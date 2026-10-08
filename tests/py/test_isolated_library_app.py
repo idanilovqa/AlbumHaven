@@ -1568,7 +1568,7 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     monkeypatch.setattr(
         isolatedLibraryApp,
         "provision_performance_auth_owner",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(isolatedLibraryApp, "stage_real_cover_pool", lambda *_args: [])
     monkeypatch.setattr(
@@ -1781,7 +1781,7 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     monkeypatch.setattr(
         isolatedLibraryApp,
         "provision_performance_auth_owner",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         isolatedLibraryApp,

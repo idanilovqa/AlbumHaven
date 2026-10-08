@@ -228,6 +228,7 @@ function settleTagEditorSessionMutationClaim(tagEditor = state.tagEditor) {
 }
 
 function openTagEditor(album, options = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient()) return false;
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);
@@ -313,6 +314,15 @@ function autoNumberSelectedTagEditorTracks() {
   state.tagEditor.autoNumberTrackNumberSnapshots = trackNumberSnapshots;
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
+}
+
+function closeTagEditorFromBackdrop() {
+  const changedUpdates = buildChangedTagEditorUpdates(
+    state.tagEditor.album,
+    state.tagEditor.tracks || [],
+    state.tagEditor.values || {},
+  );
+  if (!Object.keys(changedUpdates).length) closeTagEditor();
 }
 
 function closeTagEditor() {
@@ -713,6 +723,7 @@ async function confirmManualTagEdit() {
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
     : '';
+  const originatingSearchContext = { ...(state.view?.search_context || {}) };
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
@@ -842,6 +853,7 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       originatingViewStateRevision,
       originatingViewRequestUrl,
+      originatingSearchContext,
       tagEditMutationClaim,
       tagEdits: authoritativeTagEdits,
       preserveAbsoluteScroll: true,
@@ -1445,14 +1457,22 @@ function renderTrackModalTabs(els) {
     return;
   }
   els.tabs.hidden = false;
-  els.tabs.innerHTML = releases.map((release, index) => {
-    const showVersionMenu = isPlainDuplicateVersionTab(release, index, releases);
-    return `
-      <span class="track-modal-tab-wrap">
-        <button class="track-modal-tab ${index === state.modalReleaseIndex ? 'is-active' : ''}" type="button" data-track-tab-index="${index}" ${showVersionMenu ? `data-version-context-key="${escapeHtml(release.key || '')}"` : ''}>${escapeHtml(release.tabLabel)}</button>
-      </span>
-    `;
-  }).join('');
+  const restoreTabFocus = els.tabs.contains?.(document.activeElement);
+  els.tabs.innerHTML = buildInPageTabsHtml({
+    id: 'album-edition-tabs',
+    label: 'Album editions',
+    selectedKey: String(state.modalReleaseIndex),
+    tabs: releases.map((release, index) => ({ key: String(index), label: release.tabLabel })),
+  });
+  const tablist = els.tabs.querySelector('.in-page-tabs');
+  tablist?.querySelectorAll('[data-in-page-tab]').forEach((button, index) => {
+    button.dataset.trackTabIndex = String(index);
+    if (isPlainDuplicateVersionTab(releases[index], index, releases)) {
+      button.dataset.versionContextKey = releases[index].key || '';
+    }
+  });
+  mountInPageTabs(tablist);
+  if (restoreTabFocus) tablist?.querySelector('[aria-selected="true"]')?.focus();
   renderVersionContextMenu();
 }
 
@@ -1975,6 +1995,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';

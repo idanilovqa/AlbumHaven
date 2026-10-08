@@ -11,7 +11,7 @@ const searchToolbarUrl = pathToFileURL(path.join(
   'searchToolbar.js',
 )).href;
 
-test('search and gallery settlement observe artist GalleryBar context as well as section headings', async () => {
+test('search and gallery settlement use section headings and the owning single-artist GalleryBar only', async () => {
   const { SearchToolbar } = await import(searchToolbarUrl);
   const { GalleryPage } = await import(new URL('./galleryPage.js', searchToolbarUrl));
   const { ScanPage } = await import(new URL('./scanPage.js', searchToolbarUrl));
@@ -23,10 +23,9 @@ test('search and gallery settlement observe artist GalleryBar context as well as
     const selectors = headingSelector.split(', ');
     assert.deepEqual(selectors, [
       '#artist-groups .artist-name',
-      '[data-gallery-bar][data-gallery-context-kind="artist"] [data-gallery-context-name]',
       '[data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]',
     ]);
-    for (const excludedContext of ['gallery', 'family']) {
+    for (const excludedContext of ['gallery', 'family', 'artist']) {
       assert.equal(selectors.some(selector => selector.includes(`data-gallery-context-kind="${excludedContext}"`)), false);
     }
   }

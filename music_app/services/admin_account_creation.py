@@ -12,28 +12,11 @@ from music_app.services.auth_tokens import normalize_login_identifier
 from music_app.services.current_actor import CurrentActor
 
 
-MANAGED_CAPABILITY_KEYS = frozenset(
-    {
-        "library.browse.read",
-        "library.media.read",
-        "library.problems.read",
-        "library.inventory.manage",
-        "library.rules.read",
-        "library.logs.read",
-        "library.logs.export",
-        "library.loops.read",
-        "library.loops.media.read",
-        "library.discovery.read",
-        "library.virtual_discography.read",
-        "library.opinions.read",
-        "library.resources.read",
-        "library.playlists.create",
-        "library.playlists.manage",
-        "library.playlists.items.manage",
-        "library.track_preferences.manage",
-        "integration.lastfm.scrobbles.submit",
-    }
-)
+from music_app.services.admin_authority import is_library_administrator
+from music_app.services.capability_assignments import ASSIGNABLE_CAPABILITY_KEYS, LEGACY_CAPABILITY_KEYS, build_assignment
+
+# Retained public catalogue for the existing 18-switch legacy form.
+MANAGED_CAPABILITY_KEYS = LEGACY_CAPABILITY_KEYS
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,11 +49,14 @@ class AdminAccountCreationService:
         request_origin_ref: str | None = None,
         deployment_mode: str = "self_hosted",
         client_surface: str = "private_web",
+        role_keys: object = None,
     ) -> CreatedAccount:
         library_id = _authorized_library(actor)
         username_display, username_normalized = _username(username)
         email_display, email_normalized = _email(contact_email)
-        capabilities = _capabilities(capability_keys)
+        assignment = (build_assignment(role_keys, capability_keys)
+                      if role_keys is not None else None)
+        capabilities = assignment.effective_keys if assignment else _capabilities(capability_keys)
         if not isinstance(send_invitation, bool):
             raise ValueError("Managed account invitation choice is invalid.")
         now = self._clock().astimezone(timezone.utc)
@@ -94,6 +80,7 @@ class AdminAccountCreationService:
             request_origin_ref=request_origin_ref,
             deployment_mode=deployment_mode,
             client_surface=client_surface,
+            **({"assignment": assignment} if assignment is not None else {}),
         )
         if not isinstance(result, CreatedAccount):
             raise RuntimeError("Managed account persistence failed.")
@@ -104,7 +91,6 @@ def _authorized_library(actor: object) -> int:
     if (
         not isinstance(actor, CurrentActor)
         or not actor.is_authenticated
-        or not actor.is_bootstrap_owner
         or actor.account_id is None
         or isinstance(actor.session_id, bool)
         or not isinstance(actor.session_id, int)
@@ -115,6 +101,8 @@ def _authorized_library(actor: object) -> int:
             for item in actor.library_relationships
         )
     ):
+        raise PermissionError("Administrator account creation is not permitted.")
+    if not is_library_administrator(actor, actor.current_library_id):
         raise PermissionError("Administrator account creation is not permitted.")
     return actor.current_library_id
 
@@ -150,7 +138,7 @@ def _capabilities(values: Iterable[object]) -> tuple[str, ...]:
         not received
         or any(not isinstance(item, str) for item in received)
         or len(set(received)) != len(received)
-        or any(item not in MANAGED_CAPABILITY_KEYS for item in received)
+        or any(item not in ASSIGNABLE_CAPABILITY_KEYS for item in received)
     ):
         raise ValueError("Managed account capabilities are invalid.")
     return tuple(sorted(received))

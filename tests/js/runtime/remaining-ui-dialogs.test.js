@@ -69,9 +69,11 @@ test('failed notification retry and clear remain separate actions that do not ac
 
   assert.match(drawer, /status === 'failed'[^]*data-retry-cover-lookup-task/);
   assert.match(drawer, /data-clear-cover-lookup-task/);
-  const retryHandler = handlers.match(/const retryCoverLookupTaskButton[^]*?\n\s*}\n\n/)?.[0] || '';
-  assert.match(retryHandler, /event\.stopPropagation\(\)/);
-  assert.match(retryHandler, /startCoverLookupForAlbum\(task\.album_payload, \{ backgroundOnly: true \}\)/);
+  for (const source of [handlers.replace(/\r\n/g, '\n'), handlers.replace(/\r?\n/g, '\r\n')]) {
+    const retryHandler = source.match(/const retryCoverLookupTaskButton[^]*?\r?\n\s*}\r?\n\r?\n/)?.[0] || '';
+    assert.match(retryHandler, /event\.stopPropagation\(\)/);
+    assert.match(retryHandler, /startCoverLookupForAlbum\(task\.album_payload, \{ backgroundOnly: true \}\)/);
+  }
 });
 
 test('cover lookup notifications use navigation cards, state labels, and shared compact actions', () => {
@@ -84,8 +86,8 @@ test('cover lookup notifications use navigation cards, state labels, and shared 
  assert.match(clear, /class_name='cover-lookup-drawer-clear'/);
  assert.match(clear, /id='cover-lookup-drawer-clear'/);
  assert.match(clear, /disabled=true/);
-  assert.match(clear, /clear-notifications-icon-offwhite\.png/);
-  assert.match(clear, /clear-notifications-icon\.png/);
+  assert.match(clear, /<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true">/);
+  assert.match(clear, /<path d="m12 3-3 7m-3 0 6 2-2 5H3l3-7Zm0 3-1 3m4-2-1 3"/);
  assert.match(close, /class_name='cover-lookup-drawer-close'/);
  assert.match(close, /action-button__icon/);
  assert.match(close, /m5 5 10 10M15 5 5 15/);

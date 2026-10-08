@@ -712,6 +712,15 @@
           }
           if (this.current.eos) {
             if (this.expectContinuity && !this.continuity.eos) {
+              if (this.current.firstFrameReported) {
+                this.underruns += 1;
+                pendingPlaybackNotification = {
+                  type: 'underrun', generation: this.generation,
+                  streamId: this.current.streamId, role: 'current',
+                  renderedFrame: this.renderedFrames + outputFrame,
+                  missingFrames: left.length - outputFrame,
+                };
+              }
               outputFrame = left.length;
               break;
             }

@@ -891,6 +891,25 @@ test(`scroll anchoring restores the captured trigger for ${scenario}`, () => {
 });
 }
 
+test('scroll anchoring keeps the gallery at the top when startup hydration moves the first card', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const sectionKey = 'artist:all:Startup Artist:0';
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'startup-album', { top: 40, bottom: 340 }, sectionKey,
+  )];
+  scrollEl.scrollTop = 0;
+  const anchor = virtualGrid.captureScrollAnchor();
+
+  // Full hydration can insert artist sections ahead of the preview's first card.
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'startup-album', { top: 329, bottom: 629 }, sectionKey,
+  )];
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(scrollEl.scrollTop, 0, 'Startup must retain the root position, not follow the preview card');
+});
+
 test('scroll anchoring follows the same visible album when a scan changes its request key', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -2830,7 +2849,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   assert.ok(initialPartnerSection, 'the selected primary family member must be attached');
   assert.match(
     initialPartnerSection.innerHTML,
-    /class="[^"]*album-title-button[^"]*"[^>]*>Partner 1<\/button>/,
+    /class="[^"]*album-title-button[^"]*"[^>]*><span data-gallery-metadata-text>Partner 1<\/span><\/button>/,
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(
@@ -2884,7 +2903,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   assert.ok(promotedLeadSection);
   assert.match(
     promotedLeadSection.innerHTML,
-    /class="[^"]*album-title-button[^"]*"[^>]*>Lead 1<\/button>/,
+    /class="[^"]*album-title-button[^"]*"[^>]*><span data-gallery-metadata-text>Lead 1<\/span><\/button>/,
   );
   const retainedLead = virtualGrid.sections.find((section) => (
     section.kind === 'artist'
@@ -3028,7 +3047,7 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   const cardsMarkup = containerEl.innerHTML;
   const cardsRenderKey = context.getAlbumCardRenderKey(album, { displayMode: 'cards' });
   assert.match(cardsMarkup, /data-gallery-display="cards"/);
-  assert.match(cardsMarkup, /class="album-subtitle">Broadcast · 2005<\/div>/);
+  assert.match(cardsMarkup, /class="album-subtitle"><span data-gallery-metadata-text>Broadcast · 2005<\/span><\/div>/);
   assert.doesNotMatch(cardsMarkup, /class="album-year"/);
 
   context.state.gallery.mainState = context.reduceGalleryMainState(
@@ -3645,6 +3664,52 @@ test('deferred pointer render retains the scroll frame owner across a render gen
   assert.equal(virtualGrid.albumCardNodeCache.size, 48, 'decoded detached-card retention must stay bounded');
   assert.equal(virtualGrid.albumCardNodeCache.has('decoded-0'), false, 'the oldest decoded card should be evicted first');
 
+  const createCachedCard = (key, decoded) => {
+    const image = new context.HTMLImageElement();
+    image.complete = decoded;
+    image.naturalWidth = decoded ? 480 : 0;
+    if (!decoded) {
+      image.setAttribute('data-cover-visual-state', 'pending');
+      image.setAttribute('data-gallery-cover-loading', '1');
+    }
+    return {
+      getAttribute(name) {
+        if (name === 'data-gallery-card-key') return key;
+        if (name === 'data-gallery-card-render-key') return 'same-render';
+        return '';
+      },
+      querySelector(selector) {
+        return selector === '.cover img' || selector === 'img[data-production-cover-src]'
+          ? image
+          : null;
+      },
+    };
+  };
+  const decodedCards = Array.from(
+    { length: 10 },
+    (_value, index) => createCachedCard(`decoded-priority-${index}`, true),
+  );
+  virtualGrid.albumCardNodeCache.clear();
+  virtualGrid.rememberRenderedAlbumCards({ querySelectorAll() { return decodedCards; } });
+  const pendingCards = Array.from(
+    { length: 48 },
+    (_value, index) => createCachedCard(`pending-deep-${index}`, false),
+  );
+  virtualGrid.rememberRenderedAlbumCards({ querySelectorAll() { return pendingCards; } });
+  assert.equal(virtualGrid.albumCardNodeCache.size, 48, 'mixed detached-card retention must stay bounded');
+  decodedCards.forEach((_card, index) => {
+    assert.equal(
+      virtualGrid.albumCardNodeCache.has(`decoded-priority-${index}`),
+      true,
+      'queued deep-window placeholders must not evict a decoded navigation return window',
+    );
+  });
+  assert.equal(
+    virtualGrid.albumCardNodeCache.has('pending-deep-0'),
+    false,
+    'the oldest pending node should yield before a decoded node',
+  );
+
   const inFlightImage = new context.HTMLImageElement();
   inFlightImage.complete = false;
   inFlightImage.naturalWidth = 0;
@@ -3814,7 +3879,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
       tracks: [],
     });
 
-    assert.match(markup, /<div class="rating-row">/);
+    assert.match(markup, new RegExp(`<div class="rating-row" data-rating-value="${rating}">`));
     assert.match(
       markup,
       new RegExp(`<div class="stars" role="img" aria-label="Album rating ${rating}/10">`),
@@ -4318,4 +4383,56 @@ test('family information button survives forced render through pointerup and cli
   assert.equal(patchCount, 1, 'deferred render must resume after the click');
   assert.notStrictEqual(mountedButton, infoButton);
   virtualGrid.destroy();
+});
+
+for (const mobile of [true, false]) {
+  test(`leaving mobile Home restores gallery width before ${mobile ? 'search' : 'wide-tablet'} rendering`, () => {
+    const { context, scrollEl } = createRuntimeContext();
+    context.URL = URL;
+    context.window.location = { href: 'https://albumhaven.test/?artist=Northlight' };
+    context.document.querySelector = () => null;
+    context.showMobileGalleryPinchHint = () => {};
+    const grid = vm.runInContext('virtualGrid', context);
+    const home = { hidden: false };
+    let galleryVisible = false;
+    const main = { classList: { toggle(name, enabled) {
+      assert.equal(name, 'has-mobile-home');
+      galleryVisible = !enabled;
+    } } };
+    const originalGetById = context.document.getElementById;
+    context.document.getElementById = id => id === 'mobile-home' ? home
+      : id === 'shell-main-surface' ? main : originalGetById(id);
+    Object.defineProperty(scrollEl, 'clientWidth', { get: () => galleryVisible ? 980 : 0 });
+    context.usesMobilePageLayout = () => mobile;
+    context.state.view.selected_artist = 'Northlight';
+    context.state.view.primary_artist_groups = [{ artist: 'Northlight', albums: [
+      { key: 'quiet-hours', name: 'The Quiet Hours', album_artist: 'Northlight', tracks: [] },
+    ] }];
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'mobile-home.js'), 'utf8'), context);
+
+    context.renderArtistGroups();
+
+    assert.equal(home.hidden, true, 'Home must yield the shared gallery before it measures its container');
+    assert.ok(grid.cardTrackWidth > 200, `expected a readable card, received ${grid.cardTrackWidth}px`);
+  });
+}
+
+test('startup preview cards survive layout events until an authoritative virtual model takes ownership', () => {
+  const { context, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const preview = virtualGrid.createRenderedSectionNode({
+    key: 'startup-preview',
+    html: '<section data-startup-preview-section="1"><section class="album-card" data-startup-preview-card="1">Album</section></section>',
+  });
+  containerEl.appendChild(preview);
+  assert.equal(virtualGrid._renderGeneration, 0);
+
+  virtualGrid.onArtistTreeSettled();
+  assert.equal(containerEl.children[0], preview, 'Opening Artist Tree must retain the server-rendered preview');
+  virtualGrid.onResize();
+  assert.equal(containerEl.children[0], preview, 'Resizing before hydration must retain the same preview nodes');
+
+  virtualGrid.setGroups([], [], []);
+  assert.ok(virtualGrid._renderGeneration > 0);
+  assert.equal(containerEl.children.length, 0, 'An authoritative empty result must clear the old preview');
 });

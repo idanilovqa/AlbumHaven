@@ -20,7 +20,12 @@ test('connected panel masks the trigger interior seam', () => {
   );
   assert.match(
     css,
-    /\.trigger-anchor-open::after\s*\{[^}]*top:\s*calc\(100% - 3px\);[^}]*height:\s*calc\(var\(--trigger-anchor-gap, 0px\) \+ 3px\);/s,
+    // The continuous outline replaces the separately rasterized bridge stroke.
+    /\.trigger-anchor-open::after\s*\{[^}]*left:\s*-2px; right:\s*-2px; top:\s*-2px;[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 2px\);[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s,
+  );
+  assert.match(
+    css,
+    /\.trigger-anchor-open::before\s*\{[^}]*bottom:\s*calc\(-1 \* var\(--trigger-anchor-gap, 0px\) - 4px\);[^}]*background:\s*var\(--trigger-anchor-background\);/s,
   );
 });
 
@@ -35,7 +40,7 @@ test('connected dropdown surfaces do not animate their shadow-bearing outer pane
   );
 });
 
-test('open trigger preserves and shares the panel color rendered before anchor styling', () => {
+test('open trigger shares the panel color after its owning theme context is applied', () => {
   const context = vm.createContext({
     getComputedStyle: surface => ({
       getPropertyValue: property => property === '--trigger-anchor-background' ? '#fff7e5' : '',
@@ -76,10 +81,18 @@ test('open trigger preserves and shares the panel color rendered before anchor s
   };
 
   context.syncTriggerAnchor(surface, anchor);
-  assert.equal(triggerProperties.get('--trigger-anchor-background'), 'rgb(237, 242, 247)');
-  assert.equal(surfaceProperties.get('--trigger-anchor-background'), 'rgb(237, 242, 247)');
+  assert.equal(triggerProperties.get('--trigger-anchor-background'), 'rgb(255, 247, 229)');
+  assert.equal(surfaceProperties.get('--trigger-anchor-background'), 'rgb(255, 247, 229)');
   context.clearTriggerAnchor(surface);
   assert.equal(triggerProperties.has('--trigger-anchor-background'), false);
   assert.equal(surfaceProperties.has('--trigger-anchor-background'), false);
   assert.equal(surface.classList.contains('trigger-anchor-surface'), false);
+});
+
+
+test('capability theme observation samples the bridge interior rather than its gradient outline', () => {
+  const pageSource = fs.readFileSync(path.join(__dirname, '../../e2e/phase7/poms/capabilityPresentationPage.js'), 'utf8');
+  assert.match(pageSource, /bridgeBackground: getComputedStyle\(element, '::before'\)\.backgroundColor/);
+  assert.match(css, /\.trigger-anchor-open::before\s*\{[^}]*background:\s*var\(--trigger-anchor-background\);/s);
+  assert.match(css, /\.trigger-anchor-open::after\s*\{[^}]*background:\s*var\(--trigger-anchor-border-fill\);/s);
 });

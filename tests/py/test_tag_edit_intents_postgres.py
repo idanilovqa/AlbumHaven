@@ -189,3 +189,63 @@ def test_repository_rejects_empty_or_malformed_changes_before_opening_postgres()
             library_root_identity="X:/SyntheticMusic",
             changes=[{"path": "X:/SyntheticMusic/track.mp3", "old_values": {}, "requested_values": {}}],
         )
+
+
+class LeaseConnection(FakeConnection):
+    def __enter__(self):
+        self.events.append("open")
+        return self
+
+    def __exit__(self, *_args):
+        self.events.append("close")
+
+
+def lease_repository(connection):
+    return PostgresTagEditIntentRepository({"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL}, connect=lambda _url: connection)
+
+
+def test_intent_lease_locks_before_prepared_commit_and_releases_once():
+    connection = LeaseConnection([FakeCursor(), FakeCursor(row={}), FakeCursor()])
+    lease = lease_repository(connection).intent_lease()
+    intent_id = lease.prepare_intent(library_root_identity="root", changes=changes())
+    assert intent_id
+    assert "pg_advisory_lock" in connection.calls[0][0]
+    assert "insert into library.tag_edit_intents" in connection.calls[1][0]
+    assert "close" not in connection.events
+    lease.release()
+    lease.release()
+    assert "pg_advisory_unlock" in connection.calls[2][0]
+    assert connection.events.count("close") == 1
+
+
+def test_recovery_claim_skips_busy_intent_without_reading_journal():
+    connection = LeaseConnection([FakeCursor(row={"locked": False})])
+    with lease_repository(connection).claim_unfinished_intent("00000000-0000-0000-0000-000000000001", library_root_identity="root") as claimed:
+        assert claimed is None
+    assert len(connection.calls) == 1
+    assert "pg_try_advisory_lock" in connection.calls[0][0]
+    assert connection.events[-1] == "close"
+
+
+def test_recovery_claim_rereads_and_skips_completed_intent():
+    connection = LeaseConnection([FakeCursor(row={"locked": True}), FakeCursor(row=None), FakeCursor()])
+    with lease_repository(connection).claim_unfinished_intent("00000000-0000-0000-0000-000000000001", library_root_identity="root") as claimed:
+        assert claimed is None
+    assert "status in" in connection.calls[1][0]
+    assert connection.calls[1][1]["library_root_identity"] == "root"
+    assert "pg_advisory_unlock" in connection.calls[2][0]
+    assert connection.events[-1] == "close"
+
+
+def test_intent_lease_preparation_failure_closes_owned_session():
+    class BrokenConnection(LeaseConnection):
+        def execute(self, sql, params=None):
+            if "insert into" in sql.lower():
+                raise RuntimeError("insert failed")
+            return super().execute(sql, params)
+    connection = BrokenConnection([FakeCursor(), FakeCursor()])
+    lease = lease_repository(connection).intent_lease()
+    with pytest.raises(RuntimeError, match="insert failed"):
+        lease.prepare_intent(library_root_identity="root", changes=changes())
+    assert connection.events[-1] == "close"
+    assert "pg_advisory_unlock" in connection.calls[-1][0]

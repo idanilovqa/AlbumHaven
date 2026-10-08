@@ -131,14 +131,81 @@ export class AlbumCard extends BasePage {
     });
   }
 
-  cardByArtistAndAlbum(artistName, albumName) {
-    return this.cardsByArtistAndAlbum(artistName, albumName).first();
+  cardByArtistAndAlbum(artistName, albumName, options = {}) {
+    return this.cardsByArtistAndAlbum(artistName, albumName, options).first();
+  }
+
+  async readCoverImageReadinessByArtistAndAlbum(artistName, albumName) {
+    const images = this.cardsByArtistAndAlbum(artistName, albumName, { visible: true })
+      .first()
+      .locator(this.coverImageWithinCardSelector);
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read one resolved production cover image
+    return images.evaluateAll((resolvedImages) => {
+      if (resolvedImages.length !== 1) return { ready: false };
+      const [image] = resolvedImages;
+      const productionSrc = String(
+        image.getAttribute('data-production-cover-src') || '',
+      ).trim();
+      const renderedSrc = String(image.getAttribute('src') || '').trim();
+      const currentSrc = String(image.currentSrc || '').trim();
+      const visualState = String(
+        image.getAttribute('data-cover-visual-state') || '',
+      ).trim();
+      const resolveSource = (value) => (value ? new URL(value, document.baseURI).href : '');
+      const resolvedProductionSrc = resolveSource(productionSrc);
+      const resolvedRenderedSrc = resolveSource(renderedSrc);
+      const resolvedCurrentSrc = resolveSource(currentSrc);
+      const productionUrl = resolvedProductionSrc ? new URL(resolvedProductionSrc) : null;
+      const renderedUrl = resolvedRenderedSrc ? new URL(resolvedRenderedSrc) : null;
+      const committedProductionBlob = renderedUrl?.protocol === 'blob:'
+        && renderedUrl.origin === new URL(document.baseURI).origin
+        && productionUrl?.origin === renderedUrl.origin
+        && productionUrl.pathname === '/cover';
+      const sourceCoherent = Boolean(
+        resolvedProductionSrc
+        && (resolvedRenderedSrc === resolvedProductionSrc || committedProductionBlob)
+        && (!resolvedCurrentSrc || resolvedCurrentSrc === resolvedRenderedSrc)
+      );
+      return {
+        currentSrc,
+        productionSrc,
+        ready: image instanceof HTMLImageElement
+          && image.complete
+          && image.naturalWidth > 0
+          && visualState === 'ready'
+          && sourceCoherent,
+        renderedSrc,
+        sourceCoherent,
+        visualState,
+      };
+    });
+  }
+
+  get singleArtistContextNameSelector() {
+    return '[data-gallery-context-name]';
+  }
+
+  get singleArtistContextSelector() {
+    return '[data-gallery-bar-instance="gallery"][data-gallery-context-kind="single-artist"]';
+  }
+
+  sectionByArtistHeading(artistHeading) {
+    const normalizedHeading = exactNormalizedText(artistHeading);
+    const explicitSection = this.page.locator('#artist-groups .artist-section').filter({
+      has: this.page.locator('.artist-name').filter({ hasText: normalizedHeading }),
+    });
+    const singleArtistContext = this.page.locator(this.singleArtistContextSelector).filter({
+      has: this.page.locator('[data-gallery-context-name]').filter({ hasText: normalizedHeading }),
+    });
+    const singleArtistSection = singleArtistContext
+      .locator('xpath=following::*[@id="artist-groups"][1]')
+      .locator(':scope > .artist-section:only-child:not(:has(.artist-name))');
+    return explicitSection.or(singleArtistSection).first();
   }
 
   cardsByArtistAndAlbum(artistName, albumName, options = {}) {
-    return this.page.locator('#artist-groups .artist-section').filter({
-      has: this.page.locator('.artist-name').filter({ hasText: exactNormalizedText(artistName) }),
-    }).first().locator(options.visible ? '.album-card:visible' : '.album-card').filter({
+    return this.sectionByArtistHeading(artistName)
+      .locator(options.visible ? '.album-card:visible' : '.album-card').filter({
       has: this.page.locator(this.titleButtonSelector).filter({ hasText: exactNormalizedText(albumName) }),
     });
   }

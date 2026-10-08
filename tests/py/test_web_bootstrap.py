@@ -130,6 +130,27 @@ def test_unhashed_split_runtime_javascript_stays_no_store_with_current_version(a
     assert headers["cache-control"] == "no-store, max-age=0"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/static/js/appearance-backgrounds.js",
+        "/static/js/settings-navigation.js",
+        "/static/js/runtime/alert-components.js",
+        "/static/css/gallery-main.css",
+    ],
+)
+def test_versioned_live_static_assets_are_immutable(asgi_app, path):
+    status, headers, _body = run_asgi_request(
+        asgi_app,
+        "GET",
+        path,
+        query={"v": asgi_app.state.runtime_asset_version},
+    )
+
+    assert status == 200
+    assert headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
 def test_missing_runtime_javascript_stays_no_store_with_current_version(asgi_app):
     status, headers, _body = run_asgi_request(
         asgi_app,
@@ -204,6 +225,8 @@ def test_runtime_asset_version_is_refreshed_for_each_html_response(
     asgi_app.state.templates = CapturingTemplates()
     request = SimpleNamespace(
         app=asgi_app,
+        scope={},
+        headers={},
         cookies={"__Host-album_haven_session": "s" * 43},
         state=SimpleNamespace(current_actor=asgi_app.state.current_actor_resolver.resolve(None)),
         client=SimpleNamespace(host="testserver"),
@@ -305,9 +328,10 @@ def test_favicon_route_returns_cacheable_empty_response(asgi_app):
 def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeypatch):
     from music_app.routes import web_asgi
 
-    def fake_build_postgres_root_startup_view(*, config, query_args):
+    def fake_build_postgres_root_startup_view(*, config, query_args, library_state):
         assert config is asgi_app.state.config
         assert query_args.get("surface") is None
+        assert library_state is asgi_app.state.library_state
         return (
             {
                 "surface": {"active": "albums"},
@@ -422,6 +446,11 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert b"__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__" in body
     assert b'js/runtime/core-state-and-helpers.js' not in body
     payload = _extract_bootstrap_payload_from_shell(body)
+    assert "startup_payload" not in payload
+    assert (
+        payload["bootstrap"]["startupPayloadTiers"]["hydration"]["embeddedViewPatch"]
+        is None
+    )
     assert payload["initial_view"]["surface"]["active"] == "albums"
     assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
     assert [group["artist"] for group in payload["initial_view"]["artist_groups"]] == ["Broadcast"]
@@ -429,7 +458,10 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
     assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
-    assert b'id="library-loader" hidden' in body
+    assert re.search(rb'<[^>]+id="library-loader"[^>]*\bhidden(?:\s|>)', body)
+    loader_tag = re.search(rb'<section\b[^>]*\bid="library-loader"[^>]*>', body)
+    assert loader_tag is not None
+    assert re.search(rb'\shidden(?:\s|>)', loader_tag.group())
     assert b'<div class="albums-scroll" id="albums-scroll" hidden>' not in body
     assert b'data-sidebar-artist="Broadcast"' in body
     assert payload["bootstrap"]["startupHydration"]["embeddedViewPatch"] == {
@@ -478,8 +510,12 @@ def test_postgres_root_startup_embedded_patch_preserves_preview_gallery(monkeypa
         def __init__(self, _config):
             pass
 
-        def build_root_sidebar_payload(self, *, query_params):
+        def build_root_startup_preview_payload(self, *, query_params, library_state):
+            assert library_state is ready_library_state
             return preview_payload
+
+        def build_root_sidebar_payload(self, *, query_params):
+            raise AssertionError("root bootstrap must defer the complete sidebar payload")
 
     monkeypatch.setattr(
         web_asgi,
@@ -487,16 +523,24 @@ def test_postgres_root_startup_embedded_patch_preserves_preview_gallery(monkeypa
         FakePostgresLibraryBrowseRepository,
     )
 
+    ready_library_state = {
+        "relation_projection_ready": True,
+        "relation_views": {
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        },
+    }
     initial_view, embedded_view_patch, _elapsed_ms = web_asgi._build_postgres_root_startup_view(
         config={},
         query_args={},
+        library_state=ready_library_state,
     )
 
     assert initial_view["artist_groups"][0]["artist"] == "Broadcast"
     assert embedded_view_patch is not None
-    assert embedded_view_patch["artist_groups"][0]["artist"] == "Broadcast"
-    assert embedded_view_patch["primary_artist_groups"][0]["artist"] == "Broadcast"
-    assert embedded_view_patch["family_artist_groups"] == []
+    assert "artist_groups" not in embedded_view_patch
+    assert "primary_artist_groups" not in embedded_view_patch
+    assert "family_artist_groups" not in embedded_view_patch
 
 
 def test_web_bootstrap_source_has_no_json_or_file_bootstrap_preview_loader():
@@ -984,6 +1028,54 @@ def test_build_initial_view_preview_preserves_compact_album_track_count():
     assert "16 tracks" in markup
 
 
+def test_build_initial_view_preview_omits_album_detail_resource_contracts():
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [
+                {
+                    "artist": "Neal Morse",
+                    "artist_display": "Neal Morse",
+                    "albums": [
+                        {
+                            "key": "neal-morse-one",
+                            "name": "One",
+                            "album_artist": "Neal Morse",
+                            "artists": ["Neal Morse"],
+                            "year": 2004,
+                            "track_count_preview": 12,
+                            "tracks": [],
+                            "preview_only": True,
+                        }
+                    ],
+                }
+            ],
+            "primary_artist_groups": [],
+            "family_artist_groups": [],
+            "artists_sidebar": [],
+        }
+    )
+
+    album = preview["artist_groups"][0]["albums"][0]
+    assert album["album_ref"] == "neal-morse-one"
+    assert not {
+        "album_identity",
+        "versions",
+        "release_family",
+        "release_info",
+        "page_modes",
+        "default_page_mode",
+        "gallery_bar",
+        "info_drawer",
+        "album_note",
+        "visible_album_notes",
+        "album_info",
+        "crowd_opinion",
+        "friends_opinion",
+        "album_popularity",
+    }.intersection(album)
+    assert len(json.dumps(album, separators=(",", ":"))) < 2_000
+
+
 def test_build_initial_view_preview_preserves_missing_album_state_for_gallery_alert():
     preview = startup_bootstrap.build_initial_view_preview(
         {
@@ -1342,6 +1434,7 @@ def test_asgi_cover_route_probes_exact_cached_variant_off_event_loop(app, asgi_a
     cover_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (2400, 1800), color=(32, 96, 160)).save(cover_path, format="JPEG", quality=92)
 
+    from music_app.services.covers import display_cover_variant_cache_root
     from music_app.services.covers import find_existing_cover_display_variant
     from music_app.services.covers import resolve_cover_display_variant
     from music_app.routes.web_asgi import _conditional_file_response
@@ -1349,7 +1442,7 @@ def test_asgi_cover_route_probes_exact_cached_variant_off_event_loop(app, asgi_a
 
     cached_variant = resolve_cover_display_variant(
         cover_path,
-        cache_root=Path(app.config["DATA_DIR"]),
+        cache_root=display_cover_variant_cache_root(cover_path),
         max_size=320,
     )
     assert cached_variant != cover_path
@@ -1609,10 +1702,44 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "admin-members.js",
         "appearance-backgrounds.js",
         "appearance-palettes.js",
+        "appearance-device-profiles.js",
+        "capability-ui.js",
+        "client-device-preferences.js",
+        "client-layout-bootstrap.js",
+        "surface-dismissal.js",
         "button-component.js",
         "editor-page.js",
         "settings-navigation.js",
         "navigation-tree.js",
         "selection-accent.js",
         "unfolding-action-button.js",
+        "startup-progress.js",
     }
+
+
+def test_paged_startup_preserves_complete_sidebar_and_contiguous_page():
+    groups = [{"artist": f"Artist {i}", "albums": [{"key": f"album-{i}", "tracks": [{"title": "Track"}]}]} for i in range(8)]
+    sidebar = [{"artist": f"Artist {i}", "count": 1} for i in range(51)]
+    page = {"next_cursor": "next", "has_more": True, "revision": "revision", "page_size": 8}
+    preview = startup_bootstrap.build_initial_view_preview({
+        "artist_groups": groups, "primary_artist_groups": groups, "family_artist_groups": [],
+        "artists_sidebar": sidebar, "artist_count": 51, "album_count": 123,
+        "gallery_page": page, "initial_view_partial": False,
+    })
+    assert preview["artists_sidebar"] == sidebar
+    assert len(preview["artist_groups"]) == len(preview["primary_artist_groups"]) == 8
+    assert preview["artist_count"] == 51 and preview["album_count"] == 123
+    assert preview["gallery_page"] == page
+    assert preview["initial_view_partial"] is False
+    assert preview["artist_groups"][0]["albums"][0]["tracks"] == []
+    assert preview["artist_groups"][0]["albums"][0]["track_count_preview"] == 1
+
+
+def test_paged_startup_sidebar_markup_is_bounded_without_truncating_metadata():
+    sidebar = [{"artist": f"Artist {i:03}", "count": 1} for i in range(51)]
+    view = {"artists_sidebar": sidebar, "artist_count": 51, "surface": {"active": "albums"}, "gallery_page": {"has_more": True}}
+    markup = str(startup_bootstrap.build_startup_sidebar_html(view))
+    assert markup.count('data-sidebar-artist=') == 40
+    assert 'Artist 039' in markup and 'Artist 040' not in markup
+    assert len(view["artists_sidebar"]) == 51
+    assert '>51<' in markup

@@ -15,6 +15,12 @@ not need the private repository to build or use Album Haven.
   private fixture assets.
 - Use environment variables for machine-specific paths and credentials.
 - Keep tests independent and give state-mutating tests uniquely owned data.
+- Shared UI presentation belongs to its component CSS/templates: anchored menus
+  match their originating surface (light content stays light; dark chrome stays
+  dark), switch rows have no hover fill, checkbox hover uses neutral control
+  colors, and buttons share visibly disabled states. Keep light-theme alerts
+  readable without changing approved dark-theme alerts; do not add page-local
+  copies or overrides of these rules.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
 - Report security problems through the process in `SECURITY.md`.

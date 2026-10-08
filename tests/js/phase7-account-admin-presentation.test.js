@@ -63,3 +63,23 @@ test('library and direct Settings pages own one shared host and navigation entry
     assert.equal((template.match(/\/static\/js\/settings-navigation.js/g) || []).length, 1, templateName);
   }
 });
+
+test('Account identity selector belongs to its account content, not duplicate mobile chrome', () => {
+  const source = readProjectFile('tests', 'e2e', 'phase7', 'poms', 'authPages.js');
+  const assignment = source.match(/this\.signedInIdentity\s*=\s*([^;]+);/)?.[1];
+  assert.equal(assignment, `page.locator('.account-main [data-gallery-bar-instance="page"] .gallery-bar__summary')`);
+  assert.match(accountTemplate, /<section class="account-main">\s*\{\{ page_gallery_bar\('Password', profile\.username/);
+  // No first()/nth()/visibility fallback: duplicate identities within the owning
+  // account surface must still fail Playwright's strict locator assertions.
+  assert.doesNotMatch(assignment, /first\(|nth\(|:visible|filter\(/);
+});
+
+test('disabled shared buttons are visibly inactive and pointer-hover checkbox outlines stay neutral', () => {
+  const buttons = readProjectFile('music_app/static/css/button-component.css');
+  assert.match(buttons, /\.ui-button:disabled,\s*\.ui-button\[aria-disabled='true'\],[^{]+\{[^}]*opacity:\s*0\.38;[^}]*cursor:\s*not-allowed;/s);
+  const appearance = readProjectFile('music_app/static/css/appearance-backgrounds.css');
+  const checkboxHover = appearance.match(/:root :is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)\s*\{([^}]*)\}/)?.[1];
+  assert.ok(checkboxHover);
+  assert.match(checkboxHover, /outline:\s*1px solid var\(--appearance-control-selected\)/);
+  assert.doesNotMatch(checkboxHover, /--appearance-accent|--appearance-interaction-outline/);
+});

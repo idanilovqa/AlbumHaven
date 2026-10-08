@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -16,12 +18,6 @@ from music_app.services.current_actor import (
     LibraryRelationship,
 )
 
-try:  # pragma: no cover - exercised when the optional driver is installed.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
-    psycopg = None
-    dict_row = None
 
 
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -231,9 +227,3 @@ def _required_text(value: object, field: str) -> str:
     if not text or "\r" in text or "\n" in text:
         raise RuntimeError(f"Current actor {field} is invalid.")
     return text
-
-
-def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for actor resolution.")
-    return psycopg.connect(database_url, row_factory=dict_row)

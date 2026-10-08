@@ -87,3 +87,43 @@ test('gallery playback evidence uses the exact clicked production row path and r
   assert.equal(await readPath.call({}, row), '/owned/Clean Signal.wav');
   await assert.rejects(readPath.call({}, { async getAttribute() { return null; } }), /no playback path/);
 });
+
+for (const pendingState of [
+  { busy: true },
+  { ui: { activeViewRequestUrl: '/api/library?artist=Cosmic+Cathedral' } },
+  { ui: { pendingViewRequest: { url: '/api/library?artist=Cosmic+Cathedral' } } },
+]) {
+  test(`family view readiness rejects optimistic family while navigation is pending: ${JSON.stringify(pendingState)}`, async () => {
+    const { ArtistFamilyActions } = await import(actionsUrl);
+    const previousState = global.state;
+    global.state = {
+      busy: false,
+      ui: {},
+      view: {
+        selected_artist: 'Cosmic Cathedral',
+        query: 'Neal Morse',
+        primary_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{}] }],
+        family_artist_groups: [{ artist: 'Morse Portnoy George', albums: [{}] }],
+        related_artists: ['Neal Morse', 'Morse Portnoy George'],
+      },
+      ...pendingState,
+    };
+    try {
+      const actions = new ArtistFamilyActions({
+        async waitForPageCondition(predicate, options, expected) {
+          assert.equal(options.timeout, 120000);
+          assert.equal(predicate(expected), false, 'optimistic artist and populated chips do not prove canonical family readiness');
+          global.state.busy = false;
+          global.state.ui = {};
+          global.state.view.family_artist_groups = [{ artist: 'Neal Morse', albums: [{}] }];
+          global.state.view.related_artists = ['Neal Morse'];
+          assert.equal(predicate(expected), true, 'the settled canonical family remains eligible');
+        },
+      });
+      await actions.waitForViewReady('Cosmic Cathedral', { queryValue: 'Neal Morse' });
+    } finally {
+      if (previousState === undefined) delete global.state;
+      else global.state = previousState;
+    }
+  });
+}

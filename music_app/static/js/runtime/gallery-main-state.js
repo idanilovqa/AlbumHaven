@@ -10,7 +10,7 @@ function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
-    view: ['cards', 'covers'].includes(overrides.view) ? overrides.view : 'cards',
+    view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
   if (overrides.familySelectionExplicit === true) galleryState.familySelectionExplicit = true;
@@ -19,12 +19,15 @@ function createGalleryMainState(overrides = {}) {
 }
 
 function resetGalleryMainStateForPrimaryArtist(current = {}) {
-  return createGalleryMainState({ view: current.view });
+  return createGalleryMainState({ view: current.view, ...(typeof isMobileClient === 'function' && isMobileClient() ? { sources: current.sources } : {}) });
 }
 
 function normalizeGalleryView(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'no info' || normalized === 'covers') return 'covers';
+  if (normalized === 'list' || normalized === 'rows') {
+    return typeof window !== 'undefined' && Number(window.innerWidth) > 900 ? 'cards' : 'list';
+  }
   return 'cards';
 }
 
@@ -195,8 +198,8 @@ function resolveGalleryBarContext(config = {}) {
   if (Number(config.scrollTop || 0) <= 12) {
     return summaryContext;
   }
-  const threshold = Number(config.scrollTop || 0) + Number(config.galleryBarBottom || 0);
-  const current = (config.groups || []).filter((group) => Number(group.top || 0) <= threshold).at(-1);
+  const threshold = Number(config.scrollTop || 0);
+  const current = (config.groups || []).filter((group) => Number(group.labelBottom ?? group.top ?? 0) <= threshold).at(-1);
   return current
     ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
     : summaryContext;

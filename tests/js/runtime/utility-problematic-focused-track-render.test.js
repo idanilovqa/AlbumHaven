@@ -345,8 +345,16 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
     detail_loaded: true,
   };
   let listWrites = 0;
+  let navigationOwner = 'problematic-files';
+  const ownerWrites = [];
+  const dataset = {};
+  Object.defineProperty(dataset, 'utilityNavigationOwner', {
+    get: () => navigationOwner,
+    set: value => { ownerWrites.push(value); navigationOwner = value; },
+  });
   let listMarkup = '<button data-problematic-album-key="album-alpha">Album Alpha</button>';
   const list = {
+    dataset,
     scrollTop: 237,
     get innerHTML() { return listMarkup; },
     set innerHTML(value) {
@@ -355,16 +363,22 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
     },
   };
   const mountedDetail = '<article data-mounted-problematic-detail="album-alpha">Existing album detail</article>';
-  const detail = { innerHTML: mountedDetail, setAttribute() {}, removeAttribute() {} };
+  const detail = {
+    innerHTML: mountedDetail, setAttribute() {}, removeAttribute() {}, classList: { remove() {} },
+    querySelector(selector) {
+      assert.equal(selector, '.problematic-mutation-overlay');
+      return this.innerHTML.includes('class="problematic-mutation-overlay"') ? {} : null;
+    },
+  };
   const footer = { innerHTML: '<button>Edit Tags</button>' };
   const elements = {
-    overlay: {},
+    overlay: { setAttribute() {} },
     list,
     detail,
     footer,
     count: { textContent: '1' },
     search: { disabled: false, placeholder: '', value: '' },
-    problemFilterButton: { disabled: false, hidden: false },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
     tabs: [],
   };
   const context = {
@@ -396,7 +410,9 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
   vm.createContext(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
-  context.renderProblematicFiles();
+  context.renderUtilityModalContent();
+  context.renderUtilityModalContent();
+  assert.deepEqual(ownerWrites, [], 'repeated detail-only renders must not rewrite the list owner attribute');
 
   assert.equal(listWrites, 0);
   assert.equal(list.scrollTop, 237);
@@ -407,6 +423,15 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
   assert.equal((detail.innerHTML.match(/problematic-mutation-spinner/g) || []).length, 1);
   assert.match(detail.innerHTML, /Hold on\. Your changes are being applied/);
   assert.doesNotMatch(detail.innerHTML, /card|progress|next selection|helper/i);
+  context.renderUtilityAppearance = () => {};
+  context.state.utility.activeTab = 'appearance';
+  context.renderUtilityModalContent();
+  context.renderUtilityModalContent();
+  assert.deepEqual(ownerWrites, ['appearance'], 'a real owner change must still be published exactly once');
+  context.renderUtilityLogHistory = () => {};
+  context.state.utility.activeTab = 'log-history';
+  context.renderUtilityModalContent();
+  assert.deepEqual(ownerWrites, ['appearance'], 'Log History retains its own navigation-owner boundary');
 });
 
 test('removed mutation owner keeps its scrim until the nearest previous survivor detail is hydrated', async () => {

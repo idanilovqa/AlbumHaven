@@ -41,7 +41,10 @@ function harness() {
     getUtilityModalElements: () => ({}),
     getNonAlbumModalElements: () => ({}),
     bindOverlayPointerOrigin() {},
-    state: { tagEditor: { tracks: [{ path: 'a' }, { path: 'b' }], selectedPaths: ['a', 'b'], selectedPath: 'a', values: { a: { title: 'draft' } } } },
+    state: {
+      utility: { activeTab: 'problematic-files', problemDropdownOpen: false },
+      tagEditor: { tracks: [{ path: 'a' }, { path: 'b' }], selectedPaths: ['a', 'b'], selectedPath: 'a', values: { a: { title: 'draft' } } },
+    },
     renderTagEditor() {},
   };
   vm.createContext(context);

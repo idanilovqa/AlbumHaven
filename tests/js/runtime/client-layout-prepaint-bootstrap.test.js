@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const root = path.join(__dirname, '..', '..', '..');
 const bootstrapPath = path.join(root, 'music_app', 'static', 'js', 'client-layout-bootstrap.js');
@@ -11,6 +12,40 @@ function loadBootstrap() {
   delete require.cache[require.resolve(bootstrapPath)];
   return require(bootstrapPath);
 }
+
+test('prepaint uses the server fold default only when no saved boolean exists', () => {
+  const bootstrap = loadBootstrap();
+  for (const defaultCollapsed of [false, true]) {
+    for (const saved of [undefined, true, false]) {
+      const options = {
+        viewportWidth: 1200,
+        defaultCollapsed,
+        storage: { getItem: () => JSON.stringify({ artistTreeFolded: saved }) },
+      };
+      assert.equal(bootstrap.resolveClientLayoutPreferences(options).artistTreeFolded,
+        typeof saved === 'boolean' ? saved : defaultCollapsed);
+      assert.equal(bootstrap.resolveClientLayoutPreferences({ ...options, viewportWidth: 900 }).artistTreeFolded, false);
+    }
+    for (const storage of [null, { getItem() { throw new Error('denied'); } }]) {
+      assert.equal(bootstrap.resolveClientLayoutPreferences({ viewportWidth: 1200, defaultCollapsed, storage }).artistTreeFolded,
+        defaultCollapsed);
+    }
+  }
+});
+
+test('head capture forwards the rendered default before choosing startup rail width', () => {
+  const properties = new Map();
+  const context = vm.createContext({
+    innerWidth: 1200,
+    document: {
+      documentElement: { dataset: {}, style: { setProperty: (key, value) => properties.set(key, value) }, setAttribute() {} },
+      getElementById: () => null,
+    },
+  });
+  vm.runInContext(fs.readFileSync(bootstrapPath, 'utf8'), context);
+  assert.equal(context.AlbumHavenClientLayoutBootstrap.capture({ defaultCollapsed: true }).artistTreeFolded, true);
+  assert.equal(properties.get('--compact-rail-width'), '64px');
+});
 
 test('captures saved tree, compact player, and gallery scale before markup paints', () => {
   const bootstrap = loadBootstrap();
@@ -97,6 +132,8 @@ test('library template captures preferences in the head and finalizes before def
   const finalizeIndex = template.indexOf('AlbumHavenClientLayoutBootstrap.finalize');
 
   assert.ok(scriptIndex > -1 && scriptIndex < bodyIndex, 'pre-paint bootstrap must block before body parsing');
+  assert.match(template, /capture\(\{ defaultCollapsed: \{\{ \(shell_rail\.default_collapsed \| default\(false\)\) \| tojson \}\} \}\)/);
+  assert.ok(template.indexOf('{% set shell_rail =') < scriptIndex, 'head capture uses the same server rail default as runtime');
   assert.ok(finalizeIndex > playerIndex, 'finalizer must run after the tree, gallery, and player markup exists');
   assert.ok(finalizeIndex < template.lastIndexOf('</body>'), 'finalizer must run before the first completed document frame');
   assert.match(template, /data-client-layout-pending="true"\][^}]*transition:\s*none\s*!important/s);

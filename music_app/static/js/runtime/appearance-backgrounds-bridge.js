@@ -46,6 +46,9 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   window.addEventListener('album-haven-appearance-change', () => {
     if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
     syncSavedAppearanceLoopControlStyle();
+    if (typeof syncMobileAlbumComposition === 'function' && typeof getCurrentTrackModalAlbum === 'function') {
+      syncMobileAlbumComposition(getCurrentTrackModalAlbum());
+    }
   });
 }
 
@@ -69,8 +72,25 @@ function mountSeekbarAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountSeekbar) editor.mountSeekbar(host, {
     getLegacyColors: getPreviousBrowserWaveformColors,
-    getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
-    applySeekbarMode: seekbarMode => {
+    getSeekbarMode: profile => window.AlbumHavenDevicePreferences?.enabled
+      ? window.AlbumHavenDevicePreferences.read('playerAppearance', {}, profile).seekbarMode || 'default'
+      : state.player.appearance?.seekbarMode || 'default',
+    applySeekbarMode: async (seekbarMode, profile, isCurrentSave = () => true) => {
+      const preferences = window.AlbumHavenDevicePreferences;
+      if (preferences?.enabled) {
+        const appearance = normalizePlayerAppearance({ ...preferences.read('playerAppearance', {}, profile), seekbarMode });
+        if (!preferences.write('playerAppearance', appearance, profile) || !await preferences.flush()) {
+          throw new Error('Seekbar mode could not be saved.');
+        }
+        if (!isCurrentSave() || editor !== getBackgroundAppearanceEditor()
+          || preferences !== window.AlbumHavenDevicePreferences) return;
+        const current = normalizePlayerAppearance(preferences.read('playerAppearance', {}, profile));
+        if (profile === preferences.profile() && JSON.stringify(current) === JSON.stringify(appearance)) {
+          state.player.appearance = appearance;
+          updateWaveformAppearance(true);
+        }
+        return;
+      }
       state.player.appearance = normalizePlayerAppearance({ ...state.player.appearance, seekbarMode });
       persistPlayerAppearance();
       updateWaveformAppearance(true);

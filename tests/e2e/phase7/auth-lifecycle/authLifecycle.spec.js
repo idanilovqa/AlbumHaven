@@ -1,4 +1,4 @@
-import { LoginPage, RecoveryPage } from '../poms/authPages.js';
+import { AccountPage, LoginPage, RecoveryPage } from '../poms/authPages.js';
 import { OWNER, resetLinkFrom, signIn } from '../actions/authActions.js';
 import {
   databaseAction,
@@ -38,8 +38,9 @@ test('FTC-PERMISSIONS-003 reconciles Rendref and signs in through a token-free s
   await signIn(page, OWNER, '/account');
 
   await expect(page).toHaveURL(/\/account$/);
-  await expect(page.getByRole('heading', { name: 'Password & security' })).toBeVisible();
-  await expect(page.getByText(/Signed in as Rendref/)).toBeVisible();
+  const account = new AccountPage(page);
+  await expect(account.heading).toBeVisible();
+  await expect(account.signedInIdentity).toHaveText(new RegExp(`^${OWNER.username}$`, 'i'));
   expect(page.url()).not.toContain('token=');
   const after = await databaseState();
   expect(after.owner.id).toBe(before.owner.id);

@@ -325,6 +325,14 @@ test('per-track Play hover uses the player Play color without shifting layout', 
   expect(afterHoverBox).toEqual(beforeHoverBox);
 });
 
+test('playing album rows use the player accent color', async ({ page }) => {
+  await mountAlbumTrackTable(page);
+  const table = page.locator('.album-track-table');
+  await table.evaluate((element) => {
+    element.innerHTML = '<div class="compact-data-table-row album-track-table__row album-track-table__row--playing"><span>Track</span></div>';
+  });
+  await expect(table.locator('.album-track-table__row')).toHaveCSS('--album-track-accent', '#55c7ff');
+});
 test('ActionButton hover uses semantic edge while keyboard focus keeps its outline without shifting layout', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
 

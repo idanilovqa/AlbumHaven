@@ -1,4 +1,4 @@
-"""Every recent-authenticated admin mutation checks its final locked session."""
+"""Every admin mutation checks its final locked session, without a freshness prompt."""
 from datetime import timedelta
 import importlib
 
@@ -9,7 +9,7 @@ from music_app.services.admin_member_mutation_postgres import RecentAuthenticati
 
 @pytest.mark.parametrize("action", ["update_account", "revoke_sessions", "issue_copy", "queue_email", "queue_welcome", "queue_password_reset"])
 @pytest.mark.parametrize("failure", ["missing", "revoked", "idle", "absolute", "stale"])
-def test_recent_admin_actions_reject_invalid_locked_actor_session(action, failure):
+def test_admin_actions_validate_locked_session_without_freshness_requirement(action, failure):
     module_name = ("test_admin_member_mutation_postgres" if action in {"update_account", "revoke_sessions"}
         else "test_admin_account_invitations_postgres" if action in {"issue_copy", "queue_email"}
         else "test_admin_mail_actions_postgres")
@@ -47,11 +47,18 @@ def test_recent_admin_actions_reject_invalid_locked_actor_session(action, failur
             capability_keys=("library.browse.read",), confirm_disable=True, confirm_remove_access=False)
     elif action == "revoke_sessions":
         arguments["confirmed"] = True
-    with pytest.raises(RecentAuthenticationRequired):
+    if failure == "stale":
         getattr(service, action)(**arguments)
+    else:
+        with pytest.raises(RecentAuthenticationRequired):
+            getattr(service, action)(**arguments)
     statements = [sql for sql, _ in connection.operations]
     account_lock = next(i for i, sql in enumerate(statements) if "with locked_accounts" in sql)
     session_lock = next(i for i, sql in enumerate(statements) if "from app.account_sessions" in sql)
     assert account_lock < session_lock
-    assert not any(sql.startswith(("insert ", "update ", "delete ", "audit")) for sql in statements)
-    assert connection.events == ["begin", "rollback"]
+    if failure == "stale":
+        assert any(sql.startswith(("insert ", "update ", "delete ")) for sql in statements)
+        assert connection.events == ["begin", "commit"]
+    else:
+        assert not any(sql.startswith(("insert ", "update ", "delete ", "audit")) for sql in statements)
+        assert connection.events == ["begin", "rollback"]

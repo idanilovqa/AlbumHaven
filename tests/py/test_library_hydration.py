@@ -446,7 +446,7 @@ def test_hydrate_library_state_from_disk_loads_cache_and_relations(tmp_path: Pat
     assert saved_cache_path == tmp_path / "cache.json"
     assert saved_root_identity == "root-identity"
     assert saved_last_scan == 12.5
-    assert saved_kwargs == {"relation_views": {}, "relations_last_built": 0.0}
+    assert saved_kwargs == {"relation_views": {}, "relations_last_built": 0.0, "rebuild_relation_projection": True}
     assert saved_file_cache[str(track_path)]["cover_path"] == str(cover_path)
     assert saved_file_cache[str(track_path)]["library_root_id"] == "main-library-root-1"
     assert saved_file_cache[str(track_path)]["library_root_category"] == "main_library"
@@ -1200,3 +1200,39 @@ def test_postgres_hydration_exposes_album_owned_cover_selection_origin(
         scan_cache_adapter=adapter,
     ) is True
     assert library_state["albums"][0].cover_selection_origin == "user"
+
+
+@pytest.mark.parametrize("repair", ["root", "removed", "cover"])
+@pytest.mark.parametrize("ensure_relations", [False, True])
+def test_postgres_sanitization_republishes_relations_or_marks_them_unready(
+    tmp_path, monkeypatch, repair, ensure_relations,
+):
+    original = {"track-1": {"artist": "Old", "library_root_id": "old"}, "track-2": {"artist": "Other"}}
+    sanitized = {"track-1": {**original["track-1"], "cover_path": "cover.jpg"}}
+    if repair == "root":
+        sanitized["track-1"]["library_root_id"] = "current"
+    if repair != "removed":
+        sanitized["track-2"] = original["track-2"]
+    current_views = {"artists": ["Current"]}
+    class Adapter(FakeSelectedScanCacheAdapter):
+        def save_snapshot(self, *args, **kwargs):
+            super().save_snapshot(*args, **kwargs)
+            if kwargs.get("rebuild_relation_projection"):
+                return {"relation_views": current_views, "relations_last_built": 789.0}
+    adapter = Adapter(original, 123.0, {"artists": ["Old"]}, 456.0)
+    config = {"CACHE_PATH": tmp_path / "cache.json", "IMAGE_EXTENSIONS": {".jpg"}}
+    monkeypatch.setattr(library_hydration, "library_root_cache_identity", lambda _cfg: "root")
+    monkeypatch.setattr(library_hydration, "get_library_roots", lambda _cfg: [])
+    monkeypatch.setattr(library_hydration, "sanitize_hydrated_file_cache", lambda *_args, **_kwargs: (sanitized, {"track-1": sanitized["track-1"]}))
+    monkeypatch.setattr(library_hydration, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(library_hydration, "build_albums_from_file_cache", lambda *_args: [SimpleNamespace(key="current")])
+    monkeypatch.setattr(library_hydration, "select_runtime_persistence_adapter", lambda *_args: SimpleNamespace(effective_backend="postgres"))
+    monkeypatch.setattr(library_hydration, "schedule_cache_updates_save_for_config", lambda *_args, **_kwargs: pytest.fail("sanitized snapshot must only publish once"))
+    state = {"albums": [], "relation_projection_ready": True}
+    assert hydrate_library_state_from_disk(state, config, scan_cache_adapter=adapter, ensure_relations=ensure_relations)
+    assert len(adapter.save_calls) == 1
+    assert bool(adapter.save_calls[0][4].get("rebuild_relation_projection")) is (ensure_relations and repair != "cover")
+    assert state["relation_projection_ready"] is (ensure_relations or repair == "cover")
+    if ensure_relations and repair != "cover":
+        assert state["relation_views"] == current_views
+        assert state["relations_last_built"] == 789.0

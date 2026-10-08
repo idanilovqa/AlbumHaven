@@ -9,6 +9,10 @@
     <a class="account-menu-item" href="/admin/members" role="menuitem" tabindex="-1" data-account-menu-admin>
       <span class="account-menu-icon" aria-hidden="true">&#9817;</span><span>Admin Panel</span>
     </a>
+    {% else %}
+    <a class="account-menu-item" href="/account" role="menuitem" tabindex="-1" data-account-menu-profile>
+      <span class="account-menu-icon" aria-hidden="true">◇</span><span>My Account</span>
+    </a>
     {% endif %}
     <form class="account-menu-form" method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ account_menu_csrf_token }}">

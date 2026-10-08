@@ -258,7 +258,9 @@ function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } =
   if (els.expand) els.expand.hidden = compactPlayerPresentation !== 'floating';
   if (persist) {
     try {
-      persistCompactPlayerMode(window.localStorage, next);
+      const storage = window.AlbumHavenDevicePreferences?.enabled
+        ? window.AlbumHavenDevicePreferences : window.localStorage;
+      persistCompactPlayerMode(storage, next);
     } catch (_error) {
       // Browser policy may deny access to the storage object itself.
     }
@@ -396,7 +398,7 @@ function initCompactPlayer() {
   if (!els.player || els.player.dataset.compactBound === '1') return;
   els.player.dataset.compactBound = '1';
   let saved = 'expanded';
-  try { saved = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
+  try { saved = (window.AlbumHavenDevicePreferences?.enabled ? window.AlbumHavenDevicePreferences : window.localStorage).getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
   applyCompactPlayerMode(saved, { persist: false });
   if (typeof MutationObserver === 'function' && document.body) {
     new MutationObserver(() => syncDockedCompactPresentation(els))
@@ -555,7 +557,7 @@ function initCompactPlayer() {
     if (!compactPlayerEligible()) applyCompactPlayerMode('expanded', { persist: false });
     else if (compactPlayerMode === 'expanded') {
       let savedMode = 'expanded';
-      try { savedMode = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
+      try { savedMode = (window.AlbumHavenDevicePreferences?.enabled ? window.AlbumHavenDevicePreferences : window.localStorage).getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
       applyCompactPlayerMode(savedMode, { persist: false });
     } else if (compactPlayerPresentation === 'floating' && compactPlayerPosition) {
       compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 105, playerHeight: 105,

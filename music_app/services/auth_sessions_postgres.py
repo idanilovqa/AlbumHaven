@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -18,12 +20,6 @@ from music_app.services.auth_tokens import (
     issue_opaque_token,
 )
 
-try:  # pragma: no cover - exercised when the optional driver is installed.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
-    psycopg = None
-    dict_row = None
 
 
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -416,10 +412,6 @@ class PostgresAuthSessionService:
                 yield owned_connection
 
 
-def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for auth sessions.")
-    return psycopg.connect(database_url, row_factory=dict_row)
 
 
 def _issued_token(issuer: Callable[[], object]) -> IssuedOpaqueToken:

@@ -1,0 +1,70 @@
+name: Mobile release failure inventory
+on:
+  push:
+    branches: [2026-09-25-mobile-layout]
+    paths: [.github/workflows/mobile-ci-failure-inventory.yml]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Extract sanitized failures from completed pinned runs
+        uses: actions/github-script@v7
+        env:
+          LOG_READ_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            const source = '62346e8b258d2feee4388b297622d1c7c0adff68';
+            const runIds = [36607258113, 36607251447];
+            const tree = [], manifest = {source, runs: []};
+            const clean = text => text
+              .replace(/\u001b\[[0-9;]*m/g, '')
+              .replace(/^\d{4}-\d{2}-\d{2}T\S+\s/gm, '')
+              .replace(/https?:\/\/[^\s<>"']+/g, '<url>')
+              .replace(/[A-Za-z]:\\[^\r\n"'<>]+/g, '<windows-path>')
+              .replace(/\/(?:home|tmp|opt|var)\/[^\s"'<>]+/g, '<runner-path>')
+              .replace(/(?:password|token|secret|database_url|hmac)\s*[:=]\s*[^,\s]+/gi, '$&'.split(':')[0] === '' ? '<redacted>' : '<redacted>');
+            for (const run_id of runIds) {
+              const run = (await github.rest.actions.getWorkflowRun({...context.repo, run_id})).data;
+              if (run.head_sha !== source || run.status !== 'completed') throw new Error('Unpinned or incomplete run');
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {...context.repo, run_id, per_page: 100});
+              const row = {id: run_id, conclusion: run.conclusion, jobs: []};
+              for (const job of jobs) {
+                row.jobs.push({id: job.id, name: job.name, conclusion: job.conclusion});
+                if (job.conclusion !== 'failure') continue;
+                const first = await fetch(`https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/actions/jobs/${job.id}/logs`, {
+                  headers: {Authorization: `Bearer ${process.env.LOG_READ_TOKEN}`, Accept: 'application/vnd.github+json'}, redirect: 'manual'});
+                let response = first;
+                if (first.status === 302) {
+                  const location = new URL(first.headers.get('location'));
+                  if (location.protocol !== 'https:' || !(/\.blob\.core\.windows\.net$/.test(location.hostname) || /\.actions\.githubusercontent\.com$/.test(location.hostname))) throw new Error('Unexpected log host');
+                  response = await fetch(location);
+                }
+                if (!response.ok) throw new Error(`Cannot read job ${job.id}: ${response.status}`);
+                const lines = clean(await response.text()).split('\n');
+                const selected = new Set();
+                const flags = /(?:^not ok |^\s*not ok |^\s*FAILED |^FAILED |^ERROR |^\s*\d+\) .*\.spec\.|^\s*[✘×] |^# (?:fail|pass|tests|skipped) |^\s*\d+ (?:failed|passed|skipped)|##\[error\]|^Error:|^AssertionError:|^\s*E\s+|missing.*inventory|inventory.*missing)/i;
+                for (let i=0;i<lines.length;i++) if (flags.test(lines[i])) {
+                  const end = Math.min(lines.length, i + (/not ok /.test(lines[i]) ? 85 : /^\s*\d+\) /.test(lines[i]) ? 100 : 18));
+                  for (let k=Math.max(0,i-3);k<end;k++) selected.add(k);
+                }
+                const excerpt = [...selected].sort((a,b)=>a-b).map(i => `${i+1}: ${lines[i]}`).join('\n');
+                const name = `job-${job.id}.txt`;
+                const blob = await github.rest.git.createBlob({...context.repo, content: `${job.name}\nrun ${run_id}; source ${source}\n${excerpt}\n`, encoding: 'utf-8'});
+                tree.push({path: name, mode:'100644', type:'blob', sha:blob.data.sha});
+                console.log(`Extracted ${job.name}: ${selected.size} diagnostic lines`);
+              }
+              manifest.runs.push(row);
+            }
+            const blob = await github.rest.git.createBlob({...context.repo, content: JSON.stringify(manifest,null,2), encoding:'utf-8'});
+            tree.push({path:'manifest.json',mode:'100644',type:'blob',sha:blob.data.sha});
+            const t = await github.rest.git.createTree({...context.repo,tree});
+            const result = await github.rest.git.createCommit({...context.repo,tree:t.data.sha,parents:[],message:`Sanitized CI failure inventory for ${source}`});
+            console.log('FAILURE_INVENTORY ' + result.data.sha);
+            // No branch/tag update: this diagnostic snapshot cannot become release code.

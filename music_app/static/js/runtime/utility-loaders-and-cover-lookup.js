@@ -1,18 +1,27 @@
 async function loadProblematicFiles(force = false, options = {}) {
-  const shouldRender = options.render !== false;
+  const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
-  if (state.utility.loading) return state.utility.loadPromise;
+  if (state.utility.loading) {
+    const pendingLoad = state.utility.loadPromise;
+    const result = await pendingLoad;
+    if (pendingLoad && !state.utility.loaded
+      && pendingLoad.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0)) {
+      return loadProblematicFiles(force, options);
+    }
+    return result;
+  }
   if (state.utility.loaded && !force) {
-    if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
+    if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
     return;
   }
   state.utility.loading = true;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
-  if (shouldRender && !navigationOwnsRendering()) renderUtilityModalContent();
-  state.utility.loadPromise = (async () => {
+  if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+  let requestPromise = null;
+  requestPromise = (async () => {
     const startedAt = getProblematicUtilityNow();
     let requestMs = 0;
     let parseMs = 0;
@@ -41,16 +50,39 @@ async function loadProblematicFiles(force = false, options = {}) {
       const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
       const stateCommitStartedAt = getProblematicUtilityNow();
       initialDetailKey = String(initialDetail?.key || '').trim();
+      const selectedKey = String(state.utility.selectedProblematicKey || '');
+      const selectedDetail = options.preserveSelectedDetail === true
+        ? state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+        : null;
+      const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
+        ? summaryItems.find(item => item.key === selectedKey) : null;
       state.utility.problematicFiles = summaryItems.map((item) => {
-        if (!initialDetailKey || String(item?.key || '').trim() !== initialDetailKey) return item;
-        initialDetailMerged = true;
-        return { ...item, ...initialDetail, detail_loaded: true };
+        if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
+          initialDetailMerged = true;
+          return { ...item, ...initialDetail, detail_loaded: true };
+        }
+        return item === selectedSummary ? selectedDetail : item;
       });
       state.utility.libraryWatchHealthProblems = operationalItems;
       state.utility.detailLoadPromises = {};
       state.utility.loaded = true;
       loadSucceeded = true;
       stateCommitMs = roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
+      if (selectedSummary) {
+        const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
+        const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
+        const refreshedDetail = await detailRequest;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+        if (!refreshedDetail) {
+          const stillOwnsDetail = Number(state.utility.problematicDetailRequestToken || 0) === detailRequestToken;
+          // Discard retained stale detail, but never replace a newer navigation result.
+          state.utility.problematicFiles = state.utility.problematicFiles.map(item => (
+            item.key === selectedKey && (item === selectedDetail || stillOwnsDetail)
+              ? { ...selectedSummary, detail_load_failed: stillOwnsDetail && state.utility.selectedProblematicKey === selectedKey }
+              : item
+          ));
+        }
+      }
       return state.utility.problematicFiles;
     } catch (error) {
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
@@ -64,11 +96,15 @@ async function loadProblematicFiles(force = false, options = {}) {
       return null;
     } finally {
       const stillOwner = Number(state.utility.problematicSummaryRequestToken || 0) === requestToken;
-      if (stillOwner) {
+      // A mutation can invalidate payload ownership while this request still
+      // owns the loading slot. Release that slot without touching a newer load.
+      if (state.utility.loadPromise === requestPromise) {
         state.utility.loading = false;
         state.utility.loadPromise = null;
+      }
+      if (stillOwner) {
         const renderStartedAt = getProblematicUtilityNow();
-        if (shouldRender && !navigationOwnsRendering()) {
+        if (shouldRender() && !navigationOwnsRendering()) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
@@ -88,7 +124,9 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
     }
   })();
-  return state.utility.loadPromise;
+  requestPromise.problematicSummaryRequestToken = requestToken;
+  state.utility.loadPromise = requestPromise;
+  return requestPromise;
 }
 
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
@@ -483,6 +521,7 @@ async function performAlbumMove(album, action, options = {}) {
 
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(true);
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
@@ -516,6 +555,7 @@ async function fetchUnsuccessfulAlbumCovers() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to fetch album covers');
     }
+    if (!settleLibraryStatusAction(statusAction)) return;
     if (data.queued_after_indexing) {
       updateStatusIndicator({
         ...state.status,
@@ -530,7 +570,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         pending_cover_refresh_after_scan: true,
       });
       state.wasPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     updateStatusIndicator({
@@ -544,13 +584,13 @@ async function fetchUnsuccessfulAlbumCovers() {
     });
     if (data.already_running) {
       state.wasCoverPollingBusy = true;
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return;
     }
     state.wasCoverPollingBusy = true;
-    scheduleBrowserTimeout(pollStatus, 250);
+    scheduleStatusPoll(250);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction)) updateStatusIndicator(previousStatus);
     console.error('[AlbumHaven][Utilities] Failed to fetch unresolved album covers.', error);
     showToast(error.message || 'Failed to fetch album covers.', 'error', 3200);
   }
@@ -558,6 +598,8 @@ async function fetchUnsuccessfulAlbumCovers() {
 
 async function cancelAlbumCoverScan() {
   const previousStatus = { ...state.status };
+  const statusAction = claimLibraryStatusAction(false);
+  let cancellationStatus = null;
   try {
     console.log('[AlbumHaven][Covers] Cancelling bulk cover fetch.');
     updateStatusIndicator({
@@ -566,6 +608,7 @@ async function cancelAlbumCoverScan() {
       covers_current_folder: '',
       pending_cover_refresh_after_scan: false,
     });
+    cancellationStatus = state.status;
     const response = await fetch('/utilities/cancel-cover-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -580,8 +623,11 @@ async function cancelAlbumCoverScan() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to cancel album cover scan');
     }
+    settleLibraryStatusAction(statusAction);
   } catch (error) {
-    updateStatusIndicator(previousStatus);
+    if (settleLibraryStatusAction(statusAction) && state.status === cancellationStatus) {
+      updateStatusIndicator(previousStatus);
+    }
     console.error('[AlbumHaven][Utilities] Failed to cancel album cover scan.', error);
     showToast(error.message || 'Failed to cancel album cover scan.', 'error', 3200);
   }
@@ -978,6 +1024,7 @@ async function runLocalPlaylistImportAnalysis() {
 }
 
 function loadActiveUtilityTab(force = false) {
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(state.utility.activeTab)) return null;
   if (state.utility.activeTab === 'rules') {
     return loadUtilityRules(force);
   }
@@ -1100,8 +1147,16 @@ function resumeDeferredUtilityViewRequest() {
 let utilityCoverLoadSuspensionToken = 0;
 
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
+  if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities) {
+    const permittedTab = window.AlbumHavenCapabilities.resolveUtilityTab(state.utility.activeTab);
+    if (!permittedTab) return;
+    setUtilityActiveTab(permittedTab);
+    if (state.utility.activeTab !== permittedTab) return;
+  }
+  if (typeof presentMobileUtilityPage === 'function') presentMobileUtilityPage();
   document.getElementById('track-modal')?.classList.remove('is-above-settings');
   if (
     !utilityCoverLoadSuspensionToken
@@ -1150,10 +1205,13 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
 }
 
 function openUtilityLogHistoryTab(entryId = '') {
+  const canOpen = () => typeof window === 'undefined' || !window.AlbumHavenCapabilities
+    || window.AlbumHavenCapabilities.allowsUtilityTab('log-history');
+  if (!canOpen()) return;
   const owner = state.utility;
   const open = () => {
-    if (state.utility !== owner) return;
-    setUtilityActiveTab('log-history', true);
+    if (state.utility !== owner || !canOpen()) return;
+    if (setUtilityActiveTab('log-history', true) !== 'log-history') return;
     openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
     if (!entryId) return;
     const controller = getUtilityLogHistoryController();
@@ -1316,6 +1374,7 @@ async function submitPendingLastfmScrobbles() {
 
 function closeUtilityModal(skipAppearanceGuard = false) {
   if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (typeof dismissMobilePage === 'function' && dismissMobilePage('utilities')) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();

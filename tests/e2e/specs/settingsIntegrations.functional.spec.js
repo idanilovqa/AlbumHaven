@@ -136,7 +136,7 @@ test('FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain dis
     }).toBe(true);
   }
   await ui.guideClose.click();
-  await ui.navigation('Import Local Playlist').click();
+  await ui.openNavigationSection('Import Local Playlist');
   await expect(ui.importButton).toHaveCount(1);
   await expect(ui.importButton).toBeDisabled();
 });

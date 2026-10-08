@@ -17,6 +17,33 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
+test('player glyph preserves the mounted SVG across audio ticks despite browser serialization', () => {
+  const { context } = loadHelper();
+  const button = new FakeElement({ attributes: { 'aria-label': 'Pause' }, disabled: true });
+  let writes = 0, rendered = '';
+  Object.defineProperty(button, 'innerHTML', {
+    get: () => rendered,
+    set(value) { writes++; rendered = value.replace(/<path ([^>]+)\/>/g, '<path $1></path>'); },
+  });
+  const renderer = context.window.ButtonComponent;
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.notEqual(rendered, renderer.renderIconSvg('pause', { className: 'player-transport-icon' }));
+  assert.equal(rendered, renderer.renderIconSvg('pause', { className: 'player-transport-icon' }).replace('/></svg>', '></path></svg>'));
+  for (let tick = 0; tick < 60; tick++) context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.equal(writes, 1);
+  assert.equal(button.getAttribute('data-player-glyph'), 'pause');
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  assert.equal(button.getAttribute('data-player-glyph'), 'play');
+  assert.equal(rendered, renderer.renderIconSvg('play', { className: 'player-transport-icon' }).replace('/></svg>', '></path></svg>'));
+  context.renderGlobalPlayerPlayGlyph(button, true);
+  assert.equal(writes, 2);
+  context.renderGlobalPlayerPlayGlyph(button, false);
+  assert.equal(writes, 3);
+  assert.equal(button.getAttribute('aria-label'), 'Pause');
+  assert.equal(button.disabled, true);
+});
+
 class FakeElement {
   constructor(options = {}) {
     this.tagName = options.tagName || 'DIV';
@@ -229,6 +256,7 @@ function loadHelper(overrides = {}) {
       addEventListener: () => {},
     },
     window: {
+      ButtonComponent: require('../../../music_app/static/js/button-component.js'),
       addEventListener: () => {},
     },
     fetch: async () => ({
@@ -604,6 +632,8 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   const timelineParent = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range' });
   timeline.parentElement = timelineParent;
+  const progress = new Map();
+  timeline.style = { setProperty: (name, value) => progress.set(name, value) };
   const { context } = loadHelper({
     document,
     timeline,
@@ -634,6 +664,8 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   timeline.value = '50';
   timeline.dispatch('input');
   document.dispatch('pointermove', { clientX: 50 });
+  assert.equal(progress.get('--player-seek-progress'), `${50 / 60 * 100}%`,
+    'thin seek progress must follow the pointer without waiting for an audio tick');
   timeline.value = '47';
   timeline.dispatch('input');
   assert.deepEqual(seeks, [30, 19], 'drag previews must not restart the decoder');
@@ -645,6 +677,11 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   );
   document.dispatch('pointerup', { clientX: 50 });
   assert.deepEqual(seeks, [30, 19, 50], 'drag release performs exactly one seek at the final offset');
+  timelineParent.dispatch('pointerdown', { clientX: 35, preventDefault() {} });
+  document.dispatch('pointercancel');
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(context.state.player.timelineDragPreviewSeconds, null);
+  assert.deepEqual(seeks, [30, 19, 50], 'cancelled touch must not seek');
 });
 
 test('pause and seek rejections are observed by the streaming diagnostics boundary', async () => {
@@ -914,6 +951,15 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
 
   assert.equal(peekCalls, 1);
   assert.deepEqual(scheduled, [nextTrack]);
+});
+
+test('changing tracks clears an outgoing timeline drag preview', () => {
+  const { context } = loadHelper();
+  context.state.player.timelineDragging = true;
+  context.state.player.timelineDragPreviewSeconds = 210;
+  context.setCurrentPlayerTrack({ path: 'next.flac', durationSeconds: 300 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(context.state.player.timelineDragPreviewSeconds, null);
 });
 
 test('streaming boundary consumes the queued track exactly once', async () => {
@@ -3129,3 +3175,144 @@ for (const deleteAllowed of [true, false]) {
     assert.deepEqual(requests, ['/loops/create', '/utilities/loops'], 'an established grant or denial projection may reuse the cache');
   });
 }
+
+function loadCapabilityTrackRow(actions) {
+  const effects = [];
+  const button = new FakeElement({ tagName: 'BUTTON', classNames: ['album-track-table__play'], attributes: {
+    'data-src': '/track?path=song.flac', 'data-track-path': 'song.flac', 'data-track-title': 'Song',
+  } });
+  const row = new FakeElement();
+  const album = { name: 'Album' };
+  const document = {
+    readyState: 'loading', addEventListener() {}, getSelection: () => null,
+    querySelectorAll: selector => selector === '.play-track-button' ? [button] : [],
+    getElementById: id => id === 'capability-bootstrap' ? { textContent: JSON.stringify({
+      allowed_actions: actions, denied_selectors: ['.play-track-button', '.global-player'],
+    }) } : id === 'track-modal' ? { hidden: false } : null,
+  };
+  row.ownerDocument = document;
+  row.querySelector = () => button;
+  button.closest = selector => selector === '.album-track-table__row' ? row : null;
+  button.click = () => button.dispatch('click', { isTrusted: false });
+  const { context, audio, timeline } = loadHelper({ document,
+    canStartPlaybackInThisTab: () => { effects.push('ownership'); return true; },
+    startStreamingTrack: async () => { effects.push('stream'); return { role: 'current' }; },
+    setAlbumPlaybackQueue: () => { effects.push('queue'); context.state.player.playbackQueue = { tracks: ['song.flac'] }; },
+  });
+  context.state.player.current = { path: 'song.flac', src: '/track?path=song.flac' };
+  context.state.player.playbackQueue = { tracks: ['retained.flac'] };
+  context.state.modalReleases = [album];
+  context.state.modalReleaseIndex = 0;
+  context.window.document = document;
+  if (actions !== undefined) vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/capability-ui.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/runtime/album-track-table.js'), 'utf8'), context);
+  context.usesMobilePageLayout = () => true;
+  const readPlayback = context.getPlayerPlaybackSnapshot;
+  context.getPlayerPlaybackSnapshot = () => { effects.push('snapshot'); return readPlayback(); };
+  const animate = context.triggerAlbumTrackPlayActivation;
+  context.triggerAlbumTrackPlayActivation = target => { effects.push('animation'); animate(target); };
+  context.updatePlayerUi = () => effects.push('render');
+  context.attachSharedPlayer();
+  const click = detail => row.dispatch('click', {
+    detail, target: { closest: () => null }, currentTarget: row, preventDefault() {},
+  });
+  return { context, effects, audio, timeline, click, button };
+}
+
+for (const actions of [{ 'library.media.read': false }, {}]) {
+  test(`denied mobile track clicks and direct restart have no playback effects (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async () => {
+    const f = loadCapabilityTrackRow(actions);
+    const before = JSON.stringify(f.context.state.player);
+    const queue = f.context.state.player.playbackQueue;
+    f.click(1);
+    f.click(2);
+    f.context.activateSharedTrackButton(f.button, { restart: true, focusTimeline: true });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.effects, []);
+    assert.equal(JSON.stringify(f.context.state.player), before);
+    assert.strictEqual(f.context.state.player.playbackQueue, queue);
+    assert.equal(f.audio.playCalls, 0);
+    assert.deepEqual(f.timeline.focusCalls, []);
+  });
+}
+
+for (const actions of [{ 'library.media.read': true }, undefined]) {
+  test(`mobile track click resumes and double-tap restarts through shared playback (${actions ? 'allowed' : 'legacy'})`, async () => {
+    const f = loadCapabilityTrackRow(actions);
+    f.click(1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.audio.playCalls, 1, 'ordinary click resumes the loaded current track');
+    assert.equal(f.effects.includes('stream'), false);
+    f.click(2);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.effects.filter(effect => effect === 'stream').length, 1);
+    assert.equal(f.effects.filter(effect => effect === 'queue').length, 1);
+    assert.ok(f.effects.includes('ownership'));
+    assert.equal(f.context.state.player.current.path, 'song.flac');
+    assert.deepEqual(f.context.state.player.playbackQueue, { tracks: ['song.flac'] });
+    assert.deepEqual(f.timeline.focusCalls, [], 'row activation must not steal timeline focus');
+  });
+}
+
+test('thin mobile Play hit area yields horizontal playhead drag but preserves taps and vertical intent', () => {
+  const seeks = [];
+  const listeners = new Map();
+  const document = { activeElement: null, querySelectorAll: () => [],
+    addEventListener(name, handler) { const entries = listeners.get(name) || []; entries.push(handler); listeners.set(name, entries); },
+    dispatch(name, event = {}) { for (const handler of listeners.get(name) || []) handler(event); },
+  };
+  const { context, timeline, playButton } = loadHelper({ document,
+    getTrackIdentity: track => track?.src || '',
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 54, duration: 60, paused: false, ended: false, src: '/track?path=song.flac' }),
+    seekStreamingPlayback: seconds => seeks.push(seconds),
+  });
+  context.window.innerWidth = 390;
+  context.player.setAttribute('data-player-seekbar-presentation', 'thin');
+  timeline.rectangle = { left: 0, top: 70, width: 390, height: 24 };
+  timeline.value = '54';
+  timeline.parentElement = new FakeElement();
+  context.attachPlayerEvents();
+  playButton.closest = () => playButton;
+  const down = () => { timeline.value = '54'; context.player.dispatch('pointerdown', { pointerId: 7, isPrimary: true, button: 0, clientX: 350, clientY: 76, target: playButton, preventDefault() { throw new Error('Pointer down must preserve taps'); } }); };
+  down();
+  assert.notEqual(context.state.player.timelineDragging, true);
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  assert.equal(context.state.player.timelineDragging, true);
+  context.player.dispatch('pointerdown', { pointerId: 8, isPrimary: false });
+  timeline.parentElement.dispatch('pointerdown', { pointerId: 8, clientX: 10, preventDefault() { throw new Error('Second finger must not start native timeline drag'); } });
+  assert.deepEqual(seeks, []);
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 1);
+  let suppressed = false;
+  context.player.dispatch('click', { pointerId: 7, preventDefault() { suppressed = true; }, stopImmediatePropagation() {} });
+  assert.equal(suppressed, true);
+  down();
+  document.dispatch('pointerup', { pointerId: 7 });
+  suppressed = false;
+  context.player.dispatch('click', { pointerId: 7, preventDefault() { suppressed = true; }, stopImmediatePropagation() {} });
+  assert.equal(suppressed, false);
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 352, clientY: 99, preventDefault() { throw new Error('Vertical movement belongs to browser'); } });
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 1);
+  down();
+  document.dispatch('pointermove', { pointerId: 8, clientX: 315, clientY: 77 });
+  assert.notEqual(context.state.player.timelineDragging, true, 'other fingers cannot claim the gesture');
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  document.dispatch('pointercancel', { pointerId: 7 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(seeks.length, 1, 'cancel never commits a seek');
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  context.state.player.current = { src: '/track?path=next.flac' };
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(seeks.length, 1, 'release cannot seek a replacement track');
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  context.state.player.current = { ...context.state.player.current, title: 'Hydrated title' };
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
+});

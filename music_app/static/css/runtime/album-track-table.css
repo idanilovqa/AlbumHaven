@@ -1,5 +1,5 @@
 .album-track-table {
-  --album-track-accent: var(--appearance-waveform-edge, var(--appearance-accent, var(--accent, #55c7ff)));
+  --album-track-accent: var(--appearance-player-accent, var(--appearance-waveform-edge, var(--appearance-accent, var(--accent, #55c7ff))));
   --album-track-play-hover: var(--appearance-play, var(--appearance-player-accent, var(--album-track-accent)));
   --album-track-playing-period: 3.6s;
   --cdt-mobile-min-width: 0;
@@ -176,3 +176,5 @@
 .album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
 
 .album-track-table [role="columnheader"][data-cdt-column="number"] { width: 28px; text-align: center; }
+
+.album-track-table .compact-data-table { color: var(--appearance-ink, var(--text)); }

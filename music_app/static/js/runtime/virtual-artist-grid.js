@@ -568,6 +568,11 @@ class VirtualArtistGrid {
   restoreScrollAnchor(anchor) {
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
+    // At the root, hydration must preserve the top rather than follow a preview card.
+    if (Number(anchor.scrollTop || 0) <= 0) {
+      this.scrollEl.scrollTop = 0;
+      return;
+    }
     const albumKey = String(anchor.albumKey || '');
     if (albumKey) {
       const sectionOccurrenceKey = String(anchor.sectionOccurrenceKey || '');
@@ -1003,8 +1008,17 @@ class VirtualArtistGrid {
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
+    const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
+      viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
+      columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3), gap: this.columnGap,
+    });
+    if (mobileGeometry) {
+      this.columns = mobileGeometry.columns;
+      this.cardTrackWidth = mobileGeometry.cardTrackWidth;
+    }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
-    const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
+    const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
+      || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -1091,6 +1105,8 @@ class VirtualArtistGrid {
       this._absoluteScrollRestore,
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
+      && typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
     if (!isOwnedStabilizationScroll && ownsPendingAbsoluteRestore) {
       this.scrollEl.scrollLeft = this._absoluteScrollRestore.scrollLeft;
       this.scrollEl.scrollTop = this._absoluteScrollRestore.scrollTop;
@@ -1344,6 +1360,7 @@ class VirtualArtistGrid {
   }
 
   activateGalleryCoverImages(rootEl = this.containerEl) {
+    if (typeof syncGalleryCardMetadataMotion === 'function') syncGalleryCardMetadataMotion(rootEl);
     if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
     rootEl.querySelectorAll('img[data-gallery-cover-src]').forEach((image) => {
       if (!(image instanceof HTMLImageElement)) return;
@@ -1441,9 +1458,14 @@ class VirtualArtistGrid {
       this.albumCardNodeCache.delete(cacheKey);
       this.albumCardNodeCache.set(cacheKey, card);
       while (this.albumCardNodeCache.size > MAX_RETAINED_ALBUM_CARD_NODES) {
-        const oldestIdentity = this.albumCardNodeCache.keys().next().value;
-        if (!oldestIdentity) break;
-        this.albumCardNodeCache.delete(oldestIdentity);
+        const oldestPendingIdentity = [...this.albumCardNodeCache.entries()].find(([, cachedCard]) => {
+          const cachedCover = cachedCard?.querySelector?.('.cover img');
+          return cachedCover instanceof HTMLImageElement
+            && (!cachedCover.complete || Number(cachedCover.naturalWidth || 0) <= 0);
+        })?.[0];
+        const evictionIdentity = oldestPendingIdentity || this.albumCardNodeCache.keys().next().value;
+        if (!evictionIdentity) break;
+        this.albumCardNodeCache.delete(evictionIdentity);
       }
     });
   }
@@ -1605,6 +1627,8 @@ class VirtualArtistGrid {
   }
 
   patchRenderedSections(records, options = {}) {
+    // An uninitialized model must not clear the server-rendered startup preview.
+    if (this._renderGeneration === 0 && !records.length) return;
     if (
       !this.containerEl
       || typeof this.containerEl.appendChild !== 'function'
@@ -2082,6 +2106,8 @@ function getGalleryModeRenderer(mode) {
 }
 
 function renderArtistGroups(options = {}) {
+  // Home hides the gallery; restore its visibility before measuring virtual rows.
+  if (typeof syncMobileHome === 'function') syncMobileHome();
   const model = getFilteredGalleryMainModel();
   const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
   const renderOptions = {

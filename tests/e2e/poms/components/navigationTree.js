@@ -24,3 +24,28 @@ export class NavigationTree {
     ).first());
   }
 }
+
+// The mobile/current NavigationTree paints selection with its rendered pseudo edge.
+export async function readNavigationSelectionPaint(selectedItem) {
+  // parity-check: allow-read-only-measurement-evaluate -- observe the selected item and its actual edge, not configured tokens
+  return selectedItem.evaluateAll(elements => {
+    if (!elements[0]) return null;
+    const item = getComputedStyle(elements[0]);
+    const accent = getComputedStyle(elements[0], '::before');
+    return {
+      fill: item.backgroundColor,
+      accent: {
+        backgroundColor: accent.backgroundColor,
+        width: accent.width,
+        height: accent.height,
+        content: accent.content,
+        display: accent.display,
+        visibility: accent.visibility,
+        opacity: accent.opacity,
+        top: accent.top,
+        bottom: accent.bottom,
+        left: accent.left,
+      },
+    };
+  });
+}

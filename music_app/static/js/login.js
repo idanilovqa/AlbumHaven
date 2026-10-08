@@ -17,8 +17,14 @@
   }
 
   if (form && submitButton) {
+    window.addEventListener("pageshow", () => {
+      window.AlbumHavenStartupProgress?.reset();
+      submitButton.disabled = false;
+      submitButton.textContent = "Sign in";
+    });
     form.addEventListener("submit", () => {
       if (!form.checkValidity()) return;
+      window.AlbumHavenStartupProgress?.show(25);
       submitButton.disabled = true;
       submitButton.textContent = "Signing in…";
     });

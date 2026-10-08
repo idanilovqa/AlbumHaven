@@ -138,3 +138,29 @@ test('track metadata query reads canonical library-root linkage', () => {
   assert.match(sql, /library\.local_track_files\.library_root_id/u);
   assert.doesNotMatch(sql, /metadata\s*->>\s*'library_root_id'/u);
 });
+
+test('synthetic search inventory uses one isolated read-only seeded query with encoded artists', async () => {
+  const { queryPersistedSyntheticSearchInventory } = await import('../e2e/helpers/postgresAlbumIdentityHelpers.js');
+  const calls = [];
+  const artists = ['Neal Morse', ARTIST_PAYLOAD];
+  const rows = [{ artist: 'Neal Morse', key: 'seeded-product-key', fixtureKey: 'seed-album' }];
+  const env = { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator:test-only@127.0.0.1/album_haven_fake_e2e' };
+  const result = await queryPersistedSyntheticSearchInventory(artists, {
+    env, platform: 'linux', execFileAsync: async (command, args, options) => {
+      calls.push({ command, args, options });
+      return { stdout: JSON.stringify(rows) };
+    },
+  });
+  assert.deepEqual(result, rows);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'psql');
+  assert.equal(calls[0].options.windowsHide, true);
+  assert.doesNotMatch(calls[0].args.join(' '), /test-only|DROP TABLE/);
+  const encoded = calls[0].args.find(argument => argument.startsWith('--variable=artists_b64=')).split('=').slice(2).join('=');
+  assert.deepEqual(JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')), artists);
+  const sql = require('node:fs').readFileSync(calls[0].args.find(argument => argument.startsWith('--file=')).slice(7), 'utf8');
+  assert.match(sql, /^begin read only;/);
+  assert.match(sql, /fixture_album_key/);
+  assert.match(sql, /profile'='synthetic-large-library'/);
+  await assert.rejects(queryPersistedSyntheticSearchInventory(artists, { env: {}, execFileAsync: async () => { throw new Error('must not connect'); } }), /requires/);
+});

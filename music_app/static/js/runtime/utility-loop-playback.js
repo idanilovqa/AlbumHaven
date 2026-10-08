@@ -81,7 +81,9 @@ function collapseAllUtilityLoopGroups() {
 }
 
 function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
+  if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(nextTab)) return false;
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allowsUtilityTab(normalizedTab)) return state.utility.activeTab;
   if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
     setUtilityActiveTab(normalizedTab, true);
     if (typeof loadActiveUtilityTab === 'function') loadActiveUtilityTab(true);
@@ -232,6 +234,7 @@ function initializeUtilityLoopPlayer(loop) {
   audio.dataset.bound = '1';
   audio.dataset.speed = '1';
   audio.dataset.pitch = '0';
+  audio.dataset.appliedPitch = '0';
   audio._loopEditPreviousTimeSeconds = Number(audio.currentTime) || 0;
   if ('preservesPitch' in audio) audio.preservesPitch = true;
   playButton?.addEventListener('click', () => {
@@ -311,41 +314,160 @@ function updateUtilityLoopAudioRate(loopId) {
   document.querySelectorAll(`[data-loop-speed-menu="${cssEscape(loopId || '')}"] [data-loop-speed-option]`).forEach((button) => {
     const optionValue = Number(button.getAttribute('data-loop-speed-option') || 0);
     button.classList.toggle('is-active', Math.abs(optionValue - speed) < 0.001);
+    button.setAttribute('aria-checked', String(Math.abs(optionValue - speed) < 0.001));
   });
   if (pitchValue) pitchValue.textContent = `${pitch > 0 ? '+' : ''}${pitch} pst`;
+  const pitchButton = document.querySelector(`[data-loop-pitch-value-button="${cssEscape(loopId || '')}"]`);
+  if (pitchButton) {
+    (pitchButton.querySelector('.ui-button__content') || pitchButton).textContent = `Pitch ${pitch > 0 ? '+' : ''}${pitch}`;
+    pitchButton.setAttribute('aria-busy', String(audio.dataset.pitchPending === 'true'));
+  }
+  document.querySelectorAll(`[data-loop-pitch-menu="${cssEscape(loopId || '')}"] [data-loop-pitch-option]`).forEach(button => {
+    button.setAttribute('aria-checked', String(Number(button.dataset.loopPitchOption) === pitch));
+  });
 }
 
-function positionUtilityLoopSpeedMenu(loopId) {
-  const trigger = document.querySelector(`[data-loop-speed-value-button="${cssEscape(loopId || '')}"]`);
-  const menu = document.querySelector(`[data-loop-speed-menu="${cssEscape(loopId || '')}"]`);
+// A phone picker unfolds from its button edge; selected-option scrolling never
+// determines the surface position. Bounds exclude app chrome and the player.
+function resolveUtilityLoopMenuPlacement(anchor, menu, bounds) {
+  const above = Math.max(0, anchor.top - bounds.top);
+  const below = Math.max(0, bounds.bottom - anchor.bottom);
+  const down = below >= menu.height || below >= above;
+  const height = Math.min(menu.height, down ? below : above);
+  const width = Math.min(menu.width, Math.max(0, bounds.right - bounds.left));
+  return {
+    edge: down ? 'top' : 'bottom', height, width,
+    top: down ? anchor.bottom : anchor.top - height,
+    left: Math.max(bounds.left, Math.min(anchor.right - width, bounds.right - width)),
+  };
+}
+
+function positionUtilityLoopSpeedMenu(loopId, setting = 'speed') {
+  const trigger = document.querySelector(`[data-loop-${setting}-value-button="${cssEscape(loopId || '')}"]`);
+  const menu = document.querySelector(`[data-loop-${setting}-menu="${cssEscape(loopId || '')}"]`);
   if (!trigger || !menu || menu.hidden) return;
-  const activeOption = menu.querySelector('.is-active') || menu.querySelector('[data-loop-speed-option="1.00"]') || menu.querySelector('[data-loop-speed-option]');
+  const activeOption = menu.querySelector('[aria-checked="true"], .is-active') || menu.querySelector('button');
   if (!activeOption) return;
 
   menu.style.visibility = 'hidden';
+  menu.style.maxHeight = '';
   menu.style.left = '0px';
   menu.style.top = '0px';
 
   const triggerRect = trigger.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
 
-
-
-  let left = triggerRect.left + (triggerRect.width / 2) - (menuRect.width / 2);
-  const below = window.innerHeight - triggerRect.bottom - 8;
-  const above = triggerRect.top - 8;
-  const opensBelow = below >= menuRect.height || below >= above;
-  menu.style.maxHeight = `${Math.max(0, (opensBelow ? below : above) - 6)}px`;
-  const popupHeight = Math.min(menuRect.height, Math.max(0, (opensBelow ? below : above) - 6));
-  let top = opensBelow ? triggerRect.bottom + 6 : triggerRect.top - popupHeight - 6;
+  if (menu.classList.contains('is-mobile-loop-menu')) {
+    const viewport = window.visualViewport;
+    const viewportTop = viewport?.offsetTop || 0;
+    const viewportBottom = viewportTop + (viewport?.height || window.innerHeight);
+    const playerTop = document.querySelector('.global-player')?.getBoundingClientRect().top ?? viewportBottom;
+    const barBottom = document.querySelector('.app-bar')?.getBoundingClientRect().bottom || 0;
+    const left = viewport?.offsetLeft || 0;
+    const placement = resolveUtilityLoopMenuPlacement(triggerRect, menuRect, {
+      left: left + 8, right: left + (viewport?.width || window.innerWidth) - 8,
+      top: Math.max(viewportTop, barBottom) + 8, bottom: Math.min(viewportBottom, playerTop) - 8,
+    });
+    menu.style.width = `${placement.width}px`;
+    menu.style.maxHeight = `${placement.height}px`;
+    menu.style.left = `${placement.left}px`;
+    menu.style.top = `${placement.top}px`;
+    const list = menu.querySelector('.utility-loop-menu-options') || menu;
+    list.scrollTop = Math.max(0, activeOption.offsetTop - (list.clientHeight - activeOption.getBoundingClientRect().height) / 2);
+    menu.style.visibility = '';
+    if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+    return;
+  }
 
   const padding = 8;
-  const clamped = clampPositionToViewport(left, top, menuRect.width, popupHeight, padding);
-
-  menu.style.left = `${clamped.left}px`;
-  menu.style.top = `${clamped.top}px`;
+  const playerTop = document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight;
+  const bottom = Math.min(window.innerHeight, playerTop);
+  const optionHeight = activeOption.getBoundingClientRect().height;
+  const selectedCenter = activeOption.offsetTop + optionHeight / 2;
+  const triggerCenter = triggerRect.top + triggerRect.height / 2;
+  const top = Math.max(padding, Math.min(triggerCenter - selectedCenter, bottom - padding - optionHeight));
+  const popupHeight = Math.max(optionHeight, Math.min(menuRect.height, bottom - padding - top));
+  menu.style.maxHeight = `${popupHeight}px`;
+  const left = Math.max(padding, Math.min(triggerRect.right - menuRect.width, window.innerWidth - padding - menuRect.width));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.scrollTop = Math.max(0, selectedCenter - (triggerCenter - top));
   menu.style.visibility = '';
-  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+  if (!menu.classList.contains('is-mobile-loop-menu') && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
+}
+
+// The desktop speed menu and phone Pitch/Speed buttons share the same audio
+// owners. Portal phone pickers out of the size-contained card so they neither
+// clip nor displace another player; only one disclosure can own focus at a time.
+let activeUtilityLoopSetting = null;
+function closeUtilityLoopSettingMenu(returnFocus = false) {
+  const active = activeUtilityLoopSetting;
+  if (!active) return;
+  activeUtilityLoopSetting = null;
+  active.events.abort();
+  active.menu.hidden = true;
+  active.trigger.setAttribute('aria-expanded', 'false');
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(active.menu);
+  active.menu.classList.remove('is-mobile-loop-menu');
+  active.menu.replaceChildren(...active.optionList.childNodes);
+  for (const name of ['width', 'max-height', 'left', 'top', 'visibility']) active.menu.style.removeProperty(name);
+  if (active.parent.isConnected) active.parent.appendChild(active.menu);
+  else active.menu.remove();
+  if (returnFocus && active.trigger.isConnected) active.trigger.focus({ preventScroll: true });
+}
+function toggleUtilityLoopSettingMenu(loopId, setting, keyboard = false) {
+  if (!['speed', 'pitch'].includes(setting)) return;
+  const trigger = document.querySelector(`[data-loop-${setting}-value-button="${cssEscape(loopId)}"]`);
+  const menu = document.querySelector(`[data-loop-${setting}-menu="${cssEscape(loopId)}"]`);
+  if (!trigger || !menu) return;
+  const wasOpen = activeUtilityLoopSetting?.menu === menu;
+  closeUtilityLoopSettingMenu(false);
+  if (wasOpen) return;
+  updateUtilityLoopAudioRate(loopId);
+  const parent = menu.parentElement;
+  const style = getComputedStyle(trigger.closest('.utility-loop-entry'));
+  for (const [target, source] of [['--loop-menu-surface', '--appearance-card'], ['--loop-menu-ink', '--appearance-ink'], ['--loop-menu-line', '--appearance-line'], ['--loop-menu-accent', '--appearance-play']]) {
+    menu.style.setProperty(target, style.getPropertyValue(source));
+  }
+  // Scroll the options independently so the shared outline/bridge stays attached.
+  const optionList = document.createElement('div');
+  optionList.className = 'utility-loop-menu-options';
+  optionList.append(...menu.childNodes);
+  menu.appendChild(optionList);
+  const events = new AbortController();
+  activeUtilityLoopSetting = { menu, trigger, parent, optionList, events };
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => closeUtilityLoopSettingMenu(false));
+  menu.classList.add('is-mobile-loop-menu');
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', setting === 'speed' ? 'Playback speed' : 'Pitch shift');
+  menu.querySelectorAll('button').forEach(button => button.setAttribute('role', 'menuitemradio'));
+  document.body.appendChild(menu);
+  menu.hidden = false;
+  trigger.setAttribute('aria-expanded', 'true');
+  positionUtilityLoopSpeedMenu(loopId, setting);
+
+  const options = () => [...menu.querySelectorAll('button:not(:disabled)')];
+  if (keyboard) (menu.querySelector('[aria-checked="true"]') || options()[0])?.focus({ preventScroll: true });
+  document.addEventListener('pointerdown', event => {
+    if (!menu.contains(event.target) && !trigger.contains(event.target)) closeUtilityLoopSettingMenu(false);
+  }, { capture: true, signal: events.signal });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopImmediatePropagation(); closeUtilityLoopSettingMenu(true);
+    } else if (event.key === 'Tab') {
+      closeUtilityLoopSettingMenu(true);
+    } else if (menu.contains(event.target) && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      const buttons = options(), index = buttons.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+        : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    }
+  }, { capture: true, signal: events.signal });
+  document.addEventListener('scroll', event => {
+    if (!menu.contains(event.target)) closeUtilityLoopSettingMenu(false);
+  }, { capture: true, passive: true, signal: events.signal });
+  window.addEventListener('resize', () => closeUtilityLoopSettingMenu(false), { signal: events.signal });
 }
 
 function updateUtilityLoopPlayerUi(loopId) {
@@ -356,11 +478,12 @@ function updateUtilityLoopPlayerUi(loopId) {
   const playButton = document.querySelector(`[data-loop-play="${cssEscape(loopId || '')}"]`);
   const timeline = elements.timeline;
   const time = elements.playbackTime;
-  const duration = Number(audio.duration) || 0;
+  const duration = Number(audio.duration) || Number(audio.dataset.loopDuration) || 0;
   const current = Number(audio.currentTime) || 0;
   if (timeline) {
     timeline.max = String(Math.max(duration, 0.1));
     timeline.value = String(Math.min(current, duration || current));
+    timeline.style?.setProperty('--loop-progress', `${duration > 0 ? Math.min(100, current / duration * 100) : 0}%`);
   }
   updateUtilityLoopStereoWaveform(id, audio);
   const waveform = state.utility.savedLoopWaveforms?.[id];
@@ -371,8 +494,15 @@ function updateUtilityLoopPlayerUi(loopId) {
     time.textContent = `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   if (playButton) {
-    const icon = audio.paused ? '\u25B6' : '\u23F8';
-    if (playButton.textContent !== icon) playButton.textContent = icon;
+    if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
+      const glyph = audio.paused ? 'play' : 'pause';
+      if (playButton.dataset.loopGlyph !== glyph) playButton.innerHTML = ButtonComponent.renderIconSvg(glyph);
+      playButton.dataset.loopGlyph = glyph;
+    } else {
+      const icon = audio.paused ? '\u25B6' : '\u23F8';
+      if (playButton.textContent !== icon) playButton.textContent = icon;
+      delete playButton.dataset.loopGlyph;
+    }
     playButton.setAttribute('aria-label', audio.paused ? 'Play' : 'Pause');
   }
 }
@@ -388,7 +518,9 @@ async function renderUtilityLoopPitchPreview(loopId, semitones) {
   const isLatestRequest = () => utilityLoopPitchPreviewRequestTokens.get(audio) === requestToken;
   const pitch = Math.max(-12, Math.min(12, Number(semitones) || 0));
   const wasPlayingWhenRequested = !audio.paused && !audio.ended;
+  const previousPitch = audio.dataset.appliedPitch || '0';
   audio.dataset.pitch = String(pitch);
+  audio.dataset.pitchPending = 'true';
   if (pitchValue) pitchValue.textContent = 'Rendering...';
   updateUtilityLoopAudioRate(loopId);
   try {
@@ -403,6 +535,7 @@ async function renderUtilityLoopPitchPreview(loopId, semitones) {
       throw new Error(data.error || 'Failed to render pitch preview');
     }
     const nextSrc = data.media_url || audio.dataset.originalSrc || '';
+    audio.dataset.appliedPitch = String(pitch);
     const endedWhilePending = wasPlayingWhenRequested && audio.paused && audio.ended;
     const shouldResume = (!audio.paused && !audio.ended) || endedWhilePending;
     const previousTime = endedWhilePending
@@ -425,10 +558,14 @@ async function renderUtilityLoopPitchPreview(loopId, semitones) {
     }
   } catch (error) {
     if (!isLatestRequest()) return;
+    audio.dataset.pitch = previousPitch;
     console.error('[AlbumHaven][Loops] Failed to render pitch preview.', error);
     showToast(error.message || 'Failed to render pitch preview.', 'error', 4200);
   } finally {
-    if (isLatestRequest()) updateUtilityLoopAudioRate(loopId);
+    if (isLatestRequest()) {
+      delete audio.dataset.pitchPending;
+      updateUtilityLoopAudioRate(loopId);
+    }
   }
 }
 

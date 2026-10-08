@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import re
+from contextlib import contextmanager
 from typing import Any, Iterable
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import psycopg
 from psycopg import sql
@@ -345,6 +346,46 @@ def capture_checkpoint(connection: Any) -> None:
         verify_checkpoint(connection, expected_tables=tables)
 
 
+@contextmanager
+def suspend_gallery_restore_triggers(connection: Any, tables: Iterable[tuple[str, str]]):
+    # The saved projection is replayed too; source invalidation would create or
+    # change those rows. Keep semantic, security and foreign-key triggers active.
+    host = connection.info.host
+    if ':' in host:
+        host = f'[{host}]'
+    database_url = validate_database_url(
+        f"postgresql://{quote(connection.info.user, safe='')}@"
+        f"{host}/{quote(connection.info.dbname, safe='')}"
+    )
+    validate_connected_identity(connection, database_url)
+    table_set = set(tables)
+    rows = connection.execute(
+        """
+        select namespace.nspname, relation.relname, trigger.tgname, trigger.tgenabled
+        from pg_catalog.pg_trigger trigger
+        join pg_catalog.pg_class relation on relation.oid = trigger.tgrelid
+        join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+        where not trigger.tgisinternal and trigger.tgconstraint = 0
+          and trigger.tgfoid = to_regprocedure('library.invalidate_gallery_projection_statement()')
+        order by namespace.nspname, relation.relname, trigger.tgname
+        """
+    ).fetchall()
+    triggers = [row for row in rows if (str(row[0]), str(row[1])) in table_set and row[3] != 'D']
+    modes = {'O': 'enable', 'R': 'enable replica', 'A': 'enable always'}
+    for schema, table, name, mode in triggers:
+        if mode not in modes:
+            raise ValueError('unsupported gallery trigger mode')
+        connection.execute(sql.SQL('alter table {}.{} disable trigger {}').format(
+            sql.Identifier(schema), sql.Identifier(table), sql.Identifier(name)
+        ))
+    yield
+    # On failure the enclosing transaction rolls back both data and trigger DDL.
+    for schema, table, name, mode in triggers:
+        connection.execute(sql.SQL('alter table {}.{} {} trigger {}').format(
+            sql.Identifier(schema), sql.Identifier(table), sql.SQL(modes[mode]), sql.Identifier(name)
+        ))
+
+
 def restore_checkpoint(connection: Any) -> None:
     with connection.transaction():
         tables = owned_application_tables(connection)
@@ -352,9 +393,10 @@ def restore_checkpoint(connection: Any) -> None:
         if set(inventory) != set(tables) or len(inventory) != len(tables):
             raise ValueError("checkpoint table inventory does not match application tables")
         order = dependency_order(tables, table_dependencies(connection, tables))
-        truncate_application_tables(connection, tables)
-        for table in order:
-            restore_table(connection, table)
+        with suspend_gallery_restore_triggers(connection, tables):
+            truncate_application_tables(connection, tables)
+            for table in order:
+                restore_table(connection, table)
         restore_sequences(connection)
         analyze_application_tables(connection, tables)
         verify_checkpoint(connection, expected_tables=tables)

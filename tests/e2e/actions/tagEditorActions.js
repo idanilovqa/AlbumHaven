@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { acknowledgeSavedNotification, deliverSavedNotificationThroughStatus } from '../helpers/savedNotificationDelivery.js';
 
 export class TagEditorActions {
   constructor(tagEditor) {
@@ -743,6 +744,12 @@ export class TagEditorActions {
 
   async applyAndWaitForSavedFiles(options = {}) {
     const timeout = options.timeout || 60000;
+    if (options.savedNotificationDelivery && !['current-view', 'status-page'].includes(options.savedNotificationDelivery)) {
+      throw new Error('Unknown saved notification delivery flow');
+    }
+    if (options.savedNotificationDelivery && options.terminalAlertDismissalTimeout) {
+      throw new Error('Explicit delivery cannot replace automatic notification dismissal coverage');
+    }
     const saveTaskStatuses = new Map();
     let editRequestCount = 0;
     const observeEditRequest = (request) => {
@@ -797,6 +804,7 @@ export class TagEditorActions {
         );
       }
       const saveTaskId = String(payload.save_task_id || '').trim();
+      if (options.savedNotificationDelivery) expect(saveTaskId).not.toBe('');
       if (options.terminalAlertDismissalTimeout) {
         expect(saveTaskId).not.toBe('');
         expect(payload.save_task_status).toBe('completed');
@@ -834,7 +842,16 @@ export class TagEditorActions {
             : 'Library view updated from saved files.',
           { timeout },
         );
-        await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
+        if (options.savedNotificationDelivery === 'status-page') {
+          await deliverSavedNotificationThroughStatus(this.tagEditor,
+            responseTaskCompleted ? 'Tag changes saved.' : 'Library view updated from saved files.',
+            { timeout, beforeNavigation: options.beforeSavedNotification });
+        } else if (options.savedNotificationDelivery === 'current-view') {
+          await acknowledgeSavedNotification(this.tagEditor,
+            responseTaskCompleted ? 'Tag changes saved.' : 'Library view updated from saved files.', { timeout });
+        } else {
+          await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
+        }
         if (options.terminalAlertDismissalTimeout) {
           await expect(this.tagEditor.repairAlert).toBeHidden({
             timeout: Number(options.terminalAlertDismissalTimeout),

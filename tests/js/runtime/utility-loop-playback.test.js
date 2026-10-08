@@ -42,7 +42,7 @@ class FakeElement {
     this.hiddenWrites = [];
     this.value = String(options.value ?? '');
     this.dataset = { ...(options.dataset || {}) };
-    this.style = {};
+    this.style = { setProperty(name, value) { this[name] = value; } };
     this.rect = options.rect || { left: 0, width: 100, top: 0, height: 20 };
     this.listeners = new Map();
   }
@@ -2063,7 +2063,7 @@ test('successful saved-loop deletion stops the editor expiry once after confirma
 test('loop progress updates preserve the play button content until playback changes', () => {
   let writes = 0;
   let text = '';
-  const button = { get textContent() { return text; }, set textContent(value) { text = value; writes++; }, setAttribute() {} };
+  const button = { dataset: {}, get textContent() { return text; }, set textContent(value) { text = value; writes++; }, setAttribute() {} };
   const audio = { paused: false, duration: 20, currentTime: 1 };
   const context = loadHelper({ document: { querySelector: selector => selector.includes('data-loop-play=') ? button : null } });
   context.getSavedLoopRangeElements = () => ({ audio });

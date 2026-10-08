@@ -4,11 +4,13 @@ import performanceTimesContract from '../../../scripts/performance-times-contrac
 const {
   PERFORMANCE_THRESHOLD_STATUS,
   classifyPerformanceThreshold,
+  isTemporaryColdProblematicApiException,
 } = thresholdClassification;
 const { resolvePerformanceContractName, resolveTimingBudget } = performanceTimesContract;
 
 export const MIN_PERFORMANCE_GRACE_MS = 200;
 export const MAX_PERFORMANCE_GRACE_MS = 400;
+const SYNTHETIC_SEARCH_METRIC_ID = 'search-preview.syntheticFirstVisibleMs';
 
 export const TIMING_BUDGET_STATUS = PERFORMANCE_THRESHOLD_STATUS;
 
@@ -31,7 +33,7 @@ export function defaultPerformanceGraceMs(targetMaximum) {
   return target < 1000 ? MIN_PERFORMANCE_GRACE_MS : MAX_PERFORMANCE_GRACE_MS;
 }
 
-export function defineTimingBudget({ targetMaximum, graceMs } = {}) {
+export function defineTimingBudget({ metricId, targetMaximum, graceMs, hardCeiling } = {}) {
   const target = Number(targetMaximum);
   const grace = graceMs === undefined
     ? defaultPerformanceGraceMs(target)
@@ -40,8 +42,10 @@ export function defineTimingBudget({ targetMaximum, graceMs } = {}) {
     throw new TypeError(`Timing target must be a finite non-negative number, received ${targetMaximum}.`);
   }
   if (!Number.isFinite(grace)
-    || grace < MIN_PERFORMANCE_GRACE_MS
-    || grace > MAX_PERFORMANCE_GRACE_MS) {
+    || grace < (metricId === SYNTHETIC_SEARCH_METRIC_ID ? 100 : MIN_PERFORMANCE_GRACE_MS)
+    || (grace > MAX_PERFORMANCE_GRACE_MS && !isTemporaryColdProblematicApiException(
+      metricId, target, grace, hardCeiling === undefined ? target + grace : Number(hardCeiling),
+    ))) {
     throw new RangeError(
       `Timing grace must be between ${MIN_PERFORMANCE_GRACE_MS} and ${MAX_PERFORMANCE_GRACE_MS} ms, received ${graceMs}.`,
     );
@@ -60,6 +64,7 @@ export function evaluateTimingBudget(actualMs, contract) {
   const actual = actualMissing ? Number.NaN : Number(actualMs);
   const budget = defineTimingBudget(contract);
   const classification = classifyPerformanceThreshold({
+    metricId: contract?.metricId,
     units: 'ms',
     actual,
     targetMaximum: budget.targetMaximum,

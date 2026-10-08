@@ -28,15 +28,15 @@ test('performance shard resolver preserves the existing fixture and target mappi
     basePort: 4213,
     targets: ['playback-start', 'gapless-playback'],
   });
-  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 10);
+  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 11);
   assert.throws(() => resolvePerformanceShard('unknown'), /Unknown performance shard/);
   assert.deepEqual(
     selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'exact').targets,
     ['scan-cached'],
   );
-  assert.equal(
-    selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'related').targets.length,
-    5,
+  assert.deepEqual(
+    selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'related').targets,
+    ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page', 'scan-health', 'scan-error'],
   );
   assert.throws(
     () => selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['playback-start'], 'exact'),
@@ -62,5 +62,5 @@ test('CLI writes scalar and ten-slot target outputs for GitHub Actions', () => {
   assert.match(output, /target1=utility-problematic-files/);
   assert.match(output, /target2=problematic-files-focused/);
   assert.match(output, /target3=none/);
-  assert.match(output, /target10=none/);
+  assert.match(output, /target11=none/);
 });

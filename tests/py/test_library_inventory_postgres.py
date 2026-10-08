@@ -245,11 +245,12 @@ def test_candidate_query_excludes_stale_files_and_files_belonging_to_inactive_ro
     assert "library.local_track_files.scan_cache_stale is false" in sql
     assert "metadata #>> '{scan_cache,stale}'" not in sql
     assert "join library.library_roots" in sql
+    assert "library.library_roots.id = active_track_files.library_root_id" in sql
     assert "library.library_roots.is_active is true" in sql
     assert "left join library.library_roots" not in sql
 
 
-def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_heavy_file_data():
+def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_required_file_data():
     sql = inventory_module._non_album_candidates_sql().lower()
     active_file_cte = sql.split("active_track_files as (", 1)[1].split(
         "),\n        exception_candidates as (",
@@ -261,7 +262,8 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_heavy
         "select",
         "library.local_track_files.id,",
         "library.local_track_files.track_id,",
-        "library.local_track_files.private_path",
+        "library.local_track_files.private_path,",
+        "library.local_track_files.library_root_id",
     ]
     assert "library.local_track_files.scan_cache_stale is false" in active_file_cte
     assert "metadata #>> '{scan_cache,stale}'" not in active_file_cte
@@ -272,7 +274,7 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_heavy
     assert "library.local_track_files.file_size_bytes" in sql
     assert "library.local_track_files.modified_at" in sql
     assert "library.local_track_files.content_signature" in sql
-    assert "library.local_track_files.metadata as track_file_metadata" in sql
+    assert "library.local_track_files.metadata as track_file_metadata" not in sql
     assert "library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry" in sql
     assert "active_track_files.relative_path" not in sql
     assert "active_track_files.metadata as track_file_metadata" not in sql
@@ -292,6 +294,22 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_heavy
     assert "active_track_files.id\n        limit %(limit)s" in sql
 
 
+def test_candidate_query_projects_only_json_fields_consumed_by_non_album_shaper():
+    sql = inventory_module._non_album_candidates_sql().lower()
+
+    assert "library.local_tracks.metadata as track_metadata" not in sql
+    assert "library.local_tracks.metadata -> 'artist' as raw_track_artist" in sql
+    assert "library.local_tracks.metadata -> 'year' as raw_track_year" in sql
+    assert "library.local_artists.metadata as artist_metadata" not in sql
+    assert "library.local_albums.metadata as album_metadata" not in sql
+    assert "library.local_albums.metadata -> 'edition' as album_edition" in sql
+    assert (
+        "library.local_albums.metadata -> 'cover_revision' as album_cover_revision"
+        in sql
+    )
+    assert "library.local_track_files.metadata as track_file_metadata" not in sql
+    assert "library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry" in sql
+    assert "library.library_roots.metadata as root_metadata" not in sql
 def test_candidate_query_prefilters_active_files_through_four_indexed_eligibility_paths():
     sql = inventory_module._non_album_candidates_sql().lower()
     assert "eligible_track_file_ids as (" in sql

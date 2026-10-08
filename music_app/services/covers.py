@@ -320,6 +320,11 @@ def build_cover_variant_path(source_path: Path, *, cache_root: Path, max_size: i
     ).with_suffix(extension)
 
 
+def display_cover_variant_cache_root(source_path: Path) -> Path:
+    """Return app-owner shared preview storage beside the album media."""
+    return Path(source_path).parent / ".album-haven"
+
+
 def build_cover_variant_base_path(source_path: Path, *, cache_root: Path, max_size: int) -> Path:
     signature = _image_dimensions_signature(source_path) or (0, 0)
     cache_key_material = f"{source_path.resolve()}|{signature[0]}|{signature[1]}|{max_size}"

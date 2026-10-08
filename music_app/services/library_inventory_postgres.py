@@ -253,7 +253,8 @@ def _non_album_candidates_sql() -> str:
           select
             library.local_track_files.id,
             library.local_track_files.track_id,
-            library.local_track_files.private_path
+            library.local_track_files.private_path,
+            library.local_track_files.library_root_id
           from library.local_track_files
           join eligible_track_file_ids
             on eligible_track_file_ids.track_file_id = library.local_track_files.id
@@ -317,28 +318,28 @@ def _non_album_candidates_sql() -> str:
           library.local_tracks.disc_number,
           library.local_tracks.track_number,
           library.local_tracks.duration_seconds,
-          library.local_tracks.metadata as track_metadata,
+          library.local_tracks.metadata -> 'artist' as raw_track_artist,
+          library.local_tracks.metadata -> 'year' as raw_track_year,
           library.local_tracks.metadata ->> 'album' as raw_track_album,
           library.local_tracks.metadata ->> 'album_artist' as raw_track_album_artist,
           library.local_artists.id as artist_id,
           library.local_artists.artist_key,
           library.local_artists.name as artist_name,
           library.local_artists.sort_name as artist_sort_name,
-          library.local_artists.metadata as artist_metadata,
           library.local_albums.id as album_id,
           library.local_albums.album_key,
           library.local_albums.title as album_title,
           library.local_albums.release_year as album_release_year,
           library.local_albums.cover_path as album_cover_path,
-          library.local_albums.metadata as album_metadata,
           library.local_albums.metadata ->> 'album_artist' as raw_album_artist,
+          library.local_albums.metadata -> 'edition' as album_edition,
+          library.local_albums.metadata -> 'cover_revision' as album_cover_revision,
           active_track_files.id as track_file_id,
           active_track_files.private_path,
           library.local_track_files.relative_path,
           library.local_track_files.file_size_bytes,
           library.local_track_files.modified_at,
           library.local_track_files.content_signature,
-          library.local_track_files.metadata as track_file_metadata,
           library.local_track_files.metadata #> '{{scan_cache,file_entry}}' as file_entry,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album}}' as raw_file_album,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album_artist}}' as raw_file_album_artist,
@@ -348,7 +349,6 @@ def _non_album_candidates_sql() -> str:
           library.library_roots.id as root_id,
           library.library_roots.root_path,
           library.library_roots.root_kind,
-          library.library_roots.metadata as root_metadata,
           coalesce(
             nullif(library.local_track_files.metadata ->> 'library_root_category', ''),
             nullif(
@@ -379,7 +379,7 @@ def _non_album_candidates_sql() -> str:
           on library.local_albums.id = library.local_tracks.album_id
          and library.local_albums.library_id = library.local_tracks.library_id
         join library.library_roots
-          on library.library_roots.id = library.local_track_files.library_root_id
+          on library.library_roots.id = active_track_files.library_root_id
          and library.library_roots.library_id = library.local_tracks.library_id
          and library.library_roots.is_active is true
         left join (

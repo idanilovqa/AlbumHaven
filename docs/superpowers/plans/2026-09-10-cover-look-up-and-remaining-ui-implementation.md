@@ -1,6 +1,6 @@
 # Cover Look Up and Remaining Shared UI Implementation Plan
 
-> **For agentic workers:** Use the executing-plans skill to implement this plan task by task. Checkboxes track delivery. This document authorizes no merge, release or deployment.
+> **For agentic workers:** Use the executing-plans skill to implement this plan task by task. Checkboxes track delivery. This plan alone grants no merge, release or deployment authority. The owner's later 0.9.49 release instruction supersedes historical pause/unmerged restrictions; current authority, CI repair evidence and remaining gates are recorded in [Cover branch completion](2026-09-23-cover-branch-completion.md#current-release-authority-and-repair-checkpoint--2026-10-07).
 
 **Date:** 2026-09-10
 
@@ -24,7 +24,7 @@ A leftover mixed Navigation & utility sections specimen does not authorize combi
 
 - [Approved board](../../design-mockups/screens/remaining-ui/v001/index.html): anchors `cover`, `artist-rail`, `edit-tags`, `appearance`, `library-scan`, `library-status-dropdown`, `button-options`, `action-button-options`, `dropdown-specimen`, `search-specimens`.
 - [Full-page fold/reflow reference](../../design-mockups/screens/remaining-ui/v001/full-page.html): behavior only; preserve actual application styling.
-- [Approval record](../../design-mockups/screens/remaining-ui/v001/review.json), [approved asset hashes](../../design-mockups/screens/remaining-ui/v001/approved-artifacts.json), [historical review notes](../../design-mockups/screens/remaining-ui/v001/notes.md), [initial brief](2026-09-09-cover-look-up-refactor-brief.md).
+- [Approval record](../../design-mockups/screens/remaining-ui/v001/review.json), [approved asset hashes](../../design-mockups/screens/remaining-ui/v001/approved-artifacts.json), [historical review notes](../../design-mockups/screens/remaining-ui/v001/notes.md), [initial brief](../../history/2026-09-09-cover-look-up-refactor-brief.md).
 - [Complete use-case matrix](2026-09-10-remaining-ui-use-cases.md): normative acceptance criteria; every case maps to a task below.
 - [Settings plan](2026-09-09-settings-refactor.md), [historical technical checkpoint](2026-09-09-settings-refactor-checkpoint.md), [final Settings navigation](../../design-mockups/screens/utilities-refactor/v002/navigation.html). Reconcile against the current settings branch; its checkpoint is not current verification evidence.
 - Shared plans: [convergence index](2026-09-06-shared-ui-convergence-index.md), [ActionButton](2026-09-04-shared-action-button.md), [unfolding actions](2026-09-08-unfolding-action-button.md), [lightbox](2026-09-06-image-lightbox.md), [alerts/toasts](2026-09-06-unified-alerts-and-toasts.md), [account/admin](2026-09-06-account-and-admin-components.md), [persistent shell](2026-09-02-persistent-settings-shell.md), [album details](2026-09-04-missing-album-and-album-details-components.md), [table alignment](2026-09-04-editorial-track-table-alignment.md).

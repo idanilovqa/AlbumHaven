@@ -252,7 +252,7 @@ test('scan status waiters consume only the newest production sample', async () =
   assert.equal(completed.album_total, 1001);
 });
 
-test('scan start waiter ignores an older completed scan retained in sampler history', async () => {
+test('scan start waiter ignores an older completed scan retained in sampler history', async (t) => {
   const oldActive = {
     scanInProgress: true,
     scanMode: 'background',
@@ -281,7 +281,11 @@ test('scan start waiter ignores an older completed scan retained in sampler hist
     },
   };
 
-  const started = await waitForStatusScanStart(sampler, { timeoutMs: 100, pollMs: 1 });
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const waiting = waitForStatusScanStart(sampler, { timeoutMs: 100, pollMs: 1 });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(1);
+  const started = await waiting;
 
   assert.equal(started.album_total, 1001);
   assert.equal(readCount, 2);
@@ -325,6 +329,7 @@ test('scan gallery readiness waits for the requested visible cover population', 
     },
   };
   const navigationPanelActions = {
+    async openArtistTree() { calls.push(['open-tree']); },
     navigationPanel: {
       allArtistsLink: {
         async waitFor(options) { calls.push(['sidebar', options]); },
@@ -339,6 +344,7 @@ test('scan gallery readiness waits for the requested visible cover population', 
   });
 
   assert.deepEqual(calls, [
+    ['open-tree'],
     ['sidebar', { state: 'visible', timeout: 60000 }],
     ['card', { state: 'visible', timeout: 60000 }],
     ['covers', { minimumCount: 8, timeout: 60000 }],

@@ -386,3 +386,31 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
   assert.equal(opened, false);
   assert.equal(context.state.ui.artistsDrawerOpen, false);
 }
+
+
+// A pending hidden-tree reveal runs only after expansion settles. Ordinary
+// expansion without a reveal must retain the user's existing scroll position.
+for (const pendingArtist of ['', 'Latest Artist']) {
+  const { context, documentElement } = loadHelper({ isMobile: false, artistTreeFolded: true });
+  context.state.ui.pendingSidebarRevealArtist = pendingArtist;
+  let renders = 0;
+  context.renderSidebar = () => { renders += 1; };
+  context.toggleArtistTreeFold();
+  assert.equal(renders, 0);
+  documentElement.dispatchEvent({ type: 'transitionend', target: documentElement,
+    propertyName: '--compact-rail-width' });
+  assert.equal(renders, pendingArtist ? 1 : 0);
+}
+
+{
+  const { context } = loadHelper({ isMobile: true });
+  const opener = createElement();
+  opener.setAttribute('data-search-results', 'true');
+  opener.setAttribute('aria-description', 'Search results available in Artists');
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'mobile-library-button' ? opener : originalGetElementById(id);
+  context.openArtistsDrawer();
+  assert.equal(opener.getAttribute('aria-expanded'), 'true');
+  assert.equal(opener.getAttribute('data-search-results'), null);
+  assert.equal(opener.getAttribute('aria-description'), null);
+}

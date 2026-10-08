@@ -8,7 +8,10 @@ function getBrowserDialogTarget() {
 
 let activeAppFormDialog = null;
 function showAppFormDialog(options = {}) {
-  if (activeAppFormDialog) return activeAppFormDialog.promise;
+  if (activeAppFormDialog) {
+    if (options.anchor && activeAppFormDialog.anchor === options.anchor) activeAppFormDialog.close?.();
+    return activeAppFormDialog?.promise || Promise.resolve(null);
+  }
   const get = name => document.getElementById(`app-form-${name}`);
   const modal = get('modal'), title = get('title'), content = get('content'), error = get('error'), cancel = get('cancel'), submit = get('submit');
   if (!modal || !title || !content || !error || !cancel || !submit) return Promise.resolve(null);
@@ -19,7 +22,7 @@ function showAppFormDialog(options = {}) {
   let positionObserver = null;
   const listen = (node, name, handler) => { node.addEventListener(name, handler); listeners.push([node, name, handler]); };
   let resolve; const promise = new Promise(done => { resolve = done; });
-  const owner = { promise }; activeAppFormDialog = owner;
+  const owner = { promise, anchor }; activeAppFormDialog = owner;
   let submitEnabled = options.submitEnabled !== false, submitting = false;
   const syncSubmit = () => { if (activeAppFormDialog === owner) submit.disabled = submitting || !submitEnabled; };
   const controls = { setSubmitEnabled(value) {
@@ -36,6 +39,7 @@ function showAppFormDialog(options = {}) {
     modal.hidden = true; content.innerHTML = ''; activeAppFormDialog = null;
     resolve(value); previousFocus?.focus?.({ preventScroll: true });
   };
+  owner.close = () => finish(null);
   const apply = async event => {
     event?.preventDefault?.();
     if (submit.disabled || options.mode === 'reading') return;
@@ -61,7 +65,10 @@ function showAppFormDialog(options = {}) {
       const boundary = boundaryElement?.getBoundingClientRect();
       const left = Math.max(8, Math.min(window.innerWidth - 16, Number(boundary?.left || 0) + 8));
       const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
-      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
+      const pageBottom = boundaryElement?.closest?.('.is-mobile-page')
+        ? document.querySelector('.global-player')?.getBoundingClientRect().top || window.innerHeight
+        : boundary?.bottom || window.innerHeight;
+      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(pageBottom) - 8));
       const width = Math.min(440, right - left);
       const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
       const panelLeft = searchRect
@@ -72,7 +79,11 @@ function showAppFormDialog(options = {}) {
       syncTriggerAnchor(anchoredPanel, anchor);
     };
     modal.classList.add('app-form-anchored'); anchoredPanel.setAttribute('aria-modal', 'false');
+    if (typeof activateTriggerSurface === 'function') activateTriggerSurface(anchoredPanel, () => finish(null));
     position();
+    listen(document, 'pointerdown', event => {
+      if (!anchoredPanel.contains(event.target) && !anchor.contains(event.target)) finish(null);
+    });
     if (typeof window.addEventListener === 'function') listen(window, 'resize', position);
     if (window.visualViewport?.addEventListener) listen(window.visualViewport, 'resize', position);
     if (typeof ResizeObserver === 'function') {

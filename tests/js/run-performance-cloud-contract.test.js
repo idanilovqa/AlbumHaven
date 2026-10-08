@@ -325,3 +325,4 @@ test('three valid CI timing hard failures are terminal', (t) => {
   assert.equal(result.finalStatus, 'failed');
   assert.equal(result.recoveryUsed, true);
 });
+

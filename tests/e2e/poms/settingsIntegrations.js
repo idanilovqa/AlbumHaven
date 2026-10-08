@@ -20,8 +20,20 @@ export class SettingsIntegrations {
     this.instructions = this.detail.getByRole('button', { name: 'Read setup instructions', exact: true });
     this.guideButtons = this.guide.getByRole('button');
     this.guideClose = this.guide.getByRole('button', { name: 'Close', exact: true });
+    this.mobileSubsectionButton = page.locator('#mobile-settings-section-button');
+    this.mobileSubsectionMenu = page.getByRole('group', { name: 'Settings subsections', exact: true });
   }
   navigation(label) { return this.page.locator('[data-utility-integration-key]').filter({ hasText: new RegExp(`^${label}$`, 'u') }); }
+  async openNavigationSection(label) {
+    if (await this.mobileSubsectionButton.isVisible()) {
+      await this.mobileSubsectionButton.click();
+      await expect(this.mobileSubsectionMenu).toBeVisible();
+      await this.mobileSubsectionMenu.getByRole('button', { name: label, exact: true }).click();
+      await expect(this.mobileSubsectionMenu).toBeHidden();
+    } else {
+      await this.navigation(label).click();
+    }
+  }
   async isRetainedField(handle) {
     // parity-check: allow-read-only-measurement-evaluate -- search must retain the actual unsaved input, not mount a lookalike
     return handle.evaluate(node => node.isConnected);

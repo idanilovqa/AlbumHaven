@@ -27,6 +27,7 @@ assertManagedSyntheticLargeFixtureEnv(process.env, {
 });
 const performanceReporterPath = path.join(__dirname, 'scripts', 'playwright-performance-reporter.cjs');
 const finalResultReporterPath = path.join(__dirname, 'scripts', 'playwright-final-result-reporter.cjs');
+const pairedSearchReporterPath = path.join(__dirname, 'scripts', 'paired-search-calibration-reporter.cjs');
 const { FINAL_RESULT_NONCE_ENV } = require(finalResultReporterPath);
 const finalResultReporterOptions = { nonce: String(process.env[FINAL_RESULT_NONCE_ENV] || '') };
 delete process.env[FINAL_RESULT_NONCE_ENV];
@@ -47,6 +48,7 @@ module.exports = defineConfig({
     ['list'],
     [performanceReporterPath],
     [finalResultReporterPath, finalResultReporterOptions],
+    [pairedSearchReporterPath],
   ],
   use: {
     baseURL: managedAppUrl,

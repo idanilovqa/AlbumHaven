@@ -33,6 +33,13 @@ WEAK_HASH = "$argon2id$v=19$m=8192,t=1,p=1$7gzHXLY+Jrk$j9w4vNiunZGDaSXcnrFOXw"
 _DEFAULT_DUMMY = object()
 
 
+def test_auth_login_uses_shared_bounded_postgres_pool_by_default():
+    module = import_module(MODULE)
+    from music_app.services.postgres_connections import pooled_connection
+
+    assert module._connect is pooled_connection
+
+
 def test_auth_login_postgres_contract_is_present():
     assert util.find_spec(MODULE) is not None, (
         "missing Phase 7 login persistence service: "

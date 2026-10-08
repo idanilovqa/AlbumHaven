@@ -75,36 +75,6 @@
   color: var(--muted);
   font-size: 0.84rem;
 }
-#cover-lookup-find-better-button {
-  flex: 0 0 auto;
-  min-width: 168px;
-  min-height: 42px;
-  border-width: 2px;
-  border-color: var(--appearance-primary-button, var(--accent));
-  background: color-mix(in srgb, var(--appearance-primary-button, var(--panel)) 80%, var(--appearance-primary-button-ink, var(--text)));
-  color: var(--appearance-primary-button-ink, var(--text));
-  font-weight: 800;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-  transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
-}
-#cover-lookup-find-better-button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 80%, white);
-  background: color-mix(in srgb, var(--appearance-primary-button, var(--accent)) 88%, white);
-  box-shadow:
-    0 0 16px color-mix(in srgb, var(--appearance-interaction-outline, var(--accent)) 26%, transparent),
-    0 8px 24px rgba(0, 0, 0, 0.22);
-}
-#cover-lookup-find-better-button:active:not(:disabled) {
-  transform: translateY(1px);
-}
-@media (max-width: 720px) {
-  .cover-lookup-search-action {
-    width: 100%;
-  }
-  #cover-lookup-find-better-button {
-    width: 100%;
-  }
-}
 .cover-lookup-section {
   display: grid;
   gap: 12px;
@@ -394,8 +364,10 @@
   overflow: hidden;
 }
 .cover-lookup-art-card.is-active {
-  border-color: rgba(96,165,250,0.7);
-  box-shadow: 0 0 0 1px rgba(96,165,250,0.3), 0 0 16px rgba(96,165,250,0.18);
+  border-color: #60a5fa;
+  outline: 3px solid #60a5fa;
+  outline-offset: -2px;
+  box-shadow: none;
 }
 .cover-lookup-art-preview {
   position: relative;
@@ -509,7 +481,7 @@
   color: var(--muted);
   font-size: 0.72rem;
 }
-.cover-lookup-art-source {
+.cover-lookup-art-source-row {
   color: var(--muted);
   font-size: 0.69rem;
   text-transform: uppercase;
@@ -563,9 +535,14 @@
 .cover-lookup-art-card:focus-within .cover-lookup-art-delete {
   opacity: 1;
 }
-.cover-lookup-art-delete:hover {
+.cover-lookup-art-delete:hover:not(:disabled) {
   border-color: rgba(252,165,165,0.72);
   color: #fff1f2;
+}
+.cover-lookup-art-card .cover-lookup-art-delete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: grayscale(1);
 }
 .cover-lookup-empty {
   padding: 16px;
@@ -780,4 +757,35 @@
 .version-picker-empty {
   padding: 14px 2px;
   color: rgba(245, 247, 250, 0.72);
+}
+
+
+/* Theme-aware discovery CTA: static halo, no layout growth or perpetual pulse. */
+:root #cover-lookup-modal #cover-lookup-find-better-button:not(:disabled):not([aria-disabled="true"]) {
+  --cover-search-accent: var(--appearance-primary-button, var(--accent));
+  /* Keep shared and mobile interaction rules on the same opaque owning surface. */
+  --appearance-hover: color-mix(in srgb, var(--cover-search-accent) 12%, var(--panel));
+  --appearance-item-action-hover-background: var(--appearance-hover);
+  --appearance-item-action-pressed: color-mix(in srgb, var(--cover-search-accent) 18%, var(--panel));
+  color: var(--text);
+  background: color-mix(in srgb, var(--cover-search-accent) 8%, var(--panel));
+  border-color: color-mix(in srgb, var(--cover-search-accent) 72%, var(--appearance-line, var(--border)));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--cover-search-accent) 36%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--cover-search-accent) 18%, transparent);
+  transition: box-shadow 180ms ease, border-color 180ms ease;
+}
+:root #cover-lookup-modal #cover-lookup-find-better-button:not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) {
+  background: var(--appearance-item-action-hover-background);
+  border-color: var(--cover-search-accent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--cover-search-accent) 48%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--cover-search-accent) 30%, transparent);
+}
+:root #cover-lookup-modal #cover-lookup-find-better-button:is(:disabled, [aria-disabled="true"]) { box-shadow: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root #cover-lookup-modal #cover-lookup-find-better-button { transition: none !important; }
+}
+@media (forced-colors: active) {
+  :root #cover-lookup-modal #cover-lookup-find-better-button:not(:disabled):not([aria-disabled="true"]) {
+    box-shadow: none; border-color: Highlight;
+  }
 }

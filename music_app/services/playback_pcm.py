@@ -212,6 +212,16 @@ class PcmDecoderProcess:
                 f"{requested_seek_seconds - input_seek_seconds:.9f}",
             )
 
+        from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+
+        gapless = await ignored_mp3_gapless_info(command.path, executable)
+        audio_filter: tuple[str, ...] = ()
+        if gapless is not None:
+            coarse_seconds, filters = gapless.decode_filters(command.sample_rate, command.start_frame)
+            input_seek = ("-ss", str(coarse_seconds)) if coarse_seconds else ()
+            output_seek = ()
+            audio_filter = ("-af", filters)
+            command = replace(command, provisional_duration_seconds=gapless.duration_seconds)
         process = await process_factory(
             executable,
             "-hide_banner",
@@ -222,6 +232,7 @@ class PcmDecoderProcess:
             str(command.path),
             *output_seek,
             "-vn",
+            *audio_filter,
             "-f",
             "f32le",
             "-acodec",

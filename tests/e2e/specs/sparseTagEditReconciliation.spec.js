@@ -144,3 +144,12 @@ test('FTC-TAGS-013 keeps a year-only edit sparse and retains its optimistic spli
     verifyAfterIncrementalScan: true,
   });
 });
+
+
+test.afterEach(async ({ galleryActions, testArtifacts }, testInfo) => {
+  if (!testInfo.title.startsWith('FTC-TAGS-012') || testInfo.status === testInfo.expectedStatus) return;
+  testArtifacts.queueJsonAttachment('tags012-scroll-failure-diagnostics.json', {
+    scrollTop: await galleryActions.galleryPage.readScrollTop(),
+    virtualGrid: await galleryActions.galleryPage.readVirtualGridDiagnostics(),
+  });
+});

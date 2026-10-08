@@ -8,7 +8,7 @@ export class SettingsShell {
     this.users = this.navigation.getByRole('link', { name: 'Users', exact: true });
     this.myAccount = this.navigation.getByRole('link', { name: 'My account', exact: true });
     this.signOut = this.navigation.getByRole('button', { name: 'Sign Out', exact: true });
-    this.library = page.getByRole('link', { name: 'Album Haven library', exact: true });
+    this.library = page.getByRole('link', { name: 'Back to library', exact: true });
     this.cancel = page.getByRole('link', { name: 'Cancel', exact: true });
     this.changePassword = page.getByRole('button', { name: 'Change password', exact: true });
     this.alert = page.getByRole('alert');
@@ -16,7 +16,7 @@ export class SettingsShell {
   }
 
   async expectOwnerNavigation(active) {
-    await expect(this.navigation.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+    await expect(this.navigation.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
     await expect(this.items).toHaveCount(3);
     await expect(this.items.nth(0)).toHaveAccessibleName('Users');
     await expect(this.items.nth(1)).toHaveAccessibleName('My account');

@@ -218,7 +218,7 @@ test('AlbumTrackTable uses theme text tokens, plain durations, and a subtly diss
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
     'utf8',
   );
-  assert.match(css, /\.album-track-table \.compact-data-table\s*\{[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
+  assert.match(css, /\.album-track-table \.compact-data-table(?:,[^{]+)?\s*\{[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
   assert.match(css, /\.album-track-table \[role="columnheader"\][^}]*color:\s*var\(--appearance-muted,\s*var\(--muted\)\)/s);
   assert.match(css, /\.album-track-table \.track-duration\s*\{[^}]*margin-left:\s*0[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
   assert.match(css, /album-track-table__row--animated::after\s*\{[^}]*opacity:\s*\.84/s);

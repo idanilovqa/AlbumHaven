@@ -23,6 +23,18 @@ export class GlobalPlayerActions {
     await this.globalPlayer.page.clock.fastForward(milliseconds);
   }
 
+  async pauseLoopEditExpiryClockBeforeRenewal() {
+    // This setup advance precedes the native drag that starts the measured lease.
+    // Freeze driver/geometry overhead out of the unchanged 299000/1000ms checks.
+    const currentTime = await this.globalPlayer.readWallClockTimeMs();
+    await this.globalPlayer.page.clock.pauseAt(currentTime + 1000);
+    return this.expectLoopEditorActive();
+  }
+
+  async resumeLoopEditExpiryClock() {
+    await this.globalPlayer.page.clock.resume();
+  }
+
   async elapseLoopEditExpiryClockWithoutTimers(milliseconds) {
     const currentTime = await this.globalPlayer.readWallClockTimeMs();
     await this.globalPlayer.page.clock.setSystemTime(currentTime + milliseconds);

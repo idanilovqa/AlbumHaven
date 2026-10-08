@@ -124,3 +124,9 @@ test('mobile exclusion tables retain the approved top-right action inset without
   assert.match(css, /\.utility-problem-exclusions-detail \.compact-data-table\s*\{[^}]*--cdt-row-padding: 10px 14px;/);
   assert.match(css, /@media \(max-width: 720px\)\s*\{\s*\.utility-problem-exclusions-detail \.compact-data-table\[data-cdt-mobile="stack"\]\s*\{\s*--cdt-row-padding: 10px;/);
 });
+
+
+test('mobile exclusion actions inherit the shared compact table placement', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../music_app/static/css/runtime/utilities.css'), 'utf8');
+  assert.doesNotMatch(css, /\.utility-problem-exclusions-detail[^{}]*\[data-cdt-column="action"\][^{}]*\{[^}]*grid-row\s*:/);
+});

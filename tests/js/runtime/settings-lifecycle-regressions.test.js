@@ -279,7 +279,7 @@ function keyedNavigationHarness(kind) {
     buildUtilityRuleListItem: item => `<button ${attribute}="${item.key}">${item.title}</button>`,
     buildUtilityRuleDetail: item => `<section>${item.key} detail</section>`,
   });
-  load(c, 'utility-renderers-and-actions', 'bootstrap-utility-event-handlers');
+  load(c, 'utility-loop-playback', 'utility-renderers-and-actions', 'bootstrap-utility-event-handlers');
   c.getSelectedUtilityRule = () => c.state.utility.rules.find(item => item.key === c.state.utility.selectedRuleKey);
   // Routing and the surface renderer are real; editor contents and shared row markup
   // are narrow component adapters. The DOM model permits keyed updates and models
@@ -346,6 +346,9 @@ function librarySaveHarness() {
   h.c.showToast = message => toasts.push(message);
   h.c.scheduleBrowserTimeout = callback => polls.push(callback);
   h.c.pollStatus = () => {};
+  h.c.claimLibraryStatusAction = () => ({});
+  h.c.settleLibraryStatusAction = () => true;
+  h.c.scheduleStatusPoll = delay => h.c.scheduleBrowserTimeout(h.c.pollStatus, delay);
   h.c.updateStatusIndicator = status => statuses.push(status);
   h.c.renderLibraryLoader = () => {};
   h.c.console = { ...console, error() {} };

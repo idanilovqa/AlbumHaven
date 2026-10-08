@@ -87,6 +87,7 @@ export class SearchToolbar extends BasePage {
     this.control = page.locator(this.formSelector + ' .search-field-control');
     this.input = page.locator(this.inputSelector);
     this.applyButton = page.locator(this.applyButtonSelector);
+    this.clearButton = this.form.getByRole('button', { name: 'Clear search', exact: true });
     this.recentSearchPopover = page.getByRole('listbox', { name: 'Recent searches' });
     this.recentSearchOptions = this.recentSearchPopover.getByRole('option');
     this.mainContent = page.getByRole('main');
@@ -130,7 +131,7 @@ export class SearchToolbar extends BasePage {
   }
 
   get artistHeadingSelector() {
-    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="artist"] [data-gallery-context-name], [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
+    return '#artist-groups .artist-name, [data-gallery-bar][data-gallery-context-kind="single-artist"] [data-gallery-context-name]';
   }
 
   get artistGroupsSelector() {

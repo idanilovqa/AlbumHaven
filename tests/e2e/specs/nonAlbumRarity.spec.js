@@ -79,8 +79,12 @@ test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and
       await tagEditorActions.selectTrackByFilename(INFERRED_TRACK_FILENAME);
       await tagEditorActions.clearAlbumName();
       await tagEditorActions.expectBlankAlbumCanApply();
-      await tagEditorActions.applyAndWaitForSavedFiles();
-      albumCleared = true;
+      // This notice is already visible beside Album Details. Acknowledge it
+      // before membership work consumes its normal two-second display lifetime.
+      await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'current-view',
+        onSaveTaskCompleted: () => { albumCleared = true; },
+      });
     });
 
     await stepLogger.step('Show the track immediately in both Other and its inferred album', async () => {
@@ -120,7 +124,7 @@ test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and
       await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
       await tagEditorActions.selectTrackByFilename(INFERRED_TRACK_FILENAME);
       await tagEditorActions.setAlbumName(INFERRED_ALBUM);
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
     }
   }
 });
@@ -346,13 +350,14 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
       await tagEditorActions.selectTrackByFilename(SIBLING_TRACK_FILENAME);
       await tagEditorActions.setException('Interview');
       await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        beforeSavedNotification: () => trackModalActions.close(),
         expectNonAlbumRarityWarning: true,
       });
       exceptionsApplied = true;
     });
 
     await stepLogger.step('Inspect the widened grouped compact table and row content', async () => {
-      await trackModalActions.close();
       await searchToolbarActions.clearSearch({ submitWithEnter: true });
       await searchToolbarActions.waitForQuery('');
       await galleryActions.waitForGalleryReady();
@@ -396,8 +401,10 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
       expect((await tagEditorActions.readSummary()).exceptionType).toBe('Interview');
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
-      fixtureRestored = true;
+      await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        onSaveTaskCompleted: () => { fixtureRestored = true; },
+      });
     });
   } finally {
     if (exceptionsApplied && !fixtureRestored) {
@@ -412,15 +419,17 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
     }
   }
 });
 
 test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files', { tag: '@area:album-details' }, async ({
+  appBarActions,
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
+  scanPageActions,
   searchToolbarActions,
   settingsModalAppBarActions,
   stepLogger,
@@ -449,15 +458,17 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.setException('Non-album rarity');
       await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        beforeSavedNotification: () => trackModalActions.close(),
         expectNonAlbumRarityWarning: true,
       });
       rarityConverted = true;
     });
 
     await stepLogger.step('Rename the non-album track through its Problematic Files edit scope', async () => {
-      await trackModalActions.close();
       await settingsModalAppBarActions.openSettings();
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+      await utilityProblematicFilesActions.revealListItemByIdentity({ title: RARITY_ALBUM, meta: `${RARITY_ARTIST} · ${RARITY_YEAR}` });
       const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
       const rarityAlbumIndex = problematicItems.findIndex((item) => (
         item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
@@ -470,11 +481,19 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       expect((await tagEditorActions.readSummary()).exceptionType).toBe('Non-album rarity');
       await tagEditorActions.setAlbumName(PROBLEMATIC_FILES_RENAME_ALBUM);
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      // Acknowledge the normal two-second notice before navigating away.
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'current-view' });
+      const previousLibraryState = await tagEditorActions.tagEditor.readLibraryReturnState();
+      await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
+      await appBarActions.openStatusMenu();
+      await scanPageActions.openStatusPageFromMenu();
+      await scanPageActions.clickBack();
+      await scanPageActions.waitForDedicatedPageHidden({ timeout: 10000 });
+      await expect.poll(() => tagEditorActions.tagEditor.readLibraryReturnState(), { timeout: 10000 })
+        .toEqual(previousLibraryState);
     });
 
     await stepLogger.step('Read the renamed Album from Loose Tracks and restore the fixture', async () => {
-      await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
       await searchToolbarActions.clearSearch({ submitWithEnter: true });
       await searchToolbarActions.waitForQuery('');
       await galleryActions.waitForGalleryReady();
@@ -488,14 +507,14 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.expectAlbumName(PROBLEMATIC_FILES_RENAME_ALBUM);
       await tagEditorActions.setAlbumName(RARITY_ALBUM);
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
 
       await artistPageSettingsActions.openNonAlbumTracks(1);
       await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
 
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
@@ -523,7 +542,7 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.setAlbumName(RARITY_ALBUM);
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
     }
   }
 });
@@ -560,13 +579,15 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.setException('Non-album rarity');
       await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        beforeSavedNotification: () => trackModalActions.close(),
         expectNonAlbumRarityWarning: true,
       });
       fixtureMutated = true;
 
-      await trackModalActions.close();
       await settingsModalAppBarActions.openSettings();
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+      await utilityProblematicFilesActions.revealListItemByIdentity({ title: RARITY_ALBUM, meta: `${RARITY_ARTIST} · ${RARITY_YEAR}` });
       const sourceItems = await utilityProblematicFilesActions.readVisibleListItems();
       const sourceIndex = sourceItems.findIndex((item) => (
         item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
@@ -583,13 +604,16 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await tagEditorActions.clearAlbumName();
       await tagEditorActions.clearException();
       await tagEditorActions.expectBlankAlbumCanApply();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      // Settings already exposes the saved notice. Acknowledge it before the
+      // sibling-editor journey consumes its normal two-second display lifetime.
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'current-view' });
       await utilityProblematicFilesActions.openTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
       expect((await tagEditorActions.readSummary()).trackFilenames).toEqual([
         SIBLING_TRACK_FILENAME,
       ]);
       await tagEditorActions.close();
+      await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
     });
 
     await stepLogger.step('Persist a blank physical Album tag and expose that blank when reopened', async () => {
@@ -599,7 +623,6 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       });
       expect(physicalTags.find((item) => item.filename === RARITY_TRACK_FILENAME)?.albumValues).toEqual([]);
 
-      await settingsModalAppBarActions.closeSettings({ timeout: 10000 });
       await searchToolbarActions.clearSearch({ submitWithEnter: true });
       await searchToolbarActions.waitForQuery('');
       if (await navigationPanelActions.readActiveSidebarArtistName() !== RARITY_ARTIST) {
@@ -625,7 +648,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
 
     await stepLogger.step('Restore the generated fixture through the same editor', async () => {
       await tagEditorActions.setAlbumName(RARITY_ALBUM);
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
       fixtureRestored = true;
     });
   } finally {
@@ -643,7 +666,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.setAlbumName(RARITY_ALBUM);
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
     }
   }
 });
@@ -676,10 +699,11 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.setException('Non-album rarity');
       await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        beforeSavedNotification: () => trackModalActions.close(),
         expectNonAlbumRarityWarning: true,
       });
       fixtureMutated = true;
-      await trackModalActions.closeIfOpen();
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
       await galleryActions.waitForGalleryReady();
       expect(await galleryActions.readAlbumIdentityCardCount({
@@ -698,7 +722,7 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.clearAlbumName();
       await tagEditorActions.expectBlankAlbumCanApply();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
       await artistPageSettingsActions.openNonAlbumTracks(2);
       await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
@@ -709,7 +733,7 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
 
     await stepLogger.step('Restore Album without waiting between edits and retain rarity suppression', async () => {
       await tagEditorActions.setAlbumName(RARITY_ALBUM);
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
       await artistPageSettingsActions.openNonAlbumTracks(2);
       await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
@@ -739,7 +763,7 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
       await galleryActions.waitForGalleryReady();
       await galleryActions.waitForAlbumVisibleUnderHeading(RARITY_ARTIST, RARITY_ALBUM);
@@ -767,9 +791,10 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.setException('Non-album rarity');
       await tagEditorActions.applyAndWaitForSavedFiles({
+        savedNotificationDelivery: 'status-page',
+        beforeSavedNotification: () => trackModalActions.close(),
         expectNonAlbumRarityWarning: true,
       });
-      await trackModalActions.closeIfOpen();
       await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
       await galleryActions.waitForGalleryReady();
       expect(await galleryActions.readAlbumIdentityCardCount({
@@ -787,7 +812,7 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.setAlbumName(RARITY_ALBUM);
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
       fixtureRestored = true;
     });
   } finally {
@@ -805,7 +830,7 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.setAlbumName(RARITY_ALBUM);
       await tagEditorActions.clearException();
-      await tagEditorActions.applyAndWaitForSavedFiles();
+      await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
     }
   }
 });
@@ -900,6 +925,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
     await artistPageSettingsActions.closeNonAlbumTracks();
     await settingsModalAppBarActions.openSettings();
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+    await utilityProblematicFilesActions.revealListItemByIdentity({ title: RARITY_ALBUM, meta: `${RARITY_ARTIST} · ${RARITY_YEAR}` });
     const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
     const looseProblemIndex = problematicItems.findIndex((item) => (
       item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
@@ -992,7 +1018,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
     await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
     await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
     await tagEditorActions.clearException();
-    await tagEditorActions.applyAndWaitForSavedFiles();
+    await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
   });
 });
 
@@ -1060,7 +1086,7 @@ test('FTC-TAGS-024 completes a verified Album and Exception intent during app re
 
   await stepLogger.step('Clear the recovered Exception and publish the recovered album card', async () => {
     await tagEditorActions.clearException();
-    await tagEditorActions.applyAndWaitForSavedFiles();
+    await tagEditorActions.applyAndWaitForSavedFiles({ savedNotificationDelivery: 'status-page' });
     expect(await readGeneratedTrackPostgresState(stagedIntent.trackPath)).toEqual({
       album: RECOVERED_RARITY_ALBUM,
       exceptionType: '',
@@ -1089,8 +1115,10 @@ test('FTC-TAGS-024 completes a verified Album and Exception intent during app re
     });
     await tagEditorActions.selectTrackByFilename(SIBLING_TRACK_FILENAME);
     await tagEditorActions.setAlbumName(RARITY_ALBUM);
-    await tagEditorActions.applyAndWaitForSavedFiles();
-    await trackModalActions.closeIfOpen();
+    await tagEditorActions.applyAndWaitForSavedFiles({
+      savedNotificationDelivery: 'status-page',
+      beforeSavedNotification: () => trackModalActions.close(),
+    });
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
     await galleryActions.waitForGalleryReady();
     await galleryActions.waitForAlbumVisibleUnderHeading(RARITY_ARTIST, RARITY_ALBUM);

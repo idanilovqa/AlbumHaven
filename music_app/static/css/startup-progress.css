@@ -1,0 +1,24 @@
+/* Reuse the shared progress-bar/fill geometry with the active player palette. */
+.startup-progress {
+  position: fixed; inset: 0; z-index: 6000; visibility: visible;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 24px; padding: 24px; box-sizing: border-box;
+  background: var(--appearance-main-surface, var(--login-night));
+  color: var(--appearance-ink, var(--login-ink));
+}
+.startup-progress[hidden], .startup-progress [hidden] { display: none; }
+.startup-progress h1 { margin: 0; font-size: 1.5rem; font-weight: 500; }
+.startup-progress .progress-bar {
+  width: min(320px, 100%); height: 10px; border-radius: 999px;
+  background: var(--appearance-player, var(--login-surface));
+  border: 1px solid color-mix(in srgb, var(--appearance-play, var(--login-green)) 40%, transparent);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--appearance-play, var(--login-green)) 30%, transparent);
+  overflow: hidden;
+}
+.startup-progress .progress-fill {
+  height: 100%; width: 0%; border-radius: inherit;
+  background: var(--appearance-play, var(--login-green));
+  box-shadow: 0 0 12px var(--appearance-waveform-fill, var(--appearance-play, var(--login-green)));
+  transition: width 0.25s ease;
+}
+@media (prefers-reduced-motion: reduce) { .startup-progress .progress-fill { transition: none; } }

@@ -47,6 +47,8 @@ from music_app.services.cover_lookup_tasks import (
     update_cover_lookup_task,
 )
 from music_app.services.cover_manual_links import add_manual_cover_candidates_from_urls
+from music_app.services.client_surfaces import client_surface_from_request
+from music_app.services.cover_provider_candidates import is_provider_lookup_match
 from music_app.services.cover_refresh_runtime import (
     cancel_cover_refresh_status,
     start_manual_cover_refresh_request,
@@ -311,7 +313,7 @@ def _is_squareish_cover(width: int, height: int) -> bool:
     return abs(width - height) / max(width, height) <= 0.18
 
 
-def _serialize_cover_gallery_from_asgi(
+async def _serialize_cover_gallery_from_asgi(
     request: Request,
     album_root,
     track_paths: set[str],
@@ -319,13 +321,23 @@ def _serialize_cover_gallery_from_asgi(
     candidate_snapshot: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     config = _app_config(request)
+    file_cache = _library_state(request).get("file_cache", {}) or {}
+    missing_paths = track_paths - set(file_cache)
+    if missing_paths and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+        selected_entries = await run_in_threadpool(
+            PostgresLibraryBrowseRepository(config).build_track_file_entries_by_paths,
+            missing_paths,
+        )
+        file_cache = {**file_cache, **selected_entries}
     task_payload = serialize_cover_lookup_task_payload(
         _lookup_task_payload_for_request(request, task_id)
     )
     return serialize_cover_gallery_payload(
         album_root=album_root,
         track_paths=track_paths,
-        file_cache=_library_state(request).get("file_cache", {}) or {},
+        file_cache=file_cache,
         image_extensions=set(config["IMAGE_EXTENSIONS"]),
         image_dimensions=image_dimensions,
         is_squareish_cover=_is_squareish_cover,
@@ -519,7 +531,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             "candidate_snapshot_read_failed"
         )
     return JSONResponse(
-        _serialize_cover_gallery_from_asgi(
+        await _serialize_cover_gallery_from_asgi(
             request,
             album_context.album_root,
             album_context.track_paths,
@@ -585,6 +597,8 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     if album_error is not None:
         return _json_response(album_error)
     manual_urls = _clean_string_list(payload.get("manual_urls"))
+    if manual_urls and client_surface_from_request(request) == "tv":
+        return _json_response(({"ok": False, "error": "Manual cover links are unavailable on TV."}, 403))
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album does not contain any tracks"}, 400))
@@ -669,7 +683,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         {
             "ok": True,
             "task": serialize_cover_lookup_task_payload(task_payload),
-            "gallery": _serialize_cover_gallery_from_asgi(
+            "gallery": await _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,
                 album_context.track_paths,
@@ -706,6 +720,8 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
 
 @router.post("/utilities/cover-lookup/local-select")
 async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
+    if client_surface_from_request(request) == "tv":
+        return _json_response(({"ok": False, "error": "Local cover selection is unavailable on TV."}, 403))
     history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
@@ -720,9 +736,31 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
+    selected_inventory_state = library_state
+    if (
+        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        and not album_context.track_paths <= set(library_state.get("file_cache") or {})
+    ):
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+        from music_app.services.library import build_albums_from_file_cache
+
+        def load_selected_inventory():
+            repository = PostgresLibraryBrowseRepository(config)
+            albums = repository.build_album_payloads_by_track_paths(album_context.track_paths)
+            paths = {
+                str(track.get("path") or "").strip()
+                for selected_album in albums
+                for track in selected_album.get("tracks", [])
+                if str(track.get("path") or "").strip()
+            }
+            entries = repository.build_track_file_entries_by_paths(paths)
+            return {**library_state, "file_cache": entries,
+                    "albums": build_albums_from_file_cache(entries)}
+
+        selected_inventory_state = await run_in_threadpool(load_selected_inventory)
     try:
         authoritative_track_paths = resolve_authoritative_album_track_paths(
-            library_state,
+            selected_inventory_state,
             album_context.track_paths,
         )
     except ValueError as exc:
@@ -862,6 +900,13 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
         # The per-album promotion lock covers filesystem promotion through the
         # committed runtime-state patch, but not logging or response shaping.
         complete_local_image_promotion(promotion)
+    if selected_inventory_state is not library_state and runtime_refresh_error is None:
+        updated_albums = [
+            _authoritative_local_cover_album_payload(selected_album, authoritative_cover, cover_revision)
+            for selected_album in find_albums_by_track_paths_in_state(
+                selected_inventory_state.get("albums", []), authoritative_track_paths
+            )
+        ]
     if runtime_refresh_error is not None:
         updated_albums = [
             _authoritative_local_cover_album_payload(
@@ -939,7 +984,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,
-            "gallery": _serialize_cover_gallery_from_asgi(
+            "gallery": await _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,
                 authoritative_track_paths,
@@ -1007,7 +1052,7 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,
-            "gallery": _serialize_cover_gallery_from_asgi(
+            "gallery": await _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,
                 album_context.track_paths,
@@ -1073,7 +1118,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,
-            "gallery": _serialize_cover_gallery_from_asgi(
+            "gallery": await _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,
                 album_context.track_paths,
@@ -1222,6 +1267,9 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
                         internal=True,
                     )
                     task_payload = cover_lookup_result(task_id)
+    if (selected_match and client_surface_from_request(request) == "tv"
+            and not is_provider_lookup_match(selected_match)):
+        return _json_response(({"ok": False, "error": "Only provider cover candidates can be selected on TV."}, 403))
     if not task_payload:
         return _json_response(_task_not_found_response("Lookup task"))
     if not selected_match:
@@ -1284,7 +1332,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     response_task_payload = serialize_cover_lookup_task_payload(
         _lookup_task_payload_for_request(request, task_id)
     )
-    response_gallery_payload = _serialize_cover_gallery_from_asgi(
+    response_gallery_payload = await _serialize_cover_gallery_from_asgi(
         request,
         album_context.album_root,
         album_context.track_paths,
@@ -1450,7 +1498,7 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
         {
             "ok": True,
             "task": serialize_cover_lookup_task_payload(task_payload),
-            "gallery": _serialize_cover_gallery_from_asgi(
+            "gallery": await _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,
                 album_context.track_paths,

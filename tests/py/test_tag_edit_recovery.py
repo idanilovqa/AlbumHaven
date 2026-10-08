@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -83,6 +84,9 @@ def run_startup_recovery(
 
         def load_unfinished_intents(self, *args, **kwargs):
             return [{"id": "intent-1", "status": "prepared", "changes": changes}]
+
+        def claim_unfinished_intent(self, _intent_id, **_kwargs):
+            return nullcontext(self.load_unfinished_intents()[0])
 
         def complete_in_transaction(self, *_args, **_kwargs):
             pass
@@ -482,7 +486,7 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
 
         def load_unfinished_intents(self, *args, **kwargs):
             load_calls.append((args, kwargs))
-            return [
+            self.rows = [
                 {
                     "id": "intent-outside-root",
                     "library_root_identity": "active-root",
@@ -510,6 +514,11 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
                     ],
                 }
             ]
+
+            return self.rows
+
+        def claim_unfinished_intent(self, intent_id, **_kwargs):
+            return nullcontext(next(row for row in self.rows if row["id"] == intent_id))
 
         def mark_recovery_failed(self, intent_id, error):
             failed.append((intent_id, str(error)))
@@ -581,3 +590,41 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
         for _intent_id, error in failed
     )
     assert metadata_calls == []
+
+
+@pytest.mark.parametrize("busy", [True, False])
+def test_startup_recovery_claims_one_intent_at_a_time_before_loading_inventory(monkeypatch, tmp_path, busy):
+    from contextlib import contextmanager
+    from music_app.services import tag_edit_recovery as recovery
+    events = []
+    class Repository:
+        def __init__(self, _config):
+            pass
+        def load_unfinished_intents(self, **_kwargs):
+            return [{"id": "one"}, {"id": "two"}]
+        @contextmanager
+        def claim_unfinished_intent(self, intent_id, **_kwargs):
+            events.append(("claim", intent_id))
+            try:
+                yield None if busy else {"id": intent_id}
+            finally:
+                events.append(("release", intent_id))
+    class Adapter:
+        def load_snapshot(self, *_args):
+            events.append(("snapshot", None))
+            return {}, None, {}, None, None
+    def reconcile(_runtime, _repository, claimed, _file_cache):
+        events.append(("reconcile", claimed["id"]))
+        return {"completed": 1, "rolled_back": 0, "reconciled_external": 0, "failed": 0}
+    monkeypatch.setattr(tag_edit_intents_postgres, "PostgresTagEditIntentRepository", Repository)
+    monkeypatch.setattr(library_roots, "library_root_cache_identity", lambda _config: "root")
+    monkeypatch.setattr(scan_cache_persistence, "select_scan_cache_adapter", lambda _config: Adapter())
+    monkeypatch.setattr(recovery, "_reconcile_claimed_tag_edit_intent", reconcile, raising=False)
+    runtime = SimpleNamespace(config={"CACHE_PATH": tmp_path / "unused"}, logger=SimpleNamespace(info=lambda *_args: None))
+    summary = recovery.reconcile_unfinished_tag_edit_intents_on_startup(runtime)
+    if busy:
+        assert summary["completed"] == 0
+        assert events == [("claim", "one"), ("release", "one"), ("claim", "two"), ("release", "two")]
+    else:
+        assert summary["completed"] == 2
+        assert events == [("claim", "one"), ("snapshot", None), ("reconcile", "one"), ("release", "one"), ("claim", "two"), ("reconcile", "two"), ("release", "two")]

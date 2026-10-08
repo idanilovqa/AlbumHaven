@@ -486,6 +486,54 @@ await page.route(routePattern, delegatedHandler);
   assertRejected(result, ['request-interception']);
 });
 
+contractTest('allows only the exact pre-navigation production-search host-telemetry route', () => {
+  const filePath = 'tests/e2e/productionRealData/searchFirstVisible.spec.js';
+  const safetyRoute = `
+const hostTelemetryRequests = [];
+await context.route('**/*', async (route) => {
+  const request = route.request();
+  if (isProductionSearchHostTelemetryRequest({
+    method: request.method(),
+    url: request.url(),
+    allowedOrigin: ALLOWED_ORIGIN,
+  })) {
+    const url = new URL(request.url());
+    hostTelemetryRequests.push({
+      method: request.method(),
+      origin: url.origin,
+      pathname: url.pathname,
+    });
+    await route.abort('blockedbyclient');
+    return;
+  }
+  await route.continue();
+});
+await galleryActions.goto('/?surface=albums');
+  `;
+
+  assert.deepEqual(scanSnippet(filePath, safetyRoute).violations, []);
+  const rejectedVariants = [
+    [
+      'tests/e2e/productionRealData/other.spec.js',
+      safetyRoute,
+    ],
+    [
+      filePath,
+      safetyRoute.replace(
+        "const hostTelemetryRequests = [];",
+        "await galleryActions.goto('/?surface=albums');\nconst hostTelemetryRequests = [];",
+      ),
+    ],
+    [filePath, safetyRoute.replace('isProductionSearchHostTelemetryRequest({', 'isOtherRequest({')],
+    [filePath, safetyRoute.replace("route.abort('blockedbyclient')", "route.fulfill({ status: 204 })")],
+    [filePath, safetyRoute.replace('pathname: url.pathname,', 'pathname: url.pathname,\n      url: request.url(),')],
+    [filePath, `${safetyRoute}\nawait page.route('/extra', handler);`],
+  ];
+  for (const [variantPath, source] of rejectedVariants) {
+    assertRejected(scanSnippet(variantPath, source), ['request-interception']);
+  }
+});
+
 contractTest('rejects routeFromHAR and standalone interception operations', () => {
   for (const source of [
     "await page.routeFromHAR('fixtures/api.har');",

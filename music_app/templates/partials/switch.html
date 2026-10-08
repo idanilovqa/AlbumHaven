@@ -1,0 +1,9 @@
+{% macro ui_switch(label, name, value='on', checked=false, disabled=false, description='', class_name='', attributes={}) -%}
+<label class="gallery-switch{% if class_name %} {{ class_name }}{% endif %}">
+  <span class="gallery-switch__label">{% if description %}<strong>{{ label }}</strong><small>{{ description }}</small>{% else %}{{ label }}{% endif %}</span>
+  <span class="gallery-switch__control">
+    <input class="gallery-switch__input" type="checkbox" name="{{ name }}" value="{{ value }}" aria-label="{{ label }}"{% if checked %} checked{% endif %}{% if disabled %} disabled{% endif %}{% for key, item in attributes.items() %}{% if item is sameas true %} {{ key }}{% elif item is not sameas false and item is not none %} {{ key }}="{{ item | forceescape }}"{% endif %}{% endfor %}>
+    <span class="gallery-switch__track" aria-hidden="true"><span class="gallery-switch__knob"></span></span>
+  </span>
+</label>
+{%- endmacro %}

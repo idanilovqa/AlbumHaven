@@ -48,3 +48,30 @@ test('Problematic Files search waits for the exact nonempty virtual projection',
   };
   await new UtilityProblematicFilesActions(pom).clearSearch();
 });
+
+test('continuity readiness rejects the old virtual range after native scroll already changed', async () => {
+  const { UtilityProblematicFilesTab } = await import('../e2e/poms/utilityProblematicFilesTab.js');
+  const keys = Array.from({ length: 21 }, (_, index) => `album-${index}`);
+  const dataset = { problematicVirtualStart: '2', problematicVirtualEnd: '21', problematicMountedCount: '19', problematicVirtualAxis: 'vertical' };
+  let rendered = keys.slice(2);
+  const list = { dataset, scrollTop: 732, clientHeight: 696,
+    querySelectorAll: () => rendered.map(key => ({ getAttribute: () => key })) };
+  const context = vm.createContext({ window: {}, state: { utility: { searchQuery: '' } },
+    getFilteredProblematicAlbums: () => keys.map(key => ({ key })),
+    document: { querySelector: selector => selector === '#utility-problematic-list' ? list : { textContent: '21' } },
+  });
+  const filename = require('node:path').resolve(__dirname, '../../music_app/static/js/runtime/problematic-files-virtual-list.js');
+  vm.runInContext(require('node:fs').readFileSync(filename, 'utf8'), context);
+  const pom = Object.create(UtilityProblematicFilesTab.prototype);
+  pom.waitForPageCondition = async (predicate, options, arg) => {
+    assert.equal(options.timeout, 60000);
+    context.expected = arg;
+    const ready = () => vm.runInContext(`(${predicate.toString()})(expected)`, context);
+    assert.equal(ready(), false, 'delivered scroll with previous start2 must not arm continuity');
+    dataset.problematicVirtualStart = '4';
+    dataset.problematicMountedCount = '17';
+    rendered = keys.slice(4);
+    assert.equal(ready(), true, 'owning range4:21 and exact mounted keys are now settled');
+  };
+  await pom.waitForSearchProjection('', { requireSettledRange: true });
+});

@@ -412,7 +412,7 @@ def test_live_admin_route_rejects_actor_session_revoked_during_authority_lock(au
             (fixture.now, session.session_id)), locked_account_id=fixture.owner_id)
     assert mutation_error is None
     assert failures == []
-    assert results == [409]
+    assert results == [401]
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         assert connection.execute("select is_active from app.accounts where id = %s",
             (fixture.target_id,)).fetchone()["is_active"] is True

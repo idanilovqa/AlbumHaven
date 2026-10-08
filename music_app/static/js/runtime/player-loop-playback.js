@@ -1,3 +1,94 @@
+// The persistent player owns only three measured rows. Audio ticks do not replace
+// their nodes or restart animation; ResizeObserver handles width/font changes.
+let globalPlayerMetadataMotion = null;
+function syncGlobalPlayerMetadataMotion(els, mobile) {
+  const rows = [els.artist, els.title, els.albumLink].filter(row => row?.ownerDocument?.createElement);
+  if (!rows.length || typeof window === 'undefined') return;
+  if (!mobile) {
+    globalPlayerMetadataMotion?.dispose();
+    globalPlayerMetadataMotion = null;
+    return;
+  }
+  if (!globalPlayerMetadataMotion) {
+    const entries = new Map();
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    let frame = 0;
+    let disposed = false;
+    const refresh = () => {
+      frame = 0;
+      for (const [row, text] of entries) {
+        const motion = !media?.matches && !row.hidden
+          ? resolveCompactPlayerMetadataRowMotion({ scrollWidth: text.scrollWidth, clientWidth: row.clientWidth })
+          : { overflowing: false, distance: 0, durationMs: 0 };
+        row.classList.toggle('is-metadata-overflowing', motion.overflowing);
+        row.style.setProperty('--player-metadata-distance', `${motion.distance}px`);
+        row.style.setProperty('--player-metadata-duration', `${motion.durationMs}ms`);
+      }
+    };
+    const schedule = () => {
+      if (!disposed && !frame) frame = window.requestAnimationFrame(refresh);
+    };
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
+    media?.addEventListener?.('change', schedule);
+    window.addEventListener('resize', schedule, { passive: true });
+    document.fonts?.ready.then(schedule);
+    globalPlayerMetadataMotion = {
+      update(row) {
+        let text = row.querySelector('[data-player-metadata-text]');
+        if (!text) {
+          text = row.ownerDocument.createElement('span');
+          text.setAttribute('data-player-metadata-text', '');
+          text.textContent = row.textContent;
+          row.replaceChildren(text);
+        }
+        if (entries.get(row) === text) return;
+        const previous = entries.get(row);
+        if (previous) observer?.unobserve(previous);
+        entries.set(row, text);
+        observer?.observe(row);
+        observer?.observe(text);
+        schedule();
+      },
+      dispose() {
+        disposed = true;
+        if (frame) window.cancelAnimationFrame(frame);
+        observer?.disconnect();
+        media?.removeEventListener?.('change', schedule);
+        window.removeEventListener('resize', schedule);
+        for (const row of entries.keys()) {
+          row.classList.remove('is-metadata-overflowing');
+          row.style.removeProperty('--player-metadata-distance');
+          row.style.removeProperty('--player-metadata-duration');
+        }
+        entries.clear();
+      },
+    };
+  }
+  rows.forEach(row => globalPlayerMetadataMotion.update(row));
+}
+
+function renderGlobalPlayerMetadata(els, track) {
+  const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+  const setText = (row, text) => {
+    if (!row) return;
+    if (row.textContent !== text) row.textContent = text;
+    if (mobile) row.setAttribute?.('title', text);
+    else row.removeAttribute?.('title');
+  };
+  if (els.artist) {
+    els.artist.hidden = !mobile || !track;
+    setText(els.artist, track?.artist || '');
+  }
+  const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
+  setText(els.title, parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '');
+  if (els.albumLink) {
+    setText(els.albumLink, track?.album || '');
+    els.albumLink.hidden = !track?.album;
+  }
+  syncGlobalPlayerMetadataMotion(els, mobile);
+}
+
+
 function clampLoopTimes() {
   const duration = getPlayerDuration() || 0;
   const max = duration > 0 ? duration : Math.max(state.player.loopEnd, 30);
@@ -55,6 +146,13 @@ function updateLoopInputsFromState() {
   }
 }
 
+function renderGlobalPlayerPlayGlyph(button, paused) {
+  const icon = paused ? 'play' : 'pause';
+  if (button.getAttribute('data-player-glyph') === icon) return;
+  button.innerHTML = window.ButtonComponent.renderIconSvg(icon, { className: 'player-transport-icon' });
+  button.setAttribute('data-player-glyph', icon);
+}
+
 function updatePlayerUi() {
   const els = getPlayerElements();
   const playback = getPlayerPlaybackSnapshot();
@@ -65,6 +163,9 @@ function updatePlayerUi() {
   const displayTrack = mirroredTrack || state.player.current;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
+  els.player?.classList?.toggle('is-empty', !hasTrack);
+  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
+  if (emptyMessage) emptyMessage.hidden = hasTrack;
   const duration = getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
@@ -92,7 +193,7 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
+    renderGlobalPlayerPlayGlyph(els.play, playback.paused);
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
@@ -107,16 +208,7 @@ function updatePlayerUi() {
   if (els.loopEndHandle) els.loopEndHandle.hidden = !state.player.loopActive;
   const loopRangeSurface = els.loopRange?.querySelector('[data-loop-range-surface]');
   if (loopRangeSurface) loopRangeSurface.hidden = !state.player.loopActive;
-  if (els.title) {
-    const titleParts = [displayTrack?.artist, displayTrack?.title].filter(Boolean);
-    els.title.textContent = titleParts.length
-      ? `${titleParts.join(' - ')}${displayTrack?.album ? ' /' : ''}`
-      : '';
-  }
-  if (els.albumLink) {
-    els.albumLink.textContent = displayTrack?.album || '';
-    els.albumLink.hidden = !displayTrack?.album;
-  }
+  renderGlobalPlayerMetadata(els, displayTrack);
   updateLoopInputsFromState();
   updateWaveformAppearance();
   const compactPeaks = state.player.waveform?.compactPeaks?.data;
@@ -148,6 +240,8 @@ function setCurrentPlayerTrack(track, options = {}) {
     if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
+  state.player.timelineDragging = false;
+  state.player.timelineDragPreviewSeconds = null;
   if (typeof probeCachedWaveformPeaks === 'function') {
     const cachedWaveformProbe = probeCachedWaveformPeaks(
       String(track?.path || ''),
@@ -164,16 +258,7 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.loopStart = 0;
   state.player.loopEnd = 30;
   state.player.loopEditDurationSeconds = 0;
-  const titleParts = [track?.artist, track?.title].filter(Boolean);
-  if (els.title) {
-    els.title.textContent = titleParts.length
-      ? `${titleParts.join(' - ')}${track?.album ? ' /' : ''}`
-      : '';
-  }
-  if (els.albumLink) {
-    els.albumLink.textContent = track?.album || '';
-    els.albumLink.hidden = !track?.album;
-  }
+  renderGlobalPlayerMetadata(els, track);
   if (els.coverButton) {
     const coverPath = track?.coverPath || '';
     const loadId = (state.player.coverLoadId || 0) + 1;
@@ -900,51 +985,54 @@ function attachSharedPlayer() {
     if (trackRow && trackRow.dataset.doubleClickBound !== '1') {
       trackRow.dataset.doubleClickBound = '1';
       trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
+      trackRow.addEventListener('click', handleAlbumTrackRowClick);
     }
-    btn.addEventListener('click', (event) => {
-      const focusTimeline = event?.isTrusted !== false;
-      const src = btn.getAttribute('data-src');
-      if (!src) return;
-      if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
-        triggerAlbumTrackPlayActivation(btn);
-      }
-      const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
-      const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
-      const playback = getPlayerPlaybackSnapshot();
-      const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
-      if (isLoadedCurrentTrack) {
-        togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
-        updatePlayerUi();
-        return;
-      }
-      const currentAlbum = !document.getElementById('track-modal')?.hidden
-        ? state.modalReleases[state.modalReleaseIndex] || null
-        : null;
-      const playbackStart = playTrackFromPayload({
-        src,
-        path: trackPath,
-        title: btn.getAttribute('data-track-title') || 'Track',
-        artist: btn.getAttribute('data-track-artist') || '',
-        albumArtist: btn.getAttribute('data-track-album-artist') || '',
-        album: btn.getAttribute('data-track-album') || '',
-        coverPath: btn.getAttribute('data-track-cover') || '',
-        durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
-      });
-      if (currentAlbum) {
-        setAlbumPlaybackQueue(currentAlbum, trackPath);
-      } else {
-        state.player.playbackQueue = null;
-      }
-      if (typeof observeStreamingFacadeCallback === 'function') {
-        observeStreamingFacadeCallback(playbackStart, 'track-selection-start-error');
-      } else {
-        void playbackStart.catch((error) => {
-          console.warn('[AlbumHaven][Playback] Track selection failed.', error);
-        });
-      }
-      if (focusTimeline) focusPlayerTimeline();
-    });
+    btn.addEventListener('click', event => activateSharedTrackButton(btn, { focusTimeline: event?.isTrusted !== false }));
   });
+}
+
+function activateSharedTrackButton(btn, { restart = false, focusTimeline = false } = {}) {
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
+  const src = btn.getAttribute('data-src');
+  if (!src) return;
+  if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
+    triggerAlbumTrackPlayActivation(btn);
+  }
+  const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
+  const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
+  const playback = getPlayerPlaybackSnapshot();
+  const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
+  if (isLoadedCurrentTrack && !restart) {
+    togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
+    updatePlayerUi();
+    return;
+  }
+  const currentAlbum = !document.getElementById('track-modal')?.hidden
+    ? state.modalReleases[state.modalReleaseIndex] || null
+    : null;
+  const playbackStart = playTrackFromPayload({
+    src,
+    path: trackPath,
+    title: btn.getAttribute('data-track-title') || 'Track',
+    artist: btn.getAttribute('data-track-artist') || '',
+    albumArtist: btn.getAttribute('data-track-album-artist') || '',
+    album: btn.getAttribute('data-track-album') || '',
+    coverPath: btn.getAttribute('data-track-cover') || '',
+    durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
+  });
+  if (currentAlbum) {
+    setAlbumPlaybackQueue(currentAlbum, trackPath);
+  } else {
+    state.player.playbackQueue = null;
+  }
+  if (typeof observeStreamingFacadeCallback === 'function') {
+    observeStreamingFacadeCallback(playbackStart, 'track-selection-start-error');
+  } else {
+    void playbackStart.catch((error) => {
+      console.warn('[AlbumHaven][Playback] Track selection failed.', error);
+    });
+  }
+  if (focusTimeline) focusPlayerTimeline();
 }
 
 function claimGlobalPlayerSpaceOwnership() {
@@ -958,6 +1046,30 @@ function attachPlayerEvents() {
 
   if (typeof mountGlobalPlayerLoopControls === 'function') mountGlobalPlayerLoopControls();
 
+  let thinSeekGesture = null;
+  let suppressThinSeekClick = false;
+  els.player?.addEventListener('pointerdown', (event) => {
+    if (thinSeekGesture || event.isPrimary === false || (event.button != null && event.button !== 0)) return;
+    suppressThinSeekClick = false;
+    if (Number(window.innerWidth) > 900 || els.player.getAttribute('data-player-seekbar-presentation') !== 'thin'
+      || !state.player.current || state.player.loopActive || state.player.timelineDragging) return;
+    if (event.target === els.timeline || els.timeline?.parentElement?.contains?.(event.target)) return;
+    const control = event.target?.closest?.('button, a, input, select, textarea');
+    if (control && control !== els.play) return;
+    const rect = els.timeline?.getBoundingClientRect();
+    const duration = getPlayerDuration();
+    if (!rect || !(rect.width > 0) || !(duration > 0)) return;
+    const headX = rect.left + (Number(els.timeline.value) || 0) / duration * rect.width;
+    if (Math.abs(event.clientX - headX) > 28) return;
+    if (control !== els.play && (event.clientY < rect.top - 12 || event.clientY > rect.top + rect.height + 12)) return;
+    thinSeekGesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, track: getTrackIdentity(state.player.current), claimed: false };
+  }, { capture: true });
+  els.player?.addEventListener('click', (event) => {
+    if (!suppressThinSeekClick || event.detail === 0) return;
+    suppressThinSeekClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, { capture: true });
   els.player?.addEventListener('pointerdown', claimGlobalPlayerSpaceOwnership);
   els.player?.addEventListener('focusin', claimGlobalPlayerSpaceOwnership);
   els.play?.addEventListener('click', () => togglePlayerPlayback());
@@ -976,27 +1088,73 @@ function attachPlayerEvents() {
     setPlayerPlaybackHead(next);
   });
   els.timeline?.parentElement?.addEventListener('pointerdown', (event) => {
-    if (state.player.loopActive || event.target?.closest('.player-loop-handle')) return;
+    if (thinSeekGesture || state.player.loopActive || event.target?.closest('.player-loop-handle')) return;
     if (!state.player.current) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     event.preventDefault();
     state.player.timelineDragging = true;
     state.player.timelineDragPreviewSeconds = next;
     if (els.timeline) els.timeline.value = String(next);
+    updatePlayerUi();
   });
   document.addEventListener('pointermove', (event) => {
+    if (thinSeekGesture) {
+      if (event.pointerId !== thinSeekGesture.pointerId) return;
+      if (getTrackIdentity(state.player.current) !== thinSeekGesture.track || state.player.loopActive) {
+        if (thinSeekGesture.claimed) {
+          state.player.timelineDragging = false;
+          state.player.timelineDragPreviewSeconds = null;
+          updatePlayerUi();
+        }
+        thinSeekGesture = null;
+        return;
+      }
+      if (!thinSeekGesture.claimed) {
+        const dx = Math.abs(event.clientX - thinSeekGesture.x);
+        const dy = Math.abs(event.clientY - thinSeekGesture.y);
+        if (dy > 8 && dy >= dx) { thinSeekGesture = null; return; }
+        if (dx < 8 || dx <= dy * 1.25) return;
+        thinSeekGesture.claimed = true;
+        state.player.timelineDragging = true;
+        suppressThinSeekClick = true;
+        els.player.setPointerCapture?.(event.pointerId);
+      }
+      event.preventDefault();
+    }
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
     if (els.timeline) els.timeline.value = String(next);
+    updatePlayerUi();
   });
-  document.addEventListener('pointerup', () => {
+  document.addEventListener('pointerup', (event) => {
+    if (thinSeekGesture) {
+      if (event.pointerId !== thinSeekGesture.pointerId) return;
+      const gesture = thinSeekGesture;
+      thinSeekGesture = null;
+      if (!gesture.claimed) return;
+      if (getTrackIdentity(state.player.current) !== gesture.track || state.player.loopActive) {
+        state.player.timelineDragging = false;
+        state.player.timelineDragPreviewSeconds = null;
+        updatePlayerUi();
+        return;
+      }
+    }
     if (state.player.timelineDragging) {
       const next = Number(state.player.timelineDragPreviewSeconds);
       if (Number.isFinite(next)) setPlayerPlaybackHead(next);
     }
     state.player.timelineDragging = false;
     state.player.timelineDragPreviewSeconds = null;
+  });
+  document.addEventListener('pointercancel', (event) => {
+    if (thinSeekGesture && event.pointerId !== thinSeekGesture.pointerId) return;
+    thinSeekGesture = null;
+    suppressThinSeekClick = false;
+    if (!state.player.timelineDragging) return;
+    state.player.timelineDragging = false;
+    state.player.timelineDragPreviewSeconds = null;
+    updatePlayerUi();
   });
   document.addEventListener('keydown', handlePlayerKeyboardSeek);
   document.addEventListener('keydown', handlePlayerKeyboardPlayback, { capture: true });

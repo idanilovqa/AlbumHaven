@@ -93,11 +93,15 @@ function mountLoopEditActionControl({
     if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
       clearTimers();
       renderEngagement(retained() && currentCanCreate);
+      // Start a fresh dwell for the current track after cancelling its predecessor's timer.
+      pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
+      if (pointerWithin && currentCanCreate) visit();
     } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
       clearTimers();
       renderEngagement(retained() || (currentActive && pointerWithin));
+      if (pointerWithin && !currentEngaged) visit();
     } else if (retained()) renderEngagement(true);
     root.hidden = !currentCanCreate;
     const unavailable = !currentEnabled || !currentCanCreate;
@@ -144,6 +148,8 @@ function mountLoopEditActionControl({
   listen(touchQuery, 'change', () => { if (retained()) visit(); else leave(); });
   renderEngagement(Boolean(touchQuery?.matches));
   update({ enabled, canCreate, active, busy });
+  pointerWithin = Boolean(compound.matches?.(':hover'));
+  if (pointerWithin) visit();
   return {
     update,
     destroy() {

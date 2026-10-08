@@ -191,14 +191,39 @@ test('B06 real callbacks remain retryable after busy save failure, and cancel re
   assert.deepEqual(h.calls, ['enter', 'create', 'create', 'cancel']);
 });
 
-test('B06 changing song identity cancels an idle reveal owned by the previous song', () => {
+test('B06 changing song identity cancels the previous timer and starts a fresh exact 300 ms dwell', () => {
   const h = harness();
   h.compound.dispatch('pointerenter');
+  const previousTimer = [...h.timers.keys()][0];
   h.tick(299);
   h.controller.update({ contextKey: 'next-song', active: false });
-  h.tick(1);
-  assert.equal(h.revealed(), false);
+  assert.equal(h.timers.has(previousTimer), false);
+  assert.equal(h.timers.size, 1);
+  h.tick(1); assert.equal(h.revealed(), false, 'the previous song deadline must not reveal the replacement');
+  h.tick(298); assert.equal(h.revealed(), false);
+  h.tick(1); assert.equal(h.revealed(), true);
   assert.equal(h.timers.size, 0);
-  h.tick(1000);
-  assert.equal(h.revealed(), false);
+});
+
+test('B06 leaving cancels the replacement song dwell and a new visit starts a full delay', () => {
+  const h = harness();
+  h.compound.dispatch('pointerenter'); h.tick(299);
+  h.controller.update({ contextKey: 'next-song', active: false });
+  h.controller.update({ contextKey: 'next-song', busy: false });
+  h.tick(299); assert.equal(h.revealed(), false);
+  h.compound.dispatch('pointerleave');
+  assert.equal(h.timers.size, 0);
+  h.tick(1000); assert.equal(h.revealed(), false);
+  h.compound.dispatch('pointerenter');
+  h.tick(299); assert.equal(h.revealed(), false);
+  h.tick(1); assert.equal(h.revealed(), true);
+});
+
+test('B06 same-song reset preserves hover recovery with a fresh exact reveal deadline', () => {
+  const h = harness();
+  h.compound.dispatch('pointerenter'); h.tick(299);
+  h.controller.update({ reset: true });
+  assert.equal(h.timers.size, 1);
+  h.tick(299); assert.equal(h.revealed(), false);
+  h.tick(1); assert.equal(h.revealed(), true);
 });

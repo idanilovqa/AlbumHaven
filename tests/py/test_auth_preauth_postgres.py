@@ -14,6 +14,13 @@ NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
 RAW_TOKEN = "s" * 43
 
 
+def test_auth_preauth_uses_shared_bounded_postgres_pool_by_default():
+    module = import_module(MODULE)
+    from music_app.services.postgres_connections import pooled_connection
+
+    assert module._connect is pooled_connection
+
+
 def test_auth_preauth_postgres_contract_is_present():
     assert util.find_spec(MODULE) is not None
 

@@ -1,7 +1,16 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
 
 const repositoryRoot = path.join(__dirname, '..', '..');
+const { renderActionButton } = require('../../music_app/static/js/button-component.js');
+const { resolveAppearance } = require('../../music_app/static/js/appearance-backgrounds.js');
+const { applyFixtureAppearance } = require('./appearanceFixture.js');
+const template = fs.readFileSync(path.join(repositoryRoot, 'music_app/templates/index.html'), 'utf8');
+const clearGlyph = template.match(/action_button\('Clear completed cover art lookups'[\s\S]*?%}\s*(<svg[\s\S]*?<\/svg>)/)[1];
+const clearActionMarkup = renderActionButton({
+  ariaLabel: 'Clear completed cover art lookups', presentation: 'bare', className: 'cover-lookup-drawer-clear',
+}).replace('<span class="action-button__icon" aria-hidden="true"></span>', clearGlyph);
 
 async function addDrawerStyles(page) {
   await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'css', 'button-component.css') });
@@ -10,18 +19,14 @@ async function addDrawerStyles(page) {
 
 test('cover lookup drawer actions align complete title subtitle block', async ({ page }) => {
   await page.setContent(`
-    <aside class="cover-lookup-drawer">
+    <aside class="cover-lookup-drawer is-open">
       <div class="cover-lookup-drawer-header">
         <div>
           <h3 class="cover-lookup-drawer-title">Cover lookups</h3>
           <div class="cover-lookup-drawer-subtitle">No activity</div>
         </div>
         <div class="cover-lookup-drawer-actions">
-          <button class="cover-lookup-drawer-clear action-button action-button--bare" aria-label="Clear completed cover art lookups">
-            <span class="action-button__content">
-              <span class="cover-lookup-drawer-clear-glyph" aria-hidden="true"></span>
-            </span>
-          </button>
+          ${clearActionMarkup}
           <button class="cover-lookup-drawer-close action-button action-button--bare" aria-label="Close cover art lookups">
             <span class="action-button__content">
               <svg class="action-button__icon ui-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
@@ -40,7 +45,7 @@ test('cover lookup drawer actions align complete title subtitle block', async ({
     const subtitle = box('.cover-lookup-drawer-subtitle');
     const buttons = [...document.querySelectorAll('.cover-lookup-drawer-actions .action-button')]
       .map(button => button.getBoundingClientRect());
-    const brush = box('.cover-lookup-drawer-clear-glyph');
+    const brush = box('.cover-lookup-drawer-clear svg');
     const close = box('.cover-lookup-drawer-close .action-button__icon');
 
     return {
@@ -63,71 +68,53 @@ test('cover lookup drawer actions align complete title subtitle block', async ({
 });
 
 async function renderClearAction(page, appearanceMode) {
-  await page.setContent(`
-    <html data-appearance-mode="${appearanceMode}">
-      <body>
-        <button class="cover-lookup-drawer-clear action-button action-button--bare" aria-label="Clear completed cover art lookups">
-          <span class="action-button__content">
-            <span class="cover-lookup-drawer-clear-glyph" aria-hidden="true">
-              <img class="cover-lookup-drawer-clear-glyph-default" alt="">
-              <img class="cover-lookup-drawer-clear-glyph-hover" alt="">
-            </span>
-          </span>
-        </button>
-      </body>
-    </html>
-  `);
+  const palette = appearanceMode === 'light' ? 'paper' : 'black';
+  await page.setContent(`<!doctype html><html><body style="background:var(--appearance-panel-background)">
+    ${clearActionMarkup}
+  </body></html>`);
   await addDrawerStyles(page);
+  await applyFixtureAppearance(page, { palette_id: palette, panel_index: 0 });
+  const ink = resolveAppearance({ palette_id: palette, panel_index: 0 }).tokens.ink;
+  return `rgb(${ink.slice(1).match(/../g).map(part => parseInt(part, 16)).join(', ')})`;
 }
 
-test('light theme keeps the dark clear glyph through hover and focus', async ({ page }) => {
-  await renderClearAction(page, 'light');
-  const clearAction = page.getByRole('button', { name: 'Clear completed cover art lookups' });
-  const defaultGlyph = page.locator('.cover-lookup-drawer-clear-glyph-default');
-  const hoverGlyph = page.locator('.cover-lookup-drawer-clear-glyph-hover');
-
-  await expect(defaultGlyph).toHaveCSS('opacity', '0');
-  await expect(hoverGlyph).toHaveCSS('opacity', '1');
-
-  await clearAction.hover();
-  await expect(defaultGlyph).toHaveCSS('opacity', '0');
-  await expect(hoverGlyph).toHaveCSS('opacity', '1');
-
-  await page.mouse.move(200, 200);
-  await clearAction.focus();
-  await expect(clearAction).toBeFocused();
-  await expect(defaultGlyph).toHaveCSS('opacity', '0');
-  await expect(hoverGlyph).toHaveCSS('opacity', '1');
-});
+for (const mode of ['light', 'dark']) {
+  test(`${mode} theme keeps the shared Clear SVG legible through hover and focus`, async ({ page }) => {
+    const expectedInk = await renderClearAction(page, mode);
+    const clearAction = page.getByRole('button', { name: 'Clear completed cover art lookups' });
+    const glyph = clearAction.locator('svg');
+    await expect(glyph).toHaveCount(1);
+    await expect(clearAction.locator('img')).toHaveCount(0);
+    await expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    await expect(glyph).toHaveAttribute('viewBox', '0 0 20 20');
+    await expect(glyph).toHaveCSS('stroke', expectedInk);
+    await expect(glyph).toHaveCSS('fill', 'none');
+    await expect(glyph).toHaveCSS('opacity', '1');
+    await clearAction.hover();
+    await expect(glyph).toHaveCSS('stroke', expectedInk);
+    await expect(glyph).toHaveCSS('opacity', '1');
+    await page.mouse.move(200, 200);
+    await clearAction.focus();
+    await expect(clearAction).toBeFocused();
+    await expect(glyph).toHaveCSS('stroke', expectedInk);
+    await expect(glyph).toHaveCSS('opacity', '1');
+    await expect(clearAction).toHaveCSS('outline-style', 'solid');
+    await expect(clearAction).not.toHaveCSS('outline-color', 'rgba(0, 0, 0, 0)');
+  });
+}
 
 test('light theme keeps the disabled clear brush legible', async ({ page }) => {
-  await renderClearAction(page, 'light');
+  const expectedInk = await renderClearAction(page, 'light');
   const clearAction = page.getByRole('button', { name: 'Clear completed cover art lookups' });
   await clearAction.evaluate(button => {
     button.disabled = true;
     button.setAttribute('aria-disabled', 'true');
+    button.addEventListener('click', () => { button.dataset.activated = 'true'; });
+    button.click();
   });
-
+  await expect(clearAction).toBeDisabled();
+  await expect(clearAction).not.toHaveAttribute('data-activated', 'true');
   await expect(clearAction).toHaveCSS('opacity', '0.75');
-  await expect(page.locator('.cover-lookup-drawer-clear-glyph-hover')).toHaveCSS('opacity', '1');
-});
-
-test('dark theme retains the current clear glyph swap', async ({ page }) => {
-  await renderClearAction(page, 'dark');
-  const clearAction = page.getByRole('button', { name: 'Clear completed cover art lookups' });
-  const defaultGlyph = page.locator('.cover-lookup-drawer-clear-glyph-default');
-  const hoverGlyph = page.locator('.cover-lookup-drawer-clear-glyph-hover');
-
-  await expect(defaultGlyph).toHaveCSS('opacity', '1');
-  await expect(hoverGlyph).toHaveCSS('opacity', '0');
-
-  await clearAction.hover();
-  await expect(defaultGlyph).toHaveCSS('opacity', '0');
-  await expect(hoverGlyph).toHaveCSS('opacity', '1');
-
-  await page.mouse.move(200, 200);
-  await clearAction.focus();
-  await expect(clearAction).toBeFocused();
-  await expect(defaultGlyph).toHaveCSS('opacity', '0');
-  await expect(hoverGlyph).toHaveCSS('opacity', '1');
+  await expect(clearAction.locator('svg')).toHaveCSS('stroke', expectedInk);
+  await expect(clearAction.locator('svg')).toHaveCSS('opacity', '1');
 });

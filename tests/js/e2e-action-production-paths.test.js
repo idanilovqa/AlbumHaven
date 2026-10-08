@@ -8,6 +8,18 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
+test('gallery readiness does not confuse absence-blocking membership with applied target proof', async () => {
+  const { classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const snapshot = { canonicalApplied: true, canonicalInventoryComplete: true,
+    canonicalMatch: true, attachedMatch: true, canonicalReadyMatch: false };
+  assert.deepEqual(classifyGalleryAlbumTargetState(snapshot), {
+    status: 'retryable', reason: 'canonical membership awaiting applied evidence',
+  });
+  assert.equal(classifyGalleryAlbumTargetState({ ...snapshot, canonicalReadyMatch: true }).status, 'ready');
+  assert.equal(classifyGalleryAlbumTargetState({ ...snapshot, canonicalMatch: false, attachedMatch: false,
+    canonicalInventoryComplete: false }).reason, 'incomplete canonical inventory');
+});
+
 test('Artist Tree folding waits for the shell transition to settle', async () => {
   const { NavigationPanelActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/navigationPanelActions.js')).href);
   let reads = 0;
@@ -22,6 +34,41 @@ test('Artist Tree folding waits for the shell transition to settle', async () =>
   const result = await actions.setArtistTreeFolded(true);
   assert.equal(clicks, 1);
   assert.equal(result.transitioning, false);
+});
+
+test('sidebar selection actions unfold the Artist Tree before using its links', async () => {
+  const { NavigationPanelActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/navigationPanelActions.js')).href);
+  const calls = [];
+  const indexedArtist = {
+    async getAttribute() { calls.push('indexed-read'); return 'Indexed Artist'; },
+    async click() { calls.push('indexed-click'); },
+  };
+  const namedArtist = {
+    async click() { calls.push('named-click'); },
+  };
+  const actions = new NavigationPanelActions({
+    mobileArtistTreeButton: { async isVisible() { return false; } },
+    sidebarArtists: { nth() { return indexedArtist; } },
+    sidebarArtistByName() { return namedArtist; },
+    allArtistsLink: {
+      async scrollIntoViewIfNeeded() { calls.push('all-scroll'); },
+      async click() { calls.push('all-click'); },
+    },
+  });
+  actions.setArtistTreeFolded = async (folded) => {
+    assert.equal(folded, false);
+    calls.push('unfold');
+  };
+
+  await actions.selectSidebarArtistAt(0);
+  await actions.selectSidebarArtistByName('Named Artist');
+  await actions.clickAllArtists();
+
+  assert.deepEqual(calls, [
+    'unfold', 'indexed-read', 'indexed-click',
+    'unfold', 'named-click',
+    'unfold', 'all-scroll', 'all-click',
+  ]);
 });
 
 test('cover toast entrance observation is cancelled when native search fails', async () => {
@@ -480,12 +527,12 @@ test('offscreen sidebar setup scrolls the opposite boundary based on the target 
   assert.match(navigation, /timeout: options\.timeout \|\| 10000/);
 });
 
-test('search correctness E2E covers identical-query reselection and debounce-only no-match clearing', () => {
+test('search correctness E2E covers identical-query reselection and explicit no-match clearing', () => {
   const actions = read('tests/e2e/actions/searchToolbarActions.js');
   const spec = read('tests/e2e/specs/searchTreeCorrectness.spec.js');
-  const naturalClearStart = actions.indexOf('async clearSearchByInputDebounce(options = {})');
+  const naturalClearStart = actions.indexOf('async clearSearchWithEnter(options = {})');
   const naturalClearEnd = actions.indexOf('\n  async ', naturalClearStart + 1);
-  assert.ok(naturalClearStart >= 0, 'Expected a debounce-only search-clear action.');
+  assert.ok(naturalClearStart >= 0, 'Expected an explicitly submitted search-clear action.');
   const naturalClear = actions.slice(
     naturalClearStart,
     naturalClearEnd >= 0 ? naturalClearEnd : actions.length,
@@ -494,7 +541,7 @@ test('search correctness E2E covers identical-query reselection and debounce-onl
   assert.match(naturalClear, /input\.fill\(''\)/);
   assert.match(naturalClear, /recentSearchPopover\)\.toBeHidden/);
   assert.match(naturalClear, /waitForQuery\('', options\)/);
-  assert.doesNotMatch(naturalClear, /\.press\('Enter'\)/);
+  assert.match(naturalClear, /\.press\('Enter'\)/);
   assert.doesNotMatch(naturalClear, /applyButton\.click\(\)/);
   assert.match(
     spec,
@@ -506,7 +553,7 @@ test('search correctness E2E covers identical-query reselection and debounce-onl
   );
   assert.match(
     spec,
-    /openRecentSearches\(\)[\s\S]*clearSearchByInputDebounce\(\)[\s\S]*waitForGalleryReady\(\)[\s\S]*waitForGalleryScrollAtStart\(\)/,
+    /openRecentSearches\(\)[\s\S]*clearSearchWithEnter\(\)[\s\S]*waitForGalleryReady\(\)[\s\S]*waitForGalleryScrollAtStart\(\)/,
   );
 });
 
@@ -1809,6 +1856,151 @@ test('context guard covers existing pages and future popups, then restores every
   assert.equal(context.route(), 'original-context-route');
 });
 
+test('authenticated fixture state keeps account layout ownership while anonymous browser baselines stay explicit', async (t) => {
+  const { withArtistTreePreference } = await import('../e2e/support/artistTreeStorageState.js');
+  const source = read('tests/e2e/support/baseFixtures.js');
+  assert.match(source, /initialArtistTreeFolded: \[null, \{ option: true \}\]/);
+  const start = source.indexOf('  storageState: async');
+  const end = source.indexOf('\n  managedAppLifecycle:', start);
+  assert.ok(start >= 0 && end > start);
+  const fixture = require('node:vm').runInNewContext(
+    `({${source.slice(start, end)}}).storageState`, { withArtistTreePreference },
+  );
+  for (const reuseAuthentication of [true, false]) {
+    for (const initialArtistTreeFolded of [null, false, true]) {
+      await t.test(`${reuseAuthentication ? 'account' : 'anonymous'} / ${initialArtistTreeFolded}`, async () => {
+        const authentication = { cookies: [{ name: 'owner', value: 'fixture' }], origins: [] };
+        const before = structuredClone(authentication);
+        let loginReads = 0;
+        let useCalls = 0;
+        await fixture({
+          reuseAuthentication,
+          initialArtistTreeFolded,
+          baseURL: 'http://localhost:5000/?surface=albums',
+          workerAuthentication: {
+            async getStorageState() { loginReads += 1; return structuredClone(authentication); },
+          },
+        }, async (state) => {
+          useCalls += 1;
+          const expected = reuseAuthentication ? before : {
+            cookies: [],
+            origins: initialArtistTreeFolded === null ? [] : [{
+              origin: 'http://localhost:5000',
+              localStorage: [{
+                name: 'albumhaven.shellLayoutPreferences.v1',
+                value: JSON.stringify({ artistTreeFolded: initialArtistTreeFolded }),
+              }],
+            }],
+          };
+          assert.deepEqual(JSON.parse(JSON.stringify(state)), expected);
+        });
+        assert.equal(loginReads, reuseAuthentication ? 1 : 0);
+        assert.equal(useCalls, 1);
+        assert.deepEqual(authentication, before);
+      });
+    }
+  }
+});
+
+test('fresh browser sessions retain independent ownership and clean up every context', async (t) => {
+  const { withArtistTreePreference } = await import('../e2e/support/artistTreeStorageState.js');
+  const source = read('tests/e2e/support/baseFixtures.js');
+  const start = source.indexOf('  freshBrowserSession: async');
+  const end = source.indexOf('\n  startupRelationProjectionReadiness:', start);
+  const fixtureSource = source.slice(start, end);
+  for (const failure of [null, 'initialize', 'dispose', 'artifact']) {
+    await t.test(failure || 'normal teardown', async () => {
+      const sessions = [];
+      const attachments = [];
+      const dependencyNames = [
+        'GalleryActions', 'GalleryPage', 'CoverLookupActions', 'CoverLookup',
+        'SearchToolbarActions', 'SearchToolbar', 'TagEditorActions', 'TagEditor',
+        'TrackModalActions', 'TrackModal',
+      ];
+      const dependencies = Object.fromEntries(dependencyNames.map((name) => [name, class {}]));
+      Object.assign(dependencies, {
+        URL,
+        withArtistTreePreference,
+        installContextRequestInterceptionGuard: (context) => {
+          context.guarded = true;
+          return () => { context.restored = true; };
+        },
+        getProductionViewObserver: (page) => ({
+          async initialize() {
+            if (failure === 'initialize' && page.context.id === 2) throw new Error('initialize failed');
+          },
+          async dispose() {
+            page.context.disposed = true;
+            if (failure === 'dispose' && page.context.id === 1) throw new Error('dispose failed');
+          },
+        }),
+        observePageRuntimeLogs: (page) => ({
+          stop() { page.context.stopped = true; },
+          snapshot() { return []; },
+        }),
+        didTestFail: () => true,
+        formatRuntimeLogs: () => 'logs',
+      });
+      const fixture = require('node:vm').runInNewContext(
+        `({${fixtureSource}}).freshBrowserSession`, dependencies,
+      );
+      const execution = fixture({
+        browser: {
+          async newContext(options) {
+            const context = {
+              id: sessions.length + 1, options,
+              async newPage() {
+                assert.equal(this.guarded, true);
+                return { context: this, screenshot: async () => Buffer.from('screenshot') };
+              },
+              async close() { this.closed = true; },
+            };
+            sessions.push(context);
+            return context;
+          },
+        },
+        testArtifacts: {
+          queueTextAttachment(name) {
+            attachments.push(name);
+            if (failure === 'artifact') throw new Error('artifact failed');
+          },
+          queueAttachment({ name }) { attachments.push(name); },
+        },
+        authenticateFreshBrowserSession: false,
+        initialArtistTreeFolded: false,
+        storageState: { cookies: [{ name: 'owner' }], origins: [] },
+      }, async (factory) => {
+        const first = await factory.create();
+        const second = await factory.create();
+        assert.notEqual(first.context, second.context);
+        assert.notEqual(first.page, second.page);
+        assert.equal(first.context.closed, undefined, 'first identity remains usable');
+        for (const session of sessions) {
+          assert.equal(session.options.storageState.cookies.length, 0);
+          assert.deepEqual(session.options.storageState.origins, [{
+            origin: 'http://localhost:5000',
+            localStorage: [{ name: 'albumhaven.shellLayoutPreferences.v1', value: '{"artistTreeFolded":false}' }],
+          }]);
+        }
+      }, { project: { use: { baseURL: 'http://localhost:5000' } } });
+      if (failure) await assert.rejects(execution, /initialize failed|Failed to clean up fresh browser sessions/);
+      else await execution;
+      assert.equal(sessions.length, 2);
+      for (const session of sessions) {
+        assert.equal(session.disposed, true);
+        assert.equal(session.restored, true);
+        assert.equal(session.closed, true);
+        if (failure !== 'initialize' || session.id !== 2) assert.equal(session.stopped, true);
+      }
+      if (!failure) {
+        assert.equal(new Set(attachments).size, 4, 'each session retains its own failure evidence');
+        assert.ok(attachments.includes('fresh-browser-session-runtime-log.txt'));
+        assert.ok(attachments.includes('fresh-browser-session-2-runtime-log.txt'));
+      }
+    });
+  }
+});
+
 test('all E2E specs inherit guarded fixtures and cannot create direct browser pages', () => {
   const e2eRoot = path.join(repoRoot, 'tests/e2e');
   const sources = [];
@@ -1823,6 +2015,25 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
 
   const directBrowserCreation = /\bbrowser\.newPage\s*\(|\bcontext\.newPage\s*\(|\.newContext\s*\(/;
   const baseFixturesPath = path.join(e2eRoot, 'support', 'baseFixtures.js');
+  const mobileFixturesPath = path.join(e2eRoot, 'support', 'mobileFixtures.js');
+  const guardedRoots = new Set([baseFixturesPath, mobileFixturesPath]);
+  const inheritsGuardedTest = (filePath, seen = new Set()) => {
+    if (guardedRoots.has(filePath)) return true;
+    if (seen.has(filePath) || !fs.existsSync(filePath)) return false;
+    seen.add(filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    const imports = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g)];
+    return imports.some(([, names, specifier]) => {
+      const importedTest = names.split(',').map(name => /^\s*test(?:\s+as\s+(\w+))?\s*$/.exec(name)).find(Boolean);
+      if (!importedTest || !specifier.startsWith('.')) return false;
+      const localTestName = importedTest[1] || 'test';
+      const isSpec = filePath.endsWith('.spec.js');
+      const extension = new RegExp(`${isSpec ? '(?:export\\s+)?' : 'export\\s+'}const\\s+test\\s*=\\s*${localTestName}\\.extend\\s*\\(`);
+      const usesImportedTest = (isSpec && localTestName === 'test') || extension.test(source);
+      return usesImportedTest
+        && inheritsGuardedTest(path.resolve(path.dirname(filePath), specifier), new Set(seen));
+    });
+  };
   for (const [filePath, source] of sources) {
     assert.doesNotMatch(source, /\b(?:chromium|firefox|webkit)\.launch\s*\(/, filePath);
     if (filePath === baseFixturesPath) {
@@ -1833,7 +2044,7 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       const freshBrowserSessionFixture = source.slice(fixtureStart, fixtureEnd);
       assert.match(
         freshBrowserSessionFixture,
-        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*storageState,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*storageState: authenticateFreshBrowserSession \? storageState : \{ cookies: \[\], origins: \[\] \}[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
+        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*storageState,\s*initialArtistTreeFolded,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*storageState: authenticateFreshBrowserSession \? storageState : withArtistTreePreference\(\s*\{ cookies: \[\], origins: \[\] \}, configuredBaseUrl, initialArtistTreeFolded,\s*\)[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
       );
       assert.equal(
         (freshBrowserSessionFixture.match(/\.newContext\s*\(/g) || []).length,
@@ -1847,11 +2058,26 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       );
       const sourceOutsideFreshBrowserSession = source.slice(0, fixtureStart) + source.slice(fixtureEnd);
       assert.doesNotMatch(sourceOutsideFreshBrowserSession, directBrowserCreation, filePath);
+    } else if (filePath === mobileFixturesPath) {
+      const factoryStart = source.indexOf('export function createMobileBrowserSessions(');
+      const factoryEnd = source.indexOf('export const test = base.extend(', factoryStart);
+      assert.ok(factoryStart >= 0 && factoryEnd > factoryStart, 'mobile session ownership must remain bounded');
+      const factory = source.slice(factoryStart, factoryEnd);
+      assert.equal((factory.match(/\.newContext\s*\(/g) || []).length, 1);
+      assert.equal((factory.match(/\.newPage\s*\(/g) || []).length, 2);
+      assert.match(factory, /installContextRequestInterceptionGuard\(freshContext\)/);
+      assert.match(factory, /Promise\.allSettled\(entries\.map\(closeEntry\)\)/);
+      assert.match(factory, /AggregateError/);
+      const fixtures = source.slice(factoryEnd);
+      assert.match(fixtures, /requestInterceptionGuard:[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*auto: true/);
+      assert.match(fixtures, /mobileBrowserSessions: async \(\{ browser, context, requestInterceptionGuard \}/);
+      assert.match(fixtures, /finally \{ await sessions\.closeAll\(\); \}/);
+      assert.doesNotMatch(source.slice(0, factoryStart) + fixtures, directBrowserCreation, filePath);
     } else {
       assert.doesNotMatch(source, directBrowserCreation, filePath);
     }
     if (!filePath.endsWith('.spec.js')) continue;
-    assert.match(source, /from ['"]\.\.\/support\/(?:base|performance)Fixtures\.js['"]/, filePath);
+    assert.equal(inheritsGuardedTest(filePath), true, `${filePath} must inherit a guarded named test fixture`);
     assert.doesNotMatch(source, /from ['"]@playwright\/test['"]/, filePath);
   }
 
@@ -2054,6 +2280,65 @@ test('album identity topology uses action-owned scrolling and rendered card loca
     /with 2 of 2 production wheel actions/,
   );
   assert.equal(boundedWheelDeltas.length, 2);
+});
+
+test('GalleryPage delegates artist-section identity to AlbumCard', () => {
+  const galleryPage = read('tests/e2e/poms/galleryPage.js');
+
+  assert.match(
+    galleryPage,
+    /sectionByArtistHeading\(artistHeading\) \{[\s\S]*return this\.albumCard\.sectionByArtistHeading\(artistHeading\);/,
+  );
+});
+
+test('album cover readiness polls one atomic shared-card image checkpoint', () => {
+  const galleryActions = read('tests/e2e/actions/galleryActions.js');
+  const albumCard = read('tests/e2e/poms/albumCard.js');
+  const methodStart = galleryActions.indexOf('async waitForAlbumCoverReadyUnderHeading(');
+  const methodEnd = galleryActions.indexOf('\n  async scrollToAlbumUnderHeading(', methodStart);
+  const methodSource = galleryActions.slice(methodStart, methodEnd);
+
+  assert.match(
+    methodSource,
+    /expect\.poll\([\s\S]*readCoverImageReadinessByArtistAndAlbum\(artistName, albumName\)[\s\S]*\.toBe\(true\)/,
+  );
+  assert.doesNotMatch(methodSource, /toHaveJSProperty|toHaveAttribute/);
+  assert.doesNotMatch(methodSource, /querySelectorAll\(selectors\.artistSectionSelector\)/);
+  const checkpointStart = albumCard.indexOf('async readCoverImageReadinessByArtistAndAlbum(');
+  const checkpointEnd = albumCard.indexOf('\n  get singleArtistContextNameSelector(', checkpointStart);
+  const checkpointSource = albumCard.slice(checkpointStart, checkpointEnd);
+  assert.match(checkpointSource, /cardsByArtistAndAlbum\(artistName, albumName, \{ visible: true \}\)/);
+  assert.match(checkpointSource, /evaluateAll\(/);
+  assert.match(checkpointSource, /resolvedImages\.length !== 1/);
+  assert.match(checkpointSource, /image\.complete\s*&&\s*image\.naturalWidth > 0/);
+  assert.match(checkpointSource, /data-production-cover-src/);
+  assert.match(checkpointSource, /data-cover-visual-state/);
+  assert.match(checkpointSource, /visualState\s*===\s*'ready'/);
+  assert.match(checkpointSource, /sourceCoherent/);
+  assert.match(checkpointSource, /currentSrc/);
+  assert.match(checkpointSource, /renderedSrc/);
+});
+
+test('complete search expected card comes from the exact response payload', async () => {
+  const { resolveSearchExpectedCard } = await import(pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/galleryActions.js'),
+  ).href);
+
+  assert.deepEqual(resolveSearchExpectedCard({
+    query: 'Neal Morse',
+    payload_tier: 'full',
+    primary_artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [{ name: 'Sola Scriptura' }],
+    }],
+  }, 'Neal Morse'), {
+    album: 'Sola Scriptura',
+    artist: 'Neal Morse',
+  });
+  assert.throws(
+    () => resolveSearchExpectedCard({ query: 'Other', artist_groups: [] }, 'Neal Morse'),
+    /exact full payload/i,
+  );
 });
 
 test('mounted topology allows only the edited-card-sized trailing virtual boundary change', async () => {
@@ -2396,7 +2681,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   )?.[0] || '';
   assert.match(
     observationMethod,
-    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.family-artist-header > span:last-child[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
+    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*\.family-artist-header > span:last-child[\s\S]*ownsSingleArtist[\s\S]*artistMetaText[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
   );
   assert.doesNotMatch(
     observationMethod,
@@ -4022,7 +4307,7 @@ test('gallery target viewport snapshot measures attached card and stable gallery
   const actions = read('tests/e2e/actions/galleryActions.js');
   assert.match(
     pom,
-    /const cards = year[\s\S]*cardByIdentity\(artistName, albumName, year\)[\s\S]*cardsByArtistAndAlbum\(artistName, albumName\)[\s\S]*return cards\.evaluateAll/,
+    /const cards = year[\s\S]*cardByIdentity\(artistName, albumName, year\)[\s\S]*cardsByArtistAndAlbum\(artistName, albumName\)[\s\S]*const targets = detailsAction \? cards\.locator\(this\.albumCard\.detailsButtonWithinCardSelector\) : cards;[\s\S]*return targets\.evaluateAll/,
   );
   assert.match(
     actions,
@@ -4315,7 +4600,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   assert.deepEqual(scrolled, [[
     'Mastodon',
     'Crack The Skye',
-    { year: '2009' },
+    { year: '2009', detailsAction: true },
   ]]);
   assert.deepEqual(identity, {
     artist: 'Mastodon',
@@ -5047,7 +5332,7 @@ test('loop hover evidence moves the real mouse to target geometry without locato
   assert.match(savedHelper, /getAttribute\('data-loop-action-state'\) === 'editing'/);
   assert.match(
     savedHelper,
-    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', `\$\{style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)\}px`\)[\s\S]*readLoopActionVisualSnapshot/,
+    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*expectedWidth = style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)[\s\S]*readLoopPodWidth\(entry\)[\s\S]*toBeLessThanOrEqual\(1 \/ \(64 \* 0\.8\)\)[\s\S]*readLoopActionVisualSnapshot/,
     'saved-loop hover must settle the approved style and edit-state pod width before measuring geometry',
   );
   assert.doesNotMatch(savedHelper, /waitForTimeout|timeout\s*:/);
@@ -5123,6 +5408,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /readLoopEditorStateByName\('Warmup Loop'\)[\s\S]*editor: false/);
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
+  assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
   assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
@@ -5130,6 +5416,29 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /activateCreateAnotherLoopByName\('Warmup Loop'\)[\s\S]*cancelLoopNameDialog\(\)[\s\S]*activateCreateAnotherLoopByName\('Warmup Loop'\)[\s\S]*submitLoopName\('Transition Loop'\)/);
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|waitForTimeout\s*\(|page\.once\(['"]dialog['"]|page\.route\s*\(/);
   assert.doesNotMatch(expirySpec, /\.locator\s*\(|\.evaluate\s*\(|waitForTimeout\s*\(|page\.once\(['"]dialog['"]|page\.route\s*\(/);
+});
+
+test('loop expiry clock freezes only before the renewing drag and resumes after measurement', async () => {
+  const { GlobalPlayerActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/globalPlayerActions.js')).href);
+  const calls = [];
+  const actions = new GlobalPlayerActions({
+    readWallClockTimeMs: async () => 10000,
+    page: { clock: {
+      pauseAt: async time => calls.push(['pauseAt', time]),
+      fastForward: async duration => calls.push(['fastForward', duration]),
+      resume: async () => calls.push(['resume']),
+    } },
+  });
+  actions.expectLoopEditorActive = async () => { calls.push(['verifyActive']); return { paused: false }; };
+  assert.deepEqual(await actions.pauseLoopEditExpiryClockBeforeRenewal(), { paused: false });
+  await actions.advanceLoopEditExpiryClock(299000);
+  await actions.advanceLoopEditExpiryClock(299000);
+  await actions.advanceLoopEditExpiryClock(1000);
+  await actions.resumeLoopEditExpiryClock();
+  assert.deepEqual(calls, [
+    ['pauseAt', 11000], ['verifyActive'],
+    ['fastForward', 299000], ['fastForward', 299000], ['fastForward', 1000], ['resume'],
+  ]);
 });
 
 test('loop entry names use exact escaped matching rather than substring matching', async () => {
@@ -5168,7 +5477,8 @@ test('Problematic Files reads visible rows in one POM-owned browser snapshot', a
     querySelector(selector) {
       return {
         '.utility-list-item-title': { textContent: '?' },
-        '.utility-list-item-meta': { textContent: 'Neal Morse' },
+        '.utility-list-item-subtitle': { textContent: 'Neal Morse' },
+        '.utility-list-item-year': { textContent: '2023' },
         '.utility-list-item-issues': { textContent: '2 issues' },
       }[selector] || null;
     },
@@ -5181,14 +5491,15 @@ test('Problematic Files reads visible rows in one POM-owned browser snapshot', a
       },
     },
     listItemTitleSelector: '.utility-list-item-title',
-    listItemMetaSelector: '.utility-list-item-meta',
+    listItemSubtitleSelector: '.utility-list-item-subtitle',
+    listItemYearSelector: '.utility-list-item-year',
     listItemIssuesSelector: '.utility-list-item-issues',
   });
 
   assert.deepEqual(await actions.readVisibleListItems(), [{
     key: 'neal morse::?',
     title: '?',
-    meta: 'Neal Morse',
+    meta: 'Neal Morse \u00b7 2023',
     issues: '2 issues',
   }]);
   assert.equal(evaluateAllCalls, 1);
@@ -5249,10 +5560,7 @@ test('Problematic Files mutation completion ignores matching identities outside 
         assert.equal(item, activeListItem);
         return { async textContent() { return 'Album Previous'; } };
       },
-      metaForListItem(item) {
-        assert.equal(item, activeListItem);
-        return { async textContent() { return 'Artist · 2009'; } };
-      },
+      async readListItemMeta(item) { assert.equal(item, activeListItem); return 'Artist · 2009'; },
       async waitForMutationRemovalAndPreviousSelection(expected, options) {
         delegated = { expected, options };
       },
@@ -5645,3 +5953,317 @@ for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-a
     assert.equal(reads, ['network-url', 'foreign-blob', 'source-before'].includes(failure) ? 0 : 1);
   });
 }
+
+
+test('search actions honor an explicit search-button submission', async () => {
+  const { SearchToolbarActions } = await import(
+    pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/searchToolbarActions.js')).href
+  );
+  const interactions = [];
+  const actions = new SearchToolbarActions({
+    input: {
+      async fill(value) { interactions.push(['fill', value]); },
+      async press(key) { interactions.push(['press', key]); },
+    },
+    applyButton: { async click() { interactions.push(['click']); } },
+  });
+  await actions.search('Neal Morse', { clickApply: true });
+  assert.deepEqual(interactions, [['fill', 'Neal Morse'], ['click']]);
+});
+
+test('album cover checkpoint accepts coherent production blobs and rejects stale display sources', async () => {
+  const { AlbumCard } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/albumCard.js')).href);
+  const productionSrc = 'http://localhost/cover?path=album-cover&size=480&v=revision';
+  const blobSrc = 'blob:http://localhost/displayed-cover';
+  for (const [label, overrides, expected] of [
+    ['production blob', {}, true],
+    ['stale rendered source', { currentSrc: 'blob:http://localhost/previous-cover' }, false],
+    ['foreign blob', { src: 'blob:http://elsewhere/displayed-cover', currentSrc: 'blob:http://elsewhere/displayed-cover' }, false],
+    ['uncommitted image', { visualState: 'pending' }, false],
+    ['missing production identity', { productionSrc: '' }, false],
+    ['wrong production origin', { productionSrc: 'http://elsewhere/cover?path=album-cover' }, false],
+    ['non-cover production identity', { productionSrc: 'http://localhost/unrelated' }, false],
+    ['undecoded image', { complete: false }, false],
+  ]) {
+    const state = { src: blobSrc, currentSrc: blobSrc, productionSrc, visualState: 'ready', complete: true, ...overrides };
+    class ImageElement {
+      constructor() { this.complete = state.complete; this.naturalWidth = 480; this.currentSrc = state.currentSrc; this.isConnected = true; }
+      getBoundingClientRect() { return { width: 200, height: 200 }; }
+      getAttribute(name) { return ({ src: state.src, 'data-production-cover-src': state.productionSrc, 'data-cover-visual-state': state.visualState })[name] || null; }
+    }
+    const checkpoint = await AlbumCard.prototype.readCoverImageReadinessByArtistAndAlbum.call({
+      coverImageWithinCardSelector: 'img',
+      cardsByArtistAndAlbum: () => ({ first: () => ({ locator: () => ({
+        evaluateAll: callback => require('node:vm').runInNewContext(`(${callback.toString()})(images)`, {
+          images: [new ImageElement()], HTMLImageElement: ImageElement, URL,
+          document: { baseURI: 'http://localhost/' }, location: { origin: 'http://localhost' },
+        }),
+      }) }) }),
+    }, 'Artist', 'Album');
+    assert.equal(checkpoint.ready, expected, label);
+  }
+});
+
+
+test('paged gallery scroll requires another native wheel after committed extent growth at an unchanged anchor', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href;
+  const { GalleryPage } = await import(moduleUrl);
+  const pom = Object.create(GalleryPage.prototype);
+  const events = [];
+  const waits = [];
+  let top = 6226;
+  // Use the production galleryScrollSelector getter.
+  pom.galleryScroll = { evaluate: async () => ({ scrollTop: top, maxScrollTop: 11272, clientHeight: 755 }) };
+  pom.readScrollTop = async () => top;
+  pom.waitForPageCondition = async (_predicate, options, args) => {
+    waits.push({ options, args });
+    events.push('settled');
+  };
+  const deadline = Date.now() + 5000;
+  await pom.waitForGalleryScrollMovement(6226, 1, {
+    deadline,
+    previousMaxScrollTop: 6226,
+    onExtentExpanded: async () => { events.push('native-wheel'); top = 6792; },
+  });
+  assert.deepEqual(events, ['settled', 'native-wheel', 'settled']);
+  assert.equal(waits.length, 2, 'extent growth is progress, never movement success');
+  assert.ok(waits.every(wait => wait.options.timeout > 0 && wait.options.timeout <= 5000));
+  assert.ok(waits[1].options.timeout <= waits[0].options.timeout, 'keep the original deadline');
+});
+
+test('paged gallery extent growth cannot authorize input before committed render ownership settles', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href;
+  const { hasSettledVirtualGalleryRender } = await import(moduleUrl);
+  class FakeElement {}
+  const gallery = Object.assign(new FakeElement(), { scrollTop: 6226, scrollHeight: 12027, clientHeight: 755 });
+  const saved = { document: globalThis.document, HTMLElement: globalThis.HTMLElement, diagnostics: globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ };
+  globalThis.document = { querySelector: () => gallery };
+  globalThis.HTMLElement = FakeElement;
+  globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ = {
+    latestScroll: { renderGeneration: 2, renderRafOwner: 3, scrollTop: 6226 },
+    latestRender: { renderGeneration: 2, renderRafOwner: 0, viewportTop: 6226 },
+  };
+  try {
+    const args = { galleryScrollSelector: '#albums-scroll', priorPosition: 6226, expectedDirection: 1, previousMaxScrollTop: 6226, allowExtentExpansion: true };
+    assert.equal(hasSettledVirtualGalleryRender(args), false);
+    globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__.latestRender.renderRafOwner = 3;
+    assert.equal(hasSettledVirtualGalleryRender(args), true, 'committed expanded extent permits another native input');
+    assert.equal(hasSettledVirtualGalleryRender({ ...args, allowExtentExpansion: false }), false, 'strict movement remains unchanged');
+    assert.equal(hasSettledVirtualGalleryRender({ ...args, previousMaxScrollTop: 11272 }), false, 'unchanged extent is not progress');
+  } finally {
+    if (saved.document === undefined) delete globalThis.document; else globalThis.document = saved.document;
+    if (saved.HTMLElement === undefined) delete globalThis.HTMLElement; else globalThis.HTMLElement = saved.HTMLElement;
+    if (saved.diagnostics === undefined) delete globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__; else globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ = saved.diagnostics;
+  }
+});
+
+test('paged gallery scroll keeps strict default behavior without an extent callback', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href;
+  const { GalleryPage } = await import(moduleUrl);
+  const pom = Object.create(GalleryPage.prototype);
+  // Use the production galleryScrollSelector getter.
+  let calls = 0;
+  pom.waitForPageCondition = async (_predicate, _options, args) => {
+    calls += 1;
+    assert.notEqual(args.allowExtentExpansion, true);
+  };
+  await pom.waitForGalleryScrollMovement(6226, 1);
+  assert.equal(calls, 1);
+});
+
+
+test('gallery traversal waits for a pending root page before treating the loaded boundary as the end', async () => {
+  const { GalleryActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  let pageArrived = false;
+  let boundaryWaits = 0;
+  const target = { count: async () => pageArrived ? 1 : 0 };
+  const actions = new GalleryActions({
+    sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => target }) }),
+    async waitForRootGalleryBoundaryProgress(previous) {
+      boundaryWaits += 1;
+      assert.equal(previous.maxScrollTop, 600);
+      assert.equal(previous.pageCursor, 'next-page');
+      pageArrived = true;
+    },
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop: 600, clientHeight: 600, maxScrollTop: 600, hasMore: true, pageCursor: 'next-page' });
+  actions.readAlbumGalleryViewportState = async () => ({ attached: true, intersects: true, scrollDirection: 0 });
+  actions.scrollGalleryBy = async () => assert.fail('an in-flight page must settle before another native wheel');
+  await actions.scrollToAlbumUnderHeading('Mastodon', 'Crack The Skye Fixture 09');
+  assert.equal(boundaryWaits, 1);
+});
+
+test('root gallery boundary settlement keeps its original bounded timeout and observes only real page progress', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/galleryPage.js')).href);
+  const owner = {
+    galleryScrollSelector: '#albums-scroll',
+    async waitForPageCondition(callback, options, args) {
+      assert.equal(options.timeout, 5000);
+      const gallery = { scrollHeight: 1200, clientHeight: 600 };
+      const context = { document: { querySelector: () => gallery }, state: { view: { gallery_page: { has_more: true, next_cursor: 'next-page' } } } };
+      const predicate = require('node:vm').runInNewContext(`(${callback.toString()})`, context);
+      assert.equal(predicate(args), false);
+      context.state.view.gallery_page.next_cursor = 'following-page';
+      assert.equal(predicate(args), true);
+      context.state.view.gallery_page.next_cursor = 'next-page';
+      gallery.scrollHeight = 1800;
+      assert.equal(predicate(args), true);
+      gallery.scrollHeight = 1200;
+      context.state.view.gallery_page.has_more = false;
+      assert.equal(predicate(args), true);
+    },
+  };
+  await GalleryPage.prototype.waitForRootGalleryBoundaryProgress.call(owner, { maxScrollTop: 600, pageCursor: 'next-page' });
+});
+
+
+test('partial canonical gallery inventory remains unresolved until native traversal finds or exhausts it', async () => {
+  const { classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const snapshot = { expectedArtist: 'Mastodon', expectedAlbum: 'Later album',
+    canonicalApplied: true, canonicalInventoryComplete: false,
+    canonicalMatch: false, attachedMatch: false };
+  assert.deepEqual(classifyGalleryAlbumTargetState(snapshot), {
+    status: 'retryable', reason: 'incomplete canonical inventory',
+  });
+  assert.deepEqual(classifyGalleryAlbumTargetState({ ...snapshot, canonicalMatch: true, attachedMatch: true }), {
+    status: 'ready', reason: 'expected album attached',
+  });
+  assert.throws(() => classifyGalleryAlbumTargetState({ ...snapshot, canonicalInventoryComplete: true }),
+    /Settled gallery cannot satisfy/);
+});
+
+test('global album absence traverses real root page boundaries within the original deadline', async () => {
+  const { GalleryActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const calls = [];
+  let scrollTop = 0;
+  let complete = false;
+  const owner = {
+    galleryPage: {
+      async readAlbumTargetState() {
+        return { busy: false, activeLoader: false, pendingViewTransition: false,
+          startupHydrating: false, canonicalApplied: true,
+          canonicalInventoryComplete: complete, canonicalMatch: false, attachedMatch: false,
+          inputQuery: '', locationQuery: '', expectedQuery: '' };
+      },
+      async waitForGalleryScrollMovement(prior, direction, options) {
+        calls.push('settle');
+        assert.equal(prior, 0);
+        assert.equal(direction, 1);
+        assert.equal(options.deadline, 6000);
+      },
+      async waitForRootGalleryBoundaryProgress(previous, options) {
+        calls.push('page');
+        assert.equal(previous.scrollTop, 6000);
+        assert.equal(options.deadline, 31000);
+        complete = true;
+      },
+    },
+    async readGalleryScrollState() {
+      return { scrollTop, clientHeight: 800, maxScrollTop: 6000,
+        hasMore: !complete, pageCursor: 'next-page' };
+    },
+    async scrollGalleryBy(delta) {
+      calls.push('wheel');
+      assert.equal(delta, 6000, 'Exhaustive absence must reach the loaded native boundary in one wheel action');
+      scrollTop = 6000;
+    },
+  };
+  const method = require('node:vm').runInNewContext(
+    `(async function ${GalleryActions.prototype.expectAlbumAbsentFromSettledGallery.toString().replace(/^async\s+/u, '')})`,
+    {
+      Date: { now: () => 1000 },
+      expect: {
+        poll(read, options) {
+          assert.equal(options.timeout, 30000);
+          return { async toEqual(expected) {
+            let actual;
+            for (let attempt = 0; attempt < 4; attempt += 1) {
+              actual = await read();
+              if (JSON.stringify(actual) === JSON.stringify(expected)) return;
+            }
+            assert.equal(JSON.stringify(actual), JSON.stringify(expected));
+          } };
+        },
+      },
+    },
+  );
+  await method.call(owner, { artist: 'Mastodon', album: 'Absent album' });
+  assert.deepEqual(calls, ['wheel', 'settle', 'page']);
+});
+
+
+test('gallery visibility preserves its caller deadline through partial inventory traversal', async () => {
+  const { GalleryActions, classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  const method = require('node:vm').runInNewContext(
+    `(async function ${GalleryActions.prototype.waitForAlbumVisibleUnderHeading.toString().replace(/^async\s+/u, '')})`,
+    { Date: { now: () => 1000 }, classifyGalleryAlbumTargetState },
+  );
+  let traversed = false;
+  await method.call({
+    galleryPage: { async readAlbumTargetState() {
+      return { canonicalApplied: true, canonicalInventoryComplete: traversed,
+        canonicalMatch: traversed, attachedMatch: traversed };
+    } },
+    async scrollToAlbumUnderHeading(_artist, _album, options) {
+      traversed = true;
+      assert.equal(options.deadline, 1100);
+      assert.equal(options.timeout, 100);
+    },
+  }, 'Mastodon', 'Later album', { deadline: 1100 });
+  assert.equal(traversed, true);
+});
+
+
+for (const canonicalMatch of [true, false]) {
+  test(`partial gallery traversal rechecks canonical membership before success (match: ${canonicalMatch})`, async () => {
+    const { GalleryActions, classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+    const method = require('node:vm').runInNewContext(
+      `(async function ${GalleryActions.prototype.waitForAlbumVisibleUnderHeading.toString().replace(/^async\s+/u, '')})`,
+      { Date: { now: () => 1000 }, classifyGalleryAlbumTargetState },
+    );
+    let reads = 0;
+    let traversals = 0;
+    const request = method.call({
+      galleryPage: { async readAlbumTargetState() {
+        reads += 1;
+        return { canonicalApplied: true, canonicalInventoryComplete: reads > 1,
+          canonicalMatch: reads > 1 && canonicalMatch, attachedMatch: reads > 1 };
+      } },
+      async scrollToAlbumUnderHeading(_artist, _album, options) {
+        traversals += 1;
+        assert.equal(options.deadline, 1100);
+      },
+    }, 'Mastodon', 'Later album', { deadline: 1100 });
+    if (canonicalMatch) await request;
+    else await assert.rejects(request, /Settled gallery cannot satisfy/);
+    assert.equal(traversals, 1);
+    assert.equal(reads, 2);
+  });
+}
+
+
+test('direct gallery traversal preserves finite deadlines across boundary reconciliation', async () => {
+  const { GalleryActions, classifyGalleryAlbumTargetState } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href);
+  for (const supplied of [{ timeout: 100 }, { deadline: 1100 }, {}]) {
+    let now = 1000;
+    const stop = new Error('boundary inspected');
+    const method = require('node:vm').runInNewContext(
+      `(async function ${GalleryActions.prototype.scrollToAlbumUnderHeading.toString().replace(/^async\s+/u, '')})`,
+      { Date: { now: () => now }, classifyGalleryAlbumTargetState },
+    );
+    await assert.rejects(method.call({
+      galleryPage: {
+        sectionByArtistHeading: () => ({ getByRole: () => ({ first: () => ({ count: async () => 0 }) }) }),
+        readAlbumTargetState: async () => ({ busy: true }),
+      },
+      async readGalleryScrollState() {
+        now = 1050;
+        return { scrollTop: 600, maxScrollTop: 600, hasMore: false };
+      },
+      async waitForAlbumVisibleUnderHeading(_artist, _album, options) {
+        assert.equal(options.deadline, supplied.timeout || supplied.deadline ? 1100 : undefined);
+        throw stop;
+      },
+    }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
+  }
+});

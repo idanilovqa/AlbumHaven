@@ -1,3 +1,5 @@
+import { readNavigationSelectionPaint } from './components/navigationTree.js';
+import { readThemeColorChannels } from './settingsModalAppBar.js';
 import { expect } from '@playwright/test';
 
 // All evaluations below observe rendered state; interactions use native Playwright input.
@@ -140,9 +142,43 @@ export class InteractionSurfaces {
     this.recentSearches = page.locator('#recent-search-popover');
     this.loopPlay = page.locator('[data-loop-play]:visible').first();
     this.tagEditor = page.locator('#tag-editor-modal');
-    this.tagTable = this.tagEditor.locator('.compact-data-table');
+    this.tagTrackList = this.tagEditor.getByRole('list', { name: 'Files to edit', exact: true });
     this.tagFooter = this.tagEditor.locator('.editor-footer');
     this.tagRows = this.tagEditor.locator('[data-tag-editor-track]');
+    this.tagSelectionButtons = this.tagRows.locator('.tag-editor-track-select');
+    this.tagSelectionAccents = this.tagRows.locator('.tag-editor-track-accent');
+  }
+
+  async readTagSelectionPaint(index) {
+    const reference = await readNavigationSelectionPaint(this.selectedTreeItem);
+    const edge = reference?.accent;
+    if (!edge || edge.content !== '""' || edge.width !== '3px' || !(parseFloat(edge.height) > 0)
+      || edge.display === 'none' || edge.visibility !== 'visible' || Number(edge.opacity) <= 0
+      || /^(?:transparent|rgba\([^)]*, 0\)|color\([^)]*\/ 0\))$/u.test(edge.backgroundColor)) {
+      throw new Error('The selected artist must render its configured 3px selection edge');
+    }
+    // parity-check: allow-read-only-measurement-evaluate -- read actual Tag Editor selection paint independently of its NavigationTree reference
+    const paint = await this.tagRows.nth(index).evaluate(row => {
+      const style = getComputedStyle(row);
+      const accent = getComputedStyle(row.querySelector('.tag-editor-track-accent'));
+      return {
+        fill: style.backgroundColor,
+        accent: accent.backgroundColor,
+        fillRole: style.getPropertyValue('--tag-editor-selection-fill').trim(),
+        ink: style.getPropertyValue('--text').trim(),
+        expectedFillRole: style.getPropertyValue('--selection-body-background').trim(),
+      };
+    });
+    let expectedFill = reference.fill;
+    if (index % 2 === 1) {
+      // Owner feedback item 3 preserves alternating selected rows: 7% ink over
+      // the independently rendered navigation fill, serialized to CSS's 6 significant digits.
+      const base = readThemeColorChannels(reference.fill);
+      const ink = readThemeColorChannels(paint.ink);
+      expectedFill = `color(srgb ${base.map((channel, i) =>
+        Number(((channel * 0.93 + ink[i] * 0.07) / 255).toPrecision(6))).join(' ')})`;
+    }
+    return { ...paint, expectedFill, expectedAccent: edge.backgroundColor };
   }
 }
 
@@ -192,22 +228,35 @@ export async function expectSlowActivationLights(play) {
 
 export async function expectSharedOutlineGeometry(surfaces) {
   // parity-check: allow-read-only-measurement-evaluate -- measure CSS joins and gradients without altering the page
-  const join = await surfaces.familyPanel.evaluate(panel => {
-    const bar = document.querySelector('.gallery-bar').getBoundingClientRect();
+  const join = await surfaces.familyTrigger.evaluate(trigger => {
+    const owner = trigger.closest('[data-gallery-bar]');
+    if (!owner) throw new Error('Artist Family trigger has no owning GalleryBar.');
+    const panel = document.getElementById(trigger.getAttribute('aria-controls'));
+    const bar = owner.getBoundingClientRect();
+    const ownerStyle = getComputedStyle(owner);
     const rect = panel.getBoundingClientRect();
     const top = getComputedStyle(panel, '::after');
-    return { y: rect.top + parseFloat(top.top), dividerY: bar.bottom - 1, height: top.height, fade: top.backgroundImage };
+    return { y: rect.top + parseFloat(top.top), dividerY: bar.bottom - 1, height: top.height, fade: top.backgroundImage,
+      ownerVisible: bar.width > 0 && bar.height > 0 && ownerStyle.display !== 'none'
+        && ownerStyle.visibility === 'visible' };
   });
+  expect(join.ownerVisible).toBe(true);
   expect(Math.abs(join.y - join.dividerY)).toBeLessThanOrEqual(1);
-  expect(join.height).toBe('1px');
+  // Mobile's Family divider is 2px; the separate button/gap outline is checked below.
+  expect(join.height).toBe('2px');
   expect(join.fade).toContain('linear-gradient');
   // parity-check: allow-read-only-measurement-evaluate -- inspect interpolation and border continuity at the trigger
   const idle = await surfaces.familyTrigger.evaluate(el => {
     const s = getComputedStyle(el);
-    return { image: s.backgroundImage, top: s.borderTopWidth, shadow: s.boxShadow, transition: s.transitionProperty };
+    const outline = getComputedStyle(el, '::after');
+    const interior = getComputedStyle(el, '::before');
+    return { image: s.backgroundImage, top: s.borderTopWidth, shadow: s.boxShadow, transition: s.transitionProperty,
+      joinSideWidths: [parseFloat(interior.left) - parseFloat(outline.left),
+        parseFloat(interior.right) - parseFloat(outline.right)] };
   });
   expect(idle.image).toContain('linear-gradient');
   expect(idle.top).toBe('2px');
+  expect(idle.joinSideWidths).toEqual([2, 2]);
   expect(idle.shadow).toBe('none');
   expect(idle.transition).toContain('--trigger-anchor-cap');
 }

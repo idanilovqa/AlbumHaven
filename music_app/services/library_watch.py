@@ -178,7 +178,33 @@ def publish_watchdog_event(
         is_directory=bool(getattr(event, "is_directory", False)),
     )
     if normalized is not None:
-        publish(normalized)
+        def is_derived_cover(path: Path) -> bool:
+            root = _root_for_path(path, _resolved_roots(root_definitions))
+            if root is None:
+                return False
+            parts = path.relative_to(root[1]).parts
+            return any(
+                Path(*parts[index:index + 2]) == Path(".album-haven", "cover_variants")
+                for index in range(len(parts) - 1)
+            )
+
+        source_derived = is_derived_cover(normalized.path)
+        if normalized.kind is LibraryEventKind.MOVED and normalized.destination is not None:
+            destination_derived = is_derived_cover(normalized.destination)
+            if source_derived and destination_derived:
+                return
+            if source_derived or destination_derived:
+                # Crossing the derived-storage boundary still changes user media.
+                normalized = normalize_library_event(
+                    LibraryEventKind.CREATED if source_derived else LibraryEventKind.DELETED,
+                    normalized.destination if source_derived else normalized.path,
+                    roots=root_definitions, observed_at=observed_at,
+                    is_directory=normalized.is_directory,
+                )
+        elif source_derived:
+            return
+        if normalized is not None:
+            publish(normalized)
 
 
 class WatchdogLibraryEventSource:

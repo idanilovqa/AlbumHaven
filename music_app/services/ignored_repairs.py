@@ -49,11 +49,10 @@ def migrate_legacy_album_exclusions(config: dict) -> dict[str, int]:
     if not legacy_keys_to_remove:
         return result
 
-    migrated_keys = existing_keys.difference(legacy_keys_to_remove)
-    migrated_keys.update(album_keys_by_repair_key)
-    adapter.save_ignored_repair_keys(
-        migrated_keys,
+    adapter.upsert_ignored_repair_keys(
+        album_keys_by_repair_key,
         album_keys_by_repair_key=album_keys_by_repair_key,
+        remove_repair_keys=legacy_keys_to_remove,
     )
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),

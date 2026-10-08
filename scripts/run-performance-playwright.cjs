@@ -119,6 +119,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'scan-metadata',
     'scan-page',
     'scan-health',
+    'paired-search-calibration',
     'scan-error',
   ],
   'idle-memory': [
@@ -469,6 +470,26 @@ PERFORMANCE_TARGETS['scan-health'] = {
   env: {
     ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO: 'health-warning',
     ALBUM_HAVEN_COVER_PROVIDER_GROUPS: 'offline',
+  },
+};
+
+PERFORMANCE_TARGETS['paired-search-calibration'] = {
+  kind: 'synthetic',
+  fixtureProfile: 'synthetic-large-library',
+  fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+  coverageClass: 'real-app-library-browse-load',
+  coverageDescription: 'Isolated synthetic paired-search timing evidence for production correlation.',
+  specPath: 'tests/e2e/syntheticLargeLibrary/searchPreviewPairedCalibration.spec.js',
+  aliasNames: ['paired-search-calibration'],
+  grep: 'FTC-GALLERY-STARTUP-005U',
+  casePatterns: [
+    'Devin submit to first expected album visible',
+    'Neal Morse submit to first expected album visible',
+  ],
+  reportId: 'pairedSearchCalibrationLocal',
+  measurementExpected: true,
+  env: {
+    ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
   },
 };
 
@@ -1492,6 +1513,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
     for (const result of attemptRecord.validationResults || []) {
       const entry = resultMap.get(result.key) || {
         key: result.key,
+        ...(result.metricId !== undefined ? { metricId: result.metricId } : {}),
         checkpointKey: result.checkpointKey || '',
         description: result.description || '',
         units: result.units || '',
@@ -1514,6 +1536,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
       const resultAllowedMaximum = optionalFiniteNumber(result.allowedMaximum);
       const effectiveCeiling = resolveEffectiveCeiling(result);
       entry.contractConsistent = entry.contractConsistent
+        && entry.metricId === result.metricId
         && entry.units === (result.units || '')
         && entry.targetMaximum === resultTargetMaximum
         && entry.graceMs === resultGraceMs
@@ -1533,6 +1556,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
         entry.actuals.push(actual);
       }
       const rawClassification = classifyPerformanceThreshold({
+        metricId: result.metricId,
         units: result.units,
         actual,
         targetMaximum: result.targetMaximum,
@@ -1565,6 +1589,7 @@ function buildAggregatedThresholdEvaluation(attemptRecords = []) {
     const medianActual = median(entry.actuals);
     const meanActual = mean(entry.actuals);
     const medianClassification = classifyPerformanceThreshold({
+      metricId: entry.metricId,
       units: entry.units,
       actual: medianActual,
       targetMaximum: entry.targetMaximum,
@@ -2452,7 +2477,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group all|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
   console.log('Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

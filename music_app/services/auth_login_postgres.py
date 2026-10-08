@@ -38,13 +38,7 @@ from music_app.services.auth_tokens import (
     keyed_bucket_digest,
     normalize_login_identifier,
 )
-
-try:  # pragma: no cover - exercised when the optional driver is installed.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
-    psycopg = None
-    dict_row = None
+from music_app.services.postgres_connections import pooled_connection as _connect
 
 
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -889,12 +883,6 @@ class PostgresLoginAuthService:
             raise RuntimeError("Login persistence operation failed.") from None
         except Exception:
             raise RuntimeError("Login persistence operation failed.") from None
-
-
-def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for login authentication.")
-    return psycopg.connect(database_url, row_factory=dict_row)
 
 
 def _execute(connection: Any, sql: str, params: object = None) -> Any:

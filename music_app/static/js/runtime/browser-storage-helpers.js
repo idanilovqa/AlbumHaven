@@ -7,6 +7,8 @@ function getBrowserLocalStorage() {
 }
 
 function getLocalStorageItem(key, fallback = '') {
+  const preferences = window.AlbumHavenDevicePreferences;
+  if (preferences?.handles?.(key)) return preferences.getItem(key) ?? fallback;
   const storage = getBrowserLocalStorage();
   if (!storage) return fallback;
   try {
@@ -18,6 +20,8 @@ function getLocalStorageItem(key, fallback = '') {
 }
 
 function setLocalStorageItem(key, value) {
+  const preferences = window.AlbumHavenDevicePreferences;
+  if (preferences?.handles?.(key)) return preferences.setItem(key, String(value ?? ''));
   const storage = getBrowserLocalStorage();
   if (!storage) return false;
   try {

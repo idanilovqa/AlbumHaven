@@ -1,6 +1,7 @@
 function updateSearchClearAction(input) {
   const clear = input?.closest?.('.search-field-control')?.querySelector?.('[data-search-clear]');
   if (clear) clear.hidden = !input.value || input.disabled || input.readOnly;
+  if (input?.id === 'search-input' && typeof syncMobileSearchQueryIndicator === 'function') syncMobileSearchQueryIndicator();
 }
 
 document.addEventListener('input', (event) => {

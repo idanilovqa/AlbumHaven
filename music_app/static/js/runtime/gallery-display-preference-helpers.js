@@ -298,7 +298,13 @@ function splitArtistGroupForDisplay(group) {
     ),
     display_artist_key: canonicalArtist || String(group?.artist_display || ''),
   };
-  if (!canonicalArtist || !albums.length || getCombineSimilarArtistsPreference(canonicalArtist)) {
+  // Root membership belongs to the canonical sidebar/page inventory. Raw album
+  // credits must not split its headings when a later page adds another credit.
+  const canonicalRoot = typeof resolveViewSurface === 'function'
+    && resolveViewSurface(state.view) === 'albums'
+    && !String(state.view?.query || '').trim()
+    && !String(state.view?.selected_artist || '').trim();
+  if (canonicalRoot || !canonicalArtist || !albums.length || getCombineSimilarArtistsPreference(canonicalArtist)) {
     return [defaultGroup];
   }
 

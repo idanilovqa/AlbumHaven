@@ -27,7 +27,6 @@ function attachUtilityModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
-  els.close?.addEventListener('click', closeUtilityModal);
   let searchRenderTimer = null;
   const scheduleSearchRender = () => {
     clearTimeout(searchRenderTimer);

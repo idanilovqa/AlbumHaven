@@ -1,0 +1,31 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
+{% from "partials/switch.html" import ui_switch %}
+{% from "partials/button.html" import ui_button %}
+<section data-capability-assignment data-prerequisites="{{ access_editor.prerequisites | tojson | forceescape }}" aria-label="Role and capability assignment">
+  <input type="hidden" name="access_revision" value="{{ access_editor.revision }}">
+  <fieldset class="permission-fieldset" aria-describedby="admin-role-description">
+    <legend>Roles</legend>
+    {{ on_page_alert('Roles add together. Admin manages users and access; Owner grants library features, not administration. Select both only when both are needed.', role='note', class_name='role-note', attributes={'id': 'admin-role-description'}) }}
+    <div class="permission-groups">
+      {% for roles in access_editor.roles | batch(2) %}
+      <section class="permission-group">
+        {% for role in roles %}
+        {{ ui_switch(role.label, 'role_keys', role.key, checked=role.key in access_editor.role_keys, attributes={'data-role-label': role.label, 'data-role-grants': role.grants | tojson}) }}
+        {% endfor %}
+      </section>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% include "partials/admin-capability-switches.html" %}
+  {% for capability_key in access_editor.unlisted_keys %}
+  <input type="hidden" name="additional_capability_keys" value="{{ capability_key }}">
+  {% endfor %}
+  {% if access_editor.unlisted_keys %}<p data-retained-grants>Retained individual grants still authorize available actions, subject to device restrictions, even when the corresponding capability above is off: {{ access_editor.unlisted_keys | join(', ') }}. Choose “Use selected roles only” to remove these grants.</p>{% endif %}
+  {% if access_editor.unmanaged_keys %}<p>Grants outside this editor are preserved: {{ access_editor.unmanaged_keys | join(', ') }}. Removing library access revokes all current-library grants.</p>{% endif %}
+  <p data-role-summary aria-live="polite">Role selections and individual capabilities are saved together.</p>
+  <div class="roles-only-action">
+    {{ ui_button('Use selected roles only', disabled=not access_editor.role_keys, attributes={'data-roles-only': true, 'aria-describedby': 'roles-only-help'}) }}
+    <p id="roles-only-help">Select at least one role first. This removes individual grants and keeps the selected roles’ permissions. Changes apply only when you select {{ 'Save changes' if member else 'Create user' }}.</p>
+  </div>
+  {{ on_page_alert('New users start with Listener selected. Roles add together. Existing users keep their individual grants unless you choose “Use selected roles only”. To avoid locking yourself out, keep Admin and library access on your own account.', role='note', class_name='role-note') }}
+</section>

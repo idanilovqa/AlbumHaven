@@ -51,6 +51,7 @@ def _app(*, is_bootstrap_owner=False, password_min=8):
     app = FastAPI()
     service = Service()
     app.state.profile_password_service = service
+    app.state.runtime_asset_version = "account-runtime-digest"
     app.state.auth_policy_config = {
         "hmac": {"secret": "s" * 48, "key_version": 1},
         "trusted_origins": ["https://music.test"],
@@ -146,6 +147,8 @@ def test_account_page_renders_approved_security_profile_without_cacheable_secret
     assert "Sign Out" in body
     assert session not in body
     assert body.count('minlength="8"') == 2
+    assert '/static/js/account.js?v=account-runtime-digest' in body
+    assert '/static/js/settings-navigation.js?v=account-runtime-digest' in body
 
 
 def test_account_password_form_minimum_length_comes_from_password_policy():
@@ -172,7 +175,7 @@ def test_my_account_navigation_keeps_personal_password_and_connected_devices():
     assert re.search(r'href="/account"[^>]*aria-current="page"[^>]*>.*My account</span></a>', body)
     assert len(re.findall(r'\bdata-settings-nav(?=\s|>)', body)) == 1
     assert body.count('data-settings-host') == 1
-    assert body.count('src="/static/js/settings-navigation.js"') == 1
+    assert body.count('src="/static/js/settings-navigation.js?v=account-runtime-digest"') == 1
     assert "member.one" in body
     assert 'action="/account/password"' in body
     assert "Active sessions" in body

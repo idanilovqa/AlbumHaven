@@ -161,10 +161,10 @@ test('pending detail is inert while its accessible status overlay leaves the sid
   assert.equal(list.scrollTop, 237);
 });
 
-test('approved mobile Problematic Files and Rules turn the album sidebar into a horizontal card strip', () => {
+test('narrow desktop dialogs retain their horizontal card strip', () => {
   const mobileCss = collectMobileMediaCss(utilitiesCss);
   for (const activeTab of ['problematic-files', 'rules']) {
-    const scope = `#utility-modal[data-active-tab="${activeTab}"]`;
+    const scope = `#utility-modal:not(.is-mobile-page)[data-active-tab="${activeTab}"]`;
     const sidebarRule = cssRuleBody(mobileCss, `${scope} .utility-sidebar`);
     const listRule = cssRuleBody(mobileCss, `${scope} .utility-list`);
     const itemRule = cssRuleBody(mobileCss, `${scope} .utility-list-item`);
@@ -182,11 +182,11 @@ test('approved mobile Problematic Files and Rules turn the album sidebar into a 
   assert.equal(cssRuleBody(mobileCss, '.utility-list-item'), '');
 });
 
-test('approved mobile Problems Rules and mutation states scope detail containment to owning tabs', () => {
+test('narrow desktop dialogs scope detail containment to owning tabs', () => {
   const mobileCss = collectMobileMediaCss(utilitiesCss);
 
   for (const activeTab of ['problematic-files', 'rules']) {
-    const scope = `#utility-modal[data-active-tab="${activeTab}"]`;
+    const scope = `#utility-modal:not(.is-mobile-page)[data-active-tab="${activeTab}"]`;
     const dialogRule = cssRuleBody(mobileCss, `${scope} .utility-modal-dialog`);
     const bodyRule = cssRuleBody(mobileCss, `${scope} .utility-modal-body`);
     const detailRule = cssRuleBody(mobileCss, `${scope} .utility-detail`);
@@ -206,9 +206,9 @@ test('approved mobile Problems Rules and mutation states scope detail containmen
   assert.equal(cssRuleBody(mobileCss, '.utility-detail'), '');
 });
 
-test('approved mobile Problematic Files keeps an 84px cover beside detail metadata', () => {
+test('narrow desktop Problematic Files keeps an 84px cover beside detail metadata', () => {
   const mobileCss = collectMobileMediaCss(utilitiesCss);
-  const scope = '#utility-modal[data-active-tab="problematic-files"]';
+  const scope = '#utility-modal:not(.is-mobile-page)[data-active-tab="problematic-files"]';
   const headerRule = cssRuleBody(mobileCss, `${scope} .utility-detail-header`);
   const coverRule = cssRuleBody(mobileCss, `${scope} .utility-detail-cover`);
 

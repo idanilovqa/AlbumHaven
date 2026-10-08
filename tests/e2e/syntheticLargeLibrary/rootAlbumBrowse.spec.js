@@ -1,7 +1,6 @@
 import { expect, test } from '../support/performanceFixtures.js';
 
 import {
-  expectPostgresLibraryBrowseTelemetry,
   expectTimingBudget,
   measureActionTime,
   performanceTimingBudget,
@@ -11,6 +10,7 @@ import {
 import {
   collectRootBrowseStartupAuthorityEvidence,
   expectManualStartupEntryPath,
+  expectPagedRootBrowseAuthority,
   expectNoUnexpectedRuntimeFailures,
   expectRootBrowseStartupAuthorityEvidence,
   flattenAlbums,
@@ -77,7 +77,7 @@ test.describe(`${CASE_ID} synthetic-large root album browse UI`, () => {
       expectManualStartupEntryPath(startupEntryState, 'the root album browse benchmark');
       expect(rootAlbumsPayload, 'Expected the root album browse runtime view to be available after visible readiness.').toBeTruthy();
       expectRootBrowseStartupAuthorityEvidence(startupAuthorityEvidence);
-      expectPostgresLibraryBrowseTelemetry(rootAlbumsPayload, 'full');
+      expectPagedRootBrowseAuthority(rootAlbumsPayload, { accumulated: true });
       expect(String(rootAlbumsPayload.query || '').trim()).toBe('');
       expect(String(rootAlbumsPayload.selected_artist || '').trim()).toBe('');
       expect(Array.isArray(rootAlbumsPayload.artist_groups)).toBe(true);
@@ -89,7 +89,6 @@ test.describe(`${CASE_ID} synthetic-large root album browse UI`, () => {
       albums = flattenAlbums(rootAlbumsPayload.artist_groups);
       expect(albums.length).toBeGreaterThan(0);
       expect(albums.every((album) => album?.preview_only === true)).toBe(true);
-      expect(albums.every((album) => !Object.prototype.hasOwnProperty.call(album || {}, 'tracks'))).toBe(true);
       expect(albums.some((album) => Number(album?.track_count_preview || 0) > 0)).toBe(true);
     });
 

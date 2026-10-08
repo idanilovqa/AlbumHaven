@@ -89,6 +89,7 @@ async def _page(
         "account.html",
         {
             "request": request,
+            "runtime_asset_version": getattr(request.app.state, "runtime_asset_version", ""),
             **await load_appearance_context(request),
             "profile": profile,
             "csrf_token": csrf_token,

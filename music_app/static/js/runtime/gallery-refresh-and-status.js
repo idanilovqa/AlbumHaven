@@ -1,3 +1,138 @@
+// Root browsing has authoritative navigation and totals but only a bounded page
+// of albums. Continuations never own the foreground/search request slot.
+let rootGalleryPageRequest = null;
+
+function isPagedRootGallery(view = state.view) {
+  const surface = typeof resolveViewSurface === 'function'
+    ? resolveViewSurface(view)
+    : String(view?.surface?.active || view?.surface_request || 'albums');
+  return Boolean(view?.gallery_page
+    && !String(view.query || '').trim()
+    && !String(view.selected_artist || '').trim()
+    && surface === 'albums');
+}
+
+function cancelRootGalleryPageRequest() {
+  rootGalleryPageRequest?.controller.abort();
+  rootGalleryPageRequest = null;
+}
+
+function mergeRootGalleryPageGroups(existing, incoming) {
+  const groups = (existing || []).map(group => ({ ...group, albums: [...(group.albums || [])] }));
+  const byArtist = new Map(groups.map(group => [String(group.display_artist_key || group.artist || ''), group]));
+  for (const incomingGroup of incoming || []) {
+    const artistKey = String(incomingGroup.display_artist_key || incomingGroup.artist || '');
+    let group = byArtist.get(artistKey);
+    if (!group) {
+      group = { ...incomingGroup, albums: [] };
+      groups.push(group);
+      byArtist.set(artistKey, group);
+    }
+    const identities = new Set(group.albums.map(album => String(album.key || '')));
+    for (const album of incomingGroup.albums || []) {
+      const identity = String(album.key || '');
+      if (!identity || identities.has(identity)) continue;
+      identities.add(identity);
+      group.albums.push(album);
+    }
+  }
+  return groups;
+}
+
+function buildRootGalleryPageUrl(view) {
+  return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
+}
+
+async function loadNextRootGalleryPage() {
+  const view = state.view;
+  const page = view?.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
+    || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
+    || !scroll || scroll.clientHeight <= 0
+    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2 * scroll.clientHeight) return false;
+  const request = {
+    controller: new AbortController(),
+    viewRevision: readViewStateRevision(),
+    url: buildRootGalleryPageUrl(view),
+    cursor: page.next_cursor,
+    revision: page.revision,
+  };
+  rootGalleryPageRequest = request;
+  const ownsResponse = () => rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && readViewStateRevision() === request.viewRevision
+    && isPagedRootGallery()
+    && buildRootGalleryPageUrl(state.view) === request.url
+    && state.view.gallery_page.next_cursor === request.cursor
+    && state.view.gallery_page.revision === request.revision;
+  const url = new URL(request.url, window.location.href);
+  url.searchParams.set('gallery_page_size', '50');
+  url.searchParams.set('gallery_cursor', request.cursor);
+  url.searchParams.set('omit_sidebar', '1');
+  try {
+    let response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' }, signal: request.controller.signal,
+    });
+    let restarted = false;
+    if (response.status === 409) {
+      const conflict = await response.json();
+      if (!ownsResponse() || conflict?.restart_required !== true) return false;
+      // Catalog changes invalidate the cursor. Replace atomically with one fresh
+      // bounded page; keep the old cards visible until that response arrives.
+      url.searchParams.delete('gallery_cursor');
+      url.searchParams.delete('omit_sidebar');
+      response = await fetch(`${url.pathname}${url.search}`, {
+        headers: { Accept: 'application/json' }, signal: request.controller.signal,
+      });
+      restarted = true;
+    }
+    const data = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse()) return false;
+    if (!data.gallery_page || !data.gallery_page.revision
+      || (!restarted && data.gallery_page.revision !== request.revision)
+      || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
+        || (!restarted && data.gallery_page.next_cursor === request.cursor)))
+      || !Array.isArray(data.artist_groups)) return false;
+    const artistGroups = restarted
+      ? data.artist_groups
+      : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
+    applyViewPayload({
+      ...state.view,
+      ...(restarted ? {
+        ...data,
+        gallery_page_scope: {
+          ...(state.view.gallery_page_scope || {}),
+          gallery_scope: data.gallery_scope,
+          visible_library_categories: data.visible_library_categories,
+        },
+      } : {}),
+      artist_groups: artistGroups,
+      gallery_page: data.gallery_page,
+      initial_view_partial: false,
+    }, {
+      trackSidebarReveal: false,
+      preserveSidebarState: !restarted || state.view.gallery_page_scope?.preserve_sidebar === true,
+      preserveGalleryBrowseLocationState: true,
+      rootGalleryContinuation: true,
+    });
+    const renderOptions = { preserveScroll: true, preserveMountedGalleryChildren: true };
+    if (restarted) renderView(renderOptions);
+    else renderArtistGroups(renderOptions);
+    // Fill only the visible buffer, including a short initial page. Rechecking
+    // geometry after rendering prevents an idle timer from draining the library.
+    scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+    return true;
+  } catch (error) {
+    if (ownsResponse() && error?.name !== 'AbortError') {
+      showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
+  }
+}
+
 const STARTUP_FOLLOWUP_RETRY_DELAY_MS = 100;
 const STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS = 350;
 const STARTUP_FOLLOWUP_MAX_AGE_MS = 1000;
@@ -9,6 +144,66 @@ const BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT = 2;
 const STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS = 25;
 const STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS = 100;
 let pendingSidebarRenderFrameId = 0;
+let libraryStatusAction = null;
+let statusReadRevision = 0;
+let statusPollSequence = 0;
+let statusPollTimer = null;
+
+function scheduleStatusPoll(delay) {
+  const dueAt = Date.now() + delay;
+  // Keep the earliest read, especially the 150/250ms action acknowledgement read.
+  if (statusPollTimer && statusPollTimer.dueAt <= dueAt) return;
+  if (statusPollTimer) clearBrowserTimeout(statusPollTimer.id);
+  const scheduled = { dueAt, id: null };
+  statusPollTimer = scheduled;
+  scheduled.id = scheduleBrowserTimeout(() => {
+    if (statusPollTimer !== scheduled) return;
+    statusPollTimer = null;
+    return pollStatus();
+  }, delay);
+}
+
+function claimLibraryStatusAction(pendingStart) {
+  libraryStatusAction = { pendingStart };
+  state.ui.scanCancellationPending = false;
+  statusReadRevision += 1;
+  // Completion retries belong to the scan that produced them, not a later intent.
+  clearPendingScanCompletionViewRefresh();
+  state.ui.pendingScanCompletionViewRefreshPromise = null;
+  state.ui.pendingCoverCompletionViewRefreshPromise = null;
+  clearPendingCoverCompletionViewRefresh();
+  return libraryStatusAction;
+}
+
+function clearPendingCoverCompletionViewRefresh() {
+  if (state.ui.pendingCoverCompletionViewRefreshRetryScheduled) {
+    clearBrowserTimeout(state.ui.pendingCoverCompletionViewRefreshRetryTimerId);
+  }
+  state.ui.pendingCoverCompletionViewRefreshRetryToken = (
+    Number(state.ui.pendingCoverCompletionViewRefreshRetryToken || 0) + 1
+  );
+  state.ui.pendingCoverCompletionViewRefreshRetryScheduled = false;
+  state.ui.pendingCoverCompletionViewRefreshRetryTimerId = 0;
+  state.ui.pendingCoverCompletionViewRefreshRetryCount = 0;
+  state.ui.pendingCoverCompletionViewRefreshRetryExhausted = false;
+  state.ui.pendingCoverCompletionViewRefresh = false;
+}
+
+function settleLibraryStatusAction(action) {
+  if (libraryStatusAction !== action) return false;
+  action.pendingStart = false;
+  statusReadRevision += 1;
+  return true;
+}
+
+function currentStatusPollDelay() {
+  const status = state.status || {};
+  const busy = status.scan_in_progress || status.relations_in_progress || status.covers_in_progress;
+  const statusMenu = document.getElementById('status-context-menu');
+  return busy && statusMenu && !statusMenu.hidden
+    ? STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS
+    : (busy ? 1000 : 3000);
+}
 
 function readViewStateRevision() {
   return Number(state.ui?.viewStateRevision || 0);
@@ -32,7 +227,8 @@ function shouldAutoRefreshViewAfterCoverCompletion() {
   return false;
 }
 
-function beginPendingViewTransition(requestId) {
+function beginPendingViewTransition(requestId, options = {}) {
+  state.ui.pendingGallerySearch = options.showSearchProgress === true;
   state.ui.pendingViewTransition = true;
   state.ui.pendingViewTransitionRequestId = Number(requestId || 0);
   // Keep the current gallery mounted while the replacement payload is loading.
@@ -53,9 +249,11 @@ function finishPendingViewTransition(requestId, options = {}) {
   ) {
     return false;
   }
+  const wasSearching = state.ui.pendingGallerySearch === true;
   state.ui.pendingViewTransition = false;
+  state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
-  if (options.restoreCurrentGallery === true) {
+  if (wasSearching || options.restoreCurrentGallery === true) {
     renderLibraryLoader({
       ...(state.status || {}),
       transition_in_progress: false,
@@ -176,7 +374,19 @@ function consumePendingScanCompletionViewRefresh(requestId, data, requestOptions
   return true;
 }
 
-async function dispatchPendingScanCompletionViewRefresh() {
+function dispatchPendingScanCompletionViewRefresh(shareStatusCompletion = false) {
+  if (!shareStatusCompletion) return performPendingScanCompletionViewRefresh();
+  if (!state.ui.pendingScanCompletionViewRefreshPromise) {
+    const pending = performPendingScanCompletionViewRefresh().catch(error => {
+      if (state.ui.pendingScanCompletionViewRefreshPromise === pending) state.ui.pendingScanCompletionViewRefreshPromise = null;
+      throw error;
+    });
+    state.ui.pendingScanCompletionViewRefreshPromise = pending;
+  }
+  return state.ui.pendingScanCompletionViewRefreshPromise;
+}
+
+async function performPendingScanCompletionViewRefresh() {
   if (
     !state.ui?.pendingScanCompletionViewRefresh
     || state.ui?.pendingScanCompletionViewRefreshRetryExhausted
@@ -239,7 +449,19 @@ async function dispatchPendingScanCompletionViewRefresh() {
   return true;
 }
 
-async function dispatchPendingCoverCompletionViewRefresh() {
+function dispatchPendingCoverCompletionViewRefresh(shareStatusCompletion = false) {
+  if (!shareStatusCompletion) return performPendingCoverCompletionViewRefresh();
+  if (!state.ui.pendingCoverCompletionViewRefreshPromise) {
+    const pending = performPendingCoverCompletionViewRefresh().catch(error => {
+      if (state.ui.pendingCoverCompletionViewRefreshPromise === pending) state.ui.pendingCoverCompletionViewRefreshPromise = null;
+      throw error;
+    });
+    state.ui.pendingCoverCompletionViewRefreshPromise = pending;
+  }
+  return state.ui.pendingCoverCompletionViewRefreshPromise;
+}
+
+async function performPendingCoverCompletionViewRefresh() {
   if (
     !state.ui?.pendingCoverCompletionViewRefresh
     || state.ui?.pendingCoverCompletionViewRefreshRetryExhausted
@@ -391,6 +613,7 @@ function renderView(options = {}) {
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = String(state.ui?.searchDraftQuery ?? state.view.query ?? '');
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
   }
   const searchForm = document.getElementById('search-form');
   const ensureHiddenInput = (name, values) => {
@@ -427,9 +650,19 @@ function renderView(options = {}) {
   }
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
     renderArtistGroups(options);
+  } else if (typeof updateGalleryMainChrome === 'function') {
+    // Retained cards do not imply that search or artist context is unchanged.
+    updateGalleryMainChrome();
   }
   renderLibraryLoader(state.status);
   scheduleSidebarRender();
+  if (typeof syncMobileHome === 'function') syncMobileHome();
+  if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
+  if (isPagedRootGallery()) {
+    scheduleBrowserAnimationFrame(() => {
+      scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+    });
+  }
 }
 
 function hasEquivalentGalleryRenderTopology(retainedGroups, canonicalGroups) {
@@ -578,7 +811,85 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+async function readGalleryResponse(response, ownsResponse) {
+  if (response.status === 401) {
+    if (ownsResponse()) window.location.assign('/login');
+    throw new Error('Sign in again to continue.');
+  }
+  const data = await response.json();
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  return data;
+}
+
+function rootGalleryRefreshCoverage(apiUrl, options) {
+  if (!options.preserveScroll || options.startupRefresh || !isPagedRootGallery()) return 0;
+  const url = new URL(apiUrl, 'http://localhost');
+  if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums'
+    || !url.searchParams.has('gallery_page_size')
+    || ['q', 'artist', 'genre', 'mood', 'style', 'duration_min', 'duration_max',
+      'related_artist', 'primary_filter', 'gallery_cursor', 'payload_tier', 'root_sidebar']
+      .some(key => url.searchParams.has(key))) return 0;
+  const scope = state.view.gallery_page_scope || state.view;
+  if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return 0;
+  const categories = [...(scope.visible_library_categories || [])].sort();
+  const requestedCategories = url.searchParams.getAll('category').sort();
+  if (JSON.stringify(categories) !== JSON.stringify(requestedCategories)) return 0;
+  return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
+}
+
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse) {
+  let payload = data;
+  let restarted = false;
+  const cursors = new Set();
+  let remainingPages = Math.ceil(coverage / 50);
+  while (ownsResponse()) {
+    const page = payload?.gallery_page;
+    const count = (payload?.artist_groups || []).reduce((sum, group) => sum + (group.albums || []).length, 0);
+    if (!page?.has_more || count >= coverage) return payload;
+    const cursor = String(page.next_cursor || '');
+    if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
+      throw new Error('Root gallery refresh did not advance within its loaded coverage.');
+    }
+    cursors.add(cursor);
+    const url = new URL(apiUrl, 'http://localhost');
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_cursor', cursor);
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' }, signal: controller?.signal,
+    });
+    if (!ownsResponse()) return null;
+    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse()) return null;
+    if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
+      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+      restarted = true;
+      cursors.clear();
+      remainingPages = Math.ceil(coverage / 50);
+      url.searchParams.delete('gallery_cursor');
+      url.searchParams.delete('omit_sidebar');
+      const restartResponse = await fetch(`${url.pathname}${url.search}`, {
+        headers: { Accept: 'application/json' }, signal: controller?.signal,
+      });
+      payload = await readGalleryResponse(restartResponse, ownsResponse);
+      continue;
+    }
+    if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
+      throw new Error('Root gallery refresh returned a repeated cursor.');
+    }
+    payload = {
+      ...payload,
+      artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
+      gallery_page: next.gallery_page,
+    };
+  }
+  return null;
+}
+
 async function fetchAndRender(url, push = true, options = {}) {
+  cancelRootGalleryPageRequest();
   const requestOptions = (options && typeof options === 'object') ? options : {};
   const albumDetailPrewarmSearchGeneration = state.ui?.albumDetailPrewarmSearchSuspended
     ? Number(state.ui.albumDetailPrewarmSearchGeneration || 0)
@@ -592,6 +903,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   const apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
+  const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -617,6 +929,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     : null;
   if (!requestOptions.startupRefresh) {
     clearStartupHydrationFollowup();
+    // Foreground navigation supersedes a Home hydration deferred by Settings,
+    // including a resumed request that was just interrupted by this search.
+    state.ui.deferredUtilityViewRequest = null;
     state.awaitingInitialDataRefresh = false;
   }
   if (state.busy) {
@@ -693,13 +1008,14 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (!retainsMountedSelectedViewState) {
     renderRelated();
   }
-  if (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true) {
-    beginPendingViewTransition(requestId);
+  if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
+    || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
+    beginPendingViewTransition(requestId, requestOptions);
   }
   if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
     state.ui.forceScanPageVisible = false;
   }
-  if (requestOptions.preserveGalleryOptionsMenu !== true) {
+  if (requestOptions.preserveGalleryOptionsMenu !== true && !requestOptions.startupRefresh) {
     hideGalleryOptionsMenu();
   }
   try {
@@ -710,7 +1026,20 @@ async function fetchAndRender(url, push = true, options = {}) {
       headers: { Accept: 'application/json' },
       signal: controller?.signal,
     });
-    const data = await response.json();
+    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+    if (rootRefreshCoverage > 0) {
+      const ownsRefresh = () => {
+        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
+        try {
+          return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
+        } catch (_error) {
+          return false;
+        }
+      };
+      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
+      if (!data || !ownsRefresh()) return false;
+    }
     markStartupFollowup('payload_received', requestOptions, {
       endpoint: apiUrl,
       artistCount: Number(data?.artist_count || 0),
@@ -804,6 +1133,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     );
     const preserveMountedGallery = Boolean(
       retainedCommittedSearchGallery
+      && requestOptions.preserveScroll !== false
       && hasMountedGalleryContent
       && hasEquivalentGalleryRenderTopology(
         retainedCommittedSearchGallery,
@@ -840,10 +1170,15 @@ async function fetchAndRender(url, push = true, options = {}) {
       });
     }
     if (
-      requestOptions.startupRefresh
+      response.ok
+      && data?.ok !== false
       && (
-        startupHydrationTier !== 'sidebar'
-        || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
+        (requestOptions.startupRefresh
+          && (
+            startupHydrationTier !== 'sidebar'
+            || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
+          ))
+        || isCanonicalFullViewPayload(data, requestOptions)
       )
     ) {
       startupMetrics.completeInitialRefresh(state.view);
@@ -889,6 +1224,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       return false;
     }
     clearStartupHydrationFollowup();
+    if (requestOptions.startupRefresh) window.AlbumHavenStartupProgress?.fail();
     if (typeof clearPendingSidebarSelection === 'function') {
       clearPendingSidebarSelection();
       renderSidebar();
@@ -982,6 +1318,14 @@ async function fetchAndRender(url, push = true, options = {}) {
         resumePlayerWaveformPeakLoadsAfterForegroundView(waveformPeakLoadSuspension),
       ).catch(() => {});
     }
+    if (
+      !state.busy
+      && !state.ui.pendingViewRequest
+      && !state.ui.scanPageReturnContext
+      && !state.ui.forceScanPageVisible
+    ) {
+      resumeScanPageGalleryCoverLoads();
+    }
   }
 }
 
@@ -996,6 +1340,7 @@ async function triggerLibraryRefresh(fullRescan = false) {
     return false;
   }
   const previousStatus = { ...state.status };
+  const action = claimLibraryStatusAction(true);
   state.ui.scanCancellationAcknowledged = false;
   indicator.classList.remove('is-done', 'is-idle');
   indicator.classList.add('is-busy');
@@ -1015,10 +1360,12 @@ async function triggerLibraryRefresh(fullRescan = false) {
       body: JSON.stringify({ full_rescan: Boolean(fullRescan) }),
     });
     const data = await response.json().catch(() => ({}));
+    // Reads taken before HTTP acceptance may still contain the pre-start snapshot.
+    if (!settleLibraryStatusAction(action)) return false;
     if (response.status === 409 && data?.already_running) {
       updateStatusIndicator(previousStatus);
       showToast('Library scan is already running.', 'info', 2200);
-      scheduleBrowserTimeout(pollStatus, 250);
+      scheduleStatusPoll(250);
       return false;
     }
     if (!response.ok || data?.ok === false) {
@@ -1033,9 +1380,10 @@ async function triggerLibraryRefresh(fullRescan = false) {
     }
     state.wasPollingBusy = true;
     showToast('Library scan started.', 'success', 2200);
-    scheduleBrowserTimeout(pollStatus, 250);
+    scheduleStatusPoll(250);
     return true;
   } catch (error) {
+    if (!settleLibraryStatusAction(action)) return false;
     updateStatusIndicator(previousStatus);
     indicator.classList.remove('is-busy');
     indicator.classList.add('is-done');
@@ -1045,6 +1393,7 @@ async function triggerLibraryRefresh(fullRescan = false) {
   }
 }
 function claimLocalViewStateNavigation() {
+  cancelRootGalleryPageRequest();
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.ui.pendingViewRequest = null;
   state.ui.pendingViewTransition = false;
@@ -1091,7 +1440,10 @@ function openScanPage() {
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = '';
+  if (searchInput) {
+    searchInput.value = '';
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   renderSidebar();
   renderRelated();
   renderLibraryLoader(state.status, { scanPageVisible: true });
@@ -1108,7 +1460,6 @@ function abandonScanPageForNavigation(options = {}) {
   state.ui.scanPageReturnContext = null;
   state.ui.forceScanPageVisible = false;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
-  resumeScanPageGalleryCoverLoads();
   if (options.clearSelection === true) {
     state.view = {
       ...state.view,
@@ -1161,7 +1512,10 @@ function closeScanPage() {
   state.ui.scanPageReturnContext = null;
   if (typeof unmountLibraryStatusBar === 'function') unmountLibraryStatusBar();
   const searchInput = document.getElementById('search-input');
-  if (searchInput) searchInput.value = state.ui.searchDraftQuery;
+  if (searchInput) {
+    searchInput.value = state.ui.searchDraftQuery;
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(searchInput);
+  }
   if (
     returnContext.url
     && typeof window !== 'undefined'
@@ -1194,6 +1548,7 @@ async function cancelLibraryScan() {
   if (state.ui.scanCancellationPending) return false;
   const isFullRescan = String(state.status?.scan_mode || '') === 'manual_full_rescan';
   const scanLabel = isFullRescan ? 'full rescan' : 'scan';
+  const action = claimLibraryStatusAction(false);
   state.ui.scanCancellationPending = true;
   renderLibraryLoader(state.status, {
     scanPageVisible: Boolean(state.ui.scanPageReturnContext),
@@ -1204,6 +1559,7 @@ async function cancelLibraryScan() {
       headers: { Accept: 'application/json' },
     });
     const data = await response.json();
+    if (!settleLibraryStatusAction(action)) return false;
     if (!response.ok || !data?.ok) {
       throw new Error(data?.error || `Failed to cancel ${scanLabel} (${response.status}).`);
     }
@@ -1227,16 +1583,19 @@ async function cancelLibraryScan() {
       'success',
       2600,
     );
-    scheduleBrowserTimeout(pollStatus, 150);
+    scheduleStatusPoll(150);
     return Boolean(data.cancelled);
   } catch (error) {
+    if (!settleLibraryStatusAction(action)) return false;
     showToast(error?.message || `Failed to cancel ${scanLabel}.`, 'error', 3200);
     return false;
   } finally {
-    state.ui.scanCancellationPending = false;
-    renderLibraryLoader(state.status, {
-      scanPageVisible: Boolean(state.ui.scanPageReturnContext),
-    });
+    if (libraryStatusAction === action) {
+      state.ui.scanCancellationPending = false;
+      renderLibraryLoader(state.status, {
+        scanPageVisible: Boolean(state.ui.scanPageReturnContext),
+      });
+    }
   }
 }
 
@@ -1379,6 +1738,13 @@ function watcherHealthRefreshSignature(status) {
 }
 
 async function pollStatus() {
+  const sequence = ++statusPollSequence;
+  const readRevision = statusReadRevision;
+  const startedDuringPendingStart = Boolean(libraryStatusAction?.pendingStart);
+  const ownsStatus = () => sequence === statusPollSequence
+    && readRevision === statusReadRevision
+    && !startedDuringPendingStart;
+  let nextPollDelay = null;
   const knownStatus = state.status || {};
   const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
@@ -1394,18 +1760,19 @@ async function pollStatus() {
   const coverScheduler = typeof galleryCoverLoadScheduler !== 'undefined'
     ? galleryCoverLoadScheduler
     : null;
-  if (
-    !knownBusy
-    && coverScheduler?.isForegroundIdle?.() === false
-    && typeof coverScheduler.whenForegroundIdle === 'function'
-  ) {
-    await coverScheduler.whenForegroundIdle();
-    scheduleBrowserTimeout(pollStatus, STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS);
-    return;
-  }
   try {
+    if (
+      !knownBusy
+      && coverScheduler?.isForegroundIdle?.() === false
+      && typeof coverScheduler.whenForegroundIdle === 'function'
+    ) {
+      await coverScheduler.whenForegroundIdle();
+      if (ownsStatus()) nextPollDelay = STATUS_POLL_FOREGROUND_IDLE_RETRY_DELAY_MS;
+      return;
+    }
     const response = await fetch('/status');
-    const data = await response.json();
+    const data = await readGalleryResponse(response, ownsStatus);
+    if (!ownsStatus()) return;
     updateStatusIndicator(data);
     const normalizedStatus = state.status;
     const currentInventoryRevision = Number(
@@ -1429,11 +1796,13 @@ async function pollStatus() {
       try {
         // An earlier in-flight summary cannot satisfy a later status change.
         // Failed/superseded loads return null; keep the change pending for the next poll.
-        const refreshedItems = await loadProblematicFiles(true);
+        const refreshedItems = await loadProblematicFiles(true, { preserveSelectedDetail: true });
+        if (!ownsStatus()) return;
         if (state.utility === utility && Array.isArray(refreshedItems)) {
           utility.problematicStatusSyncedRevision = requestedRefreshRevision;
         }
       } catch (problematicFilesError) {
+        if (!ownsStatus()) return;
         console.error(
           '[AlbumHaven][Watcher] Failed to refresh Problematic Files after a status change.',
           problematicFilesError,
@@ -1487,9 +1856,19 @@ async function pollStatus() {
     const wasPollingBusy = Boolean(state.wasPollingBusy);
     const wasScanFinalizing = Boolean(state.wasScanFinalizing);
     const wasCoverPollingBusy = Boolean(state.wasCoverPollingBusy);
-    state.wasPollingBusy = busyNow;
+    if (busyNow && state.ui.pendingScanCompletionViewRefreshPromise) {
+      clearPendingScanCompletionViewRefresh();
+      state.ui.pendingScanCompletionViewRefreshPromise = null;
+    }
+    if (coverBusyNow && state.ui.pendingCoverCompletionViewRefreshPromise) {
+      clearPendingCoverCompletionViewRefresh();
+      state.ui.pendingCoverCompletionViewRefreshPromise = null;
+    }
+    // Keep a terminal transition pending until its owned async effects finish.
+    // A newer idle observation can then finish it instead of losing completion.
+    if (busyNow) state.wasPollingBusy = true;
     state.wasScanFinalizing = scanFinalizing;
-    state.wasCoverPollingBusy = coverBusyNow;
+    if (coverBusyNow) state.wasCoverPollingBusy = true;
     if ((!busyNow || scanFinalizing) && !state.ui.scanPageReturnContext) {
       state.ui.forceScanPageVisible = false;
     }
@@ -1513,6 +1892,7 @@ async function pollStatus() {
         clearPendingScanCompletionViewRefresh();
       } else if (!hasPendingSidebarNavigation()) {
         await dispatchPendingScanCompletionViewRefresh();
+        if (!ownsStatus()) return;
       }
     }
     if (wasPollingBusy && !busyNow) {
@@ -1520,21 +1900,13 @@ async function pollStatus() {
         Boolean(state.ui.scanCancellationAcknowledged)
         || String(normalizedStatus.scan_outcome || '').trim().toLowerCase() === 'cancelled'
       );
-      if (state.ui.pendingScanCompletionViewRefreshRetryScheduled) {
-        clearBrowserTimeout(state.ui.pendingScanCompletionViewRefreshRetryTimerId);
+      if (!state.ui.pendingScanCompletionViewRefreshPromise) {
+        clearPendingScanCompletionViewRefresh();
+        state.ui.pendingScanCompletionViewRefresh = true;
       }
-      state.ui.pendingScanCompletionViewRefreshRetryToken = (
-        Number(state.ui.pendingScanCompletionViewRefreshRetryToken || 0) + 1
-      );
-      state.ui.pendingScanCompletionViewRefreshRetryScheduled = false;
-      state.ui.pendingScanCompletionViewRefreshRetryTimerId = 0;
-      state.ui.pendingScanCompletionViewRefreshRetryCount = 0;
-      state.ui.pendingScanCompletionViewRefreshRetryExhausted = false;
-      state.ui.pendingScanCompletionViewRefresh = true;
-      state.ui.pendingScanCompletionViewRefreshEligibleRequestId = 0;
-      state.ui.lastSuccessfulCanonicalFullViewApply = null;
       if (!hasPendingSidebarNavigation()) {
-        await dispatchPendingScanCompletionViewRefresh();
+        await dispatchPendingScanCompletionViewRefresh(true);
+        if (!ownsStatus()) return;
       }
       state.ui.scanCancellationAcknowledged = false;
       if (!normalizedStatus.last_error && !scanWasCancelled) {
@@ -1542,26 +1914,25 @@ async function pollStatus() {
       }
       state.ui.pendingInventoryMutationViewRefresh = false;
     }
+    state.wasPollingBusy = busyNow;
+    state.ui.pendingScanCompletionViewRefreshPromise = null;
     if (wasCoverPollingBusy && !coverBusyNow) {
       if (shouldAutoRefreshViewAfterCoverCompletion()) {
-        if (state.ui.pendingCoverCompletionViewRefreshRetryScheduled) {
-          clearBrowserTimeout(state.ui.pendingCoverCompletionViewRefreshRetryTimerId);
+        if (!state.ui.pendingCoverCompletionViewRefreshPromise) {
+          clearPendingCoverCompletionViewRefresh();
+          state.ui.pendingCoverCompletionViewRefresh = true;
         }
-        state.ui.pendingCoverCompletionViewRefreshRetryToken = (
-          Number(state.ui.pendingCoverCompletionViewRefreshRetryToken || 0) + 1
-        );
-        state.ui.pendingCoverCompletionViewRefreshRetryScheduled = false;
-        state.ui.pendingCoverCompletionViewRefreshRetryTimerId = 0;
-        state.ui.pendingCoverCompletionViewRefreshRetryCount = 0;
-        state.ui.pendingCoverCompletionViewRefreshRetryExhausted = false;
-        state.ui.pendingCoverCompletionViewRefresh = true;
-        await dispatchPendingCoverCompletionViewRefresh();
+        await dispatchPendingCoverCompletionViewRefresh(true);
+        if (!ownsStatus()) return;
       }
       if (state.utility.loaded) {
         await loadProblematicFiles(true);
+        if (!ownsStatus()) return;
       }
       showToast('Album covers updated.', 'success', 3200);
     }
+    state.wasCoverPollingBusy = coverBusyNow;
+    state.ui.pendingCoverCompletionViewRefreshPromise = null;
     if (
       state.ui.pendingInventoryMutationViewRefresh
       && !busyNow
@@ -1575,12 +1946,14 @@ async function pollStatus() {
           preserveScroll: true,
           restartIfSameUrl: true,
         });
+        if (!ownsStatus()) return;
         if (!refreshApplied) {
           state.ui.pendingInventoryMutationViewRefresh = true;
         } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
           invalidateAllHydratedTrackModalAlbumDetails();
         }
       } catch (inventoryRefreshError) {
+        if (!ownsStatus()) return;
         state.ui.pendingInventoryMutationViewRefresh = true;
         console.error(
           '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
@@ -1588,17 +1961,14 @@ async function pollStatus() {
         );
       }
     }
-    const statusMenu = document.getElementById('status-context-menu');
-    const visibleStatusMenuNeedsBusySampling = Boolean(
-      (busyNow || coverBusyNow) && statusMenu && !statusMenu.hidden,
-    );
-    scheduleBrowserTimeout(
-      pollStatus,
-      visibleStatusMenuNeedsBusySampling
-        ? STATUS_POLL_VISIBLE_MENU_BUSY_DELAY_MS
-        : ((busyNow || coverBusyNow) ? 1000 : 3000),
-    );
+    nextPollDelay = currentStatusPollDelay();
   } catch (error) {
-    scheduleBrowserTimeout(pollStatus, 3000);
+    if (ownsStatus()) nextPollDelay = 3000;
+  } finally {
+    // A newer poll owns its continuation. Discarded work must not stop polling
+    // or postpone an earlier action read that is already scheduled.
+    if (sequence === statusPollSequence && (ownsStatus() || !statusPollTimer)) {
+      scheduleStatusPoll(nextPollDelay ?? currentStatusPollDelay());
+    }
   }
 }

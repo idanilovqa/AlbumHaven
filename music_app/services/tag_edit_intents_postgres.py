@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from typing import Any
 import uuid
 
@@ -31,6 +31,26 @@ class PostgresTagEditIntentRepository:
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
+
+    def intent_lease(self):
+        """Own a journal session until the edit's background finalizer releases it."""
+        return _TagEditIntentLease(self)
+
+    @contextmanager
+    def claim_unfinished_intent(self, intent_id: str, *, library_root_identity: str):
+        lease = self.intent_lease()
+        try:
+            if not lease._acquire(intent_id, wait=False):
+                yield None
+                return
+            with _transaction(lease._connection):
+                row = _first_row(lease._connection.execute(
+                    "select * from (" + _load_unfinished_sql() + ") unfinished where id = %(intent_id)s",
+                    {"intent_id": str(intent_id), "library_root_identity": library_root_identity},
+                ))
+            yield _intent_from_row(row) if row is not None else None
+        finally:
+            lease.release()
 
     def prepare_intent(
         self,
@@ -200,6 +220,64 @@ class PostgresTagEditIntentRepository:
 class _FallbackJsonb:
     def __init__(self, value: object) -> None:
         self.obj = value
+
+
+class _TagEditIntentLease:
+    """A dedicated session lock; no transaction stays open during media writes."""
+
+    def __init__(self, repository):
+        self._repository = repository
+        self._stack = ExitStack()
+        self._connection = None
+        self._intent_id = ""
+        self._locked = False
+        self._released = False
+
+    def _acquire(self, intent_id: str, *, wait: bool) -> bool:
+        if self._released or self._connection is not None:
+            raise RuntimeError("Tag edit lease has already been used.")
+        self._intent_id = str(uuid.UUID(intent_id))
+        self._connection = self._stack.enter_context(self._repository._connect_to_database())
+        function = "pg_advisory_lock" if wait else "pg_try_advisory_lock"
+        with _transaction(self._connection):
+            row = _first_row(self._connection.execute(
+                f"select {function}(hashtextextended(%(lock_key)s, 0)) as locked",
+                {"lock_key": "album-haven:tag-edit:" + self._intent_id},
+            ))
+        self._locked = wait or bool(_row_mapping(row).get("locked"))
+        return self._locked
+
+    def prepare_intent(self, *, library_root_identity: str, changes: list[dict[str, object]]) -> str:
+        normalized_changes = _validate_changes(changes)
+        identity = str(library_root_identity or "").strip()
+        if not identity:
+            raise ValueError("Tag edit intent requires a library root identity.")
+        try:
+            self._acquire(str(uuid.uuid4()), wait=True)
+            with _transaction(self._connection):
+                self._connection.execute(_prepare_intent_sql(), {
+                    "intent_id": self._intent_id,
+                    "library_root_identity": identity,
+                    "changes": _jsonb(normalized_changes),
+                })
+            return self._intent_id
+        except BaseException:
+            self.release()
+            raise
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        try:
+            if self._locked and not getattr(self._connection, "closed", False):
+                with _transaction(self._connection):
+                    self._connection.execute(
+                        "select pg_advisory_unlock(hashtextextended(%(lock_key)s, 0))",
+                        {"lock_key": "album-haven:tag-edit:" + self._intent_id},
+                    )
+        finally:
+            self._stack.close()
 
 
 def _connect(database_url: str) -> Any:

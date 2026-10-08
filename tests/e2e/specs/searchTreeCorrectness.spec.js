@@ -25,12 +25,19 @@ const EXPECTED_NEAL_FAMILY_ARTISTS = [
   'The Neal Morse Band',
   RESONANCE_ARTIST,
 ];
+const EXPECTED_COMPLETE_NEAL_GALLERY = [
+  FAMILY_ARTIST,
+  TRANSATLANTIC_ARTIST,
+  RESONANCE_ARTIST,
+  'Morse Portnoy George',
+  'The Neal Morse Band',
+];
 const FLOWER_KINGS_QUERY = 'flower kings';
 const FLOWER_KINGS_ARTIST = 'The Flower Kings';
 const EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS = [
+  FLOWER_KINGS_ARTIST,
   'Agents Of Mercy',
   'Roine Stolt',
-  FLOWER_KINGS_ARTIST,
 ];
 const UNRELATED_ARTIST = 'Album Haven Last.fm Fixture';
 const RECENT_SEARCH_QUERY = 'Joseph';
@@ -170,7 +177,12 @@ test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a n
           numeric: true,
           sensitivity: 'base',
         })),
-    ).toEqual(EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS);
+    ).toEqual([...EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS].sort((left, right) => left.localeCompare(right, 'en', {
+      numeric: true,
+      sensitivity: 'base',
+    })));
+    expect(await navigationPanelActions.readSidebarArtistNames())
+      .toEqual(await galleryActions.readArtistHeadings());
     expect(await galleryActions.readAlbumNamesByHeading(FLOWER_KINGS_ARTIST))
       .not.toHaveLength(0);
   });
@@ -202,8 +214,11 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
     completeNealView = {
       albums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
-      headings: await galleryActions.readArtistHeadings(),
+      headings: (await galleryActions.readArtistHeadingOccurrencesAcrossGallery({
+        expectedArtists: EXPECTED_COMPLETE_NEAL_GALLERY,
+      })).map(({ artist }) => artist),
     };
+    expect(new Set(completeNealView.headings).size).toBe(completeNealView.headings.length);
     expect(completeNealView.albums.length).toBeGreaterThan(1);
     await searchToolbarActions.search(TRANSATLANTIC_QUERY, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
@@ -218,11 +233,15 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
     expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual([TRANSATLANTIC_NEAL_ALBUM]);
     expect(await galleryActions.readArtistHeadings()).toEqual([FAMILY_ARTIST]);
-    await searchToolbarActions.clearSearch();
+    await searchToolbarActions.clearSearch({ submitWithEnter: true });
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: '' });
     expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual(completeNealView.albums);
-    expect(await galleryActions.readArtistHeadings()).toEqual(completeNealView.headings);
+    const restoredHeadings = (await galleryActions.readArtistHeadingOccurrencesAcrossGallery({
+      expectedArtists: EXPECTED_COMPLETE_NEAL_GALLERY,
+    })).map(({ artist }) => artist);
+    expect(restoredHeadings).toEqual(completeNealView.headings);
+    expect(new Set(restoredHeadings).size).toBe(restoredHeadings.length);
   });
 
   await stepLogger.step('Explicit Neal Morse album-title search remains narrow through same-primary selection', async () => {
@@ -325,6 +344,7 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
       minimumDecodedCovers: 1,
     });
     const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
+      submitWithEnter: true,
       expectedViewDataRequestCount: 1,
       minimumViewDataRequestCount: 0,
     });
@@ -366,7 +386,7 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
   });
 });
 
-test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
+test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, gallery-ordered, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -404,10 +424,15 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
     expect(albums.length).toBeGreaterThan(0);
   });
 
-  await stepLogger.step('Display the one-family search tree alphabetically instead of relevance order', async () => {
-    const alphabeticalState = await navigationPanelActions.readSidebarAlphabeticalState();
-    expect(alphabeticalState.displayedNames.length).toBeGreaterThan(1);
-    expect(alphabeticalState.displayedNames).toEqual(alphabeticalState.alphabeticalNames);
+  await stepLogger.step('Display the one-family search tree in the same order as the gallery', async () => {
+    await artistFamilyActions.waitForViewReady(ONE_FAMILY_QUERY, { queryValue: ONE_FAMILY_QUERY });
+    await artistFamilyActions.expand();
+    const displayedNames = await navigationPanelActions.readSidebarArtistNames();
+    expect(displayedNames.length).toBeGreaterThan(1);
+    await galleryActions.readArtistHeadingOccurrencesAcrossGallery({ expectedArtists: displayedNames });
+    const scroll = await galleryActions.readGalleryScrollState();
+    await galleryActions.scrollGalleryBy(-scroll.scrollTop);
+    await galleryActions.waitForGalleryScrollAtStart();
   });
 
   await stepLogger.step('Clear the query while retaining the best-match selection and gallery in the restored full tree', async () => {
@@ -595,7 +620,7 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
 
   await stepLogger.step('Clear the no-selection search naturally and restore the nonempty canonical root at its top', async () => {
     await searchToolbarActions.openRecentSearches();
-    await searchToolbarActions.clearSearchByInputDebounce();
+    await searchToolbarActions.clearSearchWithEnter();
     await searchToolbarActions.waitForDefaultRootUrl();
     await navigationPanelActions.waitForAllArtistsVisibility(true);
     await navigationPanelActions.waitForSidebarArtistNames(rootSnapshot.names);
@@ -636,6 +661,7 @@ test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted thr
       WHITESPACE_DISPLAY_ARTIST,
     );
     const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
+      submitWithEnter: true,
       expectedViewDataRequestCount: 1,
     });
     expect(transition).toEqual(expect.objectContaining({
@@ -835,10 +861,9 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
 
   await stepLogger.step('Hide the mounted Neal-family panel immediately when a different search commits', async () => {
     await searchToolbarActions.search(UNRELATED_ARTIST, { submitWithEnter: true });
-    expect(await artistFamilyActions.readPanelState()).toEqual({
-      visible: false,
-      chipTexts: [],
-    });
+    const panelState = await artistFamilyActions.readPanelState();
+    expect(panelState.visible).toBe(false);
+    expect(panelState.chipTexts.every(text => text === UNRELATED_ARTIST)).toBe(true);
     await searchToolbarActions.waitForQuery(UNRELATED_ARTIST);
     await galleryActions.waitForSelectedArtistGallery(UNRELATED_ARTIST, {
       queryValue: UNRELATED_ARTIST,

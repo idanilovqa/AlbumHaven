@@ -171,6 +171,13 @@ export class TrackModalActions {
     await this.waitForClosed(options);
   }
 
+  async backFromMobilePage(options = {}) {
+    await expect(this.trackModal.mobilePage).toBeVisible();
+    await expect(this.trackModal.mobileBackButton).toBeVisible();
+    await this.trackModal.mobileBackButton.click();
+    await this.waitForClosed(options);
+  }
+
   async closeForegroundWithEscape(options = {}) {
     await this.trackModal.closeButton.click({ trial: true });
     await this.trackModal.pressEscape();

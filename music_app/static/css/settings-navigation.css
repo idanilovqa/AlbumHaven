@@ -2,10 +2,10 @@
 body:has(> .settings-host):not(:has(> #app-shell)) { margin: 0; }
 .settings-host .settings-logout { margin: 0; }
 .settings-host .settings-logout button { width: 100%; border: 0; background: transparent; font-family: inherit; text-align: left; cursor: pointer; }
-.settings-host .settings-nav-item:hover, .settings-host .settings-nav-item:focus-visible { background: #172d43; color: #fff; outline: none; }
+.settings-host .settings-nav-item:hover, .settings-host .settings-nav-item:focus-visible { background: transparent; color: var(--app-ink, var(--ink)); text-decoration: underline; text-underline-offset: .22em; outline: none; }
 .settings-navigation-error { flex: 0 0 auto; margin: 12px 18px; }
 .settings-navigation-error[hidden] { display: none; }
 @media (max-width: 720px) {
-  .settings-host .settings-nav nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .settings-host .settings-nav nav { grid-template-columns: minmax(0, 1fr); }
   .settings-host .settings-nav-item { padding: 0 8px; gap: 5px; font-size: 12px; }
 }

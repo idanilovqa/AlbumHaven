@@ -41,7 +41,7 @@ function coverageAttemptEvidence(targetRoot, row, run, job) {
     throw new Error(`malformed Playwright report for coverage-only target ${row.target}`);
   }
   const cases = flattenSuites(report.suites);
-  const expectedCaseIds = row.target === 'scan-health' ? ['FTC-OPS-003F'] : ['FTC-OPS-003C', 'FTC-OPS-003E'];
+  const expectedCaseIds = row.coverageCaseIds;
   const actualCaseIds = cases.map((entry) => entry.testId).sort();
   if (cases.length !== expectedCaseIds.length
     || actualCaseIds.some((caseId, index) => caseId !== expectedCaseIds[index])) {

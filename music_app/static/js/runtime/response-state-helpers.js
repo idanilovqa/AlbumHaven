@@ -996,6 +996,12 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
+  // A replacement search/artist payload must not inherit a root page cursor.
+  if (isPlaylistSurface || normalizedView.query || normalizedView.selected_artist
+    || (Array.isArray(source.artist_groups) && !Object.prototype.hasOwnProperty.call(source, 'gallery_page'))) {
+    delete normalizedView.gallery_page;
+    delete normalizedView.gallery_page_scope;
+  }
   if (isPlaylistSurface) {
     delete normalizedView.artist_family_filters;
     delete normalizedView.artist_page;
@@ -1310,6 +1316,9 @@ function compactCurrentViewForIdle() {
 }
 
 function applyViewPayload(payload, options = {}) {
+  if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
+    cancelRootGalleryPageRequest();
+  }
   const mountedPreviousView = isRuntimePlainObject(state.view) ? state.view : {};
   const previousView = normalizeViewPayload(state.view);
   const sidebarReconciledPayload = options.preserveSidebarState
@@ -1358,6 +1367,15 @@ function applyViewPayload(payload, options = {}) {
       ? nextView.loaded_library_categories
       : previousView.non_album_library_categories || nextView.loaded_library_categories)
   )];
+  if (nextView.gallery_page && !options.rootGalleryContinuation && !nextPayload?.gallery_page_scope) {
+    // Source hydration may retain the navigation URL. Continuations must follow
+    // the actual loaded page scope, not those retained browser parameters.
+    nextView.gallery_page_scope = {
+      gallery_scope: normalizedNextView.gallery_scope,
+      visible_library_categories: [...normalizedNextView.visible_library_categories],
+      preserve_sidebar: options.preserveSidebarState === true,
+    };
+  }
   if (options.preserveGalleryBrowseLocationState === true) {
     nextView.gallery_scope = previousView.gallery_scope;
     nextView.visible_library_categories = [...previousView.visible_library_categories];
@@ -1393,7 +1411,6 @@ function applyViewPayload(payload, options = {}) {
   const nextSelectedArtist = String(nextView.selected_artist || '').trim();
   const selectionChanged = previousSelectedArtist !== nextSelectedArtist;
   const previousHadRelatedArtists = Array.isArray(previousView.related_artists) && previousView.related_artists.length > 0;
-  const allArtistsChanged = Boolean(previousView.all_artists_active) !== Boolean(nextView.all_artists_active);
   const navigationRailContentKindChanged = (
     getRuntimeNavigationRailContentKind(previousView) !== getRuntimeNavigationRailContentKind(nextView)
   );
@@ -1417,11 +1434,9 @@ function applyViewPayload(payload, options = {}) {
   }
   if (
     state.ui?.artistsDrawerOpen
-    && (
-      selectionChanged
-      || allArtistsChanged
-      || navigationRailContentKindChanged
-    )
+    // Explicit navigation closes its drawer at activation. A later search
+    // response must not dismiss a drawer the user has opened since that request.
+    && navigationRailContentKindChanged
     && typeof closeArtistsDrawer === 'function'
   ) {
     closeArtistsDrawer({ restoreFocus: false });
@@ -1525,6 +1540,7 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
   // their payload arrives later.
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.ui.pendingViewTransition = false;
+  state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
 
   return mergeViewPayload({

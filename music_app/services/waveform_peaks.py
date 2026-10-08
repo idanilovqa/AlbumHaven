@@ -18,7 +18,7 @@ PCM_READ_CHUNK_BYTES = 64 * 1024
 MAX_STDERR_DIAGNOSTIC_BYTES = 64 * 1024
 MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN = 160
 WAVEFORM_ANALYSIS_SAMPLE_RATE = 8_000
-WAVEFORM_ANALYZER_VERSION = "waveform-peaks-v2"
+WAVEFORM_ANALYZER_VERSION = "waveform-peaks-v3"
 _PEAK_LEVEL_PATTERN = re.compile(
     rb"^lavfi\.astats\.(?P<channel>[12])\.Peak_level=(?P<decibels>[^\r\n]+)$"
 )
@@ -50,6 +50,11 @@ def _finite_peak(value: float) -> float:
 
 
 def _audio_duration_seconds(path: Path) -> float:
+    from music_app.services.mp3_gapless import read_mp3_gapless_info
+
+    gapless = read_mp3_gapless_info(path)
+    if gapless is not None:
+        return gapless.duration_seconds
     try:
         from mutagen import File as MutagenFile
     except ImportError as error:  # pragma: no cover - runtime dependency diagnostic.
@@ -229,6 +234,13 @@ async def build_waveform_peaks(
     if not executable:
         raise RuntimeError("ffmpeg executable is unavailable")
     duration_seconds = await asyncio.to_thread(_audio_duration_seconds, path)
+    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+
+    gapless = await ignored_mp3_gapless_info(path, executable, cancel_event=cancel_event)
+    sample_filter = (
+        gapless.decode_filters(WAVEFORM_ANALYSIS_SAMPLE_RATE)[1]
+        if gapless is not None else f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE}"
+    )
     frames_per_bin = max(
         1,
         math.ceil(
@@ -239,7 +251,7 @@ async def build_waveform_peaks(
     )
     padded_frames = frames_per_bin * bins
     aggregate_filter = (
-        f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE},"
+        f"{sample_filter},"
         "aformat=channel_layouts=stereo,"
         f"apad=whole_len={padded_frames},"
         f"asetnsamples=n={frames_per_bin}:p=1,"

@@ -447,6 +447,11 @@ export class UtilityLoopEntryCard extends BasePage {
     };
   }
 
+  async readLoopPodWidth(entry) {
+    // parity-check: allow-read-only-measurement-evaluate -- read the rendered saved-loop pod width
+    return this.loopPodForEntry(entry).evaluate(element => parseFloat(getComputedStyle(element).width));
+  }
+
   async readLoopActionVisualSnapshot(entry) {
     const action = this.loopActionForEntry(entry);
     const [rootBounds, podBounds, entryBounds, mainBounds, timelineBounds] = await Promise.all([

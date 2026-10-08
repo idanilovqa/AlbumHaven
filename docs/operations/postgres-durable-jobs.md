@@ -166,7 +166,7 @@ For an authentication-mail backlog, inspect only authorized aggregate status and
 
 Use this additive order:
 
-1. Back up Postgres and apply migrations through `0099_retire_vacated_structural_album.sql` with the migrator role.
+1. Back up Postgres and apply migrations through `0106_retire_vacated_structural_album.sql` with the migrator role.
 2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
 3. Configure the dedicated worker-role URL and mail settings, start the worker, and confirm the closed startup preflight accepts its exact handler registry, schema, function grants, table columns, and transition-sequence access before readiness. Confirm its claim filter includes every completed scan, cover, Last.fm, and authentication-mail kind.
 4. Verify the worker fingerprint and role checks before deploying the compatible web artifact that enables durable producers. Drain any old request-owned mail tasks first. Exactly one execution owner may accept each workflow during cutover.

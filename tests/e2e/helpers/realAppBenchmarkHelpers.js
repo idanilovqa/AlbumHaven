@@ -39,6 +39,8 @@ export function readLibraryStartupEntrySnapshot(selectors) {
   const runtimeView = typeof state !== 'undefined' && state?.view && typeof state.view === 'object'
     ? state.view
     : {};
+  const runtimeSidebarArtistCount = Array.isArray(runtimeView.artists_sidebar) ? runtimeView.artists_sidebar.length : 0;
+  const runtimeArtistCount = Number(runtimeView.artist_count || 0);
   const runtimePayloadTier = String(runtimeView.payload_tier || '').trim();
   const runtimePostgresBrowse = String(runtimeView.persistence_backend || '').trim() === 'postgres'
     && String(runtimeView.persistence_seam || '').trim() === 'library_browse'
@@ -76,7 +78,22 @@ export function readLibraryStartupEntrySnapshot(selectors) {
     && visibleAlbumCardCount > 0
     && allArtistsActive
     && firstGalleryPaintSectionCount > 0;
-  const startupMode = loaderVisible
+  const postgresPagedRoot = !loaderVisible
+    && runtimePostgresBrowse
+    && runtimePayloadTier === 'gallery_page'
+    && runtimeView.initial_view_partial === false
+    && !String(runtimeView.query || '').trim()
+    && !String(runtimeView.selected_artist || '').trim()
+    && runtimeArtistCount > 0
+    && runtimeSidebarArtistCount === runtimeArtistCount
+    && visibleAllArtistsCount === runtimeArtistCount
+    && visibleSidebarArtistCount > 0
+    && visibleSidebarArtistCount <= runtimeArtistCount
+    && visibleArtistHeadingCount > 0
+    && visibleAlbumCardCount > 0
+    && allArtistsActive
+    && firstGalleryPaintSectionCount > 0;
+  const startupMode = postgresPagedRoot ? 'postgres-paged-root' : loaderVisible
     ? 'loader-first'
     : (
       postgresSidebarPreview
@@ -97,6 +114,8 @@ export function readLibraryStartupEntrySnapshot(selectors) {
     visibleAlbumCardCount,
     firstGalleryPaintSectionCount,
     runtimeArtistGroupCount,
+    runtimeSidebarArtistCount,
+    runtimeArtistCount,
     runtimePayloadTier,
     runtimePostgresBrowse,
     startupMode,
@@ -141,8 +160,8 @@ export async function readLibraryStartupEntryState(page, galleryActions, navigat
 export function expectManualStartupEntryPath(loaderState, benchmarkName) {
   const startupMode = String(loaderState?.startupMode || '');
   expect(
-    ['loader-first', 'postgres-sidebar-preview-first', 'direct-full-sidebar'].includes(startupMode),
-    `Expected ${benchmarkName} to expose loader-first, Postgres sidebar-preview-first, or direct-full-sidebar startup.`,
+    ['loader-first', 'postgres-sidebar-preview-first', 'direct-full-sidebar', 'postgres-paged-root'].includes(startupMode),
+    `Expected ${benchmarkName} to expose loader-first, Postgres sidebar-preview-first, direct-full-sidebar, or paged-root startup.`,
   ).toBe(true);
   if (startupMode === 'loader-first') {
     expect(
@@ -153,6 +172,17 @@ export function expectManualStartupEntryPath(loaderState, benchmarkName) {
       String(loaderState?.status || '').trim(),
       `Expected ${benchmarkName} to render the manual startup empty-shell copy before hydration.`,
     ).toBe('Waiting for the first albums to become available...');
+    return;
+  }
+  if (startupMode === 'postgres-paged-root') {
+    expect(loaderState.runtimePostgresBrowse).toBe(true);
+    expect(loaderState.runtimePayloadTier).toBe('gallery_page');
+    expect(loaderState.runtimeArtistCount).toBeGreaterThan(0);
+    expect(loaderState.runtimeSidebarArtistCount).toBe(loaderState.runtimeArtistCount);
+    expect(loaderState.visibleAllArtistsCount).toBe(loaderState.runtimeArtistCount);
+    expect(loaderState.visibleSidebarArtistCount).toBeGreaterThan(0);
+    expect(loaderState.visibleSidebarArtistCount).toBeLessThanOrEqual(loaderState.runtimeArtistCount);
+    expect(loaderState.firstGalleryPaintSectionCount).toBeGreaterThan(0);
     return;
   }
   if (startupMode === 'direct-full-sidebar') {
@@ -248,7 +278,8 @@ export async function collectRootBrowseStartupAuthorityEvidence(page, action) {
   const rootBrowsePayloadPromises = [];
   const bootstrapPayloadPromises = [];
   const collectResponse = (response) => {
-    if (isRootAlbumsViewDataResponse(response)) {
+    if (isRootAlbumsViewDataResponse(response)
+      && !new URL(response.url()).searchParams.has('gallery_cursor')) {
       rootBrowsePayloadPromises.push(response.json());
     }
     if (isRootAlbumsDocumentResponse(response)) {
@@ -269,6 +300,47 @@ export async function collectRootBrowseStartupAuthorityEvidence(page, action) {
   return { rootBrowsePayloads, bootstrapPayloads };
 }
 
+export function expectPagedRootBrowseAuthority(payload, { accumulated = false, embedded = false } = {}) {
+  expectPostgresLibraryBrowseTelemetry(payload, 'gallery_page');
+  expect(payload.initial_view_partial).toBe(false);
+  expect(String(payload.query || '').trim()).toBe('');
+  expect(String(payload.selected_artist || '').trim()).toBe('');
+  expect(Array.isArray(payload.artists_sidebar)).toBe(true);
+  expect(payload.artist_count).toBeGreaterThan(0);
+  expect(payload.artists_sidebar.length).toBe(payload.artist_count);
+  expect(payload.album_count).toBeGreaterThan(0);
+  const page = payload.gallery_page;
+  expect(page).toBeTruthy();
+  expect(Number.isInteger(page.page_size)).toBe(true);
+  expect(page.page_size).toBeGreaterThan(0);
+  expect(page.page_size).toBeLessThanOrEqual(100);
+  expect(page.revision).toMatch(/^[a-f0-9]{64}$/);
+  expect(typeof page.has_more).toBe('boolean');
+  expect(Array.isArray(payload.artist_groups)).toBe(true);
+  const albums = flattenAlbums(payload.artist_groups);
+  for (const album of albums) {
+    const hasTracks = Object.prototype.hasOwnProperty.call(album || {}, 'tracks');
+    // API summaries omit tracks; SSR and client compaction retain empty arrays.
+    expect(!hasTracks || ((accumulated || embedded) && Array.isArray(album.tracks) && album.tracks.length === 0)).toBe(true);
+  }
+  const count = albums.length;
+  expect(count).toBeGreaterThan(0);
+  if (!accumulated) expect(count).toBeLessThanOrEqual(page.page_size);
+  if (page.has_more) {
+    if (accumulated) expect(count).toBeGreaterThanOrEqual(page.page_size);
+    else expect(count).toBe(page.page_size);
+    expect(typeof page.next_cursor).toBe('string');
+    const cursor = JSON.parse(Buffer.from(page.next_cursor, 'base64url').toString('utf8'));
+    expect(cursor).toHaveLength(3);
+    expect(cursor[0]).toBe(1);
+    expect(cursor[1]).toBe(page.revision);
+    expect(Number.isInteger(cursor[2])).toBe(true);
+    expect(cursor[2]).toBe(count);
+  } else {
+    expect(page.next_cursor).toBeNull();
+  }
+}
+
 export function expectRootBrowseStartupAuthorityEvidence(evidence) {
   const rootBrowsePayloads = Array.isArray(evidence?.rootBrowsePayloads)
     ? evidence.rootBrowsePayloads
@@ -281,6 +353,10 @@ export function expectRootBrowseStartupAuthorityEvidence(evidence) {
     && payload?.persistence_seam === 'library_browse'
     && payload?.view_data_source === 'postgres_library_browse'
   ));
+  if (authoritativeResponse?.payload_tier === 'gallery_page') {
+    expectPagedRootBrowseAuthority(authoritativeResponse);
+    return { kind: 'paged-root-view-data', payload: authoritativeResponse };
+  }
   if (authoritativeResponse) {
     expectPostgresLibraryBrowseTelemetry(authoritativeResponse, 'full');
     return { kind: 'root-view-data', payload: authoritativeResponse };
@@ -300,6 +376,13 @@ export function expectRootBrowseStartupAuthorityEvidence(evidence) {
   ).toBeTruthy();
 
   const { bootstrap, initialView } = bootstrapEvidence;
+  if (initialView.payload_tier === 'gallery_page') {
+    expectPagedRootBrowseAuthority(initialView, { embedded: true });
+    expect(bootstrap?.startupPreview?.mode).toBe('full_view');
+    expect(bootstrap?.startupHydration?.tier).toBe('full');
+    expect(bootstrap?.startupHydration?.required).toBe(false);
+    return { kind: 'paged-root-bootstrap', payload: initialView };
+  }
   expectPostgresLibraryBrowseTelemetry(initialView);
   expect(String(initialView.query || '').trim()).toBe('');
   expect(String(initialView.selected_artist || '').trim()).toBe('');

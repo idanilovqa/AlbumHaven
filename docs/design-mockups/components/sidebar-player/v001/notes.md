@@ -11,4 +11,3 @@ Review: open mockup.html directly. Select A/B/C. Toggle sidebar, slow motion, an
 Palette follows the screenshot and existing player: dark green rail, green play, parchment gallery. Artwork and library are original illustrative placeholders; no music or user data is loaded.
 
 One animated --rail variable controls the sidebar width, content offset, player width and play alignment. Other positional transitions share its duration/easing without delays. Single-click art waits 300ms to distinguish double-click; this delay is solely a prototype gesture tradeoff, not sidebar animation delay.
-

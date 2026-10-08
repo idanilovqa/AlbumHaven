@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.e2e.support import isolatedPostgres
+
 
 def _load_module():
     path = Path(__file__).resolve().parents[2] / "tests" / "e2e" / "support" / "scanPerformanceApp.py"
@@ -18,6 +20,35 @@ def _load_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_shared_role_guard_accepts_only_the_expected_scan_performance_role():
+    class FakeResult:
+        def __init__(self, role_name):
+            self.role_name = role_name
+
+        def fetchone(self):
+            return {
+                "database_name": "album_haven_scan_e2e",
+                "role_name": self.role_name,
+            }
+
+    class FakeConnection:
+        def __init__(self, role_name):
+            self.role_name = role_name
+
+        def execute(self, _query):
+            return FakeResult(self.role_name)
+
+    isolatedPostgres._assert_connected_role(
+        FakeConnection("album_haven_migrator"),
+        isolatedPostgres.SETUP_ROLE,
+    )
+    with pytest.raises(RuntimeError, match="identity does not match"):
+        isolatedPostgres._assert_connected_role(
+            FakeConnection("album_haven_app"),
+            isolatedPostgres.SETUP_ROLE,
+        )
 
 
 def test_support_is_a_prestart_preparer_without_asgi_runtime_augmentation():

@@ -320,3 +320,15 @@
   padding-top: 6px;
   padding-bottom: 0;
 }
+
+/* Main-library and account navigation share one chrome surface on desktop too. */
+:root .settings-host .settings-nav {
+  border: 0; outline: 0; box-shadow: none;
+  background: var(--appearance-panel-background, var(--app-chrome));
+  --ink: var(--appearance-panel-ink, var(--app-ink));
+  --text: var(--ink); --muted: var(--appearance-panel-muted, var(--app-muted));
+  color: var(--ink);
+}
+:root .settings-host .settings-nav :is(.settings-nav-item, .settings-nav-item span, .settings-nav-heading) {
+  color: var(--appearance-panel-ink, var(--app-ink));
+}

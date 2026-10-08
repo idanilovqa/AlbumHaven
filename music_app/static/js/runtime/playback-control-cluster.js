@@ -37,7 +37,7 @@
       const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
       return `
         <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player" data-loop-control-style="${style}">
-          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
+          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause"><svg class="ui-icon player-transport-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6.4v11.2l9-5.6-9-5.6Z"/></svg></button>
           <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
         </span>
       `;

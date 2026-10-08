@@ -1,7 +1,7 @@
 .unfolding-action-button {
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: var(--unfolding-action-size, 34px);
+  height: var(--unfolding-action-size, 34px);
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -9,15 +9,16 @@
   background: var(--appearance-control, var(--app-control, var(--panel)));
   transition: width 180ms ease;
 }
-.unfolding-action-button.is-open { width: calc(32px * var(--unfolding-action-count, 2) + 2px); }
+.unfolding-action-button:focus-within { border-color: var(--appearance-ink, var(--text)); }
+.unfolding-action-button.is-open { width: calc((var(--unfolding-action-size, 34px) - 2px) * var(--unfolding-action-count, 2) + 2px); }
 :root .unfolding-action-button > .unfolding-action-button__action {
   display: inline-grid;
   place-items: center;
   flex: 0 0 0px;
   width: 0;
   min-width: 0;
-  height: 32px;
-  min-height: 32px;
+  height: calc(var(--unfolding-action-size, 34px) - 2px);
+  min-height: calc(var(--unfolding-action-size, 34px) - 2px);
   padding: 0;
   overflow: hidden;
   border: 0;
@@ -32,7 +33,7 @@
 }
 :root .unfolding-action-button.is-open > .unfolding-action-button__action,
 :root .unfolding-action-button > .unfolding-action-button__action.is-active {
-  flex-basis: 32px;
+  flex-basis: calc(var(--unfolding-action-size, 34px) - 2px);
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
@@ -54,4 +55,22 @@
   color: color-mix(in srgb,
     var(--appearance-play, #4ade80) 70%,
     var(--appearance-ink, var(--text)));
+}
+
+:root .unfolding-action-button > .unfolding-action-button__action[hidden] { display: none; }
+
+.unfolding-action-button[data-unfold-direction="down"] {
+  position: relative; overflow: visible; width: var(--unfolding-action-size, 40px); height: var(--unfolding-action-size, 40px); flex: 0 0 var(--unfolding-action-size, 40px); z-index: 1; transition: none;
+}
+.unfolding-action-button[data-unfold-direction="down"]::before {
+  content: ''; position: absolute; z-index: -1; inset: -1px -1px auto; height: var(--unfolding-action-size, 40px); box-sizing: border-box; border: 1px solid; border-color: inherit; border-radius: inherit; background: var(--gallery-toolbar-button-background, var(--appearance-control, var(--panel))); transition: height 240ms ease;
+}
+.unfolding-action-button[data-unfold-direction="down"].is-open::before { height: calc((var(--unfolding-action-size, 40px) - 2px) * var(--unfolding-action-count, 3) + 2px); }
+:root .unfolding-action-button[data-unfold-direction="down"] > .unfolding-action-button__action {
+  position: absolute; left: 0; top: 0; width: calc(var(--unfolding-action-size, 40px) - 2px); min-width: 0; height: calc(var(--unfolding-action-size, 40px) - 2px); min-height: 0; transform: translateY(0); transition: transform 240ms ease, opacity 180ms ease;
+}
+:root .unfolding-action-button[data-unfold-direction="down"].is-open > .unfolding-action-button__action { transform: translateY(calc(var(--unfolding-action-index, 0) * (var(--unfolding-action-size, 40px) - 2px))); }
+@media (prefers-reduced-motion: reduce) {
+  .unfolding-action-button[data-unfold-direction="down"]::before,
+  :root .unfolding-action-button[data-unfold-direction="down"] > .unfolding-action-button__action { transition: none; }
 }

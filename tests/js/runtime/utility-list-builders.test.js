@@ -374,6 +374,7 @@ test('player album resolution rejects an active queue snapshot when the requeste
 
 function loadLoopBuilderHelpers() {
   const context = {
+    ButtonComponent: require('../../../music_app/static/js/button-component.js'),
     state: {
       utility: {
         loops: [],
@@ -393,6 +394,7 @@ function loadLoopBuilderHelpers() {
         : `${wholeMinutes}:${String(Math.floor(remaining)).padStart(2, '0')}`;
     },
   };
+  context.window = context;
   vm.createContext(context);
   vm.runInContext(playbackControlClusterSource, context, { filename: playbackControlClusterPath });
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'player-and-waveform.js'), 'utf8'), context);
@@ -2828,6 +2830,103 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
     assert.equal(indexedCanonicalSource.tracks.length, 13);
   });
 });
+
+for (const scenario of [
+  { name: 'auto-selected content search', source: 'auto_top_match', allResults: true },
+  { name: 'explicit artist selection', source: 'requested_artist' },
+  { name: 'same-owner split', source: 'auto_top_match', sameOwner: true },
+  { name: 'nonstructural edit', source: 'auto_top_match', field: 'title' },
+  { name: 'superseded view', source: 'auto_top_match', superseded: true },
+  { name: 'changed query', source: 'auto_top_match', changedQuery: true },
+  { name: 'artist-name search', source: 'auto_top_match', artistNameMatch: true },
+  { name: 'explicit family filter', source: 'auto_top_match', familyFilter: true },
+  { name: 'explicit primary filter', source: 'auto_top_match', primaryFilter: true },
+  { name: 'failed refresh', source: 'auto_top_match', failedRefresh: true, allResults: true },
+]) {
+  test(`watchSaveTask preserves split search intent for ${scenario.name}`, async () => {
+    const context = loadHelpers();
+    Object.assign(context, {
+      URL, URLSearchParams,
+      normalizeGalleryDisplayMode: value => value || 'cards',
+      normalizeGalleryScalePercent: value => Number(value || 100),
+      resolveSelectedArtistFamilyDisplayMode: () => 'grouped',
+      normalizeSearchFilters: value => value || {},
+    });
+    for (const file of ['view-state-helpers.js', 'browser-navigation-helpers.js']) {
+      vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), file), 'utf8'), context);
+    }
+    const originalAlbum = {
+      key: 'various artists::collection', name: 'Collection', album_artist: 'Various Artists',
+      tracks: [{ path: 'selected.flac' }, { path: 'sibling.flac' }],
+    };
+    const source = { ...originalAlbum, tracks: [originalAlbum.tracks[1]] };
+    const destination = {
+      key: 'solo voice::collection split', name: 'Collection Split',
+      album_artist: scenario.sameOwner ? 'Various Artists' : 'Solo Voice',
+      tracks: [originalAlbum.tracks[0]],
+    };
+    const originatingSearchContext = {
+      selected_artist_source: scenario.source,
+      artist_name_match_artists: scenario.artistNameMatch ? ['Various Artists'] : [],
+    };
+    Object.assign(context.state.view, {
+      surface: 'albums', query: 'Collection', selected_artist: 'Various Artists',
+      related_artists: [], related_filter_artists: scenario.familyFilter ? ['Solo Voice'] : [],
+      primary_filter_active: Boolean(scenario.primaryFilter), search_filters: {},
+      visible_library_categories: ['main_library'],
+      search_context: originatingSearchContext,
+      artist_groups: [{ artist: 'Various Artists', albums: [source, destination] }],
+      primary_artist_groups: [], family_artist_groups: [],
+    });
+    context.state.ui = { viewStateRevision: scenario.superseded ? 8 : 7 };
+    const originUrl = context.buildApiUrl(context.state.view);
+    if (scenario.changedQuery) context.state.view.query = 'Another query';
+    const currentUrl = context.buildApiUrl(context.state.view);
+    context.location = { origin: 'http://localhost', href: `http://localhost${context.buildUrl(context.state.view)}` };
+    const historyCalls = [];
+    context.history = {
+      state: { preserved: true },
+      replaceState(snapshot, unused, url) {
+        historyCalls.push({ snapshot, url });
+        context.location.href = new URL(url, context.location.origin).href;
+      },
+    };
+    const refreshCalls = [];
+    context.fetchAndRender = async (url, push, options) => {
+      refreshCalls.push({ url, push, options });
+      if (scenario.failedRefresh) return false;
+      Object.assign(context.state.view, context.parseBrowserUrlState(url));
+      return true;
+    };
+    context.getAlbumRequestKey = album => album.key;
+    context.getAlbumIdentity = album => album.key;
+    context.showRepairAlert = () => {};
+    await context.watchSaveTask('split-search-task', {
+      originalAlbum, optimisticAlbums: [source, destination],
+      originatingViewStateRevision: 7, originatingViewRequestUrl: originUrl,
+      originatingSearchContext,
+      tagEdits: { 'selected.flac': { [scenario.field || 'album']: 'Collection Split' } },
+      terminalPayload: { ok: true, save_task_id: 'split-search-task', save_task_status: 'completed',
+        requires_view_refresh: true, updated_albums: [] },
+    });
+    assert.equal(refreshCalls.length, 1);
+    const refreshed = context.parseBrowserUrlState(refreshCalls[0].url);
+    assert.equal(refreshed.all_artists_active, Boolean(scenario.allResults));
+    assert.equal(refreshed.selected_artist, scenario.allResults ? '' : 'Various Artists');
+    assert.equal(refreshed.query, scenario.changedQuery ? 'Another query' : 'Collection');
+    assert.deepEqual(Array.from(refreshed.visible_library_categories), ['main_library']);
+    assert.equal(refreshCalls[0].push, false);
+    if (scenario.allResults && !scenario.failedRefresh) {
+      assert.equal(historyCalls.length, 1);
+      assert.equal(context.parseCurrentBrowserUrlState().all_artists_active, true);
+      assert.equal(context.parseCurrentBrowserUrlState().selected_artist, '');
+      assert.equal(context.parseCurrentBrowserUrlState().query, 'Collection');
+    } else {
+      assert.equal(historyCalls.length, 0);
+      if (!scenario.allResults) assert.equal(refreshCalls[0].url, currentUrl);
+    }
+  });
+}
 
 test('watchSaveTask refreshes a partial year split so the untouched source release remains visible', async () => {
   const context = loadHelpers();
@@ -6503,7 +6602,7 @@ test('Problematic Files detail renders the approved three-column compact table c
     ['Missing cover art', 'Missing year', 'Missing track number'],
   );
   assert.equal(context.lastCompactTableConfig.frame, 'outline');
-  assert.equal(context.lastCompactTableConfig.mobile, 'preserve');
+  assert.equal(context.lastCompactTableConfig.mobile, 'stack');
   assert.equal(context.lastCompactTableConfig.overflow, 'local');
   assert.equal(context.lastCompactTableConfig.columnsConfig.length, 3);
   assert.deepEqual(
@@ -6899,11 +6998,11 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
   assert.match(mainRule, /display:\s*grid/);
   assert.match(
     mainRule,
-    /grid-template-rows:\s*22px\s+32px/,
+    /grid-template-rows:\s*22px\s+44px/,
     'the saved player must reserve the same timestamp-row height when edit mode hides pitch',
   );
   assert.doesNotMatch(mainRule, /grid-template-rows:\s*auto/);
-  assert.match(mainRule, /height:\s*58px/);
+  assert.match(mainRule, /height:\s*70px/);
   assert.match(mainRule, /(?:row-)?gap:\s*4px/);
   assert.match(
     mainRule,
@@ -6923,8 +7022,8 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
     /transform\s*:/,
     'a transformed timeline wrapper traps the saved z4 range handles below the overlaid z3 Play pod',
   );
-  assert.match(timelineWrapRule, /min-height:\s*32px/);
-  assert.match(timelineWrapRule, /height:\s*32px/);
+  assert.match(timelineWrapRule, /min-height:\s*44px/);
+  assert.match(timelineWrapRule, /height:\s*44px/);
   assert.match(globalRangeSurfaceRule, /z-index:\s*2/);
   assert.match(savedPodRule, /position:\s*absolute/);
   assert.match(savedPodRule, /z-index:\s*4/);
@@ -7033,4 +7132,13 @@ test('immediate operation events mark the captured history stale without persist
   assert.deepEqual(persistedEntries, []);
   assert.equal(context.state.utility.logHistory.length, 0);
   assert.deepEqual(stale, ['new-activity']);
+});
+
+test('Problem exclusions distinguish empty rules from a search with no matches', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const empty = context.buildUtilityRuleDetail({ key: 'problem-ignores', album_items: [], file_items: [] });
+  assert.match(empty, /No problem exclusions yet\./);
+  context.matchesUtilityRuleSearch = () => false;
+  const filtered = context.buildUtilityRuleDetail({ key: 'problem-ignores', album_items: [{ album: 'Elsewhere' }], file_items: [] });
+  assert.match(filtered, /No problem exclusions match your search\./);
 });

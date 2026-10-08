@@ -85,8 +85,16 @@ from music_app.services.loops import (
     resolve_loop_media_path,
 )
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
-from music_app.services.track_preferences import save_track_preference
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.track_preferences import (
+    normalize_track_preference_patch, save_track_preference, track_preference_scope,
+)
+from music_app.services.track_preferences_postgres import (
+    PostgresTrackPreferencesStore, TrackPreferenceConflictError,
+    TrackPreferenceNotFoundError, TrackPreferenceScopeError,
+)
+from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.policy import ResourceScope
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
 
 router = APIRouter()
@@ -1083,12 +1091,28 @@ async def track_preferences_write(request: Request) -> JSONResponse:
         )
 
     try:
-        result = save_track_preference(
-            config,
-            track_ref,
-            track_preference_payload,
+        account_id, library_id = track_preference_scope(await current_actor_from_request(request))
+        patch = normalize_track_preference_patch(track_preference_payload)
+        selected = await run_in_threadpool(
+            PostgresTrackPreferencesStore(config).resolve_track,
+            track_ref, account_id=account_id, library_id=library_id,
+        )
+        await require_action(
+            "library.track_preferences.manage", library_id=library_id,
+            resource=ResourceScope("track", str(selected["track_id"])),
+        )(request)
+        result = await run_in_threadpool(
+            save_track_preference, config, track_ref, patch,
+            account_id=account_id, library_id=library_id,
+            expected_track_id=selected["track_id"],
             client_surface_class=_client_surface_class_from_asgi(request),
         )
+    except TrackPreferenceScopeError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 403))
+    except TrackPreferenceNotFoundError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 404))
+    except TrackPreferenceConflictError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 409))
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
 

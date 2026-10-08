@@ -491,6 +491,21 @@ test('player Album Details takes foreground without closing Settings or its draf
   assert.equal(context.state.ui.trackModalCoverLightboxGallery, true);
 });
 
+test('closing Album Details notifies the browser selection owner only after native cleanup', () => {
+  const {context, trackModal} = loadHelper();
+  const events = [];
+  context.Event = class {constructor(type) {this.type = type;}};
+  context.window = {dispatchEvent(event) {
+    assert.equal(trackModal.hidden, true);
+    assert.equal(context.state.modalReleases.length, 0);
+    assert.equal(context.getTrackModalSourcePageOwner(), null);
+    events.push(event.type);
+  }};
+  context.openTrackModal({key: 'alpha', name: 'Album Alpha', tracks: []});
+  context.closeTrackModal();
+  assert.deepEqual(events, ['albumhaven:resource-selection-available']);
+});
+
 test('Settings reopening stays above a player details request that hydrates later', async () => {
   let resolveDetails;
   const preview = { key: 'alpha', name: 'Album Alpha', preview_only: true, tracks: [] };
@@ -2486,3 +2501,76 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+test('source-bound Album restrictions guard full artwork preloading while allowed native opens retain the preload', () => {
+  const {context, trackModal} = loadHelper();
+  const images = [];
+  context.Image = class {constructor() {images.push(this);}};
+  context.buildAlbumLightboxCoverUrl = album => album.fullCover || '';
+  const album = {key: 'restricted', name: 'Restricted artwork', tracks: [], fullCover: '/cover/restricted'};
+  context.openTrackModal(album, {presentationRestrictions: {can_view_artwork: false}});
+  assert.equal(trackModal.hidden, false, 'ordinary allowed Album display remains available');
+  assert.equal(images.length, 0, 'denied artwork is not fetched by preload');
+  context.openTrackModal(album, {presentationRestrictions: {can_view_artwork: true}});
+  assert.equal(images.length, 1); assert.equal(images[0].src, album.fullCover);
+  const stale = {...album, key: 'stale', fullCover: '/cover/stale'};
+  assert.equal(context.openTrackModal(stale, {sourcePageOwner: {isCurrent: () => false}}), false);
+  assert.equal(images.length, 1, 'a retired source cannot start a new preload');
+});
+
+test('closing Album Details releases the native playtable source so retained root paging can resume', () => {
+  const {context} = loadHelper(), retired = [];
+  context.NativePlaytables = {mount() {}, retire: key => retired.push(key)};
+  context.openTrackModal({key: 'close-source', name: 'Close source', tracks: []});
+  context.closeTrackModal();
+  assert.deepEqual(retired, ['album-tracks']);
+  assert.equal(context.state.modalReleases.length, 0);
+});
+
+test('source-bound edition changes cannot borrow the original token and its original page remains replayable', async () => {
+  const {context} = loadHelper();
+  const original = {key: 'source-original', name: 'Original', tracks: []};
+  const sibling = {key: 'source-sibling', name: 'Sibling', tracks: []};
+  context.getAlbumReleaseSet = album => ({releases: [original, sibling], selectedIndex: album === sibling ? 1 : 0});
+  const current = () => true;
+  context.openTrackModal(original, {sourcePageOwner: {isCurrent: current,
+    revalidate: async () => ({album: original, isCurrent: current, presentationRestrictions: {can_open_album_page: true}})}});
+  const token = context.getTrackModalSourcePageToken();
+  assert.equal(context.canOpenTrackModalEdition(original), true);
+  assert.equal(context.canOpenTrackModalEdition(sibling), false);
+  assert.equal(context.openTrackModal(sibling, {releaseSet: {releases: [original, sibling], selectedIndex: 1}}), false);
+  assert.equal(context.getCurrentTrackModalAlbum(), original); assert.equal(context.getTrackModalSourcePageToken(), token);
+  assert.equal(await context.restoreTrackModalSourcePage({sourcePageToken: token, albumKey: original.key}, {isCurrent: current}), true);
+  assert.equal(context.getCurrentTrackModalAlbum(), original);
+  context.openTrackModal(sibling, {sourcePageOwner: {isCurrent: current}});
+  assert.equal(context.getCurrentTrackModalAlbum(), sibling);
+  assert.notEqual(context.getTrackModalSourcePageToken(), token, 'a fresh supplied target takes independent source ownership');
+});
+
+for (const newerNavigation of [false, true]) test(`real Album close resumes the post-compaction root only (newer navigation: ${newerNavigation})`, () => {
+  const {context} = loadHelper(), frames = [];
+  const token = {}; let resumed = 0;
+  context.window = {addEventListener() {}, removeEventListener() {},
+    AlbumHavenPlaylistRuntime: {snapshot: () => ({scopeKey: 'synthetic-scope'})}};
+  context.TrackActionsRuntime = {scope: () => ({actor: 'synthetic-actor', library: 'synthetic-library', token})};
+  context.scheduleBrowserAnimationFrame = callback => frames.push(callback);
+  context.loadNextRootGalleryPage = () => {resumed++;};
+  context.appBootstrap = {getInitialView: () => ({})};
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'response-state-helpers.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'playtable-source.js'), 'utf8'), context);
+  const native = vm.runInContext('NativePlaytables', context);
+  context.state.view = {query: '', selected_artist: '', surface_request: 'albums',
+    artist_groups: [], gallery_page: {revision: 'root-r1', next_cursor: 'next', has_more: true}};
+  const album = {key: 'compacted-source', name: 'Compacted source', tracks: []};
+  context.openTrackModal(album);
+  const owner = native.prepare('album-tracks', album, [{tracks: [{}]}], [{track_ref: '/synthetic/track'}],
+    () => context.getCurrentTrackModalAlbum() === album);
+  const before = context.state.view;
+  context.closeTrackModal();
+  assert.notEqual(context.state.view, before, 'the real idle compactor replaces the view object');
+  assert.equal(owner.source.snapshot(), null, 'closed table authority is retired');
+  assert.equal(frames.length, 1); assert.equal(resumed, 0);
+  if (newerNavigation) context.state.view = {...context.state.view, selected_artist: 'New source'};
+  frames.shift()();
+  assert.equal(resumed, newerNavigation ? 0 : 1);
+});

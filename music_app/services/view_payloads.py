@@ -3037,6 +3037,29 @@ def build_view_payload(
     return payload
 
 
+def _build_home_shell_payload(
+    *, public_safe=False, query_args=None, config=None, logger=None,
+    library_state=None, client_surface_class=None,
+) -> dict[str, object]:
+    if library_state is None:
+        raise ValueError("library_state is required")
+    payload = build_view_payload(
+        public_safe=public_safe,
+        active_surface_override="home",
+        query_args=query_args,
+        config=config,
+        logger=_LOGGER if logger is None else logger,
+        library_state=library_state,
+        client_surface_class=client_surface_class,
+    )
+    payload.update({
+        "artist_groups": [], "primary_artist_groups": [], "family_artist_groups": [],
+        "selected_artist": "", "all_artists_active": False,
+        "recent_local_albums": [], "recent_not_local_albums": [],
+    })
+    return payload
+
+
 def build_home_payload(
     *,
     public_safe: bool = False,
@@ -3045,34 +3068,23 @@ def build_home_payload(
     logger: object = None,
     library_state: dict[str, object] | None = None,
     client_surface_class: object = None,
+    account_id: int | None = None,
+    library_id: int | None = None,
+    allowed_actions_for_album=None,
 ) -> dict[str, object]:
     if config is None:
         raise ValueError("build_home_payload requires explicit config")
     if library_state is None:
         raise ValueError("library_state is required")
-    logger = _LOGGER if logger is None else logger
-    st = library_state
-    payload = build_view_payload(
-        public_safe=public_safe,
-        active_surface_override="home",
-        query_args=query_args,
-        config=config,
-        logger=logger,
-        library_state=st,
-        client_surface_class=client_surface_class,
+    recent = {} if public_safe else build_recent_listen_payloads(
+        config, account_id=account_id, library_id=library_id,
+        allowed_actions_for_album=allowed_actions_for_album,
     )
-    payload["artist_groups"] = []
-    payload["primary_artist_groups"] = []
-    payload["family_artist_groups"] = []
-    payload["selected_artist"] = ""
-    payload["all_artists_active"] = False
-    if public_safe:
-        payload.update({
-            "recent_local_albums": [],
-            "recent_not_local_albums": [],
-        })
-    else:
-        payload.update(build_recent_listen_payloads(config, st.get("albums", [])))
+    payload = _build_home_shell_payload(
+        public_safe=public_safe, query_args=query_args, config=config, logger=logger,
+        library_state=library_state, client_surface_class=client_surface_class,
+    )
+    payload.update(recent)
     return payload
 
 
@@ -3088,7 +3100,7 @@ def build_news_payload(
 ) -> dict[str, object]:
     if config is None:
         raise ValueError("build_news_payload requires explicit config")
-    payload = build_home_payload(
+    payload = _build_home_shell_payload(
         public_safe=public_safe,
         query_args=query_args,
         config=config,

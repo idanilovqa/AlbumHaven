@@ -9,6 +9,7 @@ from music_app.services.listen_history_postgres import (
     LASTFM_SCROBBLE_SOURCE_FAMILIES,
     PendingListenEntry,
     PostgresListenHistoryAdapter,
+    _validated_recent_window,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
@@ -17,6 +18,73 @@ _MIN_RECORDED_LISTEN_SECONDS = 10.0
 
 def load_listen_history(config: dict) -> list[dict[str, object]]:
     return _listen_history_adapter(config).load_items()
+
+
+def load_recent_listen_history(
+    config: dict, *, account_id: int, library_id: int,
+    window_start: datetime, window_end: datetime,
+) -> list[dict[str, object]]:
+    """Normalize a scoped ledger read without trusting identity in source JSON."""
+    start, end = _validated_recent_window(account_id, library_id, window_start, window_end)
+    rows = _listen_history_adapter(config).load_recent_items(
+        account_id=account_id, library_id=library_id, window_start=start, window_end=end,
+    )
+    entries = []
+    for row in rows:
+        if (type(row.get("account_id")) is not int or type(row.get("library_id")) is not int
+                or row["account_id"] != account_id or row["library_id"] != library_id
+                or type(row.get("id")) is not int or row["id"] <= 0):
+            continue
+        played_at = row.get("played_at")
+        if not isinstance(played_at, datetime) or played_at.tzinfo is None or played_at.utcoffset() is None:
+            continue
+        played_at = played_at.astimezone(timezone.utc)
+        if not start <= played_at <= end:
+            continue
+        metadata = row.get("metadata")
+        payload = metadata.get("source_payload") if isinstance(metadata, dict) else None
+        payload = payload if isinstance(payload, dict) else {}
+        source = row.get("source_family")
+        version = row.get("measurement_version")
+        if source == "rendered_local_listen_session" and version == "rendered-pcm-v1":
+            seconds = row.get("measured_listened_seconds")
+            if (row.get("finalized") is not True or type(seconds) not in (int, float)
+                    or not math.isfinite(seconds) or seconds <= _MIN_RECORDED_LISTEN_SECONDS):
+                continue
+            provenance = "measured_started_at"
+        elif source in {"runtime_listen_history_adapter", "phase_6_json_file_backfill"} and version is None:
+            seconds = _finite_legacy_seconds(payload.get("total_listened_seconds", 0))
+            contiguous = _finite_legacy_seconds(payload.get("max_contiguous_seconds", 0))
+            if seconds is None or contiguous is None or max(round(seconds, 3), round(contiguous, 3)) <= _MIN_RECORDED_LISTEN_SECONDS:
+                continue
+            provenance = "legacy_recorded_at"
+        else:
+            continue
+        entry = {key: payload[key] for key in (
+            "track_ref", "path", "title", "artist", "album", "album_artist", "track_number",
+            "album_track_count", "album_duration_seconds", "source_provenance",
+            "remote_cover_url", "remote_cover_thumbnail_url",
+        ) if key in payload}
+        entry.update(
+            row_id=row["id"], account_id=account_id, library_id=library_id,
+            track_id=row.get("track_id"), track_key=row.get("track_key"),
+            album_id=row.get("album_id"), played_at=played_at, source_family=source,
+            measurement_version=version, listened_seconds=float(seconds), time_provenance=provenance,
+        )
+        if version == "rendered-pcm-v1":
+            entry["source_provenance"] = {"kind": "local_playback", "provider": "album_haven"}
+        entries.append(entry)
+    return sorted(entries, key=lambda entry: (entry["played_at"], entry["row_id"]))
+
+
+def _finite_legacy_seconds(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        seconds = float(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def save_listen_history(config: dict, items: list[dict[str, object]]) -> None:

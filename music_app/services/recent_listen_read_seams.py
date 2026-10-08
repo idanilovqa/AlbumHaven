@@ -1,316 +1,228 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+import math
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from music_app.services.gallery_playback_context import album_can_play_in_gallery_context
+from music_app.services.allowed_actions import AllowedActions
 from music_app.services.lastfm import get_lastfm_user_timezone
-from music_app.services.listen_history import is_meaningful_listen_session, load_listen_history
+from music_app.services.listen_history import load_recent_listen_history
+from music_app.services.listen_history_postgres import (
+    PostgresListenHistoryAdapter,
+    _recent_track_ref as _normalize_track_ref,
+)
 from music_app.services.music_identity_matching import same_artist_identity
 
 _RECENT_LISTEN_WINDOW = timedelta(days=7)
-_SITTING_GAP = timedelta(minutes=20)
-
-
-def _value(source: object, field: str, default=None):
-    if isinstance(source, dict):
-        return source.get(field, default)
-    return getattr(source, field, default)
 
 
 def _normalize_text(value: object) -> str:
     return " ".join(str(value or "").strip().split())
 
 
-def _normalize_track_ref(value: object) -> str:
-    return _normalize_text(value).replace("/", "\\").casefold()
-
-
-def _parse_timestamp(value: object) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _entry_last_listened_at(entry: dict[str, object]) -> datetime | None:
-    for field in ("recorded_at", "ended_at", "started_at"):
-        parsed = _parse_timestamp(entry.get(field))
-        if parsed is not None:
-            return parsed
-    return None
-
-
-def _entry_started_at(entry: dict[str, object]) -> datetime | None:
-    return _parse_timestamp(entry.get("started_at")) or _entry_last_listened_at(entry)
-
-
-def _entry_ended_at(entry: dict[str, object]) -> datetime | None:
-    return _parse_timestamp(entry.get("ended_at")) or _entry_last_listened_at(entry)
-
-
 def _entry_source_kind(entry: dict[str, object]) -> str:
     source = entry.get("source_provenance")
-    if isinstance(source, dict):
-        return _normalize_text(source.get("kind")).casefold()
-    return ""
+    return _normalize_text(source.get("kind")).casefold() if isinstance(source, dict) else ""
 
 
-def _is_local_source_entry(entry: dict[str, object]) -> bool:
-    return _entry_source_kind(entry) == "local_playback"
-
-
-def _album_identity_key(album: object) -> tuple[str, str]:
-    return (
-        _normalize_text(_value(album, "album_artist")).casefold(),
-        _normalize_text(_value(album, "name")).casefold(),
-    )
-
-
-def _entry_album_identity(entry: dict[str, object]) -> tuple[str, str]:
-    return (
-        _normalize_text(entry.get("album_artist") or entry.get("artist")).casefold(),
-        _normalize_text(entry.get("album")).casefold(),
-    )
-
-
-def _resolve_window_timezone(config: dict[str, object]) -> ZoneInfo | datetime.tzinfo:
-    timezone_name = get_lastfm_user_timezone(config)
+def _resolve_window_timezone(config: dict[str, object], *, account_id: int) -> ZoneInfo | None:
+    timezone_name = get_lastfm_user_timezone(config, account_id=account_id)
     if timezone_name:
         try:
             return ZoneInfo(timezone_name)
-        except Exception:
+        except (ZoneInfoNotFoundError, ValueError):
             pass
-    return datetime.now().astimezone().tzinfo or timezone.utc
+    return None
 
 
-def _local_album_indexes(albums: list[object]) -> tuple[dict[str, object], dict[str, list[object]]]:
-    track_to_album: dict[str, object] = {}
-    albums_by_title: dict[str, list[object]] = defaultdict(list)
-    for album in albums or []:
-        for track in list(_value(album, "tracks", []) or []):
-            for candidate in (_value(track, "path"), _value(track, "track_ref")):
-                normalized = _normalize_track_ref(candidate)
-                if normalized:
-                    track_to_album[normalized] = album
-        _artist_key, album_title_key = _album_identity_key(album)
-        if album_title_key:
-            albums_by_title[album_title_key].append(album)
+def _local_album_indexes(albums: list[dict[str, object]]):
+    track_to_album = {}
+    albums_by_title = defaultdict(list)
+    for album in albums:
+        for ref, track_id in album["legacy_track_refs"].items():
+            normalized = _normalize_track_ref(ref)
+            candidate = (album, track_id)
+            previous = track_to_album.get(normalized)
+            if normalized in track_to_album and previous != candidate:
+                track_to_album[normalized] = None
+            else:
+                track_to_album[normalized] = candidate
+        title = _normalize_text(album["name"]).casefold()
+        if title:
+            albums_by_title[title].append(album)
     return track_to_album, albums_by_title
 
 
-def _match_local_album(
-    entry: dict[str, object],
-    *,
-    track_to_album: dict[str, object],
-    albums_by_title: dict[str, list[object]],
-) -> object | None:
-    for candidate in (entry.get("track_ref"), entry.get("path")):
+def _match_local_album(entry, *, track_to_album, albums_by_title):
+    for candidate in (entry.get("track_ref"), entry.get("path"), entry.get("track_key")):
         normalized = _normalize_track_ref(candidate)
-        if normalized and normalized in track_to_album:
-            return track_to_album[normalized]
-    entry_artist, entry_album = _entry_album_identity(entry)
-    if not entry_artist or not entry_album:
-        return None
-    matches = [
-        album
-        for album in albums_by_title.get(entry_album, [])
-        if same_artist_identity(
-            entry_artist,
-            _value(album, "album_artist") or next(iter(_value(album, "artists", []) or []), ""),
-        )
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _build_group_key(entry: dict[str, object], matched_album: object | None) -> tuple[str, str]:
-    if matched_album is not None:
-        return ("local", _normalize_text(_value(matched_album, "key")))
-    artist_text = _normalize_text(entry.get("album_artist") or entry.get("artist")).casefold()
-    album_text = _normalize_text(entry.get("album")).casefold()
-    return ("external", f"{artist_text}::{album_text}")
-
-
-def _known_album_track_count(entry: dict[str, object], matched_album: object | None) -> int | None:
-    if matched_album is not None:
-        return len(list(_value(matched_album, "tracks", []) or []))
-    raw_value = entry.get("album_track_count")
-    try:
-        return int(raw_value) if raw_value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _known_album_duration_seconds(entry: dict[str, object], matched_album: object | None) -> int | None:
-    raw_value = _value(matched_album, "total_duration_seconds", None) if matched_album is not None else entry.get("album_duration_seconds")
-    try:
-        return int(raw_value) if raw_value is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _completion_state(*, listened_track_count: int, album_track_count: int | None) -> str | None:
-    if album_track_count is None or album_track_count <= 0:
-        return None
-    return "full" if listened_track_count >= album_track_count else "partial"
+        match = track_to_album.get(normalized) if normalized else None
+        if match is not None:
+            album, track_id = match
+            return album, track_id
+    artist = _normalize_text(entry.get("album_artist") or entry.get("artist"))
+    title = _normalize_text(entry.get("album")).casefold()
+    if not artist or not title:
+        return None, None
+    matches = [album for album in albums_by_title.get(title, [])
+               if same_artist_identity(artist, album["album_artist"])]
+    return (matches[0], None) if len(matches) == 1 else (None, None)
 
 
 def _entry_track_identity(entry: dict[str, object]) -> str:
-    for candidate in (entry.get("track_ref"), entry.get("path")):
+    if entry.get("track_id") is not None:
+        return f"track::{entry['track_id']}"
+    for candidate in (entry.get("track_ref"), entry.get("path"), entry.get("track_key")):
         normalized = _normalize_track_ref(candidate)
         if normalized:
             return normalized
-    title_key = _normalize_text(entry.get("title")).casefold()
-    track_number_key = _normalize_text(entry.get("track_number")).casefold()
-    if title_key and track_number_key:
-        return f"title::{title_key}::{track_number_key}"
-    if title_key:
-        return f"title::{title_key}"
-    return ""
+    title = _normalize_text(entry.get("title")).casefold()
+    number = _normalize_text(entry.get("track_number")).casefold()
+    return f"title::{title}::{number}" if title else ""
 
 
-def _sitting_state(entries: list[dict[str, object]]) -> str | None:
-    session_count = 0
-    previous_end: datetime | None = None
-    for entry in sorted(entries, key=lambda item: _entry_started_at(item) or datetime.min.replace(tzinfo=timezone.utc)):
-        started_at = _entry_started_at(entry)
-        ended_at = _entry_ended_at(entry) or started_at
-        if started_at is None:
-            continue
-        if previous_end is None or started_at - previous_end > _SITTING_GAP:
-            session_count += 1
-        previous_end = ended_at or started_at
-    if session_count <= 0:
+def _known_nonnegative_number(value: object, *, integer=False):
+    if value is None or isinstance(value, bool):
         return None
-    return "one_sitting" if session_count == 1 else "multiple_sittings"
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(number) or number < 0 or (integer and not number.is_integer()):
+        return None
+    return int(number) if integer else number
 
 
-def _build_local_row(album: object, entries: list[dict[str, object]], last_listened_at: datetime) -> dict[str, object]:
-    track_refs = {
-        track_identity
-        for entry in entries
-        for track_identity in (_entry_track_identity(entry),)
-        if track_identity
-    }
-    album_track_count = _known_album_track_count(entries[0], album)
-    listened_duration_seconds = round(sum(float(entry.get("total_listened_seconds") or 0) for entry in entries), 3)
-    return {
-        "row_kind": "local_album",
-        "local_match_state": "matched_local",
-        "album_ref": _normalize_text(_value(album, "key")),
-        "name": _normalize_text(_value(album, "name")),
-        "album_artist": _normalize_text(_value(album, "album_artist")),
-        "listened_track_count": len(track_refs),
-        "album_track_count": album_track_count,
-        "listened_duration_seconds": listened_duration_seconds,
-        "album_duration_seconds": _known_album_duration_seconds(entries[0], album),
-        "completion_state": _completion_state(
-            listened_track_count=len(track_refs),
-            album_track_count=album_track_count,
-        ),
-        "sitting_state": _sitting_state(entries),
-        "last_listened_at": last_listened_at.isoformat(),
-        "allowed_actions": {
-            "can_open_album": bool(_normalize_text(_value(album, "key"))),
-            "can_play_album": album_can_play_in_gallery_context(album),
-        },
-    }
+def _remote_cover_url(value: object) -> str | None:
+    value = _normalize_text(value)
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password:
+            return value
+    except ValueError:
+        pass
+    return None
 
 
-def _build_external_row(entries: list[dict[str, object]], last_listened_at: datetime) -> dict[str, object]:
+def _summed_seconds(values):
+    try:
+        return round(math.fsum(values), 3)
+    except OverflowError:
+        # A finite event can still overflow the aggregate's numeric representation.
+        return None
+
+
+def _build_row(entries, album, allowed_actions_for_album):
     sample = entries[0]
-    track_keys = {
-        track_identity
-        for entry in entries
-        for track_identity in (_entry_track_identity(entry),)
-        if track_identity
-    }
-    album_track_count = _known_album_track_count(sample, None)
-    listened_duration_seconds = round(sum(float(entry.get("total_listened_seconds") or 0) for entry in entries), 3)
-    return {
-        "row_kind": "external_album",
-        "local_match_state": "not_local",
-        "name": _normalize_text(sample.get("album")),
-        "album_artist": _normalize_text(sample.get("album_artist") or sample.get("artist")),
-        "listened_track_count": len(track_keys),
-        "album_track_count": album_track_count,
-        "listened_duration_seconds": listened_duration_seconds,
-        "album_duration_seconds": _known_album_duration_seconds(sample, None),
-        "completion_state": _completion_state(
-            listened_track_count=len(track_keys),
-            album_track_count=album_track_count,
+    durations = defaultdict(list)
+    for entry in entries:
+        durations[entry["source_family"]].append(entry["listened_seconds"])
+    row = {
+        "row_kind": "local_album" if album else "external_album",
+        "local_match_state": "matched_local" if album else "not_local",
+        "name": _normalize_text(album["name"] if album else sample.get("album")),
+        "album_artist": _normalize_text(album["album_artist"] if album else sample.get("album_artist") or sample.get("artist")),
+        "listen_event_count": len(entries),
+        "listened_track_count": len({identity for entry in entries
+                                     if (identity := _entry_track_identity(entry))}),
+        "album_track_count": _known_nonnegative_number(
+            album["album_track_count"] if album else sample.get("album_track_count"), integer=True,
         ),
-        "sitting_state": _sitting_state(entries),
-        "last_listened_at": last_listened_at.isoformat(),
-        "remote_cover_url": _normalize_text(sample.get("remote_cover_url")) or None,
-        "remote_cover_thumbnail_url": _normalize_text(sample.get("remote_cover_thumbnail_url")) or None,
-        "allowed_actions": {
-            "can_open_album": False,
-            "can_play_album": False,
-        },
+        "listened_duration_seconds": _summed_seconds(entry["listened_seconds"] for entry in entries),
+        "listened_duration_by_source": {source: _summed_seconds(seconds) for source, seconds in sorted(durations.items())},
+        "time_provenance": sorted({entry["time_provenance"] for entry in entries}),
+        "album_duration_seconds": _known_nonnegative_number(
+            album["total_duration_seconds"] if album else sample.get("album_duration_seconds"),
+        ),
+        "completion_state": None,
+        "sitting_state": None,
+        "last_listened_at": sample["played_at"].isoformat(),
+        "allowed_actions": {"can_open_album": False, "can_play_album": False},
     }
+    if album:
+        actions = allowed_actions_for_album(album)
+        if not isinstance(actions, AllowedActions):
+            raise ValueError("Recent album actions require an authoritative policy projection")
+        row["album_ref"] = _normalize_text(album["key"])
+        can_open = bool(row["album_ref"]) and actions.allows("library.browse.read")
+        row["allowed_actions"] = {
+            "can_open_album": can_open,
+            "can_play_album": can_open and bool(album["can_play"]) and actions.allows("library.media.read"),
+        }
+    else:
+        row["remote_cover_url"] = _remote_cover_url(sample.get("remote_cover_url"))
+        row["remote_cover_thumbnail_url"] = _remote_cover_url(sample.get("remote_cover_thumbnail_url"))
+    return row
 
 
 def build_recent_listen_payloads(
-    config: dict[str, object],
-    albums: list[object],
-    *,
+    config: dict[str, object], *, account_id: int, library_id: int,
+    allowed_actions_for_album: Callable[[dict[str, object]], AllowedActions],
     now: datetime | None = None,
 ) -> dict[str, list[dict[str, object]]]:
-    window_timezone = _resolve_window_timezone(config)
-    effective_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    window_start = effective_now.astimezone(window_timezone) - _RECENT_LISTEN_WINDOW
-    track_to_album, albums_by_title = _local_album_indexes(albums or [])
-
-    grouped_entries: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
-    matched_albums: dict[tuple[str, str], object] = {}
-    latest_by_group: dict[tuple[str, str], datetime] = {}
-
-    for raw_entry in load_listen_history(config):
-        if not isinstance(raw_entry, dict) or not is_meaningful_listen_session(raw_entry):
-            continue
-        last_listened_at = _entry_last_listened_at(raw_entry)
-        if last_listened_at is None:
-            continue
-        if last_listened_at.astimezone(window_timezone) < window_start:
-            continue
-
-        matched_album = _match_local_album(
-            raw_entry,
-            track_to_album=track_to_album,
-            albums_by_title=albums_by_title,
-        )
-        if matched_album is None and _is_local_source_entry(raw_entry):
-            continue
-
-        group_key = _build_group_key(raw_entry, matched_album)
-        grouped_entries[group_key].append(raw_entry)
-        if matched_album is not None:
-            matched_albums[group_key] = matched_album
-        previous_latest = latest_by_group.get(group_key)
-        if previous_latest is None or last_listened_at > previous_latest:
-            latest_by_group[group_key] = last_listened_at
-
-    local_rows: list[tuple[datetime, dict[str, object]]] = []
-    external_rows: list[tuple[datetime, dict[str, object]]] = []
-    for group_key, entries in grouped_entries.items():
-        last_listened_at = latest_by_group[group_key]
-        matched_album = matched_albums.get(group_key)
-        if matched_album is not None:
-            local_rows.append((last_listened_at, _build_local_row(matched_album, entries, last_listened_at)))
+    if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+        raise ValueError("Exact recent listen account and library scope is required")
+    if not callable(allowed_actions_for_album):
+        raise ValueError("Recent album actions require an authoritative policy projection")
+    effective_now = now if now is not None else datetime.now(timezone.utc)
+    if not isinstance(effective_now, datetime) or effective_now.tzinfo is None or effective_now.utcoffset() is None:
+        raise ValueError("Recent listen time must be timezone-aware")
+    effective_now = effective_now.astimezone(timezone.utc)
+    window_timezone = _resolve_window_timezone(config, account_id=account_id)
+    local_now = effective_now.astimezone(window_timezone)
+    if window_timezone is None:
+        # A naive local boundary lets astimezone apply the server rules at that
+        # date, rather than carrying the current fixed UTC offset across DST.
+        local_now = local_now.replace(tzinfo=None)
+    window_start = (local_now - _RECENT_LISTEN_WINDOW).astimezone(timezone.utc)
+    entries = load_recent_listen_history(
+        config, account_id=account_id, library_id=library_id,
+        window_start=window_start, window_end=effective_now,
+    )
+    result = {"recent_local_albums": [], "recent_not_local_albums": []}
+    if not entries:
+        return result
+    entries.sort(key=lambda entry: (entry["played_at"], entry["row_id"]), reverse=True)
+    legacy_refs = list({str(ref) for entry in entries if entry["measurement_version"] is None
+                        for ref in (entry.get("track_ref"), entry.get("path"), entry.get("track_key")) if ref})
+    albums = PostgresListenHistoryAdapter(config).load_recent_album_candidates(
+        library_id=library_id, legacy_track_refs=legacy_refs,
+    )
+    albums_by_id = {album["id"]: album for album in albums}
+    track_to_album, albums_by_title = _local_album_indexes(albums)
+    grouped = defaultdict(list)
+    matched_albums = {}
+    for entry in entries:
+        entry = dict(entry)
+        if entry["measurement_version"] == "rendered-pcm-v1":
+            # A removed measured identity must never fall through to fuzzy legacy matching.
+            album = albums_by_id.get(entry["album_id"]) if entry["track_id"] is not None else None
+            if album is None:
+                continue
         else:
-            external_rows.append((last_listened_at, _build_external_row(entries, last_listened_at)))
-
-    local_rows.sort(key=lambda item: item[0], reverse=True)
-    external_rows.sort(key=lambda item: item[0], reverse=True)
-    return {
-        "recent_local_albums": [row for _, row in local_rows],
-        "recent_not_local_albums": [row for _, row in external_rows],
-    }
+            album = albums_by_id.get(entry["album_id"]) if entry["track_id"] is not None else None
+            track_id = entry["track_id"] if album is not None else None
+            if album is None:
+                album, track_id = _match_local_album(
+                    entry, track_to_album=track_to_album, albums_by_title=albums_by_title,
+                )
+            entry["track_id"] = track_id
+            if album is None and _entry_source_kind(entry) != "lastfm_import":
+                continue
+        if album is not None:
+            key = ("local", album["id"])
+            matched_albums[key] = album
+        else:
+            key = ("external", _normalize_text(entry.get("album_artist") or entry.get("artist")).casefold(),
+                   _normalize_text(entry.get("album")).casefold())
+        grouped[key].append(entry)
+    for key, grouped_entries in sorted(grouped.items(), key=lambda item: (
+        item[1][0]["played_at"], item[1][0]["row_id"],
+    ), reverse=True):
+        album = matched_albums.get(key)
+        target = "recent_local_albums" if album else "recent_not_local_albums"
+        result[target].append(_build_row(grouped_entries, album, allowed_actions_for_album))
+    return result

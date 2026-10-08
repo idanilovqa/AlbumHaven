@@ -55,6 +55,82 @@ class PostgresListenHistoryAdapter:
             rows = list(connection.execute(_load_listen_history_sql()).fetchall())
         return [_listen_history_item_from_row(row) for row in rows]
 
+    def load_recent_items(
+        self, *, account_id: int, library_id: int,
+        window_start: datetime, window_end: datetime,
+    ) -> list[dict[str, object]]:
+        window_start, window_end = _validated_recent_window(
+            account_id, library_id, window_start, window_end,
+        )
+        with self._connect_to_database() as connection:
+            rows = connection.execute("""
+                select h.id, h.account_id, h.library_id, h.track_id, h.track_key,
+                       h.played_at, h.source_family, h.measurement_version,
+                       h.finalized, h.measured_listened_seconds, h.metadata,
+                       a.id as album_id
+                from integration.listen_history h
+                left join library.local_tracks t
+                  on t.id = h.track_id and t.library_id = h.library_id
+                left join library.local_albums a
+                  on a.id = t.album_id and a.library_id = h.library_id
+                where h.account_id = %s and h.library_id = %s
+                  and h.played_at >= %s and h.played_at <= %s
+                  and h.source_family = any(%s)
+                order by h.played_at, h.id
+            """, (account_id, library_id, window_start, window_end,
+                  list(LASTFM_SCROBBLE_SOURCE_FAMILIES))).fetchall()
+        return [dict(row) for row in rows]
+
+    def load_recent_album_candidates(
+        self, *, library_id: int, legacy_track_refs: list[str],
+    ) -> list[dict[str, object]]:
+        if type(library_id) is not int or library_id <= 0:
+            raise ValueError("Exact recent listen library scope is required")
+        with self._connect_to_database() as connection:
+            rows = connection.execute("""
+                select a.id, a.album_key as key, a.title as name,
+                       coalesce(nullif(a.metadata->>'album_artist', ''), ar.name, '') as album_artist,
+                       count(t.id)::integer as album_track_count,
+                       case when count(t.duration_seconds) = count(t.id) and count(t.id) > 0
+                            then sum(t.duration_seconds) end as total_duration_seconds,
+                       coalesce(bool_or(exists (
+                           select 1 from library.local_track_files f
+                           where f.track_id = t.id and f.scan_cache_stale is false
+                       )), false) as can_play
+                from library.local_albums a
+                left join library.local_artists ar
+                  on ar.id = a.artist_id and ar.library_id = a.library_id
+                left join library.local_tracks t
+                  on t.album_id = a.id and t.library_id = a.library_id
+                where a.library_id = %s
+                group by a.id, ar.name
+                having count(t.id) > 0
+                order by a.id
+            """, (library_id,)).fetchall()
+            albums = {row['id']: {**dict(row), 'legacy_track_refs': {}} for row in rows}
+            if legacy_track_refs:
+                # Normalize references in Python exactly as the legacy matcher does;
+                # database lower() is not Unicode casefold(). Paths remain internal.
+                wanted = {_recent_track_ref(ref) for ref in legacy_track_refs}
+                aliases = connection.execute("""
+                    select t.id, t.album_id, t.track_key, f.private_path
+                    from library.local_tracks t
+                    join library.local_albums a
+                      on a.id = t.album_id and a.library_id = t.library_id
+                    left join library.local_track_files f
+                      on f.track_id = t.id and f.scan_cache_stale is false
+                    where t.library_id = %s
+                    order by t.id, f.id
+                """, (library_id,)).fetchall()
+                for row in aliases:
+                    album = albums.get(row['album_id'])
+                    if album is None:
+                        continue
+                    for ref in (row['track_key'], row['private_path']):
+                        if ref and _recent_track_ref(ref) in wanted:
+                            album['legacy_track_refs'][str(ref)] = row['id']
+        return list(albums.values())
+
     def load_scrobbled_play_count_lookup(
         self,
         track_refs: list[str] | tuple[str, ...],
@@ -417,3 +493,19 @@ def _insert_listen_history_sql() -> str:
         from bootstrap_context;
     """
     )
+
+
+def _validated_recent_window(account_id, library_id, window_start, window_end):
+    if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+        raise ValueError("Exact recent listen account and library scope is required")
+    if any(not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None
+           for value in (window_start, window_end)):
+        raise ValueError("Recent listen window requires aware timestamps")
+    start, end = window_start.astimezone(timezone.utc), window_end.astimezone(timezone.utc)
+    if start > end:
+        raise ValueError("Recent listen window is reversed")
+    return start, end
+
+
+def _recent_track_ref(value: object) -> str:
+    return " ".join(str(value or "").strip().split()).replace("/", "\\").casefold()

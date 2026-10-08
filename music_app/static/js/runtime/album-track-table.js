@@ -1,4 +1,5 @@
 function buildAlbumTrackPlayButtonHtml(track = {}) {
+  if (track.readable === false) return '';
   const trackPath = String(track.path || '');
   const title = String(track.playbackTitle || track.title || 'Track');
   const artist = String(track.artist || '');
@@ -7,40 +8,50 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   const coverPath = String(track.coverPath || track.cover_path || '');
   const durationSeconds = Number(track.durationSeconds || track.duration_seconds || 0);
   const isPlaying = Boolean(track.isPlaying);
+  const disabled = track.canPlay === false || track.availability === 'missing';
   const iconName = isPlaying ? 'pause' : 'play';
   const icon = ButtonComponent.renderIconSvg(iconName, {
     className: `album-track-table__play-icon ui-icon--${iconName}`,
   });
-  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
+  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}"${disabled ? ' disabled aria-disabled="true"' : ''}>${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
-  const trackPath = String(track.path || '');
+  const denied = track.readable === false;
+  if (denied) track = {rowKey: track.rowKey, readable: false, selectable: false, title: 'Unavailable track'};
+  const readOnly = config.readOnly === true || denied;
+  const trackPath = readOnly ? '' : String(track.path || '');
   const classes = ['album-track-table__row'];
-  if (track.isCurrent) classes.push('album-track-table__row--current');
-  if (track.isPlaying) classes.push('album-track-table__row--playing');
+  if (track.availability === 'missing') classes.push('album-track-table__row--missing');
+  if (!readOnly && track.isCurrent) classes.push('album-track-table__row--current');
+  if (!readOnly && track.isPlaying) classes.push('album-track-table__row--playing');
   if (track.isSearchMatch) classes.push('album-track-table__row--search-match');
-  if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
+  if (!readOnly && track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
   const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
-  const problemHtml = track.isProblematic
+  const problemHtml = !readOnly && track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
-  const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
+  const displayPath = readOnly ? '' : String(track.displayPath || track.display_path || trackPath).trim();
+  const rowKey = typeof track.rowKey === 'string' && track.rowKey ? track.rowKey : null;
+  const selectable = Boolean(rowKey) && track.readable === true && track.selectable !== false;
   return {
-    key: trackPath || `${index + 1}`,
+    key: config.selection === 'multiple' ? rowKey || ''
+      : rowKey || (readOnly ? String(track.id || index + 1) : trackPath || `${index + 1}`),
     className: classes.join(' '),
-    dataAttributes: {
+    ...(config.selection === 'multiple' || denied ? {tabIndex: selectable ? 0 : -1,
+      ariaDisabled: !selectable, ariaSelected: selectable && track.isSelected === true} : {}),
+    dataAttributes: readOnly ? {} : {
       'track-row-path': trackPath,
       'track-search-match': track.isSearchMatch ? 'true' : '',
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${readOnly ? '' : buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
-      duration: { content: `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}">${escapeHtml(track.duration || '')}</span>` },
+      duration: { content: `<span class="track-duration" ${readOnly ? '' : `data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}"`}>${escapeHtml(track.duration || '')}</span>` },
     },
   };
 }
@@ -80,11 +91,20 @@ function buildAlbumTrackTableHtml(config = {}) {
       frame: 'outline',
       overflow: 'none',
       mobile: 'preserve',
+      selection: config.selection,
     });
+    const sectionKey = typeof group?.sectionKey === 'string' ? group.sectionKey : '';
+    const action = config.sectionActions === true && sectionKey
+      ? ButtonComponent.renderActionButton({icon: 'more-vertical', presentation: 'bare',
+        className: 'album-track-table__section-action', ariaLabel: `Actions for ${label || 'this section'}`,
+        title: 'Add section to playlist', disabled: !tracks.length || group.sectionActionDisabled === true
+          || tracks.some(track => track.readable === false || track.selectable === false),
+        attributes: {'data-playtable-section-action': sectionKey}}) : '';
     const heading = showLabel
       ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
       : '';
-    return `<section class="album-track-table__disc">${heading}${table}</section>`;
+    const header = action ? `<div class="album-track-table__section-heading">${heading}${action}</div>` : heading;
+    return `<section class="album-track-table__disc"${sectionKey ? ` data-playtable-section="${escapeHtml(sectionKey)}"` : ''}>${header}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();
   const mainLength = String(config.mainLength || '').trim();
@@ -105,32 +125,4 @@ function triggerAlbumTrackPlayActivation(button) {
   button.addEventListener?.('animationend', () => {
     button.classList.remove('album-track-table__play--activating');
   }, { once: true });
-}
-
-const albumTrackRowTaps = new WeakMap();
-function handleAlbumTrackRowClick(event) {
-  if (typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()) return;
-  if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
-  const now = Date.now(), last = albumTrackRowTaps.get(event.currentTarget);
-  const doubleTap = event.detail > 1 || (last !== undefined && now - last <= 320);
-  if (doubleTap) albumTrackRowTaps.delete(event.currentTarget);
-  else albumTrackRowTaps.set(event.currentTarget, now);
-  activateAlbumTrackRow(event, { restart: doubleTap });
-}
-function handleAlbumTrackRowDoubleClick(event) {
-  // Touch click timing above also supports browsers that do not emit dblclick.
-  if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) return;
-  activateAlbumTrackRow(event);
-}
-function activateAlbumTrackRow(event, { restart = false } = {}) {
-  if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
-  const row = event.currentTarget;
-  event.preventDefault();
-  const selection = row.ownerDocument.getSelection();
-  if (selection && row.contains(selection.anchorNode) && row.contains(selection.focusNode)) selection.removeAllRanges();
-  const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (!mobile && row.dataset.trackPlaying === 'true') return;
-  const button = row.querySelector('.play-track-button');
-  if (restart && button) activateSharedTrackButton(button, { restart: true });
-  else button?.click();
 }

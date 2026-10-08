@@ -164,6 +164,8 @@ function handleGalleryBootstrapClick(event) {
   const lightboxTrigger = event.target.closest('[data-open-lightbox="1"]');
   if (lightboxTrigger) {
     event.preventDefault();
+    if (typeof getTrackModalContentRoot === 'function' && getTrackModalContentRoot()?.contains(lightboxTrigger)
+      && typeof canViewTrackModalArtwork === 'function' && !canViewTrackModalArtwork()) return;
     const items = lightboxTrigger.getAttribute('data-lightbox-gallery') === 'visible'
       ? getLightboxGalleryItems()
       : [];
@@ -206,7 +208,8 @@ function handleGalleryBootstrapClick(event) {
   if (tabButton) {
     event.preventDefault();
     const index = Number(tabButton.getAttribute('data-track-tab-index'));
-    if (Number.isInteger(index) && state.modalReleases[index]) {
+    if (!tabButton.disabled && Number.isInteger(index) && state.modalReleases[index]
+      && (typeof canOpenTrackModalEdition !== 'function' || canOpenTrackModalEdition(state.modalReleases[index]))) {
       state.modalReleaseIndex = index;
       hideVersionContextMenu();
       openTrackModal(state.modalReleases[index], {
@@ -268,6 +271,8 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
+    if (typeof deferAppFormPageReplacement === 'function'
+      && deferAppFormPageReplacement(() => handleGalleryBootstrapClick(event))) return;
     const activeSearchQuery = String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -448,6 +453,8 @@ function handleSidebarArtistSelectionClick(event) {
   if (!sidebarArtistLink) return false;
 
   event.preventDefault();
+  if (typeof deferAppFormPageReplacement === 'function'
+    && deferAppFormPageReplacement(() => handleSidebarArtistSelectionClick(event))) return true;
   if (
     state.ui.scanPageReturnContext
     || state.ui.forceScanPageVisible
@@ -2077,6 +2084,7 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
+  if (window.AlbumHavenPlaylistRuntime?.restoreDraftFromHistory?.()) return;
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }

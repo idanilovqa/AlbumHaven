@@ -4289,3 +4289,13 @@ test('Album Details passes exact explicit bonus and main durations to final summ
   ], { total_duration_seconds: 180 });
   assert.equal(config.bonusLength, '');
 });
+
+test('source-bound edition tabs display disabled siblings through the native tab component', () => {
+  const context = loadHelper([], {escapeHtml: value => String(value), canOpenTrackModalEdition: album => album.key === 'allowed'});
+  context.state.modalReleases = [{key: 'allowed', tabLabel: 'Current edition'}, {key: 'sibling', tabLabel: 'Other edition'}];
+  context.state.modalReleaseIndex = 0; context.renderVersionContextMenu = () => {};
+  const tabs = {hidden: true, innerHTML: '', querySelector: () => null};
+  context.renderTrackModalTabs({tabs});
+  assert.match(tabs.innerHTML, /data-in-page-tab="0" aria-selected="true" tabindex="0"/);
+  assert.match(tabs.innerHTML, /data-in-page-tab="1" aria-selected="false" tabindex="-1" disabled aria-disabled="true">Other edition/);
+});

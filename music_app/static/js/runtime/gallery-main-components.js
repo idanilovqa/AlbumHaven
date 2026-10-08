@@ -65,6 +65,11 @@ function buildGalleryEmptySelectionHtml() {
 }
 
 function buildArtistInfoOverlayHtml(config = {}) {
+  if (config.presentation === 'embedded') {
+    const image = config.imageUrl ? buildAlbumArtboxHtml({state: 'ready', label: `${String(config.artist || 'Artist')} artwork`,
+      coverHtml: `<img src="${escapeHtml(config.imageUrl)}" alt="" loading="lazy" decoding="async">`}) : '';
+    return `<section class="artist-info-overlay artist-info-overlay--embedded" role="region" aria-label="Information about ${escapeHtml(config.artist || 'Artist')}"><header>${image}<div class="artist-info-overlay__identity"><span>Artist</span><h2>${escapeHtml(config.artist || 'Unknown artist')}</h2>${config.metadata ? `<p>${escapeHtml(config.metadata)}</p>` : ''}</div></header><div class="artist-info-overlay__body"><p>${escapeHtml(config.summary || 'No information was supplied.')}</p>${config.sourceLabel ? `<p>${escapeHtml(`Source: ${config.sourceLabel}`)}</p>` : ''}</div></section>`;
+  }
   const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
   const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
   const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';

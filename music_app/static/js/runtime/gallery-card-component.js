@@ -20,6 +20,7 @@ function buildGalleryCardHtml(config = {}) {
 
 
 function buildControlledGalleryCardHtml(config) {
+  const displayMode = ['list', 'cards', 'covers'].includes(config.displayMode) ? config.displayMode : 'cards';
   const ref = typeof config.actionRef === 'string' && config.actionRef.trim() ? config.actionRef : '';
   const can = intent => config.interaction === 'controlled' && ref !== '' && config.actions?.[intent] === true;
   const attributes = intent => ({ 'data-gallery-card-intent': intent, 'data-gallery-card-ref': ref });
@@ -34,7 +35,9 @@ function buildControlledGalleryCardHtml(config) {
   const play = can('play') ? ButtonComponent.renderActionButton({
     ariaLabel: `Play ${title}`, icon: 'play', presentation: 'bare', attributes: attributes('play'),
   }) : '';
-  return `<section class="album-card" data-gallery-display="cards" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${buildGalleryCardInfoHtml({ ...config, openAttributes: '' })}${open || play ? `<div class="gallery-card__actions">${open}${play}</div>` : ''}</section>`;
+  const information = displayMode === 'covers' ? `<span class="gallery-card__focus-title">${escapeHtml(title)}</span>`
+    : buildGalleryCardInfoHtml({ ...config, openAttributes: '' });
+  return `<section class="album-card" data-gallery-display="${displayMode}" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${information}${open || play ? `<div class="gallery-card__actions">${open}${play}</div>` : ''}</section>`;
 }
 
 let galleryCardMetadataMotion = null;

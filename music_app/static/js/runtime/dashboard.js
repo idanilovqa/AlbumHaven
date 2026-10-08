@@ -45,6 +45,7 @@ const Dashboard = (() => {
       holder.innerHTML = ButtonComponent.renderActionButton({
         ariaLabel: 'Full size',
         title: 'Full size',
+        presentation: 'bare',
         iconClass: 'dashboard__size-icon',
         attributes: { 'aria-expanded': 'false' },
       });

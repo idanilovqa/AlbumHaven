@@ -15,7 +15,7 @@ Acceptance:
 - default API remains complete;
 - selected Suggested Edit labels are unmistakably green;
 - drag-select and drag-deselect apply at origin and remain stable across crossed labels;
-- startup progress is longer, smooth, and displays a synchronized percentage.
+- startup progress is longer, glides continuously between stage targets, displays its centered percentage in the player color, and gives both fill and percentage a readable layered glow.
 
 Rollback: revert the cohesive delivery; no schema or persisted-data rollback is required.
 
@@ -29,7 +29,7 @@ Merge/publish checkpoint: focused verification, at least two complete local revi
 4. Implement ordered candidate-ID discovery and selected-album row loading for the first 50 without complete projection construction.
 5. Implement the two-stage client load and diagnostics.
 6. Add failing interaction/style tests, then implement stronger selected green and origin-immediate crossed-index drag behavior.
-7. Add failing startup-progress component tests, then implement responsive width, percentage, smooth interpolation, completion, and reduced-motion behavior.
+7. Add failing startup-progress component tests, then implement responsive width, centered player-colored percentage, fractional target interpolation, layered fill/text glow, completion, and the explicit reduced-motion accessibility exception.
 8. Rebuild the runtime bundle.
 9. Run focused JavaScript, component, Python, production-parity, and unchanged performance/functional cases sequentially. Preserve the worker-authentication failure evidence if it still blocks the canonical target.
 10. Complete two adversarial full-diff review/fix passes; add a third if pass two finds a substantive issue.

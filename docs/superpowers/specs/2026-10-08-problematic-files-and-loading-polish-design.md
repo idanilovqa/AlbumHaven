@@ -51,7 +51,11 @@ Drag intent is fixed by the origin label: starting on an unselected label select
 
 ## Startup progress
 
-The progress track becomes responsive and materially longer, with a visible integer percentage tied to the displayed progress. Stage changes animate through a requestAnimationFrame-driven displayed value; the bar and percentage finish smoothly before dismissal. Reduced-motion users receive immediate stage updates without ornamental interpolation.
+The progress track becomes responsive and materially longer, with the percentage centered below it. The fill width moves continuously toward each reported stage target using fractional displayed progress; only the visible percentage text and ARIA value are rounded. Normal motion must never jump directly between stage targets or advance in integer-width steps, and the bar and percentage finish smoothly before dismissal.
+
+The fill and percentage use the active player color with a stable layered glow: a tight bright edge plus a softer outer halo. The effect does not pulse, so it does not compete with the progress motion or reduce readability.
+
+The `prefers-reduced-motion` media query remains an accessibility exception: only users who enable that operating-system/browser preference receive immediate stage updates without interpolation. Normal users receive the slow, continuous movement described above.
 
 ## Compatibility and rollback
 

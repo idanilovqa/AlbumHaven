@@ -412,8 +412,12 @@ two local review passes, and complete CI pass.
 ### Outcome
 
 The Album Type dropdown uses an owner-approved taxonomy derived from real local
-MusicBrainz results. Customize provides the approved user workflow and persists its
-configuration.
+MusicBrainz results. Clicking Customize opens the in-page compact Edit Gallery
+experience for library-scoped, per-artist custom subsections. The implementation
+promotes the Album Tops editor design into a shared component family so the later
+Album Tops integration can consume the same Gallery/PageHeader, AlbumPicker,
+EditableAlbumGallery, and ReorderController contracts without replacement or
+refactoring.
 
 ### Included scope
 
@@ -422,37 +426,104 @@ configuration.
 - Album Haven display categories including Studio, EP, Single, Live, Demo,
   Compilation, Soundtrack, and approved handling for every observed provider type
   and overlap.
+- Shared editor infrastructure used in two modes: manual ordering for Album Tops
+  and provider-parent-constrained assignment with chronological rendering for
+  custom album-type subsections.
 
 ### Prerequisites and gates
 
 - Published Delivery 2 and approved type inventory.
-- Owner decision on what Customize means: type visibility/order customization or
-  per-artist custom subsection editing. Do not infer this choice from historical
-  drafts.
+- Owner decision recorded October 8, 2026: Customize means per-artist custom
+  subsection editing under fixed provider-derived parent types. It does not edit
+  the canonical MusicBrainz type or create private per-account taxonomy.
 - Approved mapping rules for primary/secondary overlaps and nulls.
-- Approved exact dropdown, Customize flow, persistence, reset, empty state,
-  narrow-screen artifact, and component-system mapping.
-- Approved capability and scope for shared versus per-account customization.
+- Approved exact dropdown and custom-section screen artifacts for desktop and
+  narrow web, including populated lanes, empty lanes, active drag targets,
+  keyboard/touch controls, Save/Cancel, conflicts, errors, and reduced motion.
+  The historical October 4 Album Tops drag image is behavior reference only; it is
+  not a custom-section approval artifact and its old source-artwork leak must not
+  be reproduced.
+- Approved shared-component extension mapping. Reuse the native GalleryCard,
+  GalleryCardInfo, AlbumArtbox, GalleryBar/PageHeader, ActionButton, SearchInput,
+  tabs, and view-control families. Adapt the Album Tops `AlbumPicker`,
+  `EditableAlbumGallery`, and `ReorderController` design as shared React-owned
+  components under the current post-migration UI rule; do not create a second
+  editor family or copy the mock shell, fixtures, session store, fake identities,
+  route adapters, or title-based matching.
+- Approved capability scope already follows the owning section plan: layouts are
+  library-scoped and shared; definitions are per artist; mutation requires the
+  server-owned `can_edit_artist_sections` action or its approved successor.
+- Source references for the delivery design task:
+  - internal Album Tops shared-component map at commit
+    `867df4f26ab03a3e939edada8a2d33cc05a28ac2`;
+  - AlbumPicker/editable-gallery requirements at that same commit;
+  - custom-section owner plan at the supplied pinned reference plus its current
+    reconciled version;
+  - `AlbumHaven-Gallery-Editor-Reuse-Handoff.zip`, prepared October 8, 2026.
 
 ### Internal implementation tasks
 
 1. Write the approved taxonomy and overlap algorithm as a pure tested domain
-   mapping over preserved MusicBrainz facts.
-2. Add only the persistence required by the approved Customize ownership model.
-3. Update gallery grouping/filter payloads and the React Album Type dropdown.
-4. Implement Customize, validation, reset, optimistic/error behavior, and
-   accessibility using approved shared components.
-5. Add Problematic Files diagnostics only if the approved taxonomy produces an
-   actionable unmapped state; never treat an intentional `Other` classification as
-   corrupt metadata.
-6. Add focused Python/component tests, owner manual script, accepted functional
-   E2E, documentation, and rollback proof.
+   mapping over preserved MusicBrainz facts. Each release group has exactly one
+   provider-derived parent. Preserve all raw facts and reject UI attempts to move a
+   release across parents. `Unclassified` remains visible and non-assignable in
+   this delivery.
+2. Add library-scoped, per-artist subsection definitions, release-group-based
+   assignments, optimistic revision checks, audit ownership, and stale-assignment
+   review state. Duplicate local editions share the release-group assignment.
+3. Serve one sectioned read model to browse and edit views. The editor consumes
+   only local albums in its active selected-artist or Artist Family gallery scope;
+   the family-scope control can switch to the selected artist alone. Keep family
+   derivation outside the editor so Delivery 4 can replace folder-derived family
+   membership with MusicBrainz relationships without changing this component.
+4. Promote the compact Album Tops editor design into reusable shared React
+   components and adapters:
+   - `EditableAlbumGallery` owns compact native-card presentation, stable artwork
+     identity, editing states, focus, and lifecycle disposal;
+   - `AlbumPicker` owns native search, Cards/Rows/summary views, eligibility, and
+     stable selected release-group identities;
+   - `ReorderController` owns one lifted ghost, one exact-size dotted footprint,
+     bounded gallery scrolling, pointer/touch/keyboard movement, cancellation,
+     announcements, and reduced-motion behavior;
+   - the collection adapter supplies mode-specific validation and persistence.
+     Album Tops may persist a manual sequence. Custom sections persist assignment
+     only and always render albums inside each subsection by deterministic release
+     chronology, never by the user's drop position.
+5. Implement the section composition in the existing artist Gallery/PageHeader.
+   Clicking Customize replaces browse content with compact editing content and
+   draft Save/Cancel. Show fixed provider parents, an Unassigned lane, custom
+   subsection lanes, and dotted `+` subsection placeholders. Empty subsections do
+   not show an album drop square at rest; their dotted drop target appears when an
+   eligible album drag begins. A Studio/EP album can target only Studio/EP custom
+   subsections, Live only Live, Demo only Demo, and every other album only a
+   subsection under its own provider parent. Enforce the same rule in UI intent and
+   the service write boundary.
+6. Extend the generic move/drop-intent seam for same-parent cross-lane transfer.
+   Do not pretend the reference single-root reorder controller already supports
+   sections. Drag, keyboard, and touch use one eligibility function and announce
+   accepted and rejected targets. Moving/unassigning never deletes an album,
+   changes files, or rewrites canonical MusicBrainz facts.
+7. Keep all changes in a bounded draft. Cancel writes nothing. Save rechecks
+   capability and revision, commits atomically, preserves the draft after denial or
+   conflict, and shows the approved recovery state. Navigation, playback queue,
+   current track, Gallery preferences, and card identity remain unchanged.
+8. Update the Album Type dropdown to enter this editor, add Problematic Files
+   diagnostics only for an actionable unmapped taxonomy state, and never treat an
+   intentional `Other` classification as corrupt metadata.
+9. Add focused domain/service/component tests, browser geometry coverage, physical
+   keyboard/touch checks, owner manual script, accepted functional E2E,
+   documentation, and rollback proof. Protect large-gallery virtualization: no
+   full-gallery reconstruction on each pointer sample.
 
 ### Owner manual acceptance
 
-Exercise every approved type and overlap from Delivery 2, customize the approved
-settings, reload, verify persistence and reset, and confirm gallery membership and
-local-album-only behavior remain correct.
+Exercise every approved type and overlap from Delivery 2. Open Customize for an
+artist and an Artist Family scope, turn family scope off, create and rename custom
+subsections, assign and unassign albums with pointer, keyboard, and touch, and save.
+Verify empty-lane targets appear only during eligible drags; cross-parent targets
+remain invalid; albums inside every subsection return to chronological order after
+drop and reload; Cancel writes nothing; stale/conflicting saves preserve the draft;
+and the gallery continues to contain local albums only.
 
 ### Compatibility and rollback
 

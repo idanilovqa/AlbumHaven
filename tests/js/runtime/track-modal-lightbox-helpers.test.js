@@ -2298,6 +2298,7 @@ async function run() {
   test('closing Album Details paints hidden state before expensive cleanup and cancels stale cleanup after reopen', () => {
     const animationFrames = [];
     let compactCalls = 0;
+    let resumeCalls = 0;
     const { context, trackModal } = loadHelper({
       scheduleBrowserAnimationFrame(callback) {
         animationFrames.push(callback);
@@ -2305,9 +2306,18 @@ async function run() {
       compactCurrentViewForIdle() {
         compactCalls += 1;
       },
+      virtualGrid: {
+        suspendSelectedArtistCoverLoadsForUserAction() {
+          return 41;
+        },
+        resumeSelectedArtistCoverLoadsAfterUserAction() {
+          resumeCalls += 1;
+        },
+      },
     });
 
     context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] });
+    context.suspendGalleryCoverLoadsForTrackModal();
     const title = context.getTrackModalElements().title;
     title.textContent = 'Album Alpha';
 
@@ -2316,6 +2326,7 @@ async function run() {
     assert.equal(trackModal.hidden, true, 'close must hide the overlay synchronously');
     assert.equal(title.textContent, 'Album Alpha', 'rendered DOM must remain until the browser can paint');
     assert.equal(compactCalls, 0, 'view compaction must not block the close click');
+    assert.equal(resumeCalls, 0, 'gallery cover resumption must not block the close click');
     assert.equal(animationFrames.length, 1);
 
     animationFrames.shift()();
@@ -2325,6 +2336,7 @@ async function run() {
     animationFrames.shift()();
     assert.equal(title.textContent, '', 'cleanup must clear rendered state after the paint opportunity');
     assert.equal(compactCalls, 1);
+    assert.equal(resumeCalls, 1);
 
     context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] });
     title.textContent = 'Album Alpha';
@@ -2357,6 +2369,10 @@ async function run() {
     const { context, trackModal, openButton, documentListeners } = loadHelper({ utilityLoaded: true, overlayClickCloses: true });
     context.attachTrackButtons();
     context.attachModalEvents();
+
+    trackModal.hidden = false;
+    context.getTrackModalElements().close.dispatchEvent('pointerdown', { button: 0 });
+    assert.equal(trackModal.hidden, true, 'primary pointer-down must close Album Details immediately');
 
     trackModal.hidden = false;
     context.document.body.classList.add('modal-open');

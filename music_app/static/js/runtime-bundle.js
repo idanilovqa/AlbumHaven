@@ -11514,8 +11514,9 @@ function clearTrackModalRenderedState() {
   }
 }
 
-function scheduleTrackModalCleanupAfterPaint(generation) {
+function scheduleTrackModalCleanupAfterPaint(generation, coverLoadSuspensionTokens = []) {
   const cleanup = () => {
+    coverLoadSuspensionTokens.forEach((token) => resumeGalleryCoverLoadToken(token));
     if (generation !== trackModalCleanupGeneration) return;
     const els = getTrackModalElements();
     if (!els.overlay?.hidden) return;
@@ -11564,6 +11565,12 @@ function suspendGalleryCoverLoadsForTrackModal() {
 function resumeGalleryCoverLoadsAfterTrackModalAction(token = 0) {
   const normalizedToken = Number(token);
   if (!normalizedToken || !trackModalCoverLoadSuspensionTokens.delete(normalizedToken)) return false;
+  return resumeGalleryCoverLoadToken(normalizedToken);
+}
+
+function resumeGalleryCoverLoadToken(token = 0) {
+  const normalizedToken = Number(token);
+  if (!normalizedToken) return false;
   if (
     typeof virtualGrid !== 'undefined'
     && virtualGrid
@@ -11574,10 +11581,10 @@ function resumeGalleryCoverLoadsAfterTrackModalAction(token = 0) {
   return false;
 }
 
-function resumeAllGalleryCoverLoadsAfterTrackModalActions() {
-  Array.from(trackModalCoverLoadSuspensionTokens).forEach((token) => {
-    resumeGalleryCoverLoadsAfterTrackModalAction(token);
-  });
+function takeAllGalleryCoverLoadSuspensionTokens() {
+  const tokens = Array.from(trackModalCoverLoadSuspensionTokens);
+  tokens.forEach((token) => trackModalCoverLoadSuspensionTokens.delete(token));
+  return tokens;
 }
 
 function getTrackModalAlbumVersionKey(album) {
@@ -12262,10 +12269,10 @@ function closeTrackModal() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
   const cleanupGeneration = ++trackModalCleanupGeneration;
+  const coverLoadSuspensionTokens = takeAllGalleryCoverLoadSuspensionTokens();
   els.overlay.hidden = true;
   els.overlay.classList.remove('is-above-settings');
   invalidatePendingTrackModalLoad();
-  resumeAllGalleryCoverLoadsAfterTrackModalActions();
   state.modalReleases = [];
   state.modalReleaseIndex = 0;
   hideVersionContextMenu();
@@ -12274,7 +12281,7 @@ function closeTrackModal() {
   if (!lightboxOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
-  scheduleTrackModalCleanupAfterPaint(cleanupGeneration);
+  scheduleTrackModalCleanupAfterPaint(cleanupGeneration, coverLoadSuspensionTokens);
 }
 
 function openTrackModalForButton(button) {
@@ -12403,7 +12410,13 @@ function attachModalEvents() {
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
+  els.close?.addEventListener('pointerdown', (event) => {
+    if (event.button != null && event.button !== 0) return;
+    event.preventDefault();
+    closeTrackModal();
+  });
   els.overlay.addEventListener('click', (event) => {
+    if (els.overlay.hidden) return;
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-track-modal="1"]')) {
       closeTrackModal();
     }

@@ -340,6 +340,10 @@ commit;
         $migrationArguments = @('-X', '-w', '-v', 'ON_ERROR_STOP=1')
         if ($migration.transactional) { $migrationArguments += '-1' }
         $migrationArguments += @('-h', $HostName, '-p', "$Port", '-U', $names.Roles.migrator, '-d', $names.Database, '-f', $path)
+        $ledgerSql = "insert into ops.schema_migrations (migration_name, checksum) values ('$($migration.name)', '$($migration.sha256)');"
+        if ($migration.transactional) {
+            $migrationArguments += @('-c', $ledgerSql)
+        }
         $attemptLimit = if ($migration.requiredValidIndexes.Count -gt 0) { 2 } else { 1 }
         for ($attempt = 1; $attempt -le $attemptLimit; $attempt++) {
             try {
@@ -362,8 +366,9 @@ commit;
                 throw
             }
         }
-        $ledgerSql = "insert into ops.schema_migrations (migration_name, checksum) values ('$($migration.name)', '$($migration.sha256)') on conflict (migration_name) do update set checksum=excluded.checksum, applied_at=now();"
-        Invoke-PsqlText $psql $names.Roles.migrator $names.Database $ledgerSql
+        if (-not $migration.transactional) {
+            Invoke-PsqlText $psql $names.Roles.migrator $names.Database $ledgerSql
+        }
     }
 
     # Functional jobs use direct privileges because their mutation cases revoke

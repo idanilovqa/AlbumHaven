@@ -4753,3 +4753,38 @@ for (const query of ['Devin', '']) {
     assert.equal(context.state.ui.artistsDrawerOpen, false);
   });
 }
+
+test('All Artists waits for native form dismissal before clearing the live search draft or suspensions', () => {
+  const {context, calls} = createContext({searchInputValue: 'draft query'});
+  context.state.view.query = 'committed query';
+  context.handleGalleryBootstrapSearchInput('draft query');
+  context.state.ui.recentSearchPopoverOpen = true;
+  const timer = context.state.ui.pendingSearchCommitTimer, resumes = [];
+  context.deferAppFormPageReplacement = resume => {resumes.push(resume); return true;};
+  context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
+  assert.equal(resumes.length, 1); assert.equal(calls.fetchAndRender.length, 0);
+  assert.equal(context.state.ui.pendingSearchCommitTimer, timer);
+  assert.equal(context.state.ui.searchDraftQuery, 'draft query');
+  assert.equal(context.document.getElementById('search-input').value, 'draft query');
+  assert.equal(context.state.ui.recentSearchPopoverOpen, true);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, []);
+  assert.deepEqual(calls.waveformPeakLoadResumptions, []);
+  context.deferAppFormPageReplacement = () => false;
+  resumes[0]();
+  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(context.state.ui.searchDraftQuery, 'committed query');
+  assert.equal(context.state.ui.pendingSearchCommitTimer, 0);
+  assert.deepEqual(calls.resumeSelectedArtistCoverLoadsAfterUserAction, [9]);
+  assert.deepEqual(calls.waveformPeakLoadResumptions, [{id: 1}]);
+});
+
+test('disabled or stale source edition actions cannot change selection or open the sibling Album', () => {
+  for (const disabled of [false, true]) {
+    const {context} = createContext(); let opened = 0;
+    context.state.modalReleases = [{key: 'authorized'}, {key: 'sibling'}]; context.state.modalReleaseIndex = 0;
+    context.canOpenTrackModalEdition = () => false; context.openTrackModal = () => {opened++;};
+    context.handleGalleryBootstrapClick({target: {closest: selector => selector === '[data-track-tab-index]'
+      ? {disabled, getAttribute: () => '1'} : null}, preventDefault() {}});
+    assert.equal(opened, 0); assert.equal(context.state.modalReleaseIndex, 0);
+  }
+});

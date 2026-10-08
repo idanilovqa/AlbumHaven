@@ -933,6 +933,9 @@ def finalize_structural_tag_edit_save_task(
         completion = {
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "inventory_mutation_revision": int(
+                persistence_result.get("inventory_mutation_revision") or 0
+            ),
             "updated_albums": updated_albums,
             "updated_problematic_album": updated_problematic_album,
             "requires_view_refresh": bool(

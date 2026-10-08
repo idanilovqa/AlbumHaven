@@ -49,13 +49,10 @@ begin
      ) then
     return;
   end if;
-  select origin.id into resolved_origin_id
-    from app.request_origins as origin
-   where origin.account_id = requested_account_id
-     and origin.origin_type = requested_origin_type
-     and origin.origin_key = requested_origin_key
-     and origin.client_surface_class = requested_client_surface
-   order by origin.id desc limit 1;
+  resolved_origin_id := app.ensure_job_request_origin(
+    requested_account_id, requested_client_surface,
+    requested_origin_type, requested_origin_key, requested_at
+  );
   if resolved_origin_id is null then
     return;
   end if;

@@ -142,31 +142,30 @@ def build_lastfm_retry_handler(
     now = clock or (lambda: datetime.now(timezone.utc))
     provider_config = dict(config)
 
-    def cancel(claim: ClaimedJob, reason: str, observed_at: datetime) -> JobTransitionResult:
+    def cancel(claim: ClaimedJob, reason: str) -> JobTransitionResult:
         retry_repository.cancel_claimed_before_send(
-            **_claim_values(claim, observed_at), reason_code=reason
+            **_claim_values(claim, now()), reason_code=reason
         )
         return JobTransitionResult(JobState.CANCELED, reason)
 
     def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
-        observed_at = now()
         if context.cancel_requested:
-            return cancel(claim, "lastfm_retry_canceled_before_send", observed_at)
+            return cancel(claim, "lastfm_retry_canceled_before_send")
         if not context.lease_active:
-            return cancel(claim, "lastfm_retry_lease_lost_before_send", observed_at)
+            return cancel(claim, "lastfm_retry_lease_lost_before_send")
         decision = context.reauthorize()
         if not decision.allowed:
-            return cancel(claim, decision.reason_code, observed_at)
+            return cancel(claim, decision.reason_code)
 
-        values = _claim_values(claim, observed_at)
-        secret = retry_repository.load_claimed_session_secret(**values)
+        secret = retry_repository.load_claimed_session_secret(**_claim_values(claim, now()))
         if not secret:
-            return cancel(claim, "lastfm_session_unavailable", observed_at)
+            return cancel(claim, "lastfm_session_unavailable")
         if context.cancel_requested:
-            return cancel(claim, "lastfm_retry_canceled_before_send", observed_at)
+            return cancel(claim, "lastfm_retry_canceled_before_send")
         if not context.lease_active:
-            return cancel(claim, "lastfm_retry_lease_lost_before_send", observed_at)
-        scope = retry_repository.begin_claimed_attempt(**values)
+            return cancel(claim, "lastfm_retry_lease_lost_before_send")
+        observed_at = now()
+        scope = retry_repository.begin_claimed_attempt(**_claim_values(claim, observed_at))
         provider_payload = dict(scope.payload)
         if not str(provider_payload.get("track") or "").strip() and str(
             provider_payload.get("title") or ""
@@ -180,7 +179,7 @@ def build_lastfm_retry_handler(
             provider_result = classify_lastfm_provider_error(error)
 
         finalization = retry_repository.finalize_claimed_attempt(
-            **values,
+            **_claim_values(claim, now()),
             expected_row_revision=scope.row_revision,
             disposition=provider_result.disposition.value,
             reason_code=provider_result.reason_code,

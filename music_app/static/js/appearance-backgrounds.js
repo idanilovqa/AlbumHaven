@@ -369,7 +369,10 @@
     editor.setAttribute('data-alert-family', value.alert_family || 'ember');
     applyCompactPlayerAppearance(value, editor, effective);
   }
-  function clearTheme(rootElement) { applyTheme(empty(), rootElement); }
+  function clearTheme(rootElement) {
+    applyTheme(empty(), rootElement);
+    rootElement?.style?.removeProperty('--compact-floating-edge-color');
+  }
   const appearanceSectionKeys = {
     backgrounds: 'main', seekbar: 'player', 'selection-accent': 'interaction', alerts: 'alerts', 'album-page': 'album',
   };

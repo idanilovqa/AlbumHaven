@@ -684,6 +684,14 @@ class PostgresLastfmRetryJobRepository:
                 accepted_attempt=accepted_attempt,
             )
 
+        if request_origin_ref is not None:
+            origin_type, separator, origin_key = request_origin_ref.partition(":")
+            if not separator or not origin_type or not origin_key:
+                raise ValueError("request origin reference must contain type and key")
+            connection.execute(
+                "select app.ensure_job_request_origin(%s, %s, %s, %s, %s)",
+                (account_id, client_surface, origin_type, origin_key, scheduled_at),
+            )
         command = EnqueueJob(
             kind="lastfm_scrobble_retry",
             subject_kind="pending_scrobble",

@@ -2992,6 +2992,67 @@ test('watchSaveTask waits for a canonical structural projection before replacing
   );
 });
 
+test('canonical structural readiness accepts filtered absence only at the committed revision', () => {
+  const context = loadHelpers();
+  const expectedAlbum = {
+    key: 'artist::renamed-album', name: 'Renamed Album', album_artist: 'Artist',
+    tracks: [{ path: 'renamed-track.flac' }],
+  };
+  const emptyFilteredView = { artist_groups: [], primary_artist_groups: [], family_artist_groups: [] };
+
+  assert.equal(context.canonicalViewPayloadCoversExpectedTagEdit(
+    { ...emptyFilteredView, inventory_mutation_revision: 40 }, expectedAlbum, [expectedAlbum], 41,
+  ), false);
+  assert.equal(context.canonicalViewPayloadCoversExpectedTagEdit(
+    { ...emptyFilteredView, inventory_mutation_revision: 41 }, expectedAlbum, [expectedAlbum], 41,
+  ), true);
+  assert.equal(context.canonicalViewPayloadCoversExpectedTagEdit(
+    { ...emptyFilteredView, status: { inventory_mutation_revision: 41 } }, expectedAlbum, [expectedAlbum], 41,
+  ), false, 'process-global status does not prove the browse snapshot revision');
+});
+
+for (const filterQuery of ['q=Old%20Title', 'category=main_library']) {
+test(`watchSaveTask accepts a fresh filtered view after the edited album leaves ${filterQuery}`, async () => {
+  const context = loadHelpers();
+  const originalAlbum = {
+    key: 'artist::old-title', name: 'Old Title', album_artist: 'Artist',
+    tracks: [{ path: 'track.flac' }],
+  };
+  const optimisticAlbum = { ...originalAlbum, key: 'artist::new-title', name: 'New Title' };
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [optimisticAlbum] }];
+  context.state.view.primary_artist_groups = [];
+  context.state.view.family_artist_groups = [];
+  context.buildApiUrl = () => `/view-data?surface=albums&${filterQuery}`;
+  context.waitForBrowserTimeout = async () => {};
+  let requests = 0;
+  context.fetchAndRender = async (_url, _push, options) => {
+    requests += 1;
+    const payload = {
+      artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
+      inventory_mutation_revision: requests === 1 ? 40 : 41,
+    };
+    if (!options.shouldApplyResponse(payload)) return false;
+    context.state.view.artist_groups = payload.artist_groups;
+    return true;
+  };
+  context.document.getElementById = () => null;
+  context.renderView = () => {};
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('filtered-rename', {
+    originalAlbum, optimisticAlbums: [optimisticAlbum],
+    tagEdits: { 'track.flac': { album: 'New Title' } },
+    terminalPayload: {
+      ok: true, task_id: 'filtered-rename', status: 'completed',
+      requires_view_refresh: true, updated_albums: [], inventory_mutation_revision: 41,
+    },
+  });
+
+  assert.equal(requests, 2);
+  assert.equal(context.state.view.artist_groups.length, 0);
+});
+}
+
 test('canonical structural readiness rejects fragmented projections that only cover membership in aggregate', () => {
   const context = loadHelpers();
   const existingPaths = Array.from({ length: 13 }, (_value, index) => `existing-${index}`);

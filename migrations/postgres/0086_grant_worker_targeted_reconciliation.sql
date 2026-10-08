@@ -1129,7 +1129,7 @@ begin
            '{scan_cache}',
            coalesce(file.metadata -> 'scan_cache', '{}'::jsonb)
              || jsonb_build_object(
-                  'source', 'scan_cache', 'stale', true,
+                  'source', 'runtime_scan_cache', 'stale', true,
                   'stale_marked_at', coalesce(
                     file.metadata #>> '{scan_cache,stale_marked_at}', now()::text
                   )
@@ -1147,7 +1147,7 @@ begin
      and root.library_id = claimed_library_id
      and root.metadata ->> 'root_id' = stale.root_id
      and root.is_active is true
-     and file.metadata #>> '{scan_cache,source}' = 'scan_cache'
+     and file.metadata #>> '{scan_cache,source}' = 'runtime_scan_cache'
      and file.scan_cache_stale is false
      and (
        file.private_path in (

@@ -1619,6 +1619,14 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: events.append("server.run"))
     monkeypatch.setattr(
         isolatedLibraryApp,
+        "build_isolated_jobs_worker",
+        lambda _url: SimpleNamespace(
+            start=lambda: events.append("worker.start"),
+            stop=lambda: events.append("worker.stop"),
+        ),
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
         "reset_application_tables",
         lambda _url: events.append("database.reset"),
     )
@@ -1649,7 +1657,9 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "lastfm.timezone.seed",
             "provider.create",
             "provider.start",
+            "worker.start",
             "server.run",
+            "worker.stop",
             "provider.stop",
             "database.reset",
             "temp.cleanup",
@@ -1837,6 +1847,14 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: events.append("server.run"))
     monkeypatch.setattr(
         isolatedLibraryApp,
+        "build_isolated_jobs_worker",
+        lambda _url: SimpleNamespace(
+            start=lambda: events.append("worker.start"),
+            stop=lambda: events.append("worker.stop"),
+        ),
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
         "reset_application_tables",
         lambda *_args: events.append("database.reset"),
     )
@@ -1872,7 +1890,9 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "lock.acquire",
             "provider.create",
             "provider.start",
+            "worker.start",
             "server.run",
+            "worker.stop",
             "provider.stop",
             "lock.release",
         ]
@@ -1889,7 +1909,9 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "lastfm.timezone.seed",
             "provider.create",
             "provider.start",
+            "worker.start",
             "server.run",
+            "worker.stop",
             "provider.stop",
             "lock.release",
         ]

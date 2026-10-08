@@ -482,7 +482,7 @@ class PostgresAuthMailJobRepository:
                              when %(actor_account_id)s is null
                                then 'public_lifecycle' else 'actor' end
                          then 1 else 0 end,
-                       updated_at = now()
+                       updated_at = greatest(outbox.updated_at, clock_timestamp())
                  where outbox.id = %(outbox_id)s
                    and outbox.account_id = %(account_id)s
                    and outbox.message_category = %(category)s
@@ -666,7 +666,7 @@ class PostgresAuthMailJobRepository:
                          select request_origin_id from ops.jobs where id = %(job_id)s
                        ),
                        row_revision = outbox.row_revision + 1,
-                       updated_at = now()
+                       updated_at = greatest(outbox.updated_at, clock_timestamp())
                  where outbox.id = %(outbox_id)s
                    and outbox.account_id = %(account_id)s
                    and outbox.message_category = %(category)s

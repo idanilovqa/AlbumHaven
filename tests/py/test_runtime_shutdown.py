@@ -430,7 +430,7 @@ def test_asgi_lifespan_attempts_every_cleanup_stage_before_raising(monkeypatch, 
 
 
 @pytest.mark.parametrize("startup_fails", [False, True])
-def test_asgi_lifespan_owns_welcome_retry_worker_through_shutdown(monkeypatch, startup_fails):
+def test_asgi_lifespan_does_not_start_retired_welcome_worker(monkeypatch, startup_fails):
     import sys
     from types import ModuleType, SimpleNamespace
     from music_app import create_asgi_app
@@ -469,9 +469,9 @@ def test_asgi_lifespan_owns_welcome_retry_worker_through_shutdown(monkeypatch, s
                     pass
         else:
             async with app.router.lifespan_context(app):
-                assert calls == ["welcome-started"]
+                assert calls == []
     asyncio.run(scenario())
-    assert calls == ["welcome-started", "welcome-stopped", "runtime-stopped"]
+    assert calls == ["runtime-stopped"]
 
 
 def test_asgi_lifespan_cleans_started_resources_when_watcher_startup_fails(monkeypatch):
@@ -550,11 +550,8 @@ def test_asgi_lifespan_cleans_started_resources_when_watcher_startup_fails(monke
     asyncio.run(scenario())
 
     assert calls == [
-        "lastfm-start",
         "watch-start",
         "watch-stop",
         "coordinator-stop",
-        "executor-stop:False:True",
-        "lastfm-stop",
         "runtime-shutdown",
     ]

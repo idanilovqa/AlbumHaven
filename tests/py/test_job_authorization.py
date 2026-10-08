@@ -802,6 +802,20 @@ def test_invalid_dependency_row_fails_closed():
     )
 
 
+def test_unavailable_authorization_storage_is_not_reported_as_revocation():
+    import psycopg
+
+    service, repository = _service()
+
+    def unavailable(*_args):
+        raise psycopg.OperationalError("private database connection detail")
+
+    repository.load_authorization_context = unavailable
+    assert service.authorize(_claim(), NOW) == AuthorizationDecision(
+        False, "authorization_unavailable"
+    )
+
+
 @pytest.mark.parametrize(
     "malformed_relationships",
     [("malformed-relationship",), None],

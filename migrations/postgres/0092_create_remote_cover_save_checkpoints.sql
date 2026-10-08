@@ -110,13 +110,10 @@ begin
   ) then
     return;
   end if;
-  select origin.id into resolved_origin_id
-    from app.request_origins as origin
-   where origin.account_id = requested_account_id
-     and origin.origin_type = requested_origin_type
-     and origin.origin_key = requested_origin_key
-     and origin.client_surface_class = requested_client_surface
-   order by origin.id desc limit 1;
+  resolved_origin_id := app.ensure_job_request_origin(
+    requested_account_id, requested_client_surface,
+    requested_origin_type, requested_origin_key, requested_at
+  );
   if resolved_origin_id is null then
     return;
   end if;
@@ -173,6 +170,11 @@ begin
        and checkpoint_row.candidate_generation = requested_candidate_generation
        and checkpoint_row.candidate_id = requested_candidate_id
        and checkpoint_row.resource_revision = requested_resource_revision;
+    if accepted_checkpoint_revision is not null then
+      return query select selected_task.id, accepted_job_id,
+                          selected_task.row_revision, accepted_checkpoint_revision;
+      return;
+    end if;
   end if;
   if accepted_checkpoint_revision is null then
     raise exception 'remote cover checkpoint identity conflicts with accepted job';

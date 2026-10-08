@@ -164,17 +164,12 @@ begin
      coalesce(array_length(p_root_ids, 1), 0) > 256 then
     raise exception 'full scan intent is invalid';
   end if;
-  select origin.id
-    into accepted_request_origin_id
-    from app.request_origins as origin
-   where origin.account_id = p_initiating_account_id
-     and origin.client_surface_class = p_client_surface
-     and origin.origin_type = split_part(p_request_origin_ref, ':', 1)
-     and origin.origin_key = substring(
-       p_request_origin_ref from strpos(p_request_origin_ref, ':') + 1
-     )
-   order by origin.id desc
-   limit 1;
+  accepted_request_origin_id := app.ensure_job_request_origin(
+    p_initiating_account_id, p_client_surface,
+    split_part(p_request_origin_ref, ':', 1),
+    substring(p_request_origin_ref from strpos(p_request_origin_ref, ':') + 1),
+    p_accepted_at
+  );
   if accepted_request_origin_id is null then
     raise exception 'full scan request origin is invalid';
   end if;
@@ -455,6 +450,9 @@ set search_path = pg_catalog
 as $$
 declare
   mapped_state varchar(32);
+  targeted_intent_id bigint;
+  affected_library_id bigint;
+  failure_health text;
 begin
   if new.kind not in ('full_scan', 'targeted_reconciliation') then
     return new;
@@ -490,7 +488,54 @@ begin
            outcome_code = new.outcome_code,
            updated_at = new.updated_at
      where intent.job_id = new.id
-       and intent.state is distinct from mapped_state;
+       and intent.state is distinct from mapped_state
+     returning intent.id, intent.library_id
+       into targeted_intent_id, affected_library_id;
+    failure_health := case new.outcome_code
+      when 'targeted_reconciliation_failed' then 'reconciliation_failed'
+      when 'targeted_stable_write_unavailable' then 'stable_write_unavailable'
+    end;
+    if targeted_intent_id is not null and failure_health is not null
+       and old.state = 'running' and new.state = 'failed'
+       and old.lease_expires_at > new.updated_at then
+      update library.libraries as library_record
+         set metadata = jsonb_set(
+           coalesce(library_record.metadata, '{}'::jsonb),
+           '{library_watch_health}',
+           coalesce(library_record.metadata -> 'library_watch_health', '{}'::jsonb)
+             || coalesce((
+               select jsonb_object_agg(
+                 affected.root_id,
+                 jsonb_build_object(
+                   'state', failure_health,
+                   'detected_at', new.updated_at,
+                   'event_id', gen_random_uuid()::text
+                 )
+               )
+               from (
+                 select root.metadata ->> 'root_id' as root_id
+                   from library.targeted_reconciliation_intents as intent
+                   join library.library_roots as root on root.id = intent.primary_root_id
+                  where intent.id = targeted_intent_id
+                 union
+                 select root.metadata ->> 'root_id'
+                   from library.targeted_reconciliation_intent_moves as move
+                   join library.library_roots as root
+                     on root.id in (move.source_root_id, move.destination_root_id)
+                  where move.intent_id = targeted_intent_id
+               ) as affected
+               where nullif(btrim(affected.root_id), '') is not null
+                 and coalesce(nullif(
+                   library_record.metadata #>> array[
+                     'library_watch_health', affected.root_id, 'detected_at'
+                   ], ''
+                 )::timestamptz, '-infinity'::timestamptz) <= new.updated_at
+             ), '{}'::jsonb),
+           true
+         ),
+         updated_at = greatest(library_record.updated_at, new.updated_at)
+       where library_record.id = affected_library_id;
+    end if;
   end if;
   return new;
 end;

@@ -63,6 +63,8 @@ class StructuralTagEditConnection:
             return FakeCursor([{"bootstrap_context_ready": 1}])
         if "source_album_track_file_count" in normalized_sql:
             return FakeCursor([self.result_row])
+        if "library.retire_vacated_structural_album_siblings(" in normalized_sql:
+            return FakeCursor([{"retired_count": 0}])
         return FakeCursor()
 
     def commit(self):
@@ -147,6 +149,7 @@ def _successful_result(path_count: int = 2):
         "track_file_rows_updated": path_count,
         "inventory_mutation_revision": 8,
         "destination_album_id": 41,
+        "source_library_id": 7,
     }
 
 
@@ -268,6 +271,11 @@ def test_postgres_album_rename_is_targeted_and_never_round_trips_a_snapshot(monk
     assert "inventory_mutation_revision" in normalized_sql
     assert mutation_params["changed_paths"] == sorted(paths)
     assert unrelated_path not in repr(mutation_params)
+    retirement_calls = [
+        params for sql, params in connection.executed
+        if "library.retire_vacated_structural_album_siblings(" in _normalized_sql(sql)
+    ]
+    assert retirement_calls == [{"library_id": 7, "destination_album_id": 41}]
     assert all(
         "insert into library.local_tracks" not in _normalized_sql(sql)
         and "insert into library.local_track_files" not in _normalized_sql(sql)

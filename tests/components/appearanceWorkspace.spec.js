@@ -464,7 +464,9 @@ for (const method of ['mount', 'mountSeekbar']) {
     await expect(input).toHaveCSS('color', expected.ink);
     await expect(input).toHaveCSS('background-color', expected.control);
     await expect(input).toHaveCSS('border-top-color', expected.line);
-    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', expected.control);
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('border-top-color', expected.line);
+    await expect(page.locator('#utility-modal-footer [data-background-cancel]')).toHaveCSS('color', expected.ink);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('background-color', expected.control);
     await expect(page.locator('#utility-modal-footer [data-background-save]')).toHaveCSS('color', expected.ink);
     expect(await page.evaluate(() => document.documentElement.style.getPropertyValue('--appearance-ink'))).toBe('');

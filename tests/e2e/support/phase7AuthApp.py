@@ -15,7 +15,7 @@ import threading
 from typing import Any, Callable
 from time import monotonic
 
-from isolatedLibraryApp import configure_isolated_environment
+from isolatedLibraryApp import build_isolated_jobs_worker, configure_isolated_environment
 from isolatedPostgres import (
     IsolatedDatabaseOwnershipLock,
     prepare_isolated_database,
@@ -187,7 +187,6 @@ class _ControlHandler(BaseHTTPRequestHandler):
         try:
             if self.path == "/reset":
                 state.delivery_gate.set()
-                state.clear()
                 if state.reset_fixture is None:
                     raise RuntimeError("Fixture reset is unavailable.")
                 state.reset_fixture()
@@ -459,6 +458,8 @@ def main() -> None:
     created_servers: list[Any] = []
     started_servers: list[Any] = []
     application_servers: list[tuple[Any, threading.Thread]] = []
+    jobs_worker = None
+    reset_lock = threading.Lock()
     original_failure: BaseException | None = None
     try:
         database_lock.acquire()
@@ -487,12 +488,23 @@ def main() -> None:
         )
 
         def reset_fixture() -> None:
-            reset_application_tables(setup_database_url)
-            seed_bootstrap_owner_and_library(setup_database_url)
-            _bootstrap_owner(runtime_database_url)
-            persist_settings_playback_inventory(
-                setup_database_url, temp_root / "media", playback_inventory
-            )
+            nonlocal jobs_worker
+            with reset_lock:
+                state.delivery_gate.set()
+                if jobs_worker is not None:
+                    jobs_worker.stop()
+                    jobs_worker = None
+                state.clear()
+                reset_application_tables(setup_database_url)
+                seed_bootstrap_owner_and_library(setup_database_url)
+                _bootstrap_owner(runtime_database_url)
+                persist_settings_playback_inventory(
+                    setup_database_url, temp_root / "media", playback_inventory
+                )
+                jobs_worker = build_isolated_jobs_worker(runtime_database_url)
+                if jobs_worker is None:
+                    raise RuntimeError("Phase 7 E2E requires a durable worker database URL.")
+                jobs_worker.start()
 
         state.reset_fixture = reset_fixture
         state.database_action = lambda action: _database_action(
@@ -501,6 +513,10 @@ def main() -> None:
         state.database_state = lambda: _database_state(setup_database_url)
         _start_thread(smtp_server, "album-haven-phase7-smtp")
         started_servers.append(smtp_server)
+        jobs_worker = build_isolated_jobs_worker(runtime_database_url)
+        if jobs_worker is None:
+            raise RuntimeError("Phase 7 E2E requires a durable worker database URL.")
+        jobs_worker.start()
         _start_thread(control_server, "album-haven-phase7-control")
         started_servers.append(control_server)
 
@@ -542,6 +558,7 @@ def main() -> None:
         raise
     finally:
         application_shutdown_proven = True
+        state.delivery_gate.set()
         capture_cleanup_failures: list[Exception] = []
         capture_deadline = monotonic() + CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS
         for server in created_servers:
@@ -568,6 +585,11 @@ def main() -> None:
             try:
                 if not server.drain_requests(capture_deadline - monotonic()):
                     raise TimeoutError("Capture request handlers did not stop within the shutdown budget.")
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
+        if jobs_worker is not None and not capture_cleanup_failures:
+            try:
+                jobs_worker.stop()
             except Exception as exc:
                 capture_cleanup_failures.append(exc)
         if capture_cleanup_failures:

@@ -20,6 +20,31 @@ class FakeCursor:
         return self._rows[0] if self._rows else None
 
 
+def test_inventory_publication_load_includes_manual_scan_recovery(monkeypatch):
+    from contextlib import nullcontext
+    from music_app.services import scan_cache_persistence as persistence
+
+    marker = {
+        "inventory_mutation_revision": 41,
+        "scan_started_at": "2026-09-24T10:00:00+00:00",
+        "observed_root_ids": ["root-a"],
+    }
+    statements = []
+    connection = SimpleNamespace(execute=lambda sql: (
+        statements.append(sql) or FakeCursor([{
+            "inventory_mutation_revision": 41, "manual_scan_recovery": marker,
+        }])
+    ))
+    monkeypatch.setattr(persistence, "_ensure_bootstrap_context", lambda _connection: None)
+    adapter = persistence.PostgresScanCacheAdapter({})
+    monkeypatch.setattr(adapter, "_connect_to_database", lambda: nullcontext(connection))
+
+    assert adapter.load_inventory_publication() == {
+        "inventory_mutation_revision": 41, "manual_scan_recovery": marker,
+    }
+    assert "manual_scan_recovery" in statements[0]
+
+
 def test_load_separate_release_keys_accepts_dict_rows():
     from music_app.services.scan_cache_persistence import _load_separate_release_keys
 

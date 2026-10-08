@@ -601,7 +601,13 @@ function collectAlbumsFromViewPayload(payload) {
     .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []));
 }
 
-function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums) {
+function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums, committedInventoryRevision) {
+  const committedRevision = Number(committedInventoryRevision);
+  const snapshotRevision = Number(payload?.inventory_mutation_revision);
+  if (Number.isSafeInteger(committedRevision) && committedRevision > 0
+    && Number.isSafeInteger(snapshotRevision) && snapshotRevision >= 0) {
+    return snapshotRevision >= committedRevision;
+  }
   const expectedAlbums = Array.isArray(optimisticAlbums) && optimisticAlbums.length
     ? optimisticAlbums
     : [originalAlbum].filter(Boolean);
@@ -792,15 +798,17 @@ function getAlbumRuntimeIdentityAliases(album) {
 let tagEditViewMutationGeneration = 0;
 const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
+const activeTagEditViewMutations = new Set();
 
 function hasActiveTagEditViewMutation() {
-  return tagEditViewMutationResourceClaims.size > 0;
+  return activeTagEditViewMutations.size > 0;
 }
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
-  if (Object.values(updates || {}).some((edits) => (
+  const hasEdits = Object.values(updates || {}).some((edits) => (
     edits && typeof edits === 'object' && Object.keys(edits).length > 0
-  ))) {
+  ));
+  if (hasEdits) {
     state.ui = state.ui || {};
     state.ui.tagEditOptimisticMutationRevision = Number(
       state.ui.tagEditOptimisticMutationRevision || 0,
@@ -808,6 +816,7 @@ function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
   }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
+  if (hasEdits) activeTagEditViewMutations.add(generation);
   const resourceKeys = new Set();
   getAlbumRuntimeIdentityAliases(album).forEach((alias) => {
     resourceKeys.add(`album:${alias.toLocaleLowerCase()}`);
@@ -898,6 +907,7 @@ function pruneSettledTagEditViewMutationClaims() {
 function settleTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   settledTagEditViewMutations.add(generation);
   pruneSettledTagEditViewMutationClaims();
 }
@@ -905,6 +915,7 @@ function settleTagEditViewMutation(claim) {
 function releaseFailedTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     const remainingClaims = claims.filter((value) => value !== generation);
     if (remainingClaims.length) {
@@ -2187,6 +2198,7 @@ async function watchSaveTask(taskId, context = {}) {
                           payload,
                           originalAlbum,
                           context.optimisticAlbums,
+                          data.inventory_mutation_revision,
                         )
                       )
                     ),

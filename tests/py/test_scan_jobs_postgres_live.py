@@ -16,7 +16,7 @@ from music_app.services.current_actor import (
     CurrentActor,
     LibraryRelationship,
 )
-from music_app.services.jobs.models import EnqueueJob, JobCancellationDisposition, JobKind
+from music_app.services.jobs.models import EnqueueJob, JobCancellationDisposition, JobKind, JobState, JobTransitionResult
 from music_app.services.library_event_coordinator import (
     TargetedMove,
     TargetedReconciliationRequest,
@@ -334,13 +334,27 @@ def test_live_full_scan_rolls_back_domain_record_when_job_creation_fails(
     arguments = _full_scan_arguments(account_id, library_id, "rollback")
     arguments["request_origin_ref"] = "browser:missing-origin"
 
-    with pytest.raises(ValueError, match="origin"):
-        _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    class FailingJobs:
+        def enqueue_in_transaction(self, connection, command):
+            raise RuntimeError("injected downstream enqueue failure")
+
+    repository = PostgresScanJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=FailingJobs(),
+    )
+    with pytest.raises(RuntimeError, match="injected downstream enqueue failure"):
+        repository.enqueue_full_scan(**arguments)
 
     with isolatedPostgres._connect(setup_url) as connection:
         assert connection.execute(
             "select count(*) as count from library.full_scan_intents where library_id = %s",
             (library_id,),
+        ).fetchone()["count"] == 0
+        assert connection.execute(
+            "select count(*) as count from app.request_origins "
+            "where account_id = %s and origin_key = 'missing-origin'",
+            (account_id,),
         ).fetchone()["count"] == 0
 
 
@@ -379,6 +393,13 @@ def test_live_targeted_paths_moves_and_preserved_subtrees_round_trip_through_cla
 ):
     setup_url, runtime_url, worker_url = live_scan_database
     _, library_id = _seed_scope(setup_url, "roundtrip")
+    with isolatedPostgres._connect(setup_url) as connection:
+        for root_id, root_path in (("root-a", r"C:\Music"), ("root-b", r"D:\Music")):
+            connection.execute(
+                "update library.library_roots set root_path = %s "
+                "where library_id = %s and metadata ->> 'root_id' = %s",
+                (root_path, library_id, root_id),
+            )
     request = TargetedReconciliationRequest(
         root_id="root-a",
         paths=frozenset(
@@ -1013,6 +1034,123 @@ def test_live_worker_reconstructs_claimed_paths_from_current_root_and_scope(
     )
 
 
+@pytest.mark.parametrize("reason,health", (
+    ("targeted_reconciliation_failed", "reconciliation_failed"),
+    ("targeted_stable_write_unavailable", "stable_write_unavailable"),
+))
+@pytest.mark.parametrize("newer_warning", (False, True))
+def test_live_targeted_failure_persists_root_health_atomically(
+    live_scan_database, reason, health, newer_warning,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = f"health-{health}-{newer_warning}"
+    _account_id, library_id = _seed_scope(setup_url, suffix)
+    now = datetime.now(timezone.utc)
+    accepted = _scan_repository(runtime_url).enqueue_targeted_reconciliation(
+        library_id=library_id,
+        request=TargetedReconciliationRequest(
+            root_id="root-a", moves=(TargetedMove(
+                source=Path(rf"C:\private\scan-jobs-{suffix}\a\old.flac"),
+                destination=Path(rf"D:\private\scan-jobs-{suffix}\b\new.flac"),
+                source_root_id="root-a", destination_root_id="root-b", is_directory=False,
+            ),),
+        ),
+        producer_request_key=f"watcher-{suffix}",
+        deployment_mode="self_hosted_private_web", client_surface="library_watcher",
+        scheduled_at=now - timedelta(seconds=1),
+    )
+    jobs = PostgresJobRepository(database_url=worker_url, connect_to_database=isolatedPostgres._connect)
+    claim = jobs.claim(worker_id=suffix, now=now, lease_seconds=60, kinds=("targeted_reconciliation",))
+    assert claim is not None and claim.job_id == accepted.job_id
+    prior_warning = {"state": "overflow", "detected_at": (now + timedelta(hours=1)).isoformat(), "event_id": "newer"}
+    if newer_warning:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "update library.libraries set metadata = metadata || "
+                "jsonb_build_object('library_watch_health', %s::jsonb) where id = %s",
+                (json.dumps({"root-b": prior_warning}), library_id),
+            )
+    assert jobs.finish(claim, JobTransitionResult(JobState.FAILED, reason), now=now + timedelta(seconds=1))
+    with isolatedPostgres._connect(setup_url) as connection:
+        recorded = connection.execute(
+            "select metadata -> 'library_watch_health' as health from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["health"]
+    assert recorded is not None
+    assert set(recorded) == {"root-a", "root-b"}
+    for root_id in recorded:
+        if newer_warning and root_id == "root-b":
+            assert recorded[root_id] == prior_warning
+        else:
+            assert recorded[root_id]["state"] == health
+            assert datetime.fromisoformat(recorded[root_id]["detected_at"]) == now + timedelta(seconds=1)
+            assert recorded[root_id]["event_id"]
+
+
+@pytest.mark.parametrize("state,reason", (
+    (JobState.CANCELED, "targeted_reconciliation_failed"),
+    (JobState.FAILED, "unrelated_failure"),
+))
+def test_live_targeted_finalization_does_not_report_unrelated_health(live_scan_database, state, reason):
+    setup_url, runtime_url, worker_url = live_scan_database
+    library_id, _accepted, claim = _enqueue_and_claim_targeted(
+        setup_url=setup_url, runtime_url=runtime_url, worker_url=worker_url,
+        suffix=f"no-health-{state.value}",
+    )
+    assert PostgresJobRepository(
+        database_url=worker_url, connect_to_database=isolatedPostgres._connect,
+    ).finish(claim, JobTransitionResult(state, reason), now=datetime.now(timezone.utc))
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            "select metadata -> 'library_watch_health' as health from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["health"] is None
+
+
+def test_live_targeted_retirement_skips_siblings_removed_by_earlier_iteration(live_scan_database):
+    setup_url, runtime_url, worker_url = live_scan_database
+    library_id, accepted, claim = _enqueue_and_claim_targeted(
+        setup_url=setup_url, runtime_url=runtime_url, worker_url=worker_url,
+        suffix="retire-cursor",
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        artist_id = connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name) "
+            "values (%s, 'retire-cursor-artist', 'Artist') returning id", (library_id,),
+        ).fetchone()["id"]
+        connection.execute(
+            "insert into library.separate_releases (library_id, release_key) values (%s, 'artist::album')",
+            (library_id,),
+        )
+        destination_id, source_id = [connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title) "
+            "values (%s, %s, %s, 'Album') returning id", (library_id, artist_id, key),
+        ).fetchone()["id"] for key in ("older-destination", "newer-vacated-source")]
+        connection.execute(
+            "insert into library.local_tracks (library_id, album_id, track_key, title) "
+            "values (%s, %s, 'retained-track', 'Track')", (library_id, destination_id),
+        )
+        connection.execute(
+            "update library.targeted_reconciliation_intents set publication_attempt = %s, "
+            "committed_inventory_revision = 1, affected_album_keys = %s where id = %s",
+            (claim.attempt, ["older-destination", "newer-vacated-source"], accepted.intent_id),
+        )
+    with isolatedPostgres._connect(worker_url) as connection:
+        retired = connection.execute(
+            "select library.retire_claimed_targeted_reconciliation_vacated_albums(%s,%s,%s,%s,%s,%s) as count",
+            (accepted.intent_id, claim.job_id, claim.attempt, claim.worker_id, claim.lease_token, datetime.now(timezone.utc)),
+        ).fetchone()["count"]
+    assert retired == 1
+    with isolatedPostgres._connect(setup_url) as connection:
+        remaining = connection.execute(
+            "select id from library.local_albums where id = any(%s)", ([destination_id, source_id],),
+        ).fetchall()
+    assert [row["id"] for row in remaining] == [destination_id]
+    assert PostgresJobRepository(
+        database_url=worker_url, connect_to_database=isolatedPostgres._connect,
+    ).finish(claim, JobTransitionResult(JobState.SUCCEEDED, "targeted_reconciliation_completed"), now=datetime.now(timezone.utc))
+
+
 def test_live_worker_scope_reports_persisted_unhealthy_root(
     live_scan_database,
 ):
@@ -1456,6 +1594,125 @@ def test_live_worker_has_no_direct_inventory_table_privileges(
     assert allowed is False
 
 
+@pytest.mark.parametrize("mode", ["manual_full_rescan", "background"])
+@pytest.mark.parametrize("publication_allowed", [True, False])
+def test_live_manual_scan_recovers_only_observed_health_older_than_attempt(
+    live_scan_database, mode, publication_allowed,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = f"health-{mode}-{publication_allowed}"
+    account_id, library_id = _seed_scope(setup_url, suffix)
+    arguments = _full_scan_arguments(account_id, library_id, suffix)
+    arguments.update(mode=mode, scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    claim = PostgresJobRepository(
+        database_url=worker_url, connect_to_database=isolatedPostgres._connect,
+    ).claim(worker_id="health-recovery-worker", now=datetime.now(timezone.utc), lease_seconds=300)
+    assert claim is not None and claim.job_id == accepted.job_id
+    scans = _scan_repository(worker_url)
+    intent = scans.load_claimed_full_scan(
+        job_id=claim.job_id, worker_id=claim.worker_id, lease_token=claim.lease_token,
+    )
+    cutoff = datetime.now(timezone.utc)
+    health = {
+        "root-a": {"state": "overflow", "detected_at": (cutoff - timedelta(seconds=1)).isoformat()},
+        "root-b": {"state": "overflow", "detected_at": (cutoff + timedelta(seconds=1)).isoformat()},
+        "unobserved": {"state": "overflow", "detected_at": (cutoff - timedelta(seconds=1)).isoformat()},
+    }
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update library.libraries set metadata = metadata || %s::jsonb where id = %s",
+            (json.dumps({"library_watch_health": health}), library_id),
+        )
+        if not publication_allowed:
+            connection.execute(
+                "update ops.jobs set cancel_requested_at = now(), "
+                "cancel_requested_by_account_id = %s, cancel_reason_code = 'requested' "
+                "where id = %s", (account_id, claim.job_id),
+            )
+    result = scans.publish_claimed_full_scan(
+        claim=claim, intent_id=intent.intent_id,
+        expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+        inventory={
+            "artists": [], "albums": [], "featured_artists": [], "tracks": [], "track_files": [],
+            "scan_started_at": cutoff.isoformat(),
+        },
+        observed_root_ids=intent.root_ids, now=datetime.now(timezone.utc),
+    )
+    assert result["publication_won"] is publication_allowed
+    with isolatedPostgres._connect(setup_url) as connection:
+        metadata = connection.execute(
+            "select metadata from library.libraries where id = %s", (library_id,),
+        ).fetchone()["metadata"]
+    _settle_post_scan_cover_follow_ups(setup_url, library_id)
+    if mode == "manual_full_rescan" and publication_allowed:
+        assert metadata["library_watch_health"] == {key: value for key, value in health.items() if key != "root-a"}
+        marker = metadata["manual_scan_recovery"]
+        assert marker["inventory_mutation_revision"] == result["inventory_mutation_revision"]
+        assert datetime.fromisoformat(marker["scan_started_at"]) == cutoff
+        assert set(marker["observed_root_ids"]) == set(intent.root_ids)
+    else:
+        assert metadata["library_watch_health"] == health
+        assert "manual_scan_recovery" not in metadata
+
+
+def test_live_full_scan_retires_files_written_by_production_serializer(live_scan_database):
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = "production-source-removal"
+    account_id, library_id = _seed_scope(setup_url, suffix)
+    private_path = rf"C:\private\scan-jobs-{suffix}\a\Artist\Album\01.flac"
+    inventory = PostgresScanCacheAdapter({}).prepare_full_scan_inventory({
+        private_path: {
+            "path": private_path, "album": "Album", "album_artist": "Artist",
+            "artist": "Artist", "title": "Track", "track_number": 1,
+            "disc_number": 1, "duration_seconds": 120, "mtime": 1.0,
+            "size": 123, "library_root_id": "root-a",
+            "library_root_category": "main-library",
+        },
+    })
+    assert len(inventory["track_files"]) == 1
+    with isolatedPostgres._connect(setup_url) as connection:
+        track_id = connection.execute(
+            "insert into library.local_tracks (library_id, track_key, title) "
+            "values (%s, 'removed-track', 'Track') returning id", (library_id,),
+        ).fetchone()["id"]
+        file_id = connection.execute(
+            "insert into library.local_track_files (track_id, library_root_id, "
+            "private_path, metadata) select %s, root.id, %s, %s::jsonb "
+            "from library.library_roots root where root.library_id = %s "
+            "and root.metadata ->> 'root_id' = 'root-a' returning id",
+            (track_id, private_path, json.dumps(inventory["track_files"][0]["metadata"]), library_id),
+        ).fetchone()["id"]
+    arguments = _full_scan_arguments(account_id, library_id, suffix)
+    arguments["scheduled_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    claim = PostgresJobRepository(
+        database_url=worker_url, connect_to_database=isolatedPostgres._connect,
+    ).claim(worker_id=suffix, now=datetime.now(timezone.utc), lease_seconds=300,
+            kinds=("full_scan",))
+    assert claim is not None and claim.job_id == accepted.job_id
+    scans = _scan_repository(worker_url)
+    intent = scans.load_claimed_full_scan(
+        job_id=claim.job_id, worker_id=claim.worker_id, lease_token=claim.lease_token,
+    )
+    result = scans.publish_claimed_full_scan(
+        claim=claim, intent_id=intent.intent_id,
+        expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+        inventory={key: [] for key in inventory}, observed_root_ids=intent.root_ids,
+        now=datetime.now(timezone.utc),
+    )
+    assert result["publication_won"] is True
+    with isolatedPostgres._connect(setup_url) as connection:
+        row = connection.execute(
+            "select scan_cache_stale from library.local_track_files where id = %s",
+            (file_id,),
+        ).fetchone()
+    assert row["scan_cache_stale"] is True
+    _settle_post_scan_cover_follow_ups(setup_url, library_id)
+
+
 def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
     live_scan_database,
 ):
@@ -1875,7 +2132,7 @@ def test_live_worker_loads_active_directory_membership_without_private_reads(
 
     setup_url, runtime_url, worker_url = live_scan_database
     suffix = "worker-preparation-directory"
-    _, library_id = _seed_scope(setup_url, suffix)
+    account_id, library_id = _seed_scope(setup_url, suffix)
     root = tmp_path / "library"
     active_directory = root / "Artist" / "Album" / "Disc 2"
     active_directory.mkdir(parents=True)
@@ -1883,6 +2140,15 @@ def test_live_worker_loads_active_directory_membership_without_private_reads(
     disc_two_path = active_directory / "01.flac"
 
     with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update app.bootstrap_owners set account_id = %s "
+            "where owner_key = 'local-bootstrap-owner'",
+            (account_id,),
+        )
+        connection.execute(
+            "update library.libraries set name = 'Local Library' where id = %s",
+            (library_id,),
+        )
         connection.execute(
             """
             update library.library_roots

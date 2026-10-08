@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from starlette.datastructures import QueryParams
 from music_app.routes import api_read_asgi_routes as routes
+from music_app.services.allowed_actions import AllowedActions
 
 @pytest.fixture
 def route_context(monkeypatch):
@@ -22,7 +23,7 @@ def route_context(monkeypatch):
     monkeypatch.setattr(routes,'_library_state',lambda _request:{})
     monkeypatch.setattr(routes,'_build_status_payload_from_state',lambda _state:{'scan_in_progress':False,'usable':True})
     monkeypatch.setattr(routes,'_project_library_watch_health_for_request',lambda _request:{})
-    monkeypatch.setattr(routes,'allowed_actions_for_request',lambda *_args:SimpleNamespace(as_payload=lambda:{}))
+    monkeypatch.setattr(routes,'allowed_actions_for_request',lambda *_args:AllowedActions(()))
     return request,lock
 
 @pytest.mark.parametrize('operation,dependency',[('utilities_log_history','load_log_history_snapshot'),('utilities_log_history_export','export_log_history'),('status','load_log_history_revision')])

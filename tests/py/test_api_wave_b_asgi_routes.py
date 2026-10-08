@@ -1215,7 +1215,13 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch, 
     assert auth_calls[0]["account_id"] == 1
     assert auth_calls[0]["config"] is app.config
     assert retry_calls == []
-    assert release_calls == []
+    assert len(release_calls) == 1
+    assert release_calls[0]["account_id"] == 1
+    assert release_calls[0]["library_id"] == 1
+    assert release_calls[0]["client_surface"] == "private_web"
+    assert release_calls[0]["deployment_mode"] == "self_hosted"
+    assert release_calls[0]["request_origin_ref"]
+    assert release_calls[0]["limit"] == 100
 
 
 def test_asgi_lastfm_settings_records_safe_history_when_provider_rejects_connection(

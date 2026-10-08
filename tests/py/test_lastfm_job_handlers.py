@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -157,6 +157,34 @@ def test_handler_reauthorizes_loads_secret_marks_sending_and_finalizes_accepted(
     assert finish["disposition"] == "accepted"
     assert finish["expected_row_revision"] == 6
     assert "claimed-session-secret" not in repr(finish)
+
+
+@pytest.mark.parametrize("provider_fails", [False, True])
+def test_each_lastfm_repository_operation_uses_current_time(provider_fails):
+    repository = _Repository()
+    observed = NOW
+
+    def clock():
+        nonlocal observed
+        observed += timedelta(seconds=1)
+        return observed
+
+    def scrobble(*_args):
+        nonlocal observed
+        observed += timedelta(minutes=6)
+        if provider_fails:
+            raise RuntimeError("provider outcome unknown")
+        return LastfmSubmissionOutcome(sent=True, accepted=1, outcome="accepted")
+
+    handler = build_lastfm_retry_handler(
+        retry_repository=repository, config={},
+        scrobble_with_session=scrobble, clock=clock,
+    )
+    handler(_claim(), _Context())
+
+    timestamps = [values["now"] for _, values in repository.calls]
+    assert all(left < right for left, right in zip(timestamps, timestamps[1:]))
+    assert timestamps[-1] > NOW + timedelta(minutes=5)
 
 
 @pytest.mark.parametrize(

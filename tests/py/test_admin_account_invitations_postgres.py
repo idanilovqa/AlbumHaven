@@ -234,6 +234,7 @@ def test_email_job_failure_rolls_back_tokenless_outbox_and_audit(invitations):
             job_repository=Jobs(fail=True),
         ).queue_email(
             actor_account_id=OWNER_ID, actor_authenticated_at=NOW,
+            actor_session_id=11,
             library_id=LIBRARY_ID, target_account_id=PENDING_ID,
             request_ref="send-failure",
         )

@@ -979,7 +979,7 @@ test('regular docked style rejects malformed persisted values', () => {
 
 test('regular docked style CSS excludes sidebar rail presentations', () => {
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
-  assert.match(css, /data-docked-compact-player-regular-style='true'[^{}]*\.global-player\.is-docked-compact:not\(\.is-rail-compact\)\s*\{[^}]*border-top:\s*1px solid rgba\(74, 222, 128, 0\.48\)/s);
+  assert.match(css, /data-docked-compact-player-regular-style='true'[^{}]*\.global-player\.is-docked-compact:not\(\.is-rail-compact\)\s*\{[^}]*border-top:\s*1px solid rgba\(74, 222, 128, 0\.24\)/s);
   assert.match(css, /data-appearance-player[^{}]*data-docked-compact-player-regular-style='true'[^{}]*\.global-player\.is-docked-compact:not\(\.is-rail-compact\)\s*\{[^}]*--appearance-player-surface-start/s);
 });
 

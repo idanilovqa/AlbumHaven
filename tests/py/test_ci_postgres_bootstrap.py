@@ -95,6 +95,30 @@ def test_bootstrap_contract_exports_passwordless_worker_url(bootstrap_contract):
         "album_haven_ci_phase_8_jobs"
     )
     assert "password" not in exports["ALBUM_HAVEN_WORKER_DATABASE_URL"].casefold()
+    assert exports["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"] == exports[
+        "ALBUM_HAVEN_WORKER_DATABASE_URL"
+    ]
+
+
+def test_python_ci_restores_worker_url_for_destructive_database():
+    workflow = (REPO_ROOT / ".github" / "workflows" / "pr-gates.yml").read_text(
+        encoding="utf-8"
+    )
+    capture = workflow.split("- name: Capture destructive Python database contracts", 1)[1]
+    capture = capture.split("- name:", 1)[0]
+    export = workflow.split("- name: Export isolated Python database contracts", 1)[1]
+    export = export.split("- name:", 1)[0]
+
+    assert (
+        "PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL=$env:ALBUM_HAVEN_WORKER_DATABASE_URL"
+        in capture
+    )
+    for name in (
+        "ALBUM_HAVEN_WORKER_DATABASE_URL",
+        "ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL",
+    ):
+        assert f"{name}=$env:PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL" in export
+    assert "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" in export
 
 
 def test_bootstrap_contract_tracks_worker_for_exact_teardown(bootstrap_contract):

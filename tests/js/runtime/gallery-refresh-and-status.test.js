@@ -15,7 +15,7 @@ test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutatio
   const staleRefresh = context.fetchAndRender('/view-data', false);
   const navigationRevision = context.state.ui.viewStateRevision;
   assert.equal(context.state.ui.pendingViewTransition, true);
-  context.claimTagEditViewMutation(album, ['owned-track.mp3'], {
+  const claim = context.claimTagEditViewMutation(album, ['owned-track.mp3'], {
     'owned-track.mp3': { album: 'Release' },
   });
   const optimisticView = { artist_groups: [{ artist: 'Artist', albums: [{ ...album, track_count_preview: 16 }] }] };
@@ -29,6 +29,7 @@ test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutatio
   assert.equal(context.state.ui.activeViewRequestController, null);
   assert.equal(context.state.ui.activeViewRequestUrl, '');
   assert.equal(context.state.ui.viewStateRevision, navigationRevision);
+  context.settleTagEditViewMutation(claim);
   const canonicalRefresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
   pendingRequests[1].resolveWith(optimisticView);
   assert.equal(await canonicalRefresh, true);
@@ -40,18 +41,37 @@ test('opening a tag editor does not invalidate an in-flight gallery refresh', as
   vm.runInContext(tagMutationSource, context);
   const refresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
   context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] });
+  assert.equal(context.hasActiveTagEditViewMutation(), false);
   pendingRequests[0].resolveWith({ artist_groups: [] });
   assert.equal(await refresh, true);
   assert.equal(calls.applyViewPayload.length, 1);
+});
+
+test('settling or failing an edit leaves other active edits protected', () => {
+  const { context } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const album = { key: 'artist::release', tracks: [] };
+  context.claimTagEditViewMutation(album);
+  const first = context.claimTagEditViewMutation(album, ['one.mp3'], {
+    'one.mp3': { album: 'First' },
+  });
+  const second = context.claimTagEditViewMutation(album, ['two.mp3'], {
+    'two.mp3': { album: 'Second' },
+  });
+  context.settleTagEditViewMutation(first);
+  assert.equal(context.hasActiveTagEditViewMutation(), true);
+  context.releaseFailedTagEditViewMutation(second);
+  assert.equal(context.hasActiveTagEditViewMutation(), false);
 });
 
 test('a canonical same-URL refresh replaces a request from before an optimistic edit', async () => {
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
   const staleRefresh = context.fetchAndRender('/view-data', false);
-  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+  const claim = context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
     'owned.mp3': { album: 'Release' },
   });
+  context.settleTagEditViewMutation(claim);
   const canonicalRefresh = context.fetchAndRender('/view-data', false);
   assert.equal(pendingRequests.length, 2);
   assert.equal(pendingRequests[0].options.signal.aborted, true);
@@ -68,9 +88,10 @@ test('a noninterrupting canonical same-URL refresh queues behind an obsolete mut
   const { context, calls, pendingRequests } = createContext();
   vm.runInContext(tagMutationSource, context);
   const staleRefresh = context.fetchAndRender('/view-data', false);
-  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+  const claim = context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
     'owned.mp3': { album: 'Release' },
   });
+  context.settleTagEditViewMutation(claim);
   assert.equal(await context.fetchAndRender('/view-data', false, { interruptCurrent: false }), false);
   assert.equal(pendingRequests[0].options.signal.aborted, false);
   assert.equal(context.state.ui.pendingViewRequest.url, '/view-data');

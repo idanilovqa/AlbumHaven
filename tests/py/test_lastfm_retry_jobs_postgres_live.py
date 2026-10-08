@@ -61,7 +61,7 @@ def _drop_schemas(setup_url: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def live_lastfm_database():
+def _live_lastfm_schema():
     setup_url, runtime_url = _database_urls_or_skip()
     try:
         _drop_schemas(setup_url)
@@ -69,6 +69,17 @@ def live_lastfm_database():
         yield setup_url, runtime_url
     finally:
         _drop_schemas(setup_url)
+
+
+@pytest.fixture
+def live_lastfm_database(_live_lastfm_schema):
+    setup_url, runtime_url = _live_lastfm_schema
+    isolatedPostgres.reset_application_tables(setup_url)
+    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
+    try:
+        yield setup_url, runtime_url
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
 
 
 def _seed_scope(setup_url: str) -> tuple[int, int, int, str]:
@@ -701,6 +712,59 @@ def test_live_worker_reconciliation_adopts_legacy_due_once_across_workers(
     assert int(pending["accepted_attempt"]) == 2
 
 
+@pytest.mark.parametrize("previous_attempts", (1, 4))
+def test_live_failed_presend_reconciliation_advances_or_exhausts_attempt(
+    live_lastfm_database, previous_attempts,
+):
+    setup_url, runtime_url = live_lastfm_database
+    account_id, library_id, session_id, origin_key = _seed_scope(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "delete from app.request_origins where account_id = %s", (account_id,),
+        )
+    now = datetime.now(timezone.utc)
+    accepted = PostgresLastfmRetryJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).accept_retryable_pending(
+        account_id=account_id, library_id=library_id,
+        source_family="runtime_lastfm_sync_state_adapter",
+        source_key=f"presend-{uuid4().hex}", track_key="opaque", played_at=now,
+        previous_attempts=previous_attempts, next_attempt_at=now,
+        active_session_id=session_id, request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web", client_surface="private_web",
+        payload={"source_payload": {"artist": "Artist", "title": "Song"}},
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set state = 'failed', started_at = %s, "
+            "completed_at = %s, outcome_code = 'presend_failure', attempt_count = 1 "
+            "where id = %s", (now, now, accepted.job_id),
+        )
+    repository = PostgresLastfmRetryJobRepository(
+        database_url=os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"],
+        connect_to_database=isolatedPostgres._connect,
+    )
+    repository.reconcile_due_pending(now=now + timedelta(seconds=1))
+    repository.reconcile_due_pending(now=now + timedelta(seconds=2))
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending = connection.execute(
+            "select pending.status, pending.attempt_count, pending.accepted_attempt, "
+            "pending.current_job_id, job.state from integration.pending_scrobbles pending "
+            "join ops.jobs job on job.id = pending.current_job_id where pending.id = %s",
+            (accepted.pending_scrobble_id,),
+        ).fetchone()
+    assert pending["attempt_count"] == previous_attempts + 1
+    if previous_attempts == 4:
+        assert pending["status"] == "exhausted"
+        assert pending["current_job_id"] == accepted.job_id
+    else:
+        assert pending["status"] == "accepted"
+        assert pending["accepted_attempt"] == previous_attempts + 2
+        assert pending["current_job_id"] != accepted.job_id
+        assert pending["state"] == "queued"
+
+
 def test_live_worker_reconciliation_converges_ambiguous_generic_terminal_state(
     live_lastfm_database,
 ):
@@ -736,18 +800,6 @@ def test_live_worker_reconciliation_converges_ambiguous_generic_terminal_state(
         lease_seconds=60,
         kinds=("lastfm_scrobble_retry",),
     )
-    while claim is not None and claim.job_id != accepted.job_id:
-        assert jobs.finish(
-            claim,
-            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
-            now=now + timedelta(seconds=2),
-        )
-        claim = jobs.claim(
-            worker_id="lastfm-terminal-live",
-            now=now + timedelta(seconds=3),
-            lease_seconds=60,
-            kinds=("lastfm_scrobble_retry",),
-        )
     assert claim is not None and claim.job_id == accepted.job_id
     assert jobs.finish(
         claim,

@@ -214,6 +214,31 @@ create index if not exists worker_instances_retention_idx
   on ops.worker_instances (last_heartbeat_at, instance_id)
   where lifecycle_state = 'stopped';
 
+create or replace function app.ensure_job_request_origin(
+  p_account_id bigint, p_client_surface text, p_origin_type text,
+  p_origin_key text, p_seen_at timestamptz
+)
+returns bigint
+language sql
+set search_path = pg_catalog
+as $$
+  insert into app.request_origins (
+    account_id, client_surface_class, origin_type, origin_key,
+    first_seen_at, last_seen_at
+  ) values (
+    p_account_id, p_client_surface, p_origin_type, p_origin_key,
+    p_seen_at, p_seen_at
+  )
+  on conflict (client_surface_class, origin_type, origin_key)
+  do update set last_seen_at = greatest(
+    app.request_origins.last_seen_at, excluded.last_seen_at
+  )
+  where app.request_origins.account_id is not distinct from excluded.account_id
+  returning id;
+$$;
+
+revoke all on function app.ensure_job_request_origin(bigint, text, text, text, timestamptz) from public;
+
 revoke all on table ops.jobs from public;
 revoke all on table ops.job_transitions from public;
 revoke all on table ops.worker_instances from public;
@@ -229,6 +254,7 @@ begin
   end if;
 
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
+    grant execute on function app.ensure_job_request_origin(bigint, text, text, text, timestamptz) to album_haven_app;
     grant usage on schema ops to album_haven_app;
     grant select on table ops.jobs to album_haven_app;
     grant insert (

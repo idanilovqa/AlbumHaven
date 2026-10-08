@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -169,6 +170,67 @@ def test_welcome_handler_sends_once_and_fences_success():
     assert outcome.reason_code == "auth_mail_delivered"
     assert len(sent) == 1
     assert [name for name, _ in repository.calls] == ["load", "begin", "finish"]
+
+
+@pytest.mark.parametrize("category", ["welcome", "password_reset"])
+@pytest.mark.parametrize("provider_fails", [False, True])
+def test_each_mail_repository_operation_uses_current_time(category, provider_fails):
+    repository = _Repository()
+    observed = NOW
+
+    def clock():
+        nonlocal observed
+        observed += timedelta(seconds=1)
+        return observed
+
+    def deliver(*_args, **_kwargs):
+        nonlocal observed
+        observed += timedelta(minutes=6)
+        if provider_fails:
+            raise RuntimeError("provider outcome unknown")
+        return DeliveryResult(True, "delivered")
+
+    _handler(category, repository, deliver, clock=clock)(_claim(category), _Context())
+
+    timestamps = [values["now"] for _, values in repository.calls]
+    assert all(left < right for left, right in zip(timestamps, timestamps[1:]))
+    assert timestamps[-1] > _claim(category).lease_expires_at
+
+
+@pytest.mark.parametrize("category", ["welcome", "account_invitation", "password_reset"])
+@pytest.mark.parametrize("async_provider", [False, True])
+@pytest.mark.parametrize("failure", [False, True])
+def test_provider_completion_and_failure_are_recorded_by_worker(
+    category, async_provider, failure
+):
+    repository = _Repository()
+    sent = []
+
+    def deliver(message, **_kwargs):
+        sent.append(message)
+        if failure:
+            raise RuntimeError("private SMTP failure")
+        return DeliveryResult(True, "delivered")
+
+    async def deliver_async(message, **kwargs):
+        await asyncio.sleep(0)
+        return deliver(message, **kwargs)
+
+    outcome = _handler(
+        category, repository, deliver_async if async_provider else deliver
+    )(_claim(category), _Context())
+
+    assert len(sent) == 1
+    assert outcome.next_state is (JobState.AMBIGUOUS if failure else JobState.SUCCEEDED)
+    assert outcome.reason_code == (
+        "auth_mail_delivery_ambiguous" if failure else "auth_mail_delivered"
+    )
+    finalizations = [values for name, values in repository.calls if name == "finish"]
+    assert len(finalizations) == 1
+    assert finalizations[0]["disposition"] == (
+        "possible_send_ambiguous" if failure else "delivered"
+    )
+    assert "private SMTP failure" not in repr(finalizations)
 
 
 def test_welcome_known_not_sent_schedules_next_domain_job():

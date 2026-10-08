@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from threading import Event, Thread
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 import pytest
@@ -390,29 +391,29 @@ def test_send_invitation_route_maps_failures_without_leaking_details(
 
 
 @pytest.mark.parametrize(
-    ("state_attribute", "helper_name", "argument"),
+    ("service_name", "method_name", "path"),
     [
-        ("welcome_delivery", "_deliver_pending_welcome", 51),
-        ("invitation_delivery", "_deliver_pending_invitation", DELIVERY),
-        ("password_reset_delivery", "_deliver_pending_password_reset", DELIVERY),
+        ("admin_mail_action_service", "queue_welcome", "welcome"),
+        ("admin_account_invitation_service", "queue_email", "invitation/send"),
+        ("admin_mail_action_service", "queue_password_reset", "password-reset"),
     ],
 )
-def test_sync_delivery_callbacks_do_not_block_the_event_loop(
-    state_attribute, helper_name, argument
+def test_durable_mail_enqueue_does_not_block_the_event_loop(
+    service_name, method_name, path
 ):
-    from music_app.routes import admin_asgi
-
-    app = FastAPI()
+    app, _, _ = _app()
     callback_started = Event()
     heartbeat_ran = Event()
     release_callback = Event()
     observed = {}
 
-    def callback(_argument):
+    def callback(**kwargs):
+        assert kwargs["actor_session_id"] == 11
         callback_started.set()
         assert release_callback.wait(timeout=3.0)
+        return SimpleNamespace(accepted=True)
 
-    setattr(app.state, state_attribute, callback)
+    setattr(app.state, service_name, SimpleNamespace(**{method_name: callback}))
 
     def observe_heartbeat_then_release():
         assert callback_started.wait(timeout=3.0)
@@ -423,10 +424,12 @@ def test_sync_delivery_callbacks_do_not_block_the_event_loop(
     controller.start()
 
     async def exercise():
-        delivery_task = asyncio.create_task(getattr(admin_asgi, helper_name)(app, argument))
-        await asyncio.sleep(0)
+        request_task = asyncio.create_task(_request_async(
+            app, {}, path=f"/admin/accounts/41/{path}"
+        ))
+        assert await asyncio.to_thread(callback_started.wait, 3.0)
         heartbeat_ran.set()
-        await delivery_task
+        assert await request_task == (202, b'{"accepted":true}')
 
     try:
         asyncio.run(exercise())

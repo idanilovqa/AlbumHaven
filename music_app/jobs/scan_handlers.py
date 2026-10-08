@@ -555,6 +555,8 @@ def build_targeted_reconciliation_handler(
             return JobTransitionResult(JobState.CANCELED, "targeted_reconciliation_canceled")
         if getattr(result, "health", "") == "already_published":
             return JobTransitionResult(JobState.SUCCEEDED, "targeted_reconciliation_completed")
+        if getattr(result, "health", "") == "stable_write_unavailable":
+            return JobTransitionResult(JobState.FAILED, "targeted_stable_write_unavailable")
         if getattr(result, "health", "healthy") != "healthy":
             return JobTransitionResult(JobState.CANCELED, "targeted_root_invalid")
         invalidate(result)

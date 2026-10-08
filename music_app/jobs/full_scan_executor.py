@@ -181,12 +181,17 @@ class DurableFullScanExecutor:
                 getattr(scope, "separate_release_keys", ()) or ()
             ),
         )
+        inventory["scan_started_at"] = datetime.fromtimestamp(
+            library_state["scan_started_at"], timezone.utc
+        ).isoformat()
         result = self._scan_repository.publish_claimed_full_scan(
             claim=claim,
             intent_id=intent.intent_id,
             expected_inventory_mutation_revision=expected_revision,
             inventory=inventory,
-            observed_root_ids=tuple(root["id"] for root in root_definitions),
+            observed_root_ids=tuple(
+                publication_state.get("observed_library_root_ids") or ()
+            ),
             now=datetime.now(timezone.utc),
         )
         if result.get("publication_won") is not True:

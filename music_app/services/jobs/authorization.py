@@ -658,7 +658,16 @@ def _authorization_context_from_row(
     )
     client_surface_allowed = (
         claim.client_surface == "private_web" and origin_matches_surface
-    ) or server_owned_surface_allowed
+    ) or server_owned_surface_allowed or (
+        claim.kind == JobKind.AUTH_WELCOME_DELIVERY
+        and bootstrap_owner
+        and account_id is not None
+        and account_id == claim.account_id == origin_account_id
+        and origin_id == claim.request_origin_id
+        and origin_type == "system"
+        and claim.client_surface == "node"
+        and origin_matches_surface
+    )
     return JobAuthorizationContext(
         actor=actor,
         session_is_expired=True,

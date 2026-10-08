@@ -190,6 +190,10 @@ def test_live_cover_acceptance_is_atomic_path_free_restartable_and_revision_fenc
 ):
     setup_url, runtime_url = live_cover_database
     account_id, library_id, album_key, origin_key = _seed_cover_scope(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "delete from app.request_origins where account_id = %s", (account_id,),
+        )
     jobs = PostgresJobRepository(
         database_url=runtime_url,
         connect_to_database=isolatedPostgres._connect,
@@ -228,6 +232,7 @@ def test_live_cover_acceptance_is_atomic_path_free_restartable_and_revision_fenc
 
     assert repeated.task_id == accepted.task_id
     assert repeated.job_id == accepted.job_id
+    assert repeated.row_revision == accepted.row_revision
     restarted = PostgresCoverJobRepository(
         database_url=runtime_url,
         connect_to_database=isolatedPostgres._connect,
@@ -335,6 +340,7 @@ def test_live_claimed_cover_lookup_is_worker_scoped_cancelable_and_fenced(
     assert scope is not None
     assert scope.album["name"] == "Cover Album"
     assert len(scope.track_paths) == 1 and scope.track_paths[0].endswith("01.flac")
+
     assert scope.manual_urls == ("https://covers.example/manual.jpg",)
     running = worker_covers.publish_claimed_candidate_lookup(
         **claim_values,
@@ -504,6 +510,19 @@ def test_live_bulk_cover_refresh_is_restartable_worker_scoped_and_cancelable(
     }
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute(
+            "insert into ops.jobs (kind, subject_kind, subject_ref, parameters, "
+            "library_id, deployment_mode, client_surface, resource_revision, "
+            "idempotency_key, scheduled_at, max_attempts, recovery_policy) values "
+            "('post_scan_cover_refresh', 'inventory_revision', 'revision-12', "
+            "'{\"inventory_revision\":12}'::jsonb, %s, 'self_hosted_private_web', "
+            "'private_web', 12, %s, now(), 2, 'retry_safe')",
+            (library_id, f"post-scan-followup-{uuid4().hex}"),
+        )
+    assert app_covers.load_cover_refresh_status(library_id=library_id)[
+        "covers_in_progress"
+    ] is True
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
             "update ops.jobs set lease_expires_at = %s where id = %s",
             (requested_at, accepted.job_id),
         )
@@ -651,6 +670,21 @@ def test_live_remote_cover_save_accepts_candidate_and_fences_checkpoints(
     assert scope.selected_candidate["url"].startswith("https://covers.invalid/")
     assert len(scope.track_paths) == 1 and scope.track_paths[0].endswith("01.flac")
 
+    replay_values = dict(
+        task_key=task_key,
+        library_id=library_id,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        candidate_generation=generation,
+        candidate_id=candidate_id,
+        resource_revision=0,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+    during_send = app_covers.accept_remote_save(**replay_values)
+    assert during_send.row_revision == scope.task_revision
+
     revision = scope.checkpoint_revision
     for checkpoint in ("download_started", "artifact_written"):
         next_revision = worker_covers.checkpoint_claimed_remote_save(
@@ -697,3 +731,12 @@ def test_live_remote_cover_save_accepts_candidate_and_fences_checkpoints(
         ).fetchone()
     assert completed["status"] == "completed"
     assert completed["selected_cover_private_path"].endswith("cover.jpg")
+    finished_replay = app_covers.accept_remote_save(**replay_values)
+    assert finished_replay.job_id == accepted.job_id
+    with isolatedPostgres._connect(setup_url) as connection:
+        task = connection.execute(
+            "select status, row_revision from ops.cover_lookup_tasks where id = %s",
+            (accepted.task_id,),
+        ).fetchone()
+    assert task["status"] == "completed"
+    assert finished_replay.row_revision == task["row_revision"]

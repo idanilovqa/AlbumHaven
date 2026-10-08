@@ -238,6 +238,34 @@ def test_execution_matrix_is_closed_to_approved_private_web_contexts(
     assert context.client_surface_allowed is client_surface_allowed
 
 
+@pytest.mark.parametrize(
+    ("kind", "bootstrap_owner", "origin_type", "origin_account_id", "allowed"),
+    [
+        ("auth_welcome_delivery", True, "system", 7, True),
+        ("auth_welcome_delivery", False, "system", 7, False),
+        ("auth_welcome_delivery", True, "browser", 7, False),
+        ("auth_welcome_delivery", True, "system", 8, False),
+        ("auth_invitation_delivery", True, "system", 7, False),
+        ("full_scan", True, "system", 7, False),
+    ],
+)
+def test_node_surface_is_reserved_for_account_bound_bootstrap_welcome(
+    kind, bootstrap_owner, origin_type, origin_account_id, allowed
+):
+    repository, _, _ = _repository([_snapshot_row(
+        is_bootstrap_owner=bootstrap_owner,
+        request_origin_type=origin_type,
+        request_origin_surface="node",
+        request_origin_account_id=origin_account_id,
+    )])
+
+    context = repository.load_authorization_context(
+        _claim(kind=kind, client_surface="node"), NOW
+    )
+
+    assert context.client_surface_allowed is allowed
+
+
 def test_common_resource_and_lifecycle_state_defaults_closed_for_kind_validators():
     repository, _, _ = _repository([_snapshot_row()])
 

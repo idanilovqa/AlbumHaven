@@ -327,6 +327,12 @@ begin
      and album.album_key = affected.album_key
     order by album.id
   loop
+    if not exists (
+      select 1 from library.local_albums
+       where id = destination_row.id and library_id = claimed_library_id
+    ) then
+      continue;
+    end if;
     retired_count := retired_count
       + library.retire_vacated_structural_album_siblings(
           claimed_library_id,

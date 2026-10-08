@@ -43,13 +43,10 @@ begin
     raise exception 'cover lookup album/root scope is missing or ambiguous';
   end if;
 
-  select origin.id into resolved_origin_id
-    from app.request_origins as origin
-   where origin.origin_type = requested_origin_type
-     and origin.origin_key = requested_origin_key
-     and origin.client_surface_class = requested_client_surface
-     and origin.account_id = requested_account_id
-   order by origin.id desc limit 1;
+  resolved_origin_id := app.ensure_job_request_origin(
+    requested_account_id, requested_client_surface,
+    requested_origin_type, requested_origin_key, requested_at
+  );
   if resolved_origin_id is null then
     raise exception 'cover lookup request origin is unavailable';
   end if;
@@ -773,13 +770,10 @@ begin
   if resolved_album_id is null or resolved_root_id is null then
     return;
   end if;
-  select origin.id into resolved_origin_id
-    from app.request_origins as origin
-   where origin.account_id = requested_account_id
-     and origin.origin_type = requested_origin_type
-     and origin.origin_key = requested_origin_key
-     and origin.client_surface_class = requested_client_surface
-   order by origin.id desc limit 1;
+  resolved_origin_id := app.ensure_job_request_origin(
+    requested_account_id, requested_client_surface,
+    requested_origin_type, requested_origin_key, recorded_at
+  );
   if resolved_origin_id is null then
     return;
   end if;

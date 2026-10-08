@@ -191,9 +191,11 @@ def _request_origin(request: Request) -> RequestOrigin:
     version = hmac_config.get("key_version") if isinstance(hmac_config, Mapping) else None
     if not isinstance(secret, str) or len(secret.encode("utf-8")) < 32:
         raise RuntimeError("Policy request-origin key configuration is invalid.")
+    actor = getattr(request.state, "current_actor", None)
+    account_id = getattr(actor, "account_id", None)
     digest = hmac.new(
         secret.encode("utf-8"),
-        f"policy-origin\0{peer}".encode("utf-8"),
+        f"policy-origin\0{account_id}\0{peer}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
     return RequestOrigin("network", f"hmac:v{int(version or 1)}:{digest}")

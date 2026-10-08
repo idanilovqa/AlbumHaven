@@ -60,7 +60,7 @@ def _drop_schemas(setup_url: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def live_auth_mail_database():
+def _live_auth_mail_schema():
     setup_url, runtime_url = _database_urls_or_skip()
     try:
         _drop_schemas(setup_url)
@@ -68,6 +68,17 @@ def live_auth_mail_database():
         yield setup_url, runtime_url
     finally:
         _drop_schemas(setup_url)
+
+
+@pytest.fixture
+def live_auth_mail_database(_live_auth_mail_schema):
+    setup_url, runtime_url = _live_auth_mail_schema
+    isolatedPostgres.reset_application_tables(setup_url)
+    isolatedPostgres.seed_bootstrap_owner_and_library(setup_url)
+    try:
+        yield setup_url, runtime_url
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
 
 
 def _seed_scope(setup_url: str) -> tuple[int, int, str]:
@@ -562,18 +573,6 @@ def test_live_worker_claim_is_exact_secret_scoped_and_role_denied(
         lease_seconds=120,
         kinds=("auth_password_reset_delivery",),
     )
-    while claim is not None and claim.job_id != accepted.job_id:
-        assert jobs.finish(
-            claim,
-            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
-            now=now + timedelta(seconds=2),
-        )
-        claim = jobs.claim(
-            worker_id="auth-mail-live",
-            now=now + timedelta(seconds=3),
-            lease_seconds=120,
-            kinds=("auth_password_reset_delivery",),
-        )
     assert claim is not None and claim.job_id == accepted.job_id
     worker_repository = _repository(worker_url)
     fence = dict(
@@ -737,18 +736,6 @@ def test_live_public_reset_requires_persisted_throttle_lifecycle(
         lease_seconds=120,
         kinds=("auth_password_reset_delivery",),
     )
-    while claim is not None and claim.job_id != accepted.job_id:
-        assert jobs.finish(
-            claim,
-            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
-            now=now + timedelta(seconds=2),
-        )
-        claim = jobs.claim(
-            worker_id="public-auth-mail-live",
-            now=now + timedelta(seconds=3),
-            lease_seconds=120,
-            kinds=("auth_password_reset_delivery",),
-        )
     assert claim is not None and claim.job_id == accepted.job_id
     worker_repository = _repository(worker_url)
     fence = dict(
@@ -815,18 +802,6 @@ def test_live_welcome_send_checkpoint_schedules_exact_next_domain_job(
         lease_seconds=120,
         kinds=("auth_welcome_delivery",),
     )
-    while claim is not None and claim.job_id != accepted.job_id:
-        assert jobs.finish(
-            claim,
-            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
-            now=now + timedelta(seconds=2),
-        )
-        claim = jobs.claim(
-            worker_id="welcome-mail-live",
-            now=now + timedelta(seconds=3),
-            lease_seconds=120,
-            kinds=("auth_welcome_delivery",),
-        )
     assert claim is not None and claim.job_id == accepted.job_id
     worker_repository = _repository(worker_url)
     values = dict(

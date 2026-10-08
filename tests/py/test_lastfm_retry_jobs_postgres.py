@@ -45,6 +45,8 @@ class _Connection:
 
     def execute(self, sql, parameters=None):
         self.executed.append((" ".join(str(sql).casefold().split()), parameters))
+        if "app.ensure_job_request_origin" in sql:
+            return _Result()
         return _Result(self.rows.pop(0) if self.rows else None)
 
 

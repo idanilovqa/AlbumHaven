@@ -436,6 +436,27 @@ def test_live_durable_worker_startup_preflight_accepts_worker_and_rejects_missin
 
         assert worker_result["valid"] is True
         assert denied_result["valid"] is False
+        for table, privilege in (
+            ("ops.job_transitions", "INSERT"),
+            ("ops.worker_instances", "INSERT"),
+            ("ops.worker_instances", "UPDATE"),
+        ):
+            try:
+                with isolatedPostgres._connect(setup_url) as connection:
+                    connection.execute(
+                        f"revoke {privilege} on {table} from album_haven_worker"
+                    )
+                with isolatedPostgres._connect(worker_url) as connection:
+                    result = connection.execute(
+                        "select ops.validate_durable_worker_startup(%s::text[]) as valid",
+                        (registered_kinds,),
+                    ).fetchone()
+                assert result["valid"] is False, (table, privilege)
+            finally:
+                with isolatedPostgres._connect(setup_url) as connection:
+                    connection.execute(
+                        f"grant {privilege} on {table} to album_haven_worker"
+                    )
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True
     finally:

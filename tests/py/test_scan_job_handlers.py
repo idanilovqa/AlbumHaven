@@ -221,6 +221,68 @@ def test_handler_reloads_private_intent_and_current_roots_before_publication():
     assert outcome.reason_code == "targeted_reconciliation_completed"
 
 
+@pytest.mark.parametrize("method", [
+    "load_claimed_targeted_reconciliation",
+    "load_claimed_targeted_reconciliation_scope",
+    "load_claimed_targeted_reconciliation_preparation",
+])
+def test_targeted_storage_failure_reports_failure_for_atomic_root_health(method):
+    import psycopg
+
+    repository = _ScanRepository()
+
+    def unavailable(**_kwargs):
+        raise psycopg.OperationalError("private connection failure")
+
+    setattr(repository, method, unavailable)
+    reconciler = _Reconciler()
+    outcome = _handler(repository, reconciler, [])(_claim(), _Context())
+    assert outcome == JobTransitionResult(JobState.FAILED, "targeted_reconciliation_failed")
+    assert reconciler.requests == []
+
+
+def test_targeted_validator_distinguishes_unavailable_storage_from_invalid_scope():
+    import psycopg
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_resource_validator
+
+    def unavailable(**_kwargs):
+        raise psycopg.OperationalError("private connection failure")
+
+    repository = SimpleNamespace(load_claimed_targeted_reconciliation_scope=unavailable)
+    decision = build_targeted_reconciliation_resource_validator(
+        scan_repository=repository,
+    )(_claim(), None, NOW)
+    assert not decision.allowed
+    assert decision.reason_code == "authorization_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("health", "expected_state", "reason"),
+    (
+        ("stable_write_unavailable", JobState.FAILED, "targeted_stable_write_unavailable"),
+        ("healthy", JobState.SUCCEEDED, "targeted_reconciliation_completed"),
+        ("cancelled", JobState.CANCELED, "targeted_root_invalid"),
+        (None, JobState.CANCELED, "targeted_root_invalid"),
+        ("error", JobState.FAILED, "targeted_reconciliation_failed"),
+    ),
+)
+def test_targeted_handler_preserves_health_reason_for_atomic_job_finalization(
+    health, expected_state, reason,
+):
+    def reconcile(_request, **_kwargs):
+        if health == "error":
+            raise OSError("private filesystem failure")
+        return SimpleNamespace(health=health)
+
+    invalidated = []
+    outcome = _handler(
+        _ScanRepository(), SimpleNamespace(reconcile=reconcile), invalidated,
+    )(_claim(), _Context())
+
+    assert outcome == JobTransitionResult(expected_state, reason)
+    assert bool(invalidated) is (health == "healthy")
+
+
 @pytest.mark.parametrize(
     ("roots", "healthy", "reason"),
     (

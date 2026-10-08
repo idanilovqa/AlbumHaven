@@ -241,6 +241,7 @@ def test_job_enqueue_failure_rolls_back_admin_outbox_and_audit():
     with pytest.raises(RuntimeError, match="could not be queued"):
         _service(connection, Jobs(fail=True)).queue_welcome(
             actor_account_id=7, actor_authenticated_at=NOW, library_id=9,
+            actor_session_id=11,
             target_account_id=41, request_ref="welcome-enqueue-failure",
         )
     assert connection.events == ["begin", "rollback"]

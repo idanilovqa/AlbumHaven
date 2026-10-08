@@ -145,6 +145,7 @@ function Get-Contract {
             ALBUM_HAVEN_WORKER_DATABASE_URL = $workerUrl
             ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL = $migratorUrl
             ALBUM_HAVEN_FAKE_E2E_DATABASE_URL = $appUrl
+            ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL = $workerUrl
             ALBUM_HAVEN_APP_DATABASE_URL = $appUrl
         }
         fixtureLoad = [ordered]@{

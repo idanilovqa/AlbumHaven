@@ -1303,7 +1303,7 @@ def test_structural_tag_edit_save_task_completes_only_after_targeted_commit(tmp_
         assert save_task_result(task_id)["status"] != "completed"
         assert kwargs["changed_paths"] == {"track-1.mp3"}
         assert kwargs["changed_field_names"] == {"album"}
-        return {"album_rows_updated": 1}
+        return {"album_rows_updated": 1, "inventory_mutation_revision": 41}
 
     def find_canonical_albums(_paths):
         events.append("canonical-albums")
@@ -1343,6 +1343,7 @@ def test_structural_tag_edit_save_task_completes_only_after_targeted_commit(tmp_
     assert state["file_cache"]["track-1.mp3"]["album"] == "New Album"
     terminal_task = save_task_result(task_id)
     assert terminal_task["status"] == "completed"
+    assert terminal_task["inventory_mutation_revision"] == 41
     assert terminal_task["updated_albums"] == [
         {"key": "canonical-new-album", "name": "New Album"}
     ]

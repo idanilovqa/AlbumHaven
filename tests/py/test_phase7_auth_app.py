@@ -8,6 +8,91 @@ import sys
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _stub_durable_worker(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    monkeypatch.setattr(launcher, "build_isolated_jobs_worker",
+        lambda _url: SimpleNamespace(start=lambda: None, stop=lambda: None), raising=False)
+
+
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_phase7_durable_worker_quiesces_for_reset_and_before_database_cleanup(
+    tmp_path, monkeypatch, stop_fails,
+):
+    from types import SimpleNamespace
+    import music_app
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    temp_root = tmp_path / "phase7"
+    temp_root.mkdir()
+    events, states = [], []
+
+    class Lock:
+        def __init__(self, **_kwargs): pass
+        def acquire(self): events.append("acquire")
+        def release(self): events.append("release")
+
+    class CaptureServer:
+        def __init__(self, _address, state): states.append(state)
+        def begin_shutdown(self): pass
+        def shutdown(self): pass
+        def server_close(self): pass
+        def drain_requests(self, _timeout):
+            events.append("capture-drained")
+            return True
+
+    class Worker:
+        def __init__(self, number): self.number = number
+        def start(self): events.append(f"start-{self.number}")
+        def stop(self):
+            events.append(f"stop-{self.number}")
+            if stop_fails:
+                raise RuntimeError("worker shutdown unproven")
+
+    workers = []
+    def build_worker(url):
+        assert url == "isolated-runtime"
+        worker = Worker(len(workers) + 1)
+        workers.append(worker)
+        return worker
+
+    def run(*_args, **_kwargs):
+        events.append("app-run")
+        if not stop_fails:
+            states[0].reset_fixture()
+            events.append("reset-complete")
+
+    monkeypatch.setattr(sys, "argv", ["phase7AuthApp.py", "--port", "0", "--smtp-port", "0", "--control-port", "0"])
+    monkeypatch.setattr(launcher, "resolve_isolated_database_urls", lambda: ("isolated-setup", "isolated-runtime"))
+    monkeypatch.setattr(launcher.tempfile, "mkdtemp", lambda **_kwargs: str(temp_root))
+    monkeypatch.setattr(launcher, "IsolatedDatabaseOwnershipLock", Lock)
+    for name in ("_SMTPServer", "_ControlServer"):
+        monkeypatch.setattr(launcher, name, CaptureServer)
+    for name in ("_configure_environment", "prepare_isolated_database", "_bootstrap_owner", "persist_settings_playback_inventory", "_start_thread"):
+        monkeypatch.setattr(launcher, name, lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "build_isolated_jobs_worker", build_worker, raising=False)
+    monkeypatch.setattr(launcher, "seed_bootstrap_owner_and_library", lambda _url: events.append("seed"))
+    monkeypatch.setattr(launcher, "reset_application_tables", lambda _url: events.append("reset"))
+    monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=run))
+
+    if stop_fails:
+        with pytest.raises(RuntimeError, match="shutdown"):
+            launcher.main()
+        assert "reset" not in events and "release" not in events
+        assert temp_root.exists()
+    else:
+        launcher.main()
+        assert events == ["acquire", "start-1", "app-run", "stop-1", "reset", "seed",
+            "start-2", "reset-complete", "capture-drained", "capture-drained", "stop-2",
+            "reset", "release"]
+        assert not temp_root.exists()
+
+
 @pytest.mark.parametrize("failure_point", ["acquire", "interrupted_acquire", "control_bind", "configure"])
 def test_phase7_startup_failure_cleans_only_owned_database_and_closes_bound_servers(
     tmp_path, monkeypatch, failure_point

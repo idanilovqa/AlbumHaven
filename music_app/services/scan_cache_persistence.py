@@ -311,6 +311,12 @@ class PostgresScanCacheAdapter:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
 
+    def load_inventory_publication(self) -> dict[str, object]:
+        with self._connect_to_database() as connection:
+            _ensure_bootstrap_context(connection)
+            row = _first_row(connection.execute(_load_inventory_mutation_revision_sql()))
+        return _row_mapping(row) if row is not None else {}
+
     def prepare_full_scan_inventory(
         self,
         file_cache: dict[str, dict[str, object]],
@@ -2917,7 +2923,8 @@ def _load_inventory_mutation_revision_sql() -> str:
         select coalesce(
           nullif(library.libraries.metadata ->> 'inventory_mutation_revision', '')::bigint,
           0
-        ) as inventory_mutation_revision
+        ) as inventory_mutation_revision,
+        library.libraries.metadata -> 'manual_scan_recovery' as manual_scan_recovery
         from library.libraries
         join bootstrap_context on bootstrap_context.library_id = library.libraries.id
         limit 1;

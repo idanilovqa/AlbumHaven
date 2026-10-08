@@ -78,8 +78,11 @@ begin
   end if;
 
   if not has_table_privilege(session_user, 'ops.jobs', 'SELECT')
-     or not has_table_privilege(session_user, 'ops.job_transitions', 'SELECT,INSERT')
-     or not has_table_privilege(session_user, 'ops.worker_instances', 'SELECT,INSERT,UPDATE')
+     or not has_table_privilege(session_user, 'ops.job_transitions', 'SELECT')
+     or not has_table_privilege(session_user, 'ops.job_transitions', 'INSERT')
+     or not has_table_privilege(session_user, 'ops.worker_instances', 'SELECT')
+     or not has_table_privilege(session_user, 'ops.worker_instances', 'INSERT')
+     or not has_table_privilege(session_user, 'ops.worker_instances', 'UPDATE')
      or not has_sequence_privilege(
        session_user, 'ops.job_transitions_id_seq', 'USAGE'
      )

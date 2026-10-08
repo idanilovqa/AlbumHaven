@@ -370,6 +370,39 @@ def test_authorization_denial_cancels_without_dispatch():
     )
 
 
+@pytest.mark.parametrize("attempt,expected", [(1, JobState.RETRY_WAIT), (2, JobState.FAILED)])
+def test_authorization_storage_failure_is_bounded_without_dispatch(attempt, expected):
+    from dataclasses import replace
+
+    claimed = replace(claim(), attempt=attempt)
+    repository = Repository([claimed])
+    dispatched = []
+    worker(
+        repository,
+        authorization=Authorization(AuthorizationDecision(False, "authorization_unavailable")),
+        handlers=registry(lambda *_: dispatched.append(True)),
+    ).run_once()
+
+    outcome = repository.finishes[0][1]
+    assert outcome.next_state is expected
+    assert outcome.reason_code == "authorization_unavailable"
+    assert (outcome.scheduled_at is not None) is (expected is JobState.RETRY_WAIT)
+    assert dispatched == []
+
+
+def test_reauthorization_storage_failure_does_not_permanently_cancel_safe_work():
+    repository = Repository([claim()])
+    authorization = Authorization()
+
+    def handler(_claim, context):
+        authorization.decision = AuthorizationDecision(False, "authorization_unavailable")
+        assert not context.reauthorize().allowed
+        return JobTransitionResult(JobState.CANCELED, "full_scan_canceled")
+
+    worker(repository, authorization=authorization, handlers=registry(handler)).run_once()
+    assert repository.finishes[0][1].next_state is JobState.RETRY_WAIT
+
+
 @pytest.mark.parametrize(
     "outcome",
     [

@@ -656,74 +656,38 @@ def test_reconciliation_admission_overflow_blocks_destructive_work_until_manual_
     assert service.root_allows_destructive_reconciliation("main-root") is True
 
 
-@pytest.mark.parametrize("reconciliation_health", ["stable_write_unavailable", "healthy", "cancelled", None])
-def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher_health(
-    monkeypatch, reconciliation_health,
-):
-    import music_app
-    from types import SimpleNamespace
+def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monkeypatch):
     from music_app import create_asgi_app
     from music_app.services import (
-        lastfm_retry,
-        exception_overrides,
-        library_event_coordinator,
-        library_reconciliation,
-        library_roots,
-        library_watch_health,
-        runtime_shutdown,
-        scan_cache_persistence,
-        state,
-        targeted_library_reconciliation,
+        library_event_coordinator, library_reconciliation, library_roots,
+        library_watch_health, log_history, runtime_shutdown, scan_jobs_postgres, state,
     )
 
-    callbacks = {}
-    recorded = []
-    reconciled = []
+    callbacks, enqueued = {}, []
+    health = _health_module()
+    connection = _HealthConnection()
+    service = health.LibraryWatchHealthService(
+        health.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _url: connection,
+        )
+    )
 
-    class HealthService:
-        def __init__(self, _store):
-            self._unhealthy_roots = set()
+    class Repository:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://health-test"
 
-        def record_problem(self, problem):
-            recorded.append(problem)
-            self._unhealthy_roots.add(problem.root_id)
-            return True
+        def resolve_local_library_id(self):
+            return 19
 
-        def root_allows_destructive_reconciliation(self, root_id):
-            return root_id not in self._unhealthy_roots
+        def enqueue_targeted_reconciliation(self, **values):
+            if values["request"].root_id == "failed-root":
+                raise RuntimeError("database temporarily unavailable")
+            enqueued.append(values)
 
-        def publication_guard(self, _connection, _root_ids):
-            from contextlib import nullcontext
-            return nullcontext()
-
-    class CompletedFuture:
-        def __init__(self, result=None, error=None):
-            self._result = result
-            self._error = error
-
-        def result(self):
-            if self._error is not None:
-                raise self._error
-            return self._result
-
-        def add_done_callback(self, callback):
-            callback(self)
-
-    class InlineExecutor:
-        def submit(self, function, *args):
-            if args[0].root_id == "overflow-source":
-                return None
-            try:
-                return CompletedFuture(result=function(*args))
-            except Exception as exc:
-                return CompletedFuture(error=exc)
-
-        def shutdown(self, **_kwargs):
-            return None
-
-    class CapturingCoordinator:
-        def __init__(self, **kwargs):
-            callbacks.update(kwargs)
+    class Coordinator:
+        def __init__(self, **values):
+            callbacks.update(values)
 
         def accept(self, _event):
             return True
@@ -741,206 +705,70 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         def stop(self):
             return True
 
-        def replace_roots(self, _roots):
-            if any(root.get("id") == "attach-failed" for root in _roots):
+        def replace_roots(self, roots):
+            if any(root.get("id") == "attach-failed" for root in roots):
                 raise OSError("watch attachment unavailable")
-            return None
 
-    class TargetedReconciler:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def reconcile(self, request, *, root_healthy):
-            if request.root_id == "failed-root":
-                raise RuntimeError("database temporarily unavailable")
-            reconciled.append((request.root_id, root_healthy))
-            if request.root_id == "sampling-source":
-                return SimpleNamespace(health=reconciliation_health)
-            return root_healthy
-
-        def replace_roots(self, _roots):
-            return None
-
-        def stop(self):
-            return None
-
-    class ScanCacheRepository:
-        backend = "postgres"
-
-    monkeypatch.setattr(
-        library_watch_health,
-        "LibraryWatchHealthService",
-        HealthService,
-    )
-    monkeypatch.setattr(
-        library_event_coordinator,
-        "LibraryEventCoordinator",
-        CapturingCoordinator,
-    )
+    monkeypatch.setattr(library_watch_health, "LibraryWatchHealthService", lambda _store: service)
+    monkeypatch.setattr(scan_jobs_postgres, "PostgresScanJobRepository", Repository)
+    monkeypatch.setattr(library_event_coordinator, "LibraryEventCoordinator", Coordinator)
     monkeypatch.setattr(library_reconciliation, "LibraryWatchService", WatchService)
-    monkeypatch.setattr(
-        library_reconciliation,
-        "WatchdogLibraryEventSource",
-        lambda _roots: object(),
-    )
-    monkeypatch.setattr(
-        targeted_library_reconciliation,
-        "TargetedLibraryReconciler",
-        TargetedReconciler,
-    )
-    monkeypatch.setattr(
-        library_roots,
-        "get_library_roots",
-        lambda _config: ({"id": "main-root", "path": "C:/Music"},),
-    )
-    monkeypatch.setattr(
-        scan_cache_persistence,
-        "select_scan_cache_adapter",
-        lambda _config: ScanCacheRepository(),
-    )
-    monkeypatch.setattr(
-        exception_overrides,
-        "load_exception_overrides",
-        lambda _config: {},
-    )
-    monkeypatch.setattr(
-        state,
-        "hydrate_runtime_library_state_on_startup",
-        lambda _runtime: True,
-    )
-    monkeypatch.setattr(
-        state,
-        "ensure_runtime_relation_projection_ready",
-        lambda _runtime: None,
-    )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
-    monkeypatch.setattr(
-        runtime_shutdown,
-        "request_runtime_shutdown",
-        lambda _runtime: True,
-    )
-    monkeypatch.setattr(
-        runtime_shutdown,
-        "create_daemon_executor",
-        lambda **_kwargs: InlineExecutor(),
-    )
-    monkeypatch.setattr(
-        music_app,
-        "_BoundedExecutorAdmission",
-        lambda executor, **_kwargs: executor,
-    )
+    monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", lambda _roots: object())
+    monkeypatch.setattr(library_roots, "get_library_roots", lambda _config: ())
+    monkeypatch.setattr(log_history, "resolve_media_host_history_scope", lambda _config: None)
+    monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
+    monkeypatch.setattr(state, "ensure_runtime_relation_projection_ready", lambda _runtime: None)
+    monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: True)
 
     app = create_asgi_app()
-    problem = library_event_coordinator.CoordinatorProblem(
-        "stable_write_unavailable",
-        "main-root",
-    )
-    destination_problem = library_event_coordinator.CoordinatorProblem(
-        "stable_write_unavailable",
-        "destination-root",
+    app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://health-test"
+    request = library_event_coordinator.TargetedReconciliationRequest(
+        root_id="main-root", producer_request_key="watch-batch-1",
+        moves=(library_event_coordinator.TargetedMove(
+            source=Path("C:/Source/01.flac"),
+            destination=Path("C:/Destination/01.flac"),
+            source_root_id="main-root", destination_root_id="destination-root",
+        ),),
     )
 
-    async def exercise_problem_callback():
+    async def exercise_callbacks():
         async with app.router.lifespan_context(app):
-            with pytest.raises(OSError):
-                app.state.replace_library_watch_roots([{"id": "attach-failed", "path": "C:/Unattached"}])
-            assert recorded[-1].root_id == "attach-failed"
-            assert recorded[-1].code == "reconciliation_failed"
-            recorded.clear()
-            callbacks["emit_problem"](problem)
-            callbacks["emit_problem"](destination_problem)
-            callbacks["emit_request"](
-                library_event_coordinator.TargetedReconciliationRequest(
-                    root_id="main-root"
+            with pytest.raises(OSError, match="attachment"):
+                app.state.replace_library_watch_roots([
+                    {"id": "attach-failed", "path": "C:/Unattached"},
+                ])
+            for root_id in ("main-root", "destination-root"):
+                callbacks["emit_problem"](
+                    library_event_coordinator.CoordinatorProblem("stable_write_unavailable", root_id)
                 )
+            callbacks["emit_problem"](
+                library_event_coordinator.CoordinatorProblem("overflow", "overflow-root")
             )
-            callbacks["emit_request"](
-                library_event_coordinator.TargetedReconciliationRequest(
-                    root_id="healthy-source",
-                    moves=(
-                        library_event_coordinator.TargetedMove(
-                            source=Path("C:/Source/replacement.tmp"),
-                            destination=Path("C:/Destination/01.flac"),
-                            source_root_id="healthy-source",
-                            destination_root_id="destination-root",
-                        ),
-                    ),
+            callbacks["emit_request"](request)
+            # Admission failures propagate to the coordinator, which retains the
+            # batch for retry; the app must not report successful acceptance.
+            with pytest.raises(RuntimeError, match="temporarily unavailable"):
+                callbacks["emit_request"](
+                    library_event_coordinator.TargetedReconciliationRequest(root_id="failed-root")
                 )
-            )
-            callbacks["emit_request"](
-                library_event_coordinator.TargetedReconciliationRequest(
-                    root_id="failed-root",
-                    moves=(
-                        library_event_coordinator.TargetedMove(
-                            source=Path("C:/Failed/replacement.tmp"),
-                            destination=Path("C:/Failed Destination/01.flac"),
-                            source_root_id="failed-root",
-                            destination_root_id="failed-destination-root",
-                        ),
-                    ),
-                )
-            )
-            callbacks["emit_request"](
-                library_event_coordinator.TargetedReconciliationRequest(
-                    root_id="overflow-source",
-                    moves=(
-                        library_event_coordinator.TargetedMove(
-                            source=Path("C:/Overflow/replacement.tmp"),
-                            destination=Path("C:/Overflow Destination/01.flac"),
-                            source_root_id="overflow-source",
-                            destination_root_id="overflow-destination-root",
-                        ),
-                    ),
-                )
-            )
-            callbacks["emit_request"](
-                library_event_coordinator.TargetedReconciliationRequest(
-                    root_id="sampling-source",
-                    moves=(library_event_coordinator.TargetedMove(
-                        source=Path("C:/Sampling Source/01.flac"),
-                        destination=Path("C:/Sampling Destination/01.flac"),
-                        source_root_id="sampling-source",
-                        destination_root_id="sampling-destination",
-                    ),),
-                )
-            )
-            callbacks["emit_request"](
-                library_event_coordinator.TargetedReconciliationRequest(
-                    root_id="sampling-destination",
-                )
-            )
 
-    asyncio.run(exercise_problem_callback())
+    asyncio.run(exercise_callbacks())
 
-    assert recorded[0] == problem
-    assert reconciled == [
-        ("main-root", False),
-        ("healthy-source", False),
-        ("sampling-source", True),
-        ("sampling-destination", reconciliation_health != "stable_write_unavailable"),
-    ]
-    assert {
-        item.root_id for item in recorded
-        if item.root_id.startswith("sampling-") and item.code == "stable_write_unavailable"
-    } == (
-        {"sampling-source", "sampling-destination"}
-        if reconciliation_health == "stable_write_unavailable" else set()
-    )
-    assert any(
-        item.root_id == "failed-root" and item.code == "reconciliation_failed"
-        for item in recorded
-    )
-    assert any(
-        item.root_id == "failed-destination-root"
-        and item.code == "reconciliation_failed"
-        for item in recorded
-    )
-    assert {
-        item.root_id
-        for item in recorded
-        if item.code == "overflow"
-    } == {"overflow-source", "overflow-destination-root"}
+    assert {(problem.root_id, problem.state) for problem in service.load_problems()} == {
+        ("attach-failed", "reconciliation_failed"),
+        ("main-root", "stable_write_unavailable"),
+        ("destination-root", "stable_write_unavailable"),
+        ("overflow-root", "overflow"),
+    }
+    assert service.root_allows_destructive_reconciliation("main-root") is False
+    assert len(enqueued) == 1
+    accepted = enqueued[0]
+    assert accepted["request"] is request
+    assert accepted["library_id"] == 19
+    assert accepted["producer_request_key"] == "watch-batch-1"
+    assert accepted["deployment_mode"] == "self_hosted_private_web"
+    assert accepted["client_surface"] == "library_watcher"
+    assert accepted["scheduled_at"].utcoffset() is not None
 
 
 def test_manual_recovery_does_not_clear_health_detected_after_scan_started():

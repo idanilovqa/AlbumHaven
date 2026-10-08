@@ -386,8 +386,8 @@ as $$
      limit 1
   )
   select
-    coalesce(active_refresh.covers_in_progress,
-             pending_follow_up.covers_in_progress, false),
+    coalesce(active_refresh.covers_in_progress, false)
+      or coalesce(pending_follow_up.covers_in_progress, false),
     coalesce(active_refresh.covers_processed, 0),
     coalesce(active_refresh.covers_total, 0),
     coalesce(active_refresh.covers_downloaded, 0),

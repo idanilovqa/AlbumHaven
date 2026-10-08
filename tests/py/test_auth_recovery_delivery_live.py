@@ -32,7 +32,9 @@ def _reset_service(fixture, clock, *, connect=None):
 
 def _request(service, candidate="auth.race", source="198.51.100.14"):
     return service.request_reset(candidate=candidate, source_key=source,
-        request_ref="recovery-live", source_class="public")
+        request_ref="recovery-live", source_class="public",
+        request_origin_ref="browser:recovery-live",
+        deployment_mode="self_hosted_private_web")
 
 
 def _delivery_snapshot(fixture):
@@ -49,7 +51,7 @@ def test_live_reset_reservation_retains_expired_bucket_against_cleanup(auth_lock
     _seed_credential(fixture)
     clock = [fixture.now]
     service = _reset_service(fixture, clock)
-    assert _request(service).delivery is not None
+    assert _request(service).accepted_job is not None
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         connection.execute("""update app.auth_throttles
             set window_started_at = %s, window_expires_at = %s, failure_count = 4
@@ -68,7 +70,7 @@ def test_live_reset_reservation_retains_expired_bucket_against_cleanup(auth_lock
 
     result = _request(_reset_service(fixture, clock,
         connect=lambda url: AfterConflict(isolatedPostgres._connect(url))))
-    assert result.accepted and result.delivery is not None
+    assert result.accepted and result.accepted_job is not None
     assert cleaned == [0], "The actual cleanup must skip the reserved conflicting row"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         rows = connection.execute("select bucket_kind, window_started_at, failure_count from app.auth_throttles").fetchall()
@@ -87,22 +89,22 @@ def test_live_reset_limits_are_independent_and_roll_over_without_losing_pending_
     if kind == "reset_candidate":
         # No credential exists yet, so these charge no account budget.
         for index in range(5):
-            assert _request(service, source=f"198.51.100.{index + 1}").delivery is None
+            assert _request(service, source=f"198.51.100.{index + 1}").accepted_job is None
         _seed_credential(fixture)
-        assert _request(service, "auth.race@example.test", "203.0.113.2").delivery is not None
+        assert _request(service, "auth.race@example.test", "203.0.113.2").accepted_job is not None
     else:
         _seed_credential(fixture)
-        assert _request(service, "auth.race@example.test", "203.0.113.2").delivery is not None
+        assert _request(service, "auth.race@example.test", "203.0.113.2").accepted_job is not None
         if kind == "reset_source":
             for index in range(20):
-                assert _request(service, f"absent-{index}").delivery is None
+                assert _request(service, f"absent-{index}").accepted_job is None
         else:
             for index in range(4):
                 candidate = "auth.race" if index % 2 == 0 else "auth.race@example.test"
-                assert _request(service, candidate, f"203.0.113.{index + 3}").delivery is not None
+                assert _request(service, candidate, f"203.0.113.{index + 3}").accepted_job is not None
     before = _delivery_snapshot(fixture)
     result = _request(service)
-    assert result.accepted and result.delivery is None
+    assert result.accepted and result.accepted_job is None
     assert _delivery_snapshot(fixture) == before, "Blocked recovery must not revoke or issue anything"
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         # Keep all other buckets current across the tested bucket's boundary.
@@ -112,7 +114,7 @@ def test_live_reset_limits_are_independent_and_roll_over_without_losing_pending_
         current = connection.execute("select id, failure_count, window_started_at from app.auth_throttles where bucket_kind <> %s", (kind,)).fetchall()
     clock[0] = fixture.now + timedelta(hours=1)
     result = _request(service)
-    assert result.accepted and result.delivery is not None
+    assert result.accepted and result.accepted_job is not None
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         refreshed = connection.execute("""select failure_count, window_started_at from app.auth_throttles
             where bucket_kind = %s and window_started_at = %s""", (kind, clock[0])).fetchall()

@@ -12,6 +12,55 @@ from music_app.services import state as state_module
 from tests.py.runtime_testing import configure_test_app_paths
 
 
+@pytest.mark.parametrize("first_recovery_fails", [False, True])
+def test_durable_manual_scan_recovery_retries_then_applies_once(monkeypatch, first_recovery_fails):
+    marker = {
+        "inventory_mutation_revision": 41,
+        "scan_started_at": "2026-09-24T10:00:00+00:00",
+        "observed_root_ids": ["root-a"],
+    }
+    adapter = SimpleNamespace(
+        load_inventory_mutation_revision=lambda: 41,
+        load_inventory_publication=lambda: {
+            "inventory_mutation_revision": 41,
+            "manual_scan_recovery": marker,
+        },
+    )
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    calls = []
+
+    def recover(**values):
+        calls.append(values)
+        if first_recovery_fails and len(calls) == 1:
+            raise RuntimeError("watcher replacement failed")
+
+    library_state = {"inventory_mutation_revision": 41}
+    config = {"_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK": recover}
+    for _ in range(3):
+        assert state_module.sync_durable_inventory_revision(library_state, config) == 41
+
+    assert len(calls) == (2 if first_recovery_fails else 1)
+    assert calls[-1] == {
+        "scan_mode": "manual_full_rescan",
+        "scan_started_at": marker["scan_started_at"],
+        "observed_root_ids": ["root-a"],
+    }
+
+
+def test_durable_inventory_without_manual_recovery_does_not_restart_watcher(monkeypatch):
+    adapter = SimpleNamespace(
+        load_inventory_mutation_revision=lambda: 41,
+        load_inventory_publication=lambda: {"inventory_mutation_revision": 41},
+    )
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    calls = []
+    state_module.sync_durable_inventory_revision(
+        {"inventory_mutation_revision": 41},
+        {"_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK": lambda **values: calls.append(values)},
+    )
+    assert calls == []
+
+
 class _LoggerStub:
     def __init__(self) -> None:
         self.handlers = []

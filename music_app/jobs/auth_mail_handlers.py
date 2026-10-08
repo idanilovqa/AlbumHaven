@@ -110,26 +110,26 @@ def build_auth_mail_handler(
         "password_reset": "password_reset_enabled",
     }[category]
 
-    def cancel(claim: ClaimedJob, reason: str, observed_at: datetime):
+    def cancel(claim: ClaimedJob, reason: str):
         mail_repository.cancel_claimed_before_send(
-            **_claim_values(claim, category, observed_at), reason_code=reason
+            **_claim_values(claim, category, now()), reason_code=reason
         )
         return JobTransitionResult(JobState.CANCELED, reason)
 
     def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
-        observed_at = now()
         if context.cancel_requested:
-            return cancel(claim, "auth_mail_canceled_before_send", observed_at)
+            return cancel(claim, "auth_mail_canceled_before_send")
         if not context.lease_active:
             return JobTransitionResult(JobState.CANCELED, "auth_mail_lease_lost_before_send")
         decision = context.reauthorize()
         if not decision.allowed:
-            return cancel(claim, decision.reason_code, observed_at)
+            return cancel(claim, decision.reason_code)
         if provider_config.get(enabled_key) is not True:
-            return cancel(claim, "auth_mail_category_disabled", observed_at)
+            return cancel(claim, "auth_mail_category_disabled")
 
-        values = _claim_values(claim, category, observed_at)
-        delivery_context = mail_repository.load_claimed_delivery_context(**values)
+        delivery_context = mail_repository.load_claimed_delivery_context(
+            **_claim_values(claim, category, now())
+        )
         raw_token: str | None = None
         token_id: int | None = None
         message: Any = None
@@ -143,7 +143,7 @@ def build_auth_mail_handler(
                 )
             except Exception:
                 return cancel(
-                    claim, "auth_mail_composition_failed_before_send", observed_at
+                    claim, "auth_mail_composition_failed_before_send"
                 )
         try:
             if category != "welcome":
@@ -164,11 +164,11 @@ def build_auth_mail_handler(
                     not digest_matches
                 ):
                     return cancel(
-                        claim, "auth_mail_token_issue_failed", observed_at
+                        claim, "auth_mail_token_issue_failed"
                     )
                 raw_token = issued.raw
                 token = mail_repository.issue_claimed_token_hash(
-                    **values,
+                    **_claim_values(claim, category, now()),
                     expected_row_revision=row_revision,
                     token_hash=issued.digest,
                     expires_at=delivery_context.lifecycle_expires_at,
@@ -207,13 +207,13 @@ def build_auth_mail_handler(
                     )
 
             row_revision = mail_repository.begin_claimed_send(
-                **values, expected_row_revision=row_revision
+                **_claim_values(claim, category, now()), expected_row_revision=row_revision
             )
             provider_result = classify_auth_mail_result(
                 category, _deliver(send_email, message, provider_config)
             )
             finalization = mail_repository.finalize_claimed_delivery(
-                **values,
+                **_claim_values(claim, category, now()),
                 expected_row_revision=row_revision,
                 disposition=provider_result.disposition.value,
                 reason_code=provider_result.reason_code,
@@ -225,7 +225,7 @@ def build_auth_mail_handler(
             )
             try:
                 finalization = mail_repository.finalize_claimed_delivery(
-                    **values,
+                    **_claim_values(claim, category, now()),
                     expected_row_revision=row_revision,
                     disposition=provider_result.disposition.value,
                     reason_code=provider_result.reason_code,

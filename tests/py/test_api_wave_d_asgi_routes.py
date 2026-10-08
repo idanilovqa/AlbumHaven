@@ -35,7 +35,11 @@ from tests.py.asgi_testing import runtime_app_from_asgi_app
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    return runtime_app_from_asgi_app(create_test_asgi_app(tmp_path, monkeypatch))
+    reset_cover_lookup_runtime_state()
+    try:
+        yield runtime_app_from_asgi_app(create_test_asgi_app(tmp_path, monkeypatch))
+    finally:
+        reset_cover_lookup_runtime_state()
 
 
 @pytest.fixture(autouse=True)

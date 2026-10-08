@@ -432,6 +432,8 @@ begin
              when job.state = 'ambiguous' or pending.status = 'sending'
                then 'ambiguous'
              when job.state = 'canceled' then 'canceled'
+             when job.state = 'failed' and pending.accepted_attempt >= 5
+               then 'exhausted'
              when job.state = 'failed' then 'retry_wait'
              else pending.status
            end as next_status,
@@ -446,7 +448,7 @@ begin
   )
   update integration.pending_scrobbles as pending
      set status = terminal.next_status,
-         attempt_count = case when terminal.next_status = 'ambiguous'
+         attempt_count = case when terminal.next_status in ('ambiguous', 'retry_wait', 'exhausted')
                               then pending.accepted_attempt
                               else pending.attempt_count end,
          accepted_attempt = case when terminal.next_status = 'retry_wait'

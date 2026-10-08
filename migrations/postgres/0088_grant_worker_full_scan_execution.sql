@@ -416,6 +416,8 @@ declare
   claimed_deployment_mode varchar;
   claimed_client_surface varchar;
   committed_revision bigint;
+  claimed_scan_mode varchar;
+  recovery_cutoff timestamptz;
 begin
   if p_intent_id is null or p_job_id is null or p_attempt is null or
      p_worker_id is null or p_lease_token is null or p_now is null or
@@ -426,10 +428,10 @@ begin
   end if;
 
   select intent.library_id, job.account_id, job.capability_key,
-         job.request_origin_id, job.deployment_mode, job.client_surface
+         job.request_origin_id, job.deployment_mode, job.client_surface, intent.mode
     into claimed_library_id, claimed_account_id, claimed_capability_key,
          claimed_request_origin_id, claimed_deployment_mode,
-         claimed_client_surface
+         claimed_client_surface, claimed_scan_mode
     from ops.jobs as job
     join library.full_scan_intents as intent
       on intent.id = p_intent_id and intent.job_id = job.id
@@ -647,7 +649,7 @@ begin
   delete from library.local_album_featured_artists as featured
    using library.local_albums as album
    where featured.album_id = album.id and album.library_id = claimed_library_id
-     and featured.metadata ->> 'source' = 'scan_cache';
+     and featured.metadata ->> 'source' = 'runtime_scan_cache';
   insert into library.local_album_featured_artists
     (library_id, album_id, artist_id, featured_kind, metadata)
   select claimed_library_id, album.id, artist.id, input.featured_kind, input.metadata
@@ -705,14 +707,14 @@ begin
      set metadata = jsonb_set(
        coalesce(file.metadata, '{}'::jsonb), '{scan_cache}',
        coalesce(file.metadata -> 'scan_cache', '{}'::jsonb) ||
-         jsonb_build_object('source', 'scan_cache', 'stale', true,
+         jsonb_build_object('source', 'runtime_scan_cache', 'stale', true,
                             'stale_marked_at', now()::text), true
      ), last_seen_at = now()
     from library.library_roots as root, library.local_tracks as track
    where file.library_root_id = root.id and file.track_id = track.id
      and root.library_id = claimed_library_id and track.library_id = claimed_library_id
      and root.metadata ->> 'root_id' = any(p_observed_root_ids)
-     and file.metadata #>> '{scan_cache,source}' = 'scan_cache'
+     and file.metadata #>> '{scan_cache,source}' = 'runtime_scan_cache'
      and not exists (
        select 1
          from jsonb_to_recordset(coalesce(p_inventory -> 'track_files', '[]'::jsonb))
@@ -722,6 +724,13 @@ begin
      );
 
   committed_revision := p_expected_inventory_revision + 1;
+  if claimed_scan_mode = 'manual_full_rescan'
+     and nullif(p_inventory ->> 'scan_started_at', '') is not null then
+    recovery_cutoff := (p_inventory ->> 'scan_started_at')::timestamptz;
+    if recovery_cutoff > p_now then
+      raise exception 'full scan recovery cutoff is invalid';
+    end if;
+  end if;
   update library.libraries as library_record
      set metadata = coalesce(library_record.metadata, '{}'::jsonb) ||
        jsonb_build_object(
@@ -732,7 +741,24 @@ begin
              coalesce(library_record.metadata #> '{scan_cache,relation_projection}', '{}'::jsonb)
                || jsonb_build_object('status', 'stale')
            )
-       ), updated_at = now()
+       ) || case when recovery_cutoff is not null then jsonb_build_object(
+         'library_watch_health', coalesce((
+           select jsonb_object_agg(health_entry.key, health_entry.value)
+             from jsonb_each(coalesce(
+               library_record.metadata -> 'library_watch_health', '{}'::jsonb
+             )) as health_entry
+            where not (
+              health_entry.key = any(p_observed_root_ids)
+              and nullif(health_entry.value ->> 'detected_at', '') is not null
+              and (health_entry.value ->> 'detected_at')::timestamptz <= recovery_cutoff
+            )
+         ), '{}'::jsonb),
+         'manual_scan_recovery', jsonb_build_object(
+           'inventory_mutation_revision', committed_revision,
+           'scan_started_at', recovery_cutoff,
+           'observed_root_ids', to_jsonb(p_observed_root_ids)
+         )
+       ) else '{}'::jsonb end, updated_at = now()
    where library_record.id = claimed_library_id;
   update library.full_scan_intents as intent
      set committed_inventory_revision = committed_revision,

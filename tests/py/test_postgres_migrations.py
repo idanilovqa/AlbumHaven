@@ -105,7 +105,7 @@ def test_durable_scan_status_closes_inventory_relation_and_cover_handoff_gaps():
     assert "function library.load_authorized_full_scan_metrics(p_library_id bigint)" in sql
     assert "job.kind = 'post_scan_cover_refresh'" in sql
     assert "job.state in ('queued', 'running', 'retry_wait')" in sql
-    assert "coalesce(active_refresh.covers_in_progress, pending_follow_up.covers_in_progress, false)" in sql
+    assert "coalesce(active_refresh.covers_in_progress, false) or coalesce(pending_follow_up.covers_in_progress, false)" in sql
 
 
 def test_lastfm_retry_job_state_preserves_stable_pending_identity_and_fences_attempts():

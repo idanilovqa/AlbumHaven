@@ -103,6 +103,7 @@ def test_durable_scan_file_history_uses_closed_reason_without_private_fields(mon
             {
                 "level": "error",
                 "history": True,
+                "history_scope": None,
                 "scan_generation": 7,
                 "reason_code": "metadata_read_failed",
             },
@@ -114,10 +115,16 @@ def test_durable_scan_failure_history_store_never_receives_exception_or_path(mon
     from music_app.services import app_logging, scan_state
 
     history_payloads = []
+    history_scopes = []
+
+    def append_history(_config, payload, *, scope):
+        history_payloads.append(payload)
+        history_scopes.append(scope)
+
     monkeypatch.setattr(
         app_logging,
         "append_log_history",
-        lambda _config, payload: history_payloads.append(payload),
+        append_history,
     )
 
     scan_state._log_scan_history_failure(
@@ -135,5 +142,7 @@ def test_durable_scan_failure_history_store_never_receives_exception_or_path(mon
             "action": "Durable library scan failed",
             "reason_code": "indexing_failed",
             "scan_generation": 9,
+            "level": "error",
         }
     ]
+    assert history_scopes == [None]

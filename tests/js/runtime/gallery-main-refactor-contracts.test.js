@@ -1453,12 +1453,12 @@ test('family rows use available album art and retain independent pressed states'
 });
 
 
-test('Home keeps its context through density refreshes and returns to Gallery on a wide viewport', () => {
+test('explicit Home keeps its context through density and viewport changes before returning to Gallery', () => {
   const name = { textContent: '' }, summary = { textContent: '' };
   const bar = { hidden: false, offsetHeight: 54, dataset: {},
     querySelector: selector => selector === '[data-gallery-context-name]' ? name
       : selector === '[data-gallery-context-summary]' ? summary : null };
-  const context = loadRuntime({ URL, window: { innerWidth: 390, location: { href: 'https://albumhaven.example/' } },
+  const context = loadRuntime({ URL, window: { innerWidth: 390, location: { href: 'https://albumhaven.example/?surface=home' } },
     state: { gallery: {}, ui: {}, view: { query: '', selected_artist: '', artist_groups: [], artist_count: 4, album_count: 8 } },
     document: {
     querySelectorAll: () => [],
@@ -1479,7 +1479,15 @@ test('Home keeps its context through density refreshes and returns to Gallery on
   assert.equal(bar.dataset.galleryContextKind, 'home');
   context.window.innerWidth = 1180;
   context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Rendref');
+  assert.equal(bar.dataset.galleryContextKind, 'home');
+  context.window.location.href = 'https://albumhaven.example/?surface=albums';
+  context.updateGalleryMainChrome();
   assert.equal(name.textContent, 'Gallery');
+  assert.equal(bar.dataset.galleryContextKind, 'gallery');
+  context.window.innerWidth = 390;
+  context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Gallery', 'narrow layout alone cannot select the Home surface');
   assert.equal(bar.dataset.galleryContextKind, 'gallery');
 });
 

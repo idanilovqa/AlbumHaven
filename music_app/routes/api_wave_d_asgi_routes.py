@@ -1279,7 +1279,10 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
                     scan_mode=scan_mode,
                 )
             ),
-            get_file_cache_snapshot=lambda: state_service.cover_file_cache_snapshot_for_state(library_state),
+            get_file_cache_snapshot=lambda: state_service.cover_file_cache_snapshot_for_state(
+                library_state,
+                config,
+            ),
             submit_cover_job=state_service._COVER_EXECUTOR.submit,
             refresh_unsuccessful_cover_artwork=(
                 lambda force_search=False, prepared=None: state_service.refresh_unsuccessful_cover_artwork_for_state(

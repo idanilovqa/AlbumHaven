@@ -390,12 +390,27 @@ def refresh_cached_cover_paths_for_state(
         )
 
 
-def cover_file_cache_snapshot_for_state(library_state: dict[str, object]) -> dict[str, dict[str, object]]:
+def cover_file_cache_snapshot_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object] | None = None,
+) -> dict[str, dict[str, object]]:
     with _CACHE_LOCK:
-        return {
+        snapshot = {
             path: dict(entry) if isinstance(entry, dict) else entry
             for path, entry in dict(library_state.get("file_cache") or {}).items()
         }
+    if snapshot or config is None:
+        return snapshot
+
+    persisted, _last_scan, _relations, _relations_built, error = (
+        select_scan_cache_adapter(config).load_snapshot(
+            Path(config["CACHE_PATH"]),
+            library_root_cache_identity(config),
+        )
+    )
+    if error:
+        raise RuntimeError(error)
+    return persisted
 
 
 def hydrate_library_state_for_config(

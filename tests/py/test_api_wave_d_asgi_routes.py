@@ -2952,8 +2952,8 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
         fake_start_background_refresh_for_state,
     )
 
-    def fake_cover_file_cache_snapshot_for_state(library_state):
-        cache_snapshot_calls.append({"library_state": library_state})
+    def fake_cover_file_cache_snapshot_for_state(library_state, config):
+        cache_snapshot_calls.append({"library_state": library_state, "config": config})
         return {"snap": {"path": "snap"}}
 
     monkeypatch.setattr(
@@ -3067,7 +3067,10 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
             "scan_mode": "manual",
         }
     ]
-    assert cache_snapshot_calls == [{"library_state": asgi_app.state.library_state}]
+    assert cache_snapshot_calls == [{
+        "library_state": asgi_app.state.library_state,
+        "config": app.config,
+    }]
     assert unsuccessful_refresh_calls == [
         {
             "library_state": asgi_app.state.library_state,

@@ -2029,6 +2029,28 @@ def test_cover_file_cache_snapshot_for_state_uses_provided_state_without_flask_c
     assert snapshot["track-1"] is not file_cache["track-1"]
 
 
+def test_cover_file_cache_snapshot_for_state_falls_back_to_persisted_snapshot(
+    tmp_path, monkeypatch,
+):
+    persisted = {"track-1": {"path": "track-1"}}
+    load_calls = []
+
+    class Adapter:
+        def load_snapshot(self, cache_path, root_identity):
+            load_calls.append((cache_path, root_identity))
+            return persisted, 123.0, {}, 0.0, None
+
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda config: Adapter())
+    monkeypatch.setattr(state_module, "library_root_cache_identity", lambda config: "roots")
+    config = {"CACHE_PATH": tmp_path / "library-cache.json"}
+
+    snapshot = state_module.cover_file_cache_snapshot_for_state({}, config)
+
+    assert snapshot == persisted
+    assert snapshot is persisted
+    assert load_calls == [(config["CACHE_PATH"], "roots")]
+
+
 def test_progress_percent_helpers_use_provided_state_without_flask_context():
     library_state = {
         "scan_processed": 3,

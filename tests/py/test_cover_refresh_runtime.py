@@ -139,6 +139,35 @@ def test_start_manual_cover_refresh_starts_background_scan_when_index_missing(ru
     assert background_calls == [{"force": True, "scan_mode": "background"}]
 
 
+def test_start_manual_cover_refresh_uses_persisted_snapshot_without_full_scan(
+    runtime_config, logger,
+):
+    background_calls = []
+    submitted = []
+    library_state = {}
+    snapshot = {"track-1": {"album": "Album"}}
+
+    result = cover_refresh_runtime.start_manual_cover_refresh(
+        cache_lock=threading.Lock(),
+        config=runtime_config,
+        logger=logger,
+        get_state=lambda: library_state,
+        start_background_refresh=lambda **kwargs: background_calls.append(kwargs),
+        build_cover_jobs=lambda **kwargs: [{"folder": "Artist/Album"}],
+        submit_cover_job=lambda *args: submitted.append(args),
+        refresh_manual_cover_artwork_worker=lambda force_search, prepared: None,
+        get_file_cache_snapshot=lambda: snapshot,
+        force_search=True,
+    )
+
+    assert background_calls == []
+    assert result["queued_after_indexing"] is False
+    assert result["queued_count"] == 1
+    assert len(submitted) == 1
+    assert library_state["file_cache"] == snapshot
+    assert library_state["file_cache"] is submitted[0][2][0].file_cache
+
+
 def test_start_manual_cover_refresh_returns_direct_status_snapshot(runtime_config, logger):
     submitted = []
     invoked = []

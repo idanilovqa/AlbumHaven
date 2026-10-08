@@ -465,8 +465,13 @@ def start_manual_cover_refresh(
             return {"started": False, "already_running": True, "queued_after_indexing": False}
         needs_indexing = (
             bool(library_state.get("scan_in_progress"))
-            or not bool(library_state.get("file_cache"))
-            or not bool(library_state.get("albums"))
+            or (
+                get_file_cache_snapshot is None
+                and (
+                    not bool(library_state.get("file_cache"))
+                    or not bool(library_state.get("albums"))
+                )
+            )
         )
         if needs_indexing:
             library_state["pending_cover_refresh_after_scan"] = True
@@ -526,6 +531,8 @@ def start_manual_cover_refresh(
                 "queued_count": 0,
                 "current_folder": "",
             }
+        if not library_state.get("file_cache"):
+            library_state["file_cache"] = file_cache
         first_folder = str((jobs[0] or {}).get("folder") or "").strip() if jobs else ""
         _start_cover_refresh_progress(library_state, queued_count=len(jobs), current_folder=first_folder)
         if not jobs:

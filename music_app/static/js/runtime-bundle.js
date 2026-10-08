@@ -24944,6 +24944,22 @@ function resumeDeferredUtilityViewRequest() {
 }
 
 let utilityCoverLoadSuspensionToken = 0;
+let utilityOpenGeneration = 0;
+
+function scheduleUtilityModalOpenWorkAfterPaint(generation, forceLoad) {
+  const run = () => {
+    const els = getUtilityModalElements();
+    if (generation !== utilityOpenGeneration || !els.overlay || els.overlay.hidden) return;
+    renderUtilityModalContent();
+    if (!forceLoad) return;
+    loadActiveUtilityTab(true);
+  };
+  if (typeof scheduleBrowserAnimationFrame !== 'function') {
+    run();
+    return;
+  }
+  scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(run));
+}
 
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
@@ -24993,14 +25009,12 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   if (resetSearch) {
     state.utility.searchQuery = '';
   }
-  renderUtilityModalContent();
-  if (forceLoad) {
-    if (state.utility.pendingOpenLoadTimer) {
-      clearBrowserTimeout(state.utility.pendingOpenLoadTimer);
-      state.utility.pendingOpenLoadTimer = 0;
-    }
-    loadActiveUtilityTab(true);
+  if (state.utility.pendingOpenLoadTimer) {
+    clearBrowserTimeout(state.utility.pendingOpenLoadTimer);
+    state.utility.pendingOpenLoadTimer = 0;
   }
+  utilityOpenGeneration += 1;
+  scheduleUtilityModalOpenWorkAfterPaint(utilityOpenGeneration, forceLoad);
 }
 
 function openUtilityLogHistoryTab(entryId = '') {
@@ -25178,6 +25192,7 @@ function closeUtilityModal(skipAppearanceGuard = false) {
   if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  utilityOpenGeneration += 1;
   if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
   state.utility.problemDropdownOpen = false;
   if (els.problemFilterMenu) {

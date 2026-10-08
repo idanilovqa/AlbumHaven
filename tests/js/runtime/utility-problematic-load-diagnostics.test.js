@@ -703,8 +703,9 @@ test('Settings defers an active full startup view request until the modal closes
   ]]);
 });
 
-test('utility modal suspends gallery work synchronously before rendering or loading and resumes on close', () => {
+test('utility modal paints its visible shell before rendering and loading', () => {
   const events = [];
+  const scheduledFrames = [];
   const overlay = { hidden: true };
   const { context } = loadHelper({
     document: {
@@ -722,6 +723,54 @@ test('utility modal suspends gallery work synchronously before rendering or load
       },
     },
     getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserAnimationFrame(callback) {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    },
+    clearBrowserTimeout(timerId) { events.push(`clear:${timerId}`); },
+    renderUtilityModalContent() { events.push('render'); },
+    async fetch() {
+      events.push('load');
+      return { ok: true, status: 200, async json() { return { items: [] }; } };
+    },
+  });
+  context.state.utility.pendingOpenLoadTimer = 12;
+
+  context.openUtilityModal({ forceLoad: true });
+  assert.equal(overlay.hidden, false);
+  assert.equal(context.state.utility.pendingOpenLoadTimer, 0);
+  assert.deepEqual(events, ['suspend', 'clear:12']);
+  assert.equal(scheduledFrames.length, 1);
+
+  scheduledFrames.shift()();
+  assert.deepEqual(events, ['suspend', 'clear:12']);
+  assert.equal(scheduledFrames.length, 1);
+
+  scheduledFrames.shift()();
+  assert.equal(events[0], 'suspend');
+  assert.ok(events.indexOf('render') > events.indexOf('clear:12'));
+  assert.ok(events.indexOf('load') > events.indexOf('render'));
+
+  context.closeUtilityModal();
+  assert.equal(overlay.hidden, true);
+  assert.ok(events.indexOf('resume:7') > events.indexOf('load'));
+});
+
+test('a stale deferred Settings open cannot render or load after close and reopen', () => {
+  const events = [];
+  const scheduledFrames = [];
+  const overlay = { hidden: true };
+  const { context } = loadHelper({
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
+      querySelectorAll() { return []; },
+    },
+    getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserAnimationFrame(callback) {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    },
     renderUtilityModalContent() { events.push('render'); },
     async fetch() {
       events.push('load');
@@ -730,14 +779,14 @@ test('utility modal suspends gallery work synchronously before rendering or load
   });
 
   context.openUtilityModal({ forceLoad: true });
-  assert.equal(overlay.hidden, false);
-  assert.equal(events[0], 'suspend');
-  assert.ok(events.indexOf('suspend') < events.indexOf('render'));
-  assert.ok(events.indexOf('suspend') < events.indexOf('load'));
-
   context.closeUtilityModal();
-  assert.equal(overlay.hidden, true);
-  assert.ok(events.indexOf('resume:7') > events.indexOf('load'));
+  context.openUtilityModal({ forceLoad: false });
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+
+  assert.deepEqual(events, ['render']);
 });
 
 test('utility modal production source is statically tied to scheduler suspension and resume without a test branch', () => {
@@ -751,11 +800,10 @@ test('utility modal production source is statically tied to scheduler suspension
   const openSource = helperSource.slice(openStart, openEnd);
   const closeSource = helperSource.slice(closeStart, closeEnd);
   const suspendIndex = openSource.indexOf('virtualGrid.suspendSelectedArtistCoverLoadsForUserAction()');
-  const renderIndex = openSource.indexOf('renderUtilityModalContent()');
-  const loadIndex = openSource.indexOf('loadActiveUtilityTab(true)');
+  const scheduleIndex = openSource.indexOf('scheduleUtilityModalOpenWorkAfterPaint(');
   assert.ok(suspendIndex >= 0);
-  assert.ok(suspendIndex < renderIndex);
-  assert.ok(suspendIndex < loadIndex);
+  assert.ok(suspendIndex < scheduleIndex);
+  assert.match(helperSource, /scheduleBrowserAnimationFrame\(\(\) => scheduleBrowserAnimationFrame\(run\)\)/);
   assert.match(closeSource, /virtualGrid\.resumeSelectedArtistCoverLoadsAfterUserAction\(coverLoadSuspensionToken\)/);
   assert.doesNotMatch(`${openSource}\n${closeSource}`, /galleryCoverLoadScheduler\.(?:suspend|resume)/);
   assert.doesNotMatch(`${openSource}\n${closeSource}`, /PLAYWRIGHT|__e2e|E2E_/i);

@@ -121,7 +121,9 @@ test('Suggested Edit labels use a neutral idle edge and saturated green selected
   );
   const idleRule = css.match(/\.utility-detected-table \.utility-problem-suggestion:not\(\[aria-pressed="true"\]\)\s*\{[^}]*\}/s)?.[0] || '';
   assert.match(idleRule, /border-color:\s*var\(--appearance-line, var\(--border\)\)/);
-  assert.match(idleRule, /background:\s*color-mix\([^;]*var\(--alert-tint/);
+  assert.match(idleRule, /background:\s*color-mix\([^;]*var\(--appearance-panel-background/);
+  assert.match(idleRule, /color:\s*var\(--appearance-ink, var\(--text\)\)/);
+  assert.doesNotMatch(idleRule, /--alert-(?:tint|ink)/);
   const selectedRule = css.match(/#utility-modal \.utility-detected-table \.utility-problem-suggestion\[aria-pressed="true"\]\s*\{[^}]*\}/s)?.[0] || '';
   assert.match(selectedRule, /background:\s*#15803d !important/);
   assert.match(selectedRule, /border-color:\s*#0b5f31 !important/);

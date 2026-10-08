@@ -10293,7 +10293,10 @@ def test_problematic_files_cold_path_separates_candidate_discovery_from_indexed_
 
 
 def test_problematic_candidate_page_sql_orders_and_limits_ids_before_row_hydration():
-    from music_app.services.library_browse_postgres import _problematic_files_sql
+    from music_app.services.library_browse_postgres import (
+        _missing_albums_sql,
+        _problematic_files_sql,
+    )
 
     page_sql = " ".join(
         _problematic_files_sql(
@@ -10302,7 +10305,8 @@ def test_problematic_candidate_page_sql_orders_and_limits_ids_before_row_hydrati
         ).split()
     ).lower()
 
-    assert "count(*) over () as total_candidate_count" in page_sql
+    assert "count(*) over () as total_candidate_count" not in page_sql
+    assert page_sql.count('collate "c"') == 4
     assert "join library.local_albums" in page_sql
     assert "left join library.local_artists" in page_sql
     assert "order by lower(coalesce(library.local_albums.title, ''))" in page_sql
@@ -10310,6 +10314,10 @@ def test_problematic_candidate_page_sql_orders_and_limits_ids_before_row_hydrati
     assert "coalesce(library.local_albums.release_year::text, '')" in page_sql
     assert "lower(coalesce(library.local_albums.album_key, ''))" in page_sql
     assert page_sql.endswith("limit %(limit)s::integer;")
+
+    missing_page_sql = " ".join(_missing_albums_sql(bounded=True).split()).lower()
+    assert missing_page_sql.count('collate "c"') == 4
+    assert "limit %(limit)s::integer" in missing_page_sql
 
 
 def test_problematic_candidate_sql_conservatively_overincludes_only_strong_encoding_signals():
@@ -12093,11 +12101,12 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
     )
     requested_limits = []
     requested_album_ids = []
+    requested_missing_limits = []
 
     def load_candidate_ids(*, connection, limit):
         assert connection is not None
         requested_limits.append(limit)
-        return [1, 2, 3], 706
+        return [1, 2, 3]
 
     def load_rows(album_key=None, *, candidate_summary=True, connection=None, album_ids=None):
         assert album_key is None
@@ -12108,6 +12117,13 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
 
     repository._load_problematic_candidate_ids = load_candidate_ids
     repository._load_problematic_file_rows = load_rows
+
+    def load_missing_rows(*, connection, limit):
+        assert connection is not None
+        requested_missing_limits.append(limit)
+        return []
+
+    repository._load_missing_album_rows = load_missing_rows
     repository._get_cached_utility_projection = lambda _kind: None
     repository._build_problematic_files_payload_uncached = lambda: (_ for _ in ()).throw(
         AssertionError("bounded page must not build the complete projection")
@@ -12117,9 +12133,10 @@ def test_problematic_files_page_builds_only_bounded_candidate_rows():
 
     assert requested_limits == [2]
     assert requested_album_ids == [[1, 2]]
+    assert requested_missing_limits == [2]
     assert [item["key"] for item in payload["items"]] == ["album-1", "album-2"]
     assert payload["count"] == 2
-    assert payload["total_candidate_count"] == 706
+    assert payload["total_candidate_count"] is None
     assert payload["complete"] is False
     assert payload["initial_detail"]["key"] == "album-1"
 
@@ -12148,7 +12165,7 @@ def test_problematic_files_page_reuses_complete_projection_cache_before_querying
 
     assert [item["key"] for item in payload["items"]] == ["album-1", "album-2"]
     assert payload["count"] == 2
-    assert payload["total_candidate_count"] == 3
+    assert payload["total_candidate_count"] is None
     assert payload["complete"] is False
     assert payload["projection_cache_status"] == "bounded"
     assert payload["initial_detail"]["key"] == "album-1"

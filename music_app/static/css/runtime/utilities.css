@@ -1953,8 +1953,8 @@
 /* Suggested edits are toggles: neutral until selected, explicit when active. */
 .utility-detected-table .utility-problem-suggestion:not([aria-pressed="true"]) {
   border-color: var(--appearance-line, var(--border));
-  background: color-mix(in srgb, var(--alert-tint, var(--panel)) 42%, var(--appearance-panel-background, var(--panel)));
-  color: var(--alert-ink, var(--text));
+  background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 92%, var(--appearance-line, var(--border)));
+  color: var(--appearance-ink, var(--text));
   box-shadow: none;
 }
 #utility-modal .utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {

@@ -1,5 +1,37 @@
 [
   {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup progress uses player colors and releases content at 390px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-player-colors",
+      "startup-progress-content-release"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup progress uses player colors and releases content at 1280px",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-player-colors",
+      "startup-progress-content-release"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/searchSessionRecovery.spec.js",

@@ -157,6 +157,7 @@ def schedule_gallery_projection_refresh(config, *, connect=None):
 def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None):
     """Prepare common startup scopes once, using one coherent source snapshot."""
     from music_app.services import library_browse_postgres as browse
+    from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
     if config.get("SHARED_LIBRARY_BROWSE_ONLY"):
         return {"built": 0}
     repository = browse.PostgresLibraryBrowseRepository(config, connect=connect)
@@ -176,14 +177,12 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
         root_aliases = browse._root_browse_alias_to_canonical(aliases["alias_to_canonical"])
         missing_rows = repository._load_missing_album_rows(connection=connection)
         for state in stale:
-            if cancel_requested and cancel_requested():
-                raise InterruptedError("Gallery projection preparation cancelled")
+            _raise_if_projection_cancelled(cancel_requested)
             rows = connection.execute(browse._root_gallery_membership_sql(), browse._root_sidebar_params(state)).fetchall()
             missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
             pending.append((state, browse._prepare_root_gallery_snapshot(rows, missing, root_aliases, state)))
     built = 0
     for state, snapshot in pending:
-        if cancel_requested and cancel_requested():
-            raise InterruptedError("Gallery projection publication cancelled")
+        _raise_if_projection_cancelled(cancel_requested)
         built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect))
     return {"built": built}

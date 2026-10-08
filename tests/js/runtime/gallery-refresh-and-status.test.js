@@ -234,6 +234,7 @@ function createContext() {
     pushBrowserViewState: [],
     showToast: [],
     startupMarks: [],
+    startupFailures: 0,
     updateStatusIndicator: [],
     consoleErrors: [],
     clearedTimeouts: [],
@@ -287,6 +288,11 @@ function createContext() {
   };
 
   const context = {
+    window: {
+      AlbumHavenStartupProgress: {
+        fail() { calls.startupFailures += 1; },
+      },
+    },
     AbortController,
     HTMLFormElement: function HTMLFormElement() {},
     HTMLImageElement: function HTMLImageElement() {},
@@ -2559,6 +2565,7 @@ test('terminal full startup hydration rejection and cancellation clear the await
   });
   rejected.pendingRequests[0].rejectWith(new Error('aged hydration failed'));
   await assert.rejects(rejectedPromise, /aged hydration failed/);
+  assert.equal(rejected.calls.startupFailures, 1);
   assert.equal(rejected.context.state.awaitingInitialDataRefresh, false);
   assert.equal(rejected.context.state.ui.pendingStartupHydrationFollowup, null);
 
@@ -2570,6 +2577,7 @@ test('terminal full startup hydration rejection and cancellation clear the await
   });
   cancelled.context.state.ui.activeViewRequestController.abort();
   assert.equal(await cancelledPromise, false);
+  assert.equal(cancelled.calls.startupFailures, 0);
   assert.equal(cancelled.context.state.awaitingInitialDataRefresh, false);
   assert.equal(cancelled.context.state.ui.pendingStartupHydrationFollowup, null);
 });

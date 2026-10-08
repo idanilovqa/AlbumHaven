@@ -1,5 +1,65 @@
 # Cover branch completion
 
+## Current release authority and repair checkpoint — 2026-10-07
+
+The owner's later instruction to finish and release this branch authorizes the
+0.9.49 merge and stable publication after the required gates pass. It supersedes
+earlier instructions in this plan and its predecessor to leave PR21 unmerged,
+pause after a checkpoint, or treat application publication as unauthorized.
+Those dated checkpoints remain historical evidence, not current restrictions.
+Keep the owner-authorized `skip_reviews` waiver; never add `skip_tests`.
+
+Current published application head is
+`6b7baffdeee4dcb1ba07baffe2a141f12317e7bc`; PR21 remains open. Version remains
+`0.9.49`, and active test-data consumers retain immutable `fixtures-v1.0.25`.
+The complete native PR pipeline
+[37711113585](https://github.com/idanilovqa/AlbumHaven/actions/runs/37711113585)
+finished with failures on that exact head. All four performance profiles,
+production parity, Auth Lifecycle and Admin Management passed. Eight test jobs
+failed; Cloud Verification Gate failed downstream. This is not green CI or
+publication evidence.
+
+The complete failure inventory is retained in
+`.tmp/ci-37711113585/FAILURES-COMPLETE.md`, with final job JSON, exact logs and all
+57 retained artifacts. Failures cover component discovery/ownership counts,
+the startup-hydration rejection fixture, two Python source inventories, and a
+shared functional-fixture credential-row restoration failure. Retained logs
+also expose a background gallery-summary startup `Event` call error despite
+passing performance jobs. The functional shards stopped after their first
+passing case when restoration failed; their remaining cases are not passes.
+
+Locally verified inventory/fixture repairs are uncommitted at this checkpoint:
+the two approved startup-progress widths now have ownership rows, component
+discovery remains strict at 193 cases and total ownership at 420; the browser VM
+models startup-failure feedback and asserts one failure notification versus
+zero on cancellation; migration and runtime-script inventories explicitly
+include 0086 and `startup-progress.js`. Exact failures were reproduced before
+repair. Related JavaScript verification passed 209 tests; the two exact Python
+cases passed after failing locally. Evidence and reviewed source hashes are in
+`.tmp/ci-37711113585/REPAIR-SCOPE-VERIFICATION.md` and
+`repair-scope-reviewed-sha256.json`. These focused results do not close the
+remaining repair batch or replace complete CI.
+
+Delivery checkpoint: finish every validated repair and its focused verification,
+reassess the resulting diff, commit the entire local batch, then push once to a
+new complete native PR pipeline. Collect every required job result before the
+next repair batch. Preserve existing startup/gallery/search cases `005S`, `005T`
+and `005U`, their completeness assertions and timing budgets. Only a successful full
+pipeline permits merge, stable publication and main synchronization. Production
+promotion additionally requires the owner's requested legacy schema/permission
+repair, final release-pinned migration inventory through 0086, and verified
+deployment under the production runbook; none is established here.
+
+Sandbox4 usability evidence is separate from release acceptance. After the
+guarded launcher restart (PID 34780), authenticated Neal Morse Cover Lookup
+returned 200, and three local cover cards visibly rendered without browser errors
+at the port 5004 HTTPS URL. Evidence:
+`.tmp/lookup5004-live-1791423906239/evidence.json` and `cover-lookup.png`.
+The probe's seven image elements can include auxiliary images; the screenshot
+verifies three local cover cards while the remote placeholder remains loading.
+This does not prove migration 0086 is installed on the shared database, a ready
+summary's real-data startup improvement, or production readiness.
+
 ### ROOT01–ROOT05 durable gallery summary delivery (0.9.49)
 
 Owner approved including accurate Postgres-owned counts, ordered membership and revision invalidation in 0.9.49. Outcome: ready root requests read the complete lightweight sidebar/totals and an indexed bounded occurrence page without re-evaluating every file or hashing every occurrence. Store exact canonical ordering and the existing content hash; retain eight initial album occurrences, fifty ordinary continuation occurrences (1–100), complete sidebar, category/featured/missing/loose-track semantics and current cursor `[1, revision, offset]`. Reuse the current SQL and Python selector as the semantic oracle, existing bounded album hydration, and account-private rating overlays. No new search behavior or timing budget.

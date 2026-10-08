@@ -219,13 +219,19 @@ def test_old_schema_context_uses_accurate_fallback():
     assert len(calls) == 1
 
 
-def test_cancellation_after_capture_prevents_publication(monkeypatch):
+@pytest.mark.parametrize("cancel_at", [None, "capture", "publication"])
+def test_gallery_preparation_cancellation_contract(monkeypatch, cancel_at):
+    from threading import Event
     from music_app.services import gallery_projection_postgres as projection
+    cancellation = Event()
+    if cancel_at == "capture":
+        cancellation.set()
     class Connection:
         def __enter__(self):
             return self
         def __exit__(self, *args):
-            pass
+            if cancel_at == "publication":
+                cancellation.set()
         def execute(self, *args):
             return SimpleNamespace(fetchall=lambda: [])
     repository = SimpleNamespace(
@@ -236,12 +242,15 @@ def test_cancellation_after_capture_prevents_publication(monkeypatch):
     monkeypatch.setattr(browse, "PostgresLibraryBrowseRepository", lambda *args, **kwargs: repository)
     monkeypatch.setattr(projection, "gallery_projection_context", lambda connection: {"library_id": 1})
     monkeypatch.setattr(projection, "_ready_header", lambda *args: None)
-    published = Mock()
+    published = Mock(return_value=True)
     monkeypatch.setattr(projection, "publish_gallery_projection", published)
-    cancellation = iter((False, False, True))
-    with pytest.raises(InterruptedError, match="publication cancelled"):
-        projection.ensure_gallery_projection_ready({}, cancel_requested=lambda: next(cancellation))
-    published.assert_not_called()
+    if cancel_at:
+        with pytest.raises(InterruptedError, match="cancelled"):
+            projection.ensure_gallery_projection_ready({}, cancel_requested=cancellation)
+        published.assert_not_called()
+    else:
+        assert projection.ensure_gallery_projection_ready({}, cancel_requested=cancellation) == {"built": 2}
+        assert published.call_count == 2
 
 
 @pytest.mark.parametrize("fails", [False, True])

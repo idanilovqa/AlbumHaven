@@ -9,6 +9,94 @@ from threading import Event, Lock
 import pytest
 
 
+def test_duplicate_reconstruction_reuses_cover_paths_without_changing_payloads(monkeypatch, tmp_path):
+    from copy import deepcopy
+    from music_app.services import library_browse_postgres as browse
+
+    rows = []
+    entries = {}
+    covers = [str(tmp_path / "selected.jpg"), str(tmp_path / "alternate.jpg")]
+    for copy_index, folder in enumerate(("Copy A", "Copy B")):
+        for number in (1, 2, 3):
+            path = str(tmp_path / folder / "CD1" / f"{number}.mp3")
+            entry = {
+                "path": path, "album": "Álbum", "album_artist": "Artist", "artist": "Guest",
+                "title": f"Track {number}", "year": 2001, "disc_number": 1,
+                "track_number": number, "cover_path": covers[number == 3],
+                "edition": folder, "library_root_id": f"root-{copy_index}",
+                "library_root_category": "main_library" if copy_index == 0 else "hoard",
+            }
+            entries[path] = dict(entry)
+            rows.append({
+                "album_key": folder, "file_private_path": path, "file_entry": entry,
+                "track_key": f"track-{copy_index}-{number}", "duration_seconds": 123,
+            })
+    original_rows, original_entries = deepcopy(rows), deepcopy(entries)
+    expected = browse._duplicate_sources_from_rows(rows, file_entries_by_path=entries)
+    constructed_covers = []
+
+    def counted_path(value):
+        if value in covers:
+            constructed_covers.append(value)
+        return Path(value)
+
+    monkeypatch.setattr(browse, "Path", counted_path)
+    actual = browse._duplicate_sources_from_rows(rows, file_entries_by_path=entries)
+    assert actual == expected
+    assert all(result["has_duplicate_files"] for result in actual.values())
+    assert len(actual["Copy A"]["duplicate_sources"]) == 2
+    assert actual["Copy A"]["root_provenance"]["root_ids"] == ["root-0", "root-1"]
+    assert rows == original_rows
+    assert entries == original_entries
+    assert sorted(constructed_covers) == sorted(covers)
+
+
+@pytest.mark.parametrize("cover_type", ["path", "unhashable_pathlike"])
+def test_duplicate_reconstruction_preserves_nonstring_cover_path_compatibility(cover_type, tmp_path):
+    from music_app.services import library_browse_postgres as browse
+
+    class UnhashablePathLike:
+        __hash__ = None
+
+        def __init__(self, path):
+            self.path = str(path)
+
+        def __fspath__(self):
+            return self.path
+
+    cover_paths = [tmp_path / "Selected.JPG", tmp_path / "selected.jpg"]
+    supplied_covers = [
+        path if cover_type == "path" else UnhashablePathLike(path)
+        for path in cover_paths
+    ]
+    rows = []
+    entries = {}
+    expected_covers = {}
+    for index, cover in enumerate(supplied_covers):
+        track_path = str(tmp_path / f"Copy {index}" / "track.mp3")
+        entry = {
+            "path": track_path, "album": "Album", "album_artist": "Artist",
+            "title": "Track", "year": 2001, "cover_path": cover,
+        }
+        entries[track_path] = entry
+        expected_covers[track_path] = str(cover_paths[index])
+        rows.append({
+            "album_key": f"copy-{index}", "file_private_path": track_path,
+            "file_entry": entry, "track_key": f"track-{index}",
+        })
+
+    actual = browse._duplicate_sources_from_rows(rows, file_entries_by_path=entries)
+
+    assert set(actual) == {"copy-0", "copy-1"}
+    for result in actual.values():
+        assert result["has_duplicate_files"] is True
+        assert {
+            track["path"]: track["cover_path"]
+            for source in result["duplicate_sources"] for track in source["tracks"]
+        } == expected_covers
+    assert [entry["cover_path"] for entry in entries.values()] == supplied_covers
+
+
 class _EmptyAlbumRatingsService:
     def load_album_ratings(self, _album_keys, *, connection=None):
         del connection
@@ -7695,6 +7783,58 @@ def test_postgres_album_payloads_by_track_paths_drops_album_when_all_tracks_are_
     assert repository.build_album_payloads_by_track_paths({requested_path}) == []
 
 
+def test_rejected_album_membership_duplicate_remains_a_physical_problem():
+    from music_app.services.library_browse_postgres import _physical_file_problem_reasons
+
+    reason = "Duplicate track outside album folder"
+    assert reason in list(_physical_file_problem_reasons({"local_album_membership_problem": reason}))
+    assert "Mixed album metadata in one folder" in list(_physical_file_problem_reasons({
+        "local_album_membership_problem": reason, "_mixed_album_folder": True,
+    }))
+
+
+@pytest.mark.parametrize("changed_field,changed_value", [
+    (None, None), ("edition", "Deluxe"), ("year", 2025),
+    ("album_artist", "Another Artist"), ("artist", "Another Artist"),
+    ("title", "Another Song"), ("duration_seconds", 240),
+])
+def test_mixed_folder_copy_retains_independent_album_scoped_duplicate_problem(
+    changed_field, changed_value,
+):
+    from music_app.services.library_browse_postgres import _problematic_track_problem_rows
+
+    base = {"album": "Album", "album_artist": "Artist", "artist": "Artist",
+            "edition": "", "year": 2024, "title": "Song One", "duration_seconds": 180,
+            "library_root_id": "main", "track_number": 1, "disc_number": 1}
+    complete = [{**base, "path": "Artist/Album/01.mp3"},
+                {**base, "path": "Artist/Album/02.mp3", "title": "Song Two", "track_number": 2}]
+    mixed = {**base, "path": "Random songs/copied-song.mp3",
+             "local_album_membership_problem": "Mixed album metadata in one folder",
+             "_mixed_album_folder": True}
+    if changed_field:
+        mixed[changed_field] = changed_value
+    album = {"key": "artist::album", "album_artist": "Artist", "name": "Album",
+             "year": 2024, "_file_entries": [*complete, mixed], "tracks": []}
+    rows = _problematic_track_problem_rows(album)
+    row = next(row for row in rows if row["path"] == mixed["path"])
+    assert "Mixed album metadata in one folder" in row["reasons"]
+    assert ("Duplicate track outside album folder" in row["reasons"]) is (changed_field is None)
+    assert {reason["reason"] for reason in row["ignorable_reasons"]} == set(row["reasons"])
+
+
+def test_current_membership_classification_clears_a_stale_persisted_problem():
+    from music_app.services.library_browse_postgres import _problematic_file_entry_from_row
+
+    row = {
+        "file_private_path": "Artist/Album/song.mp3",
+        "local_album_membership_problem": None,
+        "file_entry": {"local_album_membership_problem": "Duplicate track outside album folder"},
+    }
+    assert _problematic_file_entry_from_row(row)["local_album_membership_problem"] is None
+    row.pop("local_album_membership_problem")
+    assert _problematic_file_entry_from_row(row)["local_album_membership_problem"] == "Duplicate track outside album folder"
+
+
 def test_postgres_library_browse_builds_problematic_files_projection_from_rows():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -8159,7 +8299,12 @@ def test_problematic_candidate_sql_groups_canonical_track_order_and_overincludes
     assert "active_track_order_rollup as (" in candidate_sql
     assert "required_text_missing_album_ids as (" in candidate_sql
     assert "active_candidate_source_rows as materialized" not in candidate_sql
-    assert candidate_sql.count("from library.local_track_files") == 2
+    # Browse consumes persisted membership instead of reclassifying the library.
+    assert candidate_sql.count("from library.local_track_files") == 3
+    assert "local_album_membership as materialized" in candidate_sql
+    assert "local_membership_sources as materialized" not in candidate_sql
+    assert "{scan_cache,file_entry,local_album_membership_problem}" in candidate_sql
+    assert "physical_file_context.local_album_membership_problem is not null" in candidate_sql
     order_rows_sql = candidate_sql.split(
         "active_problem_rows as materialized (",
         1,
@@ -8199,6 +8344,36 @@ def test_duplicate_candidates_select_exact_ids_before_loading_complete_container
     assert "candidate_files" not in sql
     assert "candidate_containers as materialized" in sql
     assert "join lateral ( select private_path, track_id" in sql
+
+
+def test_duplicate_sources_only_projection_preserves_candidates_without_problem_diagnostics():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    full = " ".join(_problematic_files_sql(duplicate_candidates=True).split()).lower()
+    slim = " ".join(_problematic_files_sql(
+        duplicate_candidates=True, duplicate_sources_only=True,
+    ).split()).lower()
+    for fragment in (
+        "where library.local_albums.id = any(%(album_ids)s::bigint[])",
+        "candidate_containers as materialized", "join lateral ( select private_path, track_id",
+        "scan_cache_stale is false", "is_active is true", "bootstrap_context",
+    ):
+        assert fragment in full
+        assert fragment in slim
+    for column in (
+        "album_key", "release_year", "cover_path", "artist_name", "track_key",
+        "disc_number", "track_number", "duration_seconds", "file_private_path",
+        "file_library_root_id", "file_library_root_category", "file_entry",
+    ):
+        assert column in slim
+    for diagnostic in (
+        "physical_file_context", "exception_overrides", "ignored_repairs",
+        "separate_release_keys", "album_metadata",
+    ):
+        assert diagnostic in full
+        assert diagnostic not in slim
+    assert "row_number()" not in slim
+    assert "ignored_versions" not in slim
 
 
 def test_duplicate_compact_candidates_use_domain_unicode_artist_title_year_identity():
@@ -8427,6 +8602,8 @@ def test_duplicate_absence_cache_skips_full_rows_preserves_year_provenance_and_i
         reads = 0
 
         def execute(self, sql, params):
+            assert sql == browse._problematic_files_sql(duplicate_candidates=True, duplicate_sources_only=True)
+            assert params == {"album_ids": [1]}
             self.reads += 1
             return self
 
@@ -8472,6 +8649,8 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
         reads = 0
 
         def execute(self, sql, params):
+            assert sql == browse._problematic_files_sql(duplicate_candidates=True, duplicate_sources_only=True)
+            assert params == {"album_ids": [1]}
             self.reads += 1
             return self
 
@@ -9713,6 +9892,25 @@ def test_problematic_album_checks_track_order_per_disc():
     )[0]
 
     assert _problematic_album_reasons(album) == []
+
+
+@pytest.mark.parametrize("missing_cover", [False, True])
+def test_spotify_quota_problem_survives_album_projection_with_or_without_cover(missing_cover):
+    from music_app.services.library_browse_postgres import (
+        _problematic_album_projection_payloads, _problematic_album_reasons,
+        _problematic_album_summary_payload, _problematic_album_detail_payload,
+    )
+    rows = _healthy_problematic_order_rows([1, 2])
+    for row in rows:
+        row["spotify_cover_quota_exceeded"] = True
+        if missing_cover:
+            row["album_cover_path"] = None
+    album = _problematic_album_projection_payloads(rows)[0]
+    reasons = _problematic_album_reasons(album)
+    assert "Spotify cover search quota exceeded" in reasons
+    assert ("Missing cover art" in reasons) is missing_cover
+    for payload in (_problematic_album_summary_payload(album), _problematic_album_detail_payload(album)):
+        assert "Spotify cover search quota exceeded" in payload["problem_reasons"]
 
 
 @pytest.mark.parametrize(

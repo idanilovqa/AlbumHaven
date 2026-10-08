@@ -144,6 +144,76 @@ def test_postgres_projection_uses_album_identity_not_repeated_track_ids():
     assert all(not item["has_duplicate_files"] for item in _duplicate_sources_from_rows(rows).values())
 
 
+def test_duplicate_projection_excludes_rejected_sources_without_changing_diagnostic_rows():
+    from copy import deepcopy
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    tracks = [
+        _track(folder, number)
+        for folder in ("main/Album/CD1", "hoard/Complete copy/CD1")
+        for number in (1, 2)
+    ]
+    tracks.extend([
+        _track("main/Orphan", 1, track_number=45),
+        _track("main/Random songs", 1),
+        _track("main/Random songs", 2, album="Other Album"),
+    ])
+    rows = [
+        {"album_key": "album", "file_private_path": str(track.path),
+         "file_entry": asdict(track), "duration_seconds": track.duration_seconds}
+        for track in tracks
+    ]
+    original_rows = deepcopy(rows)
+    sources = _duplicate_sources_from_rows(rows)["album"]["duplicate_sources"]
+
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/Album")), str(Path("hoard/Complete copy")),
+    }
+    assert [source["track_count"] for source in sources] == [2, 2]
+    assert rows == original_rows, "Diagnostic projection must retain rejected physical files"
+
+
+@pytest.mark.parametrize("excluded_field, excluded_value", [
+    ("local_album_membership_problem", "Duplicate track outside album folder"),
+    ("exception_type", "single"),
+])
+def test_duplicate_projection_respects_persisted_loose_membership_in_partial_row_set(excluded_field, excluded_value):
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    rows = [
+        {"album_key": "album", "file_private_path": str(track.path),
+         "file_entry": asdict(track), "duration_seconds": track.duration_seconds}
+        for track in (_track("main/Album"), _track("hoard/Complete copy"), _track("main/Orphan"))
+    ]
+    rows[-1]["file_entry"][excluded_field] = excluded_value
+    sources = _duplicate_sources_from_rows(rows)["album"]["duplicate_sources"]
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/Album")), str(Path("hoard/Complete copy")),
+    }
+
+
+@pytest.mark.parametrize("clear_source", ["row", "entry"])
+def test_duplicate_projection_respects_authoritative_cleared_membership_marker(clear_source):
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    rows = [
+        {"album_key": "album", "file_private_path": str(track.path),
+         "file_entry": asdict(track), "duration_seconds": track.duration_seconds}
+        for track in (_track("main/Album"), _track("hoard/Complete copy"))
+    ]
+    rows[-1]["file_entry"]["local_album_membership_problem"] = "Duplicate track outside album folder"
+    entries = None
+    if clear_source == "row":
+        rows[-1]["local_album_membership_problem"] = None
+    else:
+        entry = {**rows[-1]["file_entry"], "local_album_membership_problem": None}
+        entries = {rows[-1]["file_private_path"]: entry}
+    sources = _duplicate_sources_from_rows(rows, file_entries_by_path=entries)["album"]["duplicate_sources"]
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/Album")), str(Path("hoard/Complete copy")),
+    }
+
+
 def test_a_different_year_does_not_hide_a_valid_duplicate_subgroup():
     sources = _sources(_track("main/original"), _track("hoard/copy"), _track("main/reissue", year=2002))
     assert len(sources) == 2

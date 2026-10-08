@@ -90,6 +90,82 @@ function harness() {
   };
 }
 async function settle() { for (let n = 0; n < 8; n++) await Promise.resolve(); }
+for (const queuedAfterIndexing of [false, true]) {
+  test(`cover start clears completed results before and after acknowledgement queued=${queuedAfterIndexing}`, async () => {
+    const h = harness();
+    h.ctx.state.status = h.status(false, { covers_processed: 90, covers_completed: 25, covers_total: 100 });
+    const published = [];
+    const update = h.ctx.updateStatusIndicator;
+    h.ctx.updateStatusIndicator = (payload) => {
+      published.push({ ...payload });
+      update(payload);
+    };
+    const starting = h.ctx.fetchUnsuccessfulAlbumCovers();
+    h.requests.at(-1).resolve({ ok: true, queued_after_indexing: queuedAfterIndexing, queued_count: 10 });
+    await starting;
+    assert.equal(published.length, 2);
+    for (const payload of published) {
+      assert.equal(payload.covers_completed, 0, 'new-run payload must clear the prior completed count');
+      assert.equal(payload.covers_processed, 0);
+    }
+    assert.equal(h.ctx.state.status.covers_completed, 0);
+    assert.equal(h.ctx.state.status.covers_total, queuedAfterIndexing ? 0 : 10);
+  });
+}
+
+test('pending cover admission accepts only matching preparation progress and keeps stale idle reads out', async () => {
+  const h = harness();
+  const starting = h.ctx.fetchUnsuccessfulAlbumCovers();
+  const admission = h.requests.at(-1);
+  for (const [payload, elapsed] of [
+    [h.status(), null],
+    [h.status(false, { scan_generation: 0, covers_in_progress: true, covers_phase: 'preparing', covers_run_mode: 'manual-bulk', covers_elapsed_seconds: 8 }), null],
+    [h.status(false, { covers_in_progress: true, covers_phase: 'preparing', covers_run_mode: 'manual-bulk', covers_elapsed_seconds: 12 }), 12],
+  ]) {
+    const polling = h.ctx.pollStatus();
+    h.requests.at(-1).resolve(payload);
+    await polling;
+    assert.equal(h.ctx.state.status.covers_in_progress, true);
+    assert.equal(h.ctx.state.status.covers_elapsed_seconds, elapsed);
+  }
+  admission.resolve({ ok: true, queued_count: 10 });
+  await starting;
+});
+
+test('cover indicator titles prefer completed results including zero and preserve legacy fallback', () => {
+  const h = harness();
+  for (const completed of [0, 3, undefined]) {
+    const status = { covers_in_progress: true, covers_processed: 9, covers_total: 10 };
+    if (completed !== undefined) status.covers_completed = completed;
+    const expected = completed === undefined ? 9 : completed;
+    assert.ok(h.ctx.buildStatusIndicatorTitleParts(status).includes(
+      `Updating cover art: ${expected} / 10 cover searches completed`,
+    ));
+  }
+});
+
+test('cover indicator distinguishes completed searches from downloaded artwork', () => {
+  const h = harness();
+  const parts = h.ctx.buildStatusIndicatorTitleParts({
+    covers_in_progress: true, covers_processed: 10, covers_completed: 8,
+    covers_total: 10, covers_downloaded: 2,
+  });
+  assert.ok(parts.includes('Updating cover art: 8 / 10 cover searches completed'));
+  assert.ok(parts.includes('Downloaded covers: 2'));
+  assert.equal(parts.some(part => /8.*covers updated|Downloaded covers: 8/.test(part)), false,
+    'completed searches include skipped and failed jobs, not only artwork updates');
+});
+
+test('cover preparation tooltip does not invent completed searches or timing', () => {
+  const h = harness();
+  const parts = h.ctx.buildStatusIndicatorTitleParts({
+    covers_in_progress: true, covers_phase: 'preparing',
+    covers_completed: 0, covers_total: 0, covers_downloaded: 0,
+  });
+  assert.ok(parts.includes('Preparing cover search'));
+  assert.equal(parts.some(part => /0\s*\/\s*0|completed|Downloaded covers|ETA|Elapsed|\d+%/.test(part)), false);
+});
+
 async function acceptedStart(h) {
   const starting = h.ctx.triggerLibraryRefresh(true);
   h.requests.at(-1).resolve({ ok: true, full_rescan: true });

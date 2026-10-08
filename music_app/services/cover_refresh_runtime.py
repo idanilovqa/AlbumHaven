@@ -23,11 +23,17 @@ def cover_pass_file_cache_snapshot(file_cache, config):
     for entry in snapshot.values():
         entry.pop("selected_cover_path", None)
         entry.pop("selected_cover_origin", None)
+        for field in ("selected_cover_provenance", "selected_cover_revision", "selected_remote_cover_url", "selected_remote_cover_width", "selected_remote_cover_height"):
+            entry.pop(field, None)
         if type(entry.get("album_id")) is int and entry["album_id"] > 0:
             selection = selections.get(entry["album_id"])
             entry["selected_cover_path"] = selection.get("selected_cover_path") if selection else None
             if selection:
                 entry["selected_cover_origin"] = selection.get("cover_selection_origin")
+                entry["selected_cover_provenance"] = selection.get("cover_selection_provenance")
+                entry["selected_cover_revision"] = selection.get("cover_revision")
+                for field in ("remote_cover_url", "remote_cover_width", "remote_cover_height"):
+                    entry[f"selected_{field}"] = selection.get(field)
     return snapshot
 
 StateGetter = Callable[[], dict[str, object]]
@@ -70,6 +76,7 @@ def build_cover_progress_status(library_state: dict[str, object], *, now=None) -
     if library_state.get("covers_in_progress") and execution is not None and processed > 0 and total >= processed:
         remaining = max(0.0, (finished or now) - execution) / processed * (total - processed)
     return {
+        "covers_spotify_quota_exceeded": bool(library_state.get("covers_spotify_quota_exceeded")),
         "covers_elapsed_seconds": elapsed,
         "covers_estimated_remaining_seconds": remaining,
         "covers_run_mode": library_state.get("covers_run_mode") or "unknown",
@@ -91,6 +98,7 @@ def _reset_cover_refresh_progress(library_state: dict[str, object], *, in_progre
     library_state["covers_outcome"] = "running" if in_progress else "cancelled"
     library_state["covers_processed"] = 0
     library_state["covers_completed"] = 0
+    library_state["covers_spotify_quota_exceeded"] = False
     library_state["covers_total"] = 0
     library_state["covers_downloaded"] = 0
     library_state["covers_current_folder"] = ""
@@ -126,6 +134,7 @@ def _start_cover_refresh_progress(
     library_state["covers_outcome"] = "running"
     library_state["covers_processed"] = 0
     library_state["covers_completed"] = 0
+    library_state["covers_spotify_quota_exceeded"] = False
     library_state["covers_total"] = queued_count
     library_state["covers_downloaded"] = 0
     library_state["covers_current_folder"] = current_folder

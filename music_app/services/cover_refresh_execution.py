@@ -25,7 +25,7 @@ from music_app.services.cover_workflow import (
     run_serialized_cover_selection,
 )
 from music_app.services.covers import find_cover_image, images_are_visually_similar
-from music_app.services import cover_refresh_provider, cover_provider_spotify
+from music_app.services import cover_refresh_provider
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
     cover_candidate_to_lookup_match,
@@ -42,6 +42,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _COVER_SELECTION_FIELDS = (
     "cover_path", "cover_revision", "cover_selection_origin", "remote_cover_url",
+    "cover_selection_provenance",
+    "local_cover_width", "local_cover_height",
     "remote_cover_thumbnail_url", "remote_cover_source", "remote_cover_source_label",
     "remote_cover_album_url", "remote_cover_width", "remote_cover_height",
 )
@@ -186,6 +188,8 @@ def _build_automatic_cover_write_guard(
         preserve_user_ownership = bool(
             getattr(write_action, "preserve_user_ownership", False)
         )
+        replace_legacy_user = bool(getattr(write_action, "replace_legacy_user_selection", False))
+        legacy_revision = getattr(write_action, "legacy_selected_cover_revision", None)
         expected_cover_revision = str(
             getattr(write_action, "expected_cover_revision", "") or ""
         ).strip()
@@ -230,7 +234,11 @@ def _build_automatic_cover_write_guard(
                 selected_cover_path,
                 cover_revision=provisional_revision,
                 cover_selection_origin=persistence_origin,
-                reject_if_user_controlled=not preserve_user_ownership,
+                local_cover_width=getattr(write_action, "local_cover_width", None),
+                local_cover_height=getattr(write_action, "local_cover_height", None),
+                reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
+                reject_if_explicit_selection=replace_legacy_user,
+                expected_cover_state=("user", legacy_revision) if replace_legacy_user else None,
                 expected_cover_selection_origin=(
                     "user" if preserve_user_ownership else None
                 ),
@@ -256,7 +264,9 @@ def _build_automatic_cover_write_guard(
                     written_path,
                     cover_revision=exact_revision,
                     cover_selection_origin=persistence_origin,
-                    reject_if_user_controlled=not preserve_user_ownership,
+                    reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
+                    reject_if_explicit_selection=replace_legacy_user,
+                    expected_cover_state=("automatic", provisional_revision) if replace_legacy_user else None,
                     expected_cover_selection_origin=(
                         "user" if preserve_user_ownership else None
                     ),
@@ -285,7 +295,7 @@ def execute_cover_job(
     config: dict[str, object] | None = None,
     candidate_callback: Callable[..., object] | None = None,
     automatic_write_guard: Callable[..., object] | None = None,
-    spotify_retry_trace: list[dict[str, object]] | None = None,
+    search_run: cover_refresh_provider.AutomaticCoverSearchRun | None = None,
 ) -> tuple[Path | None, bool, dict[str, object]]:
     folder = job["folder"]
     artist = str(job.get("artist") or "")
@@ -313,6 +323,8 @@ def execute_cover_job(
                 stored_origin if stored_origin in {"user", "automatic"} else "automatic"
             )
             provider_kwargs["reject_if_user_controlled"] = True
+            for field in ("cover_selection_provenance", "selected_cover_revision", "selected_remote_cover_url", "selected_remote_cover_width", "selected_remote_cover_height"):
+                provider_kwargs[field] = job.get(field)
         if "selected_cover_path" in job:
             provider_kwargs["selected_cover_path"] = job["selected_cover_path"]
         effective_candidate_callback = candidate_callback or job.get("candidate_callback")
@@ -339,19 +351,10 @@ def execute_cover_job(
             provider_kwargs["automatic_write_guard"] = effective_write_guard
         if enabled_provider_groups is not None:
             provider_kwargs["enabled_provider_groups"] = enabled_provider_groups
-        if spotify_retry_trace is not None:
-            def retry_spotify(**kwargs):
-                candidate, trace = cover_refresh_provider.search_primary_remote_cover(**kwargs, only_spotify=True)
-                spotify_complete = any(item.get("resolver") == "_search_spotify" and item.get("status") in {"matched", "no_candidate"} for item in trace)
-                previous = [
-                    {**item, "previous_status": item.get("status"), "status": "superseded"}
-                    if spotify_complete and item.get("resolver") == "_search_spotify" and item.get("reason") == "spotify_cooldown"
-                    else dict(item)
-                    for item in spotify_retry_trace
-                ]
-                return candidate, [*previous, *trace]
-            provider_kwargs["search_remote_cover_func"] = retry_spotify
-            provider_kwargs["force_search"] = True
+        if search_run is not None:
+            provider_kwargs["search_remote_cover_func"] = lambda **kwargs: (
+                cover_refresh_provider.search_primary_remote_cover(**kwargs, search_run=search_run)
+            )
         return cover_refresh_provider.ensure_best_cover_for_folder(**provider_kwargs)
     except Exception as exc:
         _LOGGER.warning("Cover refresh failed for %s: %s", folder, exc)
@@ -402,7 +405,7 @@ def run_cover_jobs(
     downloaded_paths: list[str] = []
     job_results: list[dict[str, object]] = []
     provider_outcome_error: Exception | None = None
-    deferred_jobs = []
+    search_run = cover_refresh_provider.AutomaticCoverSearchRun()
     miss_reasons = {
         "remote_search_returned_no_candidate",
         "remote_search_timed_out",
@@ -579,11 +582,12 @@ def run_cover_jobs(
             skipped += 1
         with cache_lock:
             if owns_progress():
+                library_state["covers_spotify_quota_exceeded"] = search_run.spotify_disabled
                 library_state["covers_completed"] = int(library_state.get("covers_completed") or 0) + 1
                 if terminal_category == "downloaded":
                     library_state["covers_downloaded"] = int(library_state.get("covers_downloaded") or 0) + 1
                 library_state["covers_current_folder"] = str(job["folder"])
-                # Queue position includes jobs deferred before their terminal result.
+                # Queue position is retained for older clients; completed counts results.
                 library_state["covers_processed"] = max(
                     int(library_state.get("covers_processed") or 0), index,
                 )
@@ -597,7 +601,6 @@ def run_cover_jobs(
             elapsed_ms=float(detail.get("elapsed_ms") or 0.0),
             resolver_trace=detail.get("resolver_trace") or [],
             provider_outcome_persistence_uncertain=provider_outcome_error is not None,
-            **{key: detail[key] for key in ("spotify_retry_deferred", "spotify_retry_at", "spotify_retry_attempted") if key in detail},
         )
 
     def apply_job_result(index: int, job: dict[str, object], cover_path: Path | None, downloaded: bool, detail: dict[str, object]) -> None:
@@ -750,7 +753,7 @@ def run_cover_jobs(
                 continue
             desired_selection_origin = (
                 "user"
-                if str(job.get("cover_selection_origin") or "").strip().casefold()
+                if not detail.get("legacy_user_selection_replaced") and str(job.get("cover_selection_origin") or "").strip().casefold()
                 == "user"
                 else "automatic"
             )
@@ -762,6 +765,8 @@ def run_cover_jobs(
                     (
                         entry.get("cover_revision") != written_revision,
                         entry.get("cover_selection_origin") != desired_selection_origin,
+                        entry.get("local_cover_width") != detail.get("decoded_width"),
+                        entry.get("local_cover_height") != detail.get("decoded_height"),
                         entry.get("remote_cover_url") is not None,
                         entry.get("remote_cover_thumbnail_url") is not None,
                         entry.get("remote_cover_source") is not None,
@@ -789,6 +794,8 @@ def run_cover_jobs(
                     entry["cover_revision"] = written_revision
                 if downloaded:
                     entry["cover_selection_origin"] = desired_selection_origin
+                    entry["local_cover_width"] = detail.get("decoded_width")
+                    entry["local_cover_height"] = detail.get("decoded_height")
                 runtime_cover_updates[str(track_path)] = (
                     previous_selection,
                     {field: entry.get(field) for field in _COVER_SELECTION_FIELDS},
@@ -802,16 +809,11 @@ def run_cover_jobs(
             cover_cache.save()
         flush_log_handlers_debounced(logger, min_interval_seconds=2.0)
 
-    def finish_or_defer(index, job, cover_path, downloaded, detail):
+    def finish_job(index, job, cover_path, downloaded, detail):
         if provider_outcome_error is not None:
             settle_candidate_publisher(job, detail)
             persist_job_provider_outcomes(job, detail)
             record_job_outcome(index, job, cover_path, downloaded, detail)
-            return
-        cooldowns = [item for item in detail.get("resolver_trace") or []
-                     if item.get("resolver") == "_search_spotify" and item.get("reason") == "spotify_cooldown"]
-        if not downloaded and cooldowns and detail.get("reason") in {"remote_search_failed", "remote_search_timed_out"}:
-            deferred_jobs.append((index, job, cover_path, detail))
             return
         settle_candidate_publisher(job, detail)
         apply_job_result(index, job, cover_path, downloaded, detail)
@@ -852,6 +854,7 @@ def run_cover_jobs(
                     enabled_provider_groups=config.get("COVER_PROVIDER_GROUPS"),
                     config=config,
                     candidate_callback=candidate_callbacks.get(id(job)),
+                    search_run=search_run,
                 ): (index, job)
                 for index, job in enumerate(jobs, start=1)
                 if id(job) not in mixed_folder_jobs
@@ -870,7 +873,7 @@ def run_cover_jobs(
                     str(job.get("folder") or ""),
                     exc,
                 )
-                    finish_or_defer(
+                    finish_job(
                         _index,
                         job,
                         None,
@@ -883,7 +886,7 @@ def run_cover_jobs(
                         },
                     )
                     continue
-                finish_or_defer(_index, job, cover_path, downloaded, detail)
+                finish_job(_index, job, cover_path, downloaded, detail)
     else:
         for index, job in enumerate(jobs, start=1):
             if id(job) in mixed_folder_jobs:
@@ -950,39 +953,11 @@ def run_cover_jobs(
                 enabled_provider_groups=config.get("COVER_PROVIDER_GROUPS"),
                 config=config,
                 candidate_callback=candidate_callbacks.get(id(job)),
+                search_run=search_run,
             )
-            finish_or_defer(index, job, cover_path, downloaded, detail)
+            finish_job(index, job, cover_path, downloaded, detail)
             if provider_outcome_error is not None:
                 break
-
-    for index, job, cover_path, detail in deferred_jobs:
-        if provider_outcome_error is not None:
-            settle_candidate_publisher(job, detail)
-            persist_job_provider_outcomes(job, detail)
-            record_job_outcome(index, job, cover_path, False, detail)
-            continue
-        retry_at = cover_provider_spotify.spotify_cooldown_until()
-        downloaded = False
-        if retry_at <= time.time() and owns_progress() and not get_state().get("scan_in_progress"):
-            original_elapsed_ms = float(detail.get("elapsed_ms") or 0.0)
-            cover_path, downloaded, detail = execute_cover_job(
-                job=job, image_extensions=image_extensions, user_agent=user_agent,
-                cover_cache=cover_cache, force_search=True,
-                allow_apple_web_fallback=False,
-                allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
-                negative_cache_ttl_seconds=negative_cache_ttl_seconds,
-                enabled_provider_groups=config.get("COVER_PROVIDER_GROUPS"), config=config,
-                candidate_callback=candidate_callbacks.get(id(job)),
-                spotify_retry_trace=detail.get("resolver_trace") or [],
-            )
-            detail["spotify_retry_attempted"] = True
-            detail["elapsed_ms"] = original_elapsed_ms + float(detail.get("elapsed_ms") or 0.0)
-            retry_at = cover_provider_spotify.spotify_cooldown_until()
-        if not downloaded and retry_at > time.time():
-            detail["spotify_retry_deferred"] = True
-            detail["spotify_retry_at"] = retry_at
-        settle_candidate_publisher(job, detail)
-        apply_job_result(index, job, cover_path, downloaded, detail)
 
     if provider_outcome_error is not None:
         raise provider_outcome_error
@@ -1068,7 +1043,4 @@ def run_cover_jobs(
         "failed": failed,
         "downloaded_paths": downloaded_paths,
         "job_results": job_results,
-        **({"spotify_deferred": len([item for item in job_results if item.get("spotify_retry_deferred")]),
-            "spotify_retry_at": min(item["spotify_retry_at"] for item in job_results if item.get("spotify_retry_deferred"))}
-           if any(item.get("spotify_retry_deferred") for item in job_results) else {}),
     }

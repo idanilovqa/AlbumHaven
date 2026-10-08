@@ -399,7 +399,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
+    const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
     });
@@ -724,7 +724,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (apiUrl.startsWith('/view-data') && !requestOptions.startupRefresh) {
     const params = new URLSearchParams(apiUrl.split('?')[1] || '');
     const rootKeys = new Set(['surface', 'gallery_scope', 'gallery_display', 'gallery_display_mode', 'gallery_scale_percent', 'category', 'payload_tier', 'gallery_offset', 'omit_sidebar']);
-    if ([...params.keys()].every((key) => rootKeys.has(key)) && ['', 'albums', 'library'].includes(params.get('surface') || '')) {
+    if (params.get('payload_tier') !== 'full' && [...params.keys()].every((key) => rootKeys.has(key)) && ['', 'albums', 'library'].includes(params.get('surface') || '')) {
       params.set('payload_tier', 'sidebar');
       params.delete('omit_sidebar');
       apiUrl = `/view-data?${params}`;
@@ -765,6 +765,8 @@ async function fetchAndRender(url, push = true, options = {}) {
       String(state.ui.activeViewRequestUrl || '') === apiUrl
       && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
         === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      && Number(state.ui.activeViewRequestCoverMutationRevision || 0)
+        === Number(state.ui.albumCoverMutationRevision || 0)
     ) {
       const activeController = state.ui.activeViewRequestController;
       if (
@@ -814,9 +816,14 @@ async function fetchAndRender(url, push = true, options = {}) {
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
+  const requestCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
+  const requestModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  const requestModalCoverAuthority = requestModalAlbum ? { ...requestModalAlbum } : null;
+  const requestVisibleAlbums = typeof flattenVisibleAlbums === 'function' ? flattenVisibleAlbums() : [];
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
+  state.ui.activeViewRequestCoverMutationRevision = requestCoverMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -864,6 +871,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     // A response dispatched before a tag edit must not replace its optimistic view.
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
+      return false;
+    }
+    // Artwork published after this request started owns the album cover state.
+    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
@@ -929,6 +940,17 @@ async function fetchAndRender(url, push = true, options = {}) {
         preserveMountedGalleryChildren: true,
       }
       : requestOptions;
+    const responseModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    const requestKnownAlbum = requestVisibleAlbums.find((album) => album.key === responseModalAlbum?.key);
+    const responseModalCoverAuthority = requestModalCoverAuthority || requestKnownAlbum;
+    // Save replaces the known album object even when its selected bytes and
+    // legacy selection fields are unchanged. Check before applying this view.
+    const responseOwnsModalAlbum = Boolean(responseModalAlbum?.key && responseModalCoverAuthority
+      && (!requestModalAlbum || responseModalAlbum === requestModalAlbum)
+      && ['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
+        'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
+        (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
+      ));
     applyViewPayload(payloadToApply, responseApplyOptions);
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
@@ -954,6 +976,23 @@ async function fetchAndRender(url, push = true, options = {}) {
       ...responseApplyOptions,
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    if (responseOwnsModalAlbum && currentModalAlbum === responseModalAlbum
+        && typeof refreshOpenTrackModalVersionState === 'function'
+        && typeof flattenVisibleAlbums === 'function'
+        && typeof albumRequiresHydration === 'function') {
+      const canonicalAlbum = [data.primary_artist_groups, data.family_artist_groups, data.artist_groups]
+        .flatMap((groups) => (Array.isArray(groups) ? groups : []))
+        .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []))
+        .find((album) => (
+          album.key === currentModalAlbum.key && !albumRequiresHydration(album)
+          && (Object.prototype.hasOwnProperty.call(album, 'cover_path')
+            || Object.prototype.hasOwnProperty.call(album, 'remote_cover_url'))
+        ));
+      if (canonicalAlbum && !retainedMountedSelectedViewState) {
+        refreshOpenTrackModalVersionState(currentModalAlbum.key, canonicalAlbum);
+      }
+    }
     if (
       requestOptions.preserveGalleryOptionsMenu === true
       && state.gallery?.menuOpen
@@ -1582,6 +1621,17 @@ async function pollStatus() {
     const response = await fetch('/status');
     if (response.ok === false) throw new Error(`Status unavailable (${response.status})`);
     const data = await response.json();
+    if (startedDuringPendingStart && sequence === statusPollSequence
+        && readRevision === statusReadRevision && libraryStatusAction?.coverPreparation
+        && data.covers_in_progress && data.covers_phase === 'preparing'
+        && data.covers_run_mode === 'manual-bulk'
+        && data.scan_generation === knownStatus.scan_generation
+        && !data.scan_in_progress && !data.relations_in_progress) {
+      updateStatusIndicator({ ...state.status,
+        covers_elapsed_seconds: data.covers_elapsed_seconds,
+        status_connection_lost: false });
+      return;
+    }
     if (!ownsStatus()) return;
     updateStatusIndicator({ ...data, status_connection_lost: false });
     const normalizedStatus = state.status;

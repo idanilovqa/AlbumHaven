@@ -551,6 +551,12 @@ function resolveLibraryScanPhaseStates(data = {}) {
   const states = Object.fromEntries(stages.map(stage => [stage, 'future']));
   const phase = String(data.scan_phase || '').trim().toLowerCase();
   const outcome = String(data.scan_outcome || '').trim().toLowerCase();
+  if (!data.scan_in_progress && !data.relations_in_progress
+      && String(data.covers_run_mode || '').startsWith('manual')
+      && (data.covers_in_progress || data.covers_phase === 'finished')) {
+    return { discover: 'inactive', metadata: 'inactive', relations: 'inactive',
+      covers: data.covers_in_progress ? 'current' : data.covers_outcome === 'completed' ? 'complete' : 'future' };
+  }
   let currentStage = '';
   if (data.relations_in_progress || (data.scan_in_progress && phase === 'finalizing')) currentStage = 'relations';
   else if (data.covers_in_progress) currentStage = 'covers';
@@ -732,7 +738,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   title.textContent = ready
     ? 'Your local library is ready.'
     : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
-      ? (coverBusy && !data.scan_in_progress ? 'Fetching covers' : 'Scanning the library')
+      ? (coverBusy && !data.scan_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers') : 'Scanning the library')
       : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
   if (scanSummary) scanSummary.textContent = status.textContent;
@@ -743,6 +749,7 @@ function renderLibraryLoader(data = {}, options = {}) {
       item.classList.toggle('is-current', stateName === 'current');
       item.classList.toggle('is-complete', stateName === 'complete');
       item.classList.toggle('is-future', stateName === 'future');
+      item.classList.toggle('is-inactive', stateName === 'inactive');
       const stage = String(item.getAttribute('data-scan-stage') || '');
       let detail = '';
       if ((data.covers_in_progress || data.covers_phase === 'finished') && !data.scan_in_progress && String(data.covers_run_mode || '').startsWith('manual') && ['discover', 'metadata', 'relations'].includes(stage) && !data.relations_in_progress) {

@@ -5,8 +5,10 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
+from threading import Lock
 
 from config import Config
+from music_app.services.cover_refresh_policy import automatic_cover_repair_minimum_edge
 from music_app.services import cover_provider_deezer
 from music_app.services import cover_provider_fallback_web
 from music_app.services import cover_provider_http
@@ -68,6 +70,23 @@ _APPLE_MAX_PROBE_CONTENDERS = cover_provider_apple._APPLE_MAX_PROBE_CONTENDERS
 _NEGATIVE_CACHE_TTL_SECONDS = cover_provider_cache._NEGATIVE_CACHE_TTL_SECONDS
 
 
+class AutomaticCoverSearchRun:
+    """Stop Spotify for this run after quota, without affecting other providers."""
+
+    def __init__(self):
+        self.spotify_disabled = cover_provider_spotify.spotify_cooldown_until() > time.time()
+        self._quota_recorded = False
+        self._lock = Lock()
+
+    def disable_spotify(self, *, quota_response: bool = True) -> bool:
+        with self._lock:
+            self.spotify_disabled = True
+            if quota_response and not self._quota_recorded:
+                self._quota_recorded = True
+                return True
+            return False
+
+
 def _log_verbose(logger, message: str, *args: object) -> None:
     callback = getattr(logger, "verbose", None)
     if not callable(callback):
@@ -75,11 +94,12 @@ def _log_verbose(logger, message: str, *args: object) -> None:
     callback(message, *args)
 
 
-def local_cover_requires_upgrade_check(local_cover: Path | None, cached: dict[str, object] | None = None) -> bool:
+def local_cover_requires_upgrade_check(local_cover: Path | None, cached: dict[str, object] | None = None, *, minimum_edge: int | None = None) -> bool:
     if local_cover is None or not local_cover.exists():
         return True
     width, height = image_dimensions(local_cover)
-    return width < _MIN_AUTHORITATIVE_COVER_EDGE or height < _MIN_AUTHORITATIVE_COVER_EDGE
+    edge = minimum_edge if minimum_edge is not None else automatic_cover_repair_minimum_edge()
+    return width < edge or height < edge
 
 
 def _http_get_bytes(url: str, *, user_agent: str, service: str, context: str) -> bytes | None:
@@ -649,9 +669,11 @@ def search_primary_remote_cover(
     candidate_callback: Callable[..., object] | None = None,
     logger=None,
     enabled_provider_groups: object = None,
-    only_spotify: bool = False,
+    search_run: AutomaticCoverSearchRun | None = None,
+    minimum_cover_edge: int = _MIN_AUTHORITATIVE_COVER_EDGE,
 ) -> tuple[CoverCandidate | None, list[dict[str, object]]]:
     resolver_trace: list[dict[str, object]] = []
+    search_run = search_run or AutomaticCoverSearchRun()
     primary_resolvers: list[tuple[str, str, object]] = [
         (
             "apple",
@@ -676,7 +698,6 @@ def search_primary_remote_cover(
         for item in primary_resolvers
         if cover_provider_group_enabled(effective_groups, "music_services")
         and (not enabled_service_names or item[0] in enabled_service_names)
-        and (not only_spotify or item[0] == "spotify")
     ]
     primary_resolvers = cover_provider_matching.order_provider_items(
         primary_resolvers,
@@ -687,6 +708,8 @@ def search_primary_remote_cover(
     effective_logger = logger or _LOGGER
     album_deadline = time.perf_counter() + _AUTOMATIC_ALBUM_BUDGET_SECONDS
     for _provider_name, resolver_name, resolver in primary_resolvers:
+        if _provider_name == "spotify" and search_run.spotify_disabled:
+            continue
         started_at = time.perf_counter()
         budget_seconds = min(_AUTOMATIC_PROVIDER_BUDGET_SECONDS, album_deadline - started_at)
         if budget_seconds <= 0:
@@ -712,11 +735,13 @@ def search_primary_remote_cover(
                     resolver_trace[-1]["apple_http_trace"] = apple_trace
             candidate = None
         except cover_provider_spotify.SpotifyCooldown as exc:
-            resolver_trace.append({
-                "resolver": resolver_name,
-                "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                "status": "failed", "reason": "spotify_cooldown", "retry_at": exc.retry_at,
-            })
+            if search_run.disable_spotify(quota_response=exc.quota_response):
+                resolver_trace.append({
+                    "resolver": resolver_name,
+                    "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    "status": "failed", "reason": "spotify_quota_exceeded",
+                    "http_status": 429, "retry_at": exc.retry_at,
+                })
             candidate = None
         except AutomaticCoverSearchFailed:
             resolver_trace.append({
@@ -769,8 +794,8 @@ def search_primary_remote_cover(
                 trace_item["candidate_height"] = int(candidate.height or 0)
                 trace_item["acceptable"] = cover_provider_matching.cover_candidate_is_acceptable(
                     candidate,
-                    apple_sufficient_cover_edge=_APPLE_SUFFICIENT_COVER_EDGE,
-                    min_authoritative_cover_edge=_MIN_AUTHORITATIVE_COVER_EDGE,
+                    apple_sufficient_cover_edge=max(_APPLE_SUFFICIENT_COVER_EDGE, minimum_cover_edge),
+                    min_authoritative_cover_edge=minimum_cover_edge,
                 )
                 if candidate.matched_year is not None:
                     trace_item["matched_year"] = candidate.matched_year
@@ -790,13 +815,13 @@ def search_primary_remote_cover(
             primary_candidates.append(candidate)
             if cover_provider_matching.cover_candidate_is_acceptable(
                 candidate,
-                apple_sufficient_cover_edge=_APPLE_SUFFICIENT_COVER_EDGE,
-                min_authoritative_cover_edge=_MIN_AUTHORITATIVE_COVER_EDGE,
+                apple_sufficient_cover_edge=max(_APPLE_SUFFICIENT_COVER_EDGE, minimum_cover_edge),
+                min_authoritative_cover_edge=minimum_cover_edge,
             ):
                 return candidate, resolver_trace
 
     if not primary_candidates:
-        if not only_spotify and cover_provider_group_enabled(effective_groups, "bandcamp"):
+        if cover_provider_group_enabled(effective_groups, "bandcamp"):
             started_at = time.perf_counter()
             budget_seconds = min(_AUTOMATIC_PROVIDER_BUDGET_SECONDS, album_deadline - started_at)
             try:
@@ -831,8 +856,8 @@ def search_primary_remote_cover(
     return cover_provider_matching.select_primary_cover_candidate(
         primary_candidates,
         provider_order=cover_provider_matching.AUTOMATIC_PRIMARY_PROVIDER_ORDER,
-        apple_sufficient_cover_edge=_APPLE_SUFFICIENT_COVER_EDGE,
-        min_authoritative_cover_edge=_MIN_AUTHORITATIVE_COVER_EDGE,
+        apple_sufficient_cover_edge=max(_APPLE_SUFFICIENT_COVER_EDGE, minimum_cover_edge),
+        min_authoritative_cover_edge=minimum_cover_edge,
     ), resolver_trace
 
 
@@ -925,6 +950,11 @@ def ensure_best_cover_for_folder(
     negative_cache_ttl_seconds: float | None = None,
     enabled_provider_groups: object = None,
     cover_selection_origin: str = "automatic",
+    cover_selection_provenance: str | None = None,
+    selected_cover_revision: str | None = None,
+    selected_remote_cover_url: str | None = None,
+    selected_remote_cover_width: int | None = None,
+    selected_remote_cover_height: int | None = None,
     reject_if_user_controlled: bool = False,
     *,
     candidate_callback: Callable[..., object] | None = None,
@@ -941,9 +971,10 @@ def ensure_best_cover_for_folder(
     normalized_cover_selection_origin = str(
         cover_selection_origin or "automatic"
     ).strip().casefold()
-    user_controls_cover = (
-        reject_if_user_controlled and normalized_cover_selection_origin == "user"
-    )
+    selected_user_cover = reject_if_user_controlled and normalized_cover_selection_origin == "user"
+    user_controls_cover = selected_user_cover and cover_selection_provenance == "explicit"
+    legacy_user_cover = selected_user_cover and not user_controls_cover
+    minimum_edge = _MIN_AUTHORITATIVE_COVER_EDGE if user_controls_cover else automatic_cover_repair_minimum_edge()
     fetch_started_at = time.perf_counter()
     local_cover = (
         validated_selected_cover_path(selected_cover_path)
@@ -984,7 +1015,13 @@ def ensure_best_cover_for_folder(
         )
         return local_cover, False, detail
 
-    if local_cover and not force_search and not user_controls_cover and not local_cover_requires_upgrade_check(local_cover):
+    if reject_if_user_controlled and not local_cover and selected_remote_cover_url and all(
+        int(edge or 0) >= minimum_edge
+        for edge in (selected_remote_cover_width, selected_remote_cover_height)
+    ):
+        detail["reason"] = "satisfactory_selected_remote_cover_present"
+        return None, False, detail
+    if local_cover and (selected_user_cover or not force_search) and not local_cover_requires_upgrade_check(local_cover, minimum_edge=minimum_edge):
         detail["reason"] = "satisfactory_local_cover_present"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
         return local_cover, False, detail
@@ -992,7 +1029,7 @@ def ensure_best_cover_for_folder(
     cache_key = cover_provider_cache.cover_query_key(artist, album, edition, year)
     cached = cache.get(cache_key)
     now = time.time()
-    local_cover_needs_refresh = local_cover_requires_upgrade_check(local_cover, cached)
+    local_cover_needs_refresh = local_cover_requires_upgrade_check(local_cover, cached, minimum_edge=minimum_edge)
     detail["cache_key"] = cache_key
     detail["local_cover_needs_refresh"] = local_cover_needs_refresh
     effective_negative_cache_ttl_seconds = float(
@@ -1028,7 +1065,7 @@ def ensure_best_cover_for_folder(
                     str(cached.get("matched_album") or ""),
                     cached.get("matched_year"),
                 )
-            elif user_controls_cover:
+            elif selected_user_cover:
                 detail["cache_bypassed"] = True
                 _log_verbose(
                     effective_logger,
@@ -1067,7 +1104,7 @@ def ensure_best_cover_for_folder(
                     str(cached.get("source") or ""),
                 )
         if updated_at and now - updated_at <= effective_negative_cache_ttl_seconds:
-            if is_missing:
+            if is_missing and cached.get("minimum_cover_edge", _MIN_AUTHORITATIVE_COVER_EDGE) == minimum_edge:
                 detail["reason"] = "negative_cache_ttl_active"
                 detail["cache_age_seconds"] = round(now - updated_at, 2)
                 detail["cache_ttl_seconds"] = effective_negative_cache_ttl_seconds
@@ -1107,6 +1144,7 @@ def ensure_best_cover_for_folder(
         candidate_callback=candidate_callback,
         logger=effective_logger,
         enabled_provider_groups=enabled_provider_groups,
+        minimum_cover_edge=minimum_edge,
     )
     detail["resolver_trace"] = resolver_trace
     if not candidate:
@@ -1115,7 +1153,7 @@ def ensure_best_cover_for_folder(
         detail["reason"] = "remote_search_timed_out" if timed_out else "remote_search_failed" if failed else "remote_search_returned_no_candidate"
         detail["elapsed_ms"] = round((time.perf_counter() - fetch_started_at) * 1000, 2)
         if not timed_out and not failed:
-            cache.set(cache_key, {"updated_at": now, "missing": True})
+            cache.set(cache_key, {"updated_at": now, "missing": True, "minimum_cover_edge": minimum_edge})
         return local_cover, False, detail
     detail["source"] = candidate.source
     detail["candidate_url"] = candidate.url
@@ -1144,11 +1182,16 @@ def ensure_best_cover_for_folder(
     img, width, height = decoded
     try:
         remote_width = int(candidate.width or width)
+        if not user_controls_cover and (width < minimum_edge or height < minimum_edge):
+            detail["reason"] = "replacement_candidate_below_minimum_dimensions"
+            return local_cover, False, detail
         remote_height = int(candidate.height or height)
         remote_area = remote_width * remote_height
         remote_sharpness = measure_image_sharpness(img)
         detail["remote_width"] = remote_width
         detail["remote_height"] = remote_height
+        detail["decoded_width"] = width
+        detail["decoded_height"] = height
         detail["remote_area"] = remote_area
         detail["remote_sharpness"] = round(remote_sharpness, 4)
         _log_verbose(effective_logger,
@@ -1187,6 +1230,9 @@ def ensure_best_cover_for_folder(
             remote_area=remote_area,
             remote_sharpness=remote_sharpness,
         )
+        if not user_controls_cover and local_cover_needs_refresh and not should_replace:
+            should_replace = True
+            comparison_reason = "replacement_meets_minimum_dimensions"
         detail["comparison_reason"] = comparison_reason
         if not should_replace:
             detail["reason"] = comparison_reason
@@ -1270,7 +1316,11 @@ def ensure_best_cover_for_folder(
         write_action.provisional_cover_revision = hashlib.sha256(prepared_write_bytes).hexdigest()  # type: ignore[attr-defined]
         write_action.preserve_user_ownership = preserve_user_ownership  # type: ignore[attr-defined]
         write_action.expected_cover_revision = expected_cover_revision  # type: ignore[attr-defined]
+        write_action.replace_legacy_user_selection = legacy_user_cover  # type: ignore[attr-defined]
+        write_action.legacy_selected_cover_revision = selected_cover_revision  # type: ignore[attr-defined]
         write_action.prepared_cover_bytes = prepared_write_bytes  # type: ignore[attr-defined]
+        write_action.local_cover_width = width  # type: ignore[attr-defined]
+        write_action.local_cover_height = height  # type: ignore[attr-defined]
         if automatic_write_guard is not None:
             written = automatic_write_guard(
                 write_action,
@@ -1288,6 +1338,8 @@ def ensure_best_cover_for_folder(
         else:
             written = write_action()
         if written:
+            if legacy_user_cover:
+                detail["legacy_user_selection_replaced"] = True
             cache.set(cache_key, {
                 "updated_at": now,
                 "missing": False,

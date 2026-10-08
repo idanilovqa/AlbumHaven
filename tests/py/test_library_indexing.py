@@ -454,6 +454,66 @@ def test_scan_library_file_cache_preserves_remote_cover_fields_when_reindexing(t
     assert updated_file_cache[str(track_path)]["exception_type"] == "Non-album rarity"
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_full_metadata_reread_preserves_selection_authority_for_guarded_album_repair(tmp_path, monkeypatch, explicit):
+    import hashlib
+    from music_app.services.covers import Image
+    from music_app.services.library import build_albums_from_file_cache
+
+    album_root = tmp_path / "Album"
+    random_root = tmp_path / "Random songs"
+    album_root.mkdir()
+    random_root.mkdir()
+    paths = [album_root / "1.mp3", album_root / "2.mp3", random_root / "1.mp3"]
+    for path in paths:
+        path.write_bytes(b"track")
+    proper_cover = album_root / "cover.png"
+    wrong_cover = random_root / "cover.png"
+    Image.new("RGB", (1600, 1600), "red").save(proper_cover)
+    Image.new("RGB", (200, 200), "blue").save(wrong_cover)
+    selected = wrong_cover
+    if explicit:
+        selected = album_root / "manual-choice.png"
+        Image.new("RGB", (4000, 4000), "green").save(selected)
+    revision = hashlib.sha256(selected.read_bytes()).hexdigest()
+    def metadata(path):
+        return {
+            "path": str(path), "mtime": path.stat().st_mtime, "size": path.stat().st_size,
+            "album": "Album", "album_artist": "Artist", "artist": "Artist",
+            "title": f"Song {path.stem}", "track_number": int(path.stem),
+            "disc_number": 1, "year": 2000, "duration_seconds": 180,
+            "cover_path": None,
+        }
+    cache = {str(path): {**metadata(path), "cover_path": str(selected), "cover_revision": revision,
+                        "cover_selection_origin": "user", "cover_selection_provenance": "explicit" if explicit else None,
+                        "local_cover_width": 4000 if explicit else 200, "local_cover_height": 4000 if explicit else 200}
+             for path in paths}
+    monkeypatch.setattr(library_indexing, "read_metadata_for_file", metadata)
+    updated, _ = library_indexing.scan_library_file_cache(
+        {"file_cache": cache}, roots=[tmp_path], supported_extensions={".mp3"},
+        image_extensions={".png"}, exception_overrides={}, use_existing_cache=False,
+    )
+    assert updated[str(paths[0])]["cover_path"] == str(selected)
+    assert updated[str(paths[0])]["cover_revision"] == revision
+    assert updated[str(paths[0])]["cover_selection_origin"] == "user"
+    albums = build_albums_from_file_cache(updated)
+    assert len(albums) == 1
+    album = albums[0]
+    assert len(album.tracks) == 2
+    if explicit:
+        assert album.cover_path == selected
+        assert album.cover_selection_origin == "user"
+        assert album.cover_selection_provenance == "explicit"
+        assert (album.local_cover_width, album.local_cover_height) == (4000, 4000)
+        assert not getattr(album, "cover_selection_repair_previous", None)
+    else:
+        assert album.cover_path == proper_cover
+        assert album.cover_selection_origin == "automatic"
+        assert album.cover_selection_repair_previous == {
+            "cover_path": str(wrong_cover), "cover_revision": revision, "cover_selection_origin": "user",
+        }
+
+
 def test_scan_library_file_cache_repairs_missing_cover_paths(tmp_path: Path, monkeypatch):
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)

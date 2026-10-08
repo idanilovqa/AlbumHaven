@@ -100,6 +100,10 @@ export class ArtistPageSettings extends BasePage {
     return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="number"]');
   }
 
+  nonAlbumTrackRowByPath(trackPath) {
+    return this.nonAlbumTracksModal.locator(`[data-track-row-path=${JSON.stringify(String(trackPath))}]`);
+  }
+
   nonAlbumTrackCellByTitle(trackTitle) {
     return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="title"]');
   }

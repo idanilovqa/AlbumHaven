@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import random
 import shutil
 import signal
@@ -3950,6 +3951,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "height": 4000,
             "candidate_fixture_mode": "user-owned-improvement",
         })
+        self.cover_lookup_owned_album_target = None
         same_art_source = dict(cover_specs[1] if len(cover_specs) > 1 else cover_specs[0])
         self.cover_lookup_same_art_improvement_spec = prepare_provider_artwork_spec({
             **same_art_source,
@@ -4173,6 +4175,7 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
             "automatic-scan",
             "same-art-improvement",
             "alternate-improvement",
+            "owned-legacy-repair",
         }:
             raise ValueError(f"Unsupported cover lookup fixture mode: {normalized_mode}")
         with self.cover_lookup_mode_lock:
@@ -4183,6 +4186,14 @@ class _ProviderFixtureServer(ThreadingHTTPServer):
     def get_cover_lookup_mode(self) -> str:
         with self.cover_lookup_mode_lock:
             return self.cover_lookup_mode
+
+    def set_owned_legacy_cover_target(self, payload) -> None:
+        artist = str(payload.get("artist") or "")
+        album = str(payload.get("album") or "")
+        if not re.fullmatch(r"E2E Album Source Ownership [a-z0-9]+", artist) or album != "Real Album":
+            raise ValueError("Cover repair provider requires the generated owned album.")
+        self.cover_lookup_owned_album_target = {"artist": artist, "album": album, "year": 2026}
+        self.set_cover_lookup_mode("owned-legacy-repair")
 
     def set_itunes_search_delay(self, delay_seconds: object) -> None:
         if isinstance(delay_seconds, bool):
@@ -4395,6 +4406,12 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             except ValueError:
                 self.send_error(400)
                 return
+        elif action == "set-owned-legacy-repair":
+            try:
+                self.server.set_owned_legacy_cover_target(payload)
+            except ValueError:
+                self.send_error(400)
+                return
         else:
             self.send_error(400)
             return
@@ -4541,14 +4558,19 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def _matching_specs(self, query_text: object) -> list[dict[str, Any]]:
+        normalized_query = _normalize_provider_query(query_text)
         mode = self.server.get_cover_lookup_mode()
+        if mode == "owned-legacy-repair":
+            target = self.server.cover_lookup_owned_album_target
+            if target and _normalize_provider_query(f"{target['artist']} {target['album']}") in normalized_query:
+                return [{**dict(self.server.cover_lookup_user_improvement_spec), **target}]
+            return []
         if mode == "no-results":
             return []
         if mode == "metallica-mismatch":
             return [dict(spec) for spec in self.server.cover_lookup_matching_specs]
         if mode == "artist-conjunction":
             return [dict(self.server.cover_lookup_artist_conjunction_spec)]
-        normalized_query = _normalize_provider_query(query_text)
         if mode == "automatic-coverless":
             if _normalize_provider_query("Mastodon Crack The Skye Fixture 08") in normalized_query:
                 return [dict(self.server.cover_lookup_automatic_candidate_spec)]

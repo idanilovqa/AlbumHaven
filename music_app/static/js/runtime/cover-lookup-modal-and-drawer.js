@@ -805,6 +805,8 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
     || getUpdatedAlbumForTrackPaths(candidates, getAlbumTrackPaths(state.coverLookup.modal.album))
     || candidates[0];
   if (!updatedAlbum) return;
+  state.ui = state.ui || {};
+  state.ui.albumCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0) + 1;
   const applyRefresh = () => {
     patchVisibleAlbumsByTrackPath(candidates);
     refreshRenderedAlbumCoverOnly(updatedAlbum);

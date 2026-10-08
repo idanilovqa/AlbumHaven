@@ -2057,6 +2057,13 @@ function buildApiUrl(view, options = {}) {
   if (options.rootSidebar) params.set('root_sidebar', '1');
   if (String(options.payloadTier || '').trim()) {
     params.set('payload_tier', String(options.payloadTier).trim());
+  } else if (
+    options.rootFullPayload
+    && resolvedSurface === 'albums'
+    && !view.query
+    && !view.selected_artist
+  ) {
+    params.set('payload_tier', 'full');
   }
   const qs = params.toString();
   return `/view-data${qs ? `?${qs}` : ''}`;
@@ -2889,11 +2896,14 @@ function buildLoaderStatusLines(data, options = {}) {
   if (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished')) {
     const currentFolder = String(data.covers_current_folder || '').split(/[\\/]/).pop();
     lines.push({
-      title: data.covers_in_progress ? 'Fetching covers'
+      title: data.covers_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers')
         : data.covers_outcome === 'failed' ? 'Cover search failed'
         : data.covers_outcome === 'cancelled' ? 'Cover search cancelled' : 'Cover search finished',
       detail: buildCoverProgressDetail(data, currentFolder),
     });
+    if (data.covers_phase !== 'preparing' && !data.status_connection_lost && data.covers_spotify_quota_exceeded) {
+      lines.push({ title: 'Spotify', detail: 'Spotify quota reached — skipped for this run' });
+    }
   }
   if (!lines.length) {
     lines.push(options.scanPageVisible ? {
@@ -2924,7 +2934,7 @@ function buildCoverProgressDetail(data, currentAlbum = '') {
     parts.push(`elapsed ${formatDurationCompact(data.covers_elapsed_seconds)}`);
   }
   const eta = Number(data.covers_estimated_remaining_seconds);
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress && data.covers_phase !== 'preparing') {
     parts.push(data.covers_estimated_remaining_seconds != null && Number.isFinite(eta) && eta >= 0
       ? `ETA ${formatDurationCompact(eta)}` : 'ETA calculating…');
   }
@@ -2978,11 +2988,14 @@ function buildStatusIndicatorTitleParts(data = {}) {
     }
     parts.push(`${data.relations_phase}: ${Number(data.relations_processed || 0)} / ${Number(data.relations_total || 0)} (${data.relations_source})`);
   }
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress && data.covers_phase === 'preparing') {
+    parts.push('Preparing cover search');
+  } else if (data.covers_in_progress) {
     if (!progressText.value) {
       progressText.value = `${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)}`;
     }
     parts.push(`Updating cover art: ${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)} cover searches completed`);
+    if (data.covers_spotify_quota_exceeded) parts.push('Spotify quota reached — skipped for this run');
     parts.push(`Downloaded covers: ${Number(data.covers_downloaded || 0)}`);
     if (data.covers_current_folder) {
       parts.push(`Current album folder: ${data.covers_current_folder}`);
@@ -5113,6 +5126,12 @@ function resolveLibraryScanPhaseStates(data = {}) {
   const states = Object.fromEntries(stages.map(stage => [stage, 'future']));
   const phase = String(data.scan_phase || '').trim().toLowerCase();
   const outcome = String(data.scan_outcome || '').trim().toLowerCase();
+  if (!data.scan_in_progress && !data.relations_in_progress
+      && String(data.covers_run_mode || '').startsWith('manual')
+      && (data.covers_in_progress || data.covers_phase === 'finished')) {
+    return { discover: 'inactive', metadata: 'inactive', relations: 'inactive',
+      covers: data.covers_in_progress ? 'current' : data.covers_outcome === 'completed' ? 'complete' : 'future' };
+  }
   let currentStage = '';
   if (data.relations_in_progress || (data.scan_in_progress && phase === 'finalizing')) currentStage = 'relations';
   else if (data.covers_in_progress) currentStage = 'covers';
@@ -5294,7 +5313,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   title.textContent = ready
     ? 'Your local library is ready.'
     : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
-      ? (coverBusy && !data.scan_in_progress ? 'Fetching covers' : 'Scanning the library')
+      ? (coverBusy && !data.scan_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers') : 'Scanning the library')
       : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
   if (scanSummary) scanSummary.textContent = status.textContent;
@@ -5305,6 +5324,7 @@ function renderLibraryLoader(data = {}, options = {}) {
       item.classList.toggle('is-current', stateName === 'current');
       item.classList.toggle('is-complete', stateName === 'complete');
       item.classList.toggle('is-future', stateName === 'future');
+      item.classList.toggle('is-inactive', stateName === 'inactive');
       const stage = String(item.getAttribute('data-scan-stage') || '');
       let detail = '';
       if ((data.covers_in_progress || data.covers_phase === 'finished') && !data.scan_in_progress && String(data.covers_run_mode || '').startsWith('manual') && ['discover', 'metadata', 'relations'].includes(stage) && !data.relations_in_progress) {
@@ -14205,7 +14225,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
+    const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
     });
@@ -14530,7 +14550,7 @@ async function fetchAndRender(url, push = true, options = {}) {
   if (apiUrl.startsWith('/view-data') && !requestOptions.startupRefresh) {
     const params = new URLSearchParams(apiUrl.split('?')[1] || '');
     const rootKeys = new Set(['surface', 'gallery_scope', 'gallery_display', 'gallery_display_mode', 'gallery_scale_percent', 'category', 'payload_tier', 'gallery_offset', 'omit_sidebar']);
-    if ([...params.keys()].every((key) => rootKeys.has(key)) && ['', 'albums', 'library'].includes(params.get('surface') || '')) {
+    if (params.get('payload_tier') !== 'full' && [...params.keys()].every((key) => rootKeys.has(key)) && ['', 'albums', 'library'].includes(params.get('surface') || '')) {
       params.set('payload_tier', 'sidebar');
       params.delete('omit_sidebar');
       apiUrl = `/view-data?${params}`;
@@ -14571,6 +14591,8 @@ async function fetchAndRender(url, push = true, options = {}) {
       String(state.ui.activeViewRequestUrl || '') === apiUrl
       && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
         === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      && Number(state.ui.activeViewRequestCoverMutationRevision || 0)
+        === Number(state.ui.albumCoverMutationRevision || 0)
     ) {
       const activeController = state.ui.activeViewRequestController;
       if (
@@ -14620,9 +14642,14 @@ async function fetchAndRender(url, push = true, options = {}) {
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
+  const requestCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
+  const requestModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  const requestModalCoverAuthority = requestModalAlbum ? { ...requestModalAlbum } : null;
+  const requestVisibleAlbums = typeof flattenVisibleAlbums === 'function' ? flattenVisibleAlbums() : [];
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
+  state.ui.activeViewRequestCoverMutationRevision = requestCoverMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -14670,6 +14697,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     // A response dispatched before a tag edit must not replace its optimistic view.
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
+      return false;
+    }
+    // Artwork published after this request started owns the album cover state.
+    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
@@ -14735,6 +14766,17 @@ async function fetchAndRender(url, push = true, options = {}) {
         preserveMountedGalleryChildren: true,
       }
       : requestOptions;
+    const responseModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    const requestKnownAlbum = requestVisibleAlbums.find((album) => album.key === responseModalAlbum?.key);
+    const responseModalCoverAuthority = requestModalCoverAuthority || requestKnownAlbum;
+    // Save replaces the known album object even when its selected bytes and
+    // legacy selection fields are unchanged. Check before applying this view.
+    const responseOwnsModalAlbum = Boolean(responseModalAlbum?.key && responseModalCoverAuthority
+      && (!requestModalAlbum || responseModalAlbum === requestModalAlbum)
+      && ['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
+        'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
+        (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
+      ));
     applyViewPayload(payloadToApply, responseApplyOptions);
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
@@ -14760,6 +14802,23 @@ async function fetchAndRender(url, push = true, options = {}) {
       ...responseApplyOptions,
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    if (responseOwnsModalAlbum && currentModalAlbum === responseModalAlbum
+        && typeof refreshOpenTrackModalVersionState === 'function'
+        && typeof flattenVisibleAlbums === 'function'
+        && typeof albumRequiresHydration === 'function') {
+      const canonicalAlbum = [data.primary_artist_groups, data.family_artist_groups, data.artist_groups]
+        .flatMap((groups) => (Array.isArray(groups) ? groups : []))
+        .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []))
+        .find((album) => (
+          album.key === currentModalAlbum.key && !albumRequiresHydration(album)
+          && (Object.prototype.hasOwnProperty.call(album, 'cover_path')
+            || Object.prototype.hasOwnProperty.call(album, 'remote_cover_url'))
+        ));
+      if (canonicalAlbum && !retainedMountedSelectedViewState) {
+        refreshOpenTrackModalVersionState(currentModalAlbum.key, canonicalAlbum);
+      }
+    }
     if (
       requestOptions.preserveGalleryOptionsMenu === true
       && state.gallery?.menuOpen
@@ -15388,6 +15447,17 @@ async function pollStatus() {
     const response = await fetch('/status');
     if (response.ok === false) throw new Error(`Status unavailable (${response.status})`);
     const data = await response.json();
+    if (startedDuringPendingStart && sequence === statusPollSequence
+        && readRevision === statusReadRevision && libraryStatusAction?.coverPreparation
+        && data.covers_in_progress && data.covers_phase === 'preparing'
+        && data.covers_run_mode === 'manual-bulk'
+        && data.scan_generation === knownStatus.scan_generation
+        && !data.scan_in_progress && !data.relations_in_progress) {
+      updateStatusIndicator({ ...state.status,
+        covers_elapsed_seconds: data.covers_elapsed_seconds,
+        status_connection_lost: false });
+      return;
+    }
     if (!ownsStatus()) return;
     updateStatusIndicator({ ...data, status_connection_lost: false });
     const normalizedStatus = state.status;
@@ -18740,7 +18810,7 @@ async function watchSaveTask(taskId, context = {}) {
           ) {
             try {
               viewRefreshed = await fetchAndRender(
-                buildApiUrl(state.view),
+                buildApiUrl(state.view, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -23921,16 +23991,24 @@ async function performAlbumMove(album, action, options = {}) {
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
   const statusAction = claimLibraryStatusAction(true);
+  statusAction.coverPreparation = true;
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
       covers_in_progress: true,
+      covers_phase: 'preparing',
+      covers_run_mode: 'manual-bulk',
+      covers_outcome: '',
+      covers_elapsed_seconds: null,
+      covers_estimated_remaining_seconds: null,
       covers_processed: 0,
       covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: 0,
       covers_downloaded: 0,
       covers_current_folder: '',
     });
+    scheduleStatusPoll(250);
     const response = await fetch('/utilities/fetch-covers-unsuccessful', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -23965,6 +24043,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         covers_in_progress: false,
         covers_processed: 0,
         covers_completed: 0,
+        covers_spotify_quota_exceeded: false,
         covers_total: 0,
         covers_downloaded: 0,
         covers_current_folder: '',
@@ -23977,8 +24056,11 @@ async function fetchUnsuccessfulAlbumCovers() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: true,
+      covers_phase: 'fetching',
+      covers_run_mode: 'manual-bulk',
       covers_processed: 0,
       covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: Number(data.queued_count || 0),
       covers_downloaded: 0,
       covers_current_folder: String(data.current_folder || ''),
@@ -26430,6 +26512,8 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
     || getUpdatedAlbumForTrackPaths(candidates, getAlbumTrackPaths(state.coverLookup.modal.album))
     || candidates[0];
   if (!updatedAlbum) return;
+  state.ui = state.ui || {};
+  state.ui.albumCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0) + 1;
   const applyRefresh = () => {
     patchVisibleAlbumsByTrackPath(candidates);
     refreshRenderedAlbumCoverOnly(updatedAlbum);
@@ -29416,12 +29500,13 @@ async function ignoreAlbumVersion(albumKey) {
   }
 }
 
-function refreshOpenTrackModalVersionState(preferredAlbumKey = '') {
+function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbum = null) {
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return;
   const currentKey = String(preferredAlbumKey || state.modalReleases[state.modalReleaseIndex]?.key || '');
   const visibleAlbums = flattenVisibleAlbums();
-  const currentAlbum = visibleAlbums.find((item) => String(item.key || '') === currentKey)
+  const currentAlbum = preferredAlbum
+    || visibleAlbums.find((item) => String(item.key || '') === currentKey)
     || state.modalReleases[state.modalReleaseIndex]
     || visibleAlbums[0]
     || null;

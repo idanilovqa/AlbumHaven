@@ -41,7 +41,7 @@ test('rendering detaches and restores the GalleryBar instance and uses truthful 
   assert.match(runtime, /galleryBar\.remove\(\)/);
   assert.match(runtime, /function unmountLibraryStatusBar\(/);
   assert.match(runtime, /insertBefore\(detachedGalleryBar, anchor\)/);
-  assert.match(runtime, /coverBusy && !data.scan_in_progress \? 'Fetching covers' : 'Scanning the library'/);
+  assert.match(runtime, /coverBusy && !data.scan_in_progress \? \(data\.covers_phase === 'preparing' \? 'Preparing cover search' : 'Fetching covers'\) : 'Scanning the library'/);
   assert.match(runtime, /const stages = \['discover', 'metadata', 'covers', 'relations'\]/);
   assert.match(runtime, /item\.classList\.toggle\('is-current'/);
   assert.match(runtime, /item\.classList\.toggle\('is-complete'/);

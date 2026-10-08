@@ -25,6 +25,14 @@ def _cache_entry(path: Path) -> dict[str, object]:
     }
 
 
+def test_file_entry_round_trip_preserves_local_membership_rejection(tmp_path):
+    entry = _cache_entry(tmp_path / "orphan.flac")
+    entry["local_album_membership_problem"] = "Duplicate track outside album folder"
+    serialized = cache_module.serialize_file_entry(entry)
+    assert serialized["local_album_membership_problem"] == entry["local_album_membership_problem"]
+    assert cache_module.deserialize_file_entry(serialized)["local_album_membership_problem"] == entry["local_album_membership_problem"]
+
+
 def _write_migration_cache(
     cache_path: Path,
     *,

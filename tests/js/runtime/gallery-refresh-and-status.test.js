@@ -8,6 +8,148 @@ const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static',
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
 
+function prepareOpenAlbumRefresh(context) {
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'tag-editor-and-optimistic-updates.js'), 'utf8'), context);
+  const stale = {
+    key: 'artist::album::deluxe', name: 'Album', album_artist: 'Artist', edition: 'Deluxe',
+    cover_path: '/Random songs/cover.png', cover_selection_origin: 'user',
+    tracks: [{ path: '/Complete copy/01.flac' }],
+    duplicate_sources: [{ tracks: [{ path: '/Complete copy/01.flac' }] },
+      { tracks: [{ path: '/Real Album/01.flac' }] }],
+  };
+  const original = { ...stale, key: 'artist::album', edition: '', tracks: [{ path: '/Original/01.flac' }] };
+  context.state.modalReleases = [original, stale];
+  context.state.modalReleaseIndex = 1;
+  context.state.view.ignored_version_keys = [];
+  context.state.view.manual_version_links = {};
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [original, stale] }];
+  context.state.view.primary_artist_groups = context.state.view.artist_groups;
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => id === 'track-modal'
+    ? { hidden: false } : getElementById(id);
+  context.albumRequiresHydration = (album) => album?.preview_only === true || !album?.tracks?.length;
+  context.normalizeAlbumBaseName = (name) => String(name).toLowerCase();
+  context.sortAlbumVariants = (albums) => albums;
+  context.pickOriginalAlbumVariant = (albums) => albums.find((album) => !album.edition);
+  context.extractVariantLabel = (album) => album.edition || 'Original';
+  const rendered = [];
+  context.renderTrackModalRelease = (album) => rendered.push(album);
+  context.setTrackModalDuplicateSourceIndex(stale.key, 1);
+  return { stale, original, rendered };
+}
+
+test('accepted gallery refresh reconciles repaired modal cover while preserving edition and Files source', async () => {
+  const { context, pendingRequests } = createContext();
+  const { stale, original, rendered } = prepareOpenAlbumRefresh(context);
+  const repaired = { ...stale, cover_path: '/Complete copy/cover.png', cover_selection_origin: 'automatic' };
+  const refresh = context.fetchAndRender('/view-data?artist=Artist', false);
+  pendingRequests[0].resolveWith({ artist_groups: [{ artist: 'Artist', albums: [original, repaired] }] });
+  assert.equal(await refresh, true);
+  assert.equal(context.state.modalReleaseIndex, 1);
+  const current = context.state.modalReleases[1];
+  assert.equal(current.key, stale.key);
+  assert.equal(current.cover_path, repaired.cover_path);
+  assert.equal(context.getTrackModalDuplicateSourceIndex(current, current.duplicate_sources), 1);
+  context.setTrackModalDuplicateSourceIndex(current.key, 0);
+  context.renderTrackModalRelease(current);
+  assert.equal(rendered.at(-1).cover_path, repaired.cover_path);
+});
+
+test('gallery refresh preserves newer manual cover selection and ignores unrelated or partial albums', async () => {
+  for (const mode of ['manual-replacement', 'manual-in-place', 'unrelated', 'partial', 'no-selection']) {
+    const { context, pendingRequests } = createContext();
+    const { stale, rendered } = prepareOpenAlbumRefresh(context);
+    const refresh = context.fetchAndRender('/view-data?artist=Artist', false);
+    const manual = { ...stale, cover_path: '/Manual/cover.png', cover_selection_provenance: 'explicit' };
+    if (mode === 'manual-replacement') context.state.modalReleases[1] = manual;
+    if (mode === 'manual-in-place') Object.assign(stale, manual);
+    const incoming = { ...stale, cover_path: '/Complete copy/cover.png', cover_selection_origin: 'automatic' };
+    if (mode === 'unrelated') incoming.key = 'other::album';
+    if (mode === 'partial') incoming.preview_only = true;
+    if (mode === 'no-selection') {
+      delete incoming.cover_path;
+      delete incoming.cover_selection_origin;
+    }
+    pendingRequests[0].resolveWith({ artist_groups: [{ artist: 'Artist', albums: [incoming] }] });
+    assert.equal(await refresh, true);
+    assert.equal(rendered.length, 0, mode);
+    assert.equal(context.state.modalReleases[1].cover_path,
+      mode.startsWith('manual') ? manual.cover_path : stale.cover_path, mode);
+  }
+});
+
+test('superseded gallery response cannot reconcile the open album cover', async () => {
+  const { context, pendingRequests } = createContext();
+  const { stale, rendered } = prepareOpenAlbumRefresh(context);
+  const refresh = context.fetchAndRender('/view-data?artist=Artist', false);
+  context.state.ui.viewStateRevision = Number(context.state.ui.viewStateRevision || 0) + 1;
+  pendingRequests[0].resolveWith({ artist_groups: [{ artist: 'Artist', albums: [
+    { ...stale, cover_path: '/Stale response/cover.png' },
+  ] }] });
+  assert.equal(await refresh, false);
+  assert.equal(context.state.modalReleases[1], stale);
+  assert.equal(rendered.length, 0);
+});
+
+test('gallery refresh reconciles an album opened from the old gallery while its request is in flight', async () => {
+  const { context, pendingRequests } = createContext();
+  const { stale, original } = prepareOpenAlbumRefresh(context);
+  context.state.modalReleases = [];
+  context.state.modalReleaseIndex = 0;
+  const refresh = context.fetchAndRender('/view-data?artist=Artist', false);
+  context.state.modalReleases = [original, { ...stale }];
+  context.state.modalReleaseIndex = 1;
+  const repaired = { ...stale, cover_path: '/Complete copy/cover.png', cover_selection_origin: 'automatic' };
+  pendingRequests[0].resolveWith({ artist_groups: [{ artist: 'Artist', albums: [original, repaired] }] });
+  assert.equal(await refresh, true);
+  assert.equal(context.state.modalReleases[1].cover_path, repaired.cover_path);
+  assert.equal(context.getTrackModalDuplicateSourceIndex(
+    context.state.modalReleases[1], context.state.modalReleases[1].duplicate_sources,
+  ), 1);
+});
+
+test('gallery refresh preserves identical-byte manual Save with the album modal open or closed', async () => {
+  for (const modalOpen of [false, true]) {
+    const { context, pendingRequests } = createContext();
+    const { stale, original, rendered } = prepareOpenAlbumRefresh(context);
+    vm.runInContext(tagMutationSource, context);
+    context.mergeViewPayload = (patch) => context.applyViewPayload({ ...context.state.view, ...patch });
+    if (!modalOpen) {
+      context.state.modalReleases = [];
+      context.state.modalReleaseIndex = 0;
+    }
+    const refresh = context.fetchAndRender('/view-data?artist=Artist', false);
+    // A real Save response is a new canonical object even when every visible
+    // selection field is unchanged and legacy payloads omit explicit provenance.
+    const saved = { ...stale, tracks: stale.tracks.map((track) => ({ ...track })) };
+    context.patchVisibleAlbumsByTrackPath([saved]);
+    context.state.ui.albumCoverMutationRevision = Number(
+      context.state.ui.albumCoverMutationRevision || 0,
+    ) + 1;
+    assert.notEqual(context.flattenVisibleAlbums().find((album) => album.key === stale.key), stale);
+    if (!modalOpen) {
+      context.state.modalReleases = [original, { ...saved }];
+      context.state.modalReleaseIndex = 1;
+    }
+    const staleResponseGroups = [{ artist: 'Artist', albums: [original,
+      { ...stale, cover_path: '/Before manual Save/cover.png', cover_selection_origin: 'automatic' },
+    ] }];
+    pendingRequests[0].resolveWith({
+      artist_groups: staleResponseGroups,
+      primary_artist_groups: staleResponseGroups,
+      family_artist_groups: [],
+    });
+    assert.equal(await refresh, false);
+    assert.equal(
+      context.state.view.artist_groups[0].albums.find((album) => album.key === saved.key)?.cover_path,
+      saved.cover_path,
+      `gallery cover after ${modalOpen ? 'open' : 'closed'} modal Save`,
+    );
+    assert.equal(context.state.modalReleases[1].cover_path, saved.cover_path);
+    assert.equal(rendered.length, 0);
+  }
+});
+
 test('progressive gallery merges missing and live artist albums without duplicates', () => {
   const { context } = createContext();
   const groups = context.mergeGalleryPageGroups(
@@ -39,6 +181,36 @@ test('root gallery requests bounded pages and appends continuation albums', asyn
   assert.equal(context.state.view.artist_groups.length, 2);
   assert.equal(context.state.view.album_count, 100);
   assert.equal(context.state.view.gallery_page.next_offset, null);
+});
+
+test('canonical mutation refresh preserves an explicit full root payload and later-page album', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const groups = [{
+    artist: 'E2E Rarity Artist',
+    albums: [{ key: 'rarity::sparse-title', name: 'Sparse Title Edit Fixture' }],
+  }];
+  context.state.view = {
+    surface: 'albums', query: '', selected_artist: '',
+    artist_groups: groups, primary_artist_groups: groups,
+    artist_count: 39, album_count: 300,
+  };
+  const refresh = context.fetchAndRender('/view-data?surface=albums&payload_tier=full', false, {
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollLeft: 0, scrollTop: 1200 },
+    preserveMountedGalleryChildren: true,
+    retainMountedGalleryIfEquivalent: true,
+    restartIfSameUrl: true,
+  });
+  const requestedTier = new URL(calls.fetchRequests[0].url, 'http://localhost').searchParams.get('payload_tier');
+  pendingRequests[0].resolveWith({
+    payload_tier: 'full', surface: 'albums', query: '', selected_artist: '',
+    artist_groups: groups, primary_artist_groups: groups,
+    artist_count: 39, album_count: 300,
+  });
+  assert.equal(await refresh, true);
+  assert.equal(requestedTier, 'full');
+  assert.equal(context.state.view.artist_groups[0].albums[0].key, 'rarity::sparse-title');
 });
 
 test('progressive pages retain authoritative artist order and update live group metadata', () => {
@@ -3457,6 +3629,28 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
   assert.deepEqual(calls.showToast, []);
 });
 
+test('inventory reconciliation requests a full root instead of truncating later-page albums', async () => {
+  const { context, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = (_view, options = {}) => (
+    `/view-data?surface=albums${options.rootFullPayload ? '&payload_tier=full' : ''}`
+  );
+  const groups = [{ artist: 'E2E Rarity Artist', albums: [{ key: 'rarity::sparse-title' }] }];
+  context.state.view = { ...context.state.view, artist_groups: groups };
+  context.state.status = { inventory_mutation_revision: 0 };
+  const statusPromise = context.pollStatus();
+  pendingRequests[0].resolveWith({ inventory_mutation_revision: 2 });
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  assert.equal(pendingRequests.length, 2);
+  const refreshUrl = pendingRequests[1].url;
+  pendingRequests[1].resolveWith({ artist_groups: groups, album_count: 1, payload_tier: 'full' });
+  await statusPromise;
+  assert.equal(refreshUrl, '/view-data?surface=albums&payload_tier=full');
+  assert.equal(context.state.view.artist_groups[0].albums[0].key, 'rarity::sparse-title');
+});
+
 test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};
@@ -6081,4 +6275,25 @@ test('search from Scan Page refreshes committed chrome while retaining an equiva
   assert.equal(calls.renderArtistGroups, 0);
   assert.equal(artistGroups.innerHTML, galleryMarkup);
   assert.equal(artistGroups.querySelector('.album-card'), retainedCard);
+});
+
+test('accepted gallery refresh reconciles repaired modal cover after harmless gallery object replacement', async () => {
+  const { context, pendingRequests } = createContext();
+  const { stale, original } = prepareOpenAlbumRefresh(context);
+  const refresh = context.fetchAndRender('/view-data?artist=Artist', false);
+
+  const replacement = { ...stale };
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [original, replacement] }];
+  context.state.view.primary_artist_groups = context.state.view.artist_groups;
+
+  const repaired = {
+    cover_path: '/Complete copy/cover.png',
+    cover_selection_origin: 'automatic',
+  };
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Artist', albums: [original, { ...stale, ...repaired }] }],
+  });
+
+  assert.equal(await refresh, true);
+  assert.equal(context.state.modalReleases[1].cover_path, repaired.cover_path);
 });

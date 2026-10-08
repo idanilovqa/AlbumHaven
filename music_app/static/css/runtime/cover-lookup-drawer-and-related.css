@@ -620,6 +620,11 @@
 }
 .library-loader-phase-guide li.is-complete { opacity: 1; }
 .library-loader-phase-guide li.is-future { opacity: 0.48; }
+.library-loader-phase-guide li.is-inactive {
+  opacity: 0.48;
+  border-left-color: var(--border);
+  background: transparent;
+}
 .library-loader-phase-guide strong,
 .library-loader-phase-guide span { display: block; }
 .library-loader-phase-guide strong {

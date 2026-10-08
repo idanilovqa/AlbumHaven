@@ -3160,3 +3160,23 @@ for (const [label, values] of [
     assert.equal(context.state.coverLookup.modal.album.cover_revision, values.albumRevision);
   });
 }
+
+require('node:test')('publishing album artwork advances the cover mutation revision', () => {
+  const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
+  const updated = { ...original, cover_path: '/album/cover.jpg' };
+  const context = loadHelper({
+    state: {
+      ui: {},
+      coverLookup: { modal: { album: original, pastedImages: [], localCovers: [], otherArt: [] } },
+    },
+    getAlbumTrackPaths: (album) => (album?.tracks || []).map((track) => track.path),
+    getUpdatedAlbumForTrackPaths: (albums) => albums[0],
+    patchVisibleAlbumsByTrackPath() {},
+    refreshRenderedAlbumCoverOnly() {},
+    updateTrackModalIfStillShowingAlbum() {},
+  });
+
+  context.refreshCoverLookupAlbumArtwork(original, [updated]);
+
+  assert.equal(context.state.ui.albumCoverMutationRevision, 1);
+});

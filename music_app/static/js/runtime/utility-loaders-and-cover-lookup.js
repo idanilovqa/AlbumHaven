@@ -484,16 +484,24 @@ async function performAlbumMove(album, action, options = {}) {
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
   const statusAction = claimLibraryStatusAction(true);
+  statusAction.coverPreparation = true;
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
       covers_in_progress: true,
+      covers_phase: 'preparing',
+      covers_run_mode: 'manual-bulk',
+      covers_outcome: '',
+      covers_elapsed_seconds: null,
+      covers_estimated_remaining_seconds: null,
       covers_processed: 0,
       covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: 0,
       covers_downloaded: 0,
       covers_current_folder: '',
     });
+    scheduleStatusPoll(250);
     const response = await fetch('/utilities/fetch-covers-unsuccessful', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -528,6 +536,7 @@ async function fetchUnsuccessfulAlbumCovers() {
         covers_in_progress: false,
         covers_processed: 0,
         covers_completed: 0,
+        covers_spotify_quota_exceeded: false,
         covers_total: 0,
         covers_downloaded: 0,
         covers_current_folder: '',
@@ -540,8 +549,11 @@ async function fetchUnsuccessfulAlbumCovers() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: true,
+      covers_phase: 'fetching',
+      covers_run_mode: 'manual-bulk',
       covers_processed: 0,
       covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: Number(data.queued_count || 0),
       covers_downloaded: 0,
       covers_current_folder: String(data.current_folder || ''),

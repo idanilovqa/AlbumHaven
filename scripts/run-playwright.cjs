@@ -1149,28 +1149,46 @@ async function prewarmFunctionalFixture(port, options = {}) {
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;
+  const reportFailure = (stage, response = null) => {
+    if (typeof options.diagnosticWriteFn !== 'function') return;
+    const rawStatusCode = Number(response?.statusCode);
+    options.diagnosticWriteFn(`[functional-warmup-failure] ${JSON.stringify({
+      stage,
+      statusCode: Number.isInteger(rawStatusCode) ? rawStatusCode : null,
+    })}\n`);
+  };
   const requestHeaders = { ...(options.requestHeaders || {}) };
   const indexResponse = await fetchHttpResponseCompleteFn(indexUrl, {
     requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
     headers: requestHeaders,
   });
-  if (!indexResponse?.ok) return false;
+  if (!indexResponse?.ok) {
+    reportFailure('index', indexResponse);
+    return false;
+  }
   const viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
     requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
     headers: requestHeaders,
   });
-  if (!viewResponse?.ok) return false;
+  if (!viewResponse?.ok) {
+    reportFailure('view-data', viewResponse);
+    return false;
+  }
 
   let payload;
   try {
     payload = JSON.parse(String(viewResponse.body || ''));
   } catch {
+    reportFailure('view-data-json', viewResponse);
     return false;
   }
   const coverUrls = [...collectLocalCoverPreviewUrls(payload, baseUrl, new Set(), {
     mediaRoot: options.mediaRoot,
   })].sort();
-  if (coverUrls.length === 0) return false;
+  if (coverUrls.length === 0) {
+    reportFailure('cover-discovery');
+    return false;
+  }
   for (let offset = 0; offset < coverUrls.length; offset += 4) {
     const responses = await Promise.all(
       coverUrls.slice(offset, offset + 4).map((coverUrl) => fetchHttpResponseCompleteFn(
@@ -1181,14 +1199,22 @@ async function prewarmFunctionalFixture(port, options = {}) {
         },
       )),
     );
-    if (responses.some((response) => !response?.ok)) return false;
+    const failedResponse = responses.find((response) => !response?.ok);
+    if (failedResponse) {
+      reportFailure('cover-preview', failedResponse);
+      return false;
+    }
   }
   for (const pathname of ['/utilities/problematic-files', '/utilities/rules']) {
     const response = await fetchHttpResponseCompleteFn(`${baseUrl}${pathname}`, {
       requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
       headers: requestHeaders,
     });
-    if (!response?.ok) return false;
+    if (!response?.ok) {
+      reportFailure(pathname === '/utilities/problematic-files'
+        ? 'problematic-files' : 'rules', response);
+      return false;
+    }
   }
   return true;
 }
@@ -1366,6 +1392,7 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
         mediaRoot: childEnv.ALBUM_HAVEN_MEDIA_ROOT,
         requestHeaders,
+        diagnosticWriteFn: (line) => stderr.write(line),
       });
       if (!warmed) {
         throw new Error(

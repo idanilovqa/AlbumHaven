@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const ButtonComponent = require('../../../music_app/static/js/button-component.js');
+const test = require('node:test');
 
 const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
 const helperPaths = [
@@ -42,6 +43,23 @@ function loadHelpers(origin = 'http://localhost:5000') {
   });
   return context;
 }
+
+test('rootFullPayload requests full root albums without changing other browse URLs', () => {
+  const { buildApiUrl } = loadHelpers();
+  const root = { surface: { active: 'albums' }, visible_library_categories: ['hoard'] };
+  const rootUrl = new URL(buildApiUrl(root, { rootFullPayload: true }), 'http://localhost');
+  assert.equal(rootUrl.searchParams.get('payload_tier'), 'full');
+  assert.deepEqual(rootUrl.searchParams.getAll('category'), ['hoard']);
+  assert.equal(new URL(buildApiUrl(root), 'http://localhost').searchParams.has('payload_tier'), false);
+  for (const view of [
+    { ...root, query: 'Sparse' },
+    { ...root, selected_artist: 'E2E Rarity Artist' },
+    { surface: { active: 'home' } },
+    { surface: { active: 'playlists' }, playlist_id: 'favorites' },
+  ]) {
+    assert.equal(buildApiUrl(view, { rootFullPayload: true }), buildApiUrl(view));
+  }
+});
 
 {
     const context = loadHelpers();
@@ -868,7 +886,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     'Album folders: 2 / 5',
     'Current file: C:/Music/Stereolab/Track 01.flac',
     'Linking artist families: 2 / 5 (cache)',
-    'Updating cover art: 1 / 3 covers updated',
+    'Updating cover art: 1 / 3 cover searches completed',
     'Downloaded covers: 1',
     'Current album folder: C:/Music/Stereolab/Dots and Loops',
     'Total albums: 42',

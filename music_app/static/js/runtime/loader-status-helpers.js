@@ -85,11 +85,14 @@ function buildLoaderStatusLines(data, options = {}) {
   if (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished')) {
     const currentFolder = String(data.covers_current_folder || '').split(/[\\/]/).pop();
     lines.push({
-      title: data.covers_in_progress ? 'Fetching covers'
+      title: data.covers_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers')
         : data.covers_outcome === 'failed' ? 'Cover search failed'
         : data.covers_outcome === 'cancelled' ? 'Cover search cancelled' : 'Cover search finished',
       detail: buildCoverProgressDetail(data, currentFolder),
     });
+    if (data.covers_phase !== 'preparing' && !data.status_connection_lost && data.covers_spotify_quota_exceeded) {
+      lines.push({ title: 'Spotify', detail: 'Spotify quota reached — skipped for this run' });
+    }
   }
   if (!lines.length) {
     lines.push(options.scanPageVisible ? {
@@ -120,7 +123,7 @@ function buildCoverProgressDetail(data, currentAlbum = '') {
     parts.push(`elapsed ${formatDurationCompact(data.covers_elapsed_seconds)}`);
   }
   const eta = Number(data.covers_estimated_remaining_seconds);
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress && data.covers_phase !== 'preparing') {
     parts.push(data.covers_estimated_remaining_seconds != null && Number.isFinite(eta) && eta >= 0
       ? `ETA ${formatDurationCompact(eta)}` : 'ETA calculating…');
   }

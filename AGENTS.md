@@ -15,6 +15,12 @@ not need the private repository to build or use Album Haven.
   private fixture assets.
 - Use environment variables for machine-specific paths and credentials.
 - Keep tests independent and give state-mutating tests uniquely owned data.
+- Never infer a user action from pre-existing data during migration or backfill.
+  In particular, an existing cover path or remote URL is not evidence of an
+  explicit in-app cover selection. Preserve proven manual choices; leave
+  ambiguous legacy provenance unknown; any repair policy needs explicit owner
+  authorization and guarded updates. Do not blanket-promote
+  inherited covers to user-owned or blanket-clear genuine manual ownership.
 - Shared UI presentation belongs to its component CSS/templates: anchored menus
   match their originating surface (light content stays light; dark chrome stays
   dark), switch rows have no hover fill, checkbox hover uses neutral control

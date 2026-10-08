@@ -732,8 +732,11 @@ def _is_postgres_root_album_browse_request(request: Request) -> bool:
         "gallery_scale_percent",
         "category",
         "omit_sidebar",
+        "payload_tier",
     }
     if any(str(key) not in allowed_root_album_browse_params for key in request.query_params.keys()):
+        return False
+    if str(request.query_params.get("payload_tier") or "").strip().casefold() not in {"", "full"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
         return False

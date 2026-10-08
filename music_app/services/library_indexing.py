@@ -29,6 +29,10 @@ _REMOTE_COVER_KEYS = (
     "remote_cover_width",
     "remote_cover_height",
 )
+_LOCAL_COVER_SELECTION_KEYS = (
+    "cover_path", "cover_revision", "cover_selection_origin", "cover_selection_provenance",
+    "local_cover_width", "local_cover_height",
+)
 
 _DISC_FOLDER_PATTERN = re.compile(r"^(?:cd|disc|disk)\s*[-_. ]*\d+\s*$", re.IGNORECASE)
 _SCAN_PROGRESS_FILE_WEIGHT = 0.7
@@ -699,10 +703,11 @@ def scan_library_file_cache(
             else None
         )
 
-        if metadata_was_read and isinstance(existing, dict):
+        cover_authority = existing if isinstance(existing, dict) else persisted_entry
+        if metadata_was_read and isinstance(cover_authority, dict):
             for key in _REMOTE_COVER_KEYS:
                 if key not in entry or entry.get(key) in (None, ""):
-                    entry[key] = existing.get(key)
+                    entry[key] = cover_authority.get(key)
         if (
             isinstance(persisted_entry, dict)
             and type(persisted_entry.get("is_compilation")) is bool
@@ -740,6 +745,13 @@ def scan_library_file_cache(
                 record_file_error=record_file_error,
             )
 
+        if (metadata_was_read and isinstance(cover_authority, dict)
+            and cover_authority.get("cover_selection_origin") in {"user", "automatic"}):
+            # File tags cannot replace persisted selection authority. Album
+            # source validation repairs legacy selections using this exact
+            # path/revision, including when the selected image is missing.
+            for key in _LOCAL_COVER_SELECTION_KEYS:
+                entry[key] = cover_authority.get(key)
         updated_file_cache[path_str] = entry
         library_state["scan_processed"] = index
         bytes_processed += int(stat.st_size or 0)

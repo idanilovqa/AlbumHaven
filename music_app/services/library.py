@@ -379,7 +379,9 @@ def _track_album_container(path_value: object) -> str:
     raw_path = str(path_value or "").strip()
     if not raw_path:
         return ""
-    parent = Path(os.path.normpath(raw_path)).parent
+    normalized_path = os.path.normpath(raw_path)
+    path = path_value if isinstance(path_value, Path) and str(path_value) == normalized_path else Path(normalized_path)
+    parent = path.parent
     if _DISC_FOLDER_RE.search(parent.name) and parent.parent != parent:
         parent = parent.parent
     return str(parent).strip()
@@ -604,6 +606,8 @@ def _album_payload_signature_core(
         bool(getattr(album, "is_compilation", False)),
         str(getattr(album, "cover_path", "") or ""),
         str(getattr(album, "cover_revision", "") or "").strip() or None,
+        getattr(album, "cover_selection_origin", None),
+        getattr(album, "cover_selection_provenance", None),
         getattr(album, "local_cover_width", None),
         getattr(album, "local_cover_height", None),
         getattr(album, "remote_cover_url", None),
@@ -859,6 +863,7 @@ def _build_album_base_payload(
         "cover_path": str(album.cover_path) if album.cover_path else None,
         "cover_revision": getattr(album, "cover_revision", None),
         "cover_selection_origin": cover_selection_origin,
+        "cover_selection_provenance": getattr(album, "cover_selection_provenance", None),
         "local_cover_width": getattr(album, "local_cover_width", None),
         "local_cover_height": getattr(album, "local_cover_height", None),
         "remote_cover_url": getattr(album, "remote_cover_url", None),
@@ -1105,12 +1110,16 @@ def _link_duplicate_album_sources(albums: list[Album]) -> None:
     """Link physical copies across edition records without changing their queues."""
     containers: dict[str, dict[str, Track]] = {}
     folder_paths: dict[str, str] = {}
+    album_folder_keys: list[list[str]] = []
     for album in albums:
+        folder_keys: list[str] = []
         for track in album.tracks:
             folder = _track_album_container(track.path)
             key = os.path.normcase(folder)
+            folder_keys.append(key)
             folder_paths.setdefault(key, folder)
             containers.setdefault(key, {})[os.path.normcase(str(track.path))] = track
+        album_folder_keys.append(folder_keys)
     identities: dict[tuple[str, str, int], list[tuple[str, list[Track]]]] = {}
     folder_identities = {}
     for folder, tracks_by_path in containers.items():
@@ -1126,8 +1135,8 @@ def _link_duplicate_album_sources(albums: list[Album]) -> None:
         ]
         for identity, groups in identities.items() if len(groups) > 1
     }
-    for album in albums:
-        own_identities = {folder_identities[os.path.normcase(_track_album_container(track.path))] for track in album.tracks}
+    for album, folder_keys in zip(albums, album_folder_keys):
+        own_identities = {folder_identities[key] for key in folder_keys}
         duplicate_identities = own_identities.intersection(sources_by_identity)
         sources = [source for identity in sorted(duplicate_identities) for source in sources_by_identity[identity]]
         sources = [{**source, "index": index, "label": str(index + 1)} for index, source in enumerate(sources)]
@@ -1207,6 +1216,9 @@ def _cooperative_album_build_yield(processed: int, *, enabled: bool) -> None:
 
 
 def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separate_release_keys: set[str] | None = None) -> list[Album]:
+    from music_app.services.album_local_membership import rejected_local_album_paths
+
+    rejected_paths = rejected_local_album_paths(file_cache.values())
     separate_release_keys = separate_release_keys or set()
     albums: dict[str, Album] = {}
     grouped_entries: dict[tuple[str, str, str], list[dict[str, object]]] = {}
@@ -1244,6 +1256,8 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
 
     for grouping_count, entry in enumerate(file_cache.values(), start=1):
         _cooperative_album_build_yield(grouping_count, enabled=cooperative_yields_enabled)
+        if str(entry.get("path") or "") in rejected_paths:
+            continue
         if normalize_exception_value(entry.get("exception_type")):
             continue
         album_name = cached_display_text(entry["album"])
@@ -1295,6 +1309,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                     is_compilation=is_compilation,
                     cover_path=Path(cover_value) if cover_value else None,
                     cover_revision=str(entry.get("cover_revision") or "").strip() or None,
+                    cover_selection_provenance=str(entry.get("cover_selection_provenance") or "").strip() or None,
                     cover_selection_origin=(
                         str(entry.get("cover_selection_origin") or "").strip().casefold()
                         if str(entry.get("cover_selection_origin") or "").strip().casefold()
@@ -1409,6 +1424,9 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         root_provenance_payloads = getattr(album, "_root_provenance_payloads", None)
         if isinstance(root_provenance_payloads, list):
             album.root_provenance = summarize_root_provenance_payloads(root_provenance_payloads)
+        from music_app.services.album_local_cover_integrity import apply_scoped_local_cover
+
+        apply_scoped_local_cover(album, file_cache, rejected_paths)
         album.tracks.sort(key=lambda t: (
             t.disc_number if t.disc_number is not None else 999,
             t.track_number if t.track_number is not None else 999,

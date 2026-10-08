@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,7 +32,7 @@ def test_protected_selected_artwork_outside_folder_is_validated_and_retained(tmp
     path, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
         folder, "Artist", "Album", None, 2001, {".png"},
         SimpleNamespace(get=lambda _key: {}, set=lambda *_args: None), "Tests/1.0",
-        cover_selection_origin="user", reject_if_user_controlled=True,
+        cover_selection_origin="user", cover_selection_provenance="explicit", reject_if_user_controlled=True,
         selected_cover_path=str(selected),
         search_remote_cover_func=lambda **_kwargs: (None, [{"resolver": "_search_apple", "status": "failed"}]),
     )
@@ -86,6 +87,7 @@ def test_automatic_write_guard_receives_final_encoded_cover_revision(tmp_path):
         observed["origin"] = cover_selection_origin
         observed["provisional"] = write_action.provisional_cover_revision
         observed["actual"] = hashlib.sha256(written.read_bytes()).hexdigest()
+        assert (write_action.local_cover_width, write_action.local_cover_height) == (1600, 1600)
         return written
 
     folder = tmp_path / "Artist" / "Album"
@@ -578,57 +580,54 @@ def test_bandcamp_does_not_run_when_a_smaller_primary_cover_exists(monkeypatch):
     ]
 
 
-@pytest.mark.parametrize("only_spotify", [False, True])
-def test_spotify_cooldown_trace_preserves_expiry_and_partial_scope(monkeypatch, only_spotify):
+def test_spotify_quota_disables_only_the_current_automatic_run(monkeypatch):
     from music_app.services.cover_provider_spotify import SpotifyCooldown
-
     calls = []
+    monkeypatch.setattr(cover_refresh_provider.cover_provider_spotify, "spotify_cooldown_until", lambda: 0)
     for provider in ("_search_apple", "_search_deezer", "_search_youtube_music", "_search_bandcamp"):
         monkeypatch.setattr(cover_refresh_provider, provider, lambda *_args, _name=provider, **_kwargs: calls.append(_name))
-    monkeypatch.setattr(cover_refresh_provider, "_search_spotify", lambda *_args, **_kwargs: (
-        (_ for _ in ()).throw(SpotifyCooldown(212.0))
-    ))
-    candidate, trace = cover_refresh_provider.search_primary_remote_cover(
-        "Artist", "Album", None, 2001, "Tests/1.0",
-        allow_apple_web_fallback=False, has_local_cover=False, only_spotify=only_spotify,
-    )
-    assert candidate is None
-    spotify_trace = next(item for item in trace if item["resolver"] == "_search_spotify")
-    assert spotify_trace["status"] == "failed"
-    assert spotify_trace["reason"] == "spotify_cooldown"
-    assert spotify_trace["retry_at"] == 212.0
-    assert calls == ([] if only_spotify else ["_search_apple", "_search_deezer", "_search_youtube_music", "_search_bandcamp"])
+    def quota(*_args, **_kwargs):
+        calls.append("_search_spotify")
+        raise SpotifyCooldown(212.0, quota_response=True)
+    monkeypatch.setattr(cover_refresh_provider, "_search_spotify", quota)
+    run = cover_refresh_provider.AutomaticCoverSearchRun()
+    def search(context):
+        return cover_refresh_provider.search_primary_remote_cover(
+            "Artist", "Album", None, 2001, "Tests/1.0",
+            allow_apple_web_fallback=False, has_local_cover=False, search_run=context,
+        )[1]
+    first = search(run)
+    assert next(item for item in first if item["resolver"] == "_search_spotify")["reason"] == "spotify_quota_exceeded"
+    second = search(run)
+    assert all(item["resolver"] != "_search_spotify" for item in second)
+    assert calls.count("_search_spotify") == 1
+    assert calls.count("_search_bandcamp") == 2
+    search(cover_refresh_provider.AutomaticCoverSearchRun())
+    assert calls.count("_search_spotify") == 2
 
 
-@pytest.mark.parametrize("initial_status", ["timeout", "failed", "no_candidate"])
-def test_spotify_only_retry_does_not_negative_cache_partial_search(tmp_path, monkeypatch, initial_status):
-    from types import SimpleNamespace
-    from music_app.services import cover_refresh_execution
-
-    writes = []
-    cache = SimpleNamespace(get=lambda _key: {}, set=lambda *args: writes.append(args))
-    previous = [{"resolver": "_search_apple", "status": initial_status},
-                {"resolver": "_search_spotify", "status": "failed", "reason": "spotify_cooldown", "retry_at": 1.0}]
-    monkeypatch.setattr(cover_refresh_provider, "_search_spotify", lambda *_args, **_kwargs: None)
+def test_existing_spotify_cooldown_skips_provider_without_blaming_an_album(monkeypatch):
+    monkeypatch.setattr(cover_refresh_provider.cover_provider_spotify, "spotify_cooldown_until", lambda: float("inf"))
+    monkeypatch.setattr(cover_refresh_provider, "_search_spotify", lambda *_args, **_kwargs: pytest.fail("Cooling down"))
     for provider in ("_search_apple", "_search_deezer", "_search_youtube_music", "_search_bandcamp"):
-        monkeypatch.setattr(cover_refresh_provider, provider, lambda *_args, **_kwargs: pytest.fail("Only Spotify may repeat"))
-    path, downloaded, detail = cover_refresh_execution.execute_cover_job(
-        job={"folder": tmp_path, "artist": "Artist", "album": "Album"},
-        image_extensions={".jpg"}, user_agent="Tests/1.0", cover_cache=cache,
-        force_search=True, allow_apple_web_fallback=False,
-        allow_apple_web_fallback_when_has_cover=True, negative_cache_ttl_seconds=None,
-        spotify_retry_trace=previous,
+        monkeypatch.setattr(cover_refresh_provider, provider, lambda *_args, **_kwargs: None)
+    run = cover_refresh_provider.AutomaticCoverSearchRun()
+    _, trace = cover_refresh_provider.search_primary_remote_cover(
+        "Artist", "Album", None, 2001, "Tests/1.0",
+        allow_apple_web_fallback=False, has_local_cover=False, search_run=run,
     )
-    assert path is None and downloaded is False
-    expected_reason = {"timeout": "remote_search_timed_out", "failed": "remote_search_failed", "no_candidate": "remote_search_returned_no_candidate"}[initial_status]
-    assert detail["reason"] == expected_reason
-    assert detail["resolver_trace"][0] == previous[0]
-    assert detail["resolver_trace"][1] == {**previous[1], "status": "superseded", "previous_status": "failed"}
-    assert previous[1]["status"] == "failed"
-    assert detail["resolver_trace"][-1]["status"] == "no_candidate"
-    assert len(writes) == int(initial_status == "no_candidate")
-    if writes:
-        assert writes[0][1]["missing"] is True
+    assert run.spotify_disabled
+    assert all(item["status"] == "no_candidate" for item in trace)
+    assert all(item["resolver"] != "_search_spotify" for item in trace)
+
+
+def test_inflight_quota_response_is_attributed_after_another_worker_observes_cooldown(monkeypatch):
+    monkeypatch.setattr(cover_refresh_provider.cover_provider_spotify, "spotify_cooldown_until", lambda: 0)
+    run = cover_refresh_provider.AutomaticCoverSearchRun()
+    assert run.disable_spotify(quota_response=False) is False
+    assert run.spotify_disabled is True
+    assert run.disable_spotify(quota_response=True) is True
+    assert run.disable_spotify(quota_response=True) is False
 
 
 def test_automatic_timeout_is_reported_separately_from_no_match(monkeypatch):
@@ -732,6 +731,7 @@ def test_candidate_transfer_failure_keeps_normal_search_retryable(
             folder, "Artist", "Album", None, 2001, {".png"}, cache, "AlbumHavenTests/1.0",
             negative_cache_ttl_seconds=60,
             cover_selection_origin="user" if user_cover else "automatic",
+        cover_selection_provenance="explicit" if user_cover else None,
             reject_if_user_controlled=user_cover,
             selected_cover_path=str(selected_cover) if selected_cover else None,
             search_remote_cover_func=search, http_get_bytes_func=download,
@@ -980,7 +980,7 @@ def test_user_controlled_cover_publishes_improvement_without_writing_bytes(
         {".jpg"},
         CoverSearchCache(tmp_path / "cover-cache.json"),
         "AlbumHavenTests/1.0",
-        cover_selection_origin="user",
+        cover_selection_origin="user", cover_selection_provenance="explicit",
         reject_if_user_controlled=True,
         candidate_callback=publish_candidate,
         selected_cover_path=str(current_cover) if external_selection else None,
@@ -1047,6 +1047,9 @@ def test_user_controlled_cover_bypasses_positive_result_cache_to_find_new_candid
     assert automatic_result[2]["reason"] == "satisfactory_local_cover_present"
     assert search_calls == []
 
+    monkeypatch.setattr(cover_refresh_provider, "image_dimensions", lambda *_args: (600, 600))
+    monkeypatch.setattr(cover_refresh_provider, "image_area", lambda *_args: 360_000)
+
     user_result = cover_refresh_provider.ensure_best_cover_for_folder(
         folder,
         "Artist",
@@ -1056,12 +1059,49 @@ def test_user_controlled_cover_bypasses_positive_result_cache_to_find_new_candid
         {".jpg"},
         cache,
         "AlbumHavenTests/1.0",
-        cover_selection_origin="user",
+        cover_selection_origin="user", cover_selection_provenance="explicit",
         reject_if_user_controlled=True,
         search_remote_cover_func=search,
     )
     assert user_result[2]["reason"] == "remote_search_returned_no_candidate"
     assert search_calls == [True]
+
+
+@pytest.mark.parametrize("dimensions", [(1200, 1200), (1600, 1600), (1800, 1200)])
+def test_explicit_satisfactory_selected_cover_skips_automatic_provider_queries(tmp_path, dimensions):
+    image = pytest.importorskip("PIL.Image")
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    selected = tmp_path / "selected.png"
+    image.new("RGB", dimensions, "red").save(selected)
+    image.new("RGB", (200, 200), "blue").save(folder / "cover.png")
+    chosen, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2001, {".png"},
+        SimpleNamespace(get=lambda *_args: None, set=lambda *_args: None), "Tests/1.0",
+        selected_cover_path=str(selected), cover_selection_origin="user", cover_selection_provenance="explicit",
+        reject_if_user_controlled=True,
+        search_remote_cover_func=lambda **_kwargs: pytest.fail("satisfactory explicit artwork queried provider"),
+    )
+    assert chosen == selected
+    assert downloaded is False
+    assert detail["reason"] == "satisfactory_local_cover_present"
+
+
+@pytest.mark.parametrize("dimensions", [(1199, 1600), (1600, 1199)])
+def test_rectangular_explicit_artwork_with_one_small_edge_still_checks_providers(tmp_path, dimensions):
+    image = pytest.importorskip("PIL.Image")
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    selected = folder / "selected.png"
+    image.new("RGB", dimensions, "green").save(selected)
+    calls = []
+    cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2001, {".png"},
+        SimpleNamespace(get=lambda *_args: None, set=lambda *_args: None), "Tests/1.0",
+        selected_cover_path=str(selected), cover_selection_origin="user", cover_selection_provenance="explicit", reject_if_user_controlled=True,
+        search_remote_cover_func=lambda **kwargs: (calls.append(kwargs) or None, []),
+    )
+    assert len(calls) == 1
 
 
 def test_user_controlled_cover_accepts_better_same_art_upgrade_and_marks_guard_policy(
@@ -1125,7 +1165,7 @@ def test_user_controlled_cover_accepts_better_same_art_upgrade_and_marks_guard_p
         {".jpg"},
         CoverSearchCache(tmp_path / "cover-cache.json"),
         "AlbumHavenTests/1.0",
-        cover_selection_origin="user",
+        cover_selection_origin="user", cover_selection_provenance="explicit",
         reject_if_user_controlled=True,
         automatic_write_guard=guard,
         search_remote_cover_func=lambda **_kwargs: (candidate, []),

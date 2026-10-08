@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from music_app.services.album_local_membership import rejected_local_album_paths
 from music_app.services.cover_provider_cache import cover_query_key
 from music_app.services.cover_refresh_provider import local_cover_requires_upgrade_check
+from music_app.services.cover_refresh_policy import automatic_cover_repair_minimum_edge
 
 
 def build_cover_refresh_jobs(
@@ -15,10 +17,15 @@ def build_cover_refresh_jobs(
 ) -> list[dict[str, object]]:
     jobs_by_folder: dict[str, dict[str, object]] = {}
     skipped_folders: list[dict[str, object]] = []
-    cover_needs_fetch: dict[tuple[str, str | None], bool] = {}
+    cover_needs_fetch: dict[tuple[str, str | None, int], bool] = {}
     query_keys: dict[tuple[str, str, str | None, int | None], str] = {}
+    rejected_paths = rejected_local_album_paths(
+        {**entry, "path": raw_path} for raw_path, entry in file_cache.items()
+    )
 
     for raw_path, entry in file_cache.items():
+        if raw_path in rejected_paths or entry.get("local_album_membership_problem"):
+            continue
         try:
             folder = Path(raw_path).parent
         except Exception:
@@ -36,6 +43,11 @@ def build_cover_refresh_jobs(
                 "year": None,
                 "album_id": None,
                 "cover_selection_origin": None,
+                "cover_selection_provenance": None,
+                "selected_cover_revision": entry.get("selected_cover_revision", entry.get("cover_revision")),
+                "selected_remote_cover_url": entry.get("selected_remote_cover_url", entry.get("remote_cover_url")),
+                "selected_remote_cover_width": entry.get("selected_remote_cover_width", entry.get("remote_cover_width")),
+                "selected_remote_cover_height": entry.get("selected_remote_cover_height", entry.get("remote_cover_height")),
                 "selected_cover_path": (str(entry.get("selected_cover_path") or "").strip() or None)
                 if isinstance(entry.get("album_id"), int) and entry["album_id"] > 0 else None,
                 "needs_cover_fetch": False,
@@ -61,10 +73,17 @@ def build_cover_refresh_jobs(
             stored_origin == "automatic" and job.get("cover_selection_origin") != "user"
         ):
             job["cover_selection_origin"] = stored_origin
+        if entry.get("selected_cover_provenance", entry.get("cover_selection_provenance")) == "explicit":
+            job["cover_selection_provenance"] = "explicit"
 
         cover_value = str(entry.get("selected_cover_path") or entry.get("cover_path") or "").strip()
         cover_path = Path(cover_value) if cover_value else None
+        minimum_edge = 1200 if job.get("cover_selection_provenance") == "explicit" else automatic_cover_repair_minimum_edge()
         if cover_path is None:
+            if job.get("selected_remote_cover_url") and all(
+                int(job.get(field) or 0) >= minimum_edge for field in ("selected_remote_cover_width", "selected_remote_cover_height")
+            ):
+                continue
             job["needs_cover_fetch"] = True
             continue
         cache_key = None
@@ -78,11 +97,13 @@ def build_cover_refresh_jobs(
             if identity not in query_keys:
                 query_keys[identity] = cover_query_key(*identity)
             cache_key = query_keys[identity]
-        decision_key = (cover_value, cache_key)
+        decision_key = (cover_value, cache_key, minimum_edge)
         if decision_key not in cover_needs_fetch:
             cache_entry = cover_cache.get(cache_key) if cache_key is not None else None
             cover_needs_fetch[decision_key] = (
-                local_cover_requires_upgrade_check(cover_path, cache_entry)
+                local_cover_requires_upgrade_check(cover_path, cache_entry, minimum_edge=1200)
+                if job.get("cover_selection_provenance") == "explicit"
+                else local_cover_requires_upgrade_check(cover_path, cache_entry)
             )
         if cover_needs_fetch[decision_key]:
             job["needs_cover_fetch"] = True
@@ -93,7 +114,11 @@ def build_cover_refresh_jobs(
         album = str(job.get("album") or "").strip()
         needs_cover_fetch = bool(job.get("needs_cover_fetch"))
         if artist and album:
-            if require_missing_cover and not needs_cover_fetch:
+            selected_user_cover = (
+                job.get("cover_selection_origin") == "user"
+                and bool(job.get("selected_cover_path") or job.get("selected_remote_cover_url"))
+            )
+            if (require_missing_cover or selected_user_cover) and not needs_cover_fetch:
                 skipped_folders.append(
                     {
                         "folder": str(job.get("folder") or ""),

@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from music_app.services.metadata import NON_ALBUM_EXCEPTION_VALUES
+from music_app.services.album_local_membership import local_album_membership_ctes_sql
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
@@ -76,6 +77,7 @@ class PostgresLibraryInventoryRepository:
         private_paths: Iterable[object] | None = None,
         limit: object = DEFAULT_NON_ALBUM_CANDIDATE_LIMIT,
         connection: Any | None = None,
+        unassigned_only: bool = False,
     ) -> list[dict[str, object]]:
         """Load bounded raw inventory candidates without shaping browse payloads."""
         normalized_track_ids = sorted(
@@ -102,9 +104,9 @@ class PostgresLibraryInventoryRepository:
         }
         if connection is None:
             with self._connect_to_database() as owned_connection:
-                cursor = owned_connection.execute(_non_album_candidates_sql(), params)
+                cursor = owned_connection.execute(_non_album_candidates_sql(unassigned_only=unassigned_only), params)
                 return [dict(_row_mapping(row)) for row in cursor.fetchall()]
-        cursor = connection.execute(_non_album_candidates_sql(), params)
+        cursor = connection.execute(_non_album_candidates_sql(unassigned_only=unassigned_only), params)
         return [dict(_row_mapping(row)) for row in cursor.fetchall()]
 
     def _connect_to_database(self) -> Any:
@@ -188,7 +190,7 @@ def _support_state_sql() -> str:
     """
 
 
-def _non_album_candidates_sql() -> str:
+def _non_album_candidates_sql(*, unassigned_only: bool = False) -> str:
     stored_file_album = "coalesce(library.local_track_files.scan_file_album, '')"
     stored_non_album_predicate = _non_album_value_predicate_sql(stored_file_album)
     effective_album = """coalesce(
@@ -204,7 +206,11 @@ def _non_album_candidates_sql() -> str:
         with bootstrap_context as (
           {_bootstrap_context_sql()}
         ),
+        {local_album_membership_ctes_sql()},
         eligible_track_file_ids as (
+          select file_id as track_file_id from local_album_membership
+          where problem is not null
+          union
           select library.local_track_files.id as track_file_id
           from library.local_tracks
           join bootstrap_context
@@ -341,7 +347,9 @@ def _non_album_candidates_sql() -> str:
           library.local_track_files.modified_at,
           library.local_track_files.content_signature,
           library.local_track_files.metadata as track_file_metadata,
-          library.local_track_files.metadata #> '{{scan_cache,file_entry}}' as file_entry,
+          (library.local_track_files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
+            'local_album_membership_problem', (select problem from local_album_membership where file_id = library.local_track_files.id)
+          ) as file_entry,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album}}' as raw_file_album,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,album_artist}}' as raw_file_album_artist,
           library.local_track_files.metadata #>> '{{scan_cache,file_entry,artist}}' as raw_file_artist,
@@ -405,8 +413,10 @@ def _non_album_candidates_sql() -> str:
             %(track_id_count)s = 0
             or library.local_tracks.id = any(%(track_ids)s::bigint[])
           )
+          {"and library.local_tracks.album_id is null" if unassigned_only else ""}
           and (
             {effective_non_album_predicate}
+            or exists (select 1 from local_album_membership where file_id = library.local_track_files.id and problem is not null)
             or exception_override.exception_type is not null
             or (
               not coalesce(exception_override.override_payload ? 'exception_type', false)

@@ -509,6 +509,41 @@
           ]
         },
         {
+          "config": "playwright.config.js",
+          "project": "functional",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+              "area": "cover-providers"
+            }
+          ]
+        },
+        {
           "config": "playwright.cover-rescan.config.js",
           "project": "cover-rescan",
           "workers": 1,

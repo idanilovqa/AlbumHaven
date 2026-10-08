@@ -1371,6 +1371,78 @@ def test_postgres_relation_refresh_publishes_terminal_status_from_committed_arti
     assert library_state["relations_in_progress"] is False
 
 
+@pytest.mark.parametrize("guarded", [False, True])
+def test_postgres_cover_repair_publishes_committed_cache_and_rebuilds_albums(
+    config, monkeypatch, guarded,
+):
+    from music_app.services import library
+
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://example"
+    eligible = "C:/Music/Artist/Album/01.flac"
+    excluded = "C:/Music/Random/01.flac"
+    old = {"cover_path": "old.png", "cover_selection_origin": "user"}
+    rejected = {**old, "local_album_membership_problem": "outside_album_folder"}
+    canonical = {"cover_path": "repaired.png", "cover_revision": "new",
+                 "cover_selection_origin": "automatic", "cover_selection_provenance": None,
+                 "local_cover_width": 1600, "local_cover_height": 1600}
+    library_state = {"file_cache": {eligible: old, excluded: rejected},
+                     "albums": ["old"], "scan_generation": 7, "last_scan": 10.0}
+    monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config: "root")
+    monkeypatch.setattr(state_module, "save_cache_to_disk_for_config", lambda *_args, **_kwargs: {
+        "relation_views": {"artists": []}, "relations_last_built": 456.75,
+        "repaired_cover_entries": {eligible: canonical},
+    })
+    rebuilt = []
+
+    def rebuild(cache, _separate):
+        rebuilt.append(cache)
+        return [cache[eligible]["cover_path"]]
+
+    monkeypatch.setattr(library, "build_albums_from_file_cache", rebuild)
+    state_module.refresh_relation_views_for_state(
+        library_state, config, expected_scan_generation=7 if guarded else None,
+    )
+    assert library_state["file_cache"][eligible] == canonical
+    assert library_state["file_cache"][excluded] == rejected
+    assert library_state["albums"] == ["repaired.png"]
+    assert rebuilt == [library_state["file_cache"]]
+
+
+@pytest.mark.parametrize("detached_publication", [False, True])
+def test_postgres_cover_repair_does_not_overwrite_manual_save_after_commit(
+    config, monkeypatch, detached_publication,
+):
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://example"
+    path = "C:/Music/Artist/Album/01.flac"
+    library_state = {"file_cache": {path: {"cover_path": "old.png"}},
+                     "albums": ["old"], "scan_generation": 7, "last_scan": 10.0}
+    publication = dict(library_state) if detached_publication else None
+    newest = {"cover_path": "manual-5000.png", "cover_revision": "latest",
+              "cover_selection_origin": "user", "cover_selection_provenance": "explicit",
+              "local_cover_width": 5000, "local_cover_height": 5000}
+
+    def persist(*_args, **_kwargs):
+        def manual_save():
+            library_state["file_cache"] = {path: newest}
+            library_state["albums"] = ["manual-5000.png"]
+        state_module.run_authoritative_cover_commit_for_state(library_state, manual_save)
+        return {"relation_views": {"artists": []}, "relations_last_built": 456.75,
+                "repaired_cover_entries": {path: {"cover_path": "manual-4000.png",
+                    "cover_selection_origin": "user", "cover_selection_provenance": "explicit"}}}
+
+    monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config: "root")
+    monkeypatch.setattr(state_module, "save_cache_to_disk_for_config", persist)
+    with pytest.raises(state_module.ScanCancelled):
+        state_module.refresh_relation_views_for_state(
+            library_state, config, expected_scan_generation=7, publication_state=publication,
+        )
+    assert library_state["file_cache"][path] == newest
+    assert library_state["albums"] == ["manual-5000.png"]
+    assert library_state["scan_generation"] == 8
+    if detached_publication:
+        assert publication["file_cache"][path]["cover_path"] == "old.png"
+
+
 def test_postgres_relation_refresh_fails_loudly_without_committed_canonical_state(
     config,
     monkeypatch,
@@ -2121,11 +2193,31 @@ def test_recovered_cover_durable_batch_does_not_republish_inventory(recovered_co
         return {"album_rows_updated": 1, "track_file_rows_updated": 2}
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
     if downloaded:
-        monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **kw: (case.cover, True, {"reason": "downloaded", "written_revision": cover_refresh_execution.cover_revision_for_path(case.cover)}))
+        monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **kw: (case.cover, True, {"reason": "downloaded", "written_revision": cover_refresh_execution.cover_revision_for_path(case.cover), "decoded_width": 4000, "decoded_height": 4000}))
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
     assert result["changed"] is True
     assert commits == ([] if downloaded else [True])
     assert all(entry["cover_path"] == str(case.cover) for entry in case.state["file_cache"].values())
+    if downloaded:
+        assert all((entry["local_cover_width"], entry["local_cover_height"]) == (4000, 4000)
+                   for entry in case.state["file_cache"].values())
+
+
+def test_downloaded_cover_refreshes_stale_dimensions_when_path_and_revision_are_unchanged(recovered_cover_case, monkeypatch):
+    case = recovered_cover_case
+    revision = cover_refresh_execution.cover_revision_for_path(case.cover)
+    for entry in case.entries.values():
+        entry.update(cover_path=str(case.cover), cover_revision=revision,
+                     local_cover_width=1600, local_cover_height=1600)
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", lambda **_kwargs: (
+        case.cover, True, {"reason": "cover_written", "decoded_width": 4000, "decoded_height": 4000},
+    ))
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert result["changed"] is True
+    for entry in case.state["file_cache"].values():
+        assert entry["cover_path"] == str(case.cover)
+        assert entry["cover_revision"] == revision
+        assert (entry["local_cover_width"], entry["local_cover_height"]) == (4000, 4000)
 
 
 @pytest.mark.parametrize("invalidate", [None, "identity", "cover_generation", "scan_generation", "selection"])
@@ -2331,6 +2423,7 @@ def test_run_cover_jobs_logs_fast_terminal_outcome(recovered_cover_case, monkeyp
         "folder": str(case.cover.parent), "reason": reason, "terminal_category": category,
         "downloaded": downloaded, "has_cover": has_cover, "force_search": False,
         "elapsed_ms": 2.5, "resolver_trace": trace,
+        "provider_outcome_persistence_uncertain": False,
     }
     assert result[category] == 1
     assert result["processed"] == 1
@@ -2378,6 +2471,7 @@ def test_stale_cover_result_cannot_publish_completed_count(recovered_cover_case,
     current = [case.state]
     case.kwargs["get_state"] = lambda: current[0]
     newer_progress = {"covers_completed": 17, "covers_processed": 22,
+                      "covers_spotify_quota_exceeded": True,
                       "covers_total": 99, "covers_downloaded": 8,
                       "covers_current_folder": "Newer/Album", "covers_in_progress": True}
 
@@ -2416,6 +2510,7 @@ def test_background_dispatch_rejects_late_result_after_ownership_change(
     expected_progress = {}
     progress_fields = (
         "covers_completed", "covers_processed", "covers_total", "covers_downloaded",
+        "covers_spotify_quota_exceeded",
         "covers_current_folder", "covers_in_progress", "covers_outcome",
     )
 
@@ -2457,64 +2552,28 @@ def test_background_dispatch_rejects_late_result_after_ownership_change(
     assert case.cover.read_bytes() == b"recovered-cover-bytes"
 
 
-@pytest.mark.parametrize("retry_at", [99.0, 200.0])
-@pytest.mark.parametrize("renew_cooldown", [False, True])
 @pytest.mark.parametrize("workers", [1, 2])
-def test_cover_jobs_defer_spotify_once_after_ordinary_jobs(recovered_cover_case, monkeypatch, retry_at, renew_cooldown, workers):
-    from music_app.services import cover_provider_spotify
-
+def test_cover_jobs_share_quota_state_and_never_queue_spotify_retries(recovered_cover_case, monkeypatch, workers):
     case = recovered_cover_case
     case.job["track_paths"] = []
-    case.kwargs["jobs"] = [case.job, {**case.job, "album": "Already successful"}]
+    case.kwargs["jobs"] = [case.job, {**case.job, "album": "Second"}]
     case.kwargs["job_workers"] = workers
-    calls, events = [], []
-    progress = []
-    trace = [{"resolver": "_search_spotify", "status": "failed", "reason": "spotify_cooldown", "retry_at": retry_at}]
-    latest_expiry = [retry_at]
-
+    contexts, outcomes = [], []
     def execute(**kwargs):
-        album = kwargs["job"]["album"]
-        retry = kwargs.get("spotify_retry_trace") is not None
-        calls.append((album, retry))
-        if retry:
-            # The deferred first attempt is not another completed queue job.
-            assert case.state.get("covers_completed", 0) == 1
-        if album == "Already successful":
-            return case.cover, True, {"reason": "downloaded", "elapsed_ms": 1.0}
-        if retry and renew_cooldown:
-            latest_expiry[0] = 300.0
-        return None, False, {"reason": "remote_search_failed", "elapsed_ms": 1.0, "resolver_trace": trace}
-
+        run = kwargs["search_run"]
+        contexts.append(run)
+        first = run.disable_spotify()
+        trace = [{"resolver": "_search_spotify", "status": "failed", "reason": "spotify_quota_exceeded"}] if first else []
+        return None, False, {"reason": "remote_search_failed" if first else "remote_search_returned_no_candidate", "resolver_trace": trace}
     monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
-    monkeypatch.setattr(cover_provider_spotify, "spotify_cooldown_until", lambda: latest_expiry[0])
-    monkeypatch.setattr(cover_refresh_execution.time, "time", lambda: 100.0)
-    completed_results = []
-    def record_event(_config, _logger, action, **fields):
-        events.append((action, fields))
-        if action == "Cover fetch outcome":
-            progress.append(case.state.get("covers_processed", 0))
-            completed_results.append(case.state.get("covers_completed", 0))
-    monkeypatch.setattr(cover_refresh_execution, "log_app_event", record_event)
+    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda _config, _logger, action, **fields: outcomes.append(fields) if action == "Cover fetch outcome" else None)
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
-
-    assert sorted(calls[:2]) == [("Already successful", False), ("Recovered", False)]
-    assert calls[2:] == ([("Recovered", True)] if retry_at < 100 else [])
-    assert result["processed"] == 2
-    assert result["downloaded"] == 1
-    assert result["failed"] == 1
-    # Progress reports the monotonic queue position, including jobs deferred
-    # for a provider cooldown; event ordering is concurrent-worker dependent.
-    assert case.state["covers_processed"] == 2
-    assert completed_results == [1, 2]
+    assert len(contexts) == 2 and contexts[0] is contexts[1]
     assert case.state["covers_completed"] == 2
-    assert len([event for action, event in events if action == "Cover fetch outcome"]) == 2
-    pending = next(item for item in result["job_results"] if item.get("reason") == "remote_search_failed")
-    if latest_expiry[0] > 100:
-        assert result["spotify_deferred"] == 1
-        assert result["spotify_retry_at"] == latest_expiry[0]
-        assert pending["spotify_retry_deferred"] is True
-    if retry_at < 100:
-        assert pending["spotify_retry_attempted"] is True
+    assert case.state["covers_spotify_quota_exceeded"] is True
+    assert result["processed"] == 2
+    assert "spotify_deferred" not in result
+    assert len(outcomes) == 2
 
 
 @pytest.mark.parametrize("origin", ["user", "automatic"])
@@ -2535,7 +2594,7 @@ def test_retained_authoritative_cover_does_not_recover_physical_metadata(recover
     assert case.entries == baseline
 
 
-@pytest.mark.parametrize("change", ["valid_selection", "missing_selection", "generation", "before_execution"])
+@pytest.mark.parametrize("change", ["valid_selection", "missing_selection", "generation", "before_execution", "provenance_only"])
 def test_retained_selection_rechecks_current_authority(recovered_cover_case, monkeypatch, change):
     case = recovered_cover_case
     case.job.update(selected_cover_path=str(case.cover), album_id=12, cover_selection_origin="user")
@@ -2544,6 +2603,11 @@ def test_retained_selection_rechecks_current_authority(recovered_cover_case, mon
     for entry in case.entries.values():
         entry.update(selected_cover_path=str(case.cover), album_id=12, cover_selection_origin="user")
     new_cover = case.cover.parent.parent / "new-selection.png"
+    if change == "provenance_only":
+        pytest.importorskip("PIL.Image").new("RGB", (400, 400), "green").save(case.cover)
+        for entry in case.entries.values():
+            entry["cover_path"] = str(case.cover)
+    original_cover_bytes = case.cover.read_bytes()
     if change in {"valid_selection", "before_execution"}:
         pytest.importorskip("PIL.Image").new("RGB", (400, 400), "blue").save(new_cover)
     case.kwargs["file_cache"] = {path: dict(entry) for path, entry in case.entries.items()}
@@ -2555,6 +2619,9 @@ def test_retained_selection_rechecks_current_authority(recovered_cover_case, mon
     def execute(**_kwargs):
         if change == "generation":
             case.state["cover_generation"] = 2
+        elif change == "provenance_only":
+            for entry in case.entries.values():
+                entry["cover_selection_provenance"] = "explicit"
         else:
             for entry in case.entries.values():
                 entry.update(cover_path=str(new_cover), cover_revision="new-revision")
@@ -2567,10 +2634,17 @@ def test_retained_selection_rechecks_current_authority(recovered_cover_case, mon
     assert result["changed"] is False
     assert case.entries == changed_entries
     assert result["job_results"][0]["reason"] == "selected_cover_changed_during_fetch"
-    valid = change in {"valid_selection", "before_execution"}
-    assert result["job_results"][0]["cover_path"] == (str(new_cover) if valid else None)
+    valid = change in {"valid_selection", "before_execution", "provenance_only"}
+    expected_cover = case.cover if change == "provenance_only" else new_cover
+    assert result["job_results"][0]["cover_path"] == (str(expected_cover) if valid else None)
     assert result["failed"] == int(not valid)
     assert result["skipped"] == int(valid)
+    if change == "provenance_only":
+        assert case.cover.read_bytes() == original_cover_bytes
+        assert all(entry["cover_selection_origin"] == "user"
+                   and entry["cover_revision"] == "old-revision"
+                   and entry["cover_selection_provenance"] == "explicit"
+                   for entry in case.entries.values())
 
 
 @pytest.mark.parametrize("album_ids", [(12, 13), (12, 12)], ids=["mixed", "same"])
@@ -3577,45 +3651,37 @@ def test_cover_request_provider_outcome_persistence_failure_waits_for_children(
     assert request.completions == []
 
 
-def test_cover_request_deferred_outcome_failure_settles_all_accepted_results(
+def test_cover_request_quota_outcome_failure_settles_all_accepted_results(
     provider_outcome_request, monkeypatch,
 ):
     request = provider_outcome_request
     executed = []
     recorded = []
-    cooldown_until = [10**12]
 
     def execute(*, job, **_kwargs):
         executed.append(job["album_id"])
         return None, False, {
             "reason": "remote_search_failed",
             "resolver_trace": [{"resolver": "_search_spotify", "status": "failed",
-                                "reason": "spotify_cooldown", "retry_at": 10**12}],
+                                "reason": "spotify_quota_exceeded", "retry_at": 10**12}],
         }
 
     def persist(_config, *, album_id, **_kwargs):
         recorded.append(album_id)
         if album_id == 101:
-            # A later deferred job would now be eligible for a new request,
-            # but persistence uncertainty must prevent additional provider work.
-            cooldown_until[0] = 0
             raise RuntimeError("provider outcome commit acknowledgement lost")
 
     monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_provider_outcomes", persist)
-    monkeypatch.setattr(
-        cover_refresh_execution.cover_provider_spotify, "spotify_cooldown_until",
-        lambda: cooldown_until[0],
-    )
     second_job = {**request.case.job, "album_id": 102, "track_paths": []}
 
     with pytest.raises(RuntimeError, match="provider outcome commit acknowledgement lost"):
-        request.run(jobs=[request.case.job, second_job])
+        request.run(jobs=[request.case.job, second_job], workers=2)
 
-    assert executed == [101, 102], "ordinary searches must not be replayed during cooldown"
-    assert recorded == [101, 102], "deferred results must not disappear after a sibling failure"
-    assert [(event["album_id"], event["reason"], event["terminal_category"])
-            for event in request.outcomes] == [
+    assert sorted(executed) == [101, 102], "ordinary searches must not be replayed during cooldown"
+    assert sorted(recorded) == [101, 102], "accepted results must not disappear after a sibling failure"
+    assert sorted((event["album_id"], event["reason"], event["terminal_category"])
+            for event in request.outcomes) == [
         (101, "remote_search_failed", "failed"),
         (102, "remote_search_failed", "failed"),
     ]

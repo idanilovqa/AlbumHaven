@@ -127,6 +127,22 @@ def test_new_cover_run_resets_completed_results():
     assert state["covers_completed"] == 0
 
 
+def test_spotify_quota_does_not_remove_checked_albums_or_inflate_eta():
+    status = build_cover_progress_status({
+        "covers_in_progress": True, "covers_execution_started_monotonic": 0,
+        "covers_completed": 2487, "covers_processed": 2488, "covers_total": 3353,
+        "covers_spotify_quota_exceeded": True,
+    }, now=29820)
+    assert status["covers_spotify_quota_exceeded"] is True
+    assert status["covers_estimated_remaining_seconds"] == pytest.approx(29820 / 2487 * (3353 - 2487))
+
+
+def test_new_run_clears_spotify_quota_status():
+    state = {"covers_spotify_quota_exceeded": True}
+    _reset_cover_refresh_progress(state, in_progress=True)
+    assert build_cover_progress_status(state)["covers_spotify_quota_exceeded"] is False
+
+
 @pytest.mark.parametrize("fails", [False, True])
 def test_terminal_failure_or_cancellation_preserves_completed_results(fails):
     state = {"covers_in_progress": True, "cover_generation": 1,

@@ -7901,5 +7901,117 @@
     ],
     "ownerApproval": "approved"
   },
-  {"config": "playwright.component.config.js", "project": "", "test": "tests/components/coverLookupMutationBusy.spec.js", "case": "pending local cover actions remain visibly disabled on hover and re-enable normally", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["local-cover-mutation-exclusivity", "disabled-local-cover-action-appearance"], "ownerApproval": "approved"}
+  {"config": "playwright.component.config.js", "project": "", "test": "tests/components/coverLookupMutationBusy.spec.js", "case": "pending local cover actions remain visibly disabled on hover and re-enable normally", "profile": null, "setupScope": "suite", "stateMode": "read-only", "databaseScenarios": [], "filesystemScenarios": [], "expectedContracts": ["local-cover-mutation-exclusivity", "disabled-local-cover-action-appearance"], "ownerApproval": "approved"},
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-025",
+      "filesystemCopy": "media/cases/ftc-covers-025"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-album-details-023",
+      "filesystemCopy": "media/cases/ftc-album-details-023"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-026",
+      "filesystemCopy": "media/cases/ftc-covers-026"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-027",
+      "filesystemCopy": "media/cases/ftc-covers-027"
+    },
+    "ownerApproval": "approved"
+  }
 ]

@@ -5,6 +5,78 @@ const vm = require('node:vm');
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/loader-status-helpers.js'), 'utf8'), context);
 
+require('node:test')('Spotify quota is a subline and does not reduce album progress', () => {
+  const status = { covers_in_progress: true, covers_phase: 'fetching',
+    covers_completed: 2487, covers_spotify_quota_exceeded: true,
+    covers_total: 3353, covers_estimated_remaining_seconds: 10000 };
+  const detail = context.buildCoverProgressDetail(status);
+  assert.match(detail, /2487 of 3353 albums checked \(74%\)/);
+  assert.doesNotMatch(detail, /retries pending/);
+  const retryLine = context.buildLoaderStatusLines(status)[1];
+  assert.equal(retryLine.title, 'Spotify');
+  assert.equal(retryLine.detail, 'Spotify quota reached — skipped for this run');
+  assert.match(detail, /ETA/);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/runtime/status-ui-helpers.js'), 'utf8'), context);
+  const title = context.buildStatusIndicatorTitleParts(status);
+  assert.match(JSON.stringify(title), /2487 \/ 3353 cover searches completed/);
+  assert.match(JSON.stringify(title), /Spotify quota reached/);
+});
+
+require('node:test')('cover preparation labels admission truthfully without premature percentage or ETA', () => {
+  const preparing = context.buildLoaderStatusLines({
+    covers_in_progress: true, covers_phase: 'preparing', covers_run_mode: 'manual-bulk',
+    covers_completed: 0, covers_total: 0, covers_elapsed_seconds: 12,
+    covers_estimated_remaining_seconds: 900,
+  })[0];
+  assert.equal(preparing.title, 'Preparing cover search');
+  assert.match(preparing.detail, /Preparing cover search/);
+  assert.match(preparing.detail, /elapsed 12s/);
+  assert.doesNotMatch(preparing.detail, /Progress unavailable|\d+%|ETA|0 of 0/);
+});
+
+require('node:test')('cover-only preparation marks non-cover stages inactive rather than complete', () => {
+  const runtime = vm.createContext({
+    appBootstrap: { getInitialView: () => ({}) },
+    window: { location: { href: 'http://localhost/', origin: 'http://localhost' } },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/runtime/core-state-and-helpers.js'), 'utf8'), runtime);
+  const states = runtime.resolveLibraryScanPhaseStates({
+    covers_in_progress: true, covers_phase: 'preparing', covers_run_mode: 'manual-bulk',
+  });
+  assert.equal(states.covers, 'current');
+  for (const stage of ['discover', 'metadata', 'relations']) assert.equal(states[stage], 'inactive');
+});
+
+require('node:test')('cover-only request publishes preparation before the server admission responds', async () => {
+  let resolveResponse;
+  const pending = new Promise(resolve => { resolveResponse = resolve; });
+  let optimistic;
+  const runtime = vm.createContext({
+    state: { status: {} }, console: { log() {}, error() {} },
+    claimLibraryStatusAction: () => ({}),
+    startStatusIndicatorImmediately: status => { optimistic = status; },
+    scheduleStatusPoll: () => {},
+    fetch: () => pending,
+    settleLibraryStatusAction: () => false,
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,
+    '../../../music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'), 'utf8'), runtime);
+  const request = runtime.fetchUnsuccessfulAlbumCovers();
+  try {
+    assert.equal(optimistic.covers_phase, 'preparing');
+    assert.equal(optimistic.covers_spotify_quota_exceeded, false);
+    assert.match(optimistic.covers_run_mode, /^manual/);
+    const line = context.buildLoaderStatusLines(optimistic)[0];
+    assert.equal(line.title, 'Preparing cover search');
+    assert.doesNotMatch(line.detail, /Progress unavailable|\d+%|ETA|elapsed/);
+  } finally {
+    resolveResponse({ ok: true, json: async () => ({ ok: true }) });
+    await request;
+  }
+});
+
 const detail = context.buildLoaderStatusLines({
   covers_in_progress: true, covers_processed: 25, covers_total: 100,
   covers_downloaded: 12, covers_elapsed_seconds: 180,

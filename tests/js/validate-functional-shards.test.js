@@ -18,7 +18,7 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 47],
-  ['cover-providers', 20],
+  ['cover-providers', 24],
   ['metadata-mutations', 14],
   ['playback-utilities', 40],
 ]);
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 121-case assignment', () => {
+test('functional shard contract pins the approved four-way 125-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 121-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 121);
+  assert.equal(total, 125);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -709,19 +709,23 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     'FTC-COVERS-019 later automatic improvement restores the unseen indicator',
     'FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save',
     'FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection',
+    "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+    "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+    "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+    "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
   ]);
   const isolatedInvocations = waves.flatMap((wave) => wave.invocations).filter(
     (invocation) => invocation.baselineMode === 'isolated-app-process',
   );
 
-  assert.equal(isolatedInvocations.length, 4);
+  assert.equal(isolatedInvocations.length, 8);
   assert.deepEqual(
     new Set(isolatedInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name))),
     expectedCases,
   );
   assert.deepEqual(
     isolatedInvocations.map((invocation) => invocation.cases.length),
-    [1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
   );
   const sharedIndexes = firstWave.invocations
     .map((invocation, index) => invocation.baselineMode === 'owned-mutation' ? index : -1)
@@ -742,6 +746,10 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     [
       'FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save',
       'FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection',
+      "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+      "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+      "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+      "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
     ],
   );
   assert.equal(secondWave.invocations.at(-1).baselineMode, 'global-mutation');
@@ -915,7 +923,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual', { cases: 47, waves: [1, 2] }],
-    ['cover-providers', { cases: 20, waves: [1, 2] }],
+    ['cover-providers', { cases: 24, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
     ['playback-utilities', { cases: 40, waves: [1, 2, 3, 4] }],
   ]);

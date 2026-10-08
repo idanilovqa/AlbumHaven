@@ -5,6 +5,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from music_app.services.library import album_to_dict
+from music_app.services.covers import image_dimensions
 
 
 def _active_cover_state_for_track_paths(
@@ -300,6 +301,7 @@ def apply_cover_selection_for_tracks(
     remote_cover_height: int | None = None,
     cover_revision: str | None = None,
     persist_cache_update: bool = True,
+    manual_selection: bool = False,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     updated_file_cache = dict(library_state.get("file_cache", {}) or {})
     cover_value = str(cover_path) if cover_path else None
@@ -309,6 +311,13 @@ def apply_cover_selection_for_tracks(
     remote_source_value = str(remote_cover_source or "").strip() or None
     remote_source_label_value = str(remote_cover_source_label or "").strip() or None
     remote_album_url_value = str(remote_cover_album_url or "").strip() or None
+    selection_authority = {
+        "cover_selection_origin": "user" if cover_value or remote_url_value else None,
+        "cover_selection_provenance": "explicit" if cover_value or remote_url_value else None,
+    } if manual_selection else {}
+    if manual_selection:
+        width, height = image_dimensions(cover_path) if cover_path else (None, None)
+        selection_authority.update(local_cover_width=width or None, local_cover_height=height or None)
     changed_paths: set[str] = set()
 
     for track_path in track_paths:
@@ -317,6 +326,7 @@ def apply_cover_selection_for_tracks(
             continue
         if (
             entry.get("cover_path") == cover_value
+            and all(entry.get(key) == value for key, value in selection_authority.items())
             and (str(entry.get("cover_revision") or "").strip() or None) == revision_value
             and (str(entry.get("remote_cover_url") or "").strip() or None) == remote_url_value
             and (str(entry.get("remote_cover_thumbnail_url") or "").strip() or None) == remote_thumb_value
@@ -328,6 +338,7 @@ def apply_cover_selection_for_tracks(
         ):
             continue
         next_entry = dict(entry)
+        next_entry.update(selection_authority)
         next_entry["cover_path"] = cover_value
         next_entry["cover_revision"] = revision_value
         next_entry["remote_cover_url"] = remote_url_value
@@ -353,6 +364,8 @@ def apply_cover_selection_for_tracks(
         }
         if not album_paths & changed_paths:
             continue
+        for key, value in selection_authority.items():
+            setattr(album, key, value)
         _set_cover_fields(
             album,
             cover_value=cover_value,
@@ -368,6 +381,9 @@ def apply_cover_selection_for_tracks(
         for track in album_tracks:
             if str(getattr(track, "path", "") or "") not in changed_paths:
                 continue
+            if manual_selection:
+                track.local_cover_width = selection_authority["local_cover_width"]
+                track.local_cover_height = selection_authority["local_cover_height"]
             _set_cover_fields(
                 track,
                 cover_value=cover_value,
@@ -436,6 +452,7 @@ def apply_authoritative_local_cover_fallback(
 
     cover_value = str(cover_path)
     revision_value = str(cover_revision or "").strip()
+    width, height = image_dimensions(cover_path)
     updated_file_cache = dict(current_file_cache)
     for track_path in normalized_paths:
         entry = dict(updated_file_cache[track_path])
@@ -443,11 +460,17 @@ def apply_authoritative_local_cover_fallback(
             entry,
             cover_value=cover_value,
             revision_value=revision_value,
+            local_cover_width=width or None,
+            local_cover_height=height or None,
         )
         updated_file_cache[track_path] = entry
     library_state["file_cache"] = updated_file_cache
 
     for album, matching_tracks in matching_albums:
+        album.cover_selection_origin = "user"
+        album.cover_selection_provenance = "explicit"
+        album.local_cover_width = width or None
+        album.local_cover_height = height or None
         _set_cover_fields(
             album,
             cover_value=cover_value,
@@ -466,6 +489,8 @@ def apply_authoritative_local_cover_fallback(
         ):
             raise RuntimeError("Authoritative cover fallback could not patch a matching album.")
         for track in matching_tracks:
+            track.local_cover_width = width or None
+            track.local_cover_height = height or None
             _set_cover_fields(
                 track,
                 cover_value=cover_value,
@@ -497,9 +522,15 @@ def _set_local_cover_fields_on_mapping(
     *,
     cover_value: str,
     revision_value: str,
+    local_cover_width: int | None,
+    local_cover_height: int | None,
 ) -> None:
     entry["cover_path"] = cover_value
     entry["cover_revision"] = revision_value
+    entry["cover_selection_origin"] = "user"
+    entry["cover_selection_provenance"] = "explicit"
+    entry["local_cover_width"] = local_cover_width
+    entry["local_cover_height"] = local_cover_height
     entry["remote_cover_url"] = None
     entry["remote_cover_thumbnail_url"] = None
     entry["remote_cover_source"] = None

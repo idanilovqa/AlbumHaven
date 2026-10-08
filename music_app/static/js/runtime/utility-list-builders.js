@@ -2103,7 +2103,7 @@ async function watchSaveTask(taskId, context = {}) {
           ) {
             try {
               viewRefreshed = await fetchAndRender(
-                buildApiUrl(state.view),
+                buildApiUrl(state.view, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),

@@ -1320,12 +1320,13 @@ async function ignoreAlbumVersion(albumKey) {
   }
 }
 
-function refreshOpenTrackModalVersionState(preferredAlbumKey = '') {
+function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbum = null) {
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return;
   const currentKey = String(preferredAlbumKey || state.modalReleases[state.modalReleaseIndex]?.key || '');
   const visibleAlbums = flattenVisibleAlbums();
-  const currentAlbum = visibleAlbums.find((item) => String(item.key || '') === currentKey)
+  const currentAlbum = preferredAlbum
+    || visibleAlbums.find((item) => String(item.key || '') === currentKey)
     || state.modalReleases[state.modalReleaseIndex]
     || visibleAlbums[0]
     || null;

@@ -48,6 +48,32 @@ No files are moved and no cover images are overwritten by this slice. Reuse Post
 
 ## Delivery checkpoint
 
+### October 6 reconstruction-cost repair
+
+This repair continues the duplicate-membership/performance acceptance items;
+it does not complete browser acceptance. An isolated diagnostic measured a
+40,345 ms full-root handler, including 35,354 ms of duplicate attachment and
+11,556 ms of reconstruction. A separate full-root-key diagnostic measured
+2,685 ms server execution and 5,903 ms query-plus-fetch. Its profiled
+reconstruction took 15,918 ms; profiler overhead and different key scope prevent
+using that value as a browser benchmark. Path construction is a measured hotspot.
+
+The bounded implementation proposal reuses immutable cover-path objects within
+one reconstruction call and avoids reparsing already-normalized Path inputs at
+the existing album-container helper. Prerequisites are failing operation-count
+regressions and compatibility cases for strings, Paths, whitespace, dot segments,
+drive/UNC roots, disc folders and Unicode. Preserve the old normalization path
+when the fast-path preconditions do not hold.
+
+Acceptance requires complete same-input domain equality, including physical
+container validation, metadata conflicts, selected covers, source order, track
+references and provenance. Do not prune candidates, change query projections,
+introduce a persistent cache or relax the existing browser timing contract.
+After focused verification and review, rerun that unchanged browser check.
+Rollback changes only the two responsible source seams and their tests. Commit
+and full-CI promotion remain part of the repair batch; no service, media or
+database mutation belongs to this unit. Existing checklist gates remain open.
+
 ### October 4 startup hydration regression repair
 
 CI exposed startup views remaining at the sidebar tier: automatic root pagination
@@ -85,3 +111,60 @@ root paging and continuation checks. Browser
 startup costs and the complete hosted suite are still unverified.
 
 Keep these changes on the current unmerged multi-root branch for owner manual acceptance. Full applicable review, CI, E2E, and publication gates remain required before release. Do not mark those gates complete from focused tests alone.
+
+### October 6 measured reconstruction-repair checkpoint
+
+The unchanged root-browse benchmark failed at **33,196 ms against the 6,400 ms
+hard ceiling**, with one failed case and exit 1. Functional root assertions
+passed before the timing assertion. The verifier retained
+`benchmark-path-v1.capture.log` and SHA-verified copies of the trace and error
+context in `benchmark-path-v1-artifacts`. No threshold, retry allowance or E2E
+assertion changed. Performance acceptance remains open.
+
+Complete same-input OLD/NEW reconstruction parity passed for 57,980 fetched rows
+and 5,329 albums. `path-parity-v1-evidence/metadata.json` records source hashes,
+equal canonical/domain projections and the matching domain SHA256
+`6f11a57ff96a9ab58910145d81fc97b8ff90d56c46b136c32d59620aae7d99ca`.
+The parity run measured 7.892s baseline and 7.963s current reconstruction; it
+establishes compatibility, not a speedup or browser acceptance. Focused checks
+passed 216 cases across overlapping selections; this is not a unique-test total.
+
+The operator rebuilt the 77-module runtime and restarted normal shared-browsing
+sandbox3 from the current dirty feature worktree. The recorded handoff verified
+strict inventory startup, local/public Album Haven login200 and cookieless
+bootstrap401, with production unchanged and no cover pass started. Authenticated
+manual feature acceptance remains open. Separately, the truthful progress label
+`cover searches completed` passed five focused checks (two status, three
+view/progress); downloaded artwork retains its separate count.
+
+Exact E2E flow changes still await owner approval, and the complete native CI
+pipeline has not rerun. Browsing-enabled cover-maintenance composition also
+awaits approval. Preserve the checklist above: focused tests, parity and this
+manual-test deployment do not close performance, manual, CI or release gates.
+Exact task elapsed time was not recorded.
+
+### October 6 corrected architecture proposal, awaiting owner approval
+
+Read-only inspection of the complete retained `.prof` found no calls to
+`_build_album_duplicate_source_payload` or `_track_to_dict`: positive-source
+serialization was absent in that profile. A simple late serialization split
+therefore lacks evidence as a repair for this measured workload and is rejected.
+The older profile contains 57,980 rich-row adaptations taking 2.726s, including
+0.849s of exception normalization, and 173,807 Path constructions taking 5.461s.
+These timings overlap and must not be added. They do not decompose the latest
+33,196ms browser result or establish a current speedup opportunity of that size.
+
+The revised proposal has two stages at the existing `library.py` domain boundary.
+First, analyze complete rows and physical containers for identity, metadata
+conflicts and provenance under the current domain rules, before rich Track/cover
+adaptation. Then materialize rich data only for groups proven to have positive
+duplicate sources. Analyze the full input; do not discard rows or infer absence
+from compact identities alone. Query, cache and persistence changes are outside
+this proposal unless the owner approves a separate justified change.
+
+Acceptance requires complete OLD/NEW output and error parity, ordering and
+provenance parity, and preservation of physical-container closure. The unchanged
+6,400ms browser hard ceiling still applies. The proposal promises no speedup and
+has no implementation or new tests yet. Owner technical approval is pending;
+exact UI/manual, cover-composition/retry and E2E approvals, complete CI and release
+gates remain open. Existing checkbox counts are unchanged.

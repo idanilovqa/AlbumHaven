@@ -45,6 +45,8 @@ class Album:
     cover_path: Path | None = None
     cover_revision: str | None = None
     cover_selection_origin: str | None = None
+    cover_selection_provenance: str | None = None
+    cover_selection_repair_previous: dict[str, object] | None = None
     local_cover_width: int | None = None
     local_cover_height: int | None = None
     remote_cover_url: str | None = None

@@ -174,6 +174,13 @@ function buildApiUrl(view, options = {}) {
   if (options.rootSidebar) params.set('root_sidebar', '1');
   if (String(options.payloadTier || '').trim()) {
     params.set('payload_tier', String(options.payloadTier).trim());
+  } else if (
+    options.rootFullPayload
+    && resolvedSurface === 'albums'
+    && !view.query
+    && !view.selected_artist
+  ) {
+    params.set('payload_tier', 'full');
   }
   const qs = params.toString();
   return `/view-data${qs ? `?${qs}` : ''}`;

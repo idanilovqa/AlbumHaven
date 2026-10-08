@@ -1,5 +1,20 @@
 # Postgres Migrations
 
+## User-action provenance
+
+Migrations and backfills must never invent a user action from existing data.
+An existing cover path or remote URL does not prove that a user selected it in
+the app. Migration 0041's blanket `cover_selection_origin = 'user'` assignment
+is a historical error, not a precedent. Do not rewrite that migration or its
+ledger checksum. Correct proven inherited contamination with an additive,
+auditable repair. Existing flags cannot distinguish actual historical selections
+from migration backfills. The owner authorized replacing undersized legacy covers
+regardless of those flags: the next repair run requires both dimensions to meet
+2000 pixels, then the automatic minimum returns to 1200. New explicit in-app
+selection provenance retains manual protection. Never reset all user-cover
+ownership flags as a repair shortcut; guard each replacement against concurrent
+manual selections.
+
 `0083_add_active_physical_parent_index.sql` adds a nonunique partial expression
 index for active files grouped by root and normalized immediate parent. It
 changes no catalog rows or media. Existing large databases should prebuild the

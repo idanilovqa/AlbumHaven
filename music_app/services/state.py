@@ -488,7 +488,11 @@ def refresh_relation_views_for_state(
                 commit_action,
             )
         )
+    publication_generation = int(library_state.get("scan_generation") or 0)
+    repaired_cover_published = False
+
     def save_relation_snapshot() -> None:
+        nonlocal repaired_cover_published
         committed_relation_state = save_cache_to_disk_for_config(
             config,
             config["CACHE_PATH"],
@@ -497,6 +501,25 @@ def refresh_relation_views_for_state(
             float(target_state.get("last_scan") or 0.0),
             **snapshot_options,
         )
+        repaired_entries = (committed_relation_state or {}).get("repaired_cover_entries")
+        if isinstance(repaired_entries, dict) and repaired_entries:
+            from music_app.services.library import build_albums_from_file_cache
+
+            with _CACHE_LOCK:
+                # A manual Save advances the generation under this same lock.
+                # Its newer selection must survive even after this snapshot committed.
+                if int(library_state.get("scan_generation") or 0) != publication_generation:
+                    raise ScanCancelled()
+                current_entries = dict(target_state.get("file_cache") or {})
+                target_state["file_cache"] = {
+                    path: {**entry, **repaired_entries[path]} if path in repaired_entries else entry
+                    for path, entry in current_entries.items()
+                }
+                target_state["albums"] = build_albums_from_file_cache(
+                    target_state["file_cache"],
+                    set(target_state.get("separate_release_keys") or set()),
+                )
+                repaired_cover_published = True
         if postgres_relation_projection:
             if not isinstance(committed_relation_state, dict) or not isinstance(
                 committed_relation_state.get("relation_views"),
@@ -527,6 +550,9 @@ def refresh_relation_views_for_state(
         with _CACHE_LOCK:
             if int(library_state.get("scan_generation") or 0) != expected_scan_generation:
                 raise ScanCancelled()
+            if repaired_cover_published:
+                library_state["file_cache"] = target_state["file_cache"]
+                library_state["albums"] = target_state["albums"]
             for key in (
                 "relation_views",
                 "relations_in_progress",

@@ -3206,11 +3206,10 @@ test('functional-core app startup completes shared gallery, cover, and utility w
   assert.deepEqual(startupEvents[0], { stage: 'authenticate', port: 4324 });
   assert.equal(startupEvents[1].stage, 'warmup');
   assert.equal(startupEvents[1].port, 4324);
-  assert.deepEqual(startupEvents[1].options, {
-    fetchHttpResponseCompleteFn: undefined,
-    mediaRoot: undefined,
-    requestHeaders,
-  });
+  assert.equal(startupEvents[1].options.fetchHttpResponseCompleteFn, undefined);
+  assert.equal(startupEvents[1].options.mediaRoot, undefined);
+  assert.deepEqual(startupEvents[1].options.requestHeaders, requestHeaders);
+  assert.equal(typeof startupEvents[1].options.diagnosticWriteFn, 'function');
   assert.deepEqual(startupEvents[2], {
     stage: 'background-idle',
     managedChild: child,
@@ -3364,6 +3363,39 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
   )));
 });
 
+test('functional fixture warmup reports only the failed stage and HTTP status', async () => {
+  const diagnostics = [];
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    mediaRoot: path.join(os.tmpdir(), 'album-haven-functional-media'),
+    diagnosticWriteFn: (line) => diagnostics.push(line),
+    fetchHttpResponseCompleteFn: async (url) => {
+      if (url.includes('/view-data?')) {
+        return {
+          ok: true,
+          statusCode: 200,
+          body: JSON.stringify({
+            albums: [{
+              cover_path: path.join(
+                os.tmpdir(),
+                'album-haven-functional-media',
+                'deleted-fixture',
+                'cover.jpg',
+              ),
+            }],
+          }),
+        };
+      }
+      if (url.includes('/cover?')) return { ok: false, statusCode: 404, body: 'private path' };
+      return { ok: true, statusCode: 200, body: '' };
+    },
+  });
+
+  assert.equal(warmed, false);
+  assert.deepEqual(diagnostics, [
+    '[functional-warmup-failure] {"stage":"cover-preview","statusCode":404}\n',
+  ]);
+});
+
 test('waitForManagedIsolatedAppReady rejects an app that exits before status readiness', async () => {
   const child = createFakeChildProcess(5555);
   child.exitCode = 9;
@@ -3374,6 +3406,19 @@ test('waitForManagedIsolatedAppReady rejects an app that exits before status rea
     }),
     /exited before readiness with code 9/,
   );
+});
+
+test('functional fixture warmup reports null status when the failed response has no status', async () => {
+  const diagnostics = [];
+  const warmed = await _private.prewarmFunctionalFixture(4324, {
+    diagnosticWriteFn: (line) => diagnostics.push(line),
+    fetchHttpResponseCompleteFn: async () => ({ ok: false }),
+  });
+
+  assert.equal(warmed, false);
+  assert.deepEqual(diagnostics, [
+    '[functional-warmup-failure] {"stage":"index","statusCode":null}\n',
+  ]);
 });
 
 test('managed isolated spawn is handed to the outer owner before identity capture', async () => {

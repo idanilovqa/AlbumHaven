@@ -48,9 +48,10 @@ DedupeCandidates = Callable[[list[CoverCandidate]], list[CoverCandidate]]
 
 
 class SpotifyCooldown(AutomaticCoverSearchFailed):
-    def __init__(self, retry_at: float):
+    def __init__(self, retry_at: float, *, quota_response: bool = False):
         super().__init__("Spotify cooldown is active")
         self.retry_at = retry_at
+        self.quota_response = quota_response
 
 
 def spotify_cooldown_until() -> float:
@@ -258,7 +259,7 @@ def spotify_request_json(
         )
         if automatic_cover_budget_active():
             if cooldown_until:
-                raise SpotifyCooldown(cooldown_until) from exc
+                raise SpotifyCooldown(cooldown_until, quota_response=True) from exc
             raise AutomaticCoverSearchFailed() from exc
         return None
     _emit(

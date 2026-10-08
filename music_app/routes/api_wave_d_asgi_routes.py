@@ -113,6 +113,11 @@ def _authoritative_local_cover_album_payload(
     authoritative_album = dict(album)
     authoritative_album["cover_path"] = str(cover_path)
     authoritative_album["cover_revision"] = cover_revision
+    authoritative_album["cover_selection_origin"] = "user"
+    authoritative_album["cover_selection_provenance"] = "explicit"
+    width, height = image_dimensions(cover_path)
+    authoritative_album["local_cover_width"] = width or None
+    authoritative_album["local_cover_height"] = height or None
     for field in remote_fields:
         authoritative_album[field] = None
     authoritative_tracks: list[JsonDict] = []
@@ -122,6 +127,8 @@ def _authoritative_local_cover_album_payload(
         authoritative_track = dict(track)
         authoritative_track["cover_path"] = str(cover_path)
         authoritative_track["cover_revision"] = cover_revision
+        authoritative_track["local_cover_width"] = width or None
+        authoritative_track["local_cover_height"] = height or None
         for field in remote_fields:
             authoritative_track[field] = None
         authoritative_tracks.append(authoritative_track)
@@ -590,6 +597,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             logger=logger,
             cover_revision=cover_revision,
             cover_selection_origin="user",
+            explicit_selection=True,
             commit_guard=commit_cover_selection,
         )
     except Exception as exc:
@@ -783,6 +791,7 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
             config=config,
             logger=logger,
             cover_selection_origin="user" if next_cover is not None else None,
+            explicit_selection=next_cover is not None,
             clear_selection=next_cover is None,
         )
     except Exception:
@@ -846,6 +855,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             config=config,
             logger=logger,
             cover_selection_origin="user",
+            explicit_selection=True,
         )
     except Exception:
         if prior_cover_bytes is None:
@@ -1215,7 +1225,8 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     force_search = bool(payload.get("force_search")) if isinstance(payload, dict) else False
     try:
-        start_result = start_manual_cover_refresh_request(
+        start_result = await run_in_threadpool(
+            start_manual_cover_refresh_request,
             cache_lock=state_service._CACHE_LOCK,
             config=config,
             logger=logger,

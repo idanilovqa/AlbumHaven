@@ -190,6 +190,7 @@ function loadHelpers() {
   };
   vm.createContext(context);
   context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'view-state-helpers.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(
     orderAlbumTracksHelperSource,
@@ -5025,8 +5026,14 @@ test('watchSaveTask rejects an older completion when disjoint sources target the
 
 test('watchSaveTask preserves absolute scroll intent through a required view refresh', async () => {
   const context = loadHelpers();
+  context.state.view.surface = { active: 'albums' };
+  context.state.view.selected_artist = '';
   const refreshCalls = [];
-  context.buildApiUrl = () => '/api/library';
+  const buildApiOptions = [];
+  context.buildApiUrl = (_view, options) => {
+    buildApiOptions.push(options);
+    return '/api/library';
+  };
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -5048,6 +5055,7 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
     preserveAbsoluteScroll: true,
   });
 
+  assert.deepEqual(JSON.parse(JSON.stringify(buildApiOptions)), [{ rootFullPayload: true }]);
   assert.equal(refreshCalls.length, 1);
   assert.equal(refreshCalls[0][0], '/api/library');
   assert.equal(refreshCalls[0][1], false);
@@ -5062,6 +5070,33 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
       restartIfSameUrl: true,
     },
   );
+});
+
+test('watchSaveTask preserves the committed search request without a root payload tier', async () => {
+  const context = loadHelpers();
+  context.state.view.surface = { active: 'albums' };
+  context.state.view.selected_artist = '';
+  context.state.view.query = 'Sparse';
+  const refreshCalls = [];
+  context.buildApiUrl = (_view, options = {}) => (
+    `/view-data?surface=albums&q=Sparse${options.payloadTier ? `&payload_tier=${options.payloadTier}` : ''}`
+  );
+  context.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { ok: true, status: 'completed', requires_view_refresh: true, updated_albums: [] };
+    },
+  });
+  context.fetchAndRender = async (...args) => {
+    refreshCalls.push(args);
+    return true;
+  };
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('committed-search-refresh-task');
+
+  assert.equal(refreshCalls.length, 1);
+  assert.equal(refreshCalls[0][0], '/view-data?surface=albums&q=Sparse');
 });
 
 test('watchSaveTask preserves absolute scroll intent while rendering finalized albums', async () => {

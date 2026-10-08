@@ -1,6 +1,11 @@
 import { expect } from '@playwright/test';
 
 export class ArtistPageSettingsActions {
+  async expectNonAlbumTrackPaths(paths) {
+    for (const trackPath of paths) {
+      await expect(this.artistPageSettings.nonAlbumTrackRowByPath(trackPath)).toHaveCount(1);
+    }
+  }
   constructor(artistPageSettings) {
     this.artistPageSettings = artistPageSettings;
   }

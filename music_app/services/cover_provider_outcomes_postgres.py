@@ -85,4 +85,7 @@ def persist_cover_provider_outcomes(
                         json.dumps({"source_family": SOURCE_FAMILY, **safe}),
                     ),
                 )
+    if "search_spotify" in outcomes:
+        from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
 
+        invalidate_postgres_utility_projection_cache(database_url=url, kinds=("problematic-files",))

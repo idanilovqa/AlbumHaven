@@ -11,6 +11,7 @@ const trackModalHydratedAlbumDetailsLru = new Map();
 const TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT = 10;
 const TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT = 2;
 let trackModalActiveSpeculativePrewarms = 0;
+let trackModalCleanupGeneration = 0;
 const trackModalSpeculativePrewarmControllers = new Set();
 const trackModalCoverLoadSuspensionTokens = new Set();
 
@@ -105,6 +106,23 @@ function clearTrackModalRenderedState() {
     els.editTags.dataset.album = '';
     els.editTags.dataset.albumKey = '';
   }
+}
+
+function scheduleTrackModalCleanupAfterPaint(generation) {
+  const cleanup = () => {
+    if (generation !== trackModalCleanupGeneration) return;
+    const els = getTrackModalElements();
+    if (!els.overlay?.hidden) return;
+    clearTrackModalRenderedState();
+    if (typeof compactCurrentViewForIdle === 'function') {
+      compactCurrentViewForIdle();
+    }
+  };
+  if (typeof scheduleBrowserAnimationFrame !== 'function') {
+    cleanup();
+    return;
+  }
+  scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(cleanup));
 }
 
 function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
@@ -550,6 +568,7 @@ function openTrackModal(album, options = {}) {
   if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  trackModalCleanupGeneration += 1;
   preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
@@ -836,6 +855,7 @@ function closeTrackModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (!els.overlay) return;
+  const cleanupGeneration = ++trackModalCleanupGeneration;
   els.overlay.hidden = true;
   els.overlay.classList.remove('is-above-settings');
   invalidatePendingTrackModalLoad();
@@ -843,15 +863,12 @@ function closeTrackModal() {
   state.modalReleases = [];
   state.modalReleaseIndex = 0;
   hideVersionContextMenu();
-  clearTrackModalRenderedState();
-  if (typeof compactCurrentViewForIdle === 'function') {
-    compactCurrentViewForIdle();
-  }
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   if (!lightboxOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  scheduleTrackModalCleanupAfterPaint(cleanupGeneration);
 }
 
 function openTrackModalForButton(button) {

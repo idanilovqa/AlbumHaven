@@ -1,3 +1,4 @@
+const {installPrivateContext} = require('./private-context-harness.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -20,6 +21,7 @@ function fixture({width = 1200} = {}) {
   context.addEventListener = windowEvents.addEventListener.bind(windowEvents);
   context.removeEventListener = windowEvents.removeEventListener.bind(windowEvents);
   context.dispatchEvent = windowEvents.dispatchEvent.bind(windowEvents);
+  installPrivateContext(context);
   for (const filename of ['unfolding-action-button.js', 'runtime/trigger-anchor.js', 'runtime/home-friends-bridge.js']) {
     vm.runInContext(fs.readFileSync(path.join(source, filename), 'utf8'), context, {filename});
   }

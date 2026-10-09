@@ -1,3 +1,4 @@
+const {installPrivateContext} = require('./private-context-harness.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -62,6 +63,7 @@ function setup({playlists = false} = {}) {
     MutationObserver: class { constructor(callback) {this.callback = callback; observers.push(this);} observe() {} disconnect() {this.disconnected = true;} },
     escapeHtml: value => String(value),
   });
+  installPrivateContext(context);
   for (const name of ['browser-dialog-helpers.js', 'track-actions.js', 'home-friends-bridge.js', ...(playlists ? ['playlists-react-bridge.js'] : [])]) {
     vm.runInContext(fs.readFileSync(path.join(runtime, name), 'utf8'), context, {filename: name});
   }
@@ -95,7 +97,7 @@ test('React form content uses one native dialog, scoped close and no duplicate f
   assert.equal(h.focus.at(-1)[1].preventScroll, true);
   assert.equal(h.footer.hidden, false);
   assert.equal(h.content.getAttribute('tabindex'), null);
-  assert.equal(h.observers[0].disconnected, true);
+  assert.equal(h.observers.at(-1).disconnected, true);
 });
 
 test('content-owned dialog waits for portal controls and traps focus through visible enabled controls', () => {
@@ -105,9 +107,9 @@ test('content-owned dialog waits for portal controls and traps focus through vis
   const hidden = h.node('input'), disabled = h.node('button'), first = h.node('button'), last = h.node('select');
   hidden.hidden = true; disabled.disabled = true;
   [hidden, disabled, first, last].forEach(value => host.appendChild(value));
-  h.observers[0].callback();
+  h.observers.at(-1).callback();
   assert.strictEqual(h.document.activeElement, first);
-  last.focus(); h.observers[0].callback();
+  last.focus(); h.observers.at(-1).callback();
   assert.strictEqual(h.document.activeElement, last, 'later portal changes never steal interaction focus');
   assert.equal(h.fire('keydown', {key: 'Tab'}).prevented, true);
   assert.strictEqual(h.document.activeElement, first);
@@ -226,7 +228,7 @@ test('content-owned focus excludes controls in hidden or inert ancestors and hid
   hiddenParent.hidden = true; inertParent.inert = true; hiddenInput.type = 'hidden';
   hiddenParent.appendChild(h.node('input')); inertParent.appendChild(h.node('button'));
   [hiddenParent, inertParent, hiddenInput, visible].forEach(value => host.appendChild(value));
-  h.observers[0].callback(); assert.strictEqual(h.document.activeElement, visible);
+  h.observers.at(-1).callback(); assert.strictEqual(h.document.activeElement, visible);
   h.fire('keydown', {key: 'Tab'}); assert.strictEqual(h.document.activeElement, visible);
   h.fire('keydown', {key: 'Tab', shiftKey: true}); assert.strictEqual(h.document.activeElement, visible);
   form.close(); await form.promise;

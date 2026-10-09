@@ -313,7 +313,7 @@ test('selected recent album never grants a custom detail reader access from nati
     bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
   // Inspect the real view's child props, without mounting its unrelated shell.
   const hooks = {...React, useRef: value => ({current: value}), useState: value => [typeof value === 'function' ? value() : value, () => {}],
-    useEffect() {}, useLayoutEffect() {}};
+    useEffect() {}, useLayoutEffect() {}, useMemo: factory => factory()};
   const appModule = {exports: {}};
   vm.runInNewContext(appBundle, {module: appModule, exports: appModule.exports,
     require: name => name === 'react' ? hooks : require(name), console});

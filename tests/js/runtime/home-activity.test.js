@@ -79,7 +79,7 @@ function activityLifecycle(overrides = {}) {
       cursor = 0; pending = [];
       tree = fixture.exports.ActivityPanel({runtime: currentRuntime, kind: 'tracks', scopeKey: 'activity:actor', ...props});
       tree.props.ref.current = host;
-      const trackHost = elements(tree).find(element => element.type === 'div' && element.props.className === 'album-track-table' && element.props.ref);
+      const trackHost = elements(tree).find(element => element.type === 'div' && element.props.className?.split(' ').includes('album-track-table') && element.props.ref);
       if (trackHost) trackHost.props.ref.current = host;
       const table = activityTable(tree);
       const html = table ? table.props.html : elements(tree).filter(element => element.type?.name === 'NativeHtml').map(element => element.props.html).join('');
@@ -458,6 +458,7 @@ test('denied and missing track rows remain visible without granting playback or 
   const missing = fixture.host.querySelector('[data-home-activity-row="missing"]');
   const denied = fixture.host.querySelector('[data-home-activity-row="denied"]');
   assert.ok(missing.classList.contains('album-track-table__row--missing'));
+  assert.equal(missing.querySelector('[data-home-activity-play]').hasAttribute('hidden'), true);
   for (const node of [missing, denied]) {
     assert.equal(node.querySelector('[data-home-activity-play]').disabled, true);
     fixture.emit('onDoubleClick', node, {button: 0}); fixture.emit('onKeyDown', node, {key: 'Enter', ctrlKey: true});
@@ -625,4 +626,14 @@ test('Love uses the own activity context, keeps its native control during acknow
   fixture.render({value, account_ref: 'friend:one'});
   assert.equal(fixture.host.querySelector('[data-track-love]'), null);
   assert.equal(fixture.host.querySelector('[data-track-love-cell]').textContent, 'Loved');
+});
+
+
+test('confirmed available replacement restores the Recent Play affordance', t => {
+  const fixture = activityLifecycle({canTrackIntent: () => true, trackIntent() {}}); t.after(() => fixture.dispose());
+  fixture.render({value: ready([row('same', {availability: 'missing', source_readable: true})])});
+  assert.equal(fixture.host.querySelector('[data-home-activity-play]').hasAttribute('hidden'), true);
+  fixture.render({value: ready([row('same', {availability: 'local', source_readable: true})])});
+  const play = fixture.host.querySelector('[data-home-activity-play]');
+  assert.equal(play.hasAttribute('hidden'), false); assert.equal(play.disabled, false);
 });

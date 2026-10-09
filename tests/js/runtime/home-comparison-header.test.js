@@ -27,6 +27,7 @@ function fixture({mode = 'comparison', kind = 'albums', friend = true, profile =
     useRef(value) {const index = cursor++; return slots[index] ||= {current: value};},
     useState(initial) {const index = cursor++; slots[index] ||= {value: typeof initial === 'function' ? initial() : initial};
       return [slots[index].value, value => {slots[index].value = typeof value === 'function' ? value(slots[index].value) : value;}];},
+    useMemo(factory) {cursor++; return factory();},
     useEffect() {cursor++;}, useLayoutEffect() {cursor++;},
   };
   const loaded = {exports: {}};

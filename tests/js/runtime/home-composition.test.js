@@ -33,6 +33,11 @@ function viewFixture({width = 1200, presentation, section = 'recent', friend = n
         effects.push(() => {previous?.cleanup?.(); slots[index] = {deps, cleanup: effect()};});
       }
     },
+    useMemo(factory, deps) {
+      const index = cursor++, previous = slots[index];
+      if (!previous || deps.some((value, i) => !Object.is(value, previous.deps[i]))) slots[index] = {deps, value: factory()};
+      return slots[index].value;
+    },
     useLayoutEffect() {cursor++;},
   };
   const fixtureModule = {exports: {}};
@@ -104,7 +109,7 @@ test('Home places native Recent and disabled News with Period above one content 
   const body = children.find(node => node.props.className?.includes('home-friends__widget-body'));
   assert.ok(header); assert.ok(body);
   const sections = find(header, node => node.props.label === 'Home sections');
-  assert.deepEqual(JSON.parse(JSON.stringify(sections.props.items)), [['recent', 'Recent'], ['news', 'News', {disabled: true}]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(sections.props.items)), [['recent', 'Recent'], ['news', 'News', {disabled: true}], ['queue', 'Queue']]);
   assert.equal(sections.props.value, 'recent');
   assert.ok(find(header, node => node.type?.name === 'Period'));
   assert.ok(find(header, node => node.props.id === 'home-recent-kinds'));

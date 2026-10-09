@@ -697,3 +697,131 @@ test('activity Album Details retains receipt identity while native keys stay pri
 test('opaque session HMAC never enters public Home lifecycle state', () => {
   const h = setup(); assert.doesNotMatch(JSON.stringify(h.bridge.snapshot()), new RegExp('a'.repeat(64)));
 });
+
+test('friend Album hydration neutralizes actor taste without mutating the native cache', async () => {
+  const h = setup(), scopeKey = h.bridge.snapshot().scopeKey;
+  const cached = {...album(), album_rating: 9, favorite: true, album_preference: {rating: 9},
+    tracks: [{path: '/test-only/music/song.flac', inventory_track_ref: 'inventory-track:1:1', title: 'Track',
+      rating: 5, love_tier: 'obsessed', track_scrobble_count: 23, track_preference: {rating: 5, love_tier: 'obsessed', allowed_actions: {can_set_love_tier: true}}}]};
+  h.context.fetchTrackModalAlbumDetails = async () => cached;
+  const read = h.bridge.configureActivityProvider({readActivity: async () => ({snapshot_ref: 'snapshot:subject',
+    rows: [{id: 'row:subject', kind: 'album', title: 'Album', album_target: canonicalAlbum()}]})});
+  const options = {scopeKey, account_ref: 'account:friend', kind: 'albums', period: 'week'};
+  const projection = await read(options), selection = projection.rows[0].album_target;
+  await h.bridge.resourceIntent('open', selection, {scopeKey, origin: selection.origin});
+  const displayed = h.calls.opens[0][0];
+  assert.notEqual(displayed, cached); assert.equal(displayed.album_rating, null); assert.equal(displayed.favorite, null);
+  assert.equal(displayed.tracks[0].rating, null); assert.equal(displayed.tracks[0].track_preference.love_tier, null);
+  assert.equal(displayed.tracks[0].track_preference.allowed_actions.can_set_love_tier, false);
+  assert.equal(displayed.tracks[0].track_scrobble_count, null);
+  assert.equal(cached.album_rating, 9); assert.equal(cached.tracks[0].track_preference.love_tier, 'obsessed');
+});
+
+test('review: direct and transitioned mobile Create retain the exact Home presentation owner', () => {
+  for (const initialPage of ['create-playlist', 'playlist-track-destination']) {
+    const h = setup(), start = h.bridge.snapshot();
+    const release = h.bridge.retainPlaytablePresentation(start.scopeKey);
+    const form = {pageId: initialPage, token: 'form:owned'};
+    h.context.getActiveAppFormPage = () => form;
+    h.context.mobilePageState = {pages: [{kind: 'form', formToken: form.token, parentPosition: 4}]};
+    h.window.location = new URL('https://albumhaven.test/?surface=home&mobile_page=form');
+    h.window.history.state = {albumHavenNavigationPosition: 5, mobilePages: [{kind: 'form', formToken: form.token}]};
+    assert.equal(h.bridge.snapshot().entryKey, start.entryKey, initialPage);
+    form.pageId = 'create-playlist';
+    assert.equal(h.bridge.snapshot().entryKey, start.entryKey, 'same form Create transition');
+    form.token = 'form:foreign';
+    assert.equal(h.bridge.snapshot().entryKey, 5, 'foreign form must retire receipt');
+    release();
+  }
+});
+
+test('review: unknown playback state never publishes currently playing presence', () => {
+  const h = setup();
+  h.state.player.current = {path: '/test-only/current.flac', inventory_track_ref: 'inventory-track:1:1'};
+  h.context.isPlaybackLockedByAnotherTab = () => false;
+  h.context.getPlayerPlaybackSnapshot = () => ({src: '/track?test-only'});
+  assert.notEqual(h.bridge.readPresencePlayback()?.state, 'playing');
+});
+
+test('review: presence admits only the matching native streaming owner and explicit known state', () => {
+  const h = setup(), track = {path: '/test-only/current.flac', src: '/track?test-only', inventory_track_ref: 'inventory-track:1:1'};
+  h.state.player.current = track; h.context.isPlaybackLockedByAnotherTab = () => false;
+  let role = {...track}, playback = {src: track.src, paused: false, ended: false};
+  h.context.streamingEngineState = () => ({roles: {current: {track: role}}});
+  h.context.getPlayerPlaybackSnapshot = () => playback;
+  assert.equal(h.bridge.readPresencePlayback()?.state, 'playing');
+  playback = {...playback, paused: true}; assert.equal(h.bridge.readPresencePlayback()?.state, 'paused');
+  playback = {...playback, paused: false, ended: true}; assert.equal(h.bridge.readPresencePlayback()?.state, 'stopped');
+  playback = {...playback, ended: false}; role = {...track, inventory_track_ref: 'inventory-track:1:2'};
+  assert.notEqual(h.bridge.readPresencePlayback()?.state, 'playing');
+  role = {...track}; playback = {...playback, src: '/track?new'};
+  assert.notEqual(h.bridge.readPresencePlayback()?.state, 'playing');
+});
+
+test('review v2: friend Album rows without inventory identity never inherit actor love', async () => {
+  for (const identity of [{}, {inventory_track_ref: null}]) {
+    const h = setup(), scopeKey = h.bridge.snapshot().scopeKey;
+    const cached = {...album(), tracks: [{path: '/test-only/music/song.flac', ...identity, title: 'Track',
+      rating: 5, love_tier: 'obsessed', track_preference: {rating: 5, love_tier: 'obsessed', allowed_actions: {can_set_love_tier: true}}}]};
+    h.context.fetchTrackModalAlbumDetails = async () => cached;
+    const read = h.bridge.configureActivityProvider({readActivity: async () => ({snapshot_ref: 'snapshot:subject',
+      rows: [{id: 'row:subject', kind: 'album', title: 'Album', album_target: canonicalAlbum()}]})});
+    const projection = await read({scopeKey, account_ref: 'account:friend', kind: 'albums', period: 'week'});
+    const selection = projection.rows[0].album_target;
+    await h.bridge.resourceIntent('open', selection, {scopeKey, origin: selection.origin});
+    const displayed = h.calls.opens[0][0];
+    assert.equal(displayed.tracks[0].love_tier, null);
+    assert.equal(displayed.tracks[0].read_only_subject, 'account:friend');
+    assert.equal(cached.tracks[0].love_tier, 'obsessed');
+  }
+});
+
+test('friend-source Queue details retain source grants but use actor taste on own Queue', async () => {
+  const h = setup(), scopeKey = h.bridge.snapshot().scopeKey;
+  const context = {scopeKey, account_ref: 'friend:source', kind: 'tracks', period: 'week'};
+  const row = {id: 'track:source', kind: 'track', title: 'Track', artist: 'Artist', album_title: 'Album', availability: 'local', source_readable: true,
+    allowed_actions: {can_resolve_native_play: true}, album_target: {kind: 'album', ref: 'track:source', identity_ref: 'album:identity', allowed_actions: {can_view_details: true}}};
+  const calls = [];
+  const read = h.bridge.configureActivityProvider({readActivity: async () => ({snapshot_ref: 'snapshot:queue-source', rows: [row]}),
+    resolveActivityNativeTarget: async options => {calls.push(options); return {inventory_track_ref: 'inventory-track:1:2', album_ref: 'album:one', title: 'Album', artist: 'Artist',
+      allowed_actions: {can_view_details: true}, subject_taste: {subject_ref: context.account_ref, read_only: true, rating: 1, tracks: []}};}});
+  const projected = await read(context);
+  h.context.createPrivatePlaytableSource = options => options;
+  const adapter = h.bridge.createPlaytableSource({rows: projected.rows, context, instance: projected, revision: projected, isCurrent: () => true});
+  assert.equal(adapter.canQueueRow(projected.rows[0]), true);
+  const capture = adapter.captureQueueRows(projected.rows)[0];
+  const receipt = await capture.resolveDetails('album');
+  assert.equal(receipt.subject_ref, null); assert.equal(receipt.projectAlbum, undefined);
+  assert.doesNotMatch(JSON.stringify(receipt.data), /subject_taste|rating|love_tier/);
+  assert.equal(calls[0].account_ref, context.account_ref, 'source authority remains original friend scoped');
+  assert.equal(calls[0].snapshot_ref, 'snapshot:queue-source');
+  await capture.resolve();
+  h.context.fetch = async () => {throw new Error('Queue Activity Add must not call a Create-gated source endpoint');};
+  assert.equal((await capture.resolvePlaylistItem()).inventory_track_ref, 'inventory-track:1:2');
+  assert.equal(calls.length, 2, 'builder provenance does not request playback again after enqueue');
+  h.bridge.retireFriendActivity({scopeKey, friends: {status: 'denied'}});
+  await assert.rejects(capture.resolvePlaylistItem(), {name: 'AbortError'});
+  assert.equal(capture.isCurrent(), false); assert.equal(receipt.isCurrent(), false);
+  await assert.rejects(capture.resolveDetails('album'), {name: 'AbortError'});
+});
+
+test('Activity Queue Add with denied Create preserves readable runtime source and needs no new playback resolution', async () => {
+  const h=setup(), scopeKey=h.bridge.snapshot().scopeKey, rowId=`activity_${'a'.repeat(64)}`;
+  const context={scopeKey,account_ref:'00000000-0000-4000-8000-000000000001',kind:'tracks',period:'week'};
+  let mediaReads=0, creates=0;
+  h.context.fetch=async url=>{creates++; throw Object.assign(new Error(`Create is denied: ${url}`),{status:403});};
+  const read=h.bridge.configureActivityProvider({readActivity:async()=>({snapshot_ref:'A'.repeat(43),rows:[{id:rowId,kind:'track',title:'Track',availability:'local',source_readable:true,allowed_actions:{can_resolve_native_play:true}}]}),
+    resolveActivityNativeTarget:async()=>{mediaReads++;return {inventory_track_ref:'inventory-track:1:2',path:'/test-only/queued.flac',title:'Track'};}});
+  const projected=await read(context);h.context.createPrivatePlaytableSource=options=>options;
+  const privateSource=h.bridge.createPlaytableSource({rows:projected.rows,context,instance:projected,revision:projected,isCurrent:()=>true});
+  h.state.player.current=null;h.state.player.playbackQueue=null;
+  Object.assign(h.context,{activateSharedTrackButton:()=>{throw Error('Queue Add must not start playback');},getPlayerPlaybackSnapshot:()=>({ended:true}),streamingEngineState:()=>({roles:{current:null,continuity:null}}),
+    resolveNextPlaybackContextQueue:()=>null,scheduleStreamingContinuity:async()=>{},closeStreamingContinuityRole:()=>true,
+    observeStreamingFacadeCallback:promise=>void Promise.resolve(promise).catch(()=>{})});
+  for(const file of ['playlist-queue.js','explicit-queue-planner.js','explicit-queue-runtime.js'])vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/js/runtime',file),'utf8'),h.context);
+  const queue=h.window.AlbumHavenExplicitQueue, [id]=await queue.enqueue(privateSource.captureQueueRows(projected.rows));
+  const receipt=await queue.playlistSelection([id]);
+  assert.equal(receipt.rows[0].source_provenance.kind,'activity');assert.equal(receipt.rows[0].source_provenance.origin.subject_ref,context.account_ref);
+  assert.equal(mediaReads,1,'only enqueue resolves native media');assert.equal(creates,0,'no Create-gated endpoint during Add preparation');
+  assert.equal(queue.getSnapshot().entries[0].sourceReadable,true);assert.equal(receipt.isCurrent(),true);assert.equal(h.calls.plays.length,0);
+});

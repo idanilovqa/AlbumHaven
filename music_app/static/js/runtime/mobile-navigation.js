@@ -36,6 +36,14 @@ function presentMobileAppFormPage(owner) {
   if (currentMobileFormOwner() !== owner) return false;
   return presentMobilePage({kind: 'form', formToken: owner.token, albumKey: '', title: owner.title, subtitle: ''});
 }
+function updateMobileAppFormPresentation(owner) {
+  if (currentMobileFormOwner() !== owner) return false;
+  const page = mobilePageState.pages.find(value => value.kind === 'form' && value.formToken === owner.token);
+  if (!page) return false;
+  page.title = owner.title;
+  syncMobilePageShell(); writeMobilePageHistory('replace');
+  return true;
+}
 function canRetainMobileFormParent(check) {
   try {return typeof check === 'function' && check() === true;} catch {return false;}
 }

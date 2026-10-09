@@ -241,6 +241,7 @@ function setCurrentPlayerTrack(track, options = {}) {
     if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.currentChanged();
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
   if (typeof probeCachedWaveformPeaks === 'function') {
@@ -314,24 +315,33 @@ async function playTrackFromPayload(track, options = {}) {
   if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
     return false;
   }
-  if (!track?.path) return false;
+  if (!track?.path || options.signal?.aborted || options.isCurrent && options.isCurrent() !== true) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
   const selectionToken = ++playerTrackSelectionToken;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.selectionStarted();
   let startedRole;
+  const cancelSelection = () => {
+    if (selectionToken !== playerTrackSelectionToken || typeof stopStreamingPlayback !== 'function') return;
+    const stopped = stopStreamingPlayback('selection-cancelled');
+    if (typeof observeStreamingFacadeCallback === 'function') observeStreamingFacadeCallback(stopped, 'selection-cancelled');
+    else void Promise.resolve(stopped).catch(() => {});
+  };
+  options.signal?.addEventListener('abort', cancelSelection, {once: true});
   try {
     startedRole = await startStreamingTrack(track, {
       startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
       autoplay: shouldAutoplay,
     });
   } catch (error) {
-    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (selectionToken !== playerTrackSelectionToken || options.signal?.aborted) return false;
     throw error;
-  }
+  } finally {options.signal?.removeEventListener('abort', cancelSelection);}
   if (selectionToken !== playerTrackSelectionToken) return false;
+  if (options.signal?.aborted || options.isCurrent && options.isCurrent() !== true) {cancelSelection(); return false;}
   if (startedRole === null) {
     throw new Error('Streaming playback did not start');
   }
@@ -339,6 +349,7 @@ async function playTrackFromPayload(track, options = {}) {
   if (startedTrackPath && startedTrackPath !== String(track.path)) {
     throw new Error('Streaming playback started an unexpected track identity');
   }
+  if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true) ExplicitQueueRuntime.replaced();
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
@@ -381,12 +392,13 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (!nextTrack || typeof scheduleStreamingContinuity !== 'function') {
+  const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+  if ((!nextTrack && !explicitProgression) || typeof scheduleStreamingContinuity !== 'function') {
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
-  const scheduling = Promise.resolve().then(() => scheduleStreamingContinuity(nextTrack));
+  const scheduling = Promise.resolve().then(() => explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack));
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
     await scheduling;
@@ -423,6 +435,7 @@ async function handleStreamingPlaybackEnded(event = {}) {
   const identity = [event.generation, event.streamId, trackPath].join(':');
   if (identity === handledStreamingEndedIdentity) return;
   handledStreamingEndedIdentity = identity;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.ended();
   const playback = getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
   if (typeof releasePlaybackOwnership === 'function') {
@@ -522,7 +535,9 @@ async function handleStreamingPlaybackBoundary(event = {}) {
   const subsequentTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
+    await ExplicitQueueRuntime.prepareNext();
+  } else if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
     await scheduleStreamingContinuity(subsequentTrack);
   }
   if (typeof promoteWaveformPeaks === 'function') {
@@ -698,8 +713,9 @@ function setLoopActive(active) {
     const nextTrack = typeof peekNextQueuedTrack === 'function'
       ? peekNextQueuedTrack()
       : null;
-    if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
+    const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+    if ((nextTrack || explicitProgression) && typeof scheduleStreamingContinuity === 'function') {
+      const result = explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack, {
         kind: 'queued-next', startSeconds: 0,
       });
       if (typeof observeStreamingFacadeCallback === 'function') {
@@ -1010,7 +1026,7 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     : null);
   const playbackStart = playTrackFromPayload({
     src,
-    path: trackPath,
+    path: trackPath, inventory_track_ref: btn.getAttribute('data-inventory-track-ref') || null,
     title: btn.getAttribute('data-track-title') || 'Track',
     artist: btn.getAttribute('data-track-artist') || '',
     albumArtist: btn.getAttribute('data-track-album-artist') || '',

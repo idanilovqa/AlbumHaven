@@ -1,44 +1,69 @@
-﻿function ensureAlbumCardContextMenu() {
-  let menu = document.getElementById('album-card-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'album-card-context-menu';
-  menu.className = 'album-card-context-menu';
-  menu.hidden = true;
-  menu.innerHTML = '';
-  document.body.appendChild(menu);
-  return menu;
-}
-
+// The existing shared React/native Choice owner renders every Album action.
+// Native code retains source authority; there is no second menu DOM renderer.
+let albumCardContextMenuOwner = null;
+let albumCardContextActionSequence = 0;
 function hideAlbumCardContextMenu() {
-  const menu = document.getElementById('album-card-context-menu');
-  if (!menu) return;
-  menu.hidden = true;
-  menu.dataset.albumKey = '';
+  albumCardContextMenuOwner?.close({restoreFocus: false});
+  albumCardContextMenuOwner = null;
 }
-
-function showAlbumCardContextMenu(x, y, album) {
-  if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
-  const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  menu.dataset.albumKey = getAlbumIdentity(album);
-  const albumKey = String(album?.key || '');
-  const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
-    ? state.view.manual_version_links
-    : {};
-  const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
-  const moveActions = getAvailableAlbumMoveActions(album);
-  menu.innerHTML = [
-    '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
-    ...moveActions.map((item) => (
-      `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
-    )),
-    isMarkedVersion
-      ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
-      : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
-  ].join('');
-  menu.hidden = false;
+function albumCardContextActions(album, {canQueue = true} = {}) {
+  const links = state.view?.manual_version_links || {};
+  const marked = Boolean(album?.key && links[album.key]);
+  const allowed = capability => !window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows(capability) === true;
+  return [
+    {value: 'open-explorer', label: 'Open in File Explorer'},
+    ...getAvailableAlbumMoveActions(album).map(item => ({value: item.action, label: getAlbumMoveActionLabel(item)})),
+    {value: marked ? 'unmark-version' : 'mark-version', label: marked ? 'Unmark as a version' : 'Mark as a version'},
+  ].filter(item => allowed(item.value === 'open-explorer' ? 'library.files.open_location'
+    : item.value.startsWith('move_') ? 'library.files.move' : 'library.versions.manage')).concat(
+    (window.AlbumHavenExplicitQueue?.timingOptions() || []).map(option => ({value: `queue:${option.value}`,
+      label: option.value === 'end' ? 'Add to queue at end' : option.label + (option.reason ? ` · ${option.reason}` : ''),
+      disabled: !canQueue || option.enabled !== true})),
+  );
+}
+function showAlbumCardContextMenu(_x, _y, album, anchor = document.activeElement, sourceCurrent = () => true) {
+  hideAlbumCardContextMenu();
+  if (isMobileClient() || usesMobilePageLayout() || !album || !anchor?.isConnected
+    || typeof window.AlbumHavenPlaytableUI?.actions !== 'function') return false;
+  const view = state.view, scope = TrackActionsRuntime.scope().token, sequence = ++albumCardContextActionSequence;
+  let selectedAction = false;
+  const current = () => {try {return sequence === albumCardContextActionSequence && state.view === view
+    && scope === TrackActionsRuntime.scope().token && anchor.isConnected && sourceCurrent() === true;} catch {return false;}};
+  const canQueue = () => current() && album.source_readable !== false && album.allowed_actions?.can_play_album !== false
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true);
+  albumCardContextMenuOwner = window.AlbumHavenPlaytableUI.actions(anchor, {
+    formats: albumCardContextActions(album, {canQueue: canQueue()}), label: 'Album actions',
+    onSelect: async action => {
+      if (!current() || selectedAction) return false;
+      const choice = albumCardContextActions(album, {canQueue: canQueue()}).find(item => item.value === action);
+      if (!choice || choice.disabled) return false;
+      selectedAction = true;
+      if (action === 'open-explorer') {openAlbumInExplorer(album); return true;}
+      if (action === 'move_to_hoard' || action === 'move_to_library') {performAlbumMove(album, action); return true;}
+      if (action === 'mark-version') {openVersionPickerModal(album); return true;}
+      if (action === 'unmark-version') {unmarkAlbumVersion(album.key || ''); return true;}
+      if (!action.startsWith('queue:')) return false;
+      const request = new AbortController();
+      try {
+        const fresh = await fetchTrackModalAlbumDetails(getAlbumPlaybackQueueRef(album), {signal: request.signal});
+        if (!current() || !canQueue() || getAlbumPlaybackQueueRef(fresh) !== getAlbumPlaybackQueueRef(album)) return false;
+        const rows = Array.isArray(fresh.track_rows) ? fresh.track_rows : [];
+        const ordered = groupAlbumTracks(fresh.tracks || []).groups.flatMap(group => group.tracks || []);
+        const selected = ordered.map(track => rows.filter(row => row.path === track.path))
+          .filter(matches => matches.length === 1 && matches[0].source_readable !== false
+            && matches[0].playback_state?.can_start_here === true && !['missing', 'unknown', 'unresolved'].includes(matches[0].availability))
+          .map(([row]) => row);
+        const captures = captureNativeAlbumQueueSources(fresh, selected);
+        if (!captures?.length || !current()) return false;
+        await window.AlbumHavenExplicitQueue.enqueue(captures, action.slice(6), {signal: request.signal, isCurrent: current});
+        return true;
+      } catch (error) {
+        if (current() && error.name !== 'AbortError') showToast('The Album could not be added to the Queue.', 'error', 3200);
+        return false;
+      }
+    },
+  });
+  return Boolean(albumCardContextMenuOwner);
 }
 
 function ensureVersionPickerModal() {

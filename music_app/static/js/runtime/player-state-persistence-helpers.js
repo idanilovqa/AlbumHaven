@@ -1,5 +1,6 @@
 function buildPersistedPlaybackQueue(currentTrackPath) {
   const queue = state.player.playbackQueue;
+  if (queue?.explicitQueue === true) return null;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const normalizedCurrentTrackPath = String(currentTrackPath || '');
   const queueTracks = queue.tracks

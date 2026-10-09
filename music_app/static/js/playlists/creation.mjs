@@ -164,7 +164,7 @@ export function projectCreationState(state) {
       entries: [row], completeness: groupFacts.get(key)});
   }
   return freeze({entries, groups: groups.map(({identity, ...group}) => group), selectedEntries,
-    selectedCount: selectedEntries.length, visibleSelectedCount: entries.filter(row => selected.has(row.row_key)).length});
+    selectedCount: selectedEntries.length, duplicateCount: selectedEntries.length - new Set(selectedEntries.map(row => row.entry_ref)).size, visibleSelectedCount: entries.filter(row => selected.has(row.row_key)).length});
 }
 
 export function buildCreationRequest(data, {context, title, description, selectedKeys, pinnedEntries, request_key, allowAcceptedMatches = false} = {}) {
@@ -182,8 +182,10 @@ export function buildCreationRequest(data, {context, title, description, selecte
   if (selected.some(row => !row || !(eligible(row, context.mode) || allowAcceptedMatches === true && context.mode === 'missing'
     && row.match_state === 'accepted' && row.availability === 'local' && eligible(row, 'ordinary')))
     || context.mode === 'missing' && !selected.length) return null;
-  const refs = selected.map(row => row.entry_ref);
-  if (new Set(refs).size !== refs.length) return null;
+  const occurrenceRefs = selected.map(row => row.entry_ref);
+  if (new Set(occurrenceRefs).size !== occurrenceRefs.length
+    && !(context.mode === 'ordinary' && selected.every(row => occurrenceRefs.indexOf(row.entry_ref) === occurrenceRefs.lastIndexOf(row.entry_ref) || row.seed_occurrence === true))) return null;
+  const refs = [...new Set(occurrenceRefs)];
   const request = {scopeKey: context.scopeKey, playlist_id: null, mode: context.mode, source: tuple(context.source),
     title, description, entry_refs: refs, request_key, ...(data.source_protocol ? {source_protocol: data.source_protocol} : {})};
   if (new TextEncoder().encode(JSON.stringify(request)).length > 524288) return null;
@@ -392,17 +394,23 @@ export function createPlaylistCreationController({providers = {}} = {}) {
     // Only the first complete ordinary-source admission can be seeded. The
     // caller must retain the exact read snapshot across its source checks;
     // a reload, source pause or user selection retires that one-time receipt.
-    seed(entryRefs, sourceResource) {
+    seed(entryRefs, sourceResource, {preserveOccurrences = false} = {}) {
       if (!editable() || !seedAvailable || state.mode !== 'ordinary' || state.sourceResource.status !== 'ready'
         || state.sourceResource.data.entries_complete !== true
         || sourceResource !== state.sourceResource || !Array.isArray(entryRefs) || !entryRefs.length
-        || Array.from(entryRefs).some(value => !opaque(value)) || new Set(entryRefs).size !== entryRefs.length) return false;
+        || entryRefs.length > 5000 || Array.from(entryRefs).some(value => !opaque(value))
+        || !preserveOccurrences && new Set(entryRefs).size !== entryRefs.length) return false;
       const byRef = new Map(state.sourceResource.data.entries.map(row => [row.entry_ref, row]));
       const rows = entryRefs.map(value => byRef.get(value));
       if (rows.some(row => !row || !eligible(row, 'ordinary'))) return false;
       seedAvailable = false;
-      baseSelection = rows.map(row => row.row_key);
-      publish({selectedKeys: baseSelection, tab: 'selected', dirty: Boolean(state.title || state.description)});
+      const repeated = new Set(entryRefs).size !== entryRefs.length;
+      const occurrences = repeated ? rows.map((row, index) => ({...row, row_key: `initial:${index}:${row.entry_ref}`, seed_occurrence: true})) : rows;
+      const seeded = new Set(entryRefs);
+      const nextSource = repeated ? resource('ready', {...state.sourceResource.data,
+        entries: [...occurrences, ...state.sourceResource.data.entries.filter(row => !seeded.has(row.entry_ref))]}) : state.sourceResource;
+      baseSelection = occurrences.map(row => row.row_key);
+      publish({sourceResource: nextSource, selectedKeys: baseSelection, tab: 'selected', dirty: Boolean(state.title || state.description)});
       return true;
     },
     edit(patch) {

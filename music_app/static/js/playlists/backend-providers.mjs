@@ -1,8 +1,15 @@
+import {queueOccurrences} from './queue-provenance.mjs';
 // Authenticated transport adapter. Actor/context evidence and inventory links
 // remain private here; components receive only lifecycle-scoped projections.
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const revision = value => typeof value === 'string' && /^[1-9][0-9]*$/.test(value);
 const inventory = value => typeof value === 'string' && /^inventory-track:[1-9][0-9]*:[1-9][0-9]*$/.test(value);
+// A denial is evidence only for the exact capture invocation which observed it.
+// Recovery, identity checks and subsequent source projection cannot forge it.
+const queueCaptureDenials = new WeakMap();
+export function isQueueSourceCaptureDenial(error, token) {
+  return typeof token === 'symbol' && error !== null && typeof error === 'object' && queueCaptureDenials.get(error) === token;
+}
 const granted = value => value?.allowed_actions?.can_read === true && value?.allowed_actions?.can_use_for_playlist === true;
 const fail = (message, status = 409) => Object.assign(new Error(message), {status});
 const aborted = () => Object.assign(new Error('Playlist request superseded.'), {name: 'AbortError'});
@@ -243,6 +250,36 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
         || data.entries.length !== refs.length || data.entries.some((row, index) => row.inventory_track_ref !== refs[index])) throw fail('Selected Playlist source changed.');
       return {source: descriptor(data), entry_refs: data.entries.map(row => row.entry_ref)};
     },
+    async beginPlaylistQueueSource(options) {
+      const token = identity(options.scopeKey), occurrences = queueOccurrences(options.occurrences);
+      if (!occurrences) throw fail('This Queue selection cannot be added.', 400);
+      if (options.recoverCreate === true) {
+        const recovered = await recoverCreate(options);
+        if (recovered) return {recovered_creation: recovered};
+      }
+      active(token, options.signal);
+      const refs = [...new Set(occurrences.map(item => item.track_ref))];
+      let response;
+      try {
+        response = await transport.request('/playlists/creation-source/queue', {method: 'POST', body: {occurrences}, signal: options.signal, expected: JSON.parse(token)[0]});
+      } catch (error) {
+        active(token, options.signal);
+        if ([403, 404].includes(error?.status) && typeof options.source_capture_token === 'symbol') {
+          const denial = Object.assign(new Error(error.message || 'Queue source access denied.'),
+            {status: error.status, code: error.code, responseRejected: error.responseRejected, cause: error});
+          queueCaptureDenials.set(denial, options.source_capture_token);
+          throw denial;
+        }
+        throw error;
+      }
+      const data = sourceData(response, token, options.signal);
+      if (data.source_protocol !== 'complete_inventory_selection_v1' || data.source?.kind !== 'library'
+        || data.entries_complete !== true || !Array.isArray(data.entries) || data.entries.length !== refs.length
+        || data.entries.some((row, index) => row.inventory_track_ref !== refs[index] || !uuid(row.entry_ref))) throw fail('Selected Queue source changed.');
+      const entry_refs = data.entries.map(row => row.entry_ref);
+      sources.set(data.source.ref, {...sources.get(data.source.ref), queueGuard: {refs, entry_refs}});
+      return {source: descriptor(data), entry_refs};
+    },
     async beginPlaylistActivitySource(options) {
       const token = identity(options.scopeKey), refs = options.row_refs, origin = options.origin;
       if (!Array.isArray(refs) || !refs.length || refs.length > 5000 || refs.some(value => typeof value !== 'string' || !/^activity_[0-9a-f]{64}$/.test(value))
@@ -311,8 +348,16 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
     addTracks(options) {
       identity(options.scopeKey);
       if (!Array.isArray(options.track_refs) || options.track_refs.some(value => !inventory(value))) throw fail('Unrepresentable Playlist selection.', 400);
+      let guard;
+      if (Object.hasOwn(options, 'source_guard')) {
+        const value = options.source_guard, known = sources.get(value?.source?.ref);
+        if (value?.source_protocol !== 'complete_inventory_selection_v1' || !known?.queueGuard || !same(value.source, known.source)
+          || JSON.stringify(value.entry_refs) !== JSON.stringify(known.queueGuard.entry_refs)
+          || JSON.stringify(options.track_refs) !== JSON.stringify(known.queueGuard.refs)) throw fail('Invalid retained Queue source.', 400);
+        guard = {source_protocol: value.source_protocol, source: tuple(value.source), entry_refs: [...value.entry_refs]};
+      }
       return mutate('add', options, `/playlists/${encodeURIComponent(options.playlist_id)}/items`, 'POST', {
-        track_refs: options.track_refs, revision: options.revision || revisions.get(options.playlist_id)});
+        track_refs: options.track_refs, revision: options.revision || revisions.get(options.playlist_id), ...(guard ? {source_guard: guard} : {})});
     },
     saveDefaultSort(options) {
       identity(options.scopeKey);

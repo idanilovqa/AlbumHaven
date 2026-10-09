@@ -28,8 +28,14 @@ export function selectionPresentation(value) {
       && ['album', 'artist'].includes(selected.targetKind)
       && (selected.snapshotRef == null || reference(selected.snapshotRef))
       ? {rowId: selected.rowId, targetKind: selected.targetKind, targetRef: selected.targetRef, snapshotRef: selected.snapshotRef ?? null} : null;
-    result.push({query, selected: descriptor,
-      childAlbumRef: descriptor?.targetKind === 'artist' && reference(entry.childAlbumRef) ? entry.childAlbumRef : null,
+    const tracks = entry.tracks;
+    const trackDescriptor = ['tracks', 'listens'].includes(query.kind) && Array.isArray(tracks?.rowIds)
+      && tracks.rowIds.length > 0 && tracks.rowIds.length <= 5000 && tracks.rowIds.every(reference)
+      && new Set(tracks.rowIds).size === tracks.rowIds.length
+      && (tracks.snapshotRef == null || reference(tracks.snapshotRef))
+      ? {rowIds: [...tracks.rowIds], snapshotRef: tracks.snapshotRef ?? null} : null;
+    result.push({query, selected: trackDescriptor ? null : descriptor, tracks: trackDescriptor,
+      childAlbumRef: (descriptor?.targetKind === 'artist' || trackDescriptor) && reference(entry.childAlbumRef) ? entry.childAlbumRef : null,
       pane: pane(entry.pane), expanded: ['recent', 'friends', 'artist', 'album'].includes(entry.expanded) ? entry.expanded : null,
       scroll: {source: position(entry.scroll?.source), artist: position(entry.scroll?.artist), album: position(entry.scroll?.album)}});
     keys.add(key);
@@ -41,7 +47,7 @@ export function selectionPresentation(value) {
 export function selectionEntry(entries, query) {
   const key = selectionQueryKey(query);
   return entries.find(entry => selectionQueryKey(entry.query) === key)
-    || {query: selectionQuery(query), selected: null, childAlbumRef: null, pane: 'recent', expanded: null, scroll: {source: 0, artist: 0, album: 0}};
+    || {query: selectionQuery(query), selected: null, tracks: null, childAlbumRef: null, pane: 'recent', expanded: null, scroll: {source: 0, artist: 0, album: 0}};
 }
 export function updateSelectionEntry(entries, query, patch) {
   if (!selectionQuery(query)) return entries;
@@ -54,11 +60,11 @@ export function retireFriendSelections(entries, friends) {
   if (!['ready', 'empty', 'denied'].includes(friends?.status)) return entries;
   let changed = false;
   const next = entries.map(entry => {
-    if (entry.query.section !== 'friends' || !entry.selected) return entry;
+    if (entry.query.section !== 'friends' || !entry.selected && !entry.tracks) return entry;
     const matches = ready(friends) ? friends.data?.friends.filter(person => person.account_ref === entry.query.account_ref) ?? [] : [];
     if (matches.length === 1 && matches[0].relationship === 'accepted' && matches[0].allowed_actions?.can_view_activity === true) return entry;
     changed = true;
-    return {...entry, selected: null, childAlbumRef: null, pane: 'recent', expanded: null};
+    return {...entry, selected: null, tracks: null, childAlbumRef: null, pane: 'recent', expanded: null};
   });
   return changed ? next : entries;
 }
@@ -148,4 +154,25 @@ export function resolveListenedAlbum(value, artistTarget, albumRef) {
 
 export function sameSelectionTarget(left, right) {
   return Boolean(left && right && detailSelectionKey(left) === detailSelectionKey(right));
+}
+
+
+// Identity and detail authority are separate. Each consensus target retains one
+// current receipt; public names and local file paths never identify resources.
+export function resolveActivityTrackSelection(snapshot, query, descriptor) {
+  if (!['tracks', 'listens'].includes(query?.kind) || !Array.isArray(descriptor?.rowIds)
+    || !descriptor.rowIds.length || descriptor.rowIds.length > 5000
+    || new Set(descriptor.rowIds).size !== descriptor.rowIds.length) return null;
+  const source = selectionSource(snapshot, query);
+  if (source.status !== 'ready' || (source.data?.snapshot_ref ?? null) !== (descriptor.snapshotRef ?? null)) return null;
+  const selected = new Set(descriptor.rowIds);
+  const rows = (source.data?.rows || []).filter(row => selected.has(row.id));
+  if (rows.length !== selected.size || new Set(rows.map(row => row.id)).size !== selected.size
+    || rows.some(row => !['track', 'listen'].includes(row.kind) || row.source_readable === false)) return null;
+  const common = kind => {
+    const targets = rows.map(row => activitySelectionTarget(row, kind, query, source));
+    const first = targets[0], identity = first?.identity_ref || first?.ref;
+    return identity && targets.every(target => target && (target.identity_ref || target.ref) === identity) ? first : null;
+  };
+  return {rows, album: common('album'), artist: common('artist'), source};
 }

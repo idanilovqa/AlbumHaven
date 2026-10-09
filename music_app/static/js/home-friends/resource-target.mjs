@@ -6,6 +6,12 @@ const freeze = Object.freeze;
 const grant = (value, name) => object(value) && Object.hasOwn(value, name) && value[name] === true;
 
 export function detailOrigin(value) {
+  if (object(value) && value.source === 'queue') {
+    if (Object.keys(value).some(key => !['source', 'occurrence_refs'].includes(key))
+      || !Array.isArray(value.occurrence_refs) || !value.occurrence_refs.length || value.occurrence_refs.length > 5000
+      || !value.occurrence_refs.every(reference) || new Set(value.occurrence_refs).size !== value.occurrence_refs.length) return null;
+    return freeze({source: 'queue', occurrence_refs: freeze([...value.occurrence_refs])});
+  }
   if (!object(value) || !['recent', 'activity', 'playlist', 'comparison'].includes(value.source)) return null;
   const playlist = value.source === 'playlist';
   if (value.account_ref != null && !reference(value.account_ref)) return null;
@@ -25,6 +31,7 @@ export function detailSelection(value) {
   if (value.origin != null && !origin) return null;
   const native = nativeActions(value.native_actions, value.kind);
   return freeze({kind: value.kind, ref: value.ref,
+    ...(reference(value.identity_ref) ? {identity_ref: value.identity_ref} : {}),
     allowed_actions: freeze({can_view_details: grant(value.allowed_actions, 'can_view_details')}),
     ...(origin ? {origin} : {}),
     ...(native ? {native_actions: native} : {})});

@@ -5,14 +5,14 @@ const chevron = '<svg class="ui-choice__chevron" viewBox="0 0 24 24" aria-hidden
 // React owns the stable trigger and current values. The canonical Choice owner
 // retains the menu, anchored surface, keyboard behavior and focus return.
 export function NativeChoice({runtime, label, value, options = [], onChange, disabled = false, showLabel = true,
-  className = '', buttonClassName = '', matchTriggerWidth = true, controlLabelPrefix = ''}) {
+  className = '', buttonClassName = '', matchTriggerWidth = true, menuWidth, controlLabelPrefix = ''}) {
   const root = useRef(null), owner = useRef(null), latest = useRef(null);
   const choices = options.map(option => Array.isArray(option)
     ? {value: String(option[0]), label: String(option[1]), disabled: option[2] === true}
     : {value: String(option.value), label: String(option.label), disabled: option.disabled === true});
   const selected = String(value ?? ''), selectedLabel = choices.find(option => option.value === selected)?.label || '';
   const unavailable = disabled || typeof runtime.openChoice !== 'function' || !choices.some(option => !option.disabled);
-  latest.current = {choices, selected, label, onChange, unavailable, matchTriggerWidth};
+  latest.current = {choices, selected, label, onChange, unavailable, matchTriggerWidth, menuWidth};
   const visibleLabel = controlLabelPrefix && selectedLabel ? `${controlLabelPrefix}: ${selectedLabel}` : selectedLabel;
   const html = runtime.buttonHtml({label: visibleLabel, size: 'small', disabled: unavailable,
     className: ['ui-choice__trigger', buttonClassName].filter(Boolean).join(' '),
@@ -26,7 +26,7 @@ export function NativeChoice({runtime, label, value, options = [], onChange, dis
       const current = latest.current, trigger = host.firstElementChild;
       if (current.unavailable || !trigger || trigger.disabled) return;
       owner.current = runtime.openChoice(trigger, {formats: current.choices, selected: current.selected, label: current.label,
-        matchTriggerWidth: current.matchTriggerWidth, density: 'compact', initialFocus, updateTriggerLabel: false,
+        matchTriggerWidth: current.matchTriggerWidth, menuWidth: current.menuWidth, density: 'compact', initialFocus, updateTriggerLabel: false,
         onSelect: next => {
           const active = latest.current;
           if (!active.unavailable && active.choices.some(option => option.value === next && !option.disabled)) active.onChange?.(next);
@@ -57,7 +57,7 @@ export function NativeChoice({runtime, label, value, options = [], onChange, dis
     for (const attribute of [...current.attributes]) if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
     for (const attribute of [...next.attributes]) if (current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
     if (current.innerHTML !== next.innerHTML) current.innerHTML = next.innerHTML;
-  }, [html, choicesKey, selected, runtime, matchTriggerWidth]);
+  }, [html, choicesKey, selected, runtime, matchTriggerWidth, menuWidth]);
   return <span className={['ui-choice', className].filter(Boolean).join(' ')}>
     {showLabel && <span className="ui-choice__label">{label}</span>}
     <span ref={root} className="ui-choice__control" dangerouslySetInnerHTML={{__html: initial.current}}/>

@@ -29,7 +29,7 @@ const samePage = (left, right) => left.draftToken && left.draftToken === right.d
 export function MissingPlaylistDraftHeader({runtime, title, filtersId, filtersOpen, busy, actions, onAction}) {
   const host = useRef(null);
   const html = runtime.galleryBarHtml({contextKind: 'recent', title: title || 'Missing tracks', actionsHtml: [
-    ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'download'],
+    ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'export-text'],
     ['filters', 'Filters', !actions.filters, 'filters'], ['save', 'Save', !actions.save, 'save'], ['close', 'Close playlist preview', !actions.close, 'close'],
   ].map(([action, label, unavailable, icon]) => {
     const options = {disabled: busy || unavailable, title: action === 'top' && unavailable
@@ -57,17 +57,17 @@ export function missingPlaylistDraftTableHtml(runtime, {id, state, projection, d
   sort = {key: null, direction: 'default'}}) {
   const escape = runtime.escapeHtml, selected = new Set(state.selectedKeys);
   const metrics = metricColumns;
-  const identityColumns = '30px 78px 36px minmax(180px,1.3fr) minmax(90px,.7fr) minmax(90px,.7fr) minmax(115px,.7fr)';
+  const identityColumns = '30px 70px 36px minmax(0,1.3fr) minmax(0,.7fr) minmax(0,.7fr) minmax(64px,.7fr)';
   const positions = new Map(projection.authoredEntries.map((entry, index) => [entry.row_key, index]));
   const reorderable = projection.canReorder && !disabled;
   return runtime.tableHtml({id, ariaLabel: `${state.title || 'Missing playlist'} tracks`, density: 'compact', frame: 'outline',
-    selection: 'multiple', overflow: 'local', mobile: 'preserve',
+    selection: 'multiple', overflow: 'local',
     sort, sortDisabled: disabled,
     columns: `${identityColumns} ${metrics.map(column => column.width).join(' ')} 40px`,
-    narrowColumns: `${identityColumns} ${metrics.filter(column => !column.hideWhenNarrow).map(column => column.width).join(' ')} 40px`,
-    columnsConfig: [{key: 'selection', label: 'Select', header: 'screen-reader'}, {key: 'order', label: 'Order', action: true},
-      {key: 'number', label: '#'}, {key: 'title', label: 'Track'}, {key: 'artist', label: 'Artist'}, {key: 'album', label: 'Album'},
-      {key: 'availability', label: 'Availability'}, ...metrics, {key: 'remove', label: 'Remove', action: true}],
+    narrowColumns: `30px 36px minmax(0,1fr) ${metrics.filter(column => !column.hideWhenNarrow).map(column => column.width).join(' ')} 40px`,
+    columnsConfig: [{key: 'selection', label: 'Select', header: 'screen-reader'}, {key: 'order', label: 'Order', action: true, hideWhenNarrow: true},
+      {key: 'number', label: '#'}, {key: 'title', label: 'Track'}, {key: 'artist', label: 'Artist', hideWhenNarrow: true}, {key: 'album', label: 'Album', hideWhenNarrow: true},
+      {key: 'availability', label: 'Availability', hideWhenNarrow: true}, ...metrics, {key: 'remove', label: 'Remove', action: true}],
     rows: projection.entries.map(entry => {
       const index = positions.get(entry.row_key), title = known(entry.title);
       // Only presentation facts reach AlbumTrackTable. Its native media contract
@@ -88,7 +88,7 @@ export function missingPlaylistDraftTableHtml(runtime, {id, state, projection, d
               attributes: {'data-draft-move': direction, 'aria-label': `${label}: ${title}`}})).join('')},
           number: {content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escape(index + 1)}</span>`
             + runtime.actionHtml({icon: 'play', className: 'album-track-table__play', ariaLabel: `Playback unavailable for ${title}`,
-              title: 'Source playback is unavailable for this unsaved playlist.', presentation: 'bare', disabled: true}) + '</span>'},
+              title: 'Source playback is unavailable for this unsaved playlist.', presentation: 'bare', hidden: entry.availability === 'missing', disabled: true}) + '</span>'},
           title: {content: `<div class="home-detail__release playlists-draft__identity">${artwork}<div>${native.cells.title.content}`
             + (metadata ? `<span class="album-track-table__secondary">${escape(metadata)}</span>` : '') + '</div></div>'},
           artist: {content: escape(known(entry.artist))}, album: {content: escape(known(entry.album_title))},
@@ -163,7 +163,7 @@ export function MissingPlaylistDraftTracks({runtime, id, controller, state, proj
       Add to playlist is unavailable for these unsaved source tracks.
     </p>
     {sort.direction !== 'default' && <p className="playlists__note" role="status">Sorted view. Restore default table order to reorder tracks.</p>}
-    <div ref={host} className="album-track-table playlists__tracks playlists-draft__tracks" dangerouslySetInnerHTML={{__html: initial.current}}
+    <div ref={host} className="album-track-table album-track-table--collection playlists__tracks playlists-draft__tracks" dangerouslySetInnerHTML={{__html: initial.current}}
     onChange={event => {
       const input = event.target.closest('[data-draft-pick]');
       if (input && !input.disabled && current()) controller.toggle(input.dataset.draftPick);

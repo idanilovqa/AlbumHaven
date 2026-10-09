@@ -246,6 +246,7 @@ export function CreationForm({runtime, controller, state, onCreated, onPrepareDr
           disabled={locked || !eligibleCount} onChange={event => controller.selectVisible(event.target.checked)}/><span>Select visible</span></label>
       </fieldset>
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{projection.selectedCount} tracks selected</span>
+      {projection.duplicateCount > 0 && <p className="playlists__note">{projection.duplicateCount} repeated occurrences shown; each source track will be added once.</p>}
       {state.selectionLimit && <NativeHtml html={runtime.alertHtml({severity: 'error', role: 'alert',
         message: 'A playlist can include up to 5,000 selected tracks. Remove a track before selecting more.'})}/>}
       <div role="tabpanel" aria-labelledby={`${id}-tabs-${state.tab}`}>

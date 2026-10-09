@@ -147,7 +147,8 @@ export async function dispatchPlaylistAdd(write, request) {
   const data = playlistAddRequest(request?.track_refs);
   if (!data || typeof write !== 'function') throw new TypeError('Invalid playlist Add request.');
   return write({scopeKey: request.scopeKey, playlist_id: request.playlist_id, ...data,
-    ...(request.revision ? {revision: request.revision} : {}), signal: request.signal});
+    ...(request.revision ? {revision: request.revision} : {}),
+    ...(request.source_guard ? {source_guard: request.source_guard} : {}), signal: request.signal});
 }
 export function draftDirty(detail, draft) {
   return Boolean(detail && draft && (draft.title !== detail.title || draft.description !== detail.description

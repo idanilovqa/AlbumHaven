@@ -36,8 +36,8 @@ export function PlaylistHeader({runtime, detail, draft, busy, actions, filtersOp
   const host = useRef(null);
   const html = runtime.galleryBarHtml({contextKind: 'recent', title: draft?.title || detail?.title || 'Playlists',
     actionsHtml: [
-      ['add', 'Add tracks', !actions.add, 'add'], ['missing', 'Create missing playlist', !actions.missing, 'missing-playlist'],
-      ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'download'], ['share', 'Share', !detail || actions.share === false, 'share'],
+      ['add', 'Add tracks', !actions.add, 'add'], ['missing', 'Inspect missing tracks', !actions.missing, 'missing-playlist'],
+      ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'export-text'], ['share', 'Share', !detail || actions.share === false, 'share'],
       ['settings', 'Playlist settings', !detail, 'more'],
       ['filters', 'Filters', !detail, 'filters'], ['save', 'Save', !actions.save, 'save'], ['discard', 'Discard unsaved changes', !draft, 'close'],
     ].map(([action, label, disabled, icon]) => runtime.actionHtml({icon, ariaLabel: label, presentation: 'bare', disabled: busy || disabled,

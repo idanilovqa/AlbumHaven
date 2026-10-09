@@ -4,7 +4,7 @@ import {Button, NativeHtml} from './components.jsx';
 
 // Native form ownership includes dismissal, focus trap and return focus. React
 // owns only a dedicated inner host, safe to unmount after native teardown.
-export function NativeDialog({runtime, title, pageId, parentSurface, returnFocus, beforeDismiss, onClose, children, contentOwnsFooter = true}) {
+export function NativeDialog({runtime, title, pageId, presentationKey, parentSurface, returnFocus, beforeDismiss, onClose, children, contentOwnsFooter = true}) {
   const [host, setHost] = useState(null), [failed, setFailed] = useState(false);
   const latest = useRef(onClose), ownerRef = useRef(null), closeOptions = useRef(null); latest.current = onClose;
   const dismissal = useRef(beforeDismiss); dismissal.current = beforeDismiss;
@@ -22,7 +22,10 @@ export function NativeDialog({runtime, title, pageId, parentSurface, returnFocus
       ownerRef.current = owner;
     } catch (_error) {setFailed(true);}
     return () => {disposed = true; ownerRef.current = null; owner?.close(null, {force: true, restoreFocus: false, returnToParent: false});};
-  }, [runtime, title, pageId, parentSurface, contentOwnsFooter, Boolean(beforeDismiss)]);
+  }, [runtime, presentationKey ?? title, presentationKey ?? pageId, parentSurface, contentOwnsFooter, Boolean(beforeDismiss)]);
+  useLayoutEffect(() => {
+    if (presentationKey) ownerRef.current?.updatePresentation?.({title, pageId});
+  }, [presentationKey, title, pageId]);
   if (failed) return <div><NativeHtml html={runtime.alertHtml({severity: 'info', role: 'status', message: 'This dialog is not available right now.'})}/>
     <Button runtime={runtime} onClick={() => latest.current?.()}>Close</Button></div>;
   const close = options => {

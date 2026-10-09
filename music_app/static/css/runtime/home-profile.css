@@ -1,0 +1,24 @@
+/* Profile placement only. Buttons, inputs, image empty states and feedback use
+   their shared owners; this surface introduces no alternate control palette. */
+.home-profile__identity { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.home-profile__avatar { flex: 0 0 58px; width: 58px; height: 58px; border-radius: 50%; }
+.home-profile__avatar > div { border-radius: inherit; }
+.home-profile__copy { min-width: 0; }
+.home-profile__name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.home-profile__name h1, .home-profile__name h2 { margin: 0; overflow-wrap: anywhere; }
+.home-profile__copy p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.home-profile__handle { white-space: normal; }
+.home-profile__editor { grid-template-columns: minmax(0, 1fr); min-width: 0; width: min(100%, 480px); }
+.home-profile__editor-title { min-width: 0; }
+.home-profile__editor-title > .home-friends__button { max-width: 100%; }
+.home-profile__editor-title .ui-button__content { overflow-wrap: anywhere; white-space: normal; }
+.home-profile__avatar-editor { display: flex; align-items: center; gap: 16px; }
+.home-profile__avatar-editor > .home-profile__avatar { flex-basis: 88px; width: 88px; height: 88px; }
+.home-profile__image-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.home-profile__editor p { margin: 0; }
+.home-profile__editor textarea { min-width: 0; width: 100%; resize: vertical; }
+@media (max-width: 600px) {
+  .home-profile__identity { gap: 10px; }
+  .home-profile__identity > .home-profile__avatar { flex-basis: 44px; width: 44px; height: 44px; }
+  .home-profile__editor { width: 100%; }
+}

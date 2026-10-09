@@ -43,39 +43,62 @@ test('mobile Settings consumes only server-authorized section actions', () => {
   assert.equal(context.mobileUtilityTabAllowed('__proto__', {}), false);
 });
 
-test('single mobile track-body activation uses the real play control and excludes nested actions', () => {
-  const calls = [];
-  const button = { disabled: false, dataset: { trackPath: '/generated/track.mp3' }, click() { calls.push('play'); } };
-  const row = { querySelector: () => button, contains: () => false, dataset: {}, ownerDocument: { getSelection: () => ({ removeAllRanges() {} }) } };
-  const context = load('album-track-table.js', { usesMobilePageLayout: () => true,
-    window: { getSelection: () => ({ removeAllRanges() {} }) }, state: { player: { current: null } },
-    activateSharedTrackButton: (target, options) => {
-      assert.equal(target, button);
-      assert.equal(options.restart, true);
-      calls.push('restart');
+test('submitting an open mobile search with an empty draft still reaches gallery submission', () => {
+  const closes = [];
+  const context = load('mobile-navigation.js', {
+    usesMobilePageLayout: () => true,
+    document: {
+      getElementById(id) {
+        return id === 'search-input' ? { value: '' } : null;
+      },
     },
   });
-  // The table event uses the component's existing click route, never a second player.
-  const event = { target: { closest: () => null }, currentTarget: row, detail: 1, preventDefault() {} };
-  context.handleAlbumTrackRowClick(event);
-  assert.equal(calls.filter(x => x === 'play').length, 1);
-  context.handleAlbumTrackRowClick({ ...event, target: { closest: () => button } });
-  assert.deepEqual(calls, ['play']);
-  context.handleAlbumTrackRowClick({ ...event, detail: 2 });
-  // Mobile handles the second tap above; a native dblclick must not restart twice.
-  context.handleAlbumTrackRowDoubleClick(event);
-  assert.equal(calls.filter(x => x === 'play').length, 1);
-  assert.equal(calls.filter(x => x === 'restart').length, 1);
+  vm.runInContext('mobilePageState.searchOpen = true', context);
+  context.setMobileSearchOpen = (open) => closes.push(open);
+
+  assert.equal(context.handleMobileSearchSubmit(), false);
+  assert.deepEqual(closes, [false]);
+});
+
+test('mobile track-body taps select while the explicit native Play control remains independent', async t => {
+  const {bindPlaytableSelection} = await import('../../../music_app/static/js/playtables/selection.mjs');
+  const env = require('./native-home-harness.cjs').createNativeHomeRuntime(), doc = env.document;
+  doc.defaultView = {innerWidth: 390, navigator: {platform: 'iPhone'}};
+  const host = doc.createElement('section'); doc.body.appendChild(host);
+  host.innerHTML = '<div data-cdt-row-key="row"><span>Track</span><button>Play</button></div>';
+  const row = host.firstElementChild, button = row.querySelector('button'), calls = [];
+  button.addEventListener('click', () => calls.push('native-play'));
+  const instance = {};
+  const owner = bindPlaytableSelection(host, {sourceAdapter: {snapshot: () => ({scopeKey: 'mobile', instance,
+    rows: [{rowKey: 'row', readable: true, selectable: true}]})}, onPlay: () => calls.push('deliberate-play')});
+  t.after(() => {owner.dispose(); host.remove();});
+  row.firstElementChild.dispatchEvent(new env.context.Event('click'));
+  assert.equal(row.getAttribute('aria-selected'), 'true'); assert.deepEqual(calls, []);
+  button.dispatchEvent(new env.context.Event('click')); assert.deepEqual(calls, ['native-play']);
+  row.dispatchEvent(new env.context.Event('dblclick')); assert.deepEqual(calls, ['native-play', 'deliberate-play']);
+  button.dispatchEvent(new env.context.Event('dblclick')); assert.equal(calls.length, 2);
 });
 
 test('personal Home is distinct from the explicit All Artists route', () => {
+  const shell = {hidden: false};
   const context = load('mobile-home.js', { URL, usesMobilePageLayout: () => true,
-    window: { location: { href: 'https://example.test/' } }, state: { view: { query: '', selected_artist: '' } } });
+    document: {getElementById: id => id === 'app-shell' ? shell : null},
+    window: { location: { href: 'https://example.test/?surface=home' } },
+    state: { view: { surface: {active: 'home'}, query: '', selected_artist: '' }, ui: {} } });
   assert.equal(context.shouldShowMobileHome(), true);
-  context.window.location.href = 'https://example.test/?all_artists=1';
+  context.window.location.href = 'https://example.test/?surface=albums&all_artists=1';
   assert.equal(context.shouldShowMobileHome(), false);
   context.window.location.href = 'https://example.test/';
+  assert.equal(context.shouldShowMobileHome(), true, 'the native Home surface supplies the query-free route');
+  context.state.view.surface.active = 'albums';
+  assert.equal(context.shouldShowMobileHome(), false);
+  context.window.location.href = 'https://example.test/?q=Northlight';
   context.state.view.query = 'Northlight';
+  assert.equal(context.shouldShowMobileHome(), false, 'the authoritative Albums search result is not personal Home');
+  context.window.location.href = 'https://example.test/'; context.state.view.query = '';
+  context.state.view.surface.active = 'home'; shell.hidden = true;
+  assert.equal(context.shouldShowMobileHome(), false);
+  shell.hidden = false; context.state.ui.pendingViewTransition = true;
   assert.equal(context.shouldShowMobileHome(), false);
 });
 
@@ -556,4 +579,15 @@ for (const width of [390, 1180]) test(`mobile duplicate Folder action is unavail
   const hidden = css.match(/html\[data-client-profile="mobile"\] :is\(([^)]+)\) \{ display: none !important; \}/)[1];
   assert.ok(hidden.includes('[data-open-track-modal-duplicate-folder]'));
   assert.equal(hidden.includes('[data-track-duplicate-source-index]'), false);
+});
+
+test('mobile action controls preserve a 40px touch target at phone width', () => { const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8'); const actionRule = css.match(/\.mobile-bar-action\s*\{[^}]*flex:\s*0\s+0\s+40px[^}]*\}/)?.[0] || ''; assert.notEqual(actionRule, ''); }); test('mobile gallery geometry keeps requested one, two, and three-column taps within the viewport', () => {
+  for (const [viewportWidth, availableWidth] of [[320, 296], [390, 366], [480, 456]]) {
+    for (const columns of [1, 2, 3]) {
+      const geometry = preferences.resolveMobileGalleryGeometry({ viewportWidth, availableWidth, columns, gap: 12 });
+      assert.equal(geometry.columns, columns);
+      assert.ok(geometry.cardTrackWidth >= 0);
+      assert.ok(geometry.cardTrackWidth * columns + 12 * (columns - 1) <= availableWidth);
+    }
+  }
 });

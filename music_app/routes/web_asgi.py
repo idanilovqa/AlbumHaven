@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.private_ui_context import private_ui_context_ref
+
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.loops import get_loop
 
@@ -17,11 +19,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import QueryParams
 
 from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.app_logging import log_app_event
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
+    display_cover_variant_cache_root,
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
     normalize_cover_variant_size,
@@ -182,11 +186,10 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
     if asset_paths is None:
         static_root = Path(__file__).resolve().parent.parent / "static"
         runtime_stylesheets = tuple(sorted((static_root / "css").rglob("*.css")))
+        runtime_javascript = tuple(sorted((static_root / "js").rglob("*.js")))
         asset_paths = (
             static_root / "app.js",
-            static_root / "js" / "runtime-bundle.js",
-            static_root / "js" / "navigation-tree.js",
-            static_root / "js" / "audio-worklets" / "gapless-playback-processor.js",
+            *runtime_javascript,
             *runtime_stylesheets,
         )
     digest = hashlib.sha256()
@@ -203,6 +206,11 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
     actor = getattr(request.state, "current_actor", None)
+    private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    bootstrap = context.get("bootstrap_payload")
+    if isinstance(bootstrap, dict) and isinstance(bootstrap.get("initial_view"), dict):
+        context = {**context, "bootstrap_payload": {**bootstrap,
+            "initial_view": {**bootstrap["initial_view"], "context_ref": private_context}}}
     request.app.state.runtime_asset_version = _runtime_asset_version()
     return request.app.state.templates.TemplateResponse(
         request,
@@ -218,6 +226,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
                 request.app.state.auth_policy_config,
             ),
             **context,
+            "private_ui_context": private_context,
             "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
             "utility_allowed_actions": allowed_actions_for_request(request, (
                 "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
@@ -322,6 +331,7 @@ def _build_startup_hydration_endpoint(
     active_surface: str = "albums",
     payload_tier: str = "",
     omit_sidebar: bool = False,
+    all_artists_active: bool = False,
 ) -> str:
     normalized_surface = resolve_active_view_surface(active_surface)
     if normalized_surface == "home":
@@ -336,6 +346,8 @@ def _build_startup_hydration_endpoint(
         params.append(("q", query_raw))
     if selected_artist:
         params.append(("artist", selected_artist))
+    if query_raw and all_artists_active:
+        params.append(("all_artists", "1"))
     normalized_family_display_mode = normalize_selected_artist_family_display_mode(
         selected_artist_family_display_mode
     )
@@ -385,6 +397,7 @@ def _build_startup_hydration_contract(
     initial_view_partial: bool,
     embedded_view_patch: dict[str, object] | None = None,
     allow_sidebar_followup_fetch: bool = True,
+    all_artists_active: bool = False,
 ) -> dict[str, object]:
     hydration_required = bool(initial_view_partial) or preview_mode == "empty_shell"
     normalized_surface = resolve_active_view_surface(active_surface)
@@ -408,6 +421,7 @@ def _build_startup_hydration_contract(
                 gallery_scale_percent,
                 visible_library_categories,
                 active_surface=normalized_surface,
+                all_artists_active=all_artists_active,
             ),
             "followupEndpoint": "",
             "embeddedViewPatch": None,
@@ -436,6 +450,7 @@ def _build_startup_hydration_contract(
                 gallery_scale_percent,
                 visible_library_categories,
                 active_surface=normalized_surface,
+                all_artists_active=all_artists_active,
                 omit_sidebar=True,
             )
             if allow_sidebar_followup_fetch
@@ -455,6 +470,7 @@ def _build_startup_hydration_contract(
                 gallery_scale_percent,
                 visible_library_categories,
                 active_surface=normalized_surface,
+                all_artists_active=all_artists_active,
                 payload_tier="sidebar",
             ),
             "followupEndpoint": followup_endpoint,
@@ -486,6 +502,7 @@ def _build_startup_hydration_contract(
             gallery_scale_percent,
             visible_library_categories,
             active_surface=normalized_surface,
+            all_artists_active=all_artists_active,
         ),
         "followupEndpoint": "",
         "embeddedViewPatch": None,
@@ -521,10 +538,16 @@ def _build_postgres_root_startup_view(
     *,
     config: dict[str, object],
     query_args: Any,
+    library_state: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object] | None, float]:
     payload_started_at = time.perf_counter()
-    payload = PostgresLibraryBrowseRepository(config).build_root_sidebar_payload(
-        query_params=query_args,
+    payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
+        query_params=QueryParams([
+            (key, value) for key, value in QueryParams(query_args).multi_items()
+            if key not in {"gallery_cursor", "gallery_page_size"}
+        ] + ([] if str(query_args.get("surface") or "").strip().casefold() == "home"
+             else [("gallery_page_size", "8")])),
+        library_state=library_state,
     )
     initial_view = build_initial_view_preview(payload)
     preview_sidebar = [
@@ -535,9 +558,6 @@ def _build_postgres_root_startup_view(
     embedded_view_patch = None
     if preview_sidebar:
         embedded_view_patch = {
-            "artist_groups": list(initial_view.get("artist_groups") or []),
-            "primary_artist_groups": list(initial_view.get("primary_artist_groups") or []),
-            "family_artist_groups": list(initial_view.get("family_artist_groups") or []),
             "artists_sidebar": preview_sidebar,
             "artist_count": int(payload.get("artist_count") or len(preview_sidebar)),
             "album_count": int(payload.get("album_count") or 0),
@@ -616,6 +636,7 @@ def _build_bootstrap_payload(
             ) = _build_postgres_root_startup_view(
                 config=config,
                 query_args=query_args,
+                library_state=library_state,
             )
             if library_state.get("cold_scan_pending") and int(initial_view.get("album_count") or 0) == 0:
                 preview_mode = "empty_shell"
@@ -704,11 +725,10 @@ def _build_bootstrap_payload(
         initial_view_partial=initial_view_partial,
         embedded_view_patch=embedded_view_patch,
         allow_sidebar_followup_fetch=True,
+        all_artists_active=str(query_args.get("all_artists", "")).strip().casefold()
+        in {"1", "true", "yes", "on"},
     )
     bootstrap_payload = {
-        "startup_payload": {
-            "first_paint_view": initial_view,
-        },
         "initial_view": initial_view,
         "bootstrap": {
             "coverCacheToken": COVER_CACHE_PROCESS_TOKEN,
@@ -752,7 +772,10 @@ def _build_bootstrap_payload(
                     "previewMode": preview_mode,
                     "includesGalleryMarkup": render_gallery_markup,
                 },
-                "hydration": startup_hydration,
+                "hydration": {
+                    **startup_hydration,
+                    "embeddedViewPatch": None,
+                },
             },
             "startupHydration": startup_hydration,
         },
@@ -860,9 +883,6 @@ async def index(request: Request) -> Response:
     query_raw = query_args.get("q", "").strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
-    cold_scan_waiting = bool(library_state.get("cold_scan_pending")) or str(
-        library_state.get("cold_scan_handoff_status") or "idle"
-    ) == "claimed"
     bootstrap_payload, payload_elapsed_ms, startup_preview = await run_in_threadpool(
         _build_bootstrap_payload,
         query_args=query_args,
@@ -874,6 +894,22 @@ async def index(request: Request) -> Response:
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
     )
+    bootstrap_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
+    initial_view = bootstrap_payload.get("initial_view") or {}
+    if (
+        _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
+        and int(initial_view.get("album_count") or 0) == 0
+        and not library_state.get("last_error")
+        and not library_state.get("scan_in_progress")
+    ):
+        with request.app.state.cold_scan_handoff_lock:
+            if str(library_state.get("cold_scan_handoff_status") or "idle") == "idle":
+                library_state["cold_scan_pending"] = True
+                library_state["cold_scan_handoff_status"] = "pending"
+                library_state["cold_scan_handoff_error"] = ""
+    cold_scan_waiting = bool(library_state.get("cold_scan_pending")) or str(
+        library_state.get("cold_scan_handoff_status") or "idle"
+    ) == "claimed"
     initial_view_partial = bool(bootstrap_payload["bootstrap"]["partialView"])
     startup_preview_mode = str(
         bootstrap_payload["bootstrap"].get("startupPreview", {}).get("mode") or "empty_shell"
@@ -883,10 +919,14 @@ async def index(request: Request) -> Response:
         bootstrap_payload["bootstrap"]["scanInProgress"] = True
         bootstrap_payload["bootstrap"]["scanPhase"] = "discovering"
         bootstrap_payload["bootstrap"]["scanMode"] = "background"
+    appearance_started_at = time.perf_counter()
+    appearance_context = await load_appearance_context(request)
+    appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
+    template_started_at = time.perf_counter()
     response = _template_response(
         request,
         {
-            **await load_appearance_context(request),
+            **appearance_context,
             "query": query_raw,
             "selected_artist": selected_artist,
             "effective_selected_artist": resolve_effective_selected_artist(
@@ -900,6 +940,7 @@ async def index(request: Request) -> Response:
             "startup_preview": startup_preview,
         },
     )
+    template_elapsed_ms = round((time.perf_counter() - template_started_at) * 1000, 2)
     response.headers["Cache-Control"] = "no-store, max-age=0"
     claim_token = _claim_pending_cold_scan(request)
     if claim_token is not None:
@@ -917,6 +958,9 @@ async def index(request: Request) -> Response:
         level="info",
         elapsed_ms=total_elapsed_ms,
         payload_elapsed_ms=payload_elapsed_ms,
+        bootstrap_elapsed_ms=bootstrap_elapsed_ms,
+        appearance_elapsed_ms=appearance_elapsed_ms,
+        template_elapsed_ms=template_elapsed_ms,
         query=query_raw,
         selected_artist=selected_artist,
         album_count=0,
@@ -1019,7 +1063,12 @@ async def bootstrap_data(request: Request) -> JSONResponse:
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
     )
-    return JSONResponse(bootstrap_payload)
+    actor = getattr(request.state, "current_actor", None)
+    private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    if isinstance(bootstrap_payload.get("initial_view"), dict):
+        bootstrap_payload = {**bootstrap_payload,
+            "initial_view": {**bootstrap_payload["initial_view"], "context_ref": private_context}}
+    return JSONResponse(bootstrap_payload, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/refresh-api")
@@ -1142,21 +1191,22 @@ def _cover_response(request: Request, path: str, size: str | None) -> Response:
         return _not_found()
     requested_size = normalize_cover_variant_size(size)
     if requested_size > 0:
+        cache_root = display_cover_variant_cache_root(resolved)
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
         )
         try:
             cached_variant = find_existing_cover_display_variant(
                 resolved,
-                cache_root=Path(config["DATA_DIR"]),
+                cache_root=cache_root,
                 max_size=requested_size,
             )
             if cached_variant is not None:
                 resolved = cached_variant
-            else:
+            elif config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
                 resolved = resolve_cover_display_variant(
                     resolved,
-                    cache_root=Path(config["DATA_DIR"]),
+                    cache_root=cache_root,
                     max_size=requested_size,
                     priority=request_priority,
                 )

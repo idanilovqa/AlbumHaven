@@ -2666,3 +2666,13 @@ def test_scan_relation_callback_forwards_inventory_revision_to_publication(confi
     assert len(published) == 1
     assert published[0]['expected_inventory_mutation_revision'] == 0
     assert published[0]['expected_cover_mutation_revision'] == 3
+
+
+def test_startup_persistence_recovery_preserves_journal_and_exclusion_migration_without_hydration(monkeypatch, config, logger):
+    runtime = SimpleNamespace(config=config, logger=logger)
+    calls = []
+    monkeypatch.setattr("music_app.services.tag_edit_recovery.reconcile_unfinished_tag_edit_intents_on_startup", lambda app: calls.append(("recover", app)))
+    monkeypatch.setattr(state_module, "migrate_legacy_album_exclusions", lambda selected_config: calls.append(("migrate", selected_config)) or {"migrated_album_count": 0, "removed_legacy_rule_count": 0, "created_album_rule_count": 0})
+    monkeypatch.setattr(state_module, "_call_hydrate_library_state_from_disk", lambda *_args, **_kwargs: pytest.fail("Recovery must not hydrate the whole library"))
+    state_module.recover_runtime_library_persistence_on_startup(runtime)
+    assert calls == [("recover", runtime), ("migrate", config)]

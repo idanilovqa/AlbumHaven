@@ -32,6 +32,7 @@ const configuredPlaywrightSurfaces = [
   'playwright.synthetic-large-library.config.cjs',
   'playwright.utility-problematic-files.config.cjs',
   'playwright.non-album-rescan.config.js',
+  'playwright.home-feedback.config.js',
   'playwright.performance.config.cjs',
   'playwright.scan-performance.config.cjs',
 ];
@@ -268,7 +269,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
       if (!Number.isFinite(target.targetMs) || target.targetMs <= 0) {
         errors.push(`${name} must declare a positive target`);
       }
-      if (!Number.isFinite(target.graceMs) || target.graceMs < 200 || target.graceMs > 400) {
+      if (!Number.isFinite(target.graceMs) || target.graceMs < (name === 'paired-search-calibration' ? 100 : 200) || target.graceMs > 400) {
         errors.push(`${name} must declare grace from 200 through 400 ms`);
       }
       if (target.ceilingMs !== target.targetMs + target.graceMs) {
@@ -292,7 +293,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 21) errors.push('default performance group must expose all 21 targets');
+  if (defaults.length !== 22) errors.push('default performance group must expose all 22 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -507,7 +508,7 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
-test('functional shard contract owns all 121 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 134 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -517,20 +518,21 @@ test('functional shard contract owns all 121 browser-functional cases exactly on
         'playwright.cover-rescan.config.js',
         'playwright.lastfm-auto-timezone.config.js',
         'playwright.non-album-rescan.config.js',
+        'playwright.home-feedback.config.js',
       ].includes(entry.config))
       .map(caseIdentity),
   );
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 121);
+  assert.equal(expectedCases.size, 134);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 4);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 28 performance cases across 21 targets', () => {
+test('performance target contract owns all 30 performance cases across 22 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -553,6 +555,7 @@ test('performance target contract owns all 28 performance cases across 21 target
     'utility-rules',
     'selected-artist',
     'search-browse',
+    'paired-search-calibration',
     'root-album-browse',
     'app-open-all-artists',
     'problematic-files-focused',
@@ -567,10 +570,10 @@ test('performance target contract owns all 28 performance cases across 21 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 28);
+  assert.equal(expectedCases.size, 30);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 21);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 21);
+  assert.equal(contract.targets.length, 22);
+  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 22);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')
@@ -725,17 +728,18 @@ test('idle-memory fixture uses the owner-approved shared local and CI limits', (
 test('read-only inventory command reports complete discovery and ownership totals', () => {
   const inventory = discoverInventory();
 
-  assert.equal(inventory.configuredSurfaces, 12);
+  assert.equal(inventory.configuredSurfaces, 13);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 121,
-    component: 189,
+    browserFunctional: 134,
+    component: 194,
     mobile: 74,
-    performance: 28,
-    total: 412,
+    performance: 30,
+    total: 432,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 412,
-    functionalShards: 121,
-    performanceTargets: 28,
+    testDataMatrix: 432,
+    functionalShards: 134,
+    performanceTargets: 30,
   });
 });
+

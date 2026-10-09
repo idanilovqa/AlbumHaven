@@ -3,8 +3,46 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from music_app.routes import api_view_payload_helpers
+from music_app.services import selected_artist_membership
 from music_app.services.selected_artist_membership import selected_artist_family_artists
 from music_app.services.artist_sidebar import build_artists_sidebar
+
+
+def test_cached_album_group_matching_reuses_one_album_membership_snapshot(monkeypatch):
+    album = SimpleNamespace(
+        key="neal-morse-testimony",
+        album_artist="Neal Morse",
+        artists=["Neal Morse"],
+        is_compilation=False,
+    )
+    snapshot_calls = 0
+    original_snapshot = selected_artist_membership._album_group_membership_snapshot
+
+    def counted_snapshot(*args, **kwargs):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        return original_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(
+        selected_artist_membership,
+        "_album_group_membership_snapshot",
+        counted_snapshot,
+    )
+    match_cache = {}
+
+    assert selected_artist_membership.cached_album_matches_group_artist(
+        album,
+        "Neal Morse",
+        {},
+        match_cache,
+    )
+    assert not selected_artist_membership.cached_album_matches_group_artist(
+        album,
+        "The Neal Morse Band",
+        {},
+        match_cache,
+    )
+    assert snapshot_calls == 1
 
 
 def test_api_view_payload_helpers_do_not_expose_dead_flask_path_fallbacks():

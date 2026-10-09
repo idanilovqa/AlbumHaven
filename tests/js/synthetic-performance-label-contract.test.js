@@ -85,3 +85,19 @@ test('performance helper surfaces no longer expose local-real-data identifiers o
     );
   }
 });
+
+test('Problematic Files report copy matches the approved readiness ceiling', () => {
+  const performanceFixtures = readRepositoryFile(
+    'tests',
+    'e2e',
+    'support',
+    'performanceFixtures.js',
+  );
+  const summaryBuilder = performanceFixtures.match(
+    /function buildUtilityProblematicFilesLocalSummaryCards[\s\S]*?function buildUtilityRulesLocalSummaryCards/u,
+  );
+
+  assert.ok(summaryBuilder, 'Problematic Files summary builder should remain present');
+  assert.match(summaryBuilder[0], /1200 ms hard ceiling/u);
+  assert.doesNotMatch(summaryBuilder[0], /1400 ms hard ceiling/u);
+});

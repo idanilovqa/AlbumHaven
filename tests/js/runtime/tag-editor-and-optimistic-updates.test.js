@@ -25,7 +25,8 @@ const helperPath = path.join(
   'runtime',
   'tag-editor-and-optimistic-updates.js',
 );
-const helperSource = fs.readFileSync(helperPath, 'utf8');
+const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
+  + '\n' + fs.readFileSync(helperPath, 'utf8');
 const albumUiComponentSources = [
   'alert-components.js',
   'album-artbox.js',
@@ -118,6 +119,24 @@ function loadHelper(albums, overrides = {}) {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
+
+test('album editions render the same keyboard tab component as Home', () => {
+  const context = loadHelper([], { escapeHtml: value => String(value) });
+  context.state.modalReleases = [
+    { key: 'original', tabLabel: 'Original - 1998' },
+    { key: 'remix', tabLabel: 'Anniversary Remix - 2018' },
+  ];
+  context.state.modalReleaseIndex = 1;
+  context.renderVersionContextMenu = () => {};
+  const tabs = { hidden: true, innerHTML: '', querySelector: () => null };
+  context.renderTrackModalTabs({ tabs });
+  assert.equal(tabs.hidden, false);
+  assert.match(tabs.innerHTML, /class="in-page-tabs"/);
+  assert.match(tabs.innerHTML, /role="tablist" aria-label="Album editions"/);
+  assert.match(tabs.innerHTML, /data-in-page-tab="1" aria-selected="true" tabindex="0"/);
+  assert.match(tabs.innerHTML, /Original - 1998/);
+  assert.match(tabs.innerHTML, /Anniversary Remix - 2018/);
+});
 
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
   const context = loadHelper([]);
@@ -337,8 +356,10 @@ test('openTagEditor orders a copied track list by disc, track number, and natura
     tracks: originalTracks,
   };
   const overlay = { hidden: true };
+  const applyButton = { disabled: false };
   const boundOverlays = [];
   let renderCount = 0;
+  const scheduledFrames = [];
   const context = loadHelper([album], {
     bindOverlayPointerOrigin(candidate) {
       boundOverlays.push(candidate);
@@ -351,7 +372,7 @@ test('openTagEditor orders a copied track list by disc, track number, and natura
       },
     },
     getTagEditorElements() {
-      return { overlay };
+      return { overlay, applyButton };
     },
     getTagEditorTracks() {
       return originalTracks;
@@ -362,12 +383,25 @@ test('openTagEditor orders a copied track list by disc, track number, and natura
     renderTagEditor() {
       renderCount += 1;
     },
+    scheduleBrowserAnimationFrame(callback) {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    },
     showRepairAlert(message) {
       throw new Error(message);
     },
   });
 
   context.openTagEditor(album, { tracksMode: 'all' });
+
+  assert.equal(overlay.hidden, false);
+  assert.equal(applyButton.disabled, true);
+  assert.equal(renderCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
+  assert.equal(renderCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
 
   assert.deepEqual(
     Array.from(context.state.tagEditor.tracks, (track) => track.key),
@@ -1447,6 +1481,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
       });
     },
   });
+  context.state.view.search_context = { selected_artist_source: 'auto_top_match', artist_name_match_artists: [] };
   context.state.tagEditor = { album, tracks: album.tracks, values: {} };
   context.openTagEditConfirmModal();
   galleryScroll.scrollTop = 9592;
@@ -1463,6 +1498,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
     'the optimistic album must be navigable while the edit request is still pending',
   );
   assert.strictEqual(pendingOptimisticEntries[0].optimisticAlbums[0], optimisticAlbum);
+  context.state.view.search_context = { selected_artist_source: 'requested_artist' };
   releaseResponse();
   await confirmation;
 
@@ -1485,6 +1521,7 @@ test('queued tag edit retains its initial optimistic render until the save-task 
   );
   assert.deepEqual(eventSequence, ['render', 'watch']);
   assert.equal(watchedTasks[0].options.originatingViewRequestUrl, '/api/library?selected_artist=DDT');
+  assert.equal(watchedTasks[0].options.originatingSearchContext.selected_artist_source, 'auto_top_match');
 });
 
 test('pending problematic navigation ownership includes only directly edited track paths', () => {

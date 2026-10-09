@@ -23,6 +23,13 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[3]
+_EXACT_NONTRANSACTIONAL_MIGRATION = "0083_add_album_raw_artist_search_index.sql"
+_EXACT_NONTRANSACTIONAL_INDEX = (
+    "library.local_albums_normalized_raw_artists_trgm_idx"
+)
+_EXACT_NONTRANSACTIONAL_INDEX_VERIFIER = Path(
+    "scripts/postgres/verify_0083_album_raw_artist_index.sql"
+)
 DATABASE_NAME = "album_haven_fake_e2e"
 SETUP_DATABASE_ENV = "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"
 RUNTIME_DATABASE_ENV = "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL"
@@ -487,18 +494,115 @@ def _assert_connected_role(connection: Any, expected_role: str) -> None:
         expected_connected_role = (
             f"{expected_role}_{database_name.removeprefix('album_haven_ci_')}"
         )
-    if not _is_owned_isolated_database_name(database_name) or role_name != expected_connected_role:
+    is_owned_database = (
+        _is_owned_isolated_database_name(database_name)
+        or database_name == "album_haven_scan_e2e"
+    )
+    if not is_owned_database or role_name != expected_connected_role:
         raise RuntimeError(
             "Connected Postgres identity does not match the isolated E2E contract: "
             f"database={database_name!r}, role={role_name!r}."
         )
 
 
-def apply_all_migrations(setup_database_url: str) -> None:
-    migrations_root = ROOT / "migrations" / "postgres"
-    migration_paths = sorted(path for path in migrations_root.glob("*.sql") if path.is_file())
+def _concurrent_index_names(migration_sql: str) -> list[str]:
+    names: list[str] = []
+    pattern = re.compile(
+        r"create\s+index\s+concurrently\s+(?:if\s+not\s+exists\s+)?"
+        r"(?P<index>[a-z_][a-z0-9_$]*)\s+on\s+"
+        r"(?:(?P<schema>[a-z_][a-z0-9_$]*)\.)?[a-z_][a-z0-9_$]*",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(migration_sql):
+        index_name = match.group("index")
+        schema_name = match.group("schema")
+        names.append(f"{schema_name}.{index_name}" if schema_name else index_name)
+    return names
+
+
+def _drop_invalid_concurrent_indexes(connection: Any, index_names: list[str]) -> list[str]:
+    invalid_names: list[str] = []
+    for index_name in index_names:
+        state = connection.execute(
+            """
+            select pg_index.indisvalid, pg_index.indisready
+            from pg_catalog.pg_index
+            where pg_index.indexrelid = to_regclass(%s)
+            """,
+            (index_name,),
+        ).fetchone()
+        if state and state["indisvalid"] and state["indisready"]:
+            continue
+        connection.execute(f"drop index concurrently if exists {index_name}")
+        invalid_names.append(index_name)
+    return invalid_names
+
+
+def _exact_nontransactional_index_state(connection: Any) -> str:
+    root = ROOT.resolve()
+    verifier_path = (root / _EXACT_NONTRANSACTIONAL_INDEX_VERIFIER).resolve()
+    if not verifier_path.is_relative_to(root) or not verifier_path.is_file():
+        raise RuntimeError("The 0083 index-definition verifier is missing or unsafe.")
+    row = connection.execute(verifier_path.read_text(encoding="utf-8")).fetchone()
+    state = str(row["index_state"]) if row else ""
+    if state not in {"missing", "ready", "mismatched"}:
+        raise RuntimeError("The 0083 index-definition verifier returned an invalid state.")
+    return state
+
+
+def _drop_mismatched_exact_nontransactional_index(connection: Any) -> str:
+    state = _exact_nontransactional_index_state(connection)
+    if state == "mismatched":
+        connection.execute(
+            f"drop index concurrently if exists {_EXACT_NONTRANSACTIONAL_INDEX}"
+        )
+        return "missing"
+    return state
+
+
+def _apply_nontransactional_migration(
+    connection: Any,
+    migration_sql: str,
+    migration_name: str,
+) -> None:
+    index_names = _concurrent_index_names(migration_sql)
+    if not index_names:
+        raise RuntimeError("Nontransactional migration has no recognized concurrent index.")
+
+    connection.commit()
+    connection.autocommit = True
+    try:
+        if migration_name == _EXACT_NONTRANSACTIONAL_MIGRATION:
+            _drop_mismatched_exact_nontransactional_index(connection)
+            try:
+                connection.execute(migration_sql)
+                state = _exact_nontransactional_index_state(connection)
+                if state != "ready":
+                    raise RuntimeError(
+                        "Concurrent index migration left a nonconforming index: "
+                        f"{_EXACT_NONTRANSACTIONAL_INDEX}"
+                    )
+            except Exception:
+                _drop_mismatched_exact_nontransactional_index(connection)
+                raise
+            return
+        try:
+            connection.execute(migration_sql)
+        except Exception:
+            _drop_invalid_concurrent_indexes(connection, index_names)
+            raise
+        invalid_names = _drop_invalid_concurrent_indexes(connection, index_names)
+        if invalid_names:
+            raise RuntimeError(
+                f"Concurrent index migration left an invalid index: {invalid_names[0]}"
+            )
+    finally:
+        connection.autocommit = False
+
+
+def apply_migrations(setup_database_url: str, migration_paths: list[Path]) -> None:
     if not migration_paths:
-        raise RuntimeError(f"No Postgres migrations found under {migrations_root}.")
+        return
     with _connect(setup_database_url) as connection:
         _assert_connected_role(connection, SETUP_ROLE)
         ledger = connection.execute(
@@ -517,17 +621,36 @@ def apply_all_migrations(setup_database_url: str) -> None:
                 "select migration_name, checksum from ops.schema_migrations"
             ).fetchall()
         }
+        from scripts.postgres_migration_compatibility import validate_applied_migrations
+
+        validate_applied_migrations(connection, ROOT / "migrations" / "postgres", applied)
         for migration_path in migration_paths:
             checksum = hashlib.sha256(migration_path.read_bytes()).hexdigest()
             if migration_path.name in applied:
                 if applied[migration_path.name] != checksum:
                     raise RuntimeError(f"Migration checksum mismatch: {migration_path.name}")
                 continue
-            connection.execute(migration_path.read_text(encoding="utf-8"))
+            migration_sql = migration_path.read_text(encoding="utf-8")
+            if "create index concurrently" in migration_sql.casefold():
+                _apply_nontransactional_migration(
+                    connection,
+                    migration_sql,
+                    migration_path.name,
+                )
+            else:
+                connection.execute(migration_sql)
             connection.execute(
                 "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
                 (migration_path.name, checksum),
             )
+
+
+def apply_all_migrations(setup_database_url: str) -> None:
+    migrations_root = ROOT / "migrations" / "postgres"
+    migration_paths = sorted(path for path in migrations_root.glob("*.sql") if path.is_file())
+    if not migration_paths:
+        raise RuntimeError(f"No Postgres migrations found under {migrations_root}.")
+    apply_migrations(setup_database_url, migration_paths)
 
 
 def grant_runtime_role_privileges(

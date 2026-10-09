@@ -303,8 +303,8 @@ def test_ignored_repairs_migrates_complete_legacy_album_rules_to_one_album_rule(
                 "unrelated::problem-file::missing-year",
             }
 
-        def save_ignored_repair_keys(self, values, *, album_keys_by_repair_key=None):
-            saved_calls.append((set(values), dict(album_keys_by_repair_key or {})))
+        def upsert_ignored_repair_keys(self, values, *, album_keys_by_repair_key=None, remove_repair_keys=()):
+            saved_calls.append((set(values), dict(album_keys_by_repair_key or {}), set(remove_repair_keys)))
 
     monkeypatch.setattr(ignored_repairs_module, "RuleStatePostgresAdapter", FakeAdapter)
     result = ignored_repairs_module.migrate_legacy_album_exclusions(
@@ -314,8 +314,9 @@ def test_ignored_repairs_migrates_complete_legacy_album_rules_to_one_album_rule(
     album_rule = "neal morse::?::problem-album::undecoded-characters"
     assert saved_calls == [
         (
-            {"unrelated::problem-file::missing-year", album_rule},
+            {album_rule},
             {album_rule: "neal morse::?"},
+            {"X:/SyntheticMusic/01.mp3::album", "X:/SyntheticMusic/02.mp3::album"},
         )
     ]
     assert result == {
@@ -583,3 +584,32 @@ def test_postgres_exception_override_upserts_do_not_delete_unmentioned_paths():
     ]
     assert connection.transaction_entries == 1
     assert connection.transaction_exits == 1
+
+
+def test_legacy_album_migration_preserves_exclusion_created_after_snapshot(monkeypatch):
+    from music_app.services import ignored_repairs
+    keys = {"legacy-file::album"}
+
+    class Adapter:
+        def __init__(self, _config):
+            pass
+
+        def load_complete_legacy_album_exclusion_groups(self):
+            return [{"album_key": "artist::?", "album_title": "?", "legacy_repair_keys": ["legacy-file::album"]}]
+
+        def load_ignored_repair_keys(self):
+            snapshot = set(keys)
+            keys.add("concurrent-user-exclusion")
+            return snapshot
+
+        def save_ignored_repair_keys(self, values, **_kwargs):
+            keys.clear()
+            keys.update(values)
+
+        def upsert_ignored_repair_keys(self, values, *, remove_repair_keys=(), **_kwargs):
+            keys.difference_update(remove_repair_keys)
+            keys.update(values)
+
+    monkeypatch.setattr(ignored_repairs, "RuleStatePostgresAdapter", Adapter)
+    ignored_repairs.migrate_legacy_album_exclusions({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"})
+    assert keys == {"concurrent-user-exclusion", "artist::?::problem-album::undecoded-characters"}

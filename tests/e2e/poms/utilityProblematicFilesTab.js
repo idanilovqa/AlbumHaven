@@ -158,6 +158,21 @@ export class UtilityProblematicFilesTab extends BasePage {
     return '.utility-list-item-meta';
   }
 
+  get listItemSubtitleSelector() {
+    return '.utility-list-item-subtitle';
+  }
+
+  get listItemYearSelector() {
+    return '.utility-list-item-year';
+  }
+
+  async readListItemMeta(item) {
+    // parity-check: allow-read-only-measurement-evaluate -- read artist and always-visible year as distinct semantic fields
+    return item.evaluate((element, selectors) => selectors
+      .map(selector => String(element.querySelector(selector)?.textContent || '').trim())
+      .filter(Boolean).join(' · '), [this.listItemSubtitleSelector, this.listItemYearSelector]);
+  }
+
   get listItemIssuesSelector() {
     return '.utility-list-item-issues';
   }
@@ -196,6 +211,20 @@ export class UtilityProblematicFilesTab extends BasePage {
 
   filenameForTrackRow(row) {
     return row.locator('[role="cell"][data-cdt-column="filename"]');
+  }
+
+  async readDetectedTrackRows() {
+    // parity-check: allow-read-only-measurement-evaluate -- read one atomic snapshot of rendered track identities and reasons
+    return this.detailTrackRows.evaluateAll(rows => rows.map(row => {
+      const path = String(row.getAttribute('data-problematic-track-path') || '');
+      return {
+        filename: path.split(/[\\/]/).pop(),
+        path,
+        reasons: Array.from(row.querySelectorAll(
+          '[role="cell"][data-cdt-column="reason"] [data-problem-exclusion-scope="file"]',
+        )).map(reason => String(reason.textContent || '').trim()).filter(Boolean),
+      };
+    }));
   }
 
   reasonsForTrackRow(row) {

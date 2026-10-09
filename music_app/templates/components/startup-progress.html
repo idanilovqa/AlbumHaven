@@ -1,0 +1,12 @@
+<section class="startup-progress" data-startup-progress="{{ startup_progress_initial | default(0) }}" hidden aria-label="Loading Album Haven">
+  <h1>Just a sec</h1>
+  <div class="startup-progress-meter">
+    <div class="progress-bar" role="progressbar" aria-label="Completed loading stages" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill"></div></div>
+    <output data-startup-percent aria-hidden="true">0%</output>
+  </div>
+  <div data-startup-error hidden role="alert">
+    <p>Unable to load the library. Reload and try again.</p>
+    <button type="button" class="ui-button ui-button--primary ui-button--medium" data-startup-retry><span class="ui-button__content">Reload</span></button>
+  </div>
+</section>
+<script src="/static/js/startup-progress.js?v={{ runtime_asset_version | default(app_version | default('')) }}"></script>

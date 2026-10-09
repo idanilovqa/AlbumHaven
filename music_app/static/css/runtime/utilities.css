@@ -373,6 +373,30 @@
     overflow: auto;
   }
 }
+.utility-detected-actions .utility-exception-action.ui-button--primary {
+  border-color: var(--appearance-primary-button, #2fbd72);
+  background: transparent;
+  color: var(--appearance-primary-button, #2fbd72);
+}
+.utility-detected-actions .utility-exception-action.ui-button--primary:hover:not(:disabled):not([aria-disabled="true"]),
+.utility-detected-actions .utility-exception-action.ui-button--primary:focus-visible:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--appearance-primary-button, #2fbd72);
+  background: color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 14%, transparent);
+  color: var(--appearance-primary-button, #2fbd72);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 28%, transparent);
+}
+.utility-detected-actions .utility-detail-apply.ui-button--primary:not(:disabled):not([aria-disabled="true"]) {
+  border-color: var(--appearance-primary-button, #2fbd72);
+  background: var(--appearance-primary-button, #2fbd72);
+  color: var(--appearance-primary-button-ink, #06130b);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 34%, transparent), 0 0 16px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 28%, transparent);
+}
+.utility-detected-actions .utility-detail-apply.ui-button--primary:hover:not(:disabled):not([aria-disabled="true"]),
+.utility-detected-actions .utility-detail-apply.ui-button--primary:focus-visible:not(:disabled):not([aria-disabled="true"]) {
+  border-color: color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 82%, white);
+  background: color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 86%, white);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 42%, transparent), 0 0 22px color-mix(in srgb, var(--appearance-primary-button, #2fbd72) 42%, transparent);
+}
 .utility-list-item.is-dragging {
   opacity: 0.55;
 }
@@ -389,12 +413,35 @@
 }
 .utility-list-item-title {
   font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .utility-list-item-meta,
 .utility-list-item-issues {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
   margin-top: 4px;
   color: var(--muted);
   font-size: 0.86rem;
+}
+.utility-list-item-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.utility-list-item-year {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+#utility-modal[data-active-tab="problematic-files"] .utility-list-item-year::before {
+  content: "\2022";
+  margin-right: 4px;
+  font-weight: 900;
 }
 .utility-list-item-badge {
   display: inline-block;
@@ -1898,3 +1945,23 @@
 .library-settings-move-policy-row .gallery-switch { padding-inline: 0; font: inherit; text-align: left; }
 .library-settings-move-policy-row .gallery-switch:disabled { opacity: .45; cursor: default; background: transparent; }
 .library-settings-move-policy-row [data-library-policy-value] { color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  #utility-modal.is-mobile-page .utility-detected-table { flex: none; height: auto; min-height: 0; overflow-x: auto; }
+  #utility-modal.is-mobile-page .utility-detected-table .compact-data-table { height: auto; min-height: 0; align-content: start; }
+  #utility-modal.is-mobile-page .utility-detected-actions { position: sticky; bottom: 0; z-index: 2; margin-top: 12px; padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px)); background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 94%, transparent); }
+}
+/* Suggested edits are toggles: neutral until selected, explicit when active. */
+.utility-detected-table .utility-problem-suggestion:not([aria-pressed="true"]) {
+  border-color: var(--appearance-line, var(--border));
+  background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 92%, var(--appearance-line, var(--border)));
+  color: var(--appearance-ink, var(--text));
+  box-shadow: none;
+}
+#utility-modal .utility-detected-table .utility-problem-suggestion[aria-pressed="true"] {
+  border-color: #0b5f31 !important;
+  background: #15803d !important;
+  color: #fff !important;
+  box-shadow: 0 0 0 2px #22c55e,
+    inset 0 0 0 1px color-mix(in srgb, #fff 22%, transparent),
+    0 0 14px color-mix(in srgb, #22c55e 55%, transparent) !important;
+}

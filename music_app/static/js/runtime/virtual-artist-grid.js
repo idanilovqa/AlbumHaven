@@ -298,6 +298,8 @@ class VirtualArtistGrid {
     this.columns = 1;
     this.cardTrackWidth = CARD_GALLERY_LAYOUT_CONFIG.cardMinWidth;
     this.lastKey = '';
+    this._destroyed = false;
+    this._metadataMotion = null;
     this._raf = null;
     this._scrollRenderFallbackTimer = 0;
     this._measureRaf = null;
@@ -385,6 +387,10 @@ class VirtualArtistGrid {
   }
 
   destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
+    this._metadataMotion?.dispose();
+    this._metadataMotion = null;
     this._renderGeneration += 1;
     this.scrollEl.removeEventListener('scroll', this.onScroll);
     this.scrollEl.removeEventListener('wheel', this.onUserScrollIntent);
@@ -435,6 +441,7 @@ class VirtualArtistGrid {
   }
 
   onPointerDown(event) {
+    if (this._destroyed) return;
     const target = event?.target;
     const closest = typeof target?.closest === 'function'
       ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]')
@@ -464,6 +471,7 @@ class VirtualArtistGrid {
     this._activeAlbumCardPointerId = null;
     if (this._albumCardPointerReleaseRaf) return;
     this._albumCardPointerReleaseRaf = scheduleBrowserAnimationFrame(() => {
+      if (this._destroyed) return;
       this._albumCardPointerReleaseRaf = 0;
       if (this._albumCardPointerGestureActive) return;
       const deferredRender = this._deferredPointerGestureRender;
@@ -480,6 +488,7 @@ class VirtualArtistGrid {
   }
 
   suspendSelectedArtistCoverLoadsForUserAction() {
+    if (this._destroyed) return 0;
     if (typeof galleryCoverLoadScheduler === 'undefined') return 0;
     this._nextCoverLoadUserActionToken += 1;
     const token = this._nextCoverLoadUserActionToken;
@@ -568,6 +577,11 @@ class VirtualArtistGrid {
   restoreScrollAnchor(anchor) {
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
+    // At the root, hydration must preserve the top rather than follow a preview card.
+    if (Number(anchor.scrollTop || 0) <= 0) {
+      this.scrollEl.scrollTop = 0;
+      return;
+    }
     const albumKey = String(anchor.albumKey || '');
     if (albumKey) {
       const sectionOccurrenceKey = String(anchor.sectionOccurrenceKey || '');
@@ -692,6 +706,7 @@ class VirtualArtistGrid {
   }
 
   restoreOwnedAbsoluteScrollPosition(position) {
+    if (this._destroyed) return false;
     if (
       !this.scrollEl
       || !Number.isFinite(Number(position?.scrollTop))
@@ -724,6 +739,7 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    if (this._destroyed) return;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
     this._renderGeneration += 1;
     const renderGeneration = this._renderGeneration;
@@ -1096,10 +1112,13 @@ class VirtualArtistGrid {
   }
 
   onScroll() {
+    if (this._destroyed) return;
     const ownsPendingAbsoluteRestore = Boolean(
       this._absoluteScrollRestore,
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
+      && typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
     if (!isOwnedStabilizationScroll && ownsPendingAbsoluteRestore) {
       this.scrollEl.scrollLeft = this._absoluteScrollRestore.scrollLeft;
       this.scrollEl.scrollTop = this._absoluteScrollRestore.scrollTop;
@@ -1153,9 +1172,14 @@ class VirtualArtistGrid {
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     this.invalidateScrollStabilization();
+    if (this._scrollRestoreRaf) {
+      cancelBrowserAnimationFrame(this._scrollRestoreRaf);
+      this._scrollRestoreRaf = null;
+    }
   }
 
   onArtistTreeSettled() {
+    if (this._destroyed) return;
     const anchor = this.captureScrollAnchor();
     this.onResize({ preserveCardTrackWidth: true });
     if (anchor && !this._resetScrollAfterMeasure) {
@@ -1168,6 +1192,7 @@ class VirtualArtistGrid {
   }
 
   onResize(options = {}) {
+    if (this._destroyed) return;
     const artistTreeTransitioning = document.getElementById('shell-navigation-rail')
       ?.classList?.contains?.('is-transitioning');
     if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
@@ -1178,6 +1203,7 @@ class VirtualArtistGrid {
   }
 
   render(force = false, options = {}) {
+    if (this._destroyed) return;
     if (this._albumCardPointerGestureActive || this._albumCardPointerReleaseRaf) {
       this._deferredPointerGestureRender = {
         force: Boolean(force),
@@ -1353,7 +1379,10 @@ class VirtualArtistGrid {
   }
 
   activateGalleryCoverImages(rootEl = this.containerEl) {
-    if (typeof syncGalleryCardMetadataMotion === 'function') syncGalleryCardMetadataMotion(rootEl);
+    if (this._destroyed) return;
+    if (typeof syncGalleryCardMetadataMotion === 'function') {
+      this._metadataMotion = syncGalleryCardMetadataMotion(rootEl);
+    }
     if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
     rootEl.querySelectorAll('img[data-gallery-cover-src]').forEach((image) => {
       if (!(image instanceof HTMLImageElement)) return;
@@ -1451,9 +1480,14 @@ class VirtualArtistGrid {
       this.albumCardNodeCache.delete(cacheKey);
       this.albumCardNodeCache.set(cacheKey, card);
       while (this.albumCardNodeCache.size > MAX_RETAINED_ALBUM_CARD_NODES) {
-        const oldestIdentity = this.albumCardNodeCache.keys().next().value;
-        if (!oldestIdentity) break;
-        this.albumCardNodeCache.delete(oldestIdentity);
+        const oldestPendingIdentity = [...this.albumCardNodeCache.entries()].find(([, cachedCard]) => {
+          const cachedCover = cachedCard?.querySelector?.('.cover img');
+          return cachedCover instanceof HTMLImageElement
+            && (!cachedCover.complete || Number(cachedCover.naturalWidth || 0) <= 0);
+        })?.[0];
+        const evictionIdentity = oldestPendingIdentity || this.albumCardNodeCache.keys().next().value;
+        if (!evictionIdentity) break;
+        this.albumCardNodeCache.delete(evictionIdentity);
       }
     });
   }
@@ -1615,6 +1649,8 @@ class VirtualArtistGrid {
   }
 
   patchRenderedSections(records, options = {}) {
+    // An uninitialized model must not clear the server-rendered startup preview.
+    if (this._renderGeneration === 0 && !records.length) return;
     if (
       !this.containerEl
       || typeof this.containerEl.appendChild !== 'function'
@@ -1695,6 +1731,7 @@ class VirtualArtistGrid {
   }
 
   scheduleMeasureRows(force = false) {
+    if (this._destroyed) return;
     if (!force && !this.isScrollSettled) {
       this.recordDiagnosticEvent('measure-request-skipped-scrolling', { force: false });
       return;
@@ -1708,6 +1745,7 @@ class VirtualArtistGrid {
     }
     let measureRafOwner = 0;
     measureRafOwner = scheduleBrowserAnimationFrame(() => {
+      if (this._destroyed) return;
       this._activeMeasureRafOwner = measureRafOwner;
       this._measureRaf = null;
       this.recordDiagnosticEvent('measure-frame-started', { measureRafOwner });

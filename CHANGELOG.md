@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.9.50 - 2026-10-08
+
+- Made Settings, Edit Tags, and album-details dismissal respond immediately while slower cleanup and data loading continue in the background.
+- Cut Problematic Files startup work with bounded initial loading, reusable projections, cache-aware diagnostics, and complete background hydration without weakening search results.
+- Improved Problematic Files suggestion dragging and changed inactive suggestion labels to a neutral outline so selected labels remain clearly green.
+- Prevented collaboration albums with multiple Cyrillic artists from being reduced to an incorrect single-artist suggestion.
+- Smoothed and lengthened the startup progress bar, centered its percentage below the bar, and added player-color glow to both elements.
+- Kept Problematic Files performance reporting aligned with the 1,000 ms target and 1,200 ms hard ceiling.
+
+## 0.9.49 - 2026-10-07
+
+- Kept notifications clear of transparent waveform seek controls so pointer
+  interaction remains available.
+- Improved authenticated startup with bounded initial gallery loading, accurate
+  global artist and album totals, and the complete artist sidebar.
+- Added a PostgreSQL gallery summary with transaction-based invalidation, stable
+  ordering and cursors, bounded page hydration, and an accurate fallback when
+  the summary is absent or stale.
+- Kept artist ordering stable after search and clearing, expanded folder-derived
+  artist families, and prevented stale search responses from replacing newer views.
+- Replaced previous gallery results with a compact Searching indicator while a
+  submitted search is pending.
+- Removed the redundant search-preview request so complete search results no
+  longer wait for a second response; retained Searching feedback and timing limits.
+- Unified selection, search, and scan loading indicators through the same compact
+  spinner component.
+- Added persistent album-adjacent cover previews, throttled preview backfill,
+  and full-size artwork preloading when album details open.
+- Displayed linked album editions immediately using the shared tabs on desktop
+  and mobile, and retained filtered mobile artist navigation after search.
+- Improved Problematic Files layout, year visibility, truncation, suggestion
+  selection feedback, and continuous drag selection across displayed suggestions.
+- Corrected MP3 gapless boundaries using encoder metadata while preserving
+  intentional silence, and reused successful decoder compatibility checks to
+  reduce repeated seek preparation.
+- Improved mobile artwork navigation and playback seeking, and prevented stray
+  text carets outside focused editable controls.
+- Made horizontal drags near the thin player's playhead take precedence over
+  adjacent Play-button hits while preserving normal taps and cancelled gestures.
+- Prevented late Problematic Files responses from replacing playback controls
+  in another active utility tab, and refreshed Last.fm log history after failed
+  connection attempts.
+
+- Preserved the released 0.9.48 mobile layout and Admin capability behavior while
+  reconciling the approved desktop Gallery, player, and appearance presentation.
+- Resumed deferred Gallery cover loading only after cached Scan Page navigation
+  finishes rendering its replacement view.
+- Preserved decoded album-card artwork ahead of pending virtual-window placeholders
+  and kept loop action pods from shrinking in constrained layouts.
+- Corrected scan-performance database identity propagation and retained focused
+  regression coverage for production locators, provider labels, and navigation.
+- Added a database-owned normalized artist-search projection with
+  revision/readiness checks and the existing live-query fallback, preserving
+  multi-alias, raw-metadata, path-derived, active, stale, and category-filtered
+  results.
+- Preserved ready relation metadata when confirmed missing-album cleanup deletes
+  stale inventory, while still advancing the inventory mutation revision.
+- Added safe nontransactional migration handling for the concurrent
+  artist-search index: validate before ledgering, remove only the named invalid
+  index after failure, and leave the next startup able to retry.
+- Added explicit Devin and Neal Morse submit-to-first-visible performance budgets
+  without treating their still-uncollected baseline and range as zero
+  milliseconds.
+- Replaced the production-search database's reversible unsalted identity digest
+  with a versioned, domain-separated HMAC proof that exposes neither database
+  identifiers nor authentication secrets.
+
 ## 0.9.48 - 2026-09-30
 
 - Added responsive mobile navigation and Home, with shared account and Settings

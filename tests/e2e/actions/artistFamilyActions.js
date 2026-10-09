@@ -23,7 +23,9 @@ export class ArtistFamilyActions {
   async waitForViewReady(expectedArtist, options = {}) {
     const expectedQuery = String(options.queryValue || '').trim();
     await this.artistFamily.waitForPageCondition((expected) => {
-      if (typeof state === 'undefined' || !state?.view) {
+      // Optimistic artist selection may still expose the previous artist's family.
+      if (typeof state === 'undefined' || !state?.view || state.busy
+          || state.ui?.activeViewRequestUrl || state.ui?.pendingViewRequest) {
         return false;
       }
       const view = state.view;

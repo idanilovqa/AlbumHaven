@@ -219,6 +219,7 @@ function updatePlayerUi() {
   refreshTrackModalPlaybackState();
   refreshNonAlbumModalPlaybackState();
   persistPlayerState();
+  try {window.AlbumHavenTrackPlayback?.sync();} catch { /* Optional paint must never interrupt native playback. */ }
 }
 
 function setCurrentPlayerTrack(track, options = {}) {
@@ -240,6 +241,9 @@ function setCurrentPlayerTrack(track, options = {}) {
     if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.currentChanged();
+  state.player.timelineDragging = false;
+  state.player.timelineDragPreviewSeconds = null;
   if (typeof probeCachedWaveformPeaks === 'function') {
     const cachedWaveformProbe = probeCachedWaveformPeaks(
       String(track?.path || ''),
@@ -311,24 +315,33 @@ async function playTrackFromPayload(track, options = {}) {
   if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
     return false;
   }
-  if (!track?.path) return false;
+  if (!track?.path || options.signal?.aborted || options.isCurrent && options.isCurrent() !== true) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
   const selectionToken = ++playerTrackSelectionToken;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.selectionStarted();
   let startedRole;
+  const cancelSelection = () => {
+    if (selectionToken !== playerTrackSelectionToken || typeof stopStreamingPlayback !== 'function') return;
+    const stopped = stopStreamingPlayback('selection-cancelled');
+    if (typeof observeStreamingFacadeCallback === 'function') observeStreamingFacadeCallback(stopped, 'selection-cancelled');
+    else void Promise.resolve(stopped).catch(() => {});
+  };
+  options.signal?.addEventListener('abort', cancelSelection, {once: true});
   try {
     startedRole = await startStreamingTrack(track, {
       startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
       autoplay: shouldAutoplay,
     });
   } catch (error) {
-    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (selectionToken !== playerTrackSelectionToken || options.signal?.aborted) return false;
     throw error;
-  }
+  } finally {options.signal?.removeEventListener('abort', cancelSelection);}
   if (selectionToken !== playerTrackSelectionToken) return false;
+  if (options.signal?.aborted || options.isCurrent && options.isCurrent() !== true) {cancelSelection(); return false;}
   if (startedRole === null) {
     throw new Error('Streaming playback did not start');
   }
@@ -336,6 +349,7 @@ async function playTrackFromPayload(track, options = {}) {
   if (startedTrackPath && startedTrackPath !== String(track.path)) {
     throw new Error('Streaming playback started an unexpected track identity');
   }
+  if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true) ExplicitQueueRuntime.replaced();
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
@@ -378,12 +392,13 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (!nextTrack || typeof scheduleStreamingContinuity !== 'function') {
+  const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+  if ((!nextTrack && !explicitProgression) || typeof scheduleStreamingContinuity !== 'function') {
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
-  const scheduling = Promise.resolve().then(() => scheduleStreamingContinuity(nextTrack));
+  const scheduling = Promise.resolve().then(() => explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack));
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
     await scheduling;
@@ -420,6 +435,7 @@ async function handleStreamingPlaybackEnded(event = {}) {
   const identity = [event.generation, event.streamId, trackPath].join(':');
   if (identity === handledStreamingEndedIdentity) return;
   handledStreamingEndedIdentity = identity;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.ended();
   const playback = getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
   if (typeof releasePlaybackOwnership === 'function') {
@@ -519,7 +535,9 @@ async function handleStreamingPlaybackBoundary(event = {}) {
   const subsequentTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
+    await ExplicitQueueRuntime.prepareNext();
+  } else if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
     await scheduleStreamingContinuity(subsequentTrack);
   }
   if (typeof promoteWaveformPeaks === 'function') {
@@ -695,8 +713,9 @@ function setLoopActive(active) {
     const nextTrack = typeof peekNextQueuedTrack === 'function'
       ? peekNextQueuedTrack()
       : null;
-    if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
+    const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+    if ((nextTrack || explicitProgression) && typeof scheduleStreamingContinuity === 'function') {
+      const result = explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack, {
         kind: 'queued-next', startSeconds: 0,
       });
       if (typeof observeStreamingFacadeCallback === 'function') {
@@ -979,17 +998,13 @@ function attachSharedPlayer() {
   document.querySelectorAll('.play-track-button').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
-    const trackRow = btn.closest?.('.album-track-table__row');
-    if (trackRow && trackRow.dataset.doubleClickBound !== '1') {
-      trackRow.dataset.doubleClickBound = '1';
-      trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
-      trackRow.addEventListener('click', handleAlbumTrackRowClick);
-    }
     btn.addEventListener('click', event => activateSharedTrackButton(btn, { focusTimeline: event?.isTrusted !== false }));
   });
 }
 
 function activateSharedTrackButton(btn, { restart = false, focusTimeline = false } = {}) {
+  if (btn?.disabled) return;
+  if (typeof canPlayTrackModalSelection === 'function' && !canPlayTrackModalSelection(btn)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   const src = btn.getAttribute('data-src');
   if (!src) return;
@@ -1005,12 +1020,13 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     updatePlayerUi();
     return;
   }
-  const currentAlbum = !document.getElementById('track-modal')?.hidden
+  const selectedAlbum = typeof getTrackModalSelectionAlbumFor === 'function' ? getTrackModalSelectionAlbumFor(btn) : null;
+  const currentAlbum = selectedAlbum || (!document.getElementById('track-modal')?.hidden
     ? state.modalReleases[state.modalReleaseIndex] || null
-    : null;
+    : null);
   const playbackStart = playTrackFromPayload({
     src,
-    path: trackPath,
+    path: trackPath, inventory_track_ref: btn.getAttribute('data-inventory-track-ref') || null,
     title: btn.getAttribute('data-track-title') || 'Track',
     artist: btn.getAttribute('data-track-artist') || '',
     albumArtist: btn.getAttribute('data-track-album-artist') || '',
@@ -1044,6 +1060,30 @@ function attachPlayerEvents() {
 
   if (typeof mountGlobalPlayerLoopControls === 'function') mountGlobalPlayerLoopControls();
 
+  let thinSeekGesture = null;
+  let suppressThinSeekClick = false;
+  els.player?.addEventListener('pointerdown', (event) => {
+    if (thinSeekGesture || event.isPrimary === false || (event.button != null && event.button !== 0)) return;
+    suppressThinSeekClick = false;
+    if (Number(window.innerWidth) > 900 || els.player.getAttribute('data-player-seekbar-presentation') !== 'thin'
+      || !state.player.current || state.player.loopActive || state.player.timelineDragging) return;
+    if (event.target === els.timeline || els.timeline?.parentElement?.contains?.(event.target)) return;
+    const control = event.target?.closest?.('button, a, input, select, textarea');
+    if (control && control !== els.play) return;
+    const rect = els.timeline?.getBoundingClientRect();
+    const duration = getPlayerDuration();
+    if (!rect || !(rect.width > 0) || !(duration > 0)) return;
+    const headX = rect.left + (Number(els.timeline.value) || 0) / duration * rect.width;
+    if (Math.abs(event.clientX - headX) > 28) return;
+    if (control !== els.play && (event.clientY < rect.top - 12 || event.clientY > rect.top + rect.height + 12)) return;
+    thinSeekGesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, track: getTrackIdentity(state.player.current), claimed: false };
+  }, { capture: true });
+  els.player?.addEventListener('click', (event) => {
+    if (!suppressThinSeekClick || event.detail === 0) return;
+    suppressThinSeekClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, { capture: true });
   els.player?.addEventListener('pointerdown', claimGlobalPlayerSpaceOwnership);
   els.player?.addEventListener('focusin', claimGlobalPlayerSpaceOwnership);
   els.play?.addEventListener('click', () => togglePlayerPlayback());
@@ -1062,27 +1102,73 @@ function attachPlayerEvents() {
     setPlayerPlaybackHead(next);
   });
   els.timeline?.parentElement?.addEventListener('pointerdown', (event) => {
-    if (state.player.loopActive || event.target?.closest('.player-loop-handle')) return;
+    if (thinSeekGesture || state.player.loopActive || event.target?.closest('.player-loop-handle')) return;
     if (!state.player.current) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     event.preventDefault();
     state.player.timelineDragging = true;
     state.player.timelineDragPreviewSeconds = next;
     if (els.timeline) els.timeline.value = String(next);
+    updatePlayerUi();
   });
   document.addEventListener('pointermove', (event) => {
+    if (thinSeekGesture) {
+      if (event.pointerId !== thinSeekGesture.pointerId) return;
+      if (getTrackIdentity(state.player.current) !== thinSeekGesture.track || state.player.loopActive) {
+        if (thinSeekGesture.claimed) {
+          state.player.timelineDragging = false;
+          state.player.timelineDragPreviewSeconds = null;
+          updatePlayerUi();
+        }
+        thinSeekGesture = null;
+        return;
+      }
+      if (!thinSeekGesture.claimed) {
+        const dx = Math.abs(event.clientX - thinSeekGesture.x);
+        const dy = Math.abs(event.clientY - thinSeekGesture.y);
+        if (dy > 8 && dy >= dx) { thinSeekGesture = null; return; }
+        if (dx < 8 || dx <= dy * 1.25) return;
+        thinSeekGesture.claimed = true;
+        state.player.timelineDragging = true;
+        suppressThinSeekClick = true;
+        els.player.setPointerCapture?.(event.pointerId);
+      }
+      event.preventDefault();
+    }
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
     if (els.timeline) els.timeline.value = String(next);
+    updatePlayerUi();
   });
-  document.addEventListener('pointerup', () => {
+  document.addEventListener('pointerup', (event) => {
+    if (thinSeekGesture) {
+      if (event.pointerId !== thinSeekGesture.pointerId) return;
+      const gesture = thinSeekGesture;
+      thinSeekGesture = null;
+      if (!gesture.claimed) return;
+      if (getTrackIdentity(state.player.current) !== gesture.track || state.player.loopActive) {
+        state.player.timelineDragging = false;
+        state.player.timelineDragPreviewSeconds = null;
+        updatePlayerUi();
+        return;
+      }
+    }
     if (state.player.timelineDragging) {
       const next = Number(state.player.timelineDragPreviewSeconds);
       if (Number.isFinite(next)) setPlayerPlaybackHead(next);
     }
     state.player.timelineDragging = false;
     state.player.timelineDragPreviewSeconds = null;
+  });
+  document.addEventListener('pointercancel', (event) => {
+    if (thinSeekGesture && event.pointerId !== thinSeekGesture.pointerId) return;
+    thinSeekGesture = null;
+    suppressThinSeekClick = false;
+    if (!state.player.timelineDragging) return;
+    state.player.timelineDragging = false;
+    state.player.timelineDragPreviewSeconds = null;
+    updatePlayerUi();
   });
   document.addEventListener('keydown', handlePlayerKeyboardSeek);
   document.addEventListener('keydown', handlePlayerKeyboardPlayback, { capture: true });

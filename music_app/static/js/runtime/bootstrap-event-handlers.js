@@ -71,6 +71,9 @@ document.addEventListener('mouseover', (event) => {
   if (handleUtilityBootstrapMouseOver(event)) return;
   handleGalleryBootstrapMouseOver(event);
 });
+document.addEventListener('mousemove', (event) => {
+  if (handleUtilityBootstrapMouseOver(event)) event.preventDefault();
+});
 
 document.addEventListener('mouseup', (event) => {
   handleUtilityBootstrapMouseUp(event);
@@ -138,6 +141,7 @@ searchInput?.addEventListener('input', () => {
 });
 
 window.addEventListener('popstate', () => {
+  if (typeof handleImageLightboxPopState === 'function' && handleImageLightboxPopState()) return;
   if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
   handleGalleryBootstrapPopState();
 });

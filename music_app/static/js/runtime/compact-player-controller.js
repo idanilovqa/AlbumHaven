@@ -306,11 +306,16 @@ function currentQueueIndex() {
   compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
+  if (queue.playlistId) return playlistQueueCurrentIndex(queue, path);
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }
 
 async function playCompactQueueOffset(offset) {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
+    const result = await ExplicitQueueRuntime.skip(offset);
+    if (result !== undefined) return result;
+  }
   const queue = state.player.playbackQueue;
   const index = currentQueueIndex();
   if (!queue?.tracks?.length || index < 0) return;
@@ -322,7 +327,7 @@ async function playCompactQueueOffset(offset) {
   queue.currentIndex = targetIndex;
   let started = false;
   try {
-    const playbackStart = playTrackFromPayload(track);
+    const playbackStart = playTrackFromPayload(track, {explicitQueueTransition: true});
     syncCompactPlayerUi();
     started = await playbackStart;
     return started;
@@ -341,7 +346,8 @@ async function playCompactQueueOffset(offset) {
       compactPlayerPendingSelection = null;
       if (!started && ownsQueueCursor) {
         const playingPath = String(state.player.current?.path || '');
-        const playingIndex = queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
+        const playingIndex = queue.playlistId ? playlistQueueCurrentIndex(queue, playingPath)
+          : queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
         queue.currentIndex = playingIndex >= 0 ? playingIndex : index;
       }
       syncCompactPlayerUi();
@@ -390,7 +396,8 @@ function syncCompactPlayerUi(snapshot = {}) {
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });
   if (els.previous) els.previous.disabled = controls.previousDisabled || locked;
-  if (els.next) els.next.disabled = controls.nextDisabled || locked;
+  const explicitNext = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.hasNext();
+  if (els.next) els.next.disabled = (controls.nextDisabled && !explicitNext) || locked;
 }
 
 function initCompactPlayer() {

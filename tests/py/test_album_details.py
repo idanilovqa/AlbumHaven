@@ -162,7 +162,7 @@ def test_build_album_detail_payload_without_config_does_not_consult_flask_global
     )
 
     assert payload is not None
-    assert payload["track_rows"][0]["track_stats"]["scrobble_count"] == 0
+    assert payload["track_rows"][0]["track_stats"]["scrobble_count"] is None
     assert payload["track_rows"][0]["track_preference"] == {
         "rating": None,
         "love_tier": "off",
@@ -197,7 +197,7 @@ def test_build_album_detail_payload_requires_library_state_before_non_album_look
         album_details_module.build_album_detail_payload("non-album::mono::type::non-album rarity::")
 
 
-def test_attach_album_detail_track_rows_uses_prehydrated_track_overlays_without_config():
+def test_attach_album_detail_track_rows_neutralizes_unscoped_scrobbles_and_taste():
     from music_app.services import album_details as album_details_module
 
     payload = album_details_module._attach_album_detail_track_rows(
@@ -230,8 +230,8 @@ def test_attach_album_detail_track_rows_uses_prehydrated_track_overlays_without_
         viewer_opinion_preferences={},
     )
 
-    assert payload["track_rows"][0]["track_stats"]["scrobble_count"] == 7
-    assert payload["track_rows"][0]["track_preference"]["rating"] == 4
-    assert payload["track_rows"][0]["track_preference"]["love_tier"] == "loved"
+    assert payload["track_rows"][0]["track_stats"]["scrobble_count"] is None
+    assert payload["track_rows"][0]["track_preference"]["rating"] is None
+    assert payload["track_rows"][0]["track_preference"]["love_tier"] == "off"
     assert payload["track_rows"][0]["track_preference"]["allowed_actions"]["client_surface_class"] == "tv"
-    assert payload["track_rows"][0]["can_edit_preferences"] is True
+    assert payload["track_rows"][0]["can_edit_preferences"] is False

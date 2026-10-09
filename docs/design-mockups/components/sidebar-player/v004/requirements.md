@@ -52,4 +52,4 @@ The owner accepted option B (no player changes in v003). A now unfolds only artw
 
 ## Final owner approval
 
-The owner said: "You can move play button in Option C slighly higher. Otherwise - all approved. Note that I liked slow motion two. Add it to the appearance settings. Write up detailed implemntation plan". v004 applies C top=59px (previously 62px) and adds Standard/Slow motion under Appearance. This is design approval and authorization to plan, not production manual acceptance or publication approval. See ../../../../superpowers/plans/2026-09-21-sidebar-player-appearance.md.
+The owner said: "You can move play button in Option C slighly higher. Otherwise - all approved. Note that I liked slow motion two. Add it to the appearance settings. Write up detailed implemntation plan". v004 applies C top=59px (previously 62px) and adds Standard/Slow motion under Appearance. This is design approval and authorization to plan, not production manual acceptance or publication approval. The implementation plan is retained in the private owner repository.

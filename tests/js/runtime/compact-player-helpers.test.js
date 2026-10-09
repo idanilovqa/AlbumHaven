@@ -58,6 +58,8 @@ function loadQueueController(t, initialIndex = 0) {
   vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
   const playbackPath = path.join(path.dirname(controllerPath), 'player-loop-playback.js');
   vm.runInContext(fs.readFileSync(playbackPath, 'utf8'), context, { filename: playbackPath });
+  const playlistQueuePath = path.join(path.dirname(controllerPath), 'playlist-queue.js');
+  vm.runInContext(fs.readFileSync(playlistQueuePath, 'utf8'), context, { filename: playlistQueuePath });
   vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
   context.setCurrentPlayerTrack = track => { context.state.player.current = track; };
   context.compactPlayerElements = () => controls;
@@ -297,6 +299,8 @@ test('compact controller reduces a folded follow-sidebar player to the rail cont
     },
     window: { setTimeout, clearTimeout, innerWidth: 1200, innerHeight: 800, localStorage: {}, addEventListener() {} },
   });
+  const playlistQueuePath = path.join(path.dirname(controllerPath), 'playlist-queue.js');
+  vm.runInContext(fs.readFileSync(playlistQueuePath, 'utf8'), context, { filename: playlistQueuePath });
   vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
   context.compactPlayerElements = () => ({ player, expanded, compact, collapse, expand });
 
@@ -438,6 +442,8 @@ test('docked geometry preserves its last visible left edge while Settings hides 
   const properties = new Map();
   let rect = { left: 8, width: 264 };
   context.document = { getElementById: () => ({ getBoundingClientRect: () => rect }) };
+  const playlistQueuePath = path.join(path.dirname(controllerPath), 'playlist-queue.js');
+  vm.runInContext(fs.readFileSync(playlistQueuePath, 'utf8'), context, { filename: playlistQueuePath });
   vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
   context.compactPlayerElements = () => ({ player: { style: { setProperty: (key, value) => properties.set(key, value) } } });
   context.syncDockedCompactGeometry();
@@ -611,5 +617,24 @@ for (const enabled of [true, false]) {
     assert.equal(reloaded.controls.expanded.inert, true, 'fresh initialization restores the saved compact mode');
     reloaded.context.applyCompactPlayerMode('expanded');
     assert.equal(mount().controls.expanded.inert, false);
+  });
+}
+
+for (const rejected of [false, true]) {
+  test(`compact Playlist duplicate occurrence advances and restores exact item when rejected=${rejected}`, async t => {
+    const {context, tracks, starts, settle, controls} = loadQueueController(t, 1);
+    tracks.forEach((track, index) => {track.playlistItemId = `item-${index}`;});
+    tracks[0].path = tracks[1].path = 'shared.flac';
+    context.state.player.playbackQueue.playlistId = 'playlist';
+    context.syncCompactPlayerUi();
+    assert.equal(context.currentQueueIndex(), 1);
+    assert.equal(controls.previous.disabled, false);
+    const pending = context.playCompactQueueOffset(1);
+    assert.equal(starts[0].track.playlistItemId, 'item-2');
+    assert.equal(context.currentQueueIndex(), 2);
+    await settle(0, rejected ? new Error('Playback unavailable') : null);
+    await pending;
+    assert.equal(context.currentQueueIndex(), rejected ? 1 : 2);
+    assert.equal(context.state.player.playbackQueue.currentIndex, rejected ? 1 : 2);
   });
 }

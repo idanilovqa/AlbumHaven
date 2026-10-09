@@ -45,6 +45,14 @@ def test_cover_variant_priority_normalization_requires_explicit_background():
     assert covers_module.normalize_cover_variant_priority("unexpected") == "foreground"
 
 
+def test_display_cover_variant_root_is_shared_beside_album_media(tmp_path):
+    source_path = tmp_path / "Artist" / "Album" / "cover.jpg"
+
+    assert covers_module.display_cover_variant_cache_root(source_path) == (
+        source_path.parent / ".album-haven"
+    )
+
+
 def test_five_blocked_foreground_variants_cannot_starve_reserved_interactive_lane(
     tmp_path,
     monkeypatch,

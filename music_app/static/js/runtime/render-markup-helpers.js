@@ -74,12 +74,7 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
-  const displayedSidebarArtists = [...sidebarArtists].sort((left, right) => {
-    const leftLabel = String(left?.artist_display || left?.artist || '');
-    const rightLabel = String(right?.artist_display || right?.artist || '');
-    return leftLabel.localeCompare(rightLabel, 'en', { numeric: true, sensitivity: 'base' });
-  });
-  html += displayedSidebarArtists.map(item => renderItem({
+  html += sidebarArtists.map(item => renderItem({
     label: item.artist_display || item.artist, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({

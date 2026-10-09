@@ -12,6 +12,10 @@
 .gallery-bar__actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; --gallery-toolbar-button-background: var(--appearance-main-surface, var(--panel)); }
 .gallery-bar__actions :is(.gallery-view-cluster, .gallery-view-choice) { background: var(--gallery-toolbar-button-background); }
 .gallery-action-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--gallery-toolbar-button-background, var(--appearance-main-surface, var(--panel))); color: var(--text); cursor: pointer; }
+@media (min-width: 901px) {
+  .gallery-bar__actions { --gallery-toolbar-button-background: var(--appearance-control, var(--panel)); }
+  .gallery-action-button { background: var(--gallery-toolbar-button-background, var(--appearance-control, var(--panel))); }
+}
 .gallery-view-choice:not(:disabled):not([aria-disabled='true']) { cursor: pointer; }
 .gallery-action-button svg, .gallery-view-choice svg, #gallery-sources-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .gallery-action-button:hover { background: var(--appearance-item-action-hover-background, var(--appearance-hover, var(--panel))); border-color: var(--appearance-item-action-hover-border, var(--border)); color: var(--text); }
@@ -277,3 +281,33 @@
 }
 .gallery-card__hover-year::before { right: calc(50% + var(--gallery-year-gap) - 3px); }
 .gallery-card__hover-year::after { left: calc(50% + var(--gallery-year-gap) - 3px); }
+
+/* Header action faces use the surrounding surface by default. Open dropdowns,
+   native pointer feedback, keyboard focus and AppBar keep their shared owners. */
+.gallery-bar__actions { margin-inline-start: auto; justify-content: flex-end; }
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  :is(button.ui-button, button.action-button, button.gallery-action-button):not(.app-bar *):not([role="menu"] *):not(.trigger-anchor-open):not(.unfolding-action-button__action):not(:focus-visible) { border-color: transparent !important; }
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  :is(button.ui-button, button.action-button, button.gallery-action-button):not(.app-bar *):not([role="menu"] *):not(.trigger-anchor-open):not(.unfolding-action-button__action):not(:hover):not(:active) { background: transparent !important; }
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  .unfolding-action-button:not(.app-bar *):not(.is-open):not(.trigger-anchor-open),
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  .unfolding-action-button:not(.app-bar *):not(.is-open):not(.trigger-anchor-open)::before { border-color: transparent !important; }
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  .unfolding-action-button:not(.app-bar *):not(.is-open):not(.trigger-anchor-open) > .unfolding-action-button__action:not(:focus-visible) { border-color: transparent !important; }
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  .unfolding-action-button:not(.app-bar *):not(.is-open):not(.trigger-anchor-open):not(:hover):not(:active),
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  .unfolding-action-button:not(.app-bar *):not(.is-open):not(.trigger-anchor-open):not(:hover):not(:active)::before,
+:root :is(.gallery-bar, .album-details-header, .family-artist-header, .artist-info-overlay > header, #mobile-page-header)
+  .unfolding-action-button:not(.app-bar *):not(.is-open):not(.trigger-anchor-open):not(:hover):not(:active) > .unfolding-action-button__action:not(:focus-visible) { background: transparent !important; }
+:root :is(.gallery-bar, .family-artist-header) button.gallery-info-button:not(.app-bar *):not(.trigger-anchor-open):not([aria-expanded="true"]):not(:focus-visible) { box-shadow: none !important; }
+
+/* Embedded ArtistInfo uses the same information owner without overlay chrome. */
+.artist-info-overlay--embedded { position: static; z-index: auto; width: 100%; max-height: none; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.artist-info-overlay--embedded::before, .artist-info-overlay--embedded::after { display: none; }
+.artist-info-overlay--embedded > header { padding: 0; align-items: start; }
+.artist-info-overlay--embedded > header > .album-artbox { width: 112px; height: 112px; flex: 0 0 112px; }
+.artist-info-overlay--embedded .artist-info-overlay__identity { min-width: 0; overflow-wrap: anywhere; }
+.artist-info-overlay--embedded .artist-info-overlay__body { max-height: none; overflow: visible; padding: 12px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.artist-info-overlay--embedded .artist-info-overlay__body p { margin: 0; }

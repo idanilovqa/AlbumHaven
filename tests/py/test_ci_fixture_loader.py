@@ -1841,15 +1841,100 @@ def test_bootstrap_contract_uses_strict_suffixed_database_and_role_names(tmp_pat
     assert _bootstrap_contract(tmp_path, AppPrivilegeMode="Inherited")["appPrivilegeMode"] == "Inherited"
 
 
-def test_bootstrap_contract_applies_lexical_migrations_atomically_with_checksums(tmp_path: Path) -> None:
+def test_bootstrap_contract_classifies_only_0083_as_nontransactional(tmp_path: Path) -> None:
     contract = _bootstrap_contract(tmp_path)
     migrations = contract["migrations"]
     expected = sorted(path.name for path in (Path(__file__).parents[2] / "migrations" / "postgres").glob("*.sql"))
     assert [migration["name"] for migration in migrations] == expected
     assert all(migration["sha256"] for migration in migrations)
     assert all("ON_ERROR_STOP=1" in migration["arguments"] for migration in migrations)
-    assert all("-1" in migration["arguments"] or "--single-transaction" in migration["arguments"] for migration in migrations)
     assert all(migration["recordChecksumAfterSuccess"] is True for migration in migrations)
+
+    by_name = {migration["name"]: migration for migration in migrations}
+    concurrent = by_name["0083_add_album_raw_artist_search_index.sql"]
+    assert concurrent["transactional"] is False
+    assert "-1" not in concurrent["arguments"]
+    assert "--single-transaction" not in concurrent["arguments"]
+    assert concurrent["requiredValidIndexes"] == [
+        "library.local_albums_normalized_raw_artists_trgm_idx"
+    ]
+    assert concurrent["indexDefinitionVerifier"] == (
+        "scripts\\postgres\\verify_0083_album_raw_artist_index.sql"
+    )
+
+    transactional = [
+        migration
+        for migration in migrations
+        if migration["name"] != "0083_add_album_raw_artist_search_index.sql"
+    ]
+    assert all(migration["transactional"] is True for migration in transactional)
+    assert all("-1" in migration["arguments"] for migration in transactional)
+    assert all(migration["requiredValidIndexes"] == [] for migration in transactional)
+    assert all(migration["indexDefinitionVerifier"] is None for migration in transactional)
+
+
+def test_bootstrap_validates_nontransactional_index_before_ledger_write() -> None:
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+    migration_loop = source[
+        source.index("foreach ($migration in $contract.migrations)") : source.index(
+            "# functional jobs use direct privileges"
+        )
+    ]
+
+    assert "get-migrationindexstate" in migration_loop
+    assert "-cne 'ready'" in migration_loop
+    assert migration_loop.index("-cne 'ready'") < migration_loop.index(
+        "invoke-psqltext $psql $names.roles.migrator $names.database $ledgersql"
+    )
+    assert "if (-not $migration.transactional)" in migration_loop
+    assert "if ($migration.transactional)" in migration_loop
+    assert "$migrationarguments += @('-c', $ledgersql)" in migration_loop
+    assert "on conflict (migration_name) do update" not in migration_loop
+
+
+def test_bootstrap_cleans_only_named_invalid_concurrent_indexes_before_rethrow() -> None:
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+    cleanup = source[
+        source.index("function remove-invalidmigrationindexes") : source.index(
+            "function invoke-provision"
+        )
+    ]
+    migration_loop = source[
+        source.index("foreach ($migration in $contract.migrations)") : source.index(
+            "# functional jobs use direct privileges"
+        )
+    ]
+
+    assert "foreach ($indexname in $indexnames)" in cleanup
+    assert "get-migrationindexstate" in cleanup
+    assert "if ($indexstate -ceq 'mismatched')" in cleanup
+    assert "drop index concurrently if exists $indexname" in cleanup
+
+    invoke = migration_loop.index("invoke-checked $psql $migrationarguments")
+    catch = migration_loop.index("catch", invoke)
+    cleanup_call = migration_loop.index(
+        "remove-invalidmigrationindexes", catch
+    )
+    rethrow = migration_loop.index("throw", cleanup_call)
+    ledger = migration_loop.index("$ledgersql", rethrow)
+    assert invoke < catch < cleanup_call < rethrow < ledger
+
+
+def test_bootstrap_cleans_invalid_concurrent_index_before_single_retry() -> None:
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+    migration_loop = source[
+        source.index("foreach ($migration in $contract.migrations)") : source.index(
+            "# functional jobs use direct privileges"
+        )
+    ]
+
+    assert "$attemptlimit = if ($migration.requiredvalidindexes.count -gt 0) { 2 } else { 1 }" in migration_loop
+    assert "for ($attempt = 1; $attempt -le $attemptlimit; $attempt++)" in migration_loop
+    catch = migration_loop.index("catch")
+    cleanup_call = migration_loop.index("remove-invalidmigrationindexes", catch)
+    retry = migration_loop.index("continue", cleanup_call)
+    rethrow = migration_loop.index("throw", retry)
+    assert cleanup_call < retry < rethrow
 
 
 def test_bootstrap_contract_defines_least_privilege_positive_and_negative_probes(tmp_path: Path) -> None:

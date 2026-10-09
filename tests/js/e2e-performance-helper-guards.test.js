@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { EventEmitter } = require('node:events');
+const vm = require('node:vm');
 const path = require('node:path');
 const test = require('node:test');
 const { pathToFileURL } = require('node:url');
@@ -261,6 +263,64 @@ test('playback evidence checkpoint and baseline share the currentStreamId schema
   assert.doesNotMatch(checkpoint, /\n\s*streamId:/);
 });
 
+test('actual playbackMark excludes old same-stream samples and requires new rendered progress', async () => {
+  const helperUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/helpers/gaplessPlaybackHelpers.js')).href;
+  const { observePlaybackPcmTraffic, summarizeTrackPlaybackEvidence } = await import(helperUrl);
+  const track = 'C:/Music/resumed.flac';
+  let snapshot = {
+    generation: 4, renderedFrame: 1024,
+    diagnostics: {
+      firstFrameAtMs: 10,
+      renderedPcmEvidence: {
+        generation: 4, streamId: 17, frames: 512, finiteSamples: 1024,
+        nonZeroSamples: 1000, peakSample: 0.75, samples: [0.75, -0.75],
+      },
+    },
+  };
+  const page = new EventEmitter();
+  page.evaluate = async callback => vm.runInNewContext(`(${callback.toString()})()`, {
+    getStreamingPlaybackSnapshot: () => snapshot,
+    state: { player: { current: { path: track }, streaming: { roles: { current: { streamId: 17 } } } } },
+    performance: { now: () => 50 },
+  });
+  const observer = observePlaybackPcmTraffic(page);
+  try {
+    const after = await observer.playbackMark();
+    assert.equal(after.currentStreamId, 17);
+    assert.equal(after.streamId, 17);
+    const unchanged = summarizeTrackPlaybackEvidence({
+      after, events: [], path: track, renderer: await observer.playbackMark(),
+    });
+    assert.equal(unchanged.pcmFrames, 0);
+    assert.equal(unchanged.finiteSamples, 0);
+    assert.equal(unchanged.nonZeroSamples, 0);
+    assert.equal(unchanged.peakSample, 0);
+    assert.equal(unchanged.renderedFrameDelta, 0);
+
+    snapshot = {
+      ...snapshot, renderedFrame: 1152,
+      diagnostics: {
+        ...snapshot.diagnostics,
+        renderedPcmEvidence: {
+          ...snapshot.diagnostics.renderedPcmEvidence,
+          frames: 640, finiteSamples: 1280, nonZeroSamples: 1240,
+        },
+      },
+    };
+    const progressed = summarizeTrackPlaybackEvidence({
+      after, events: [], path: track, renderer: await observer.playbackMark(),
+    });
+    assert.equal(progressed.pcmFrames, 128);
+    assert.equal(progressed.finiteSamples, 256);
+    assert.equal(progressed.nonZeroSamples, 240);
+    assert.equal(progressed.peakSample, 0.75);
+    assert.equal(progressed.renderedFrameDelta, 128);
+  } finally {
+    observer.stop();
+  }
+  assert.equal(page.listenerCount('websocket'), 0);
+});
+
 test('playback evidence never reuses samples from an older same-path stream', async () => {
   const helperUrl = pathToFileURL(
     path.join(repoRoot, 'tests/e2e/helpers/gaplessPlaybackHelpers.js'),
@@ -390,6 +450,14 @@ test('app-open specs share strict production startup-authority evidence', () => 
   }
 });
 
+test('artist-family benchmark explicitly submits the empty query before awaiting restored browse', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
+  const clearStep = spec.slice(spec.indexOf('const clearSearchReadyMs ='), spec.indexOf('const finalIdleMemory ='));
+  assert.match(clearStep, /clearSearch\(\{ submitWithEnter: true \}\)/);
+  assert.match(clearStep, /waitForQuery\('', \{ timeout: 60000 \}\)/);
+  assert.match(clearStep, /waitForUrlWithoutQueryParameter\('q', \{ timeout: 10000 \}\)/);
+});
+
 test('artist-family benchmark keeps browser mechanics outside the scenario spec', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
   const artistFamilyActions = readRepoFile('tests/e2e/actions/artistFamilyActions.js');
@@ -398,6 +466,10 @@ test('artist-family benchmark keeps browser mechanics outside the scenario spec'
 
   assert.doesNotMatch(spec, /\b(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(/);
   assert.doesNotMatch(spec, /page\.(?:addInitScript|locator|waitForFunction)\s*\(/);
+  assert.match(
+    spec,
+    /const searchGalleryReadyMs[\s\S]*?measureActionTime\(\s*async \(\) => \{\},[\s\S]*?await galleryActions\.waitForAlbumVisibleUnderHeading\(\s*EXPECTED_FAMILY\.resonance,\s*RESONANCE_ALBUM/,
+  );
   assert.doesNotMatch(spec, /\b(?:localStorage|sessionStorage)\b/);
   assert.match(artistFamilyActions, /async waitForViewReady\(/);
   assert.match(artistFamilyActions, /async waitForPrimaryAndRelatedFilterActive\(/);
@@ -570,6 +642,9 @@ test('focused search browse resolves its timing budget from the central authorit
   );
   assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_BROWSE_BUDGET\.metricId/);
   assert.match(spec, /recordContractCompletion\(\)/);
+  assert.match(spec, /recordSubmissionBoundary/);
+  assert.match(spec, /Date\.now\(\)\s*-\s*searchSubmittedAt/);
+  assert.doesNotMatch(spec, /measureActionTime/);
   assert.doesNotMatch(spec, /benchmarkValidation\s*:/);
 });
 
@@ -1395,7 +1470,8 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.match(coldBlock, /readCompletedResponseDurationMs\(coldResponse\)/);
   assert.match(coldBlock, /await coldResponse\.text\(\)/);
   assert.match(coldBlock, /new TextEncoder\(\)\.encode\(coldResponseBody\)\.byteLength/);
-  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('rebuilt'\)/);
+  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('bounded'\)/);
+  assert.match(coldBlock, /completeSummaryResponse\.json\(\)/);
   assert.match(coldBlock, /evaluateProblematicFilesDatasetContract\(/);
   assert.match(coldBlock, /coldInitialDetail\.key\)\.toBe\(coldFirstSummaryItem\.key\)/);
   assert.doesNotMatch(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);

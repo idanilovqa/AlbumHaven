@@ -2539,3 +2539,24 @@ require('node:test')('sidebar count provenance follows its own response across s
   assert.deepEqual(Array.from(state.view.sidebar_library_categories), ['main_library', 'hoard']);
   assert.equal(state.view.artists_sidebar[0].count, 12);
 });
+
+test('root page cursors survive compact state but never leak into a replacement search', () => {
+  const c = loadHelpers();
+  const root = c.normalizeViewPayload({ surface_request: 'albums', query: '', selected_artist: '', artist_groups: [], gallery_page: { next_cursor: 'next', revision: 'r1', has_more: true } });
+  assert.equal(c.compactRuntimeViewPayload(root).gallery_page.next_cursor, 'next');
+  assert.equal(c.normalizeViewPayload({ query: 'Devin', artist_groups: [] }, root).gallery_page, undefined);
+  assert.equal(c.normalizeViewPayload({ selected_artist: 'A', artist_groups: [] }, root).gallery_page, undefined);
+  assert.equal(c.normalizeViewPayload({ query: '', selected_artist: '', artist_groups: [] }, root).gallery_page, undefined);
+});
+
+test('paged source hydration retains navigation location but captures continuation scope', () => {
+  const c = loadHelpers();
+  c.applyViewPayload({ surface_request: 'albums', query: '', selected_artist: '', gallery_scope: 'main', visible_library_categories: ['main_library'], artist_groups: [] });
+  c.applyViewPayload({ surface_request: 'albums', query: '', selected_artist: '', gallery_scope: 'all', visible_library_categories: ['hoard'], artist_groups: [], gallery_page: { next_cursor: 'next', revision: 'r1', has_more: true } }, { preserveGalleryBrowseLocationState: true });
+  assert.equal(c.state.view.gallery_scope, 'main');
+  assert.equal(c.state.view.gallery_page_scope.gallery_scope, 'all');
+  assert.deepEqual(Array.from(c.state.view.gallery_page_scope.visible_library_categories), ['hoard']);
+  c.applyViewPayload({ ...c.state.view, album_count: 5 });
+  assert.equal(c.state.view.gallery_page_scope.gallery_scope, 'all');
+  assert.deepEqual(Array.from(c.state.view.gallery_page_scope.visible_library_categories), ['hoard']);
+});

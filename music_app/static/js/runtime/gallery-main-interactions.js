@@ -338,7 +338,9 @@ function getGalleryFamilyPanelModel() {
   });
 }
 
-function closeGalleryMainSurface(returnFocus = true) {
+const galleryMainSurfaceCloseCallbacks = new WeakMap();
+
+function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
@@ -353,14 +355,25 @@ function closeGalleryMainSurface(returnFocus = true) {
   active.anchor?.setAttribute?.('aria-expanded', 'false');
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(active.surface);
   const closed = galleryMainSurfaceController.close(active.key === 'search-suggestions' ? false : returnFocus);
-  if (!slidingPanel || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+  if (immediate || !slidingPanel || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
     active.surface.hidden = true;
   } else {
+    let finished = false;
+    let timeout;
+    const cancel = () => {
+      finished = true;
+      active.surface.removeEventListener?.('transitionend', finish);
+      window.clearTimeout?.(timeout);
+      galleryMainSurfaceCloseCallbacks.delete(active.surface);
+    };
     const finish = () => {
+      if (finished) return;
+      cancel();
       if (!active.surface.classList?.contains?.('is-open')) active.surface.hidden = true;
     };
+    galleryMainSurfaceCloseCallbacks.set(active.surface, cancel);
     active.surface.addEventListener?.('transitionend', finish, { once: true });
-    window.setTimeout?.(finish, 260);
+    timeout = window.setTimeout?.(finish, 260);
   }
   return closed;
 }
@@ -383,7 +396,8 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
     closeGalleryMainSurface(true);
     return false;
   }
-  if (previous) closeGalleryMainSurface(false);
+  if (previous) closeGalleryMainSurface(false, { immediate: true });
+  galleryMainSurfaceCloseCallbacks.get(surface)?.();
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
   }, { anchor });

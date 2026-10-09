@@ -77,28 +77,6 @@ test('performance timing contract fails closed for missing metrics and invalid t
   }
 });
 
-test('temporary cold API 1000 ms grace is exact and cannot widen other contracts', (t) => {
-  const { loadPerformanceTimesContract, resolveTimingBudget } = loadAuthority();
-  const metricId = 'utility-problematic-files-isolated-postgres.coldProblematicApiMs';
-  const approved = { targetMs: 1000, graceMs: 1000, hardCeilingMs: 2000 };
-  for (const contractName of ['local', 'ci']) {
-    const contractPath = writeContract(t, { [metricId]: validMetric({ [contractName]: approved }) });
-    const contract = loadPerformanceTimesContract({ contractPath });
-    assert.deepEqual(resolveTimingBudget(metricId, contractName, contract), {
-      metricId, contractName, targetMaximum: 1000, graceMs: 1000, hardCeiling: 2000,
-    });
-    for (const [id, triplet] of [
-      ['example.ready', approved],
-      [metricId, { targetMs: 999, graceMs: 1000, hardCeilingMs: 1999 }],
-      [metricId, { targetMs: 1000, graceMs: 999, hardCeilingMs: 1999 }],
-      [metricId, { ...approved, hardCeilingMs: 2001 }],
-    ]) {
-      const invalidPath = writeContract(t, { [id]: validMetric({ [contractName]: triplet }) });
-      assert.throws(() => loadPerformanceTimesContract({ contractPath: invalidPath }), /grace|ceiling/i);
-    }
-  }
-});
-
 test('checked-in timing authority contains the approved local and CI triplets', () => {
   const {
     loadPerformanceTimesContract,
@@ -107,12 +85,12 @@ test('checked-in timing authority contains the approved local and CI triplets', 
   const contract = loadPerformanceTimesContract();
   const approved = {
     'utility-problematic-files-isolated-postgres.coldProblematicApiMs': {
-      local: [1000, 1000, 2000],
-      ci: [1000, 1000, 2000],
+      local: [1000, 200, 1200],
+      ci: [1000, 200, 1200],
     },
     'utility-problematic-files-isolated-postgres.problematicReadyMs': {
-      local: [1000, 400, 1400],
-      ci: [1000, 400, 1400],
+      local: [1000, 200, 1200],
+      ci: [1000, 200, 1200],
     },
     'utility-problematic-files-isolated-postgres.problematicCachedEnterMs': {
       local: [1000, 200, 1200],
@@ -136,7 +114,7 @@ test('checked-in timing authority contains the approved local and CI triplets', 
     },
     'search-browse.searchBrowseReadyMs': {
       local: [800, 400, 1200],
-      ci: [2000, 400, 2400],
+      ci: [800, 400, 1200],
     },
     'artist-family.treeNealSelectionMs': {
       local: [450, 200, 650],
@@ -244,6 +222,6 @@ test('CI differs from local for exactly the five owner-approved metrics', () => 
     'app-open-all-artists.visibleUiReadyMs',
     'artist-family.treeNealSelectionMs',
     'playback-start.maximumStartMs',
-    'search-browse.searchBrowseReadyMs',
   ].sort());
 });
+

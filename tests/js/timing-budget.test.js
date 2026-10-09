@@ -3,6 +3,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+test('synthetic search enforces the owner-approved 500 ms boundary', async () => {
+  const { performanceTimingBudget, evaluateTimingBudget, defineTimingBudget } =
+    await import('../../tests/e2e/helpers/timingBudget.js');
+  const budget = performanceTimingBudget('search-preview.syntheticFirstVisibleMs');
+  assert.equal(budget.targetMaximum, 400);
+  assert.equal(budget.graceMs, 100);
+  assert.equal(budget.hardCeiling, 500);
+  for (const [actual, status] of [[400, 'target-met'], [447, 'grace-used'],
+    [500, 'grace-used'], [501, 'hard-fail']]) {
+    assert.equal(evaluateTimingBudget(actual, budget).status, status);
+  }
+  assert.throws(() => defineTimingBudget({
+    metricId: 'unrelated.metric', targetMaximum: 400, graceMs: 100, hardCeiling: 500,
+  }), /grace/i);
+});
+
 function listSpecFiles(root) {
   return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(root, entry.name);
@@ -45,14 +61,14 @@ test('timing budgets preserve explicit owner-approved grace within 200-400 ms', 
   assert.throws(() => defineTimingBudget({ targetMaximum: 1000, graceMs: 401 }), /between 200 and 400 ms/);
 });
 
-test('temporary cold API 1000 ms grace is metric-scoped and preserves exact boundaries', async () => {
+test('cold Problematic Files API preserves the 1000 ms target and 1200 ms ceiling', async () => {
   const { defineTimingBudget, evaluateTimingBudget } = await import('../../tests/e2e/helpers/timingBudget.js');
   const metricId = 'utility-problematic-files-isolated-postgres.coldProblematicApiMs';
-  const contract = { metricId, targetMaximum: 1000, graceMs: 1000, hardCeiling: 2000 };
+  const contract = { metricId, targetMaximum: 1000, graceMs: 200, hardCeiling: 1200 };
   for (const contractName of ['local', 'ci']) {
     for (const [actual, status, passed] of [
       [1000, 'target-met', true], [1001, 'grace-used', true],
-      [2000, 'grace-used', true], [2001, 'hard-fail', false],
+      [1200, 'grace-used', true], [1201, 'hard-fail', false],
     ]) {
       const result = evaluateTimingBudget(actual, { ...contract, contractName });
       assert.equal(result.status, status);
@@ -61,13 +77,10 @@ test('temporary cold API 1000 ms grace is metric-scoped and preserves exact boun
       assert.equal(result.contractName, contractName);
     }
   }
-  for (const override of [
-    { metricId: undefined }, { metricId: 'example.readyMs' },
-    { targetMaximum: 999, hardCeiling: 1999 },
-    { graceMs: 999, hardCeiling: 1999 }, { hardCeiling: 2001 },
-  ]) {
-    assert.throws(() => defineTimingBudget({ ...contract, ...override }), /grace|ceiling/i);
-  }
+  assert.throws(
+    () => defineTimingBudget({ ...contract, graceMs: 401 }),
+    /grace|ceiling/i,
+  );
 });
 
 test('timing results distinguish target met, grace used, and hard fail at exact boundaries', async () => {

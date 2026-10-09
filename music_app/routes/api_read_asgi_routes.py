@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.private_ui_context import private_ui_context_ref
+
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.log_history import history_scope_for_request, normalize_log_history_query, export_log_history, LogHistoryQueryError
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
@@ -8,7 +10,7 @@ import logging
 import time
 from collections.abc import Iterable, Mapping
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -36,11 +38,18 @@ from music_app.services.page_resource_seams import (
 )
 from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
-from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.library_browse_postgres import (
+    PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
+)
+from music_app.services.library_inventory_postgres import PostgresLibraryInventoryRepository
+from music_app.services.track_preferences import track_preference_scope
+from music_app.services.track_preferences_postgres import TrackPreferenceScopeError
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.policy import ResourceScope
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -54,6 +63,7 @@ from music_app.services.view_payloads import (
     project_missing_album_actions,
 )
 from music_app.services.client_surfaces import resolve_client_surface_class
+from music_app.services.database_identity import load_database_identity_status
 from config import PERSISTENCE_BACKEND_POSTGRES
 
 router = APIRouter()
@@ -183,6 +193,33 @@ def _app_logger(request: Request):
 
 def _library_state(request: Request) -> dict[str, object]:
     return request.app.state.library_state
+
+
+def _load_application_database_identity_status(request: Request) -> dict[str, object]:
+    with request.app.state.database_identity_status_lock:
+        cached = request.app.state.database_identity_status
+        expires_at = getattr(request.app.state, "database_identity_expires_at", 0.0)
+        if isinstance(cached, Mapping) and time.monotonic() < expires_at:
+            return dict(cached)
+        auth_policy_config = getattr(request.app.state, "auth_policy_config", None)
+        identity_hmac_config = (
+            auth_policy_config.get("hmac")
+            if isinstance(auth_policy_config, Mapping)
+            else None
+        )
+        loaded = load_database_identity_status(
+            _app_config(request),
+            hmac_config=(
+                identity_hmac_config
+                if isinstance(identity_hmac_config, Mapping)
+                else None
+            ),
+        )
+        status = dict(loaded) if isinstance(loaded, Mapping) else {"ready": False}
+        if status.get("ready") is True:
+            request.app.state.database_identity_status = status
+            request.app.state.database_identity_expires_at = time.monotonic() + 60.0
+        return dict(status)
 
 
 class _AsgiQueryArgs:
@@ -390,6 +427,20 @@ async def status(request: Request) -> JSONResponse:
             )
         except Exception:
             logging.getLogger(__name__).warning('Operational history revision is unavailable')
+    payload["database_identity"] = await run_in_threadpool(
+        _load_application_database_identity_status,
+        request,
+    )
+    identity = payload["database_identity"]
+    if (
+        not payload["scan_in_progress"]
+        and not library_state.get("scan_generation")
+        and not library_state.get("albums")
+        and not library_state.get("file_cache")
+        and identity.get("ready")
+    ):
+        # Deferred startup has no runtime inventory; reuse the scoped durable count.
+        payload["album_total"] = identity.get("catalog_album_count", payload["album_total"])
     payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
     return JSONResponse(payload)
 
@@ -455,26 +506,67 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
     }
 
 
+def _transient_scan_view_response(
+    request: Request, browse_state: Mapping[str, object], page_params: Mapping[str, object] | None = None
+) -> JSONResponse:
+    request_started_at = time.perf_counter()
+    payload = build_view_payload(
+        query_args=_AsgiQueryArgs(request.query_params),
+        config=_app_config(request),
+        logger=_app_logger(request),
+        library_state=browse_state,
+        client_surface_class=_client_surface_class_from_asgi(request),
+    )
+    if page_params is not None:
+        payload = build_transient_root_gallery_page(
+            payload, page_params, scan_generation=int(browse_state.get("scan_generation") or 0)
+        )
+    _apply_transient_scan_album_rating_overlays(
+        request,
+        _transient_view_album_payloads(payload),
+    )
+    _log_view_data_request_from_asgi(request, payload, request_started_at)
+    _project_missing_album_actions_for_request(request, payload)
+    return JSONResponse(payload)
+
+
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
+    if str(request.query_params.get("surface") or "").casefold() == "playlists":
+        from music_app.routes.owned_playlists_asgi import playlist_view_response
+        return playlist_view_response(request)
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    if _should_use_transient_scan_browse_state(library_state, browse_state):
-        request_started_at = time.perf_counter()
-        payload = build_view_payload(
-            query_args=_AsgiQueryArgs(request.query_params),
-            config=_app_config(request),
-            logger=_app_logger(request),
-            library_state=browse_state,
-            client_surface_class=_client_surface_class_from_asgi(request),
-        )
-        _apply_transient_scan_album_rating_overlays(
-            request,
-            _transient_view_album_payloads(payload),
-        )
-        _log_view_data_request_from_asgi(request, payload, request_started_at)
+    if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:
+        params = dict(request.query_params)
+        params.pop("gallery_page_size", None)
+        params.pop("gallery_cursor", None)
+        if (str(request.query_params.get("q") or "").strip()
+                or str(request.query_params.get("artist") or "").strip()
+                or str(request.query_params.get("surface") or "albums").casefold() not in {"albums", "library"}
+                or str(request.query_params.get("payload_tier") or "").casefold() not in {"", "full"}):
+            return JSONResponse({"ok": False, "error": "Gallery paging requires the library root."}, status_code=400)
+        # Existing route selection still validates the remaining browse parameters.
+        allowed = {"surface", "payload_tier", "gallery_scope", "gallery_display", "gallery_display_mode",
+                   "gallery_scale_percent", "category", "omit_sidebar", "all_artists", "q", "artist"}
+        if set(params) - allowed:
+            return JSONResponse({"ok": False, "error": "Invalid gallery paging parameters."}, status_code=400)
+        from starlette.datastructures import QueryParams
+        page_params = QueryParams([*request.query_params.multi_items(), *([] if "gallery_page_size" in request.query_params else [("gallery_page_size", "50")])])
+        try:
+            if _should_use_transient_scan_browse_state(library_state, browse_state):
+                return _transient_scan_view_response(request, browse_state, page_params)
+            payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_startup_preview_payload(
+                query_params=page_params, library_state=library_state)
+        except ValueError as error:
+            restart = "restart required" in str(error)
+            return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
+                                status_code=409 if restart else 400)
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
+
+    if _should_use_transient_scan_browse_state(library_state, browse_state):
+        return _transient_scan_view_response(request, browse_state)
 
     if _is_postgres_root_sidebar_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
@@ -631,6 +723,7 @@ def _unsupported_postgres_selected_artist_browse_response(request: Request) -> J
 def _is_postgres_album_search_request(request: Request) -> bool:
     allowed_search_params = {
         "q",
+        "payload_tier",
         "surface",
         "all_artists",
         "gallery_scope",
@@ -644,6 +737,9 @@ def _is_postgres_album_search_request(request: Request) -> bool:
         return False
     query = str(request.query_params.get("q") or "").strip()
     if not query or _query_requires_file_backed_search_semantics(query):
+        return False
+    payload_tier = str(request.query_params.get("payload_tier") or "").strip().casefold()
+    if payload_tier not in {"", "search_preview", "full"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() != "albums":
         return False
@@ -775,11 +871,28 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
 
 @router.get("/home-data")
 async def home_data(request: Request) -> JSONResponse:
-    _hydrate_cached_library_for_asgi(request)
+    actor = await current_actor_from_request(request)
+    if not actor.is_authenticated:
+        raise HTTPException(401, "Authentication required.", headers={"Cache-Control": "private, no-store"})
+    if (any(type(value) is not int or value <= 0 for value in (actor.account_id, actor.current_library_id))
+            or not any(relationship.library_id == actor.current_library_id
+                       for relationship in actor.library_relationships)):
+        raise HTTPException(403, "Action not permitted.", headers={"Cache-Control": "private, no-store"})
     request_started_at = time.perf_counter()
+    await run_in_threadpool(_hydrate_cached_library_for_asgi, request)
+
+    def album_actions(album):
+        return allowed_actions_for_request(
+            request, ("library.browse.read", "library.media.read"),
+            resource=ResourceScope("album", str(album["id"])),
+        )
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    payload = build_home_payload(
+    payload = await run_in_threadpool(
+        build_home_payload,
+        account_id=actor.account_id,
+        library_id=actor.current_library_id,
+        allowed_actions_for_album=album_actions,
         query_args=_AsgiQueryArgs(request.query_params),
         config=_app_config(request),
         logger=_app_logger(request),
@@ -820,7 +933,7 @@ async def home_data(request: Request) -> JSONResponse:
                 }
             )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    return JSONResponse(payload)
+    return JSONResponse({**payload, "context_ref": private_ui_context_ref(request)}, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/album-details")
@@ -841,31 +954,55 @@ async def album_details(request: Request) -> JSONResponse:
         or request.headers.get("X-Album-Haven-Client-Surface")
         or request.headers.get("X-Album-Haven-Client-Surface-Class")
     )
+    try:
+        account_id, library_id = track_preference_scope(await current_actor_from_request(request))
+    except TrackPreferenceScopeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+
+    def preference_action_resolver(track_id: int) -> bool:
+        return allowed_actions_for_request(
+            request, ("library.track_preferences.manage",),
+            resource=ResourceScope("track", str(track_id)),
+        ).allows("library.track_preferences.manage")
+
+    taste_scope = {
+        "account_id": account_id, "library_id": library_id,
+        "preference_action_resolver": preference_action_resolver,
+    }
     browse_state = resolve_active_scan_browse_state(_library_state(request))
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload(
-            album_key,
-            client_surface_class=client_surface_class,
-        )
+        try:
+            payload = await run_in_threadpool(
+                PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload,
+                album_key, client_surface_class=client_surface_class, **taste_scope,
+            )
+        except TrackPreferenceScopeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse({"ok": True, "album": payload})
+        return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
 
     _hydrate_cached_library_for_asgi(request)
-    payload = build_album_detail_payload(
-        album_key,
-        client_surface_class=client_surface_class,
-        config=_app_config(request),
-        library_state=browse_state,
+    inventory_library_id = await run_in_threadpool(
+        PostgresLibraryInventoryRepository(_app_config(request)).load_inventory_library_id,
     )
+    try:
+        payload = await run_in_threadpool(
+            build_album_detail_payload, album_key,
+            client_surface_class=client_surface_class, config=_app_config(request),
+            library_state=browse_state, inventory_library_id=inventory_library_id,
+            **taste_scope,
+        )
+    except TrackPreferenceScopeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
     if payload is None:
         return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
     if browse_state.get("scan_in_progress"):
         _apply_transient_scan_album_rating_overlays(request, [payload])
     _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse({"ok": True, "album": payload})
+    return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
 
 
 def _should_use_postgres_album_detail_path(
@@ -930,9 +1067,17 @@ def _unsupported_postgres_non_album_modal_response(
 
 
 @router.get("/utilities/problematic-files")
-def utilities_problematic_files(request: Request) -> JSONResponse:
+def utilities_problematic_files(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1, le=200),
+) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_problematic_files_payload()
+        repository = PostgresLibraryBrowseRepository(_app_config(request))
+        payload = (
+            repository.build_problematic_files_page(limit=limit)
+            if limit is not None
+            else repository.build_problematic_files_payload()
+        )
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)

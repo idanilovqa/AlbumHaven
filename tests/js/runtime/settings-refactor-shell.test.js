@@ -29,6 +29,7 @@ function harness() {
       coverLookup: { drawerOpen: false }, tagEditor: {},
     },
     document: {
+      createElement: () => element(),
       querySelectorAll(selector) { return selector.includes('data-utility-tab') ? els.tabs : []; },
       getElementById(id) {
         if (id === 'navigation-tree-item-template') return { textContent: read('music_app/templates/components/navigation-tree-item.html') };
@@ -398,7 +399,7 @@ test('S02 tab alignment observers and scroll listeners are disposed on close and
   // Load the real close boundary without unrelated network loader initialization.
   const loaders = read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js');
   const close = loaders.slice(loaders.indexOf('function closeUtilityModal('), loaders.indexOf('let repairConfirmReturnFocus'));
-  vm.runInContext(`let utilityCoverLoadSuspensionToken = 0;\n${close}`, context);
+  vm.runInContext(`let utilityCoverLoadSuspensionToken = 0; let utilityOpenGeneration = 0;\n${close}`, context);
   context.syncUtilityTabAlignment(els);
   context.syncUtilityTabAlignment(els);
   assert.equal(observers.length, 1, 'repeated rendering reuses one observer');
@@ -494,7 +495,19 @@ function problematicSelectionHarness({ detailLoaded = true } = {}) {
         row.scrollIntoView = () => { forcedScrolls++; };
         const album = context.state.utility.problematicFiles.find(item => item.key === match[1]);
         const title = { textContent: album.name };
-        const metadata = { textContent: album.album_artist + (album.year ? ` · ${album.year}` : '') };
+        const metadata = {
+          children: [],
+          get firstChild() { return this.children[0] || null; },
+          querySelector(selector) { return this.children.find(child => `.${child.className}` === selector) || null; },
+          insertBefore(child, reference) {
+            const index = reference ? this.children.indexOf(reference) : this.children.length;
+            this.children.splice(index, 0, child);
+            child.remove = () => this.children.splice(this.children.indexOf(child), 1);
+          },
+        };
+        for (const [className, value] of [['utility-list-item-subtitle', album.album_artist], ['utility-list-item-year', album.year]]) {
+          if (value) metadata.insertBefore({ className, textContent: String(value) }, null);
+        }
         const count = { textContent: String(album.track_count ?? album.tracks.length) };
         let artworkHtml = context.buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name}` });
         let image = element({ src: `/cover?path=${album.cover_path}` });
@@ -574,7 +587,9 @@ test('S04 hydration updates title year and count while retaining its mounted row
   }) });
   await request;
   assert.equal(row.querySelector('.utility-list-item-title').textContent, 'Hydrated title');
-  assert.equal(row.querySelector('.utility-list-item-meta').textContent, 'Hydrated artist · 2025');
+  const metadata = row.querySelector('.utility-list-item-meta');
+  assert.equal(metadata.querySelector('.utility-list-item-subtitle').textContent, 'Hydrated artist');
+  assert.equal(metadata.querySelector('.utility-list-item-year').textContent, '2025');
   assert.equal(row.querySelector('.navigation-tree-count').textContent, '12');
   assert.equal(row.querySelector('img'), image, 'metadata changes must not restart an unchanged artwork request');
   runtime.assertStable();

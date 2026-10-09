@@ -172,6 +172,8 @@ const state = {
     loaded: false,
     loading: false,
     loadPromise: null,
+    completeLoadPromise: null,
+    problematicFilesComplete: false,
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,
@@ -648,6 +650,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
   const pendingViewTransition = Boolean(state.ui.pendingViewTransition);
+  const searching = pendingViewTransition && state.ui.pendingGallerySearch === true && !scanPageVisible;
   const isLoadingState = scanBusy || relBusy || state.awaitingInitialDataRefresh || pendingViewTransition;
   const shouldShow = shouldShowLibraryLoader(state.view, data, {
     scanPageVisible,
@@ -673,6 +676,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  loader.classList?.toggle('is-searching', searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
@@ -719,6 +723,16 @@ function renderLibraryLoader(data = {}, options = {}) {
     if (browseButton) browseButton.hidden = true;
     if (cancelButton) cancelButton.hidden = true;
     if (actions) actions.hidden = true;
+    return;
+  }
+
+  if (searching) {
+    spinner.hidden = false;
+    title.textContent = 'Searching';
+    status.textContent = '';
+    progress.innerHTML = '';
+    if (actions) actions.hidden = true;
+    setDomPropertyIfChanged(readyCheck, 'hidden', true);
     return;
   }
 

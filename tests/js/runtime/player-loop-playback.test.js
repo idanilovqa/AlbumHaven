@@ -322,6 +322,15 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
+test('optional track paint notification cannot interrupt the native player update', () => {
+  const {context} = loadHelper();
+  assert.doesNotThrow(() => context.updatePlayerUi(), 'an absent React track module remains optional');
+  let notifications = 0;
+  context.window.AlbumHavenTrackPlayback = {sync() {notifications++; throw new Error('Paint failed');}};
+  assert.doesNotThrow(() => context.updatePlayerUi());
+  assert.equal(notifications, 1);
+});
+
 test('visible play control and global Space dispatch pause and resume through the streaming engine', async () => {
   const calls = [];
   const snapshot = {
@@ -632,6 +641,8 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   const timelineParent = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range' });
   timeline.parentElement = timelineParent;
+  const progress = new Map();
+  timeline.style = { setProperty: (name, value) => progress.set(name, value) };
   const { context } = loadHelper({
     document,
     timeline,
@@ -662,6 +673,8 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   timeline.value = '50';
   timeline.dispatch('input');
   document.dispatch('pointermove', { clientX: 50 });
+  assert.equal(progress.get('--player-seek-progress'), `${50 / 60 * 100}%`,
+    'thin seek progress must follow the pointer without waiting for an audio tick');
   timeline.value = '47';
   timeline.dispatch('input');
   assert.deepEqual(seeks, [30, 19], 'drag previews must not restart the decoder');
@@ -673,6 +686,11 @@ test('timeline input, keyboard seek, and drag release each issue one streaming s
   );
   document.dispatch('pointerup', { clientX: 50 });
   assert.deepEqual(seeks, [30, 19, 50], 'drag release performs exactly one seek at the final offset');
+  timelineParent.dispatch('pointerdown', { clientX: 35, preventDefault() {} });
+  document.dispatch('pointercancel');
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(context.state.player.timelineDragPreviewSeconds, null);
+  assert.deepEqual(seeks, [30, 19, 50], 'cancelled touch must not seek');
 });
 
 test('pause and seek rejections are observed by the streaming diagnostics boundary', async () => {
@@ -942,6 +960,15 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
 
   assert.equal(peekCalls, 1);
   assert.deepEqual(scheduled, [nextTrack]);
+});
+
+test('changing tracks clears an outgoing timeline drag preview', () => {
+  const { context } = loadHelper();
+  context.state.player.timelineDragging = true;
+  context.state.player.timelineDragPreviewSeconds = 210;
+  context.setCurrentPlayerTrack({ path: 'next.flac', durationSeconds: 300 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(context.state.player.timelineDragPreviewSeconds, null);
 });
 
 test('streaming boundary consumes the queued track exactly once', async () => {
@@ -3158,24 +3185,21 @@ for (const deleteAllowed of [true, false]) {
   });
 }
 
-function loadCapabilityTrackRow(actions) {
+async function loadCapabilityTrackRow(actions, t) {
+  const {bindPlaytableSelection} = await import('../../../music_app/static/js/playtables/selection.mjs');
+  const native = require('./native-home-harness.cjs').createNativeHomeRuntime(), document = native.document;
+  document.readyState = 'loading';
   const effects = [];
-  const button = new FakeElement({ tagName: 'BUTTON', classNames: ['album-track-table__play'], attributes: {
-    'data-src': '/track?path=song.flac', 'data-track-path': 'song.flac', 'data-track-title': 'Song',
-  } });
-  const row = new FakeElement();
+  const host = document.createElement('section'); document.body.appendChild(host);
+  host.innerHTML = '<div class="album-track-table__row" data-cdt-row-key="song-occurrence" tabindex="0">Song'
+    + '<button type="button" class="play-track-button album-track-table__play" data-src="/track?path=song.flac" data-track-path="song.flac" data-track-title="Song">Play</button></div>';
+  const row = host.firstElementChild, button = row.querySelector('button');
   const album = { name: 'Album' };
-  const document = {
-    readyState: 'loading', addEventListener() {}, getSelection: () => null,
-    querySelectorAll: selector => selector === '.play-track-button' ? [button] : [],
-    getElementById: id => id === 'capability-bootstrap' ? { textContent: JSON.stringify({
-      allowed_actions: actions, denied_selectors: ['.play-track-button', '.global-player'],
-    }) } : id === 'track-modal' ? { hidden: false } : null,
-  };
-  row.ownerDocument = document;
-  row.querySelector = () => button;
-  button.closest = selector => selector === '.album-track-table__row' ? row : null;
-  button.click = () => button.dispatch('click', { isTrusted: false });
+  const modal = document.createElement('div'); modal.id = 'track-modal'; document.body.appendChild(modal);
+  const bootstrap = document.createElement('script'); bootstrap.id = 'capability-bootstrap';
+  bootstrap.textContent = JSON.stringify({allowed_actions: actions,
+    denied_selectors: actions?.['library.media.read'] === true ? [] : ['.play-track-button', '.global-player']});
+  document.body.appendChild(bootstrap);
   const { context, audio, timeline } = loadHelper({ document,
     canStartPlaybackInThisTab: () => { effects.push('ownership'); return true; },
     startStreamingTrack: async () => { effects.push('stream'); return { role: 'current' }; },
@@ -3197,22 +3221,38 @@ function loadCapabilityTrackRow(actions) {
   context.triggerAlbumTrackPlayActivation = target => { effects.push('animation'); animate(target); };
   context.updatePlayerUi = () => effects.push('render');
   context.attachSharedPlayer();
-  const click = detail => row.dispatch('click', {
-    detail, target: { closest: () => null }, currentTarget: row, preventDefault() {},
+  const instance = {};
+  const selection = bindPlaytableSelection(host, {
+    sourceAdapter: {snapshot: () => ({scopeKey: 'media-capability-fixture', instance,
+      rows: [{rowKey: 'song-occurrence', readable: true, selectable: true}]})},
+    onPlay: (_rowKey, event, options) => context.activateSharedTrackButton(button,
+      {restart: options?.restart === true, focusTimeline: event.isTrusted !== false}),
   });
-  return { context, effects, audio, timeline, click, button };
+  t.after(() => {selection.dispose(); host.remove(); modal.remove(); bootstrap.remove();});
+  const emit = (target, type, properties = {}) => {
+    const event = new native.context.Event(type);
+    Object.assign(event, {detail: 1, isTrusted: false}, properties); target.dispatchEvent(event); return event;
+  };
+  const tap = timeStamp => {
+    const pointer = {pointerType: 'touch', pointerId: 1, isPrimary: true, clientX: 20, clientY: 20};
+    emit(row, 'pointerdown', {...pointer, timeStamp});
+    emit(row, 'pointerup', {...pointer, timeStamp: timeStamp + 10});
+    emit(row, 'click', {timeStamp: timeStamp + 11});
+  };
+  return { context, effects, audio, timeline, tap, button, row,
+    play: () => emit(button, 'click'), doubleClick: timeStamp => emit(row, 'dblclick', {detail: 2, timeStamp}) };
 }
 
 for (const actions of [{ 'library.media.read': false }, {}]) {
-  test(`denied mobile track clicks and direct restart have no playback effects (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async () => {
-    const f = loadCapabilityTrackRow(actions);
+  test(`denied mobile track gestures and direct restart have no playback effects (${Object.keys(actions).length ? 'denied' : 'missing grant'})`, async t => {
+    const f = await loadCapabilityTrackRow(actions, t);
     const before = JSON.stringify(f.context.state.player);
     const queue = f.context.state.player.playbackQueue;
-    f.click(1);
-    f.click(2);
+    f.tap(100); f.tap(230); f.doubleClick(245); f.play();
     f.context.activateSharedTrackButton(f.button, { restart: true, focusTimeline: true });
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(f.effects, []);
+    assert.equal(f.row.getAttribute('aria-selected'), 'true', 'readable row selection does not grant media access');
     assert.equal(JSON.stringify(f.context.state.player), before);
     assert.strictEqual(f.context.state.player.playbackQueue, queue);
     assert.equal(f.audio.playCalls, 0);
@@ -3221,13 +3261,18 @@ for (const actions of [{ 'library.media.read': false }, {}]) {
 }
 
 for (const actions of [{ 'library.media.read': true }, undefined]) {
-  test(`mobile track click resumes and double-tap restarts through shared playback (${actions ? 'allowed' : 'legacy'})`, async () => {
-    const f = loadCapabilityTrackRow(actions);
-    f.click(1);
+  test(`mobile row selection, explicit resume and deliberate double-tap use shared playback (${actions ? 'allowed' : 'legacy'})`, async t => {
+    const f = await loadCapabilityTrackRow(actions, t);
+    const queue = f.context.state.player.playbackQueue;
+    f.tap(100);
+    assert.equal(f.row.getAttribute('aria-selected'), 'true'); assert.deepEqual(f.effects, []);
+    assert.equal(f.audio.playCalls, 0, 'a single row tap selects without playing');
+    assert.strictEqual(f.context.state.player.playbackQueue, queue);
+    f.play();
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(f.audio.playCalls, 1, 'ordinary click resumes the loaded current track');
+    assert.equal(f.audio.playCalls, 1, 'explicit Play resumes the loaded current track');
     assert.equal(f.effects.includes('stream'), false);
-    f.click(2);
+    f.tap(1000); f.tap(1130); f.doubleClick(1145);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(f.effects.filter(effect => effect === 'stream').length, 1);
     assert.equal(f.effects.filter(effect => effect === 'queue').length, 1);
@@ -3237,3 +3282,64 @@ for (const actions of [{ 'library.media.read': true }, undefined]) {
     assert.deepEqual(f.timeline.focusCalls, [], 'row activation must not steal timeline focus');
   });
 }
+
+test('thin mobile Play hit area yields horizontal playhead drag but preserves taps and vertical intent', () => {
+  const seeks = [];
+  const listeners = new Map();
+  const document = { activeElement: null, querySelectorAll: () => [],
+    addEventListener(name, handler) { const entries = listeners.get(name) || []; entries.push(handler); listeners.set(name, entries); },
+    dispatch(name, event = {}) { for (const handler of listeners.get(name) || []) handler(event); },
+  };
+  const { context, timeline, playButton } = loadHelper({ document,
+    getTrackIdentity: track => track?.src || '',
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 54, duration: 60, paused: false, ended: false, src: '/track?path=song.flac' }),
+    seekStreamingPlayback: seconds => seeks.push(seconds),
+  });
+  context.window.innerWidth = 390;
+  context.player.setAttribute('data-player-seekbar-presentation', 'thin');
+  timeline.rectangle = { left: 0, top: 70, width: 390, height: 24 };
+  timeline.value = '54';
+  timeline.parentElement = new FakeElement();
+  context.attachPlayerEvents();
+  playButton.closest = () => playButton;
+  const down = () => { timeline.value = '54'; context.player.dispatch('pointerdown', { pointerId: 7, isPrimary: true, button: 0, clientX: 350, clientY: 76, target: playButton, preventDefault() { throw new Error('Pointer down must preserve taps'); } }); };
+  down();
+  assert.notEqual(context.state.player.timelineDragging, true);
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  assert.equal(context.state.player.timelineDragging, true);
+  context.player.dispatch('pointerdown', { pointerId: 8, isPrimary: false });
+  timeline.parentElement.dispatch('pointerdown', { pointerId: 8, clientX: 10, preventDefault() { throw new Error('Second finger must not start native timeline drag'); } });
+  assert.deepEqual(seeks, []);
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 1);
+  let suppressed = false;
+  context.player.dispatch('click', { pointerId: 7, preventDefault() { suppressed = true; }, stopImmediatePropagation() {} });
+  assert.equal(suppressed, true);
+  down();
+  document.dispatch('pointerup', { pointerId: 7 });
+  suppressed = false;
+  context.player.dispatch('click', { pointerId: 7, preventDefault() { suppressed = true; }, stopImmediatePropagation() {} });
+  assert.equal(suppressed, false);
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 352, clientY: 99, preventDefault() { throw new Error('Vertical movement belongs to browser'); } });
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 1);
+  down();
+  document.dispatch('pointermove', { pointerId: 8, clientX: 315, clientY: 77 });
+  assert.notEqual(context.state.player.timelineDragging, true, 'other fingers cannot claim the gesture');
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  document.dispatch('pointercancel', { pointerId: 7 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(seeks.length, 1, 'cancel never commits a seek');
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  context.state.player.current = { src: '/track?path=next.flac' };
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(context.state.player.timelineDragging, false);
+  assert.equal(seeks.length, 1, 'release cannot seek a replacement track');
+  down();
+  document.dispatch('pointermove', { pointerId: 7, clientX: 315, clientY: 77, preventDefault() {} });
+  context.state.player.current = { ...context.state.player.current, title: 'Hydrated title' };
+  document.dispatch('pointerup', { pointerId: 7 });
+  assert.equal(seeks.length, 2, 'same-track metadata hydration preserves the gesture');
+});

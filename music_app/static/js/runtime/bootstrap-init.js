@@ -1,3 +1,5 @@
+const STARTUP_PREVIEW_HYDRATION_DELAY_MS = 5000;
+
 restorePlayerAppearance();
 attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
@@ -10,11 +12,22 @@ if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }
+let idlePlaybackPreparationCancelled = false;
 if (typeof prepareStreamingPlaybackEngine === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
-  void prepareStreamingPlaybackEngine().catch((error) => {
-    console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
-  });
+  const prepareIdlePlayback = () => {
+    if (idlePlaybackPreparationCancelled) return;
+    void prepareStreamingPlaybackEngine().catch((error) => {
+      console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
+    });
+  };
+  // AudioContext creation can synchronously open the device. Keep that work out
+  // of initial rendering; an early play action still awaits engine preparation.
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(prepareIdlePlayback, { timeout: 1000 });
+  } else {
+    scheduleBrowserTimeout(prepareIdlePlayback, 0);
+  }
 }
 const bootstrapSearchParams = new URL(window.location.href).searchParams;
 const galleryDisplayPreferenceResolutionOptions = {
@@ -82,7 +95,8 @@ const startupHydrationTier = String(startupHydration.tier || 'full');
 const shellMainContentKind = String(
   state.view?.shell_layout?.slots?.main_content?.content_kind || '',
 ).trim();
-const shouldStartImmediateHydration = shellMainContentKind === 'discovery_center_page'
+const hasPagedRootInitialView = typeof isPagedRootGallery === 'function' && isPagedRootGallery();
+const shouldStartImmediateHydration = hasPagedRootInitialView || shellMainContentKind === 'discovery_center_page'
   ? false
   : shouldRunImmediateStartupHydration(state.view, bootstrap);
 let embeddedStartupViewPatch = startupHydration?.embeddedViewPatch && typeof startupHydration.embeddedViewPatch === 'object'
@@ -102,7 +116,10 @@ if (shouldStartImmediateHydration) {
   startupMetrics.beginInitialRefresh();
 }
 if (shouldApplyEmbeddedSidebarHydration) {
-  applyViewPayload(embeddedStartupViewPatch, { trackSidebarReveal: false });
+  applyViewPayload({
+    ...state.view,
+    ...embeddedStartupViewPatch,
+  }, { trackSidebarReveal: false });
 }
 embeddedStartupViewPatch = null;
 if (startupHydration && typeof startupHydration === 'object') {
@@ -111,20 +128,41 @@ if (startupHydration && typeof startupHydration === 'object') {
 if (bootstrap.startupPayloadTiers?.hydration && typeof bootstrap.startupPayloadTiers.hydration === 'object') {
   bootstrap.startupPayloadTiers.hydration.embeddedViewPatch = null;
 }
-renderView();
+if (shouldTreatStartupPreviewAsVisibleReady) {
+  const startupPreviewGroups = (
+    Array.isArray(state.view?.primary_artist_groups) && state.view.primary_artist_groups.length
+  ) || (
+    Array.isArray(state.view?.family_artist_groups) && state.view.family_artist_groups.length
+  )
+    ? [
+      ...(Array.isArray(state.view.primary_artist_groups) ? state.view.primary_artist_groups : []),
+      ...(Array.isArray(state.view.family_artist_groups) ? state.view.family_artist_groups : []),
+    ]
+    : (Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : []);
+  rebuildAlbumIndex(startupPreviewGroups);
+  renderView({ preserveMountedGallery: true });
+} else {
+  renderView();
+}
 if (typeof initGalleryMain === 'function') initGalleryMain();
+if (hasPagedRootInitialView) {
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+  });
+}
 if (typeof initMobileNavigation === 'function') initMobileNavigation();
 if (typeof syncMobileHome === 'function') syncMobileHome();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
-  !bootstrap.partialView
-  && !startupHydrationRequired
-  && !state.view?.initial_view_partial
+  hasPagedRootInitialView || (
+    !bootstrap.partialView
+    && !startupHydrationRequired
+    && !state.view?.initial_view_partial
+  )
 );
 if (
   !shouldStartImmediateHydration
   && hasAuthoritativeServerRenderedInitialView
-  && !isEffectivelyEmptyView(state.view)
   && typeof startupMetrics?.completeInitialRefresh === 'function'
 ) {
   const completeServerRenderedInitialRefresh = () => {
@@ -204,7 +242,33 @@ if (shouldStartImmediateHydration) {
     galleryDisplayPreferenceResolutionOptions,
   );
   if (immediateHydrationEndpoint) {
+    const hydrationOriginQuery = String(state.view?.query || '').trim();
+    const hydrationOriginArtist = String(state.view?.selected_artist || '').trim();
+    const hydrationOriginRevision = typeof readViewStateRevision === 'function'
+      ? readViewStateRevision()
+      : null;
+    const shouldDelayRootStartupHydration = Boolean(
+      shouldTreatStartupPreviewAsVisibleReady
+      && !hydrationOriginQuery
+      && !hydrationOriginArtist
+    );
     const runHydration = () => {
+      if (
+        (
+          shouldDelayRootStartupHydration
+          && state.awaitingInitialDataRefresh !== true
+        )
+        || String(state.view?.query || '').trim() !== hydrationOriginQuery
+        || String(state.view?.selected_artist || '').trim() !== hydrationOriginArtist
+        || (
+          hydrationOriginRevision !== null
+          && typeof readViewStateRevision === 'function'
+          && readViewStateRevision() !== hydrationOriginRevision
+        )
+      ) {
+        state.awaitingInitialDataRefresh = false;
+        return;
+      }
       fetchAndRender(immediateHydrationEndpoint, false, {
         startupRefresh: true,
         preserveScroll: true,
@@ -212,15 +276,25 @@ if (shouldStartImmediateHydration) {
         startupHydrationFollowupEndpoint: resolvedStartupHydrationFollowupEndpoint,
       });
     };
+    const scheduleHydration = () => {
+      if (
+        shouldDelayRootStartupHydration
+        && typeof scheduleBrowserTimeout === 'function'
+      ) {
+        scheduleBrowserTimeout(runHydration, STARTUP_PREVIEW_HYDRATION_DELAY_MS);
+        return;
+      }
+      runHydration();
+    };
     if (
-      shouldTreatStartupPreviewAsVisibleReady
+      shouldDelayRootStartupHydration
       && typeof scheduleBrowserAnimationFrame === 'function'
     ) {
       scheduleBrowserAnimationFrame(() => {
-        scheduleBrowserAnimationFrame(runHydration);
+        scheduleBrowserAnimationFrame(scheduleHydration);
       });
     } else {
-      runHydration();
+      scheduleHydration();
     }
   }
 }
@@ -275,27 +349,22 @@ window.addEventListener('scroll', () => {
 
 
 document.addEventListener('contextmenu', (event) => {
+  const heading = event.target.closest('#track-modal-title');
+  if (heading) {
+    const album = getCurrentTrackModalAlbum();
+    if (!album || !isTrackModalSourceActionCurrent() || !canPlayTrackModalSelection(heading)) return;
+    event.preventDefault();
+    showAlbumCardContextMenu(event.clientX, event.clientY, album, heading, () =>
+      getCurrentTrackModalAlbum() === album && isTrackModalSourceActionCurrent() && canPlayTrackModalSelection(heading));
+    return;
+  }
   const albumCard = event.target.closest('.album-card');
   if (!albumCard) return;
   event.preventDefault();
   const trigger = albumCard.querySelector('[data-album-key]');
   const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
-  showAlbumCardContextMenu(event.clientX, event.clientY, album);
+  showAlbumCardContextMenu(event.clientX, event.clientY, album, trigger || albumCard);
 }, true);
-
-document.addEventListener('click', (event) => {
-  const insideAlbumMenu = event.target.closest('#album-card-context-menu');
-  const insideAlbumCard = event.target.closest('.album-card');
-  if (!insideAlbumMenu && !insideAlbumCard) {
-    hideAlbumCardContextMenu();
-  }
-});
-
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    hideAlbumCardContextMenu();
-  }
-});
 
 window.addEventListener('blur', () => {
   hideAlbumCardContextMenu();
@@ -331,6 +400,7 @@ document.addEventListener('pointerdown', reconcileLoopEditSessionExpiry, true);
 document.addEventListener('keydown', reconcileLoopEditSessionExpiry, true);
 let unloadStreamingCleanupPromise = null;
 function cleanupStreamingPlaybackForUnload() {
+  idlePlaybackPreparationCancelled = true;
   if (unloadStreamingCleanupPromise) return unloadStreamingCleanupPromise;
   if (typeof stopStreamingPlayback !== 'function') {
     unloadStreamingCleanupPromise = Promise.resolve();

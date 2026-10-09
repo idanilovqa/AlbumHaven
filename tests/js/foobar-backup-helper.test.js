@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const helperPath = path.resolve(__dirname, '..', '..', 'docs', 'future-feature-plans', 'foobar-reference-assets', 'backup_foobar_db.ps1');
+const POWERSHELL_PROCESS_TIMEOUT_MS = 60000;
 const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 
 for (const scenario of ['closed', 'running', 'root-wal', 'nested-wal']) {
@@ -31,7 +32,7 @@ for (const scenario of ['closed', 'running', 'root-wal', 'nested-wal']) {
     try {
       const result = spawnSync(process.platform === 'win32' ? 'powershell.exe' : 'pwsh', [
         '-NoProfile', '-NonInteractive', '-File', launcher,
-      ], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      ], { encoding: 'utf8', windowsHide: true, timeout: POWERSHELL_PROCESS_TIMEOUT_MS });
       assert.ifError(result.error);
       const output = `${result.stdout}\n${result.stderr}`;
       if (scenario === 'closed') {
@@ -60,7 +61,7 @@ test('Foobar backup rejects nested destination with a trailing source separator'
     `& ${psQuote(helperPath)} -FoobarRoot ${psQuote(source + path.sep)} -DestinationRoot ${psQuote(destination)}`].join('\n'));
   try {
     const result = spawnSync(process.platform === 'win32' ? 'powershell.exe' : 'pwsh', ['-NoProfile', '-NonInteractive', '-File', launcher],
-      { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+      { encoding: 'utf8', windowsHide: true, timeout: POWERSHELL_PROCESS_TIMEOUT_MS });
     assert.ifError(result.error); assert.notEqual(result.status, 0);
     assert.match(result.stderr, /DestinationRoot must be outside FoobarRoot/);
     assert.equal(fs.existsSync(destination), false, 'unsafe output must not be created');

@@ -1196,6 +1196,10 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
 
 {
   const { context } = loadHelper();
+  let menuOptions;
+  context.window ||= {};
+  context.window.AlbumHavenPlaytableUI = {actions: (_anchor, options) => {menuOptions = options; return {close() {}};}};
+  context.TrackActionsRuntime = {scope: () => ({token: 'session'})};
   context.showAlbumCardContextMenu(12, 24, {
     key: 'arrival-album',
     move_availability: {
@@ -1205,12 +1209,10 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
         move_to_library: { available: true, target_category: 'main_library' },
       },
     },
-  });
-  const menu = context.document.getElementById('album-card-context-menu');
-  assert.match(menu.innerHTML, /data-album-card-action="move_to_hoard"/);
-  assert.match(menu.innerHTML, /Move to Hoard/);
-  assert.match(menu.innerHTML, /data-album-card-action="move_to_library"/);
-  assert.match(menu.innerHTML, /Move to Main Library/);
+  }, {isConnected: true});
+  const formats = new Map(Array.from(menuOptions.formats, item => [item.value, item]));
+  assert.equal(formats.get('move_to_hoard').label, 'Move to Hoard');
+  assert.equal(formats.get('move_to_library').label, 'Move to Main Library');
 }
 
 
@@ -1219,7 +1221,8 @@ test('album context menus are unavailable for narrow layouts and wide mobile cli
     const { context } = loadHelper();
     context.isMobileClient = () => mobile;
     context.usesMobilePageLayout = () => narrow;
-    context.ensureAlbumCardContextMenu = () => { throw new Error('Mobile must not build desktop actions'); };
+    context.window ||= {};
+    context.window.AlbumHavenPlaytableUI = {actions: () => { throw new Error('Mobile must not build desktop actions'); }};
     context.showAlbumCardContextMenu(10, 20, { key: 'generated' });
   }
 });
@@ -1279,3 +1282,16 @@ for (const allowed of [false, true, undefined]) {
     }
   });
 }
+
+
+test('paged root loose tracks remain visible outside the loaded artist window', () => {
+  const { context } = loadHelper();
+  const track = { artist: 'Later Artist', title: 'Loose track' };
+  context.state.view = {
+    selected_artist: '', gallery_page: { has_more: true, next_cursor: 'next' },
+    artist_groups: [{ artist: 'First Artist', albums: [] }],
+    artists_sidebar: [{ artist: 'First Artist' }, { artist: 'Later Artist' }],
+    non_album_tracks: [track],
+  };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
+});

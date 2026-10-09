@@ -963,12 +963,24 @@ def finalize_structural_tag_edit_save_task(
             release()
 
 
+def _release_cancelled_save_reservation(future, reservation) -> None:
+    if future.cancelled():
+        release = getattr(reservation, "release", None)
+        if callable(release):
+            release()
+
+
 def queue_finalize_save_task(*, wait_for_completion: bool = False, **kwargs) -> None:
     if wait_for_completion:
         finalize_save_task(**kwargs)
         return
     try:
-        _SAVE_TASK_EXECUTOR.submit(finalize_save_task, **kwargs)
+        future = _SAVE_TASK_EXECUTOR.submit(finalize_save_task, **kwargs)
+        future.add_done_callback(
+            lambda completed: _release_cancelled_save_reservation(
+                completed, kwargs.get("structural_tag_edit_reservation"),
+            )
+        )
     except Exception:
         release = getattr(
             kwargs.get("structural_tag_edit_reservation"),
@@ -989,9 +1001,14 @@ def queue_finalize_structural_tag_edit_save_task(
         finalize_structural_tag_edit_save_task(**kwargs)
         return
     try:
-        _STRUCTURAL_TAG_EDIT_EXECUTOR.submit(
+        future = _STRUCTURAL_TAG_EDIT_EXECUTOR.submit(
             finalize_structural_tag_edit_save_task,
             **kwargs,
+        )
+        future.add_done_callback(
+            lambda completed: _release_cancelled_save_reservation(
+                completed, kwargs.get("structural_tag_edit_reservation"),
+            )
         )
     except Exception:
         release = getattr(

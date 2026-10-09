@@ -11,6 +11,7 @@ const suites = [
   { config: 'playwright.cover-rescan.config.js' },
   { config: 'playwright.non-album-rescan.config.js' },
   { config: 'playwright.config.js' },
+  { config: 'playwright.home-feedback.config.js' },
 ];
 
 function hasFocusedSelection(argv) {

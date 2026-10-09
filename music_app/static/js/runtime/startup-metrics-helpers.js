@@ -70,6 +70,7 @@ const startupMetrics = (() => {
     markOnce,
     schedulePaintMark,
     markInitialRender(view = {}) {
+      window.AlbumHavenStartupProgress?.show(75);
       markOnce('runtime_boot_complete', {
         query: String(view.query || ''),
         selectedArtist: String(view.selected_artist || ''),
@@ -92,6 +93,7 @@ const startupMetrics = (() => {
     completeVisibleInitialRefresh(view = {}, detail = {}) {
       if (bootState.initialVisibleRefreshCompleted) return;
       bootState.initialVisibleRefreshCompleted = true;
+      window.AlbumHavenStartupProgress?.finish();
       const extraDetail = detail && typeof detail === 'object' ? detail : {};
       schedulePaintMark('initial_visible_refresh_complete', () => ({
         artistCount: Number(view.artist_count || 0),

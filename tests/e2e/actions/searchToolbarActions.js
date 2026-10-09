@@ -13,8 +13,12 @@ export class SearchToolbarActions {
   }
 
   async search(query, options = {}) {
+    await this.searchToolbar.input.click();
     await this.searchToolbar.input.fill(query);
-    if (options.submitWithEnter) {
+    // Search submission is explicit in the product flow. Keep the helper's
+    // default aligned with that contract; callers that need draft-only input
+    // can opt out explicitly.
+    if (options.submitWithEnter !== false && !options.clickApply) {
       if (typeof options.recordSubmissionBoundary === 'function') {
         await options.recordSubmissionBoundary();
       }
@@ -29,16 +33,26 @@ export class SearchToolbarActions {
     }
   }
 
+  async submitPreparedQueryWithEnter(query, options = {}) {
+    const normalizedQuery = String(query || '').trim();
+    await this.searchToolbar.input.fill(normalizedQuery);
+    await expect(this.searchToolbar.input).toHaveValue(normalizedQuery);
+    if (typeof options.recordSubmissionBoundary === 'function') {
+      await options.recordSubmissionBoundary();
+    }
+    await this.searchToolbar.input.press('Enter');
+  }
+
   async settleDebouncedPrefixesThenSubmit(query, prefixes, options = {}) {
     const completedQuery = String(query || '');
     for (const prefix of prefixes) {
       const typedPrefix = String(prefix || '');
       await this.searchToolbar.input.fill(typedPrefix);
-      await this.waitForQuery(typedPrefix, options);
+      await expect(this.searchToolbar.input).toHaveValue(typedPrefix);
     }
     if (await this.searchToolbar.input.inputValue() !== completedQuery) {
       await this.searchToolbar.input.fill(completedQuery);
-      await this.waitForQuery(completedQuery, options);
+      await expect(this.searchToolbar.input).toHaveValue(completedQuery);
     }
     await this.searchToolbar.input.press('Enter');
     await this.waitForQuery(completedQuery, options);
@@ -68,11 +82,12 @@ export class SearchToolbarActions {
     }
   }
 
-  async clearSearchByInputDebounce(options = {}) {
+  async clearSearchWithEnter(options = {}) {
     await this.searchToolbar.input.fill('');
     await expect(this.searchToolbar.recentSearchPopover).toBeHidden({
       timeout: options.popoverTimeout || 1000,
     });
+    await this.searchToolbar.input.press('Enter');
     await this.waitForQuery('', options);
   }
 

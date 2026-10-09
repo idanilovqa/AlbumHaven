@@ -486,6 +486,40 @@ const EVALUATE_BEHAVIOR_PATTERN = new RegExp([
   String.raw`\.(?:setProperty|removeProperty|play|pause|load|submit|requestSubmit|showModal|close)\s*\(`,
 ].join('|'), 'i');
 
+const PRODUCTION_SEARCH_BENCHMARK_SPEC = 'tests/e2e/productionRealData/searchFirstVisible.spec.js';
+const PRODUCTION_SEARCH_SAFETY_ROUTE = `.route('**/*', async (route) => {
+  const request = route.request();
+  if (isProductionSearchHostTelemetryRequest({
+    method: request.method(),
+    url: request.url(),
+    allowedOrigin: ALLOWED_ORIGIN,
+  })) {
+    const url = new URL(request.url());
+    hostTelemetryRequests.push({
+      method: request.method(),
+      origin: url.origin,
+      pathname: url.pathname,
+    });
+    await route.abort('blockedbyclient');
+    return;
+  }
+  await route.continue();
+})`.replace(/\s+/gu, '');
+
+function approvedProductionSearchSafetyRouteRange(relativePath, text) {
+  if (relativePath !== PRODUCTION_SEARCH_BENCHMARK_SPEC) return null;
+  const routeMatches = javascriptMemberAccessMatches(text, ['route']);
+  if (routeMatches.length !== 1) return null;
+  const [routeMatch] = routeMatches;
+  const receiver = text.slice(Math.max(0, routeMatch.index - 20), routeMatch.index);
+  if (!/\bcontext\s*$/u.test(receiver)) return null;
+  const callSource = matchingCallSource(text, routeMatch.index);
+  if (callSource.replace(/\s+/gu, '') !== PRODUCTION_SEARCH_SAFETY_ROUTE) return null;
+  const navigationIndex = text.indexOf("galleryActions.goto('/?surface=albums')");
+  if (navigationIndex === -1 || routeMatch.index >= navigationIndex) return null;
+  return { start: routeMatch.index, end: routeMatch.index + callSource.length };
+}
+
 function scanSource({ filePath, source }) {
   const relativePath = normalizedPath(filePath);
   const text = String(source || '');
@@ -538,6 +572,7 @@ function scanSource({ filePath, source }) {
 
   if (relativePath.startsWith('tests/e2e/')) {
     const commentFreeText = stripCommentsPreservingLayout(text);
+    const approvedSafetyRouteRange = approvedProductionSearchSafetyRouteRange(relativePath, text);
     const selectorOwnershipSurface = (
       relativePath.startsWith('tests/e2e/actions/')
       || relativePath.startsWith('tests/e2e/helpers/')
@@ -572,6 +607,11 @@ function scanSource({ filePath, source }) {
       text,
       ['route', 'routeFromHAR', 'routeWebSocket', 'unroute', 'unrouteAll', 'fulfill', 'abort', 'continue'],
     )) {
+      if (
+        approvedSafetyRouteRange
+        && match.index >= approvedSafetyRouteRange.start
+        && match.index < approvedSafetyRouteRange.end
+      ) continue;
       add(
         'request-interception',
         match,

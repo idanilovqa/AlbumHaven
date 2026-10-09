@@ -26,6 +26,19 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
+    ("GET", "/home/activity/now-playing"): "library.browse.read",
+    ("POST", "/playback/session/presence-source"): "library.media.read",
+    ("POST", "/playback/session/presence"): "library.browse.read",
+    ("GET", "/friends"): "library.social.read",
+    ("GET", "/friends/discover"): "library.social.read",
+    ("GET", "/friends/notifications"): "library.social.read",
+    ("POST", "/friends/notifications/{notification_id}/read"): "library.social.manage",
+    ("GET", "/friends/{account_ref}"): "library.social.read",
+    ("POST", "/friends/requests"): "library.social.manage",
+    ("POST", "/friends/{account_ref}/{action}"): "library.social.manage",
+    ("GET", "/friends/{account_ref}/taste"): "library.social.taste.read",
+    ("GET", "/admin/friends-policy"): "accounts.read",
+    ("PUT", "/admin/friends-policy"): "accounts.capabilities.manage",
     ("WEBSOCKET", "/playback/pcm"): "library.media.read",
     ("POST", "/logout"): "auth.session.logout",
     ("POST", "/admin/accounts"): "accounts.create",
@@ -40,6 +53,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/accounts/{account_id}/invitation/send"): "accounts.invitation.send",
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
+    ("GET", "/account/playlist-preferences"): "account.self.playlist_preferences.read",
+    ("PUT", "/account/playlist-preferences"): "account.self.playlist_preferences.write",
+    ("GET", "/account/playlist-preferences/operations/{request_key}"): "account.self.playlist_preferences.read",
     ("GET", "/account/appearance"): "account.self.appearance.read",
     ("GET", "/account/layout-preferences"): "account.self.appearance.read",
     ("PUT", "/account/layout-preferences"): "account.self.appearance.write",
@@ -55,6 +71,13 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
+    ("GET", "/home/activity"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/native-queue"): "library.browse.read",
+    ("GET", "/library/album-artwork/{album_ref}"): "library.artwork.read",
+    ("POST", "/home/activity/native-target"): "library.browse.read",
+    ("GET", "/playlists/{playlist_ref}/items/{item_ref}/native-target"): "library.browse.read",
+    ("GET", "/friends/{account_ref}/activity"): "library.social.history.read",
+    ("GET", "/friends/{account_ref}/comparison"): "library.social.history.read",
     ("GET", "/home/recent-albums"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",
     ("GET", "/utilities/problematic-files"): "library.problems.read",
@@ -147,6 +170,18 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/news-center/preferences"): "library.discovery.preferences.manage",
     ("POST", "/discovery-lookups"): "library.discovery.lookup",
     ("POST", "/virtual-artists"): "library.virtual_discography.create",
+    ("GET", "/playlists/destinations"): "library.browse.read",
+    ("GET", "/playlists/creation-source/current"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/queue"): "library.browse.read",
+    ("POST", "/playlists/creation-source/selection"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/match-candidates"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/accept-match"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/activity"): "library.playlists.create",
+    ("GET", "/playlists/{playlist_ref}/missing-source"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/complete"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/entries"): "library.playlists.create",
+    ("GET", "/playlists/operations/{request_key}"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/items/remove"): "library.playlists.items.manage",
     ("POST", "/playlists"): "library.playlists.create",
     ("POST", "/playlists/derived-popular-tracks"): "library.playlists.create",
     ("PATCH", "/playlists/{playlist_ref}"): "library.playlists.manage",
@@ -157,6 +192,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/playlists/{playlist_ref}/items/reorder"): "library.playlists.items.manage",
     ("PUT", "/playlists/{playlist_ref}/cover"): "library.playlists.cover.manage",
     ("DELETE", "/playlists/{playlist_ref}/cover"): "library.playlists.cover.manage",
+    ("GET", "/playlists/{playlist_ref}/access-grants"): "library.playlists.access.manage",
+    ("GET", "/playlists/{playlist_ref}/access-candidates"): "library.playlists.access.manage",
+    ("PATCH", "/playlists/{playlist_ref}/visibility"): "library.playlists.access.manage",
     ("POST", "/playlists/{playlist_ref}/access-grants"): "library.playlists.access.manage",
     ("PATCH", "/playlists/{playlist_ref}/access-grants/{grant_ref}"): "library.playlists.access.manage",
     ("DELETE", "/playlists/{playlist_ref}/access-grants/{grant_ref}"): "library.playlists.access.manage",
@@ -186,6 +224,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
             # The route resolves this resource through the actor's owned loops.
             action = "library.loops.media.read"
         preference_headers = (
+            {"Cache-Control": "private, no-store"}
+            if route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends") else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -236,6 +276,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 headers=preference_headers,
             )
         response = await call_next(request)
+        if route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends"):
+            response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)
         return response

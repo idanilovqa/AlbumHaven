@@ -2109,3 +2109,21 @@ def test_regular_finalizer_durable_failure_releases_reservation(tmp_path):
 
     assert releases == ["released"]
     assert save_task_result(task_id)["status"] == "failed"
+
+
+@pytest.mark.parametrize("structural", [False, True])
+def test_cancelled_queued_finalizer_releases_intent_session_and_structural_reservation(monkeypatch, structural):
+    from music_app.routes.api_wave_a_asgi_routes import _EditTagsReservation
+    releases = []
+    reservation = _EditTagsReservation(
+        SimpleNamespace(release=lambda: releases.append("intent")),
+        SimpleNamespace(release=lambda: releases.append("structural")),
+    )
+    future = Future()
+    executor = save_tasks_module._STRUCTURAL_TAG_EDIT_EXECUTOR if structural else save_tasks_module._SAVE_TASK_EXECUTOR
+    monkeypatch.setattr(executor, "submit", lambda *_args, **_kwargs: future)
+    queue = save_tasks_module.queue_finalize_structural_tag_edit_save_task if structural else save_tasks_module.queue_finalize_save_task
+    queue(structural_tag_edit_reservation=reservation)
+    assert releases == []
+    assert future.cancel()
+    assert releases == ["intent", "structural"]

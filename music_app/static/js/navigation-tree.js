@@ -4,7 +4,7 @@
   if (window.NavigationTree) return;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   // HTML slots contain component-rendered markup; resource text uses escaped fields.
-  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '' } = {}) {
+  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '', disabled = false } = {}) {
     const template = document.getElementById('navigation-tree-item-template')?.textContent;
     if (!template) throw new Error('NavigationTreeItem template is missing.');
     const settings = variant === 'settings';
@@ -20,12 +20,17 @@
     if (action) values.type = panel ? 'button' : 'submit';
     else values.href = /^(?:\/(?!\/)|#)/.test(String(href)) ? href : '#';
     if (draggable) values.draggable = 'true';
+    if (disabled === true) {
+      values['aria-disabled'] = 'true';
+      if (action) values.disabled = 'disabled';
+      else {delete values.href; values.role = 'link'; values.tabindex = '-1';}
+    }
     for (const [name, value] of Object.entries(attributes)) {
       if (/^data-[a-z0-9-]+$/.test(name) && !name.startsWith('data-navigation-tree-')) values[name] = value;
     }
     if (selected) values['aria-current'] = settings ? 'page' : 'true';
     const attrs = Object.entries(values).map(([name, value]) => name + '="' + escape(value) + '"').join(' ');
-    const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + escape(subtitle) + (year ? (subtitle ? ' · ' : '') + escape(year) : '') + '</span>' : escape(label);
+    const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + (subtitle ? '<span class="utility-list-item-subtitle">' + escape(subtitle) + '</span>' : '') + (year ? '<span class="utility-list-item-year">' + escape(year) + '</span>' : '') + '</span>' : escape(label);
     const slots = [tag, attrs, wide ? '<span class="navigation-tree-artwork">' + artworkHtml + '</span>' : icon ? '<span class="navigation-tree-icon" aria-hidden="true">' + escape(icon) + '</span>' : '', identity,
       (count === null ? '' : '<span class="navigation-tree-count artist-count"' + (countHidden ? ' hidden' : '') + '>' + escape(count) + '</span>') + (wide ? trailingHtml : ''), tag];
     let index = 0;
@@ -47,11 +52,26 @@
   function updateItem(item, { label = '', subtitle = '', year = '', count = null, artworkHtml, artworkLabel } = {}) {
     for (const [selector, value] of [
       ['.utility-list-item-title', label],
-      ['.utility-list-item-meta', subtitle + (year ? ' · ' + year : '')],
       ['.navigation-tree-count', count === null ? '' : count],
     ]) {
       const field = item.querySelector?.(selector);
       if (field && field.textContent !== String(value)) field.textContent = String(value);
+    }
+    const meta = item.querySelector?.('.utility-list-item-meta');
+    if (meta) {
+      for (const [className, value] of [['utility-list-item-subtitle', subtitle], ['utility-list-item-year', year]]) {
+        let field = meta.querySelector(`.${className}`);
+        if (!value) {
+          field?.remove();
+          continue;
+        }
+        if (!field) {
+          field = document.createElement('span');
+          field.className = className;
+          meta.insertBefore(field, className === 'utility-list-item-subtitle' ? meta.firstChild : null);
+        }
+        if (field.textContent !== String(value)) field.textContent = String(value);
+      }
     }
     const artwork = item.querySelector?.('.navigation-tree-artwork');
     if (artwork && artworkHtml !== undefined) artwork.innerHTML = artworkHtml;

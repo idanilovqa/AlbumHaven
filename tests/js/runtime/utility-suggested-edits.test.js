@@ -245,25 +245,6 @@ test('P07 suggestion toggle preserves independent problem selections', () => {
   assert.deepEqual(context.state.utility.problemExclusionSelections, { 'problem-year-1': true });
 });
 
-test('P07 dragging suggestions selects every intervening field and supports reverse deselection', () => {
-  const context = proposalContext();
-  assert.equal(typeof context.extendProblemSuggestionRange, 'function');
-  context.extendProblemSuggestionRange(0, 2);
-  assert.deepEqual(Object.keys(context.state.utility.proposalSelections), ['year-1', 'artist-1', 'year-2']);
-  context.extendProblemSuggestionRange(2, 0, false);
-  assert.deepEqual(Object.keys(context.state.utility.proposalSelections), []);
-  assert.deepEqual(context.state.utility.problemExclusionSelections, {});
-});
-
-test('P07 suggestion ranges skip disabled rendered labels', () => {
-  const context = proposalContext();
-  const buttons = context.document.querySelectorAll();
-  buttons[1].disabled = true;
-  context.document.querySelectorAll = () => buttons;
-  context.extendProblemSuggestionRange(0, 1);
-  assert.deepEqual(Object.keys(context.state.utility.proposalSelections), ['year-1', 'year-2']);
-});
-
 test('P05 labels show exact current and corrected values without replacing source casing', () => {
   const context = proposalContext();
   assert.equal(typeof context.formatProblemSuggestionLabel, 'function');

@@ -948,6 +948,7 @@ test('rating authority E2E action observes the real view-data response without i
       },
     },
     input: {
+        async click() { interactions.push('focus'); },
       async fill(value) { interactions.push(`fill:${value}`); },
       async press(value) { interactions.push(`press:${value}`); },
     },
@@ -960,6 +961,7 @@ test('rating authority E2E action observes the real view-data response without i
 
   assert.deepEqual(interactions, [
     'response-armed',
+      'focus',
     'fill:Rating Numeric Authority',
     'press:Enter',
   ]);
@@ -2102,11 +2104,17 @@ test('gallery cover readiness requires decoded images or explicit final placehol
 
 test('gallery readiness uses hydration state instead of a fixed virtualized-card count', () => {
   const gallery = read('tests/e2e/actions/galleryActions.js');
+  const readinessStart = gallery.indexOf('async waitForGalleryReady');
+  const readinessEnd = gallery.indexOf('async expectCentralLoaderHidden');
+  assert.ok(readinessStart >= 0 && readinessEnd > readinessStart);
+  const readiness = gallery.slice(readinessStart, readinessEnd);
 
   assert.match(gallery, /options\.minimumCards === undefined\s*\? 1/);
   assert.match(gallery, /metrics\.initialRefreshCompleted/);
   assert.match(gallery, /metrics\.marks\?\.initial_refresh_complete/);
   assert.match(gallery, /libraryLoader\.hidden/);
+  assert.match(readiness, /startupProgress\.hidden/);
+  assert.match(readiness, /startupProgressSelector: this\.galleryPage\.startupProgressSelector/);
   assert.match(gallery, /visibleCards\.length >= selectors\.minimumCards/);
   assert.match(gallery, /bounds\.width > 0 && bounds\.height > 0/);
   assert.doesNotMatch(gallery, /minimumCards \?\? 10/);
@@ -5939,20 +5947,59 @@ for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-a
 }
 
 
-test('search actions honor an explicit search-button submission', async () => {
+test('search actions wait for actionable input before Enter submission', async () => {
   const { SearchToolbarActions } = await import(
     pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/searchToolbarActions.js')).href
   );
   const interactions = [];
   const actions = new SearchToolbarActions({
     input: {
+      async click() { interactions.push(['focus']); },
       async fill(value) { interactions.push(['fill', value]); },
       async press(key) { interactions.push(['press', key]); },
     },
     applyButton: { async click() { interactions.push(['click']); } },
   });
-  await actions.search('Neal Morse', { clickApply: true });
-  assert.deepEqual(interactions, [['fill', 'Neal Morse'], ['click']]);
+  await actions.search('Neal Morse', {
+    recordSubmissionBoundary() {
+      interactions.push(['boundary']);
+    },
+  });
+  assert.deepEqual(interactions, [
+    ['focus'],
+    ['fill', 'Neal Morse'],
+    ['boundary'],
+    ['press', 'Enter'],
+  ]);
+});
+
+test('search actions record the submission boundary before clicking Apply', async () => {
+  const { SearchToolbarActions } = await import(
+    pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/searchToolbarActions.js')).href
+  );
+  const interactions = [];
+  const actions = new SearchToolbarActions({
+    input: {
+      async click() { interactions.push(['focus']); },
+      async fill(value) { interactions.push(['fill', value]); },
+    },
+    applyButton: {
+      async click() { interactions.push(['click']); },
+    },
+  });
+
+  await actions.search('Neal Morse', {
+    clickApply: true,
+    recordSubmissionBoundary() {
+      interactions.push(['boundary']);
+    },
+  });
+  assert.deepEqual(interactions, [
+    ['focus'],
+    ['fill', 'Neal Morse'],
+    ['boundary'],
+    ['click'],
+  ]);
 });
 
 test('album cover checkpoint accepts coherent production blobs and rejects stale display sources', async () => {

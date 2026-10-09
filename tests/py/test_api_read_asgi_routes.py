@@ -4534,6 +4534,18 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
+        def build_problematic_files_page(self, *, limit):
+            assert limit == 50
+            return {
+                "count": 1,
+                "items": [{"key": "bounded-album", "detail_loaded": False}],
+                "initial_detail": {"key": "bounded-album", "detail_loaded": True},
+                "complete": False,
+                "persistence_backend": "postgres",
+                "persistence_seam": "library_browse",
+                "view_data_source": "postgres_library_browse",
+            }
+
         def build_problematic_file_detail_payload(self, album_key):
             if album_key == "missing":
                 return None
@@ -4564,6 +4576,24 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         asgi_app,
         "GET",
         "/utilities/problematic-files",
+    )
+    bounded_status, _bounded_headers, bounded_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"limit": "50"},
+    )
+    invalid_limit_status, _invalid_limit_headers, invalid_limit_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"limit": "abc"},
+    )
+    oversized_limit_status, _oversized_limit_headers, oversized_limit_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"limit": "201"},
     )
     path_detail_status, _path_detail_headers, path_detail_body = _run_asgi_request(
         asgi_app,
@@ -4612,6 +4642,23 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "operational_items": [],
         "operational_count": 0,
     }
+    assert bounded_status == 200
+    assert _decode_json(bounded_body) == {
+        "count": 1,
+        "items": [{"key": "bounded-album", "detail_loaded": False}],
+        "initial_detail": {"key": "bounded-album", "detail_loaded": True},
+        "complete": False,
+        "persistence_backend": "postgres",
+        "persistence_seam": "library_browse",
+        "view_data_source": "postgres_library_browse",
+        "watcher_health": {"state": "healthy", "problems": []},
+        "operational_items": [],
+        "operational_count": 0,
+    }
+    assert invalid_limit_status == 422
+    assert _decode_json(invalid_limit_body)["detail"][0]["loc"] == ["query", "limit"]
+    assert oversized_limit_status == 422
+    assert _decode_json(oversized_limit_body)["detail"][0]["loc"] == ["query", "limit"]
     assert path_detail_status == 200
     assert _decode_json(path_detail_body) == {
         "key": "broken-album",
@@ -4635,7 +4682,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "ok": False,
         "error": "Problematic album not found.",
     }
-    assert repository_configs == [app.config, app.config, app.config, app.config]
+    assert repository_configs == [app.config, app.config, app.config, app.config, app.config]
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

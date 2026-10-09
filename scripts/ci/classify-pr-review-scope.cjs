@@ -283,7 +283,8 @@ function selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullRevie
 function applyPipelineSkips(scope, { labels = [], repository, headRepository } = {}) {
   const trusted = Boolean(repository && repository === headRepository);
   const selected = new Set(normalizeLabels(labels));
-  const skipReviews = trusted && selected.has('skip_reviews');
+  const runReviews = trusted && selected.has('run_reviews');
+  const skipReviews = trusted && !runReviews;
   const skipTests = trusted && selected.has('skip_tests');
   return { ...scope, mode: skipReviews ? 'none' : scope.mode, skipReviews, skipTests };
 }

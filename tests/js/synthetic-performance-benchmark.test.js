@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-test('shared millisecond benchmarks enforce ordinary grace or the exact approved cold-load exception', async () => {
+test('shared millisecond benchmarks enforce ordinary grace limits', async () => {
   const benchmarks = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
   const catalog = [
     benchmarks.ALL_ARTISTS_LOCAL_BENCHMARK,
@@ -18,13 +18,7 @@ test('shared millisecond benchmarks enforce ordinary grace or the exact approved
   assert.equal(timingExpectations.length, 55);
   for (const expectation of timingExpectations) {
     assert.ok(Number.isFinite(expectation.targetMaximum), `${expectation.key} target`);
-    if (expectation.metricId === 'utility-problematic-files-isolated-postgres.coldProblematicApiMs') {
-      assert.equal(expectation.targetMaximum, 1000);
-      assert.equal(expectation.graceMs, 1000);
-      assert.equal(expectation.maxAllowed, 2000);
-    } else {
-      assert.ok(expectation.graceMs >= 200 && expectation.graceMs <= 400, `${expectation.key} grace`);
-    }
+    assert.ok(expectation.graceMs >= 200 && expectation.graceMs <= 400, `${expectation.key} grace`);
     assert.equal(expectation.maxAllowed, expectation.targetMaximum + expectation.graceMs, `${expectation.key} ceiling`);
     assert.equal(expectation.hardCeiling, expectation.maxAllowed, `${expectation.key} hard ceiling alias`);
   }
@@ -470,9 +464,9 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   } = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
 
   const passingEvaluation = evaluateUtilityProblematicFilesLocalBenchmark({
-    coldProblematicApiMs: 2000,
+    coldProblematicApiMs: 1200,
     problematicResponseBytes: 2097152,
-    problematicReadyMs: 1400,
+    problematicReadyMs: 1200,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,
     problematicCachedReenterMs: 1000,
@@ -498,7 +492,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   const readinessFailure = evaluateUtilityProblematicFilesLocalBenchmark({
     coldProblematicApiMs: 1000,
     problematicResponseBytes: 2097152,
-    problematicReadyMs: 1401,
+    problematicReadyMs: 1201,
     problematicCachedEnterMs: 1000,
     problematicCachedExitMs: 1000,
     problematicCachedReenterMs: 1000,
@@ -509,7 +503,7 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     finalMemory: { peakBytes: 50331648 },
   });
   const coldApiFailure = evaluateUtilityProblematicFilesLocalBenchmark({
-    coldProblematicApiMs: 2001,
+    coldProblematicApiMs: 1201,
     problematicResponseBytes: 2097152,
     problematicReadyMs: 1000,
     problematicCachedEnterMs: 1000,
@@ -698,14 +692,14 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
     },
   );
   assert.equal(coldApiExpectation?.targetMaximum, 1000);
-  assert.equal(coldApiExpectation?.graceMs, 1000);
-  assert.equal(coldApiExpectation?.maxAllowed, 2000);
+  assert.equal(coldApiExpectation?.graceMs, 200);
+  assert.equal(coldApiExpectation?.maxAllowed, 1200);
   assert.equal(passingEvaluation.results.find((result) => result.key === 'coldProblematicApiMs')?.graceUsed, true);
   assert.equal(responseSizeExpectation?.maxAllowed, 2097152);
   assert.equal(responseSizeExpectation?.units, 'bytes');
   assert.equal(readinessExpectation?.targetMaximum, 1000);
-  assert.equal(readinessExpectation?.graceMs, 400);
-  assert.equal(readinessExpectation?.maxAllowed, 1400);
+  assert.equal(readinessExpectation?.graceMs, 200);
+  assert.equal(readinessExpectation?.maxAllowed, 1200);
   assert.equal(passingEvaluation.results.find((result) => result.key === 'problematicReadyMs')?.graceUsed, true);
   assert.equal(longestFilterExpectation?.targetMaximum, 3300);
   assert.equal(longestFilterExpectation?.graceMs, 400);
@@ -713,9 +707,9 @@ test('utility problematic-files benchmark guards the cold API, payload size, vis
   assert.equal(filterFailure.failures.length, 1);
   assert.match(filterFailure.failures[0], /longestProblemFilterMs hard-fail: exceeded 3700 ms/);
   assert.equal(readinessFailure.failures.length, 1);
-  assert.match(readinessFailure.failures[0], /problematicReadyMs hard-fail: exceeded 1400 ms/);
+  assert.match(readinessFailure.failures[0], /problematicReadyMs hard-fail: exceeded 1200 ms/);
   assert.equal(coldApiFailure.failures.length, 1);
-  assert.match(coldApiFailure.failures[0], /coldProblematicApiMs hard-fail: exceeded 2000 ms/);
+  assert.match(coldApiFailure.failures[0], /coldProblematicApiMs hard-fail: exceeded 1200 ms/);
   assert.equal(responseSizeFailure.failures.length, 1);
   assert.match(responseSizeFailure.failures[0], /problematicResponseBytes failed: exceeded 2.0 MB \(2097152 bytes\)/);
 });

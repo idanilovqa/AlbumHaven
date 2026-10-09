@@ -180,6 +180,8 @@ function loadHelper(options = {}) {
   const context = {
     activeTagEditMutationClaim: options.activeTagEditMutationClaim || null,
     virtualGrid: options.virtualGrid,
+    scheduleBrowserAnimationFrame: options.scheduleBrowserAnimationFrame,
+    compactCurrentViewForIdle: options.compactCurrentViewForIdle,
     AbortController,
     Promise,
     Array,
@@ -2307,6 +2309,62 @@ async function run() {
     assert.equal(context.state.lightbox.loadToken, 4);
     assert.equal(context.document.body.classList.contains('modal-open'), false);
   }
+
+  test('closing Album Details paints hidden state before expensive cleanup and cancels stale cleanup after reopen', () => {
+    const animationFrames = [];
+    let compactCalls = 0;
+    let resumeCalls = 0;
+    const { context, trackModal } = loadHelper({
+      scheduleBrowserAnimationFrame(callback) {
+        animationFrames.push(callback);
+      },
+      compactCurrentViewForIdle() {
+        compactCalls += 1;
+      },
+      virtualGrid: {
+        suspendSelectedArtistCoverLoadsForUserAction() {
+          return 41;
+        },
+        resumeSelectedArtistCoverLoadsAfterUserAction() {
+          resumeCalls += 1;
+        },
+      },
+    });
+
+    context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] });
+    context.suspendGalleryCoverLoadsForTrackModal();
+    const title = context.getTrackModalElements().title;
+    title.textContent = 'Album Alpha';
+
+    context.closeTrackModal();
+
+    assert.equal(trackModal.hidden, true, 'close must hide the overlay synchronously');
+    assert.equal(title.textContent, 'Album Alpha', 'rendered DOM must remain until the browser can paint');
+    assert.equal(compactCalls, 0, 'view compaction must not block the close click');
+    assert.equal(resumeCalls, 0, 'gallery cover resumption must not block the close click');
+    assert.equal(animationFrames.length, 1);
+
+    animationFrames.shift()();
+    assert.equal(title.textContent, 'Album Alpha', 'cleanup must wait through the first paint opportunity');
+    assert.equal(animationFrames.length, 1);
+
+    animationFrames.shift()();
+    assert.equal(title.textContent, '', 'cleanup must clear rendered state after the paint opportunity');
+    assert.equal(compactCalls, 1);
+    assert.equal(resumeCalls, 1);
+
+    context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] });
+    title.textContent = 'Album Alpha';
+    context.closeTrackModal();
+    animationFrames.shift()();
+    context.openTrackModal({ key: 'beta', name: 'Album Beta', tracks: [] });
+    title.textContent = 'Album Beta';
+    animationFrames.shift()();
+
+    assert.equal(trackModal.hidden, false);
+    assert.equal(title.textContent, 'Album Beta', 'stale close cleanup must not clear a reopened modal');
+    assert.equal(compactCalls, 1);
+  });
 
   {
     let resumedDeferredLoads = 0;

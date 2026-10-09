@@ -4,7 +4,7 @@
   if (window.NavigationTree) return;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   // HTML slots contain component-rendered markup; resource text uses escaped fields.
-  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '' } = {}) {
+  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '', disabled = false } = {}) {
     const template = document.getElementById('navigation-tree-item-template')?.textContent;
     if (!template) throw new Error('NavigationTreeItem template is missing.');
     const settings = variant === 'settings';
@@ -20,6 +20,11 @@
     if (action) values.type = panel ? 'button' : 'submit';
     else values.href = /^(?:\/(?!\/)|#)/.test(String(href)) ? href : '#';
     if (draggable) values.draggable = 'true';
+    if (disabled === true) {
+      values['aria-disabled'] = 'true';
+      if (action) values.disabled = 'disabled';
+      else {delete values.href; values.role = 'link'; values.tabindex = '-1';}
+    }
     for (const [name, value] of Object.entries(attributes)) {
       if (/^data-[a-z0-9-]+$/.test(name) && !name.startsWith('data-navigation-tree-')) values[name] = value;
     }

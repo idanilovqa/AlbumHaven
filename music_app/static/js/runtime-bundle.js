@@ -40116,7 +40116,8 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
-    const activeSearchQuery = String(state.view?.query || '').trim();
+    const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
+    const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
@@ -40152,11 +40153,12 @@ function handleGalleryBootstrapClick(event) {
     closeArtistsDrawer({ restoreFocus: false });
     const nextView = {
       ...state.view,
-      query: state.view.query || '',
+      query: activeSearchQuery,
       selected_artist: '',
       all_artists_active: true,
       related_filter_artists: [],
       primary_filter_active: false,
+      ...(isLibraryHome ? { search_context: null } : {}),
     };
     state.gallery.sidebarArtistsOverride = null;
     state.gallery.sidebarShowAllArtistsOverride = null;

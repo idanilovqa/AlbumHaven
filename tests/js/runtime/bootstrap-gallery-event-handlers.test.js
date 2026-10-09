@@ -518,8 +518,12 @@ function submitSearch(context, query) {
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
 }
 
-function createAllArtistsEvent() {
-  const button = {};
+function createAllArtistsEvent({ libraryHome = false } = {}) {
+  const button = {
+    getAttribute(name) {
+      return name === 'data-library-home' && libraryHome ? '1' : null;
+    },
+  };
   let prevented = false;
   const event = {
     target: {
@@ -904,6 +908,21 @@ test('switching primary artist preserves the active search and requested-artist 
   assert.equal(requestUrl.searchParams.get('artist'), 'Resonance');
   assert.deepEqual(Array.from(context.state.gallery.mainState.familyArtists), []);
   assert.equal(context.state.gallery.mainState.view, 'covers');
+});
+
+test('library-home navigation clears active search state before opening All artists', () => {
+  const { context, calls } = createContext();
+  context.state.view.query = 'slow search';
+  context.state.view.search_context = { kind: 'text' };
+
+  const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
+  context.handleGalleryBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.equal(context.document.getElementById('search-input').value, '');
+  assert.equal(context.state.ui.searchDraftQuery, '');
+  assert.equal(calls.buildApiUrl.at(-1).query, '');
+  assert.equal(calls.buildApiUrl.at(-1).search_context, null);
 });
 
 test('handleSidebarArtistSelectionClick closes the mobile drawer before loading a selected artist', () => {

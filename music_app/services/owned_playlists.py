@@ -123,6 +123,9 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
         "revoke_editor": {"grant_ref", "revision", "request_key"},
         "delete": {"revision", "request_key"},
         "default_sort": {"sort", "revision", "request_key"},
+        "request_edit": {"revision", "request_key"},
+        "decide_edit_request": {"revision", "request_key", "request_ref", "decision"},
+        "copy": {"revision", "request_key", "title"},
     }
     if not isinstance(action, str) or action not in fields or not isinstance(payload, dict) or set(payload) - fields[action]:
         raise PlaylistError("invalid_command")
@@ -144,7 +147,15 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
         return PlaylistCommand(action, None, request_key, data)
     target = uuid_ref(playlist_ref)
     data = {"revision": playlist_revision(payload.get("revision"))}
-    if action == "save":
+    if action == "copy":
+        if "title" in payload:
+            data["title"] = _text(payload["title"], maximum=MAX_PLAYLIST_TITLE_LENGTH, title=True)
+    elif action == "decide_edit_request":
+        data["request_ref"] = uuid_ref(payload.get("request_ref"))
+        if payload.get("decision") not in ("approve", "decline"):
+            raise PlaylistError("invalid_command")
+        data["decision"] = payload["decision"]
+    elif action == "save":
         if not set(payload).intersection(("title", "description", "item_order")):
             raise PlaylistError("invalid_command")
         if "title" in payload:
@@ -198,9 +209,11 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
 
 
 def command_actions(command: PlaylistCommand) -> tuple[str, ...]:
-    if command.action == "create":
+    if command.action in {"create", "copy"}:
         return BROWSE, CREATE
-    if command.action in {"visibility", "grant_editor", "revoke_editor"}:
+    if command.action == "request_edit":
+        return (BROWSE,)
+    if command.action in {"visibility", "grant_editor", "revoke_editor", "decide_edit_request"}:
         return BROWSE, ACCESS
     if command.action == "delete":
         return BROWSE, MANAGE

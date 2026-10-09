@@ -38,6 +38,7 @@ export function PlaylistHeader({runtime, detail, draft, busy, actions, filtersOp
     actionsHtml: [
       ['add', 'Add tracks', !actions.add, 'add'], ['missing', 'Inspect missing tracks', !actions.missing, 'missing-playlist'],
       ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'export-text'], ['share', 'Share', !detail || actions.share === false, 'share'],
+      ...(actions.copy ? [['copy', 'Save a copy', false, 'save']] : []),
       ['settings', 'Playlist settings', !detail, 'more'],
       ['filters', 'Filters', !detail, 'filters'], ['save', 'Save', !actions.save, 'save'], ['discard', 'Discard unsaved changes', !draft, 'close'],
     ].map(([action, label, disabled, icon]) => runtime.actionHtml({icon, ariaLabel: label, presentation: 'bare', disabled: busy || disabled,
@@ -106,7 +107,7 @@ export function playlistSharingRenderCurrent(subject, state) {
 const EMPTY_PROVIDERS = Object.freeze({});
 const filterSourceIdentity = state => state.resource.status === 'ready' && state.resource.data?.detail
   ? [state.scopeKey, state.selectedPlaylistId, state.resource.data.detail] : null;
-export function PlaylistsView({runtime, controller, state, onSelect, onPrepareDraft, integrationProviders = EMPTY_PROVIDERS, readDetail, navigationError = false}) {
+export function PlaylistsView({shareRequest = null, onShareRequestHandled, runtime, controller, state, onSelect, onPrepareDraft, integrationProviders = EMPTY_PROVIDERS, readDetail, navigationError = false}) {
   const [dialog, setDialog] = useState(null), [message, setMessage] = useState('');
   const filterSession = usePlaylistFilterSession(controller, filterSourceIdentity, integrationProviders);
   const filterOwner = filterSession.opening, filtersOpen = Boolean(filterOwner);
@@ -170,9 +171,15 @@ export function PlaylistsView({runtime, controller, state, onSelect, onPrepareDr
       });
       return;
     }
-    setDialog({kind, scopeKey: state.scopeKey, playlistId: state.selectedPlaylistId, sharingGranted: granted(detail, 'can_share'),
+    setDialog({kind, scopeKey: state.scopeKey, playlistId: state.selectedPlaylistId, sharingGranted: granted(detail, 'can_view_sharing') || granted(detail, 'can_share'),
       source: ['create', 'missing'].includes(kind) ? playlistCreationContext(state, mode).source : null});
   };
+  useEffect(() => {
+    if (shareRequest && detail?.playlist_id === shareRequest.playlist_id && state.resource.status === 'ready'
+      && (granted(detail, 'can_view_sharing') || granted(detail, 'can_share'))) {
+      openDialog('share'); onShareRequestHandled?.(shareRequest);
+    }
+  }, [shareRequest, detail, state.resource.status]);
   const closeDialog = ({restoreFocusRequested = false} = {}) => {
     pendingFocus.current = restoreFocusRequested ? {kind: dialog?.kind, scopeKey: state.scopeKey, playlistId: state.selectedPlaylistId} : null;
     setDialog(null);
@@ -211,6 +218,7 @@ export function PlaylistsView({runtime, controller, state, onSelect, onPrepareDr
     if (action === 'missing') openDialog('missing');
     if (action === 'export') exportText(false);
     if (action === 'save') await controller.mutate('savePlaylist');
+    if (action === 'copy') await controller.mutate('copyPlaylist');
     if (action === 'discard') {
       if (discardRequest.current) return;
       if (typeof runtime.confirm !== 'function') {setMessage('Discard confirmation is unavailable. Your draft is unchanged.'); return;}
@@ -249,7 +257,7 @@ export function PlaylistsView({runtime, controller, state, onSelect, onPrepareDr
     <main className="playlists__content" aria-label="Playlist">
       <PlaylistHeader {...{runtime, detail, draft, filtersOpen}} busy={busy || discarding} actions={{add: !picking && controller.available('addTracks') && typeof runtime.pickTracks === 'function',
         missing: canOpenPlaylistCreation(state, integrationProviders, 'missing'), top: controller.available('createAlbumTop'),
-        export: canExport && exportRows.some(row => row.source_readable !== false), save: canSave, share: granted(detail, 'can_share')}} onAction={run}/>
+        export: canExport && exportRows.some(row => row.source_readable !== false), save: canSave, share: granted(detail, 'can_view_sharing') || granted(detail, 'can_share'), copy: controller.available('copyPlaylist')}} onAction={run}/>
       {filtersOpen && <PlaylistFilterSurface key={filterOwner.id} runtime={runtime} id="playlists-filters"
         returnFocus={() => page.current?.querySelector('[data-playlists-action="filters"]')}
         onClose={() => filterSession.close(filterOwner)}>

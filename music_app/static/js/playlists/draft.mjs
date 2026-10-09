@@ -33,7 +33,8 @@ const eligible = row => row.source_readable === true && opaque(row.entry_ref)
 const sourceContext = value => ({scopeKey: ref(field(value, 'scopeKey')), mode: 'missing',
   source: normalizeCreationDescriptor(field(value, 'source')), canCreate: field(value, 'canCreate') === true,
   canCreateAlbumTop: field(value, 'canCreateAlbumTop') === true});
-const authorized = state => Boolean(state.canCreate && state.scopeKey && state.source?.kind === 'playlist');
+const authorized = state => Boolean(state.canCreate && state.scopeKey && (state.source?.kind === 'playlist'
+  || state.source?.kind === 'activity' && state.source.source_protocol === 'missing_activity_selection_v1'));
 const ready = state => authorized(state) && state.sourceResource?.status === 'ready';
 const failure = value => [401, 403, 'denied'].includes(value?.status) ? 'denied'
   : [409, 'conflict'].includes(value?.status) ? 'conflict' : value?.status === 'unavailable' ? 'unavailable' : 'error';
@@ -220,6 +221,16 @@ export function createMissingPlaylistDraftController({prepared, providers = {}} 
       if (entries.some(row => !row)) return false;
       authoredRefs = entries.map(row => row.entry_ref);
       publish({entries, dirty: true}); return true;
+    },
+    async prepareExportText() {
+      if (disposed || retired || !ready(state) || controller.localMatch.blocking()) return null;
+      if (state.source.kind === 'activity') {
+        const selected = state.selectedKeys;
+        if (!await controller.refresh() || disposed || retired || !ready(state)) return null;
+        const retained = new Set(state.entries.map(row => row.row_key));
+        publish({selectedKeys: selected.filter(key => retained.has(key))});
+      }
+      return missingPlaylistDraftText(state);
     },
     exportText: () => disposed || retired ? '' : missingPlaylistDraftText(state),
     topIntent: () => disposed || retired ? null : missingPlaylistDraftTopIntent(state),

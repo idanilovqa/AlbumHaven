@@ -32,7 +32,8 @@ const tuple = value => record(value) && ['library', 'playlist', 'activity'].incl
   && opaque(field(value, 'ref')) && ref(field(value, 'revision'))
   ? {kind: value.kind, ref: value.ref, revision: value.revision} : null;
 const sameSource = (a, b) => a?.kind === b?.kind && a?.ref === b?.ref && a?.revision === b?.revision;
-const sourceMatchesMode = (source, mode) => mode === 'ordinary' ? ['library', 'activity'].includes(source?.kind) : mode === 'missing' && source?.kind === 'playlist';
+const sourceMatchesMode = (source, mode) => mode === 'ordinary' ? ['library', 'activity'].includes(source?.kind) : mode === 'missing' && (source?.kind === 'playlist'
+  || source?.kind === 'activity' && source.source_protocol === 'missing_activity_selection_v1');
 const PAGED_PROTOCOL = 'library_selection_v1';
 const paged = value => value?.source_protocol === PAGED_PROTOCOL && value?.entries_complete === false;
 const permittedContext = context => Boolean(ref(field(context, 'scopeKey')) && field(context, 'canCreate') === true

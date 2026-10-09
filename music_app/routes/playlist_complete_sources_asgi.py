@@ -119,3 +119,45 @@ async def playlist_match_candidates(request: Request):
 @router.post('/playlists/creation-source/accept-match')
 async def playlist_accept_match(request: Request):
     return await _match(request,accept=True)
+
+
+async def _activity_missing(request, *, probe=False):
+    from music_app.services import playlist_activity_missing as activity_missing
+    try:
+        context,constraints=_context(request,CREATE)
+        _require_context_header(request)
+        if request.query_params:raise PlaylistError('invalid_command')
+        payload=await read_bounded_json_object(request,max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
+        if not isinstance(payload,dict) or set(payload)!={'origin','row_refs'}:
+            raise PlaylistError('invalid_command')
+        result=await run_in_threadpool(activity_missing.inspect,_service(request),context,
+            payload['origin'],payload['row_refs'],constraints=constraints,probe=probe)
+        return _response(request,result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError('command_too_large',413))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post('/playlists/creation-source/activity-missing/eligibility')
+async def activity_missing_eligibility(request: Request):
+    return await _activity_missing(request,probe=True)
+
+
+@router.post('/playlists/creation-source/activity-missing')
+async def activity_missing_capture(request: Request):
+    return await _activity_missing(request)
+
+
+@router.get('/playlists/creation-source/activity-missing')
+def retained_activity_missing_capture(request: Request):
+    from music_app.services import playlist_activity_missing as activity_missing
+    try:
+        context,constraints=_context(request,CREATE)
+        _require_context_header(request)
+        if set(request.query_params)!={'source_ref','source_revision'}:
+            raise PlaylistError('invalid_source_query')
+        return _response(request,activity_missing.read_capture(_service(request),context,
+            request.query_params['source_ref'],request.query_params['source_revision'],constraints=constraints))
+    except PlaylistError as error:
+        return _error(error)

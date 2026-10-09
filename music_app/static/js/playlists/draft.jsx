@@ -254,9 +254,16 @@ export function MissingPlaylistDraftPage({runtime, controller, state, onClose, o
     if (action === 'filters') {if (ready) filterSession.toggle(); return;}
     if (action === 'export') {
       if (!canExport) return;
-      const owner = lifetime.current;
-      try {await runtime.downloadText({text: controller.exportText(), filename: 'playlist-missing.txt'});}
-      catch {if (continuationCurrent(owner)) setMessage('TXT export is unavailable.');}
+      const owner = lifetime.current, request = {}; pending.current = request; setCompleting(true);
+      try {
+        const text = state.source?.kind === 'activity' ? await controller.prepareExportText() : controller.exportText();
+        if (!continuationCurrent(owner) || pending.current !== request) return;
+        if (text === null) {setMessage('TXT export is unavailable. Refresh the source before trying again.'); return;}
+        await runtime.downloadText({text, filename: 'playlist-missing.txt'});
+      } catch {if (continuationCurrent(owner)) setMessage('TXT export is unavailable.');}
+      finally {
+        if (pending.current === request) {pending.current = null; if (continuationCurrent(owner)) setCompleting(false);}
+      }
       return;
     }
     if (!['save', 'reconcile', 'retry', 'top', 'close'].includes(action)) return;

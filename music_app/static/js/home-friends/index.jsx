@@ -1,4 +1,5 @@
 import {createPresencePublisher} from './presence.mjs';
+import {normalizeCreationResult, prepareMissingDraft} from '../playlists/creation.mjs';
 import {createPlaylistMatchProviders} from '../playlists/match-providers.mjs';
 import {createPlaylistBackendProviders} from '../playlists/backend-providers.mjs';
 import {createHomeBackendProviders} from './backend-providers.mjs';
@@ -178,7 +179,38 @@ function mountPlaylistSurface() {
     playlistMount = mountPlaylists({host, runtime, providers: playlistBackend(runtime)});
   }
 }
+let activityInspect = null;
+async function activityMissingEligibility(options) {
+  const native = window.AlbumHavenPlaylistRuntime, home = window.AlbumHavenHomeRuntime?.snapshot();
+  if (!native || !home?.visible || home.scopeKey !== options?.scopeKey || !options.isCurrent?.()) return null;
+  const providers = playlistBackend(native), scopeKey = native.snapshot().scopeKey;
+  const result = await providers.readActivityMissingEligibility?.({...options, scopeKey});
+  return options.isCurrent?.() ? result : null;
+}
+async function inspectActivityMissing(options) {
+  const native = window.AlbumHavenPlaylistRuntime, home = window.AlbumHavenHomeRuntime?.snapshot();
+  if (activityInspect || playlistAction || !native?.canOpenPlaytableForm?.() || !home?.visible || home.scopeKey !== options?.scopeKey || !options.isCurrent?.()) return false;
+  mountPlaylistSurface();
+  if (!playlistMount) return false;
+  const request = {generation: playlistProviderGeneration, scopeKey: native.snapshot().scopeKey};
+  const current = () => activityInspect === request && request.generation === playlistProviderGeneration
+    && native.canOpenPlaytableForm?.() === true && native.snapshot().scopeKey === request.scopeKey && options.isCurrent?.() === true;
+  activityInspect = request;
+  try {
+    const result = await playlistBackend(native).beginActivityMissingSource?.({...options, scopeKey: request.scopeKey});
+    if (!current()) return false;
+    if (result?.recovered_creation) throw new Error('Your earlier playlist was already saved. Open it from Playlists before starting another.');
+    if (!result?.source || !result.resource) return false;
+    const context = {scopeKey: request.scopeKey, mode: 'missing', source: result.source, canCreate: true};
+    const normalized = normalizeCreationResult(result.resource, context);
+    if (normalized.status !== 'ready') return false;
+    const packet = prepareMissingDraft({...context, sourceResource: normalized, mutation: {status: 'idle'},
+      title: result.resource.data.title, description: '', selectedKeys: normalized.data.entries.map(row => row.row_key)});
+    return packet && current() ? playlistMount.prepareActivityDraft(packet, options.scopeKey) : false;
+  } finally {if (activityInspect === request) activityInspect = null;}
+}
 window.AlbumHavenPlaylistUI = Object.freeze({
+  activityMissingEligibility, inspectActivityMissing,
   configureProviders(next = {}) {
     if (!next || typeof next !== 'object' || Array.isArray(next)) throw new TypeError('Playlist providers must be an object.');
     playlistProviderGeneration++;

@@ -17,7 +17,7 @@ function harness() {
     const node = document.createElement('div'); if (id) node.id = id;
     if (attribute) node.setAttribute(attribute, ''); document.body.appendChild(node); return node;
   };
-  const shell = add('app-shell'); shell.dataset.nativeAccountId = 'account:one'; shell.dataset.nativeLibraryId = 'library:one';
+  const shell = add('app-shell'); shell.dataset.privateUiContext = 'a'.repeat(64); shell.dataset.nativeAccountId = 'account:one'; shell.dataset.nativeLibraryId = 'library:one';
   add('playlists-root'); add('shell-main-surface'); add('mobile-home');
   const settings = add(null, 'data-settings-host'); settings.hidden = true;
   add(null, 'data-settings-outlet'); add(null, 'data-settings-nav');
@@ -38,7 +38,7 @@ function harness() {
     replaceState(value, title, url) {location.href = new URL(url || location.href, location).href; entries[index] = {url: location.href, state: structuredClone(value)};},
     go(delta) {queueMicrotask(() => {if (index + delta < 0 || index + delta >= entries.length) return; index += delta; location.href = entries[index].url; dispatch();});},
   };
-  const view = {surface: {active: 'playlists'}, playlist_sidebar: {active_playlist_id: 'source', items: []},
+  const view = {context_ref: 'a'.repeat(64), surface: {active: 'playlists'}, playlist_sidebar: {active_playlist_id: 'source', items: []},
     playlist_detail: {playlist_id: 'source', title: 'Real source', track_rows: []}};
   Object.assign(context, {URL, URLSearchParams, AbortController, location, history, innerWidth: 1200,
     state: {view, ui: {}}, AlbumHavenHomeRuntime: {}, DOMParser: class {},
@@ -49,7 +49,7 @@ function harness() {
     NavigationTree: {setSelection() {}},
   });
   installPrivateContext(context);
-  for (const file of ['settings-navigation.js', 'runtime/mobile-navigation.js', 'runtime/browser-navigation-helpers.js',
+  for (const file of ['runtime/mobile-home.js', 'settings-navigation.js', 'runtime/mobile-navigation.js', 'runtime/browser-navigation-helpers.js',
     'runtime/gallery-refresh-and-status.js', 'runtime/bootstrap-gallery-event-handlers.js', 'runtime/track-actions.js', 'runtime/playlists-react-bridge.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, {filename: file});
   }
@@ -58,6 +58,7 @@ function harness() {
   context.handleGalleryBootstrapPopState = () => {
     calls.gallery++;
     if (context.AlbumHavenPlaylistRuntime.restoreDraftFromHistory()) return;
+    context.syncMobileHome();
   };
   const runtime = context.AlbumHavenPlaylistRuntime, navigation = context.AlbumHavenSettingsNavigation.instance;
   let current = true, decision = true;
@@ -218,7 +219,7 @@ function mountHarness(readPlaylists, providers, payload) {
     }});
   const calls = {navigate: 0, released: 0};
   const runtime = {snapshot: () => shell, subscribe: () => () => {}, readPlaylists,
-    openDraft(value) {owner = value; shell = {...shell, playlistId: null, draftToken: value.token, retainedDraftToken: value.token}; return true;},
+    openDraft(value) {owner = value; shell = {...shell, visible: true, playlistId: null, draftToken: value.token, retainedDraftToken: value.token}; return true;},
     releaseDraft(token) {
       if (!owner || owner.token !== token) return false;
       const current = owner; owner = null; calls.released++;
@@ -233,7 +234,7 @@ function mountHarness(readPlaylists, providers, payload) {
     for (const effect of pending) effect();
     return tree;
   };
-  return {mount, runtime, calls, render, renderDraft: tree => tree.type(tree.props)};
+  return {mount, runtime, calls, render, renderDraft: tree => tree.type(tree.props), setShell: patch => {shell = {...shell, ...patch};}};
 }
 
 test('Save acknowledgement still revalidates refreshed source grants, identity and revision before preserving private draft facts', async () => {
@@ -321,4 +322,59 @@ test('async Top UI ownership aborts on retained-row and source changes even when
     pending.resolve(true); await opening;
     form.dispose(); h.mount.dispose();
   }
+});
+
+test('Activity can open the existing Missing draft page with a verified Home scope and return to its source', async () => {
+  const f=harness();
+  f.context.state.view={surface:{active:'home'}};
+  f.location.href='https://albumhaven.test/?home_kind=tracks';
+  f.history.replaceState({albumHavenNavigationPosition:0},'',f.location.href);
+  f.context.AlbumHavenHomeRuntime={snapshot:()=>({visible:f.context.shouldShowMobileHome(),authenticated:true,scopeKey:'home:current'})};
+  f.context.syncMobileHome();
+  assert.equal(f.document.getElementById('mobile-home').hidden,false);
+  assert.equal(f.runtime.snapshot().visible,false);
+  let alive=true;
+  const opened=f.runtime.openDraft({token:'activity:draft',scopeKey:f.runtime.snapshot().scopeKey,externalScopeKey:'home:current',
+    isCurrent:()=>alive,confirmLeave:()=>true,onDiscard:()=>{alive=false;}});
+  assert.equal(opened,true);assert.equal(f.runtime.snapshot().draftToken,'activity:draft');
+  assert.equal(f.runtime.snapshot().visible,true);
+  assert.equal(f.document.getElementById('mobile-home').hidden,true);
+  assert.equal(f.document.getElementById('shell-main-surface').classList.contains('has-mobile-home'),false);
+  assert.equal(f.context.AlbumHavenHomeRuntime.snapshot().visible,false);
+  await f.runtime.closeDraft('activity:draft');await settle();
+  assert.equal(f.location.search,'?home_kind=tracks');assert.equal(f.runtime.snapshot().draftToken,null);
+  assert.equal(f.document.getElementById('mobile-home').hidden,false);
+  assert.equal(f.context.AlbumHavenHomeRuntime.snapshot().visible,true);
+});
+
+test('external Missing draft rejects a stale or unauthenticated Home source',()=>{
+  for(const home of [{visible:true,authenticated:true,scopeKey:'home:new'},{visible:true,authenticated:false,scopeKey:'home:current'}]){
+    const f=harness();f.context.state.view={surface:{active:'home'}};f.location.href='https://albumhaven.test/';
+    f.context.AlbumHavenHomeRuntime={snapshot:()=>home};
+    assert.equal(f.runtime.openDraft({token:'activity:draft',scopeKey:f.runtime.snapshot().scopeKey,externalScopeKey:'home:current',
+      isCurrent:()=>true,confirmLeave:()=>true,onDiscard:()=>{}}),false);
+    assert.equal(f.history.state.playlistDraft,undefined);
+  }
+});
+
+test('external Activity packet mounts the existing draft controller while hidden Playlist directory is loading',async()=>{
+  const creation=await import('../../../music_app/static/js/playlists/creation.mjs');
+  const subject={scopeKey:'mount:actor',mode:'missing',canCreate:true,source:{kind:'activity',ref:'activity:capture',revision:'activity:revision',
+    source_protocol:'missing_activity_selection_v1',allowed_actions:{can_read:true,can_use_for_playlist:true}}};
+  const sourceResource=creation.normalizeCreationResult({status:'ready',data:{...subject,source_protocol:'missing_activity_selection_v1',
+    allowed_actions:subject.source.allowed_actions,entries_complete:true,entries:[{entry_ref:'occurrence:one',title:'Missing original',
+      availability:'missing',allowed_actions:{can_read:true,can_select:true}}]}},subject);
+  const packet=creation.prepareMissingDraft({...subject,sourceResource,mutation:{status:'idle'},title:'Missing activity',description:'',
+    selectedKeys:sourceResource.data.entries.map(row=>row.row_key)});
+  assert.ok(packet);
+  let writes=0;const directory=deferred();
+  const h=mountHarness(()=>directory.promise,{createPlaylistFromSelection:()=>{writes++;}},{playlist_sidebar:{items:[]},playlist_index:{playlists:[]}});
+  h.setShell({visible:false,playlistId:null,payload:null});h.render();
+  assert.equal(h.mount.prepareActivityDraft(packet,'home:current'),true);
+  const page=h.renderDraft(h.render());assert.equal(page.props.controller.getSnapshot().source.kind,'activity');
+  assert.equal(page.props.controller.getSnapshot().entries.length,1);assert.equal(writes,0);
+  directory.resolve({playlist_sidebar:{items:[]},playlist_index:{playlists:[]},playlist_actions:{can_create:true}});await settle();
+  assert.equal(page.props.controller.getSnapshot().entries.length,1);
+  h.mount.configureProviders({});assert.equal(h.calls.released,1);assert.equal(page.props.controller.getSnapshot().entries.length,0);
+  h.mount.dispose();
 });

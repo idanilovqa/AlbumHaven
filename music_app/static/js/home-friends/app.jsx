@@ -1,3 +1,4 @@
+import {ActivityMissingAction} from './activity-missing.jsx';
 import {useNowPlaying} from './now-playing.jsx';
 import {QueuePanel, QueueHeader, useExplicitQueue, useQueueDetails} from './queue.jsx';
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
@@ -452,7 +453,9 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
           <div className="home-friends__catalog-controls" hidden={homeSection === 'queue'}>
             <Tabs runtime={runtime} id="home-recent-kinds" label="Recent listening view" items={kinds} value={kind}
               onChange={changeView(value => setKind({kind: value, kindExplicit: true}))}/>
-            <div className="gallery-bar__actions">{kind !== 'albums' && <ViewControl runtime={runtime} kind={kind} value={views[kind]} onChange={changeView(value => setViews({...views, [kind]: value}))}/>}</div>
+            <div className="gallery-bar__actions"><ActivityMissingAction runtime={runtime} value={currentRecent} scopeKey={state.scopeKey}
+              kind={recentKind} period={period} selectedRowIds={trackSelection?.rows.map(row => row.id)}
+              enabled={section === 'recent' && homeSection === 'recent'} onError={setActionError}/>{kind !== 'albums' && <ViewControl runtime={runtime} kind={kind} value={views[kind]} onChange={changeView(value => setViews({...views, [kind]: value}))}/>}</div>
           </div>
         </header>
         <div className="home-friends__widget-body home-friends__recent-body">
@@ -465,6 +468,9 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
       </section>
       <section ref={friendsWidget} className="home-friends__widget" hidden={section !== 'friends'} data-home-widget="friends" aria-label="Friends">
         <header className="gallery-bar home-friends__widget-header" hidden={comparing && !hasSelection}><div className="gallery-bar__context"><h2 className={friend && friendMode === 'comparison' ? 'sr-only' : undefined}>{profileRoute ? 'Profile' : friend ? friendMode === 'comparison' ? 'Taste comparison' : 'Recent' : 'Friends'}</h2></div><div className="gallery-bar__actions">
+          {friend && friendMode === 'activity' && <ActivityMissingAction runtime={runtime} value={friendResource} scopeKey={state.scopeKey}
+            account_ref={friend.account_ref} kind={friendActivityKind} period={friendPeriod} selectedRowIds={trackSelection?.rows.map(row => row.id)}
+            enabled={section === 'friends'} onError={setActionError}/>}
           {friend && friendMode === 'activity' && <ViewControl runtime={runtime} kind={friendKind} value={friendViews[friendKind]} onChange={changeView(value => setFriendViews({...friendViews, [friendKind]: value}))}/>}
           {section === 'friends' && !comparing && <Button runtime={runtime} icon="back" onClick={() => navigate(friend || profileRoute ? 'friends' : 'recent')}>{friend || profileRoute ? 'Back to friends' : 'Back to Home'}</Button>}
         </div></header>

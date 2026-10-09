@@ -32,7 +32,7 @@ def normalize_activity_origin(value):
     return {key:value[key] for key in ("audience","subject_ref","kind","period","snapshot_ref")}
 
 
-def _export(connection,context,origin,row_refs,*,config,constraints):
+def _export(connection,context,origin,row_refs,*,config,constraints,source_order=False):
     from music_app.services.home_activity import ActivityScope, ActivityQuery, HomeActivityError
     from music_app.services.home_activity_postgres import HomeActivityPostgresRepository
     subject=None
@@ -54,17 +54,19 @@ def _export(connection,context,origin,row_refs,*,config,constraints):
             decision=PolicyEvaluator().evaluate(target,constraints=effective).decision.allowed
             return AllowedActions((scope.read_action,) if decision else ())
         allowed.scope_wide=not callable(constraints)
-        return HomeActivityPostgresRepository(config).read_selection(connection,scope=scope,query=query,
+        repository=HomeActivityPostgresRepository(config)
+        read=repository.read_missing_selection if source_order else repository.read_selection
+        return read(connection,scope=scope,query=query,
             row_refs=row_refs,allowed_actions_for_resource=allowed)
     except HomeActivityError as error:
-        raise PlaylistError("source_expired" if error.status_code==410 else "source_unavailable",
-            410 if error.status_code==410 else 403 if error.status_code==403 else 409) from None
+        raise PlaylistError("source_too_large" if error.status_code==413 else "source_expired" if error.status_code==410 else "source_unavailable",
+            error.status_code if error.status_code in {403,410,413} else 409) from None
 
 
-def _rows(connection,context,exported,*,config,constraints):
+def _rows(connection,context,exported,*,config,constraints,preserve_occurrences=False,current=None):
     ids=[entry["canonical_resource"]["id"] for entry in exported
          if entry["canonical_resource"] is not None and entry["canonical_resource"]["kind"]=="track"]
-    if len(set(ids))!=len(ids):raise PlaylistError("duplicate_identity",409)
+    if not preserve_occurrences and len(set(ids))!=len(ids):raise PlaylistError("duplicate_identity",409)
     for identity in ids:
         target=replace(context,action=BROWSE,resource=ResourceScope("track",str(identity)))
         effective=constraints(target) if callable(constraints) else constraints
@@ -72,8 +74,9 @@ def _rows(connection,context,exported,*,config,constraints):
             raise RuntimeError("Playlist source policy constraints are invalid.")
         if not PolicyEvaluator().evaluate(target,constraints=effective).decision.allowed:
             raise PlaylistError("source_unavailable",403)
-    current=sources.inventory_rows(connection,context.library_id,ids,lock=True,config=config)
-    if set(current)!=set(ids):raise PlaylistError("source_changed",409)
+    if current is None:
+        current=sources.inventory_rows(connection,context.library_id,ids,lock=True,config=config)
+    if not set(ids)<=set(current):raise PlaylistError("source_changed",409)
     result=[]
     for entry in exported:
         identity=entry["canonical_resource"]
@@ -160,7 +163,7 @@ def lock_target(owner,context,*,source_ref=None,origin=None,constraints=None):
                 join library.library_memberships m on m.account_id=a.id and m.library_id=s.library_id
                 join app.social_profiles p on p.account_ref::text=s.origin_descriptor#>>'{activity,subject_ref}'
                 where s.ref=%s and s.actor_account_id=%s and s.session_id=%s and s.library_id=%s
-                  and s.protocol='complete_activity_selection_v1'
+                  and s.protocol in ('complete_activity_selection_v1','missing_activity_selection_v1')
                   and session.revoked_at is null and session.idle_expires_at>clock_timestamp()
                   and session.absolute_expires_at>clock_timestamp()''',
                 (source_ref,actor.account_id,actor.session_id,context.library_id)).fetchone()

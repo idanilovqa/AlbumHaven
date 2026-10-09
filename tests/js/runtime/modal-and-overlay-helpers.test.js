@@ -231,6 +231,14 @@ function loadHelper() {
     getAlbumIdentity(album) {
       return String(album?.key || '');
     },
+    __activatedSurfaces: [],
+    __clearedSurfaces: [],
+    activateTriggerSurface(surface, close) {
+      context.__activatedSurfaces.push({ surface, close });
+    },
+    clearTriggerAnchor(surface) {
+      context.__clearedSurfaces.push(surface);
+    },
     ButtonComponent: require(buttonComponentPath),
   };
 
@@ -1232,6 +1240,7 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
   const { context } = loadHelper();
   context.showAlbumCardContextMenu(12, 24, {
     key: 'arrival-album',
+    allowed_actions: { 'library.files.edit_tags': true },
     move_availability: {
       available_actions: ['move_to_hoard', 'move_to_library'],
       actions: {
@@ -1241,11 +1250,31 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
     },
   });
   const menu = context.document.getElementById('album-card-context-menu');
+  assert.match(menu.innerHTML, /data-album-card-action="edit-tags"/);
+  assert.match(menu.innerHTML, /Open in File Explorer[\s\S]*Edit Tags/);
   assert.match(menu.innerHTML, /data-album-card-action="move_to_hoard"/);
   assert.match(menu.innerHTML, /Move to Hoard/);
   assert.match(menu.innerHTML, /data-album-card-action="move_to_library"/);
   assert.match(menu.innerHTML, /Move to Main Library/);
+  assert.equal(context.__activatedSurfaces.length, 1);
+  assert.equal(context.__activatedSurfaces[0].surface, menu);
+  context.__activatedSurfaces[0].close();
+  assert.equal(menu.hidden, true);
+  assert.equal(context.__clearedSurfaces.at(-1), menu);
 }
+
+test('album context menu disables Edit Tags when the album lacks permission', () => {
+  const { context } = loadHelper();
+  context.showAlbumCardContextMenu(12, 24, {
+    key: 'read-only-album',
+    allowed_actions: { 'library.files.edit_tags': false },
+  });
+  const menu = context.document.getElementById('album-card-context-menu');
+  assert.match(
+    menu.innerHTML,
+    /data-album-card-action="edit-tags"[^>]*disabled[^>]*aria-disabled="true"/,
+  );
+});
 
 
 test('album context menus are unavailable for narrow layouts and wide mobile clients', () => {

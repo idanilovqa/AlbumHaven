@@ -15,6 +15,7 @@ function hideAlbumCardContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.albumKey = '';
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
 function showAlbumCardContextMenu(x, y, album) {
@@ -29,8 +30,10 @@ function showAlbumCardContextMenu(x, y, album) {
     : {};
   const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
   const moveActions = getAvailableAlbumMoveActions(album);
+  const canEditTags = Boolean(album?.allowed_actions?.['library.files.edit_tags']);
   menu.innerHTML = [
     '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
+    `<button type="button" class="album-card-context-menu-item" data-album-card-action="edit-tags"${canEditTags ? '' : ' disabled aria-disabled="true"'}>Edit Tags</button>`,
     ...moveActions.map((item) => (
       `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
     )),
@@ -39,6 +42,9 @@ function showAlbumCardContextMenu(x, y, album) {
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
   ].join('');
   menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  }
 }
 
 function ensureVersionPickerModal() {

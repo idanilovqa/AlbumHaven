@@ -178,7 +178,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page .track-modal-header { display: none; }
   .is-mobile-page .track-modal-body { display: flex !important; flex-direction: column; overflow: visible; gap: 16px; padding: 0 0 20px; }
   .is-mobile-page .track-modal-cover { width: 100%; max-width: none; margin: 0; flex: none; }
-  .is-mobile-page .track-modal-tabs { margin-bottom: 16px; padding: 0; }
+  .is-mobile-page .track-modal-tabs { margin-bottom: 8px; padding: 0; }
   .is-mobile-page .track-modal-tabs .in-page-tabs > [role="tab"] { min-height: 44px; }
   .is-mobile-page .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; object-fit: contain; }
   .is-mobile-page .track-modal-main { min-width: 0; width: 100%; overflow: visible; }
@@ -310,7 +310,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-page-header[data-inline-album-layout="true"] { position: absolute; inset: 0 12px auto; z-index: 3; padding: 14px 0; background: var(--appearance-main-surface, var(--bg)); }
   .mobile-page-header[data-inline-album-layout="true"][data-album-identity-in-body="true"] { visibility: hidden; pointer-events: none; }
   .mobile-album-overview { flex: 0 0 auto; display: grid; align-items: start; gap: 12px; min-width: 0; width: 100%; }
-  .album-details-cover-source-markers { justify-self: start; margin-top: 6px; }
+  #track-modal.is-mobile-page .album-details-cover-source-markers { flex-direction: column; gap: 2px; margin: 0; }
+  .mobile-album-overview > .album-details-cover-source-markers { grid-column: 1; grid-row: 1; align-self: start; justify-self: center; margin-top: 40px; }
+  .mobile-page-header > .album-details-cover-source-markers { position: absolute; top: 52px; left: 6px; }
   .album-details-cover-source-markers .album-details-source-marker { width: 20px; height: 20px; }
   .album-details-cover-source-markers .album-details-source-marker svg { width: 14px; height: 14px; }
   .mobile-album-overview > #mobile-back-button { grid-column: 1; grid-row: 1; align-self: start; width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
@@ -322,7 +324,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-album-actions .action-button svg { width: 20px; height: 20px; }
   .mobile-album-identity [hidden] { display: none !important; }
   #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-overview { grid-template-columns: 32px clamp(96px, 28.7vw, 112px) minmax(0, 1fr); }
-  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity { grid-column: 3; grid-row: 1; align-self: center; margin-bottom: 40px; }
+  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity { grid-column: 3; grid-row: 1; align-self: start; margin-bottom: 40px; }
   #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__primary { font-size: 16px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__eyebrow { margin: 0 0 4px; line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__secondary { margin-top: 4px; font-size: 11px; line-height: 14px; white-space: nowrap; }

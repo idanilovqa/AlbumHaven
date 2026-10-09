@@ -360,8 +360,7 @@ document.addEventListener('contextmenu', (event) => {
 
 document.addEventListener('click', (event) => {
   const insideAlbumMenu = event.target.closest('#album-card-context-menu');
-  const insideAlbumCard = event.target.closest('.album-card');
-  if (!insideAlbumMenu && !insideAlbumCard) {
+  if (!insideAlbumMenu) {
     hideAlbumCardContextMenu();
   }
 });

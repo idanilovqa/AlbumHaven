@@ -60,10 +60,10 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 10px 16px 0;
+  padding: 4px 16px 0;
 }
 .track-modal-tabs[hidden] { display: none; }
-.track-modal-tabs > .in-page-tabs { width: 100%; overflow-x: auto; }
+.track-modal-tabs > .in-page-tabs { width: 100%; gap: 18px; overflow-x: auto; }
 .track-modal-tabs > .in-page-tabs > [role="tab"] { flex: 0 0 auto; }
 .track-modal-tab-wrap {
   position: relative;

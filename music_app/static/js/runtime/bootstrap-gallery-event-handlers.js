@@ -109,6 +109,13 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
 
+    if (action === 'edit-tags') {
+      if (album?.allowed_actions?.['library.files.edit_tags']) {
+        openTagEditor(album, { tracksMode: 'all' });
+      }
+      return;
+    }
+
     if (action === 'move_to_hoard' || action === 'move_to_library') {
       performAlbumMove(album, action);
       return;

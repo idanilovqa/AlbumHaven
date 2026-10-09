@@ -123,9 +123,16 @@ test('mobile Album Details keeps source markers with the cover instead of either
   assert.doesNotMatch(navigation, /mobile-album-source-markers|buildAlbumSourceMarkerItemsHtml/);
   assert.doesNotMatch(components, /mobile-album-overview__source-markers/);
   assert.doesNotMatch(mobileCss, /mobile-album-source-markers|mobile-album-overview__source-markers/);
+  assert.match(components, /overview\.appendChild\(sourceMarkers\)/);
+  assert.match(mobileCss, /mobile-album-overview\s*>\s*\.album-details-cover-source-markers[^}]*grid-column:\s*1[^}]*grid-row:\s*1/s);
+  assert.match(mobileCss, /album-details-cover-source-markers[^}]*flex-direction:\s*column/s);
   assert.match(mobileCss, /\.album-details-cover-source-markers/);
   assert.match(mobileCss, /mobile-album-overview \.track-modal-cover[^}]*aspect-ratio:\s*auto/);
   assert.match(trackModalCss, /\.track-modal-cover:has\(> \.album-details-cover-source-markers\)[^}]*aspect-ratio:\s*auto/);
+  assert.match(
+    mobileCss,
+    /data-mobile-album-layout="stacked_bar"[^}]*\.mobile-album-identity[^}]*align-self:\s*start/s,
+  );
 });
 
 test('AlbumDetailsHeader supports the three approved layouts and fat-dot identity separators', () => {

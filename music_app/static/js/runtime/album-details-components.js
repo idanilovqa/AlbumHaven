@@ -147,6 +147,14 @@ function syncMobileAlbumComposition(album) {
   overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
+  const mobileHeader = document.getElementById('mobile-page-header');
+  const freshSourceMarkers = cover.querySelector(':scope > .album-details-cover-source-markers');
+  const retainedSourceMarkers = overview?.querySelector(':scope > .album-details-cover-source-markers')
+    || mobileHeader?.querySelector(':scope > .album-details-cover-source-markers');
+  if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
+    retainedSourceMarkers.remove();
+  }
+  const sourceMarkers = freshSourceMarkers || retainedSourceMarkers;
   if (inline && !overview) {
     overview = document.createElement('div');
     overview.className = 'mobile-album-overview';
@@ -159,6 +167,11 @@ function syncMobileAlbumComposition(album) {
   }
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
+  if (sourceMarkers) {
+    if (inline && overview) overview.appendChild(sourceMarkers);
+    else if (mobile && mobileHeader) mobileHeader.appendChild(sourceMarkers);
+    else cover.appendChild(sourceMarkers);
+  }
   if (identity) {
     identity.hidden = !inline;
     if (inline) {

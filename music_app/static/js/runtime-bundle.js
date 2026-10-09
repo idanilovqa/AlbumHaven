@@ -4794,6 +4794,14 @@ function syncMobileAlbumComposition(album) {
   overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
+  const mobileHeader = document.getElementById('mobile-page-header');
+  const freshSourceMarkers = cover.querySelector(':scope > .album-details-cover-source-markers');
+  const retainedSourceMarkers = overview?.querySelector(':scope > .album-details-cover-source-markers')
+    || mobileHeader?.querySelector(':scope > .album-details-cover-source-markers');
+  if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
+    retainedSourceMarkers.remove();
+  }
+  const sourceMarkers = freshSourceMarkers || retainedSourceMarkers;
   if (inline && !overview) {
     overview = document.createElement('div');
     overview.className = 'mobile-album-overview';
@@ -4806,6 +4814,11 @@ function syncMobileAlbumComposition(album) {
   }
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
+  if (sourceMarkers) {
+    if (inline && overview) overview.appendChild(sourceMarkers);
+    else if (mobile && mobileHeader) mobileHeader.appendChild(sourceMarkers);
+    else cover.appendChild(sourceMarkers);
+  }
   if (identity) {
     identity.hidden = !inline;
     if (inline) {
@@ -10754,6 +10767,7 @@ function hideAlbumCardContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.albumKey = '';
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
 function showAlbumCardContextMenu(x, y, album) {
@@ -10768,8 +10782,10 @@ function showAlbumCardContextMenu(x, y, album) {
     : {};
   const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
   const moveActions = getAvailableAlbumMoveActions(album);
+  const canEditTags = Boolean(album?.allowed_actions?.['library.files.edit_tags']);
   menu.innerHTML = [
     '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
+    `<button type="button" class="album-card-context-menu-item" data-album-card-action="edit-tags"${canEditTags ? '' : ' disabled aria-disabled="true"'}>Edit Tags</button>`,
     ...moveActions.map((item) => (
       `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
     )),
@@ -10778,6 +10794,9 @@ function showAlbumCardContextMenu(x, y, album) {
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
   ].join('');
   menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  }
 }
 
 function ensureVersionPickerModal() {
@@ -30879,6 +30898,9 @@ function renderVersionContextMenu() {
   menu.style.top = `${stateMenu.y}px`;
   menu.dataset.albumKey = stateMenu.albumKey;
   menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideVersionContextMenu);
+  }
 }
 
 function showVersionContextMenu(albumKey, x, y) {
@@ -30899,7 +30921,10 @@ function hideVersionContextMenu() {
     visible: false,
   };
   const menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) menu.hidden = true;
+  if (menu) {
+    menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  }
 }
 
 function buildTrackModalCoverVisualHtml({
@@ -36151,7 +36176,7 @@ class VirtualArtistGrid {
       if (block.kind === 'subheading') {
                 const count = Math.max(0, Number(block.count || 0));
                 const countLabel = `${count} ${count === 1 ? 'album' : 'albums'}`;
-                return `<div class="artist-subsection-label"><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="artist-subsection-separator" aria-hidden="true">•</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
+                return `<div class="artist-subsection-label"><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-separator" aria-hidden="true">•</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
@@ -39920,6 +39945,13 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
 
+    if (action === 'edit-tags') {
+      if (album?.allowed_actions?.['library.files.edit_tags']) {
+        openTagEditor(album, { tracksMode: 'all' });
+      }
+      return;
+    }
+
     if (action === 'move_to_hoard' || action === 'move_to_library') {
       performAlbumMove(album, action);
       return;
@@ -43378,8 +43410,7 @@ document.addEventListener('contextmenu', (event) => {
 
 document.addEventListener('click', (event) => {
   const insideAlbumMenu = event.target.closest('#album-card-context-menu');
-  const insideAlbumCard = event.target.closest('.album-card');
-  if (!insideAlbumMenu && !insideAlbumCard) {
+  if (!insideAlbumMenu) {
     hideAlbumCardContextMenu();
   }
 });

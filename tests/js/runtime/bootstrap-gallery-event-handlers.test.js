@@ -1982,6 +1982,38 @@ test('handleGalleryBootstrapClick resolves duplicate-folder actions from the cur
   assert.deepEqual(calls.openAlbumInExplorer, [{ key: 'duplicate-source-album' }]);
 });
 
+test('album context Edit Tags closes the menu before opening the full-album editor', () => {
+  const { context } = createContext();
+  const album = {
+    key: 'context-album',
+    allowed_actions: { 'library.files.edit_tags': true },
+  };
+  const menu = { dataset: { albumKey: album.key } };
+  const action = {
+    getAttribute(name) {
+      return name === 'data-album-card-action' ? 'edit-tags' : '';
+    },
+  };
+  const order = [];
+  context.document.getElementById = (id) => (id === 'album-card-context-menu' ? menu : null);
+  context.getIndexedAlbum = (key) => (key === album.key ? album : null);
+  context.hideAlbumCardContextMenu = () => order.push('close');
+  context.openTagEditor = (editedAlbum, options) => order.push({ editedAlbum, options });
+
+  context.handleGalleryBootstrapClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-album-card-action]' ? action : null;
+      },
+    },
+    preventDefault() {},
+  });
+
+  assert.equal(order[0], 'close');
+  assert.equal(order[1].editedAlbum, album);
+  assert.deepEqual({ ...order[1].options }, { tracksMode: 'all' });
+});
+
 test('search submit abandons Scan Page before dispatching an unfiltered query request', () => {
   const unresolvedRequest = new Promise(() => {});
   const { context, calls } = createContext({
@@ -2689,6 +2721,7 @@ test('selecting a different tree artist preserves search and resets filters whil
     albumTypes: ['studio', 'ep'],
     view: 'covers',
     familyArtists: [],
+    showFeaturedOn: true,
   });
 });
 

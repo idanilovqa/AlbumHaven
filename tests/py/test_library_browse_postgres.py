@@ -8793,6 +8793,8 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
         "has_unseen_automatic_improvement": True,
     }
     assert payload["poor_art_quality"] is True
+    assert "_text_problem_reason_cache" not in payload
+    json.dumps(payload)
     assert payload["track_rows"][0]["track_stats"]["scrobble_count"] == 0
     assert payload["track_rows"][0]["track_preference"]["allowed_actions"]["can_rate"] is True
     assert connect_calls == ["postgresql://album_haven_app@localhost/app"]

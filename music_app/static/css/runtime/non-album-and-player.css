@@ -261,14 +261,14 @@ gap: 8px;
 align-items: start;
 }
 .artist-subsection-label {
-  margin: 2px 0 -2px;
+  margin: 2px 0 -2px 28px;
   color: #d6c8ab;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content max-content max-content;
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
   align-items: center;
   gap: 8px;
-  font-size: 0.82rem;
-  font-weight: 800;
+  font-size: 0.68rem;
+  font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }

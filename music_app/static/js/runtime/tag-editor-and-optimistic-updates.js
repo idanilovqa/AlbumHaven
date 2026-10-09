@@ -1555,6 +1555,9 @@ function renderVersionContextMenu() {
   menu.style.top = `${stateMenu.y}px`;
   menu.dataset.albumKey = stateMenu.albumKey;
   menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideVersionContextMenu);
+  }
 }
 
 function showVersionContextMenu(albumKey, x, y) {
@@ -1575,7 +1578,10 @@ function hideVersionContextMenu() {
     visible: false,
   };
   const menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) menu.hidden = true;
+  if (menu) {
+    menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  }
 }
 
 function buildTrackModalCoverVisualHtml({

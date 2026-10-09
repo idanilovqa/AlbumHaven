@@ -1,0 +1,16 @@
+/* Collection layout only. Controls, gallery cards, menus and dialogs remain
+   owned by the shared native component families. */
+#library-navigation-root { flex: 1 1 auto; min-width: 0; }
+#library-navigation-root .ui-choice, #library-navigation-root .ui-choice__control,
+#library-navigation-root .ui-choice__trigger { width: 100%; }
+:is(#playlist-sidebar-root, #album-tops-sidebar-root) { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
+:is(#playlist-sidebar-root, #album-tops-sidebar-root)[hidden] { display: none; }
+.collection-sidebar { display: flex; flex-direction: column; gap: 10px; padding: 12px; min-width: 0; }
+#album-tops-root { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
+#album-tops-root[hidden] { display: none; }
+.shell-main-surface.has-react-album-tops > :is([data-gallery-bar-instance="gallery"], #albums-scroll, .discovery-center-page) { display: none; }
+.album-tops { display: flex; flex-direction: column; min-width: 0; min-height: 0; color: var(--text); }
+.album-tops > :is(.home-activity__cards, .home-friends__status, p) { margin: 12px; }
+.album-tops__header { flex: 0 0 auto; }
+#collection-library-navigation { order: -1; flex: 0 0 auto; }
+#collection-library-navigation[hidden] { display: none; }

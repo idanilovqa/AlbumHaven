@@ -281,3 +281,66 @@ def test_record_playback_session_complete_ignores_too_short_listens():
     assert harness.updated_entries == []
     assert harness.scrobble_calls == []
     assert harness.logged_events == []
+
+
+def test_measured_completion_keeps_preflight_configuration_failure_retryable(monkeypatch):
+    from contextlib import nullcontext
+
+    from music_app.services import lastfm_sync_bridge
+    from music_app.services.lastfm import LastfmError
+    from music_app.services.listen_history import is_meaningful_listen_session
+
+    stored: dict[str, object] = {}
+    monkeypatch.setattr(
+        lastfm_sync_bridge,
+        "measured_provider_guard",
+        lambda *_args, **_kwargs: nullcontext(),
+    )
+
+    def append_entry(_config, entry, **_scope):
+        stored.update(entry, id="listen-1")
+        return dict(stored)
+
+    def update_entry(_config, entry_id, updates, **_scope):
+        assert entry_id == "listen-1"
+        stored.update(updates)
+        return dict(stored)
+
+    def missing_server_credentials(_config, _payload, *, session):
+        assert session is not None
+        raise LastfmError(
+            "Last.fm API credentials are not configured on the server.",
+            retryable=True,
+            error_kind="configuration_error",
+        )
+
+    payload = {
+        **_complete_payload(),
+        "measurement_version": "rendered-pcm-v1",
+        "device_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 1,
+        "finalized": True,
+        "measured_listened_seconds": 180.0,
+        "max_measured_contiguous_seconds": 180.0,
+    }
+    response, status = lastfm_sync_bridge.record_playback_session_complete(
+        {},
+        payload,
+        account_id=1,
+        library_id=1,
+        lastfm_session=object(),
+        user_timezone="UTC",
+        normalize_playback_track_payload=lambda value: value,
+        is_meaningful_listen_session=is_meaningful_listen_session,
+        append_listen_history_entry=append_entry,
+        update_listen_history_entry=update_entry,
+        scrobble_track=missing_server_credentials,
+        log_lastfm_scrobble_event=lambda *_args, **_kwargs: None,
+    )
+
+    assert status == 200
+    assert response["scrobbled"] is False
+    assert stored["scrobble_submission_state"] == "not_sent"
+    assert stored["scrobble_retryable"] is True
+    assert stored["sync_problem"]["status"] == "pending_retry"

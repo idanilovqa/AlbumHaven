@@ -491,6 +491,38 @@ def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
     )[0]["artist_relationship"] == "owned"
 
 
+def test_album_detail_projection_keeps_only_mixed_folder_file_when_no_valid_source():
+    from music_app.services import library_browse_postgres as browse
+
+    row = _browse_album_row(
+        artist="-",
+        album_id=84,
+        album_key="-::malformed-tag-album",
+        title="Malformed Tag Album",
+    )
+    row["file_entry"] = {
+        "artist": "-",
+        "album_artist": "-",
+        "album": "Malformed Tag Album",
+        "title": "Malformed Tag Track",
+        "local_album_membership_problem": "Mixed album metadata in one folder",
+    }
+
+    assert browse._selected_artist_album_payloads([row], "-") == []
+
+    payloads = browse._selected_artist_album_payloads(
+        [row],
+        "-",
+        retain_rejected_if_empty=True,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["key"] == "-::malformed-tag-album"
+    assert [track["title"] for track in payloads[0]["tracks"]] == [
+        "Malformed Tag Album Track"
+    ]
+
+
 def test_postgres_paged_root_occurrences_keep_relationship_and_copy_album_payload():
     from music_app.services import library_browse_postgres as browse
 

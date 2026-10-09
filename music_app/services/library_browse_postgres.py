@@ -1378,7 +1378,11 @@ class PostgresLibraryBrowseRepository:
             or first_row_payload.get("artist_name")
             or ""
         ).strip()
-        albums = _selected_artist_album_payloads(rows, artist_display)
+        albums = _selected_artist_album_payloads(
+            rows,
+            artist_display,
+            retain_rejected_if_empty=True,
+        )
         if has_persisted_identity and len(albums) == 1:
             # A single persisted release keeps the identity advertised by the gallery.
             # Multiple virtual years still require an exact projected-key match.
@@ -6357,7 +6361,12 @@ def _query_param_list(query_params: Mapping[str, object] | None, key: str) -> li
     return [text] if text else []
 
 
-def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> list[dict[str, object]]:
+def _selected_artist_album_payloads(
+    rows: list[object],
+    artist_display: str,
+    *,
+    retain_rejected_if_empty: bool = False,
+) -> list[dict[str, object]]:
     from music_app.services.album_local_membership import rejected_local_album_paths
 
     membership_entries = []
@@ -6372,6 +6381,13 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
                      duration_seconds=entry.get("duration_seconds") or payload.get("duration_seconds"))
         membership_entries.append(entry)
     rejected_paths = rejected_local_album_paths(membership_entries)
+    all_rows_rejected = retain_rejected_if_empty and bool(rows) and all(
+        str(payload.get("file_private_path") or "") in rejected_paths
+        or _row_json_mapping(payload.get("file_entry")).get(
+            "local_album_membership_problem"
+        )
+        for payload in (_row_mapping(row) for row in rows)
+    )
     albums: dict[object, dict[str, object]] = {}
     track_ids_by_album: dict[object, set[object]] = {}
     directory_paths_by_album: dict[object, list[str]] = {}
@@ -6383,8 +6399,10 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
         if persisted_album_id is None and not persisted_album_key:
             continue
         file_entry = _row_json_mapping(row_payload.get("file_entry"))
-        if (str(row_payload.get("file_private_path") or "") in rejected_paths
-                or file_entry.get("local_album_membership_problem")):
+        if (
+            str(row_payload.get("file_private_path") or "") in rejected_paths
+            or file_entry.get("local_album_membership_problem")
+        ) and not (retain_rejected_if_empty and all_rows_rejected):
             continue
         exception_type = _effective_row_exception_type(row_payload)
         if exception_type:

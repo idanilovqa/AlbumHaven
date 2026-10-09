@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
@@ -107,24 +108,39 @@ def iter_local_cover_candidates(
     active_cover_path: Path | None,
 ) -> list[dict[str, object]]:
     candidates: list[dict[str, object]] = []
-    for path in album_root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in image_extensions:
+    pending_directories = [album_root]
+    while pending_directories:
+        directory = pending_directories.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
             continue
-        width, height = image_dimensions(path)
-        candidates.append(
-            {
-                "path": str(path),
-                "filename": path.name,
-                "relative_path": str(path.relative_to(album_root)),
-                "width": width,
-                "height": height,
-                "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
-                "is_squareish": is_squareish_cover(width, height),
-                "is_active": bool(active_cover_path and path == active_cover_path),
-                "area": width * height if width > 0 and height > 0 else 0,
-                "depth": len(path.relative_to(album_root).parts),
-            }
-        )
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    pending_directories.append(Path(entry.path))
+                    continue
+                if not entry.is_file() or Path(entry.name).suffix.lower() not in image_extensions:
+                    continue
+            except OSError:
+                continue
+            path = Path(entry.path)
+            width, height = image_dimensions(path)
+            relative_path = path.relative_to(album_root)
+            candidates.append(
+                {
+                    "path": str(path),
+                    "filename": path.name,
+                    "relative_path": str(relative_path),
+                    "width": width,
+                    "height": height,
+                    "resolution": f"{width}x{height}" if width > 0 and height > 0 else "Unknown",
+                    "is_squareish": is_squareish_cover(width, height),
+                    "is_active": bool(active_cover_path and path == active_cover_path),
+                    "area": width * height if width > 0 and height > 0 else 0,
+                    "depth": len(relative_path.parts),
+                }
+            )
     candidates.sort(
         key=lambda item: (
             not bool(item.get("is_squareish")),

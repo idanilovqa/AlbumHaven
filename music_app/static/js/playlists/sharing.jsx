@@ -30,6 +30,7 @@ export function SharePlaylist({runtime, controller, state, onClose}) {
   const detail = state.resource.data?.detail;
   const [sharing, setSharing] = useState({subject: null, value: {status: 'loading', data: null}});
   const [visibility, setVisibility] = useState(null), [query, setQuery] = useState(''), [cursor, setCursor] = useState(null);
+  const [decisions, setDecisions] = useState({});
   const [retry, setRetry] = useState(0), live = useRef(null), seen = useRef(new Set());
   const busy = state.mutation.status === 'loading';
   const current = Boolean(detail && sharing.subject === detail);
@@ -54,10 +55,10 @@ export function SharePlaylist({runtime, controller, state, onClose}) {
     && controller.getSnapshot().resource.data?.detail === detail && controller.getSnapshot().mutation.status !== 'loading';
   const writable = () => !revisionConflict && active() && !draftDirty(detail, playlistDraft(controller.getSnapshot()));
   const display = data && {...data, visibility: visibility ?? data.visibility};
-  return <NativeDialog runtime={runtime} title="Share playlist" onClose={onClose} beforeDismiss={() => controller.getSnapshot().mutation.status !== 'loading'}>{close =>
+  return <NativeDialog runtime={runtime} showCloseButton dismissDisabled={busy} title="Share playlist" onClose={onClose} beforeDismiss={() => controller.getSnapshot().mutation.status !== 'loading'}>{close =>
     <div className="playlists__form tag-editor-form">
-      <CreationSearch runtime={runtime} id="playlist-sharing-search" label="Find library members" maxLength={100} value={query} disabled={busy}
-        onChange={value => {if (!busy && live.current?.controller === controller) {setQuery(value.slice(0, 100)); setCursor(null); seen.current.clear();}}}/>
+      {data?.can_manage && <CreationSearch runtime={runtime} id="playlist-sharing-search" label="Find library members" maxLength={100} value={query} disabled={busy}
+        onChange={value => {if (!busy && live.current?.controller === controller) {setQuery(value.slice(0, 100)); setCursor(null); seen.current.clear();}}}/>}
       <Status runtime={runtime} value={current ? sharing.value : {status: 'loading'}} label="Playlist sharing" retry={() => setRetry(value => value + 1)}/>
       {metadataDirty && <p className="playlists__note">Save or discard the playlist's unsaved changes before updating sharing.</p>}
       {revisionConflict && <><p className="playlists__note" role="alert">This playlist changed. Refresh it before editing access.</p>
@@ -68,7 +69,25 @@ export function SharePlaylist({runtime, controller, state, onClose}) {
           const latest = controller.getSnapshot();
           if (latest.scopeKey === scopeKey && latest.selectedPlaylistId === playlistId && controller.getLifecycleVersion() === version) await controller.load();
         }}>Refresh playlist</Button></>}
-      {display && <SharingFields runtime={runtime} value={display} busy={busy || metadataDirty || revisionConflict} onChange={value => {if (writable()) setVisibility(value.visibility);}}
+      {data && !data.can_manage && <>
+        <p className="playlists__note">{data.visibility === 'server_shared' ? 'Shared with this library.' : 'Shared with you.'} Only the owner can change access.</p>
+        {data.request_status === 'pending' && <p role="status">Edit access requested. The owner can review it in Notifications.</p>}
+        {data.request_status === 'declined' && <p role="status">The owner declined your previous request.</p>}
+        {data.can_request_edit && <Button runtime={runtime} disabled={busy || revisionConflict || data.request_status === 'pending' || !controller.available('requestEditAccess')}
+          onClick={() => {if (writable()) controller.mutate('requestEditAccess');}}>Request edit access</Button>}
+      </>}
+      {data?.can_manage && data.pending_requests.map(request => <div key={request.request_ref} className="playlists__share-person">
+        <span>{request.display_name || request.username_display || 'Library member'} requested edit access.</span>
+        <NativeChoice runtime={runtime} label={`Access for ${request.display_name || request.username_display || 'Library member'}`}
+          value={decisions[request.request_ref] || 'viewer'} disabled={busy || metadataDirty || revisionConflict}
+          options={ [['viewer', 'Viewer'], ['editor', 'Editor']] }
+          onChange={role => {if (writable()) setDecisions(value => ({...value, [request.request_ref]: role}));}}/>
+        <Button runtime={runtime} disabled={busy || metadataDirty || revisionConflict || decisions[request.request_ref] !== 'editor'}
+          onClick={() => {if (writable() && decisions[request.request_ref] === 'editor') controller.mutate('decideEditRequest', {request_ref: request.request_ref, decision: 'approve'});}}>Apply</Button>
+        <Button runtime={runtime} disabled={busy || metadataDirty || revisionConflict}
+          onClick={() => {if (writable()) controller.mutate('decideEditRequest', {request_ref: request.request_ref, decision: 'decline'});}}>Decline</Button>
+      </div>)}
+      {display?.can_manage && <SharingFields runtime={runtime} value={display} busy={busy || metadataDirty || revisionConflict} onChange={value => {if (writable()) setVisibility(value.visibility);}}
         onEditor={value => {if (writable()) controller.mutate('setPlaylistEditor', value);}}/>}
       {cursor && <Button runtime={runtime} disabled={busy} onClick={() => {if (active()) {setCursor(null); seen.current.clear();}}}>First page</Button>}
       {data?.next_cursor && <Button runtime={runtime} disabled={busy || seen.current.has(data.next_cursor)} onClick={() => {
@@ -76,8 +95,8 @@ export function SharePlaylist({runtime, controller, state, onClose}) {
         seen.current.add(data.next_cursor); setCursor(data.next_cursor);
       }}>More library members</Button>}
       <MutationStatus runtime={runtime} value={state.mutation} controller={controller}/>
-      <div className="playlists__actions"><Button runtime={runtime} disabled={busy || metadataDirty || revisionConflict || !data?.can_manage || !controller.available('saveSharing') || display.visibility === data.visibility}
-        onClick={() => {if (writable()) controller.mutate('saveSharing', {visibility: display.visibility});}}>Save visibility</Button>
+      <div className="playlists__actions">{data?.can_manage && <Button runtime={runtime} disabled={busy || metadataDirty || revisionConflict || !data?.can_manage || !controller.available('saveSharing') || display.visibility === data.visibility}
+        onClick={() => {if (writable()) controller.mutate('saveSharing', {visibility: display.visibility});}}>Save visibility</Button>}
         <Button runtime={runtime} disabled={busy} onClick={() => close()}>Close</Button></div>
     </div>}
   </NativeDialog>;

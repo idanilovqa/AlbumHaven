@@ -22,3 +22,9 @@ export function completeDeletedPlaylistNavigation(controller, runtime, mutation)
   const open = () => current() ? runtime.navigate({playlist_id: null}) : false;
   return runtime.deferFormNavigation?.(open) || open();
 }
+
+// A queued Share opening cannot outlive its acknowledged native navigation.
+export function playlistShareIntentCurrent(intent, shell, generation) {
+  return Boolean(intent && intent.generation === generation && intent.nativeSnapshot === shell
+    && shell.visible && shell.playlistId === intent.row.playlist_id && intent.isCurrent() === true);
+}

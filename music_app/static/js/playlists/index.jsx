@@ -1,8 +1,9 @@
+import {createPlaylistEditNotifications} from './edit-request-notifications.mjs';
 import React, {useEffect, useState, useSyncExternalStore} from 'react';
 import {createRoot} from 'react-dom/client';
 import {createPlaylistController, granted} from './model.mjs';
 import {PlaylistsView, PlaylistDirectory} from './app.jsx';
-import {applyPlaylistShell, completeDeletedPlaylistNavigation} from './shell.mjs';
+import {applyPlaylistShell, completeDeletedPlaylistNavigation, playlistShareIntentCurrent} from './shell.mjs';
 import {playlistCreationContext} from './creation-session.mjs';
 import {createMissingPlaylistDraftController} from './draft.mjs';
 import {MissingPlaylistDraftPage} from './draft.jsx';
@@ -14,7 +15,19 @@ export function mountPlaylists({host, runtime, providers = {}}) {
   const root = createRoot(host), controller = createPlaylistController({readPlaylists: runtime.readPlaylists, providers});
   let configuredProviders = {...providers};
   let disposed = false, generation = 0, navigationSequence = 0, customReader = typeof providers.readPlaylists === 'function';
-  let activeDraft = null, deletedNavigation = null;
+  let activeDraft = null, deletedNavigation = null, copiedNavigation = null, shareRequest = null, notifications = null;
+  const mountNotifications = () => {
+    if (disposed || notifications || !runtime.notificationRegistry?.()?.registerSource) return;
+    notifications = createPlaylistEditNotifications({runtime, notifications: runtime.notificationRegistry(), providers: configuredProviders,
+      async onOpen(row, isCurrent) {
+        if (!isCurrent() || !runtime.openSharedPlaylist) return false;
+        const opened = await runtime.openSharedPlaylist({playlist_id: row.playlist_id, isCurrent});
+        if (opened === false || !isCurrent()) return false;
+        shareRequest = {row, nativeSnapshot: runtime.snapshot(), generation, isCurrent}; root.render(<Session/>); return true;
+      }});
+  };
+  const unsubscribeNotifications = runtime.subscribeNotificationRegistry?.(mountNotifications);
+  mountNotifications();
   const clearDraft = owner => {
     if (activeDraft !== owner) return;
     activeDraft = null; owner.unsubscribe?.(); owner.abort.abort(); owner.controller.dispose(); owner.nativePayload = null;
@@ -102,6 +115,7 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     const [navigationError, setNavigationError] = useState(false);
     const shell = useSyncExternalStore(runtime.subscribe, runtime.snapshot, runtime.snapshot);
     const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+    if (shareRequest && !playlistShareIntentCurrent(shareRequest, shell, generation)) shareRequest = null;
     useEffect(() => {
       if (state.mutation.action !== 'deletePlaylist' || state.mutation.status !== 'ready' || state.selectedPlaylistId !== null
         || shell.scopeKey !== state.scopeKey || shell.playlistId !== state.mutation.playlist_id || deletedNavigation === state.mutation) return;
@@ -110,6 +124,18 @@ export function mountPlaylists({host, runtime, providers = {}}) {
         if (!disposed && controller.getSnapshot().scopeKey === state.scopeKey && controller.getSnapshot().mutation === mutation) setNavigationError('delete');
       });
     }, [state.scopeKey, state.selectedPlaylistId, state.mutation, shell.scopeKey, shell.playlistId]);
+    useEffect(() => {
+      if (state.mutation.status === 'ready' && ['decideEditRequest', 'setPlaylistEditor', 'saveSharing'].includes(state.mutation.action)) notifications?.refresh();
+    }, [state.mutation]);
+    useEffect(() => {
+      if (state.mutation.action !== 'copyPlaylist' || state.mutation.status !== 'ready'
+        || !state.mutation.copied_playlist_id || copiedNavigation === state.mutation || shell.scopeKey !== state.scopeKey) return;
+      const mutation = state.mutation, scopeKey = state.scopeKey;
+      copiedNavigation = mutation;
+      Promise.resolve(runtime.navigate({playlist_id: mutation.copied_playlist_id})).catch(() => {
+        if (!disposed && controller.getSnapshot().scopeKey === scopeKey && controller.getSnapshot().mutation === mutation) setNavigationError(true);
+      });
+    }, [state.mutation, shell.scopeKey, state.scopeKey]);
     useEffect(() => {
       setNavigationError(false);
       if (activeDraft && shell.retainedDraftToken === activeDraft.token && shell.scopeKey === activeDraft.scopeKey) {
@@ -143,6 +169,7 @@ export function mountPlaylists({host, runtime, providers = {}}) {
       directory={<PlaylistDirectory runtime={runtime} state={state} onSelect={select} canCreate={false}/>}/>;
     return <PlaylistsView key={`${shell.scopeKey}:${generation}`} runtime={runtime} controller={controller} state={state}
       integrationProviders={configuredProviders} readDetail={configuredProviders.readDetail} navigationError={navigationError}
+      shareRequest={shareRequest?.row || null} onShareRequestHandled={request => {if (shareRequest?.row === request) shareRequest = null;}}
       onSelect={select} onPrepareDraft={prepareDraft}/>;
   }
   root.render(<Session/>);
@@ -151,11 +178,11 @@ export function mountPlaylists({host, runtime, providers = {}}) {
       if (activeDraft && Object.keys({...configuredProviders, ...next}).some(key => configuredProviders[key] !== next?.[key])) {
         const owner = activeDraft; runtime.releaseDraft?.(owner.token); clearDraft(owner);
       }
-      controller.configure(next); configuredProviders = {...next}; customReader = typeof next?.readPlaylists === 'function'; generation++; root.render(<Session/>);
+      shareRequest = null; controller.configure(next); configuredProviders = {...next}; notifications?.configure(configuredProviders); customReader = typeof next?.readPlaylists === 'function'; generation++; root.render(<Session/>);
     }},
     refresh() {if (!disposed) return controller.load();},
     dispose() {if (!disposed) {
-      disposed = true;
+      disposed = true; notifications?.dispose(); unsubscribeNotifications?.();
       if (activeDraft) {const owner = activeDraft; runtime.releaseDraft?.(owner.token); clearDraft(owner);}
       unsubscribeSource(); controller.dispose(); root.unmount();
     }},

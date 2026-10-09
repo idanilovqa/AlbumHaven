@@ -572,6 +572,34 @@ const HomeFriendsRuntime = (() => {
     };
     return isCurrent() ? Object.freeze({target: selectionApi().projectTarget(target), isCurrent}) : null;
   }
+  async function activityMissingRequest(method, options, fallback) {
+    const owner = activity, origin = options?.origin;
+    const ownsSource = () => {
+      const snapshot = sync();
+      return owner && activity === owner && snapshot.authenticated && snapshot.visible
+        && options?.scopeKey === snapshot.scopeKey && owner.scopeKey === snapshot.scopeKey
+        && !options.signal?.aborted && options.isCurrent?.() === true
+        && origin?.audience === (owner.context.account_ref == null ? 'own' : 'friend')
+        && origin.subject_ref === owner.context.account_ref && origin.kind === owner.context.kind
+        && origin.period === owner.context.period && origin.snapshot_ref === owner.snapshotRef;
+    };
+    const startedCurrent = ownsSource();
+    let sourceDenial = null;
+    try {
+      return await (window.AlbumHavenPlaylistUI?.[method]?.({...options, onSourceDenied: error => {sourceDenial = error;}}) ?? fallback);
+    } catch (error) {
+      // A typed source denial invalidates only this captured native lease, not
+      // Friend grants or another snapshot. Create denial and expiry say nothing
+      // about source read authority; explicit refresh may establish a new lease.
+      if (startedCurrent && sourceDenial === error && error?.responseRejected === true && error.status === 403
+        && error.code === 'source_unavailable' && ownsSource()) {
+        eraseActivity(); activitySourceEpoch++; actionSequence++;
+        resourceSelection?.invalidateResourceSelections();
+        listeners.forEach(listener => listener());
+      }
+      throw error;
+    }
+  }
   function retireFriendActivity({scopeKey, friends} = {}) {
     if (scopeKey !== `${identity}:${scopeGeneration}` || !['ready', 'empty', 'denied', 'unavailable', 'error'].includes(friends?.status)) return false;
     const accepted = new Set(['ready', 'empty'].includes(friends.status) && Array.isArray(friends.data?.friends)
@@ -905,6 +933,8 @@ const HomeFriendsRuntime = (() => {
     explicitQueue: () => window.AlbumHavenExplicitQueue,
     openPlaytableContext: (...args) => window.AlbumHavenPlaytableUI?.context(...args) ?? false,
     openPlaylistAction: (...args) => window.AlbumHavenPlaytableUI?.open(...args) ?? false,
+    readActivityMissingEligibility: options => activityMissingRequest('activityMissingEligibility', options, null),
+    inspectActivityMissing: options => activityMissingRequest('inspectActivityMissing', options, false),
     retireFriendActivity,
     ...resourceSelection,
     mountResourceSelection(host, options) {

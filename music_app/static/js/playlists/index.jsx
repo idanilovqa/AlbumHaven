@@ -25,6 +25,12 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     const owner = activeDraft;
     if (!owner) return;
     const source = controller.getSnapshot(), snapshot = owner.controller.getSnapshot();
+    if (owner.external) {
+      if (runtime.snapshot().scopeKey !== owner.scopeKey || source.resource.status === 'denied') {
+        runtime.releaseDraft?.(owner.token); clearDraft(owner);
+      }
+      return;
+    }
     if (source.scopeKey !== owner.scopeKey || source.resource.status === 'denied') {
       runtime.releaseDraft?.(owner.token); clearDraft(owner); return;
     }
@@ -36,15 +42,19 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     owner.controller.setContext(playlistCreationContext(source, 'missing'));
   }
   const unsubscribeSource = controller.subscribe(syncDraftContext);
-  function prepareDraft(packet) {
+  function prepareDraft(packet, externalScopeKey = null) {
     if (disposed || activeDraft || typeof runtime.openDraft !== 'function') return false;
-    const shell = runtime.snapshot(), source = controller.getSnapshot(), context = playlistCreationContext(source, 'missing');
-    if (!shell.visible || shell.scopeKey !== packet?.scopeKey || context.scopeKey !== packet.scopeKey || !context.canCreate
+    const external = externalScopeKey !== null;
+    if (external && (packet?.source?.kind !== 'activity' || packet.source.source_protocol !== 'missing_activity_selection_v1')) return false;
+    const shell = runtime.snapshot();
+    if (external) controller.setScope(shell.scopeKey);
+    const source = controller.getSnapshot(), context = external ? packet : playlistCreationContext(source, 'missing');
+    if ((!shell.visible && !external) || shell.scopeKey !== packet?.scopeKey || context.scopeKey !== packet.scopeKey || !context.canCreate
       || context.source?.kind !== packet.source?.kind || context.source?.ref !== packet.source?.ref) return false;
     const local = createMissingPlaylistDraftController({prepared: packet, providers: configuredProviders});
     if (!local.getSnapshot().draftToken) {local.dispose(); return false;}
     const owner = {controller: local, token: packet.draftToken, scopeKey: packet.scopeKey, completing: false,
-      sourcePlaylistId: source.selectedPlaylistId, nativePayload: shell.payload, abort: new AbortController(),
+      external, sourcePlaylistId: external ? null : source.selectedPlaylistId, nativePayload: shell.payload, abort: new AbortController(),
       topEntries: local.getSnapshot().entries, topIntent: JSON.stringify(local.topIntent())};
     activeDraft = owner;
     owner.unsubscribe = local.subscribe(() => {
@@ -58,7 +68,7 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     });
     syncDraftContext();
     if (!draftCurrent(owner)) {clearDraft(owner); return false;}
-    const opened = runtime.openDraft({token: owner.token, scopeKey: owner.scopeKey,
+    const opened = runtime.openDraft({token: owner.token, scopeKey: owner.scopeKey, externalScopeKey,
       isCurrent: () => draftCurrent(owner), onDiscard: () => clearDraft(owner),
       confirmLeave: async () => {
         const before = local.getSnapshot();
@@ -68,6 +78,7 @@ export function mountPlaylists({host, runtime, providers = {}}) {
         return accepted === true && draftCurrent(owner) && local.getSnapshot() === before;
       }});
     if (!opened) {clearDraft(owner); return false;}
+    if (external) controller.load();
     return true;
   }
   async function savedDraft(owner, ack) {
@@ -147,6 +158,9 @@ export function mountPlaylists({host, runtime, providers = {}}) {
   }
   root.render(<Session/>);
   return Object.freeze({
+    prepareActivityDraft(packet, externalScopeKey) {
+      return typeof externalScopeKey === 'string' && prepareDraft(packet, externalScopeKey);
+    },
     configureProviders(next) {if (!disposed) {
       if (activeDraft && Object.keys({...configuredProviders, ...next}).some(key => configuredProviders[key] !== next?.[key])) {
         const owner = activeDraft; runtime.releaseDraft?.(owner.token); clearDraft(owner);

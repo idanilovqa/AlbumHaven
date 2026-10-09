@@ -17,7 +17,8 @@ export function createPlaylistMatchProviders({transport, runtime} = {}) {
   function identity(options) {
     const context = transport.context();
     if (disposed || !context || typeof options.scopeKey !== 'string' || !options.scopeKey || !accepts(options.scopeKey)) throw fail(403);
-    if (options.source?.kind !== 'playlist' || !uuid(options.source.ref) || typeof options.source.revision !== 'string' || !/^[1-9][0-9]*$/.test(options.source.revision)
+    if (!['playlist', 'activity'].includes(options.source?.kind) || !uuid(options.source.ref)
+      || (options.source.kind === 'playlist' ? typeof options.source.revision !== 'string' || !/^[1-9][0-9]*$/.test(options.source.revision) : !uuid(options.source.revision))
       || !uuid(options.entry_ref)) throw fail(400);
     return {context, scopeKey: options.scopeKey, generation, source: tuple(options.source), entry_ref: options.entry_ref};
   }
@@ -75,9 +76,9 @@ export function createPlaylistMatchProviders({transport, runtime} = {}) {
           || data.entry.availability !== 'local' || data.entry.match_state !== 'accepted'
           || data.entry.allowed_actions?.can_read !== true || data.entry.allowed_actions?.can_select !== true) throw fail();
         const allowed_actions = {can_read: true, can_use_for_playlist: true};
-        const context = {scopeKey: owner.scopeKey, mode: 'missing', canCreate: true, source: {...owner.source, allowed_actions}};
+        const context = {scopeKey: owner.scopeKey, mode: 'missing', canCreate: true, source: {...owner.source, allowed_actions, ...(owner.source.kind === 'activity' ? {source_protocol: 'missing_activity_selection_v1'} : {})}};
         const normalized = normalizeCreationResult({status: 'ready', data: {...context,
-          allowed_actions, entries_complete: true, entries: [data.entry]}}, context);
+          allowed_actions, ...(owner.source.kind === 'activity' ? {source_protocol: 'missing_activity_selection_v1'} : {}), entries_complete: true, entries: [data.entry]}}, context);
         if (normalized.status !== 'ready') throw fail();
         return {status: 'ready', data: {scopeKey: owner.scopeKey, source: owner.source, entry_ref: owner.entry_ref, entry: normalized.data.entries[0]}};
       } finally {current.pending = false;}

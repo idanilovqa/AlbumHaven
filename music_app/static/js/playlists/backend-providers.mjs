@@ -15,13 +15,26 @@ const fail = (message, status = 409) => Object.assign(new Error(message), {statu
 const aborted = () => Object.assign(new Error('Playlist request superseded.'), {name: 'AbortError'});
 const tuple = source => ({kind: source.kind, ref: source.ref, revision: source.revision});
 const same = (a, b) => a?.kind === b?.kind && a?.ref === b?.ref && a?.revision === b?.revision;
-const sourceProtocols = new Set(['library_selection_v1', 'complete_inventory_selection_v1', 'complete_activity_selection_v1', 'missing_playlist_selection_v1']);
+const sourceProtocols = new Set(['library_selection_v1', 'complete_inventory_selection_v1', 'complete_activity_selection_v1', 'missing_playlist_selection_v1', 'missing_activity_selection_v1']);
 const visibilityModes = ['private', 'server_shared'];
 function preferences(value) {
   if (typeof value?.remember_order_mode !== 'boolean' || !['regular', 'shuffle'].includes(value.last_order_mode)
     || value.effective_order_mode !== (value.remember_order_mode ? value.last_order_mode : 'regular') || !revision(value.revision)) throw fail('Invalid Playlist preferences.');
   return {remember_order_mode: value.remember_order_mode, last_order_mode: value.last_order_mode,
     effective_order_mode: value.effective_order_mode, revision: value.revision};
+}
+
+function activityMissingBody(options) {
+  const origin = options.origin, refs = options.row_refs ?? null;
+  if (!['own', 'friend'].includes(origin?.audience)
+    || (origin.audience === 'own' ? origin.subject_ref !== null : !uuid(origin.subject_ref))
+    || !['tracks', 'listens'].includes(origin.kind) || !['week', 'month', 'six', 'year', 'all'].includes(origin.period)
+    || typeof origin.snapshot_ref !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(origin.snapshot_ref)
+    || refs !== null && (!Array.isArray(refs) || !refs.length || refs.length > 5000
+      || refs.some(value => typeof value !== 'string' || !/^activity_[0-9a-f]{64}$/.test(value)) || new Set(refs).size !== refs.length))
+    throw fail('This activity source cannot be inspected.', 400);
+  return {origin: {audience: origin.audience, subject_ref: origin.subject_ref, kind: origin.kind,
+    period: origin.period, snapshot_ref: origin.snapshot_ref}, row_refs: refs};
 }
 
 export function createPlaylistBackendProviders({transport, runtime} = {}) {
@@ -51,11 +64,12 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
   function sourceData(response, token, signal, expected = null) {
     active(token, signal);
     const data = response?.data;
-    const missing = data?.source_protocol === 'missing_playlist_selection_v1';
-    const kind = missing ? 'playlist' : data?.source_protocol === 'complete_activity_selection_v1' ? 'activity' : 'library';
+    const missing = ['missing_playlist_selection_v1', 'missing_activity_selection_v1'].includes(data?.source_protocol);
+    const kind = data?.source_protocol === 'missing_playlist_selection_v1' ? 'playlist'
+      : ['complete_activity_selection_v1', 'missing_activity_selection_v1'].includes(data?.source_protocol) ? 'activity' : 'library';
     if (response?.status !== 'ready' || !sourceProtocols.has(data?.source_protocol) || data.mode !== (missing ? 'missing' : 'ordinary')
       || data.source?.kind !== kind || !uuid(data.source.ref)
-      || !(missing ? revision(data.source.revision) : uuid(data.source.revision)) || !granted(data)
+      || !(kind === 'playlist' ? revision(data.source.revision) : uuid(data.source.revision)) || !granted(data)
       || expected && !same(data.source, expected)) throw fail('Playlist source was not acknowledged.');
     acceptActor(data.actor_scope);
     sources.set(data.source.ref, {source: tuple(data.source), protocol: data.source_protocol,
@@ -214,6 +228,18 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       return reconcile(operation, options.signal, options.scopeKey);
     }
   }
+  async function activityMissingRequest(path, token, body, options) {
+    try {
+      return await transport.request(path, {method: 'POST', body, signal: options.signal, expected: JSON.parse(token)[0]});
+    } catch (error) {
+      active(token, options.signal);
+      // Only this source request can prove source denial. Recovery before the
+      // capture and validation after it must never invalidate the current Home.
+      if (error?.responseRejected === true && error.status === 403 && error.code === 'source_unavailable')
+        options.onSourceDenied?.(error);
+      throw error;
+    }
+  }
   return Object.freeze({
     hasPendingPlaylistOperation(options) {try {identity(options.scopeKey); return Boolean(pendingOperation(options));} catch {return false;}},
     retryPlaylistOperation: retryOriginal,
@@ -298,6 +324,29 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
           || row.inventory_track_ref !== null && !inventory(row.inventory_track_ref))) throw fail('Selected activity source changed.');
       return {source: descriptor(data), entry_refs: data.entries.map(row => row.entry_ref)};
     },
+    async readActivityMissingEligibility(options) {
+      const token = identity(options.scopeKey), body = activityMissingBody(options);
+      const response = await activityMissingRequest('/playlists/creation-source/activity-missing/eligibility', token, body, options);
+      active(token, options.signal);
+      const data = response?.data;
+      if (response?.status !== 'ready' || typeof data?.can_inspect_missing !== 'boolean'
+        || !Number.isSafeInteger(data.missing_count) || data.missing_count < 0 || data.missing_count > 5000
+        || data.can_inspect_missing !== (data.missing_count > 0)) throw fail('Activity eligibility is unavailable.');
+      acceptActor(data.actor_scope);
+      return {can_inspect_missing: data.can_inspect_missing, missing_count: data.missing_count};
+    },
+    async beginActivityMissingSource(options) {
+      const token = identity(options.scopeKey), body = activityMissingBody(options);
+      const recovered = await recoverCreate(options);
+      active(token, options.signal);
+      if (recovered) return {recovered_creation: recovered};
+      const response = await activityMissingRequest('/playlists/creation-source/activity-missing', token, body, options);
+      const data = sourceData(response, token, options.signal);
+      if (data.source_protocol !== 'missing_activity_selection_v1' || data.capture_ref !== data.source.ref
+        || data.entries_complete !== true || !Array.isArray(data.entries) || !data.entries.length
+        || data.entries.length > 5000 || data.entries.some(row => row.availability !== 'missing')) throw fail('Missing activity source changed.');
+      return {source: descriptor(data), resource: {status: 'ready', data: projection(data, options.scopeKey)}};
+    },
     async readPlaylistCreationSource(options) {
       const token = identity(options.scopeKey);
       if (options.mode === 'missing' && options.source?.kind === 'playlist' && uuid(options.source.ref) && revision(options.source.revision)) {
@@ -312,6 +361,18 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
         if (data.source_protocol !== 'missing_playlist_selection_v1' || data.entries_complete !== true || !Array.isArray(data.entries)
           || !retained && !data.entries.length || data.entries.some(row => row.availability !== 'missing'
             && !(retained && row.availability === 'local' && row.match_state === 'accepted'))) throw fail('Missing Playlist source unavailable.');
+        return {status: 'ready', data: projection(data, options.scopeKey)};
+      }
+      if (options.mode === 'missing' && options.source?.kind === 'activity') {
+        const known = sources.get(options.source.ref);
+        if (!known || known.protocol !== 'missing_activity_selection_v1' || !same(known.source, options.source))
+          throw fail('The retained Activity source is unavailable. Open a new Inspect session.');
+        const response = await transport.request(transport.query('/playlists/creation-source/activity-missing', {
+          source_ref: known.source.ref, source_revision: known.source.revision}), {signal: options.signal});
+        const data = sourceData(response, token, options.signal, known.source);
+        if (data.source_protocol !== known.protocol || data.capture_ref !== known.source.ref || data.entries_complete !== true
+          || !Array.isArray(data.entries) || data.entries.some(row => row.availability !== 'missing'
+            && !(row.availability === 'local' && row.match_state === 'accepted'))) throw fail('Missing activity source changed.');
         return {status: 'ready', data: projection(data, options.scopeKey)};
       }
       const known = sources.get(options.source?.ref);
@@ -334,7 +395,7 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
     createPlaylistFromSelection(options) {
       identity(options.scopeKey);
       const known = sources.get(options.source?.ref);
-      if (!known || !same(known.source, options.source) || options.mode !== (known.protocol === 'missing_playlist_selection_v1' ? 'missing' : 'ordinary')
+      if (!known || !same(known.source, options.source) || options.mode !== (['missing_playlist_selection_v1', 'missing_activity_selection_v1'].includes(known.protocol) ? 'missing' : 'ordinary')
         || options.source_protocol !== known.protocol) throw fail('Playlist source unavailable.', 409);
       return mutate('create', options, '/playlists', 'POST', {source_protocol: known.protocol, mode: options.mode, source: tuple(known.source),
         title: options.title, description: options.description, entry_refs: options.entry_refs});

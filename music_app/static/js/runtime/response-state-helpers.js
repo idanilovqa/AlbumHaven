@@ -1428,6 +1428,8 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
+  if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;

@@ -6875,7 +6875,8 @@ const STREAMING_WORKLET_URL = '/static/js/audio-worklets/gapless-playback-proces
 const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_FRAMES = 48_000;
 const STREAMING_CREDIT_LOW_WATER_FRAMES = 12_000;
-const STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES = STREAMING_CREDIT_LOW_WATER_FRAMES;
+const STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES = 2 * STREAMING_SAMPLE_RATE;
+const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 const STREAMING_QUEUED_NEXT_PREPARE_FRAMES = 3 * STREAMING_SAMPLE_RATE;
 const STREAMING_REPLACEMENT_PREPARE_FRAMES = 2 * STREAMING_SAMPLE_RATE;
 const STREAMING_SEEK_PREPARE_FRAMES = 12_000;
@@ -7189,6 +7190,81 @@ function failStreamingEngine(source, event, reason) {
   setStreamingError(source, event);
   const cleanup = beginStreamingCleanup(reason, { preserveError: true });
   void cleanup.catch((error) => console.error('Streaming cleanup failed', error));
+}
+
+function refreshPlayerAfterStreamingTransportChange() {
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+}
+
+async function recoverUnexpectedStreamingSocketClose(socket, event) {
+  const engine = streamingEngineState();
+  if (engine.socket !== socket) return;
+  const current = engine.roles.current;
+  const startRequestId = engine.startRequestId;
+  const recovery = current ? {
+    track: current.track,
+    startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
+    attempt: Math.max(0, Number(current.transportRecoveryAttempt) || 0),
+  } : null;
+  const wasPlaying = Boolean(current && !engine.snapshot.paused && !engine.snapshot.ended);
+  const detail = [event?.code, event?.reason]
+    .filter((value) => value !== undefined && value !== '')
+    .join(' ');
+  setStreamingError('socket', { message: detail || 'Playback socket closed unexpectedly' });
+
+  let cleanupError = null;
+  try {
+    await beginStreamingCleanup('socket-closed', {
+      preserveError: true,
+      socketAlreadyClosed: true,
+    });
+  } catch (error) {
+    cleanupError = error;
+    engine.diagnostics.lastCleanupError = {
+      name: error?.name || 'Error',
+      message: error?.message || String(error),
+    };
+  }
+
+  if (!recovery || engine.startRequestId !== startRequestId) {
+    refreshPlayerAfterStreamingTransportChange();
+    return;
+  }
+  engine.pendingTransportRecovery = recovery;
+  Object.assign(engine.snapshot, {
+    currentTime: recovery.startSeconds,
+    duration: Number(recovery.track?.durationSeconds) || 0,
+    paused: true,
+    ended: false,
+    src: String(recovery.track?.src || ''),
+    readyState: 0,
+  });
+  if (cleanupError
+      || !wasPlaying
+      || recovery.attempt >= STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS) {
+    engine.mode = 'error';
+    refreshPlayerAfterStreamingTransportChange();
+    return;
+  }
+
+  engine.pendingTransportRecovery = null;
+  delete engine.diagnostics.lastError;
+  try {
+    const recovered = await startStreamingTrack(recovery.track, {
+      startSeconds: recovery.startSeconds,
+      autoplay: true,
+      transportRecoveryAttempt: recovery.attempt + 1,
+    });
+    if (recovered) {
+      engine.diagnostics.transportReconnects =
+        (Number(engine.diagnostics.transportReconnects) || 0) + 1;
+    }
+  } catch (error) {
+    engine.pendingTransportRecovery = recovery;
+    setStreamingError('socket', error);
+    engine.snapshot.paused = true;
+  }
+  refreshPlayerAfterStreamingTransportChange();
 }
 
 function observeStreamingFacadeCallback(result, source) {
@@ -8191,13 +8267,8 @@ async function prepareStreamingPlaybackEngine() {
           return;
         }
         if (engine.socket !== socket) return;
-        const detail = [event?.code, event?.reason].filter((value) => value !== undefined && value !== '').join(' ');
-        setStreamingError('socket', { message: detail || 'Playback socket closed unexpectedly' });
-        const cleanup = beginStreamingCleanup('socket-closed', {
-          preserveError: true,
-          socketAlreadyClosed: true,
-        });
-        void cleanup.catch((error) => console.error('Streaming cleanup failed', error));
+        void recoverUnexpectedStreamingSocketClose(socket, event)
+          .catch((error) => console.error('Streaming socket recovery failed', error));
       };
       socket.onmessage = ({ data }) => {
         if (data instanceof ArrayBuffer) {
@@ -8320,8 +8391,10 @@ async function startStreamingTrack(track, {
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
+  transportRecoveryAttempt = null,
 } = {}) {
   const engine = streamingEngineState();
+  if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
   settleStreamingReplacementCushionWaiter(false);
@@ -8452,6 +8525,7 @@ async function startStreamingTrack(track, {
   });
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
+  current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
   if (typeof probeCachedWaveformPeaks === 'function') {
     try {
       const cachedWaveformProbe = probeCachedWaveformPeaks(
@@ -8569,6 +8643,18 @@ async function resumeStreamingPlayback(
   expectedCurrentRole = null,
 ) {
   const engine = streamingEngineState();
+  const pendingRecovery = engine.pendingTransportRecovery;
+  if (pendingRecovery && !engine.context && !engine.roles.current) {
+    engine.pendingTransportRecovery = null;
+    delete engine.diagnostics.lastError;
+    const recovered = await startStreamingTrack(pendingRecovery.track, {
+      startSeconds: pendingRecovery.startSeconds,
+      autoplay: true,
+      onAutoplayStarted: onPlaybackStarted,
+      transportRecoveryAttempt: 0,
+    });
+    return Boolean(recovered && !engine.snapshot.paused);
+  }
   if (!engine.context || !engine.node) await prepareStreamingPlaybackEngine();
   const context = engine.context;
   const node = engine.node;
@@ -8899,6 +8985,7 @@ function beginStreamingCleanup(reason, options = {}) {
 }
 
 async function stopStreamingPlayback(reason = 'stopped') {
+  streamingEngineState().pendingTransportRecovery = null;
   return beginStreamingCleanup(reason);
 }
 function getStreamingPlaybackSnapshot() {

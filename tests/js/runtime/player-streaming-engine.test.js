@@ -286,6 +286,7 @@ function createEngineHarness(options = {}) {
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
     handleStreamingPlaybackEnded: options.handleStreamingPlaybackEnded,
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
+    updatePlayerUi: options.updatePlayerUi,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
   };
@@ -1734,7 +1735,7 @@ test('uses a boundary to promote the stable server stream and waits for its ack 
     sampleRate: 48_000,
     currentCapacityFrames: 12 * 48_000,
     continuityCapacityFrames: 5 * 48_000,
-    startupBufferFrames: 12_000,
+    startupBufferFrames: 2 * 48_000,
   });
   harness.nodes[0].port.dispatch({
     type: 'first-frame',
@@ -1807,7 +1808,7 @@ test('swapped physical rings keep promoted and replacement roles within their in
     sampleRate: 48_000,
     currentCapacityFrames: 12 * 48_000,
     continuityCapacityFrames: 5 * 48_000,
-    startupBufferFrames: 12_000,
+    startupBufferFrames: 2 * 48_000,
   });
   acceptMetadata(harness, current);
   harness.nodes[0].port.dispatch({
@@ -4126,22 +4127,48 @@ test('paused metadata and consumption update accounting without credit until exp
   assert.ok(diagnostics.inFlightFrames.continuity <= 5 * 48_000);
 });
 
-test('unexpected socket close is inspectable while intentional stop remains stopped without an error', async () => {
-  const failed = createEngineHarness();
-  await failed.api.start(makeTrack());
+test('unexpected socket close reconnects once from the rendered position and leaves an explicit retry after a second loss', async () => {
+  let uiUpdates = 0;
+  const failed = createEngineHarness({ updatePlayerUi: () => { uiUpdates += 1; } });
+  const track = makeTrack();
+  await failed.api.start(track);
+  const first = failed.sent('open')[0];
+  failed.nodes[0].port.dispatch({
+    type: 'position',
+    generation: first.generation,
+    streamId: first.streamId,
+    timelineFrame: 3 * 48_000,
+  });
   failed.sockets[0].unexpectedClose({ code: 1006, reason: 'network disappeared' });
+  await failed.settle();
+  await failed.settle();
+
+  assert.equal(failed.sockets.length, 2);
+  const recovered = failed.sockets[1].sent.find(({ type }) => type === 'open');
+  assert.equal(recovered.path, track.path);
+  assert.equal(recovered.startFrame, 3 * 48_000);
+  assert.equal(failed.api.snapshot().diagnostics.lastError, undefined);
+  assert.equal(failed.nodes[0].disconnectCalls, 1);
+  assert.equal(failed.contexts[0].closeCalls, 1);
+
+  failed.sockets[1].unexpectedClose({ code: 1006, reason: 'network disappeared again' });
+  await failed.settle();
   await failed.settle();
 
   const failedSnapshot = failed.api.snapshot();
+  assert.equal(failed.sockets.length, 2, 'automatic recovery is bounded to one attempt');
   assert.equal(failedSnapshot.mode, 'error');
+  assert.equal(failedSnapshot.paused, true);
   assert.equal(failedSnapshot.diagnostics.lastError.source, 'socket');
-  assert.match(failedSnapshot.diagnostics.lastError.message, /1006|network disappeared/);
-  assert.equal(failed.portMessages('stop').length, 1);
-  assert.equal(failed.nodes[0].disconnectCalls, 1);
-  assert.equal(failed.contexts[0].closeCalls, 1);
-  assert.equal(failed.engine.context, null);
-  assert.equal(failed.engine.node, null);
-  assert.equal(failed.engine.socket, null);
+  assert.match(failedSnapshot.diagnostics.lastError.message, /1006|network disappeared again/);
+  assert.ok(uiUpdates > 0, 'transport failure refreshes the visible player state');
+
+  assert.equal(await failed.api.resume(), true);
+  await failed.settle();
+  assert.equal(failed.sockets.length, 3, 'an explicit play retries after automatic recovery is exhausted');
+  const retried = failed.sockets[2].sent.find(({ type }) => type === 'open');
+  assert.equal(retried.path, track.path);
+  assert.equal(retried.startFrame, 3 * 48_000);
 
   const stopped = createEngineHarness();
   await stopped.api.start(makeTrack());

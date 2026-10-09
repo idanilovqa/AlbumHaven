@@ -219,6 +219,7 @@ function updatePlayerUi() {
   refreshTrackModalPlaybackState();
   refreshNonAlbumModalPlaybackState();
   persistPlayerState();
+  try {window.AlbumHavenTrackPlayback?.sync();} catch { /* Optional paint must never interrupt native playback. */ }
 }
 
 function setCurrentPlayerTrack(track, options = {}) {
@@ -981,17 +982,13 @@ function attachSharedPlayer() {
   document.querySelectorAll('.play-track-button').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
-    const trackRow = btn.closest?.('.album-track-table__row');
-    if (trackRow && trackRow.dataset.doubleClickBound !== '1') {
-      trackRow.dataset.doubleClickBound = '1';
-      trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
-      trackRow.addEventListener('click', handleAlbumTrackRowClick);
-    }
     btn.addEventListener('click', event => activateSharedTrackButton(btn, { focusTimeline: event?.isTrusted !== false }));
   });
 }
 
 function activateSharedTrackButton(btn, { restart = false, focusTimeline = false } = {}) {
+  if (btn?.disabled) return;
+  if (typeof canPlayTrackModalSelection === 'function' && !canPlayTrackModalSelection(btn)) return;
   if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
   const src = btn.getAttribute('data-src');
   if (!src) return;
@@ -1007,9 +1004,10 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     updatePlayerUi();
     return;
   }
-  const currentAlbum = !document.getElementById('track-modal')?.hidden
+  const selectedAlbum = typeof getTrackModalSelectionAlbumFor === 'function' ? getTrackModalSelectionAlbumFor(btn) : null;
+  const currentAlbum = selectedAlbum || (!document.getElementById('track-modal')?.hidden
     ? state.modalReleases[state.modalReleaseIndex] || null
-    : null;
+    : null);
   const playbackStart = playTrackFromPayload({
     src,
     path: trackPath,

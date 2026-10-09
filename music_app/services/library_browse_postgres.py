@@ -6760,7 +6760,12 @@ def _album_artist_relationship(rows: Iterable[object]) -> str:
         str(_row_mapping(row).get("featured_kind") or "").strip().casefold()
         for row in rows
     }
-    return "featured" if kinds == {"featured_track_artist"} else "owned"
+    return (
+        "featured"
+        if "owner" not in kinds
+        and kinds & {"featured_member", "featured_track_artist"}
+        else "owned"
+    )
 
 
 def _copy_album_for_artist_occurrence(

@@ -491,6 +491,34 @@ def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
     )[0]["artist_relationship"] == "owned"
 
 
+def test_postgres_featured_track_artist_remains_featured_with_member_relation():
+    from music_app.services import library_browse_postgres as browse
+
+    featured = _browse_album_row(
+        artist="98 Degrees & Stevie Wonder",
+        album_id=83,
+        album_key="various-artists::mulan",
+        title="Mulan",
+    )
+    featured["album_metadata"] = {
+        "album_artist": "Various Artists",
+        "artists": ["Various Artists"],
+    }
+
+    rows = [
+        dict(featured, featured_kind="featured_member"),
+        dict(featured, featured_kind="featured_track_artist"),
+    ]
+
+    assert browse._album_artist_relationship([rows[0]]) == "featured"
+    assert browse._root_album_browse_album_payloads(
+        rows, "98 Degrees & Stevie Wonder"
+    )[0]["artist_relationship"] == "featured"
+    assert browse._selected_artist_album_payloads(
+        rows, "98 Degrees & Stevie Wonder"
+    )[0]["artist_relationship"] == "featured"
+
+
 def test_album_detail_projection_keeps_only_mixed_folder_file_when_no_valid_source():
     from music_app.services import library_browse_postgres as browse
 

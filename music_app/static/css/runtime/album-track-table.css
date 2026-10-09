@@ -229,3 +229,11 @@
   display: none;
   animation: none;
 }
+
+/* Missing rows retain their position instead of showing a non-playable hover action. */
+.album-track-table .album-track-table__row--missing .album-track-table__play,
+.album-track-table .album-track-table__play[hidden] { display: none; }
+.album-track-table .album-track-table__row--missing:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__number { visibility: visible; }
+
+/* Shared collection width follows the containing widget, not the viewport. */
+.album-track-table--collection { box-sizing: border-box; width: 100%; max-width: 832px; margin-inline: auto; }

@@ -44,7 +44,8 @@ class PrivateNativeTargets:
             join library.library_roots r on r.id=f.library_root_id
             where f.track_id=%s and r.library_id=%s and r.is_active is true
               and f.scan_cache_stale is false order by f.id''',(track_id,context.library_id)).fetchall()
-        return self._play_target(row,files)
+        return {**self._play_target(row,files),
+            'inventory_track_ref':f'inventory-track:{context.library_id}:{track_id}'}
 
     def _play_target(self,row,files):
         for file in files:
@@ -74,7 +75,9 @@ class PrivateNativeTargets:
         result={}
         for identity,row in rows.items():
             if row['availability']!='local':continue
-            try:result[identity]=self._play_target(row,by_track.get(identity,[]))
+            try:
+                result[identity]={**self._play_target(row,by_track.get(identity,[])),
+                    'inventory_track_ref':f'inventory-track:{context.library_id}:{identity}'}
             except NativeTargetError:pass
         return result
 

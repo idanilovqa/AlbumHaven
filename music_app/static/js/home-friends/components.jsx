@@ -59,7 +59,7 @@ export function Tabs({runtime, id, label, items, value, onChange}) {
 export function Period({runtime, value, onChange, total, range}) {
   return <>
     <span className="home-friends__listens">Listens: {metric(total)}</span>
-    <NativeChoice runtime={runtime} className="home-friends__period" buttonClassName="ui-choice__trigger--header" showLabel={false} label="Period" value={value} onChange={onChange}
+    <NativeChoice runtime={runtime} className="home-friends__period" buttonClassName="ui-choice__trigger--header" showLabel={false} label="Period" menuWidth="content" value={value} onChange={onChange}
       options={ [['week', 'Last week'], ['month', 'Last month'], ['six', 'Last 6 months'], ['year', 'Last year'], ['all', 'All time']] }/>
     {range && <span className="home-friends__range">{range}</span>}
   </>;

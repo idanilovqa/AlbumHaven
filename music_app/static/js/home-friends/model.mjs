@@ -198,6 +198,8 @@ function activityData(data) {
         love_tier: ['off', 'loved', 'obsessed'].includes(row.love_tier) ? row.love_tier : null,
         track_preference: activityTrackPreference(row.track_preference),
       } : {}),
+      favorite: typeof row.favorite === 'boolean' ? row.favorite : null,
+      taste_state: text(row.taste_state),
       duration_seconds: nullableNumber(row.duration_seconds),
       rating: Number.isInteger(row.rating) && row.rating >= 1
         && row.rating <= (track ? 5 : row.kind === 'album' ? 10 : 0) ? row.rating : null,

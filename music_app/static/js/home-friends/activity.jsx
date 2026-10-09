@@ -1,3 +1,4 @@
+import {trackLoveHtml} from './track-preference.mjs';
 import React, {useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Button, NativeHtml} from './components.jsx';
 import {NativeChoice} from './native-choice.jsx';
@@ -35,16 +36,17 @@ export function projectActivityRows(rows, order = 'server', ascending = false) {
 const duration = value => typeof value === 'number' && Number.isFinite(value) && value >= 0
   ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '–';
 export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', scopeKey, account_ref = null, period = 'week', readDetail,
-  selectedResourceId, onResourceSelect, listenedAlbumsRef}) {
+  selectedResourceId, onResourceSelect, onTracksSelect, selectedTrackIds, listenedAlbumsRef, nowPlaying}) {
   const [order, setOrder] = useState('server'), [ascending, setAscending] = useState(false), [localSelectedId, setSelectedId] = useState(null);
   const [actionError, setActionError] = useState(null);
   const root = useRef(null), trackHost = useRef(null), returnFocus = useRef(null), sortFocus = useRef(null), latest = useRef(null), resourceSelection = useRef(null);
   const rows = value?.status === 'ready' ? value.data?.rows || EMPTY_ROWS : EMPTY_ROWS;
   const tracks = ['tracks', 'listens'].includes(kind);
   const context = useMemo(() => ({scopeKey, account_ref, kind, period}), [scopeKey, account_ref, kind, period]);
+  const trackControlled = tracks && typeof onTracksSelect === 'function';
   const controlled = !tracks && selectedResourceId !== undefined, targetKind = kind === 'artists' ? 'artist' : 'album';
   const candidates = rows.filter(row => row.id === (controlled ? selectedResourceId : localSelectedId));
-  const candidate = candidates.length === 1 && readableResource(candidates[0]) ? candidates[0] : null;
+  const candidate = !trackControlled && candidates.length === 1 && readableResource(candidates[0]) ? candidates[0] : null;
   // Retiring the parent's stale id is synchronous. Keeping its tombstone until
   // a new selection prevents permission restoration from reopening the pane.
   if (!controlled) resourceSelection.current = null;
@@ -135,9 +137,14 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
   };
   const selection = usePlaytableSelection(trackHost, {sourceAdapter: source.sourceAdapter, tableKey: `home-activity-${kind}`, enabled: tracks,
     isViewCurrent: () => current(),
-    onInspect: rowKey => {const row = selectedRow(rowKey); if (row) setSelectedId(row.id);},
+    initialSelectedRowKeys: trackControlled ? selectedTrackIds : undefined,
+    onSelectionChange: snapshot => {if (trackControlled && current()) onTracksSelect(snapshot.selectedRowKeys);},
+    onInspect: rowKey => {const row = selectedRow(rowKey); if (!row) return;
+      if (trackControlled) onTracksSelect(selection.ownerRef.current?.getSnapshot().selectedRowKeys || [row.id], {inspect: true});
+      else setSelectedId(row.id);},
     onPlay: rowKey => {const row = selectedRow(rowKey); if (row) play(row);},
-    onPlaylistAction: source.actionsAvailable ? (packet, lifetime, anchor) => runtime.openPlaylistAction(packet, lifetime, source.sourceAdapter, anchor) : undefined,
+    onContextAction: typeof runtime.openPlaytableContext === 'function' ? (packet, lifetime, anchor) => runtime.openPlaytableContext(packet, lifetime, source.sourceAdapter, anchor) : undefined,
+    onPlaylistAction: source.actionsAvailable ? (packet, lifetime, anchor, options) => runtime.openPlaylistAction(packet, lifetime, source.sourceAdapter, anchor, options) : undefined,
     onError: message => {if (current()) setActionError({value, context, message});}});
   const select = event => {
     if (!current() || event.defaultPrevented || !root.current.contains(event.target)) return;
@@ -163,7 +170,9 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
         return;
       }
       const selectButton = event.target.closest('[data-home-activity-select]');
-      if (selectButton && !selectButton.disabled) setSelectedId(row.id);
+      if (selectButton && !selectButton.disabled) {
+        if (trackControlled) selection.ownerRef.current?.select(row.id); else setSelectedId(row.id);
+      }
       return;
     }
     const button = event.target.closest('[data-home-activity-select]');
@@ -173,31 +182,39 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
     }
   };
   const columns = [...(tracks ? [{key: 'number', label: '#'}] : []), {key: 'title', label: kind === 'artists' ? 'Artist' : kind === 'albums' ? 'Album' : 'Track'},
-    ...(kind === 'artists' ? [] : [{key: 'artist', label: 'Artist'}]),
-    ...(['tracks', 'listens'].includes(kind) ? [{key: 'album', label: 'Album'}] : []),
-    ...(tracks ? [{key: 'availability', label: 'Availability'}, {key: 'love', label: 'Love'}] : []),
-    {key: 'listens', label: 'Listens', sortable: true}, ...(kind === 'artists' ? [] : [{key: 'rating', label: 'Rating', hideWhenNarrow: true}]),
+    ...(kind === 'artists' ? [] : [{key: 'artist', label: 'Artist', hideWhenNarrow: tracks}]),
+    ...(['tracks', 'listens'].includes(kind) ? [{key: 'album', label: 'Album', hideWhenNarrow: true}] : []),
+    ...(kind === 'albums' ? [{key: 'favorite', label: 'Favorite'}] : []),
+    ...(tracks ? [{key: 'availability', label: 'Availability', hideWhenNarrow: true}, {key: 'love', label: 'Love'}] : []),
+    {key: 'listens', label: 'Listens', sortable: true}, ...(kind === 'artists' ? [] : [{key: 'rating', label: 'Rating'}]),
     ...(['tracks', 'listens'].includes(kind) ? [{key: 'duration', label: 'Length', sortable: true}] : []),
-    {key: 'last', label: kind === 'listens' ? 'Listened at' : 'Last listened'}];
-  const width = column => column.key === 'number' ? '36px' : tracks && column.key === 'title' ? 'minmax(160px,1.3fr)'
-    : ['title', 'artist', 'album'].includes(column.key) ? 'minmax(110px,1fr)' : column.key === 'last' ? 'minmax(140px,1fr)' : 'minmax(52px,auto)';
+    {key: 'last', label: kind === 'listens' ? 'Listened at' : 'Last listened', hideWhenNarrow: tracks}];
+  const width = column => column.key === 'number' ? '36px' : tracks && column.key === 'title' ? 'minmax(0,1.3fr)'
+    : ['title', 'artist', 'album'].includes(column.key) ? 'minmax(0,1fr)' : column.key === 'last' ? 'minmax(96px,1fr)' : 'minmax(52px,auto)';
   // Love and current/selected state are painted into persistent native cells.
   // Neither selection nor player notifications may replace a row's click target.
   const table = useMemo(() => kind === 'artists' ? '' : runtime.tableHtml({id: `home-activity-${kind}`, ariaLabel: 'Recent listening', density: 'compact', columns: columns.map(width).join(' '),
     narrowColumns: columns.filter(column => !column.hideWhenNarrow).map(width).join(' '), columnsConfig: columns, sort: metricSort,
-    rows: sorted.map(row => {
+    rows: [...(tracks && nowPlaying ? [{key: `now-playing:${nowPlaying.occurrence_ref}`,
+      className: 'album-track-table__row album-track-table__row--current album-track-table__row--playing',
+      dataAttributes: {'now-playing': 'true'}, cells: {number: '▶',
+        title: {content: `<span class="album-track-table__title">${escape(nowPlaying.row.title || 'Unknown track')}</span><span role="status">Now playing</span>`},
+        artist: escape(nowPlaying.row.artist || '–'), album: escape(nowPlaying.row.album_title || '–'),
+        availability: '', love: {content: trackLoveHtml(runtime, nowPlaying.row)}, rating: escape(metric(nowPlaying.row.rating)),
+        listens: '–', duration: escape(duration(nowPlaying.row.duration_seconds)), last: 'Live'}}] : []), ...sorted.map(row => {
       const readable = readableResource(row) && (!tracks || readableActivityTrack(row));
       const title = readable ? row.title || 'Unknown' : `Unavailable ${row.kind === 'listen' ? 'track' : row.kind}`;
       const cells = {
         ...(!tracks ? {title: {content: `<span>${escape(title)}</span>` + runtime.actionHtml({icon: 'more', ariaLabel: `Select ${title}`, presentation: 'bare', disabled: !readable,
           attributes: {'data-home-activity-select': row.id}})}} : {}),
         artist: escape(readable ? row.artist || '–' : '–'), album: escape(readable ? row.album_title || '–' : '–'), listens: escape(metric(readable ? row.listen_count : null)),
+        favorite: readable && typeof row.favorite === 'boolean' ? row.favorite ? 'Yes' : 'No' : '–',
         rating: escape(metric(readable ? row.rating : null)), duration: escape(duration(readable ? row.duration_seconds : null)), last: escape(activityTimestamp(readable ? row.last_listened_at : null, zone)),
       };
       return tracks ? activityTrackRow(runtime, row, positions.get(row), context, cells)
         : {key: row.id, ariaSelected: readable && row.id === selectedId, ariaDisabled: !readable, cells};
-    }), emptyHtml: '<p>No listening items were returned.</p>', overflow: 'local', frame: 'outline', selection: tracks ? 'multiple' : 'single'}),
-  [runtime, sorted, positions, context, tracks, kind, order, ascending, zone, tracks ? null : selectedId]);
+    })], emptyHtml: '<p>No listening items were returned.</p>', overflow: 'local', frame: 'outline', selection: tracks ? 'multiple' : 'single'}),
+  [runtime, sorted, positions, context, tracks, kind, order, ascending, zone, nowPlaying, tracks ? null : selectedId]);
   useLayoutEffect(() => {
     if (!tracks) return;
     const paint = () => {if (current()) paintActivityTracks(root.current, runtime, rows, context, love);};
@@ -230,7 +247,7 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
           <Button runtime={runtime} icon={view === 'covers' ? 'more' : undefined} selected={readable && row.id === selectedId} disabled={!readable}
             attributes={{'data-home-activity-select': row.id}} onClick={() => selectResource(row)}>{`Select ${title}`}</Button>
         </div>;
-      })}</div> : <div ref={trackHost} className={tracks ? 'album-track-table' : ''}><NativeHtml html={table} onClick={select}/></div>}
+      })}</div> : <div ref={trackHost} className={tracks ? 'album-track-table album-track-table--collection' : ''}><NativeHtml html={table} onClick={select}/></div>}
     {actionError?.value === value && actionError?.context === context && <NativeHtml html={runtime.alertHtml({severity: 'error', role: 'alert', message: actionError.message})}/>}
     {selected && !controlled && <aside className="home-activity__selection" aria-label="Selected listening item"><header><h3>{selected.title}</h3><Button runtime={runtime} icon="close" onClick={close}>Close selection</Button></header>
       {selected.artist && <p>{selected.artist}{selected.album_title && ` · ${selected.album_title}`}</p>}

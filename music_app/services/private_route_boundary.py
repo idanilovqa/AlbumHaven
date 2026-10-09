@@ -26,6 +26,9 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
+    ("GET", "/home/activity/now-playing"): "library.browse.read",
+    ("POST", "/playback/session/presence-source"): "library.media.read",
+    ("POST", "/playback/session/presence"): "library.browse.read",
     ("GET", "/friends"): "library.social.read",
     ("GET", "/friends/discover"): "library.social.read",
     ("GET", "/friends/notifications"): "library.social.read",
@@ -169,6 +172,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/virtual-artists"): "library.virtual_discography.create",
     ("GET", "/playlists/destinations"): "library.browse.read",
     ("GET", "/playlists/creation-source/current"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/queue"): "library.browse.read",
     ("POST", "/playlists/creation-source/selection"): "library.playlists.create",
     ("POST", "/playlists/creation-source/match-candidates"): "library.playlists.create",
     ("POST", "/playlists/creation-source/accept-match"): "library.playlists.create",
@@ -221,7 +225,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
             action = "library.loops.media.read"
         preference_headers = (
             {"Cache-Control": "private, no-store"}
-            if route_path in {"/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends") else
+            if route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends") else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -272,7 +276,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 headers=preference_headers,
             )
         response = await call_next(request)
-        if route_path in {"/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends"):
+        if route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith("/friends"):
             response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)

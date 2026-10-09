@@ -22,7 +22,7 @@ export function activityTrackRow(runtime, row, index, context, cells) {
     ariaDisabled: !readable, dataAttributes: {'home-activity-row': row.id}, cells: {...cells,
       number: {content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escape(index + 1)}</span>`
         + runtime.actionHtml({icon: 'play', className: 'album-track-table__play', ariaLabel: `Play ${title}`, title: 'Play track',
-          presentation: 'bare', disabled: !playableActivityTrack(runtime, row, context), attributes: {'data-home-activity-play': '1'}}) + '</span>'},
+          presentation: 'bare', hidden: row.availability === 'missing', disabled: !playableActivityTrack(runtime, row, context), attributes: {'data-home-activity-play': '1'}}) + '</span>'},
       title: {content: `<div class="home-detail__release">${artwork}${native?.cells?.title?.content || `<span class="album-track-table__title">${escape(title)}</span>`}</div>`
         + runtime.actionHtml({icon: 'more', ariaLabel: `Select ${title}`, title: 'Show track information', presentation: 'bare',
           disabled: !readable, attributes: {'data-home-activity-select': row.id}})},
@@ -48,6 +48,7 @@ export function paintActivityTracks(host, runtime, rows, context, love) {
     node.classList.toggle('album-track-table__row--animated', playing && playback?.playingAnimation === true);
     const play = node.querySelector('[data-home-activity-play]');
     if (play) {
+      play.hidden = row.availability === 'missing';
       play.disabled = !playableActivityTrack(runtime, row, context);
       play.setAttribute('aria-disabled', String(play.disabled));
     }

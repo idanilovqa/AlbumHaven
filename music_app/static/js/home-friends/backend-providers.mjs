@@ -108,13 +108,20 @@ export function createHomeBackendProviders(transport, {runtime} = {}) {
       const origin = {audience: options.account_ref == null ? 'own' : 'friend', subject_ref: options.account_ref ?? null,
         kind: options.kind, period: options.period, snapshot_ref: options.snapshot_ref};
       const result = await transport.request('/home/activity/native-target', {method: 'POST', signal: options.signal,
-        expected: JSON.parse(token)[0], body: {origin, row_ref: options.rowId, intent: options.intent}});
+        expected: JSON.parse(token)[0], body: {origin, row_ref: options.rowId, intent: options.intent, ...(options.intent === 'details' && options.target_kind ? {target_kind: options.target_kind} : {})}});
       active(token, options.signal);
       const data = result?.data;
       if (result.status !== 'ready' || data?.row_ref !== options.rowId || data.intent !== options.intent
         || !data.origin || Object.keys(data.origin).length !== Object.keys(origin).length
         || Object.keys(origin).some(key => data.origin[key] !== origin[key]) || !data.native_target) throw fail('Native activity target changed.');
       return data.native_target;
+    },
+    async readNowPlaying(options) {
+      const token = identity(options.scopeKey);
+      const result = await transport.request(transport.query('/home/activity/now-playing', {subject_ref: options.account_ref}), {signal: options.signal});
+      active(token, options.signal);
+      if (result.status !== 'ready' || result.data && result.data.subject_ref !== options.account_ref) throw fail('Live activity changed.');
+      return result;
     },
     readActivity: options => history(false, options), readComparison: options => history(true, options),
     requestMember: options => transition('request', options), acceptRequest: options => transition('accept', options),

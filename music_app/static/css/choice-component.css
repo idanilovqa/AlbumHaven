@@ -22,3 +22,8 @@
 @media (pointer: coarse) {
   :root .settings-foobar-format-menu[data-choice-width] .gallery-menu-action { min-height: 44px; padding-block: 10px; }
 }
+
+:root .settings-foobar-format-menu[data-choice-width="content"] .gallery-menu-action,
+:root .settings-foobar-format-menu[data-choice-width="content"] .ui-button__content {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal;
+}

@@ -1,3 +1,4 @@
+import {createPresencePublisher} from './presence.mjs';
 import {createPlaylistMatchProviders} from '../playlists/match-providers.mjs';
 import {createPlaylistBackendProviders} from '../playlists/backend-providers.mjs';
 import {createHomeBackendProviders} from './backend-providers.mjs';
@@ -12,7 +13,7 @@ import {mountPlaytableSelection} from '../playtables/selection.jsx';
 import {PlaylistActionSession} from '../playlists/selection-actions.jsx';
 
 let requestedProviders = null, providers = {}, providerGeneration = 0, activeController = null, root = null, mountedRuntime = null;
-let friendNotifications = null, ownedHomeProviders = null;
+let friendNotifications = null, ownedHomeProviders = null, presencePublisher = null;
 function bindProviders(runtime) {
   // The native resolver can inspect private media authority. Only its sanitized
   // activity reader crosses into the React controller.
@@ -39,7 +40,7 @@ function Session({runtime, shell, notifications}) {
     return () => {if (activeController === controller) activeController = null; controller.dispose();};
   }, [controller]);
   useEffect(() => notifications?.useHome(controller), [controller, notifications]);
-  return <HomeFriendsView key={shell.entryKey ?? 'initial'} {...{runtime, controller, state, shell}} readDetail={providers.readDetail}/>;
+  return <HomeFriendsView key={shell.entryKey ?? 'initial'} {...{runtime, controller, state, shell}} readDetail={providers.readDetail} readNowPlaying={providers.readNowPlaying}/>;
 }
 function Root({runtime, generation, notifications}) {
   const shell = useSyncExternalStore(runtime.subscribe, runtime.snapshot, runtime.snapshot);
@@ -60,6 +61,10 @@ function mount() {
   const runtime = window.AlbumHavenHomeRuntime, host = document.getElementById('home-friends-root');
   if (root || !runtime || !host) return;
   mountedRuntime = runtime;
+  if (!presencePublisher && window.AlbumHavenPrivateUITransport && runtime.readPresencePlayback && window.crypto?.randomUUID) {
+    presencePublisher = createPresencePublisher({transport: window.AlbumHavenPrivateUITransport,
+      readPlayback: runtime.readPresencePlayback, subscribe: runtime.subscribeTrackPlayback, playerRef: window.crypto.randomUUID()});
+  }
   providers = bindProviders(runtime);
   mountNotifications();
   root = createRoot(host);
@@ -110,7 +115,7 @@ function closePlaylistAction(owner) {
   playlistAction = null; owner.lifetime.dispose?.(); owner.releasePresentation?.();
   queueMicrotask(() => {owner.root.unmount(); owner.host.remove();});
 }
-function openPlaylistAction(packet, lifetime, sourceAdapter, anchor) {
+function openPlaylistAction(packet, lifetime, sourceAdapter, anchor, options = {}) {
   const native = window.AlbumHavenPlaylistRuntime;
   if (playlistAction || !native?.playtableFormRuntime || !native.canOpenPlaytableForm?.()
     || !lifetime?.isCurrent?.() || sourceAdapter?.snapshot?.()?.scopeKey !== packet?.scopeKey) return false;
@@ -130,7 +135,7 @@ function openPlaylistAction(packet, lifetime, sourceAdapter, anchor) {
   const runtime = native.playtableFormRuntime(isCurrent);
   const surface = anchor?.closest?.('#non-album-modal, #track-modal, [data-resource-selection-content="album"]');
   const parentSurface = surface?.id ? `#${surface.id}` : surface ? '[data-resource-selection-content="album"]' : undefined;
-  owner.root.render(<PlaylistActionSession {...{runtime, packet, lifetime, sourceAdapter, parentSurface}}
+  owner.root.render(<PlaylistActionSession {...{runtime, packet, lifetime, sourceAdapter, parentSurface}} initialMode={options.mode}
     providers={playlistProviders} readDetail={playlistProviders.readDetail}
     returnFocus={() => anchor?.isConnected ? anchor : null}
     onClose={() => closePlaylistAction(owner)}
@@ -145,7 +150,27 @@ function openPlaylistAction(packet, lifetime, sourceAdapter, anchor) {
     onNotice={() => native.notifyPlaytableCreation?.()}/>);
   return true;
 }
-window.AlbumHavenPlaytableUI = Object.freeze({mount: mountPlaytableSelection, open: openPlaylistAction});
+function openPlaytableContext(packet, lifetime, sourceAdapter, anchor) {
+  const native = window.AlbumHavenPlaylistRuntime;
+  if (!lifetime?.isCurrent?.() || !native?.openChoice) return false;
+  const queue = window.AlbumHavenExplicitQueue;
+  const formats = [{value: 'new', label: 'Create new playlist'}, {value: 'add', label: 'Add to playlist'},
+    ...(queue && sourceAdapter.canQueue?.(packet.row_keys) ? queue.timingOptions().map(option => ({value: `queue:${option.value ?? option.id}`, label: option.label, reason: option.reason, disabled: option.enabled !== true})) : [])];
+  return Boolean(native.openChoice(anchor, {formats, label: 'Selected track actions', actionMenu: true, menuWidth: 'content',
+    updateTriggerLabel: false, initialFocus: 'first', onSelect: value => {
+      if (!lifetime.isCurrent()) return false;
+      if (value === 'new' || value === 'add') return openPlaylistAction(packet, lifetime, sourceAdapter, anchor, {mode: value === 'new' ? 'create' : 'add'});
+      if (!value.startsWith('queue:') || !queue) return false;
+      const request = new AbortController();
+      Promise.resolve(sourceAdapter.captureQueue(packet.row_keys, {signal: request.signal})).then(entries => {
+        if (!entries || !lifetime.isCurrent()) return false;
+        return queue.enqueue(entries, value.slice(6), {signal: request.signal, isCurrent: lifetime.isCurrent});
+      }).catch(error => {if (error?.name !== 'AbortError' && lifetime.isCurrent()) native.notifyQueueFailure?.();}).finally(() => lifetime.dispose?.());
+      return true;
+    }}));
+}
+window.AlbumHavenPlaytableUI = Object.freeze({mount: mountPlaytableSelection, open: openPlaylistAction, context: openPlaytableContext,
+  actions: (anchor, options) => window.AlbumHavenPlaylistRuntime?.openChoice?.(anchor, {...options, actionMenu: true, menuWidth: 'content', updateTriggerLabel: false, initialFocus: 'first'}) || null});
 window.dispatchEvent(new Event('albumhaven:playtable-ui-ready'));
 function mountPlaylistSurface() {
   const host = document.getElementById('playlists-root'), runtime = window.AlbumHavenPlaylistRuntime;

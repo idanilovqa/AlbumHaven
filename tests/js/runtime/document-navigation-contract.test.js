@@ -39,3 +39,13 @@ test('full-document JavaScript navigation is limited to authentication and fatal
 
   assert.deepEqual(found, allowed);
 });
+
+test('Discovery Center diagnostic payload links cannot replace the app document', () => {
+  const template = source('music_app/templates/index.html');
+  for (const label of ['Summary payload', 'Entries payload', 'Preferences payload']) {
+    assert.match(
+      template,
+      new RegExp(`<a[^>]+target="_blank"[^>]+rel="noopener"[^>]*>${label}<\\/a>`),
+    );
+  }
+});

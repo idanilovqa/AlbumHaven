@@ -144,9 +144,9 @@
         <section class="discovery-center-page-summary">
           <h2>Open Discovery Center</h2>
           <p>{{ discovery_center_page.summary.drawer_preview.empty_state.detail if discovery_center_page.summary and discovery_center_page.summary.drawer_preview and discovery_center_page.summary.drawer_preview.empty_state else '' }}</p>
-          <p><a href="{{ discovery_center_page.summary_route or '/news-center/summary' }}">Summary payload</a></p>
-          <p><a href="{{ discovery_center_page.entries_route or '/news-center/entries?tab=inbox&source=all' }}">Entries payload</a></p>
-          <p><a href="{{ discovery_center_page.preferences_route or '/news-center/preferences' }}">Preferences payload</a></p>
+          <p><a href="{{ discovery_center_page.summary_route or '/news-center/summary' }}" target="_blank" rel="noopener">Summary payload</a></p>
+          <p><a href="{{ discovery_center_page.entries_route or '/news-center/entries?tab=inbox&source=all' }}" target="_blank" rel="noopener">Entries payload</a></p>
+          <p><a href="{{ discovery_center_page.preferences_route or '/news-center/preferences' }}" target="_blank" rel="noopener">Preferences payload</a></p>
         </section>
       </section>
       <div class="albums-scroll" id="albums-scroll" hidden aria-hidden="true">

@@ -4063,9 +4063,11 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
     .join('');
 }
 
-function buildAlbumSourceMarkersHtml(categories = []) {
-  const items = buildAlbumSourceMarkerItemsHtml(categories);
-  return items ? `<div class="album-details-source-markers">${items}</div>` : '';
+function buildAlbumCoverSourceMarkersHtml(album = {}) {
+  const items = buildAlbumSourceMarkerItemsHtml(resolveAlbumSourceMarkerCategories(album));
+  return items
+    ? `<div class="album-details-source-markers album-details-cover-source-markers">${items}</div>`
+    : '';
 }
 
 function buildFilterPillHtml(config = {}) {
@@ -4525,8 +4527,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  const sourceMarkersHtml = buildAlbumSourceMarkersHtml(config.sourceCategories);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${sourceMarkersHtml}${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -4636,17 +4637,6 @@ function syncMobileAlbumComposition(album) {
   if (inline && !identity) {
     identity = document.createElement('div');
     identity.className = 'mobile-album-identity';
-  }
-  let sourceMarkers = overview?.querySelector('.mobile-album-overview__source-markers');
-  const sourceMarkerItems = buildAlbumSourceMarkerItemsHtml(resolveAlbumSourceMarkerCategories(album));
-  if (inline && sourceMarkerItems && !sourceMarkers) {
-    sourceMarkers = document.createElement('div');
-    sourceMarkers.className = 'album-details-source-markers mobile-album-overview__source-markers';
-    overview.appendChild(sourceMarkers);
-  }
-  if (sourceMarkers) {
-    sourceMarkers.innerHTML = sourceMarkerItems;
-    sourceMarkers.hidden = !inline || !sourceMarkerItems;
   }
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
@@ -30651,6 +30641,7 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
+  const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
   ).trim().toLowerCase();
@@ -30662,7 +30653,6 @@ function renderTrackModalRelease(album) {
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
-      sourceCategories: resolveAlbumSourceMarkerCategories(album),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     els = getTrackModalElements();
@@ -30689,6 +30679,7 @@ function renderTrackModalRelease(album) {
       <div class="track-modal-cover-shell">
         ${renderAlbumArtbox({ state: 'missing', label: `${album.name || 'Album'} artwork unavailable` })}
       </div>
+      ${coverSourceMarkersHtml}
     `;
   } else if (albumHasDisplayCover(album)) {
     const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -30728,6 +30719,7 @@ function renderTrackModalRelease(album) {
       })}
       ${coverSourceBadge}
       </div>
+      ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
       ? els.cover.querySelector('.track-modal-cover-image-slot')
@@ -30792,6 +30784,7 @@ function renderTrackModalRelease(album) {
         overlayHtml: coverToolsHtml,
       })}
       </div>
+      ${coverSourceMarkersHtml}
     `;
   }
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
@@ -41270,8 +41263,7 @@ function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
-    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
-    sourceCategories: album ? resolveAlbumSourceMarkerCategories(album) : [], tab: kind === 'utilities' ? state.utility.activeTab : '' };
+    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
@@ -41968,17 +41960,6 @@ function syncMobileAlbumHeader() {
     coverBottom: albumPage ? cover?.getBoundingClientRect().bottom : undefined,
     identityBottom: hasInlineIdentity ? identity.getBoundingClientRect().bottom : undefined,
   });
-  const sourceMarkerItems = albumPage ? buildAlbumSourceMarkerItemsHtml(active.sourceCategories) : '';
-  let sourceMarkers = header.querySelector(':scope > .mobile-album-source-markers');
-  if (sourceMarkerItems && !sourceMarkers) {
-    sourceMarkers = document.createElement('div');
-    sourceMarkers.className = 'album-details-source-markers mobile-album-source-markers';
-    header.querySelector('#mobile-settings-actions')?.before(sourceMarkers);
-  }
-  if (sourceMarkers) {
-    sourceMarkers.innerHTML = sourceMarkerItems;
-    sourceMarkers.hidden = !sourceMarkerItems;
-  }
   header.dataset.inlineAlbumLayout = String(Boolean(hasInlineIdentity));
   header.dataset.albumIdentityInBody = String(presentation.bodyOwnsIdentity);
   // One Back button: beside the cover initially, in the pinned bar after handoff.

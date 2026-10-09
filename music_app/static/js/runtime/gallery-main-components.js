@@ -60,9 +60,11 @@ function buildAlbumSourceMarkerItemsHtml(categories = []) {
     .join('');
 }
 
-function buildAlbumSourceMarkersHtml(categories = []) {
-  const items = buildAlbumSourceMarkerItemsHtml(categories);
-  return items ? `<div class="album-details-source-markers">${items}</div>` : '';
+function buildAlbumCoverSourceMarkersHtml(album = {}) {
+  const items = buildAlbumSourceMarkerItemsHtml(resolveAlbumSourceMarkerCategories(album));
+  return items
+    ? `<div class="album-details-source-markers album-details-cover-source-markers">${items}</div>`
+    : '';
 }
 
 function buildFilterPillHtml(config = {}) {

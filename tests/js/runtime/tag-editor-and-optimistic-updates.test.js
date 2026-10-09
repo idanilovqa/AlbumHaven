@@ -28,6 +28,7 @@ const helperPath = path.join(
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
   + '\n' + fs.readFileSync(helperPath, 'utf8');
 const albumUiComponentSources = [
+  'gallery-main-components.js',
   'alert-components.js',
   'album-artbox.js',
   'album-details-components.js',
@@ -3855,6 +3856,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     buildAlbumDisplayCoverUrl() {
       return '/cover.png';
     },
+    buildAlbumCoverSourceMarkersHtml() {
+      return '';
+    },
     formatAlbumDuration() {
       return '';
     },
@@ -3944,6 +3948,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     },
     albumHasDisplayCover() {
       return false;
+    },
+    buildAlbumCoverSourceMarkersHtml() {
+      return '';
     },
     formatAlbumDuration() {
       return '';
@@ -4126,6 +4133,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     },
     albumHasDisplayCover() {
       return false;
+    },
+    buildAlbumCoverSourceMarkersHtml() {
+      return '';
     },
     formatAlbumDuration() {
       return '';

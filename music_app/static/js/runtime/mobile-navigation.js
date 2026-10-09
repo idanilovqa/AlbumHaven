@@ -12,8 +12,7 @@ function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
-    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
-    sourceCategories: album ? resolveAlbumSourceMarkerCategories(album) : [], tab: kind === 'utilities' ? state.utility.activeTab : '' };
+    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
@@ -710,17 +709,6 @@ function syncMobileAlbumHeader() {
     coverBottom: albumPage ? cover?.getBoundingClientRect().bottom : undefined,
     identityBottom: hasInlineIdentity ? identity.getBoundingClientRect().bottom : undefined,
   });
-  const sourceMarkerItems = albumPage ? buildAlbumSourceMarkerItemsHtml(active.sourceCategories) : '';
-  let sourceMarkers = header.querySelector(':scope > .mobile-album-source-markers');
-  if (sourceMarkerItems && !sourceMarkers) {
-    sourceMarkers = document.createElement('div');
-    sourceMarkers.className = 'album-details-source-markers mobile-album-source-markers';
-    header.querySelector('#mobile-settings-actions')?.before(sourceMarkers);
-  }
-  if (sourceMarkers) {
-    sourceMarkers.innerHTML = sourceMarkerItems;
-    sourceMarkers.hidden = !sourceMarkerItems;
-  }
   header.dataset.inlineAlbumLayout = String(Boolean(hasInlineIdentity));
   header.dataset.albumIdentityInBody = String(presentation.bodyOwnsIdentity);
   // One Back button: beside the cover initially, in the pinned bar after handoff.

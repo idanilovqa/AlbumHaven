@@ -25,7 +25,7 @@ function loadComponents() {
   return context;
 }
 
-test('Album Details renders noninteractive source markers before header actions', () => {
+test('Album Details headers never render library source markers', () => {
   const context = loadComponents();
   const html = context.buildAlbumDetailsHeaderHtml({
     layout: 'classic_bar',
@@ -35,21 +35,21 @@ test('Album Details renders noninteractive source markers before header actions'
     actionsHtml: '<button type="button">Close</button>',
   });
 
-  assert.match(html, /album-details-source-markers/);
-  assert.match(html, /aria-label="Hoard"/);
-  assert.match(html, /aria-label="New Arrivals"/);
-  assert.ok(html.indexOf('album-details-source-markers') < html.indexOf('album-details-header__actions'));
-  const markers = html.match(/<div class="album-details-source-markers"[\s\S]*?<\/div>/)?.[0] || '';
-  assert.doesNotMatch(markers, /<button|data-open-tracklist/);
+  assert.doesNotMatch(html, /album-details-source-markers|aria-label="Hoard"|aria-label="New Arrivals"/);
+  assert.match(html, /album-details-header__actions/);
 });
 
-test('Album Details omits source markers for Main-only albums', () => {
+test('Album Details renders noninteractive source markers below the cover', () => {
   const context = loadComponents();
-  const html = context.buildAlbumDetailsHeaderHtml({
-    artist: 'Artist', album: 'Album', sourceCategories: ['main_library'],
+  const html = context.buildAlbumCoverSourceMarkersHtml({
+    root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] },
   });
 
-  assert.doesNotMatch(html, /album-details-source-markers|aria-label="Hoard"|aria-label="New Arrivals"/);
+  assert.match(html, /album-details-cover-source-markers/);
+  assert.match(html, /aria-label="Hoard"/);
+  assert.match(html, /aria-label="New Arrivals"/);
+  assert.doesNotMatch(html, /<button|data-open-tracklist/);
+  assert.equal(context.buildAlbumCoverSourceMarkersHtml({ source: 'main_library' }), '');
 });
 
 test('Album Details source markers reuse the gallery source glyphs and obey the icon preference', () => {
@@ -67,7 +67,7 @@ test('Album Details source markers reuse the gallery source glyphs and obey the 
   assert.match(css, /:root\[data-library-source-icons="false"\][^}]*\.album-details-source-markers\s*\{[^}]*display:\s*none/s);
 });
 
-test('Album Details render path passes the album source categories into its header', () => {
+test('Album Details render path places source markers after the cover shell', () => {
   const source = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'),
     'utf8',
@@ -75,10 +75,13 @@ test('Album Details render path passes the album source categories into its head
   const renderStart = source.indexOf('function renderTrackModalRelease(album)');
   const renderEnd = source.indexOf('\nfunction ', renderStart + 1);
   const render = source.slice(renderStart, renderEnd < 0 ? undefined : renderEnd);
-  assert.match(render, /sourceCategories:\s*resolveAlbumSourceMarkerCategories\(album\)/);
+  assert.doesNotMatch(render, /sourceCategories:\s*resolveAlbumSourceMarkerCategories\(album\)/);
+  assert.match(render, /const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml\(album\)/);
+  assert.match(render, /track-modal-cover-shell[\s\S]*?<\/div>\s*\$\{coverSourceMarkersHtml\}/);
+  assert.equal([...render.matchAll(/\$\{coverSourceMarkersHtml\}/g)].length, 3);
 });
 
-test('mobile Album Details creates source marker hosts for classic and inline layouts', () => {
+test('mobile Album Details keeps source markers with the cover instead of either header', () => {
   const navigation = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'mobile-navigation.js'),
     'utf8',
@@ -91,12 +94,17 @@ test('mobile Album Details creates source marker hosts for classic and inline la
     path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'),
     'utf8',
   );
+  const trackModalCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'track-modal-and-lightbox.css'),
+    'utf8',
+  );
 
-  assert.match(navigation, /mobile-album-source-markers/);
-  assert.match(navigation, /buildAlbumSourceMarkerItemsHtml/);
-  assert.match(components, /mobile-album-overview__source-markers/);
-  assert.match(mobileCss, /\.mobile-page-header\s*>\s*\.mobile-album-source-markers/);
-  assert.match(mobileCss, /\.mobile-album-overview__source-markers/);
+  assert.doesNotMatch(navigation, /mobile-album-source-markers|buildAlbumSourceMarkerItemsHtml/);
+  assert.doesNotMatch(components, /mobile-album-overview__source-markers/);
+  assert.doesNotMatch(mobileCss, /mobile-album-source-markers|mobile-album-overview__source-markers/);
+  assert.match(mobileCss, /\.album-details-cover-source-markers/);
+  assert.match(mobileCss, /mobile-album-overview \.track-modal-cover[^}]*aspect-ratio:\s*auto/);
+  assert.match(trackModalCss, /\.track-modal-cover:has\(> \.album-details-cover-source-markers\)[^}]*aspect-ratio:\s*auto/);
 });
 
 test('AlbumDetailsHeader supports the three approved layouts and fat-dot identity separators', () => {

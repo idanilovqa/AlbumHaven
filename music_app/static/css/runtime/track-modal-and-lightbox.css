@@ -165,6 +165,12 @@
   width: 100%;
   overflow: visible;
 }
+.track-modal-cover:has(> .album-details-cover-source-markers) {
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
 .track-modal-cover-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -658,6 +664,9 @@
     max-width: 100%;
     aspect-ratio: 1;
     justify-self: start;
+  }
+  .track-modal-cover:has(> .album-details-cover-source-markers) .track-modal-cover-shell {
+    height: min(calc(100% - 32px), 100cqw);
   }
 }
 .track-modal-main { min-height: 0; overflow: hidden; }

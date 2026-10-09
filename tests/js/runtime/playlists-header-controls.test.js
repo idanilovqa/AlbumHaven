@@ -74,13 +74,13 @@ test('native header dispatches icon clicks once and rejects every action while b
     actions: {add: true, missing: true, top: true, export: true, save: true}, onAction: action => actions.push(action)};
   let tree = fixture.render(props);
   for (const button of host.querySelectorAll('[data-playlists-action]')) tree.props.onClick(native.event('click', button.querySelector('svg')));
-  assert.deepEqual(actions, ['add', 'missing', 'top', 'export', 'share', 'filters', 'save', 'discard']);
+  assert.deepEqual(actions, ['add', 'missing', 'top', 'export', 'share', 'settings', 'filters', 'save', 'discard']);
   tree = fixture.render({...props, busy: true});
   for (const button of host.querySelectorAll('[data-playlists-action]')) {
     assert.equal(button.disabled, true); assert.equal(button.getAttribute('aria-disabled'), 'true');
     tree.props.onClick(native.event('click', button.querySelector('svg')));
   }
-  assert.equal(actions.length, 8);
+  assert.equal(actions.length, 9);
   fixture.dispose(); host.remove();
 });
 

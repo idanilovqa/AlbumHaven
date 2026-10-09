@@ -148,15 +148,15 @@ test('draft metrics render supplied read-only facts and keep unavailable values 
   const table = host.querySelector('.compact-data-table'), style = table.getAttribute('style');
   assert.equal(table.getAttribute('data-cdt-narrow'), 'true');
   const fullColumns = style.match(/--cdt-columns: ([^;]+)/)[1], narrowColumns = style.match(/--cdt-narrow-columns: ([^;]+)/)[1];
-  assert.match(fullColumns, / 60px 112px 72px 100px 72px 40px$/);
-  assert.equal(narrowColumns, fullColumns.replace(' 112px ', ' '), 'the shared narrow grid removes only Rating');
+  assert.match(fullColumns, / 36px 80px 54px 64px 54px 40px$/);
+  assert.equal(narrowColumns, '30px 36px minmax(0,1fr) 36px 54px 54px 40px', 'the responsive grid retains selection, track, Love, plays, duration and remove');
   const ratingCells = host.querySelectorAll('[data-cdt-column="track_rating"]');
   assert.equal(ratingCells.length, state.entries.length + 1);
   assert.ok(ratingCells.every(cell => cell.hasAttribute('data-cdt-hide-narrow')));
   for (const key of ['love_tier', 'play_count', 'popularity_count', 'duration']) {
     const cells = host.querySelectorAll(`[data-cdt-column="${key}"]`);
     assert.equal(cells.length, state.entries.length + 1);
-    assert.ok(cells.every(cell => !cell.hasAttribute('data-cdt-hide-narrow')));
+    assert.ok(cells.every(cell => cell.hasAttribute('data-cdt-hide-narrow') === (key === 'popularity_count')));
   }
   const known = host.querySelector('[data-playlist-row-key="entry:high"]');
   assert.equal(known.querySelector('[data-love-tier]').getAttribute('aria-label'), 'Obsessed');

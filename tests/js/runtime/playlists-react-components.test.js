@@ -44,7 +44,7 @@ test('header exposes named native icon actions in approved order and preserves d
   const host = native.document.createElement('div'); host.innerHTML = html;
   assert.equal(host.querySelector('[data-playlists-action="top"]').disabled, true);
   assert.equal(host.querySelector('[data-playlists-action="add"]').disabled, false);
-  const labels = ['Add tracks', 'Create missing playlist', 'Create Album Top', 'Export TXT', 'Share', 'Playlist settings', 'Filters', 'Save', 'Discard unsaved changes'];
+  const labels = ['Add tracks', 'Inspect missing tracks', 'Create Album Top', 'Export TXT', 'Share', 'Playlist settings', 'Filters', 'Save', 'Discard unsaved changes'];
   assert.deepEqual([...host.querySelectorAll('[data-playlists-action]')].map(button => button.getAttribute('aria-label')), labels);
   assert.ok([...host.querySelectorAll('[data-playlists-action]')].every(button => button.classList.contains('action-button--bare') && button.querySelector('svg')));
   assert.equal(host.querySelector('[data-playlists-action="export"]').disabled, false);
@@ -100,6 +100,7 @@ test('persisted tracks inherit native missing paint only for confirmed missing r
   for (const availability of ['missing', 'unresolved', 'local']) {
     const row = host.querySelector(`[data-playlist-row-key="item:${availability}"]`);
     assert.equal(row.classList.contains('album-track-table__row--missing'), availability === 'missing');
+    assert.equal(row.querySelector('[data-playlists-play]').hasAttribute('hidden'), availability === 'missing');
   }
   assert.match(host.querySelector('[data-playlist-row-key="item:unresolved"]').textContent, /Needs review/);
 });

@@ -494,7 +494,7 @@ for (const [label, retire] of missingTransferRetirements) {
   }
 }
 
-function selectedActionFixture({refreshFails = false, readDestinations} = {}) {
+function selectedActionFixture({refreshFails = false, readDestinations, initialMode} = {}) {
   const driver = hookDriver(selectionBuilt), closing = deferred(), closeEntered = deferred(), owners = [], writes = [], addWrites = [], navigations = [], closed = [];
   const invalidations = new Set(), destinationReads = []; let current = true, dialog, form, formProps, picker;
   const source = {scopeKey: 'scope:selected-session', instance: {}, revision: 'view:r1',
@@ -512,13 +512,13 @@ function selectedActionFixture({refreshFails = false, readDestinations} = {}) {
   }, addTracks: async request => {addWrites.push(request); return {ok: true};}, readPlaylistCreationSource: async request => sourceResult(request),
   createPlaylistFromSelection: async request => {writes.push(request); return acknowledgement(request);}};
   const runtime = {alertHtml: config => config.message, confirm: async () => true, openForm(config) {
-    const owner = {config, host: {}, attempts: [], close(_value, options) {this.attempts.push(options); closeEntered.resolve(); return closing.promise;}};
+    const owner = {config, host: {}, attempts: [], updatePresentation(value) {Object.assign(config, value); return true;}, close(_value, options) {this.attempts.push(options); closeEntered.resolve(); return closing.promise;}};
     owners.push(owner); config.onMount(owner.host); return owner;
   }};
   const fixture = {owners, writes, addWrites, navigations, closed, closing, closeEntered, destinationReads,
     replaySessionEffects() {driver.replayEffects('session'); fixture.render();},
     render() {
-      dialog = driver.render('session', driver.ActionSession, {runtime, sourceAdapter, lifetime, providers,
+      dialog = driver.render('session', driver.ActionSession, {runtime, sourceAdapter, lifetime, providers, initialMode,
         packet: {scopeKey: source.scopeKey, row_keys: ['row:selected'], origin: {tableKey: 'table:selected', target: 'selection'}},
         onClose: value => closed.push(value), onNavigate: id => navigations.push(id)});
       let portal = driver.render('dialog', dialog.type, dialog.props);
@@ -540,7 +540,11 @@ function selectedActionFixture({refreshFails = false, readDestinations} = {}) {
 
 test('selected-track picker switches to real seeded CreationForm in one native form and awaits native return before navigation', async () => {
   const fixture = selectedActionFixture(); await settle(); await fixture.openCreate();
-  assert.equal(fixture.owners.length, 1, 'Create reuses the existing native form');
+  assert.equal(fixture.owners.length, 1, 'Create retains one native form owner');
+  assert.equal(fixture.owners[0].config.title, 'Create playlist');
+  assert.equal(fixture.owners[0].config.pageId, 'create-playlist');
+  assert.equal(fixture.state.tab, 'selected');
+  assert.equal(fixture.writes.length, 0);
   assert.deepEqual(plain(fixture.state.selectedKeys), ['entry:occurrence:private']);
   assert.equal(fixture.creation.edit({title: 'Selection playlist'}), true);
   const pending = fixture.submit(); await fixture.closeEntered.promise; fixture.render();
@@ -603,4 +607,28 @@ test('selected-track Create completion keeps acknowledged success on refresh fai
   const pending = retired.submit(); await retired.closeEntered.promise; retired.retire();
   const owner = retired.owners[0]; owner.config.onClose(owner.host, owner.attempts[0]); retired.closing.resolve(true); await pending;
   assert.deepEqual(retired.navigations, []); assert.equal(retired.closed.length, 1); assert.equal(retired.writes.length, 1); retired.dispose();
+});
+
+
+test('direct Create enters the standard builder with Selected prefilled and no chooser or write', async () => {
+  const fixture = selectedActionFixture({initialMode: 'create'}); await settle(); await settle(); fixture.render();
+  assert.equal(fixture.owners.length, 1); assert.equal(fixture.owners[0].config.title, 'Create playlist');
+  assert.equal(fixture.owners[0].config.pageId, 'create-playlist'); assert.equal(fixture.state.tab, 'selected');
+  assert.deepEqual(plain(fixture.state.selectedKeys), ['entry:occurrence:private']);
+  assert.equal(fixture.writes.length, 0); assert.equal(fixture.addWrites.length, 0); fixture.dispose();
+});
+
+test('review v2: direct Create can recover a failed initial destination read in its retained dialog', async () => {
+  let reads = 0;
+  const fixture = selectedActionFixture({initialMode: 'create', readDestinations: async request => {
+    if (++reads === 1) throw new Error('temporary read failure');
+    return {status: 'ready', data: {scopeKey: request.scopeKey, allowed_actions: {can_create: true},
+      playlist_creation_source: descriptor(), destinations: []}};
+  }});
+  await settle(); fixture.render();
+  const retry = elements(fixture.picker).find(element => !element.props.disabled && /retry|reload/i.test(String(element.props.children)) && element.props.onClick);
+  assert.ok(retry, 'a recoverable read error must expose an enabled retry');
+  await retry.props.onClick(); await settle(); await settle(); fixture.render();
+  assert.equal(fixture.state.tab, 'selected'); assert.equal(fixture.owners.length, 1);
+  assert.equal(fixture.writes.length, 0); fixture.dispose();
 });

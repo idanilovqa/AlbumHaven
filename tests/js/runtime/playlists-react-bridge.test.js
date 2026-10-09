@@ -589,7 +589,7 @@ test('initial Playlist source transfers survive UI cleanup but retire with reads
 });
 
 test('backend Playlist playback resolves verified items in displayed order without Album fallback', async () => {
-  const rows = ['one', 'two', 'unresolved'].map(id => ({playlist_item_id: id, title: id, source_readable: true,
+  const rows = ['one', 'two', 'unresolved'].map(id => ({playlist_item_id: id, title: id, album_title: 'Same title', album_ref: `album:${id}`, source_readable: true,
     allowed_actions: {can_read: true, can_play: id !== 'unresolved'}}));
   const h = setup(payload('playlist:one', {revision: '3', track_rows: rows}));
   const resolved = [], played = [];
@@ -606,6 +606,7 @@ test('backend Playlist playback resolves verified items in displayed order witho
   assert.deepEqual(resolved, ['two', 'one']); assert.equal(played[0].playlistItemId, 'one');
   assert.deepEqual(plain(h.state.player.playbackQueue.tracks).map(row => row.playlistItemId), ['two', 'one']);
   assert.equal(h.state.player.playbackQueue.currentIndex, 1); assert.equal(h.state.player.playbackQueue.albumSnapshot, null);
+  assert.deepEqual(plain(h.state.player.playbackQueue.tracks).map(row => row.albumRef), ['album:two', 'album:one'], 'same-title albums retain distinct canonical identities');
   assert.doesNotMatch(JSON.stringify(h.bridge.snapshot()), /\/private\//);
 });
 test('backend Playlist native response requires exact item/revision and never starts a partial queue', async () => {
@@ -730,4 +731,17 @@ test('gapless same-file occurrence promotion notifies current Playlist subscribe
   assert.equal(changes.length, 2); assert.equal(changes.at(-1).data.current_playlist_item_id, 'B');
   assert.doesNotMatch(JSON.stringify(changes), /shared\.flac|occurrence/);
   remove(); h.state.player.current = tracks[0]; h.context.AlbumHavenTrackPlayback.sync(); assert.equal(changes.length, 2);
+});
+
+test('Queue Playlist builder capture freshly checks original readable item without playback authority', async () => {
+  const row = track('item:source', {availability: 'local', source_readable: true, allowed_actions: {can_play: true}});
+  const data = payload('playlist:one', {revision: '3', track_rows: [row]}), h = setup(data), shell = h.bridge.snapshot();
+  h.context.createPrivatePlaytableSource = options => options;
+  const source = h.bridge.createPlaytableSource({rows: [row], context: {scopeKey: shell.scopeKey, playlist_id: shell.playlistId}, instance: data, revision: '3', isCurrent: () => true});
+  const capture = source.captureQueueRows([row])[0]; let fresh = payload('playlist:one', {revision: '3', track_rows: [{...row, availability: 'missing', playback_state: {can_start_here: false}, allowed_actions: {can_play: false}}]});
+  h.context.fetch = async url => {assert.match(url, /^\/view-data\?surface=playlists&playlist_id=/); return response(fresh);};
+  assert.equal((await capture.resolvePlaylistItem()).inventory_track_ref, row.inventory_track_ref);
+  assert.equal(h.calls.activations.length, 0);
+  fresh = payload('playlist:one', {revision: '4', track_rows: [row]}); await assert.rejects(capture.resolvePlaylistItem(), {name: 'AbortError'});
+  fresh = payload('playlist:one', {revision: '3', track_rows: [{...row, source_readable: false}]}); await assert.rejects(capture.resolvePlaylistItem(), {name: 'AbortError'});
 });

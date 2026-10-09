@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-let actions;
-test.before(async () => {actions = await import('../../../music_app/static/js/playlists/selection-actions.mjs');});
+let actions, createBackend;
+test.before(async () => {actions = await import('../../../music_app/static/js/playlists/selection-actions.mjs'); ({createPlaylistBackendProviders:createBackend}=await import('../../../music_app/static/js/playlists/backend-providers.mjs'));});
+const captureFailure = status => createBackend({runtime:{snapshot:()=>({scopeKey:'scope:action-test'})},transport:{context:()=> 'context:one',request:async path=>{assert.equal(path,'/playlists/creation-source/queue');throw Object.assign(new Error('Capture failed'),{status});}}}).beginPlaylistQueueSource;
 const deferred = () => {let resolve, reject; const promise = new Promise((yes, no) => {resolve = yes; reject = no;}); return {promise, resolve, reject};};
 const descriptor = (revision = 'source:r1') => ({kind: 'library', ref: 'library:action-test', revision,
   allowed_actions: {can_read: true, can_use_for_playlist: true}});
@@ -18,13 +19,14 @@ const sourceResult = request => ({status: 'ready', data: {scopeKey: request.scop
   allowed_actions: {can_read: true, can_use_for_playlist: true}, entries_complete: true,
   entries: ['first', 'second', 'third', 'extra'].map(id => ({entry_ref: `entry:${id}`, canonical_track_ref: `canonical:${id}`,
     title: id, allowed_actions: {can_read: true, can_select: true}, availability: 'local', parent_album: {state: 'unknown'}}))}});
-function fixture({rows = defaultRows(), providers = {}, source = descriptor(), selected, readable = true, activityOrigin = null} = {}) {
+function fixture({rows = defaultRows(), providers = {}, source = descriptor(), selected, readable = true, activityOrigin = null, queueSource = null} = {}) {
   let current = true, snapshot = {scopeKey: 'scope:action-test', instance: {}, revision: 'view:r1', active: true,
     rows: rows.map(row => ({rowKey: row.rowKey, readable, selectable: true}))};
   const invalidations = new Set(), sourceListeners = new Set(), signal = new AbortController();
   const reads = [], writes = [], creations = [];
   const sourceAdapter = {snapshot: () => snapshot, subscribe(listener) {sourceListeners.add(listener); return () => sourceListeners.delete(listener);},
     resolveRows: keys => ({rows: keys.map(key => rows.find(row => row.rowKey === key)), playlist_creation_source: source,
+      ...(queueSource ? {queue_source: {occurrences: keys.map(key => queueSource[rows.findIndex(row => row.rowKey === key)])}} : {}),
       ...(activityOrigin ? {activity_source: {origin: activityOrigin, row_refs: keys.map(key => rows.find(row => row.rowKey === key).activity_row_ref)}} : {})})};
   const lifetime = {signal: signal.signal, isCurrent: () => current, subscribeInvalidation(listener) {invalidations.add(listener); return () => invalidations.delete(listener);}};
   const configured = {readPlaylistDestinations: async request => {reads.push(request); return destinations(request.scopeKey);},
@@ -194,11 +196,14 @@ test('source mapping changes between picker admission and dispatch retire the wh
   assert.equal(await f.controller.add(), false); assert.equal(f.controller.getSnapshot().status, 'retired'); assert.equal(f.writes.length, 0); f.controller.dispose();
 });
 
-test('seeded Create loads the literal full library and selects the same unique representatives in source order', async () => {
+test('seeded Create shows each selected occurrence in source order and submits existing unique representatives', async () => {
   const f = await selectedFixture(); assert.equal(await f.controller.openCreate(), true);
   const creation = f.controller.getCreationController(), state = creation.getSnapshot();
-  assert.equal(state.mode, 'ordinary'); assert.equal(state.sourceResource.data.entries.length, 4);
-  assert.deepEqual(state.selectedKeys, ['entry:entry:first', 'entry:entry:second', 'entry:entry:third']);
+  assert.equal(state.mode, 'ordinary'); assert.equal(state.sourceResource.data.entries.length, 6);
+  assert.equal(state.selectedKeys.length, 5);
+  const selectedEntries = state.selectedKeys.map(key => state.sourceResource.data.entries.find(row => row.row_key === key));
+  assert.deepEqual(selectedEntries.map(row => row.entry_ref), ['entry:first', 'entry:second', 'entry:first', 'entry:third', 'entry:second']);
+  assert.equal(new Set(state.selectedKeys).size, 5);
   assert.equal(state.tab, 'selected'); assert.equal(state.dirty, false);
   assert.equal(creation.seed(['entry:extra'], state.sourceResource), false);
   creation.edit({title: 'Created from selection'}); const ack = await creation.submit();
@@ -318,7 +323,102 @@ test('activity Create preserves unknown originals and deduplicates only proven i
   assert.equal(await f.controller.load(), true); assert.equal(f.controller.getSnapshot().canAdd, false);
   assert.equal(f.controller.getSnapshot().canCreate, true); assert.equal(await f.controller.openCreate(), true);
   assert.deepEqual(captured[0].row_refs, ['activity_first', 'activity_unknown']);
-  const creation = f.controller.getCreationController(); assert.equal(creation.getSnapshot().selectedKeys.length, 2);
+  const creation = f.controller.getCreationController(); assert.equal(creation.getSnapshot().selectedKeys.length, 3);
+  assert.deepEqual(creation.getSnapshot().selectedKeys.map(key => creation.getSnapshot().sourceResource.data.entries.find(row => row.row_key === key).entry_ref), ['entry:local', 'entry:local', 'entry:original']);
   assert.equal(creation.getSnapshot().source.kind, 'activity');
   assert.doesNotMatch(JSON.stringify(f.controller.getSnapshot()), /inventory-track|activity_first|snapshot:one/);
+});
+
+test('review: occurrence seed uses the same inferred canonical identity as representative dedup', async () => {
+  const f = await selectedFixture({rows: [
+    mapping('a', '/private/first.flac', 'canonical:first', 'entry:first'),
+    mapping('b', '/private/second.flac', null, 'entry:second'),
+    mapping('c', '/private/second.flac', 'canonical:first', 'entry:second'),
+  ]});
+  assert.equal(f.controller.getSnapshot().counts.uniqueTrackCount, 1);
+  assert.equal(await f.controller.openCreate(), true);
+  const state = f.controller.getCreationController().getSnapshot();
+  assert.equal(state.selectedKeys.length, 3);
+  assert.deepEqual(state.selectedKeys.map(key => state.sourceResource.data.entries.find(row => row.row_key === key).entry_ref),
+    ['entry:first', 'entry:first', 'entry:first']);
+  f.controller.dispose();
+});
+
+test('Queue source preserves all duplicate origins and Add carries retained guard through final server refusal', async () => {
+  const rows = [mapping('first', 'inventory-track:1:2'), mapping('duplicate', 'inventory-track:1:2')];
+  const queueSource = [{kind: 'inventory', track_ref: rows[0].track_ref},
+    {kind: 'playlist', track_ref: rows[0].track_ref, playlist_ref: 'playlist:source', revision: '3', item_ref: 'item:source'}];
+  const begins = [], guards = []; let committed = 0;
+  const captured = {source: {...descriptor(), source_protocol: 'complete_inventory_selection_v1'}, entry_refs: ['entry:first']};
+  const f = await selectedFixture({rows, queueSource, providers: {
+    beginPlaylistQueueSource: async request => {begins.push(request); return captured;},
+    beginPlaylistSelectionSource: () => {throw new Error('Queue must not become inventory-only');},
+    addTracks: async request => {guards.push(request.source_guard); if (request.source_guard) throw Object.assign(new Error('Source revoked at commit'), {status:403}); committed++; return {ok:true};},
+  }});
+  assert.equal(await f.controller.add(), false);
+  assert.deepEqual(begins[0].occurrences, queueSource, 'every original lineage survives canonical dedup');
+  assert.deepEqual(guards[0], {source_protocol: 'complete_inventory_selection_v1', source: {kind:'library',ref:descriptor().ref,revision:descriptor().revision},entry_refs:['entry:first']});
+  assert.equal(committed, 0); assert.equal(f.controller.getSnapshot().mutation.status, 'denied'); f.controller.dispose();
+});
+
+test('Queue Create retains its server source and cannot fall back when the Queue source provider is unavailable', async () => {
+  const rows = [mapping('first', 'inventory-track:1:2')], queueSource = [{kind:'inventory',track_ref:rows[0].track_ref}];
+  const denied = await selectedFixture({rows, queueSource, providers: {beginPlaylistSelectionSource: async () => {throw Error('No fallback');}}});
+  assert.equal(denied.controller.getSnapshot().canCreate, false); assert.equal(await denied.controller.add(), false); denied.controller.dispose();
+  let committed = 0, captured = 0, attempted = 0;
+  const f = await selectedFixture({rows, queueSource, providers: {
+    beginPlaylistQueueSource: async request => {captured++; assert.equal(request.recoverCreate,true); return {source:{...descriptor(),source_protocol:'complete_inventory_selection_v1'},entry_refs:['entry:first']};},
+    readPlaylistCreationSource: async request => {const result=sourceResult(request); result.data.source_protocol='complete_inventory_selection_v1'; return result;},
+    createPlaylistFromSelection: async request => {attempted++; assert.equal(request.source.ref, descriptor().ref); throw Object.assign(new Error('Retained source revoked'),{status:403});},
+  }});
+  assert.equal(await f.controller.openCreate(), true); const creation=f.controller.getCreationController(); creation.edit({title:'Queue selection'});
+  assert.equal(await creation.submit(), false); assert.equal(committed,0); assert.equal(captured,1); assert.equal(attempted,1); f.controller.dispose();
+});
+
+test('Activity-origin Queue Add needs Browse and destination Add, independently of denied Create', async () => {
+  const rows=[mapping('first','inventory-track:1:2')];
+  const queueSource=[{kind:'activity',track_ref:rows[0].track_ref,row_ref:'activity:row',origin:{audience:'friend',subject_ref:'friend:one',kind:'tracks',period:'week',snapshot_ref:'snapshot:one'}}];
+  const begins=[],writes=[];
+  const f=await selectedFixture({rows,queueSource,providers:{
+    readPlaylistDestinations: async request=>destinations(request.scopeKey,{allowed_actions:{can_create:false}}),
+    beginPlaylistActivitySource: ()=>{throw Error('Create-gated Activity endpoint must not be used');},
+    beginPlaylistQueueSource: async request=>{begins.push(request);return {source:{...descriptor(),source_protocol:'complete_inventory_selection_v1'},entry_refs:['entry:first']};},
+    addTracks: async request=>{writes.push(request);return {ok:true};},
+  }});
+  assert.equal(f.controller.getSnapshot().canCreate,false); assert.equal(f.controller.getSnapshot().canAdd,true);
+  assert.equal(await f.controller.add(),true); assert.deepEqual(begins[0].occurrences,queueSource);
+  assert.equal(writes[0].source_guard.entry_refs[0],'entry:first'); f.controller.dispose();
+});
+
+test('only completed Queue source-capture403/404 reports read denial; destination/expiry/transient failures do not', async () => {
+  const rows=[mapping('one','inventory-track:1:2')],queueSource=[{kind:'inventory',track_ref:rows[0].track_ref}];
+  for(const action of ['add','create'])for(const status of [403,404,401,409,410,500]) {
+    const denied=[];const f=await selectedFixture({rows,queueSource,providers:{beginPlaylistQueueSource:captureFailure(status)}});
+    f.sourceAdapter.rejectSourceRead=value=>denied.push(value);
+    assert.equal(await (action==='add'?f.controller.add():f.controller.openCreate()),false);
+    assert.deepEqual(denied,[403,404].includes(status)?[status]:[]);f.controller.dispose();
+  }
+  const denied=[];const f=await selectedFixture({rows,queueSource,providers:{
+    beginPlaylistQueueSource:async()=>({source:{...descriptor(),source_protocol:'complete_inventory_selection_v1'},entry_refs:['entry:first']}),
+    addTracks:async()=>{throw Object.assign(new Error('Destination access denied'),{status:403});},
+  }});f.sourceAdapter.rejectSourceRead=value=>denied.push(value);
+  assert.equal(await f.controller.add(),false);assert.deepEqual(denied,[]);f.controller.dispose();
+  const gate=deferred(), late=[];const stale=await selectedFixture({rows,queueSource,providers:{beginPlaylistQueueSource:()=>gate.promise}});
+  stale.sourceAdapter.rejectSourceRead=value=>late.push(value);const pending=stale.controller.add();
+  await new Promise(resolve=>setImmediate(resolve));stale.retire();gate.reject(Object.assign(new Error('Late source denial'),{status:403}));
+  assert.equal(await pending,false);assert.deepEqual(late,[]);stale.controller.dispose();
+});
+
+test('generic destination and creation-source reader errors cannot invoke Queue capture denial', async () => {
+  const rows=[mapping('one','inventory-track:1:2')],queueSource=[{kind:'inventory',track_ref:rows[0].track_ref}];
+  for(const channel of ['destinations','creation-read']) {
+    let deny=false;const reports=[];
+    const f=await selectedFixture({rows,queueSource,providers:{
+      readPlaylistDestinations:async request=>{if(deny&&channel==='destinations')throw Object.assign(new Error('Destination read denied'),{status:403});return destinations(request.scopeKey);},
+      beginPlaylistQueueSource:async()=>({source:{...descriptor(),source_protocol:'complete_inventory_selection_v1'},entry_refs:['entry:first']}),
+      readPlaylistCreationSource:async()=>{throw Object.assign(new Error('Generic creation source reader failed'),{status:403});},
+    }});f.sourceAdapter.rejectSourceRead=status=>reports.push(status);deny=true;
+    assert.equal(await(channel==='destinations'?f.controller.add():f.controller.openCreate()),false);
+    assert.deepEqual(reports,[]);f.controller.dispose();
+  }
 });

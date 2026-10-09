@@ -1,3 +1,4 @@
+const {installPrivateContext, STAMP} = require('./private-context-harness.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -47,6 +48,7 @@ function harness() {
     buildUrl: value => value.url || '/?artist=Retained',
     NavigationTree: {setSelection() {}},
   });
+  installPrivateContext(context);
   for (const file of ['settings-navigation.js', 'runtime/mobile-navigation.js', 'runtime/browser-navigation-helpers.js',
     'runtime/gallery-refresh-and-status.js', 'runtime/bootstrap-gallery-event-handlers.js', 'runtime/track-actions.js', 'runtime/playlists-react-bridge.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, {filename: file});
@@ -164,7 +166,7 @@ test('Close uses the retained native parent and clears the draft once', async ()
 
 test('persisted navigation acquires its request ownership after the draft dismissal settles', async () => {
   const h = harness(); h.open();
-  const target = {surface: {active: 'playlists'}, playlist_sidebar: {active_playlist_id: 'saved:one',
+  const target = {context_ref: STAMP, surface: {active: 'playlists'}, playlist_sidebar: {active_playlist_id: 'saved:one',
     items: [{playlist_id: 'saved:one', allowed_actions: {can_open: true}}]},
     playlist_detail: {playlist_id: 'saved:one', title: 'Saved', track_rows: []}};
   h.context.fetchAndRender = async (url, push, options) => {
@@ -207,7 +209,7 @@ function mountHarness(readPlaylists, providers, payload) {
     useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
   };
   const loaded = {exports: {}};
-  vm.runInNewContext(mountBundle, {module: loaded, exports: loaded.exports, console, AbortController, URL, crypto: {randomUUID},
+  vm.runInNewContext(mountBundle, {module: loaded, exports: loaded.exports, console, AbortController, TextEncoder, URL, crypto: {randomUUID},
     require(name) {
       if (name === 'react') return hooks;
       if (name === 'react-dom') return {createPortal: children => children};

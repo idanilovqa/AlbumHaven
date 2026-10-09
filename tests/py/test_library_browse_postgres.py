@@ -2288,6 +2288,7 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
     assert first_album["preview_only"] is False
     assert first_album["tracks"] == [
         {
+            "track_id": 1003,
             "key": "broadcast-noise-01",
                 "track_ref": "broadcast-noise-01",
                 "title": "Long Was the Year",
@@ -2305,8 +2306,8 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
             "duration_seconds": 215,
             "duration_display": "3m 35s",
                 "path": r"D:\Music\Broadcast\Noise\01.flac",
-                "track_scrobble_count": 0,
-                "track_preference_overlay": {"rating": None, "love_tier": None},
+                "track_scrobble_count": None,
+                "track_preference_overlay": {"rating": None, "love_tier": "off"},
                 "is_problematic": False,
             }
         ]
@@ -8302,7 +8303,7 @@ def test_postgres_selected_artist_payload_suppresses_family_without_contributing
     assert payload["family_artist_groups"] == []
 
 
-def test_postgres_album_detail_payload_loads_tracks_for_album_key():
+def test_postgres_album_detail_payload_loads_tracks_for_album_key(monkeypatch):
     import music_app.services.album_details as album_details_module
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -8362,12 +8363,12 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
         },
         connect=lambda _database_url: FakeConnection(),
     )
-    album_details_module.build_scrobbled_play_count_lookup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("Postgres album detail payload should use prehydrated scrobble counts.")
-    )
-    album_details_module.build_track_preference_overlay_lookup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("Postgres album detail payload should use prehydrated track preferences.")
-    )
+    monkeypatch.setattr(album_details_module, "build_scrobbled_play_count_lookup", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("Unscoped album detail must not query personal scrobble counts.")
+    ))
+    monkeypatch.setattr(album_details_module, "build_track_preference_overlay_lookup", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("Unscoped album detail must not query private track preferences.")
+    ))
 
     payload = repository.build_album_detail_payload(
         "3::to the power of three",
@@ -8390,15 +8391,16 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
         "seen_automatic_improvement_revision": 2,
         "has_unseen_automatic_improvement": True,
     }
-    assert payload["track_rows"][0]["track_stats"]["scrobble_count"] == 0
-    assert payload["track_rows"][0]["track_preference"]["allowed_actions"]["can_rate"] is True
+    assert payload["track_rows"][0]["track_stats"]["scrobble_count"] is None
+    assert payload["track_rows"][0]["track_preference"]["allowed_actions"]["can_rate"] is False
     assert payload["gallery_list_block"]["track_rows_source"] == "inline"
     assert executed[1] == {"album_key": "3::to the power of three"}
     sql = str(executed[0])
     assert "where library.local_albums.album_key = %(album_key)s" in sql
     assert "library.local_track_files.private_path as file_private_path" in sql
-    assert "coalesce(scrobble_counts.scrobble_count, 0) as track_scrobble_count" in sql
-    assert "track_preferences.rating as track_preference_rating" in sql
+    assert "scrobble_counts" not in sql
+    assert "integration.listen_history" not in sql
+    assert "track_preferences.rating as track_preference_rating" not in sql
     assert "local_album_cover_candidate_snapshots" in sql
 
 
@@ -9532,6 +9534,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
             "total_duration_display": "2m 00s",
                 "tracks": [
                     {
+                        "track_id": 9001,
                         "key": "split-1999-01",
                         "track_ref": "split-1999-01",
                         "title": "1999 Track",
@@ -9550,8 +9553,8 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
                         "duration_seconds": 120,
                         "duration_display": "2m 00s",
                         "path": requested_path,
-                        "track_scrobble_count": 0,
-                        "track_preference_overlay": {"rating": None, "love_tier": None},
+                        "track_scrobble_count": None,
+                        "track_preference_overlay": {"rating": None, "love_tier": "off"},
                     }
                 ],
             "open_directory_paths": [r"D:\Music\Split Artist\Split Album\1999"],
@@ -9695,6 +9698,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
             "total_duration_display": "2m 02s",
             "tracks": [
                 {
+                    "track_id": 9602,
                     "key": "exception-album-02",
                     "track_ref": "exception-album-02",
                     "title": "Remain Editable",
@@ -9713,8 +9717,8 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
                     "duration_seconds": 122,
                     "duration_display": "2m 02s",
                     "path": sibling_path,
-                    "track_scrobble_count": 0,
-                    "track_preference_overlay": {"rating": None, "love_tier": None},
+                    "track_scrobble_count": None,
+                    "track_preference_overlay": {"rating": None, "love_tier": "off"},
                 }
             ],
             "open_directory_paths": [r"D:\Synthetic Music\Exception Artist\Exception Album"],

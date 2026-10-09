@@ -95,38 +95,6 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
-  const albumAction = event.target.closest('[data-album-card-action]');
-  if (albumAction) {
-    event.preventDefault();
-    const action = albumAction.getAttribute('data-album-card-action') || '';
-    const menu = document.getElementById('album-card-context-menu');
-    const album = getIndexedAlbum(menu?.dataset.albumKey || '');
-
-    hideAlbumCardContextMenu();
-
-    if (action === 'open-explorer') {
-      openAlbumInExplorer(album);
-      return;
-    }
-
-    if (action === 'move_to_hoard' || action === 'move_to_library') {
-      performAlbumMove(album, action);
-      return;
-    }
-
-    if (action === 'mark-version') {
-      openVersionPickerModal(album);
-      return;
-    }
-
-    if (action === 'unmark-version') {
-      unmarkAlbumVersion(album?.key || '');
-      return;
-    }
-
-    return;
-  }
-
   const versionPickerOption = event.target.closest('[data-version-picker-target]');
   if (versionPickerOption) {
     event.preventDefault();

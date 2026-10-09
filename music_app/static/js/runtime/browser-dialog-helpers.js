@@ -45,7 +45,7 @@ function showAppFormDialog(options = {}) {
   let positionObserver = null, focusObserver = null;
   const listen = (node, name, handler) => { node.addEventListener(name, handler); listeners.push([node, name, handler]); };
   let resolve; const promise = new Promise(done => { resolve = done; });
-  const pageId = typeof options.pageId === 'string' && options.pageId.trim() ? options.pageId : null;
+  let pageId = typeof options.pageId === 'string' && options.pageId.trim() ? options.pageId : null;
   const sequence = ++appFormSequence, scope = appFormScopeIdentity();
   const token = `app-form-${Date.now().toString(36)}-${sequence}-${Math.random().toString(36).slice(2)}`;
   const owner = { promise, anchor, pageId, token, title: options.title || 'Settings' }; activeAppFormDialog = owner;
@@ -141,6 +141,14 @@ function showAppFormDialog(options = {}) {
     });
     syncSubmit();
     return dismissal;
+  };
+  controls.updatePresentation = presentation => {
+    if (activeAppFormDialog !== owner || finishing || !presentation || typeof presentation.title !== 'string'
+      || typeof presentation.pageId !== 'string' || !presentation.pageId.trim() || !pageId) return false;
+    owner.title = presentation.title; owner.pageId = pageId = presentation.pageId;
+    title.textContent = presentation.title;
+    if (typeof updateMobileAppFormPresentation === 'function') updateMobileAppFormPresentation(owner);
+    return true;
   };
   owner.close = controls.close;
   owner.dismiss = controls.dismiss;
@@ -258,7 +266,7 @@ function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, pa
     onAfterClose(_content, closeOptions) {onClose?.(host, closeOptions);},
   });
   if (!controls) throw new Error('The form dialog is unavailable.');
-  return Object.freeze({promise, close, dismiss: (reason, options) => controls?.dismiss(reason, options)});
+  return Object.freeze({promise, close, updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
 }
 
 function showBrowserAlert(message) {

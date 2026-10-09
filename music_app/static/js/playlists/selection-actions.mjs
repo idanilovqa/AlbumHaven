@@ -1,3 +1,5 @@
+import {isQueueSourceCaptureDenial} from './backend-providers.mjs';
+import {queueOccurrences} from './queue-provenance.mjs';
 import {dispatchPlaylistAdd, playlistWriteAcknowledged} from './model.mjs';
 import {createPlaylistCreationController, normalizeCreationDescriptor} from './creation.mjs';
 
@@ -39,6 +41,9 @@ function resolveSelection(packet, sourceAdapter) {
   const resolved = sourceAdapter.resolveRows(targets.map(row => row.rowKey));
   const rows = Array.isArray(resolved) ? resolved : resolved?.rows;
   if (!dense(rows) || rows.length !== targets.length || rows.some((row, index) => row.rowKey !== targets[index].rowKey)) fail('unavailable');
+  const queueSource = own(resolved, 'queue_source') ? queueOccurrences(resolved.queue_source?.occurrences) : null;
+  if (own(resolved, 'queue_source') && (!queueSource || queueSource.length !== rows.length
+    || rows.some((row, index) => row.track_ref !== queueSource[index].track_ref))) fail('unavailable');
   const activity = resolved?.activity_source;
   const activityValid = record(activity?.origin) && ['own', 'friend'].includes(activity.origin.audience)
     && ['tracks', 'listens'].includes(activity.origin.kind) && ['week', 'month', 'six', 'year', 'all'].includes(activity.origin.period)
@@ -53,16 +58,18 @@ function resolveSelection(packet, sourceAdapter) {
     if (track && canonical) byRef.set(track, canonical);
     return {rowKey: row.rowKey, track_ref: track, canonical_track_ref: canonical, entry_ref: entry, ...(activityValid ? {activity_row_ref: row.activity_row_ref} : {})};
   });
-  const seen = new Set(), representatives = [];
+  const seen = new Map(), representatives = [], occurrenceIndexes = [];
   for (const row of mapping) {
     const canonical = row.canonical_track_ref || byRef.get(row.track_ref);
     const key = canonical ? `canonical:${canonical}` : row.track_ref ? `write:${row.track_ref}` : row.activity_row_ref ? `activity:${row.activity_row_ref}` : `entry:${row.entry_ref}`;
-    if (!seen.has(key)) {seen.add(key); representatives.push({...row, canonical_track_ref: canonical || null});}
+    if (!seen.has(key)) {seen.set(key, representatives.length); representatives.push({...row, canonical_track_ref: canonical || null});}
+    occurrenceIndexes.push(seen.get(key));
   }
   const refs = representatives.map(row => row.track_ref), entries = representatives.map(row => row.entry_ref);
   const source = normalizeCreationDescriptor(resolved?.playlist_creation_source);
   return {instance: snapshot.instance, revision: snapshot.revision, mapping,
-    representatives, source, refs, entries, activitySource: activityValid ? {...activity, row_refs: representatives.map(row => row.activity_row_ref)} : null,
+    occurrenceIndexes,
+    representatives, source, refs, entries, queueSource, activitySource: activityValid ? {...activity, row_refs: representatives.map(row => row.activity_row_ref)} : null,
     canAdd: refs.every(Boolean) && new Set(refs).size === refs.length,
     canSeed: source?.kind === 'library' && entries.every(Boolean) && new Set(entries).size === entries.length,
     counts: {selectedRowCount: targets.length, uniqueTrackCount: representatives.filter(row => row.track_ref || row.canonical_track_ref).length,
@@ -74,6 +81,7 @@ function sameSelection(left, right) {
   return left.instance === right.instance && left.revision === right.revision
     && JSON.stringify(left.mapping) === JSON.stringify(right.mapping)
     && JSON.stringify(left.activitySource) === JSON.stringify(right.activitySource)
+    && JSON.stringify(left.queueSource) === JSON.stringify(right.queueSource)
     && (left.source === null && right.source === null || sameSource(left.source, right.source));
 }
 export function normalizePlaylistDestinations(value, scopeKey) {
@@ -97,7 +105,7 @@ const initial = () => freeze({status: 'unavailable', counts: null, destinations:
 export function createPlaylistActionController({packet, lifetime, sourceAdapter, providers = {}} = {}) {
   const configured = {...providers};
   const providerKeys = ['readPlaylistDestinations', 'addTracks', 'readPlaylistCreationSource', 'createPlaylistFromSelection',
-    'beginPlaylistSelectionSource', 'beginPlaylistActivitySource', 'reconcilePlaylistOperation', 'retryPlaylistOperation', 'hasPendingPlaylistOperation'];
+    'beginPlaylistSelectionSource', 'beginPlaylistActivitySource', 'beginPlaylistQueueSource', 'reconcilePlaylistOperation', 'retryPlaylistOperation', 'hasPendingPlaylistOperation'];
   let state = initial(), disposed = false, retired = false, baseline = null, directory = null,
     pending = null, generation = 0, creation = null, createdAck = null, dispatched = false, listening = false;
   const listeners = new Set(), unsubscriptions = [];
@@ -124,14 +132,26 @@ export function createPlaylistActionController({packet, lifetime, sourceAdapter,
     if (typeof configured.readPlaylistDestinations !== 'function') return {status: 'unavailable', data: null};
     return normalizePlaylistDestinations(await configured.readPlaylistDestinations({scopeKey: packet.scopeKey, signal}), packet.scopeKey);
   };
+  const captureQueueSource = async options => {
+    const captureToken = Symbol('queue-source-capture');
+    try {return await configured.beginPlaylistQueueSource({...options, source_capture_token: captureToken});}
+    catch (error) {
+      // Only this read/capture boundary proves original source denial. A
+      // destination write rejection, expiry or transient error says nothing
+      // about the source's continuing readable authority.
+      if (isQueueSourceCaptureDenial(error, captureToken) && !options.signal?.aborted && current()) sourceAdapter.rejectSourceRead?.(error.status);
+      throw error;
+    }
+  };
   const activitySource = () => Boolean(baseline?.activitySource && typeof configured.beginPlaylistActivitySource === 'function');
-  const selectedSource = () => activitySource() || baseline?.canAdd && typeof configured.beginPlaylistSelectionSource === 'function';
+  const queueSource = () => Boolean(baseline?.queueSource && typeof configured.beginPlaylistQueueSource === 'function');
+  const selectedSource = () => baseline?.queueSource ? queueSource() : activitySource() || baseline?.canAdd && typeof configured.beginPlaylistSelectionSource === 'function';
   const canCreate = data => Boolean(data?.canCreate && (selectedSource() || baseline?.canSeed && sameSource(data.source, baseline.source))
     && typeof configured.readPlaylistCreationSource === 'function' && typeof configured.createPlaylistFromSelection === 'function');
   const present = result => {
     directory = result.data;
     publish({status: result.status, destinations: (result.data?.destinations || []).filter(row => row.canAdd),
-      canCreate: canCreate(result.data), canAdd: Boolean(baseline?.canAdd && typeof configured.addTracks === 'function'), counts: baseline?.counts || null});
+      canCreate: canCreate(result.data), canAdd: Boolean(baseline?.canAdd && (!baseline.queueSource || queueSource()) && typeof configured.addTracks === 'function'), counts: baseline?.counts || null});
   };
   const listen = () => {
     if (listening || disposed || retired) return;
@@ -169,7 +189,7 @@ export function createPlaylistActionController({packet, lifetime, sourceAdapter,
       if (!current() || state.busy || dispatched || state.mode !== 'destinations') return false;
       const target = directory?.destinations.find(row => row.playlist_id === state.selectedId && row.canAdd);
       if (!target) return false;
-      if (!baseline.canAdd || typeof configured.addTracks !== 'function') {
+      if (!baseline.canAdd || baseline.queueSource && !queueSource() || typeof configured.addTracks !== 'function') {
         publish({mutation: {status: 'unavailable', acknowledged: false, refresh: null}}); return false;
       }
       const operation = start(); publish({busy: true, creationRecovery: null, mutation: {status: 'loading', acknowledged: false, refresh: null}});
@@ -186,11 +206,20 @@ export function createPlaylistActionController({packet, lifetime, sourceAdapter,
           return false;
         }
         if (!active(operation)) return false;
+        let sourceGuard;
+        if (baseline.queueSource) {
+          const captured = await captureQueueSource({scopeKey: packet.scopeKey, occurrences: baseline.queueSource, signal: operation.request.signal});
+          if (!active(operation)) return false;
+          const descriptor = normalizeCreationDescriptor(captured?.source);
+          if (!descriptor || descriptor.kind !== 'library' || descriptor.source_protocol !== 'complete_inventory_selection_v1'
+            || !Array.isArray(captured.entry_refs) || captured.entry_refs.length !== baseline.refs.length || captured.entry_refs.some(value => !ref(value))) fail('unavailable');
+          sourceGuard = {source_protocol: descriptor.source_protocol, source: {kind: descriptor.kind, ref: descriptor.ref, revision: descriptor.revision}, entry_refs: captured.entry_refs};
+        }
         dispatched = true;
         publish({writeStarted: true});
         if (!active(operation)) return false;
         const response = await dispatchPlaylistAdd(configured.addTracks, {scopeKey: packet.scopeKey, playlist_id: target.playlist_id,
-          track_refs: baseline.refs, revision: target.revision, signal: operation.request.signal});
+          track_refs: baseline.refs, revision: target.revision, ...(sourceGuard ? {source_guard: sourceGuard} : {}), signal: operation.request.signal});
         if (!active(operation)) return false;
         if (!playlistWriteAcknowledged(response)) {
           publish({mutation: {status: failure(response), acknowledged: false, refresh: null}}); return false;
@@ -247,7 +276,8 @@ export function createPlaylistActionController({packet, lifetime, sourceAdapter,
         if (!active(operation)) return false;
         present(fresh);
         if (!canCreate(fresh.data)) return false;
-        const selected = activitySource() ? await configured.beginPlaylistActivitySource({scopeKey: packet.scopeKey,
+        const selected = baseline.queueSource ? await captureQueueSource({scopeKey: packet.scopeKey,
+          occurrences: baseline.queueSource, recoverCreate: true, signal: operation.request.signal}) : activitySource() ? await configured.beginPlaylistActivitySource({scopeKey: packet.scopeKey,
           ...baseline.activitySource, signal: operation.request.signal}) : selectedSource() ? await configured.beginPlaylistSelectionSource({scopeKey: packet.scopeKey,
           track_refs: baseline.refs, signal: operation.request.signal}) : {source: fresh.data.source, entry_refs: baseline.entries};
         if (!active(operation)) return false;
@@ -308,7 +338,9 @@ export function createPlaylistActionController({packet, lifetime, sourceAdapter,
         const entries = new Map(sourceResource.data.entries.map(row => [row.entry_ref, row]));
         if (!selectedSource() && baseline.representatives.some(row => row.canonical_track_ref
           && entries.get(row.entry_ref)?.canonical_track_ref !== row.canonical_track_ref)
-          || !creation.seed(selected.entry_refs, sourceResource)) {
+          || selected.entry_refs.length !== baseline.representatives.length
+          || baseline.occurrenceIndexes.some(index => index < 0)
+          || !creation.seed(baseline.occurrenceIndexes.map(index => selected.entry_refs[index]), sourceResource, {preserveOccurrences: true})) {
           creation.dispose(); creation = null; publish({canCreate: false, mutation: {status: 'unavailable', acknowledged: false, refresh: null}}); return false;
         }
         publish({mode: 'create'}); return true;

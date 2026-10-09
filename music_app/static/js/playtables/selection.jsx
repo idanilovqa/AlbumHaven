@@ -18,6 +18,8 @@ export function usePlaytableSource({runtime, sourceRows, rows, context, instance
       snapshot: () => !active || !accepted ? null : native ? native.snapshot()
         : current() ? {scopeKey: context.scopeKey, instance, revision: view, rows: exposed} : null,
       subscribe: listener => native?.subscribe(listener) || (() => {}),
+      canQueue: keys => active && accepted && native?.canQueue?.(keys) === true,
+      captureQueue: (keys, options) => active && accepted ? native?.captureQueue?.(keys, options) || null : null,
       resolveRows: keys => active && accepted ? native?.resolveRows(keys) || null : null,
       retainNavigation: keys => active && accepted ? native?.retainNavigation?.(keys) || null : null,
       updateRows(next, nextRevision) {
@@ -55,7 +57,11 @@ export function usePlaytableSelection(hostRef, options) {
     if (!host || options.enabled === false) {setSnapshot(EMPTY_PLAYTABLE_SELECTION); return undefined;}
     const owner = bindPlaytableSelection(host, latest.current);
     ownerRef.current = owner;
-    const refresh = () => setSnapshot(owner.getSnapshot());
+    for (const rowKey of latest.current.initialSelectedRowKeys || []) owner.select(rowKey, {toggle: true});
+    const refresh = () => {
+      const next = owner.getSnapshot(); setSnapshot(next);
+      latest.current.onSelectionChange?.(next);
+    };
     const unsubscribe = owner.subscribe(refresh); refresh();
     return () => {unsubscribe(); owner.dispose(); if (ownerRef.current === owner) ownerRef.current = null;};
   }, [hostRef, options.sourceAdapter, options.enabled]);
@@ -70,6 +76,8 @@ export function PlaytableSelectionActions({runtime, snapshot, ownerRef, availabl
       {snapshot.droppedCount > 0 ? ` · ${snapshot.droppedCount} no longer visible or selectable` : ''}</span>
     <Button runtime={runtime} disabled={!available || !count} size="small"
       onClick={event => ownerRef.current?.openSelection(event.target.closest('button'))}>Add to playlist</Button>
+    <Button runtime={runtime} disabled={!available || !count} size="small"
+      onClick={event => ownerRef.current?.openSelection(event.target.closest('button'), {mode: 'create'})}>Create new playlist</Button>
   </div>;
 }
 
@@ -95,7 +103,7 @@ export function mountPlaytableSelection(host, options) {
   render();
   return {
     getSnapshot: () => bridge.current?.getSnapshot() || EMPTY_PLAYTABLE_SELECTION,
-    openSelection: anchor => bridge.current?.openSelection(anchor) || false,
+    openSelection: (anchor, options) => bridge.current?.openSelection(anchor, options) || false,
     update(next) {if (disposed) return;
       const replaced = next?.sourceAdapter && next.sourceAdapter !== current.sourceAdapter;
       current = {...current, ...next};

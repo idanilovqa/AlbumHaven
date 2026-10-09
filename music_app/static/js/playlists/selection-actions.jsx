@@ -37,7 +37,7 @@ function SeededCreation({runtime, action, readDetail, onCreated, onDismiss, comp
 // One native form owns both destination selection and the ordinary CreationForm.
 // The parent owns the retained source receipt and releases it after onClose.
 export function PlaylistActionSession({runtime, packet, lifetime, sourceAdapter, providers, onClose, onNavigate, onNotice,
-  readDetail, parentSurface, returnFocus}) {
+  readDetail, parentSurface, returnFocus, initialMode}) {
   const [controller, setController] = useState(() => createPlaylistActionController({packet, lifetime, sourceAdapter, providers}));
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const [completed, setCompleted] = useState(null);
@@ -53,7 +53,9 @@ export function PlaylistActionSession({runtime, packet, lifetime, sourceAdapter,
       return undefined;
     }
     alive.current = true;
-    controller.load();
+    controller.load().then(() => {
+      if (alive.current && !disposedControllers.current.has(controller) && initialMode === 'create') return controller.openCreate();
+    });
     return () => {alive.current = false; disposedControllers.current.add(controller); controller.dispose();};
   }, [controller]);
   useLayoutEffect(() => {
@@ -99,7 +101,8 @@ export function PlaylistActionSession({runtime, packet, lifetime, sourceAdapter,
     }
   };
   const finished = state.writeStarted;
-  return <NativeDialog runtime={runtime} title="Add to playlist" pageId="playlist-track-destination" parentSurface={parentSurface}
+  return <NativeDialog runtime={runtime} title={state.mode === 'create' || initialMode === 'create' ? 'Create playlist' : 'Add to playlist'}
+    pageId={state.mode === 'create' || initialMode === 'create' ? 'create-playlist' : 'playlist-track-destination'} presentationKey="playlist-selection" parentSurface={parentSurface}
     returnFocus={returnFocus} beforeDismiss={beforeDismiss} onClose={options => {
       // Native teardown can precede its awaited parent return. Keep the receipt
       // through that return so the last authority check controls navigation.
@@ -108,12 +111,20 @@ export function PlaylistActionSession({runtime, packet, lifetime, sourceAdapter,
     }}>{close => {
     closeOwner.current = close;
     return <>
-      {state.counts && <p className="playlists__note" role="status">{state.counts.selectedRowCount} selected rows · {state.counts.uniqueTrackCount} unique tracks
+      {initialMode !== 'create' && state.mode !== 'create' && state.counts && <p className="playlists__note" role="status">{state.counts.selectedRowCount} selected rows · {state.counts.uniqueTrackCount} unique tracks
         {state.counts.unresolvedSourceCount > 0 ? ` · ${state.counts.unresolvedSourceCount} unresolved source entries retained` : ''}
         {state.counts.duplicateCount > 0 ? `; ${state.counts.duplicateCount} repeats included once.` : '.'}</p>}
       {state.mode === 'create' ? <SeededCreation {...{runtime, readDetail, completed}} action={controller} onCreated={created} onDismiss={close}
         canDismissWhileLoading={!state.writeStarted}/>
-        : <form className="playlists__form" aria-label="Add selected tracks to playlist" aria-busy={state.busy}
+        : initialMode === 'create' ? <><ActionStatus {...{runtime, state}}/><div className="playlists__actions">
+          <Button runtime={runtime} disabled={state.busy || finished || state.status === 'retired'} onClick={async () => {
+            await controller.load();
+            if (alive.current && !disposedControllers.current.has(controller)) await controller.openCreate();
+          }}>Retry creation</Button>
+          <RetryOriginalRequest runtime={runtime} scopeKey={packet.scopeKey} available={controller.canRetryOriginal?.() === true}
+            disabled={state.busy} retry={controller.retryOriginal} current={controller.isCurrent}/>
+          <Button runtime={runtime} disabled={state.busy && state.writeStarted} onClick={() => close({reason: 'cancel'})}>Cancel</Button>
+        </div></> : <form className="playlists__form" aria-label="Add selected tracks to playlist" aria-busy={state.busy}
           onSubmit={event => {event.preventDefault(); controller.add();}}>
           <ActionStatus {...{runtime, state}}/>
           {['ready', 'empty'].includes(state.status) && <>

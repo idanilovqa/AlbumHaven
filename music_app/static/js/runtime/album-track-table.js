@@ -13,7 +13,7 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   const icon = ButtonComponent.renderIconSvg(iconName, {
     className: `album-track-table__play-icon ui-icon--${iconName}`,
   });
-  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}"${disabled ? ' disabled aria-disabled="true"' : ''}>${icon}</button>`;
+  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-inventory-track-ref="${escapeHtml(track.inventory_track_ref || '')}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}"${disabled ? ' disabled aria-disabled="true"' : ''}>${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
@@ -51,6 +51,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
+      rating: {content: escapeHtml(config.subjectTaste && Number.isInteger(track.subjectRating) ? track.subjectRating : '–')},
+      love: {content: config.subjectTaste && ['off', 'loved', 'obsessed'].includes(track.subjectLove)
+        ? `<span role="img" aria-label="${escapeHtml(track.subjectLove)}">${ButtonComponent.renderIconSvg(`love-${track.subjectLove}`)}</span>` : '–'},
       duration: { content: `<span class="track-duration" ${readOnly ? '' : `data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}"`}>${escapeHtml(track.duration || '')}</span>` },
     },
   };
@@ -75,6 +78,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       { key: 'number', label: '#' },
       { key: 'title', label: 'Track' },
       ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
+      ...(config.subjectTaste ? [{key: 'rating', label: 'Rating'}, {key: 'love', label: 'Love'}] : []),
       { key: 'problem', label: 'Problem', header: 'absent', action: true },
       { key: 'duration', label: 'Length', action: true },
     ];
@@ -84,7 +88,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       headers: groupIndex === 0 ? 'visible' : 'absent',
       columns: showPath
         ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+        : config.subjectTaste ? '36px minmax(0,1fr) 52px 36px 20px minmax(54px,auto)' : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
       columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',

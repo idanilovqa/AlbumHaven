@@ -52,14 +52,14 @@ export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reo
   const escape = runtime.escapeHtml;
   const positions = new Map(sourceRows.map((row, index) => [row, index]));
   reorderable = reorderable && !sorted(sort);
-  const leadingColumns = `${reorderable ? '70px ' : ''}36px minmax(160px,1.3fr) minmax(90px,.7fr) minmax(90px,.7fr) minmax(95px,.6fr)`;
+  const leadingColumns = `${reorderable ? '70px ' : ''}36px minmax(0,1.3fr) minmax(0,.7fr) minmax(0,.7fr) minmax(64px,.6fr)`;
   return runtime.tableHtml({id: 'playlist-tracks', ariaLabel: `${detail.title || 'Playlist'} tracks`, density: 'compact', frame: 'outline', sort,
-    selection: 'multiple', overflow: 'local', mobile: 'preserve',
+    selection: 'multiple', overflow: 'local',
     columns: `${leadingColumns} ${METRIC_COLUMNS.map(column => column.width).join(' ')}`,
-    narrowColumns: `${leadingColumns} ${METRIC_COLUMNS.filter(column => !column.hideWhenNarrow).map(column => column.width).join(' ')}`,
+    narrowColumns: `${reorderable ? '70px ' : ''}36px minmax(0,1fr) ${METRIC_COLUMNS.filter(column => !column.hideWhenNarrow).map(column => column.width).join(' ')}`,
     columnsConfig: [...(reorderable ? [{key: 'order', label: 'Order', action: true}] : []),
-      {key: 'number', label: '#'}, {key: 'title', label: 'Track'}, {key: 'artist', label: 'Artist'},
-      {key: 'album', label: 'Album'}, {key: 'availability', label: 'Availability'}, ...METRIC_COLUMNS],
+      {key: 'number', label: '#'}, {key: 'title', label: 'Track'}, {key: 'artist', label: 'Artist', hideWhenNarrow: true},
+      {key: 'album', label: 'Album', hideWhenNarrow: true}, {key: 'availability', label: 'Availability', hideWhenNarrow: true}, ...METRIC_COLUMNS],
     rows: rows.map((track, index) => {
       const position = positions.get(track) ?? index;
       const native = typeof runtime.albumTrackRow === 'function' ? runtime.albumTrackRow({title: track.title,
@@ -71,7 +71,7 @@ export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reo
         tabIndex: track.source_readable === true ? 0 : -1, ariaDisabled: track.source_readable !== true,
         dataAttributes: {'playlist-row-key': track.row_key}, cells: {
           number: {content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escape(position + 1)}</span>` + runtime.actionHtml({icon: 'play', className: 'album-track-table__play', ariaLabel: `Play ${track.title || 'track'}`,
-            title: 'Play track', presentation: 'bare', disabled: !playable(runtime, detail, track), attributes: {'data-playlists-play': '1'}}) + '</span>'},
+            title: 'Play track', presentation: 'bare', hidden: track.availability === 'missing', disabled: !playable(runtime, detail, track), attributes: {'data-playlists-play': '1'}}) + '</span>'},
           title: {content: `<div class="home-detail__release playlists__track-identity">${artwork}<div>${native?.cells?.title?.content || escape(track.title)}</div></div>` + runtime.actionHtml({icon: 'more',
             ariaLabel: `Show details for ${track.title || 'track'}`, title: 'Show track and album information', presentation: 'bare',
             disabled: track.source_readable !== true, attributes: {'data-playlists-select': '1'}})},
@@ -179,12 +179,13 @@ export function PlaylistTracks({runtime, rows, detail, controller, state, select
     isViewCurrent: () => current(),
     onInspect: rowKey => {const row = selectedRow(rowKey); if (row?.source_readable === true) onSelect(row);},
     onPlay: rowKey => {const row = selectedRow(rowKey); if (row) play(row);},
-    onPlaylistAction: source.actionsAvailable ? (packet, lifetime, anchor) => runtime.openPlaylistAction(packet, lifetime, source.sourceAdapter, anchor) : undefined,
+    onContextAction: typeof runtime.openPlaytableContext === 'function' ? (packet, lifetime, anchor) => runtime.openPlaytableContext(packet, lifetime, source.sourceAdapter, anchor) : undefined,
+    onPlaylistAction: source.actionsAvailable ? (packet, lifetime, anchor, options) => runtime.openPlaylistAction(packet, lifetime, source.sourceAdapter, anchor, options) : undefined,
     onError});
   return <><span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
     <PlaytableSelectionActions runtime={runtime} {...selection} available={source.actionsAvailable}/>
     {sorted(sort) && <p className="playlists__note" role="status">Sorted view. Restore default order to reorder tracks.</p>}
-    <div ref={host} className="album-track-table playlists__tracks" onClick={event => {
+    <div ref={host} className="album-track-table album-track-table--collection playlists__tracks" onClick={event => {
       if (!current() || event.defaultPrevented || !host.current.contains(event.target)) return;
       const sortButton = event.target.closest('[data-cdt-sort]');
       if (sortButton) {

@@ -5,11 +5,11 @@ import {trackLoveHtml} from '../home-friends/track-preference.mjs';
 // Love alone can consume the native preference controller's current state;
 // numeric display facts never grant mutation or playback authority.
 const columns = Object.freeze([
-  {key: 'love_tier', label: 'Love', width: '60px'},
-  {key: 'track_rating', label: 'Rating', width: '112px', hideWhenNarrow: true},
-  {key: 'play_count', label: 'Plays', width: '72px'},
-  {key: 'popularity_count', label: 'Popularity', width: '100px'},
-  {key: 'duration', label: 'Length', width: '72px'},
+  {key: 'love_tier', label: 'Love', width: '36px'},
+  {key: 'track_rating', label: 'Rating', width: '80px', hideWhenNarrow: true},
+  {key: 'play_count', label: 'Plays', width: '54px'},
+  {key: 'popularity_count', label: 'Popularity', width: '64px', hideWhenNarrow: true},
+  {key: 'duration', label: 'Length', width: '54px'},
 ].map(column => Object.freeze({...column, sortable: column.key !== 'track_rating', type: 'number'})));
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 

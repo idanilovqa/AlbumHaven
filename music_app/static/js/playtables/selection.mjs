@@ -31,7 +31,7 @@ export const EMPTY_PLAYTABLE_SELECTION = Object.freeze({scopeKey: null, rows: Ob
 export function createPlaytableSelection({sourceAdapter, tableKey = 'playtable', isViewCurrent = () => true}) {
   if (typeof sourceAdapter?.snapshot !== 'function') throw new TypeError('Playtable selection needs a source adapter.');
   if (!key(tableKey)) throw new TypeError('Playtable selection needs a public table key.');
-  let source = null, snapshot = EMPTY_PLAYTABLE_SELECTION, disposed = false, viewGeneration = 0, selectionGeneration = 0;
+  let source = null, snapshot = EMPTY_PLAYTABLE_SELECTION, disposed = false, viewGeneration = 0, selectionGeneration = 0, anchor = null;
   const listeners = new Set(), receipts = new Set();
   const currentView = () => {try {return isViewCurrent() === true;} catch {return false;}};
   const publish = (selectedRowKeys, focusedRowKey, droppedCount = 0) => {
@@ -51,6 +51,7 @@ export function createPlaytableSelection({sourceAdapter, tableKey = 'playtable',
     if (!changed) return snapshot;
     source = next; viewGeneration += 1;
     const selectable = new Set((source?.rows || []).filter(row => row.selectable).map(row => row.rowKey));
+    if (replaced || !selectable.has(anchor)) anchor = null;
     const selected = replaced ? [] : snapshot.selectedRowKeys.filter(rowKey => selectable.has(rowKey));
     const dropped = replaced ? 0 : snapshot.selectedRowKeys.length - selected.length;
     if (replaced || !sameKeys(selected, snapshot.selectedRowKeys)) selectionGeneration += 1;
@@ -60,17 +61,23 @@ export function createPlaytableSelection({sourceAdapter, tableKey = 'playtable',
     if (!disposed && generation === viewGeneration) publish(selected, focused, dropped);
     return snapshot;
   };
-  const select = (rowKey, {toggle = false, preserve = false} = {}) => {
+  const select = (rowKey, {toggle = false, preserve = false, range = false} = {}) => {
     update();
     if (disposed || !source?.rows.some(row => row.rowKey === rowKey && row.selectable)) return false;
     const before = snapshot.selectedRowKeys;
-    const selected = preserve && before.includes(rowKey) ? [...before]
+    const ordered = source.rows.filter(row => row.selectable).map(row => row.rowKey);
+    const ranged = range && anchor !== null && ordered.includes(anchor);
+    const first = ordered.indexOf(anchor), last = ordered.indexOf(rowKey);
+    const rangeKeys = ranged ? ordered.slice(Math.min(first, last), Math.max(first, last) + 1) : null;
+    const selected = ranged ? toggle ? [...new Set([...before, ...rangeKeys])] : rangeKeys
+      : preserve && before.includes(rowKey) ? [...before]
       : toggle ? before.includes(rowKey) ? before.filter(value => value !== rowKey) : [...before, rowKey] : [rowKey];
     if (!sameKeys(before, selected)) {
       const view = viewGeneration, selection = ++selectionGeneration;
       retire('selection');
       if (disposed || view !== viewGeneration || selection !== selectionGeneration) return false;
     }
+    if (!ranged && !(preserve && before.includes(rowKey))) anchor = rowKey;
     if (!sameKeys(before, selected) || snapshot.focusedRowKey !== rowKey || snapshot.droppedCount) publish(selected, rowKey);
     return true;
   };
@@ -164,16 +171,16 @@ export function bindPlaytableSelection(host, options) {
     const before = owner.getSnapshot();
     const failed = () => {owner.update();
       if (!disposed && owner.getSnapshot() === before && isCurrent()
-        && (current.onPlay === callback || current.onPlaylistAction === callback)) current.onError?.(message);
+        && (current.onPlay === callback || current.onPlaylistAction === callback || current.onContextAction === callback)) current.onError?.(message);
     };
     try {Promise.resolve(callback?.(...args)).catch(failed);}
     catch {failed();}
   };
-  const open = (anchor, target = {}) => {
-    if (disposed || !host.isConnected || typeof current.onPlaylistAction !== 'function') return false;
+  const open = (anchor, target = {}, options = {}) => {
+    if (disposed || !host.isConnected || typeof current.onPlaylistAction !== 'function' && typeof current.onContextAction !== 'function') return false;
     const action = owner.action(target);
     if (!action) return false;
-    invoke(current.onPlaylistAction, [action.packet, action.lifetime, anchor], 'Playlist actions could not be opened.', action.lifetime.isCurrent);
+    invoke(options.context && current.onContextAction || current.onPlaylistAction, [action.packet, action.lifetime, anchor, options], 'Playlist actions could not be opened.', action.lifetime.isCurrent);
     return true;
   };
   const playRow = (row, event, playOptions) => {
@@ -208,9 +215,9 @@ export function bindPlaytableSelection(host, options) {
       lastTouch = null; playedTouch = {node: row.node, snapshot: owner.getSnapshot(), time: now};
       playRow(row, event, {restart: true}); return;
     }
-    const selected = owner.select(row.rowKey, {toggle: event.ctrlKey || event.metaKey});
+    const selected = owner.select(row.rowKey, {toggle: event.ctrlKey || event.metaKey, range: event.shiftKey});
     lastTouch = touch && selected ? {node: row.node, snapshot: owner.getSnapshot(), time: now} : null;
-    if (selected && !event.ctrlKey && !event.metaKey)
+    if (selected && !event.ctrlKey && !event.metaKey && !event.shiftKey)
       current.onInspect?.(row.rowKey, event);
   };
   const context = event => {
@@ -218,7 +225,7 @@ export function bindPlaytableSelection(host, options) {
     const row = rowFor(event);
     if (!row) return;
     if (suppressContext?.node === row.node) {suppressContext = null; event.preventDefault(); return;}
-    if (owner.context(row.rowKey) && open(row.node)) event.preventDefault();
+    if (owner.context(row.rowKey) && open(row.node, {}, {context: true})) event.preventDefault();
   };
   const doubleClick = event => {
     if (event.button > 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
@@ -238,15 +245,15 @@ export function bindPlaytableSelection(host, options) {
     const row = rowFor(event);
     if (!row) return;
     if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) {
-      if (owner.context(row.rowKey) && open(row.node)) {
+      if (owner.context(row.rowKey) && open(row.node, {}, {context: true})) {
         event.preventDefault(); suppressContext = {node: row.node};
       }
     } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.shiftKey) {
       if (typeof current.onPlay !== 'function') return;
       event.preventDefault(); invoke(current.onPlay, [row.rowKey, event], 'This track could not be played.');
-    } else if ((event.key === 'Enter' || event.key === ' ') && !event.shiftKey) {
+    } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      if (owner.select(row.rowKey, {toggle: event.ctrlKey || event.metaKey}) && !event.ctrlKey && !event.metaKey)
+      if (owner.select(row.rowKey, {toggle: event.ctrlKey || event.metaKey, range: event.shiftKey}) && !event.ctrlKey && !event.metaKey && !event.shiftKey)
         current.onInspect?.(row.rowKey, event);
     }
   };
@@ -273,7 +280,7 @@ export function bindPlaytableSelection(host, options) {
   const handlers = {click, contextmenu: context, dblclick: doubleClick, keydown, pointerdown, pointermove, pointerup, pointercancel};
   for (const [type, callback] of Object.entries(handlers)) host.addEventListener(type, callback);
   paint();
-  return {...owner, openSelection: anchor => open(anchor),
+  return {...owner, openSelection: (anchor, options) => open(anchor, {}, options),
     update(next) {
       if (disposed) return owner.getSnapshot();
       if (next?.sourceAdapter && next.sourceAdapter !== sourceAdapter) throw new TypeError('Remount selection for a replacement adapter.');

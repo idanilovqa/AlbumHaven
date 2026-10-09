@@ -1980,7 +1980,7 @@ class VirtualArtistGrid {
       if (block.kind === 'subheading') {
                 const count = Math.max(0, Number(block.count || 0));
                 const countLabel = `${count} ${count === 1 ? 'album' : 'albums'}`;
-                return `<div class="artist-subsection-label"><span>${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
+                return `<div class="artist-subsection-label"><span class="gallery-divider__line" aria-hidden="true"></span><span class="artist-subsection-title">${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="artist-subsection-separator" aria-hidden="true">•</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);

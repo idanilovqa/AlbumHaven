@@ -3223,6 +3223,19 @@ def test_postgres_scan_publication_persists_album_compilation_state(monkeypatch)
     assert persisted_album_metadata["Ordinary Contract"]["is_compilation"] is False
 
 
+def test_attached_track_artist_names_keeps_numeric_slash_artist_intact():
+    from music_app.services import scan_cache_persistence
+
+    assert scan_cache_persistence._attached_track_artist_names(
+        "Ногу Свело! feat 25 / 17",
+        "Ногу Свело!",
+    ) == ["Ногу Свело!", "25/17"]
+    assert scan_cache_persistence._attached_track_artist_names(
+        "Owner feat Guest / Partner",
+        "Owner",
+    ) == ["Owner", "Guest", "Partner"]
+
+
 def test_local_album_inventory_retains_cover_revision_after_track_metadata_rewrite(
     monkeypatch,
 ):

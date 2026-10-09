@@ -80,7 +80,10 @@ _OWNER_LED_FEATURE_RE = re.compile(
     r"^(?P<owner>.+?)(?:\s+(?:feat\.?|featuring|with|vs|x)\s+|\s*&\s*|/|;|,\s*)(?P<featured>.+)$",
     re.IGNORECASE,
 )
-_FEATURED_MEMBER_SPLIT_RE = re.compile(r"\s+(?:and|и)\s+|(?:\s*&\s*)|/|;|,")
+_FEATURED_MEMBER_SPLIT_RE = re.compile(
+    r"\s+(?:and|и)\s+|(?:\s*&\s*)|(?<!\d)/|/(?!\d)|;|,"
+)
+_NUMERIC_ARTIST_SLASH_RE = re.compile(r"(?<=\d)\s*/\s*(?=\d)")
 
 
 class ScanCachePublicationSuperseded(RuntimeError):
@@ -2802,7 +2805,8 @@ def _attached_track_artist_names(track_artist_name: str | None, owner_name: str 
 
 def _split_featured_member_names(value: object) -> list[str]:
     names: list[str] = []
-    for part in _FEATURED_MEMBER_SPLIT_RE.split(str(value or "")):
+    text = _NUMERIC_ARTIST_SLASH_RE.sub("/", str(value or ""))
+    for part in _FEATURED_MEMBER_SPLIT_RE.split(text):
         name = _text_or_none(part)
         if name is None:
             continue

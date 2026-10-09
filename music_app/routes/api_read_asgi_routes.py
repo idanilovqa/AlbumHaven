@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from music_app.services.private_ui_context import private_ui_context_ref
-
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.log_history import history_scope_for_request, normalize_log_history_query, export_log_history, LogHistoryQueryError
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
@@ -10,7 +8,7 @@ import logging
 import time
 from collections.abc import Iterable, Mapping
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -41,15 +39,10 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.library_browse_postgres import (
     PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
 )
-from music_app.services.library_inventory_postgres import PostgresLibraryInventoryRepository
-from music_app.services.track_preferences import track_preference_scope
-from music_app.services.track_preferences_postgres import TrackPreferenceScopeError
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
-from music_app.services.current_actor_asgi import current_actor_from_request
-from music_app.services.policy import ResourceScope
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -532,9 +525,6 @@ def _transient_scan_view_response(
 
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
-    if str(request.query_params.get("surface") or "").casefold() == "playlists":
-        from music_app.routes.owned_playlists_asgi import playlist_view_response
-        return playlist_view_response(request)
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
     if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:
@@ -871,28 +861,11 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
 
 @router.get("/home-data")
 async def home_data(request: Request) -> JSONResponse:
-    actor = await current_actor_from_request(request)
-    if not actor.is_authenticated:
-        raise HTTPException(401, "Authentication required.", headers={"Cache-Control": "private, no-store"})
-    if (any(type(value) is not int or value <= 0 for value in (actor.account_id, actor.current_library_id))
-            or not any(relationship.library_id == actor.current_library_id
-                       for relationship in actor.library_relationships)):
-        raise HTTPException(403, "Action not permitted.", headers={"Cache-Control": "private, no-store"})
+    _hydrate_cached_library_for_asgi(request)
     request_started_at = time.perf_counter()
-    await run_in_threadpool(_hydrate_cached_library_for_asgi, request)
-
-    def album_actions(album):
-        return allowed_actions_for_request(
-            request, ("library.browse.read", "library.media.read"),
-            resource=ResourceScope("album", str(album["id"])),
-        )
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    payload = await run_in_threadpool(
-        build_home_payload,
-        account_id=actor.account_id,
-        library_id=actor.current_library_id,
-        allowed_actions_for_album=album_actions,
+    payload = build_home_payload(
         query_args=_AsgiQueryArgs(request.query_params),
         config=_app_config(request),
         logger=_app_logger(request),
@@ -933,7 +906,7 @@ async def home_data(request: Request) -> JSONResponse:
                 }
             )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    return JSONResponse({**payload, "context_ref": private_ui_context_ref(request)}, headers={"Cache-Control": "private, no-store"})
+    return JSONResponse(payload)
 
 
 @router.get("/album-details")
@@ -954,55 +927,31 @@ async def album_details(request: Request) -> JSONResponse:
         or request.headers.get("X-Album-Haven-Client-Surface")
         or request.headers.get("X-Album-Haven-Client-Surface-Class")
     )
-    try:
-        account_id, library_id = track_preference_scope(await current_actor_from_request(request))
-    except TrackPreferenceScopeError as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
-
-    def preference_action_resolver(track_id: int) -> bool:
-        return allowed_actions_for_request(
-            request, ("library.track_preferences.manage",),
-            resource=ResourceScope("track", str(track_id)),
-        ).allows("library.track_preferences.manage")
-
-    taste_scope = {
-        "account_id": account_id, "library_id": library_id,
-        "preference_action_resolver": preference_action_resolver,
-    }
     browse_state = resolve_active_scan_browse_state(_library_state(request))
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
-        try:
-            payload = await run_in_threadpool(
-                PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload,
-                album_key, client_surface_class=client_surface_class, **taste_scope,
-            )
-        except TrackPreferenceScopeError as exc:
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload(
+            album_key,
+            client_surface_class=client_surface_class,
+        )
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
+        return JSONResponse({"ok": True, "album": payload})
 
     _hydrate_cached_library_for_asgi(request)
-    inventory_library_id = await run_in_threadpool(
-        PostgresLibraryInventoryRepository(_app_config(request)).load_inventory_library_id,
+    payload = build_album_detail_payload(
+        album_key,
+        client_surface_class=client_surface_class,
+        config=_app_config(request),
+        library_state=browse_state,
     )
-    try:
-        payload = await run_in_threadpool(
-            build_album_detail_payload, album_key,
-            client_surface_class=client_surface_class, config=_app_config(request),
-            library_state=browse_state, inventory_library_id=inventory_library_id,
-            **taste_scope,
-        )
-    except TrackPreferenceScopeError as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
     if payload is None:
         return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
     if browse_state.get("scan_in_progress"):
         _apply_transient_scan_album_rating_overlays(request, [payload])
     _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
+    return JSONResponse({"ok": True, "album": payload})
 
 
 def _should_use_postgres_album_detail_path(
@@ -1067,9 +1016,17 @@ def _unsupported_postgres_non_album_modal_response(
 
 
 @router.get("/utilities/problematic-files")
-def utilities_problematic_files(request: Request) -> JSONResponse:
+def utilities_problematic_files(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1, le=200),
+) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_problematic_files_payload()
+        repository = PostgresLibraryBrowseRepository(_app_config(request))
+        payload = (
+            repository.build_problematic_files_page(limit=limit)
+            if limit is not None
+            else repository.build_problematic_files_payload()
+        )
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)

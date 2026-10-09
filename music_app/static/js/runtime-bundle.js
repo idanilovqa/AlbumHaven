@@ -25882,19 +25882,57 @@ function getLibraryExceptionTypeChoices() {
   return values;
 }
 
+function isCustomCollectionException(value) {
+  return String(value || '').trim() === 'Custom Collection';
+}
+
+function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoices(), currentValue = '') {
+  const selected = String(currentValue || '').trim();
+  return values.map((value) => (
+    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  )).join('');
+}
+
+function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!menu) return;
+  menu.hidden = true;
+  input?.setAttribute('aria-expanded', 'false');
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  if (restoreFocus) input?.focus?.({ preventScroll: true });
+}
+
+function openTagEditorExceptionMenu() {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!input || !menu || input.disabled) return false;
+  menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), input.value);
+  menu.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, input);
+  return true;
+}
+
+function selectTagEditorExceptionOption(value) {
+  const input = getTagEditorElements().form?.querySelector('[data-tag-field="exception_type"]');
+  if (!input) return;
+  input.value = String(value || '');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  closeTagEditorExceptionMenu({ restoreFocus: true });
+}
+
 function syncTagEditorCollectionFields(selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || [])) {
   const form = getTagEditorElements().form;
   if (!form) return true;
   const exceptionInput = form.querySelector('[data-tag-field="exception_type"]');
   const collectionInput = form.querySelector('[data-tag-field="custom_collection_name"]');
   const collectionField = form.querySelector('[data-custom-collection-name-field]');
-  const list = document.getElementById('tag-editor-exception-types');
-  if (list) {
-    list.innerHTML = getLibraryExceptionTypeChoices()
-      .map((value) => `<option value="${escapeHtml(value)}"></option>`)
-      .join('');
-  }
-  const isCollection = String(exceptionInput?.value || '').trim() === 'Custom Collection';
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (menu) menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), exceptionInput?.value);
+  const isCollection = isCustomCollectionException(exceptionInput?.value);
   if (collectionField) collectionField.hidden = !isCollection;
   if (collectionInput) collectionInput.disabled = !isCollection || selectedPaths.length === 0;
   if (!isCollection) return true;
@@ -37696,6 +37734,16 @@ function attachRepairConfirmEvents() {
 // BEGIN js/runtime/bootstrap-utility-event-handlers.js
 
 async function handleUtilityBootstrapClick(event) {
+  const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
+  if (exceptionOption) {
+    event.preventDefault();
+    selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+    return;
+  }
+  const exceptionInput = event.target.closest('#tag-editor-form [data-tag-field="exception_type"]');
+  if (exceptionInput) openTagEditorExceptionMenu();
+  else if (!event.target.closest('[data-tag-editor-exception-anchor]')) closeTagEditorExceptionMenu();
+
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -38670,12 +38718,13 @@ function handleUtilityBootstrapInput(event) {
       ...(state.tagEditor.values[path] || {}),
       [field]: input.value,
     };
-    if (field === 'exception_type' && String(input.value || '').trim() !== 'Custom Collection') {
+    if (field === 'exception_type' && !isCustomCollectionException(input.value)) {
       state.tagEditor.values[path].custom_collection_name = '';
     }
   });
   if (field === 'exception_type' && typeof syncTagEditorCollectionFields === 'function') {
     syncTagEditorCollectionFields(selectedPaths);
+    openTagEditorExceptionMenu();
   }
   syncTagEditorPendingChanges();
 }
@@ -38933,6 +38982,34 @@ function handleUtilityBootstrapKeyDown(event) {
     || event.metaKey
   ) {
     return false;
+  }
+  const exceptionInput = event.target?.closest?.('#tag-editor-form [data-tag-field="exception_type"]');
+  const exceptionOption = event.target?.closest?.('[data-tag-editor-exception-option]');
+  if (exceptionInput || exceptionOption) {
+    const menu = document.getElementById('tag-editor-exception-menu');
+    if (event.key === 'Escape' && menu && !menu.hidden) {
+      event.preventDefault();
+      closeTagEditorExceptionMenu({ restoreFocus: true });
+      return true;
+    }
+    if (event.key === 'Enter' && exceptionOption) {
+      event.preventDefault();
+      selectTagEditorExceptionOption(exceptionOption.getAttribute('data-tag-editor-exception-option'));
+      return true;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      if (!menu || menu.hidden) openTagEditorExceptionMenu();
+      const options = Array.from(menu?.querySelectorAll?.('[data-tag-editor-exception-option]') || []);
+      if (!options.length) return true;
+      const current = options.indexOf(exceptionOption);
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? options.length - 1
+          : current < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0)
+            : (current + (event.key === 'ArrowUp' ? -1 : 1) + options.length) % options.length;
+      options[next].focus();
+      return true;
+    }
   }
   const reorderGrip = event.target?.closest?.('[data-tag-editor-reorder-grip]');
   if (reorderGrip && ['ArrowUp', 'ArrowDown'].includes(event.key)) {

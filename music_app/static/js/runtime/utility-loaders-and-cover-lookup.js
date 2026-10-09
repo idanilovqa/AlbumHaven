@@ -1788,19 +1788,57 @@ function getLibraryExceptionTypeChoices() {
   return values;
 }
 
+function isCustomCollectionException(value) {
+  return String(value || '').trim() === 'Custom Collection';
+}
+
+function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoices(), currentValue = '') {
+  const selected = String(currentValue || '').trim();
+  return values.map((value) => (
+    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  )).join('');
+}
+
+function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!menu) return;
+  menu.hidden = true;
+  input?.setAttribute('aria-expanded', 'false');
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  if (restoreFocus) input?.focus?.({ preventScroll: true });
+}
+
+function openTagEditorExceptionMenu() {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!input || !menu || input.disabled) return false;
+  menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), input.value);
+  menu.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, input);
+  return true;
+}
+
+function selectTagEditorExceptionOption(value) {
+  const input = getTagEditorElements().form?.querySelector('[data-tag-field="exception_type"]');
+  if (!input) return;
+  input.value = String(value || '');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  closeTagEditorExceptionMenu({ restoreFocus: true });
+}
+
 function syncTagEditorCollectionFields(selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || [])) {
   const form = getTagEditorElements().form;
   if (!form) return true;
   const exceptionInput = form.querySelector('[data-tag-field="exception_type"]');
   const collectionInput = form.querySelector('[data-tag-field="custom_collection_name"]');
   const collectionField = form.querySelector('[data-custom-collection-name-field]');
-  const list = document.getElementById('tag-editor-exception-types');
-  if (list) {
-    list.innerHTML = getLibraryExceptionTypeChoices()
-      .map((value) => `<option value="${escapeHtml(value)}"></option>`)
-      .join('');
-  }
-  const isCollection = String(exceptionInput?.value || '').trim() === 'Custom Collection';
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (menu) menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), exceptionInput?.value);
+  const isCollection = isCustomCollectionException(exceptionInput?.value);
   if (collectionField) collectionField.hidden = !isCollection;
   if (collectionInput) collectionInput.disabled = !isCollection || selectedPaths.length === 0;
   if (!isCollection) return true;

@@ -26,7 +26,7 @@ test('native metrics distinguish personal plays, global popularity and optional 
   assert.deepEqual([...host.querySelectorAll('[role="columnheader"]')].map(node => node.dataset.cdtColumn),
     ['love_tier', 'track_rating', 'play_count', 'popularity_count', 'duration']);
   assert.equal(host.querySelector('[data-cdt-sort="track_rating"]'), null);
-  assert.deepEqual(metrics.playlistTrackMetricColumns().filter(column => column.hideWhenNarrow).map(column => column.key), ['track_rating']);
+  assert.deepEqual(metrics.playlistTrackMetricColumns().filter(column => column.hideWhenNarrow).map(column => column.key), ['track_rating', 'popularity_count']);
   assert.equal(cell('play_count').textContent, '0'); assert.equal(cell('popularity_count').textContent, '70001');
   assert.equal(cell('duration').textContent, '2:59');
   assert.equal(cell('love_tier').querySelector('[role="img"]').getAttribute('aria-label'), 'Obsessed');

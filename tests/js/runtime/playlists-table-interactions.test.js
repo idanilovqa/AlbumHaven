@@ -59,12 +59,12 @@ function fixture(t, {rows = [row('b', {duration_seconds: 20}), row('a', {duratio
     props = {...{runtime, controller, rows, detail, state, selected: null, currentItemId: null,
       onSelect: value => selects.push(value), onError: value => errors.push(value)}, ...props, state, detail, rows, ...patch};
     cursor = 0; pending = []; tree = loaded.exports.PlaylistTracks(props);
-    const table = children(tree).find(node => node.props.className === 'album-track-table playlists__tracks');
+    const table = children(tree).find(node => node.props.className?.split(' ').includes('playlists__tracks'));
     table.props.ref.current = host;
     for (const effect of pending) effect();
     return table.props;
   }
-  function emit(name, target, values = {}, handlers = children(tree).find(node => node.props.className === 'album-track-table playlists__tracks').props) {
+  function emit(name, target, values = {}, handlers = children(tree).find(node => node.props.className?.split(' ').includes('playlists__tracks')).props) {
     const type = {onClick: 'click', onDoubleClick: 'dblclick', onKeyDown: 'keydown', onContextMenu: 'contextmenu'}[name];
     const event = Object.assign(new native.context.Event(type), {button: 0, detail: 1}, values);
     event.target = target;
@@ -117,15 +117,16 @@ test('metric headers sort their own supplied facts and retain the canonical auth
   assert.deepEqual(value.moves, []); assert.deepEqual(value.plays, []);
 });
 
-test('native narrow columns hide Rating while keeping the remaining metric order', t => {
+test('native narrow columns hide Rating and popularity while keeping the remaining metric order', t => {
   const value = fixture(t), table = value.host.querySelector('.compact-data-table');
   assert.equal(table.getAttribute('data-cdt-narrow'), 'true');
   assert.equal(value.host.querySelector('[data-cdt-column="track_rating"]').hasAttribute('data-cdt-hide-narrow'), true);
-  assert.match(table.getAttribute('style'), /112px/);
+  assert.equal(value.host.querySelector('[data-cdt-column="popularity_count"]').hasAttribute('data-cdt-hide-narrow'), true);
+  assert.match(table.getAttribute('style'), /80px/);
   const narrow = table.getAttribute('style').split('--cdt-narrow-columns: ')[1];
-  assert.doesNotMatch(narrow, /112px/); assert.match(narrow, /60px 72px 100px 72px/);
+  assert.doesNotMatch(narrow, /80px|64px/); assert.match(narrow, /36px 54px 54px$/);
   value.sort('duration'); value.render();
-  assert.doesNotMatch(value.host.querySelector('.compact-data-table').getAttribute('style').split('--cdt-narrow-columns: ')[1], /70px|112px/);
+  assert.doesNotMatch(value.host.querySelector('.compact-data-table').getAttribute('style').split('--cdt-narrow-columns: ')[1], /70px|80px/);
 });
 
 test('artwork uses the native empty state for unsafe and denied URLs without leaking media fields', t => {

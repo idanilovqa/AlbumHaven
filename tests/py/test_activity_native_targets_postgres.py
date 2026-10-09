@@ -70,6 +70,7 @@ def test_exact_friend_receipt_can_resolve_native_play_without_exposing_path_in_p
     result=service.resolve(ctx,origin=origin,row_ref=rows[0]['id'],intent='play')
     assert result['origin']==origin and result['row_ref']==rows[0]['id']
     assert result['native_target']['path'] in probes and Path(result['native_target']['path']).is_file()
+    assert result['native_target']['inventory_track_ref']==projected[0]['inventory_track_ref']
 
 
 @pytest.mark.parametrize('kind',['tracks','albums','artists'])
@@ -210,3 +211,60 @@ def test_persisted_native_queue_revalidates_membership_revision_and_media(native
         with state['db'].connect() as con:
             con.execute('delete from app.playlist_operations where library_id=%s',(ctx.library_id,))
             con.execute('delete from app.playlists where library_id=%s',(ctx.library_id,))
+
+
+def test_track_receipts_project_independent_snapshot_bound_album_and_artist_identity(native_activity):
+    _,ctx,service,_=native_activity
+    origin,rows=capture(native_activity)
+    projected=service.project(ctx,origin=origin,rows=rows)
+    for row in projected:
+        for kind in ('album','artist'):
+            target=row[kind+'_target']
+            assert target['ref']==row['id']
+            assert target['identity_ref'].startswith(kind+'_')
+            resolved=service.resolve(ctx,origin=origin,row_ref=row['id'],intent='details',target_kind=kind)
+            assert kind+'_ref' in resolved['native_target']
+    assert projected[0]['album_target']['identity_ref']==projected[1]['album_target']['identity_ref']
+    assert projected[0]['artist_target']['identity_ref']==projected[1]['artist_target']['identity_ref']
+    other_origin,other_rows=capture(native_activity)
+    other=service.project(ctx,origin=other_origin,rows=other_rows)
+    assert projected[0]['album_target']['identity_ref']!=other[0]['album_target']['identity_ref']
+
+
+@pytest.mark.parametrize('target_kind',['track','invalid',False,{},'artist'])
+def test_target_kind_never_changes_playback_resolution(native_activity,target_kind):
+    _,ctx,service,probes=native_activity
+    origin,rows=capture(native_activity)
+    with pytest.raises(NativeTargetError,match='invalid_command'):
+        service.resolve(ctx,origin=origin,row_ref=rows[0]['id'],intent='play',target_kind=target_kind)
+    assert not probes
+
+
+def test_friend_track_and_album_overlay_use_subject_taste_and_never_viewer_fallback(native_activity):
+    from music_app.services.track_preferences_postgres import PostgresTrackPreferencesStore
+    state,ctx,service,_=native_activity
+    track=state['data']['tracks'][0]
+    prefs=PostgresTrackPreferencesStore(state['db'].config)
+    # The production preference mutator is intentionally exercised, not a cache.
+    for account,rating,love in ((ctx.actor.account_id,2,'off'),(state['peer'],5,'loved')):
+        prefs.patch_preference(track['key'],{'rating':rating,'love_tier':love},account_id=account,library_id=ctx.library_id,expected_track_id=track['id'])
+    with state['db'].connect() as con:
+        album_key=con.execute('select album_key from library.local_albums where id=%s',(state['data']['album'],)).fetchone()['album_key']
+        for account,rating in ((ctx.actor.account_id,2),(state['peer'],9)):
+            con.execute("insert into app.album_ratings(account_id,library_id,album_key,rating,provenance) values(%s,%s,%s,%s,'explicit_import')",
+                (account,ctx.library_id,album_key,rating))
+    origin,rows=capture(native_activity)
+    projected=service.project(ctx,origin=origin,rows=rows)
+    subject=next(row for row in projected if row['inventory_track_ref']==f"inventory-track:{ctx.library_id}:{track['id']}")
+    assert subject['rating']==5 and subject['love_tier']=='loved'
+    result=service.resolve(ctx,origin=origin,row_ref=subject['id'],intent='details',target_kind='album')
+    overlay=result['native_target']['subject_taste']
+    assert overlay['subject_ref']==state['peer_ref'] and overlay['read_only'] is True
+    assert overlay['rating']==9 and overlay['favorite'] is None
+    album_origin,album_rows=capture(native_activity,'albums')
+    assert service.project(ctx,origin=album_origin,rows=album_rows)[0]['rating']==9
+    assert next(row for row in overlay['tracks'] if row['inventory_track_ref']==subject['inventory_track_ref'])['rating']==5
+    def denied(context):
+        return PolicyEvaluationConstraints(request_origin_allowed=context.action!='library.social.taste.read')
+    hidden=service.project(ctx,origin=origin,rows=rows,constraints=denied)
+    assert all(row['rating'] is None and row['love_tier'] is None for row in hidden)

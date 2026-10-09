@@ -317,3 +317,39 @@ test('touch scrolling, cancellation and native descendant controls cannot comple
   value.emit(button, 'click', {pointerType: 'touch', timeStamp: 1210});
   tap(value, 'a', 1280); assert.deepEqual(value.calls.play, []);
 });
+
+test('range selection uses occurrence order, skips denied rows and notifies once', async t => {
+  const {owner} = await core(t, [facts('same:1'), facts('denied', 'disc:1', {readable: false}), facts('other'), facts('same:2')]);
+  owner.select('same:1');
+  let notices = 0; owner.subscribe(() => notices++);
+  owner.select('same:2', {range: true});
+  assert.deepEqual(owner.getSnapshot().selectedRowKeys, ['same:1', 'other', 'same:2']);
+  assert.equal(notices, 1);
+  owner.select('other', {range: true});
+  assert.deepEqual(owner.getSnapshot().selectedRowKeys, ['same:1', 'other']);
+  assert.deepEqual(owner.action().packet.row_keys, ['same:1', 'other']);
+});
+
+test('range anchors retire with source replacement and removed anchors', async t => {
+  const {owner, adapter} = await core(t);
+  owner.select('a'); owner.select('c', {range: true});
+  adapter.patch({rows: [facts('b'), facts('c')]});
+  owner.select('c', {range: true});
+  assert.deepEqual(owner.getSnapshot().selectedRowKeys, ['c']);
+  adapter.patch({instance: {}, rows: [facts('a'), facts('b'), facts('c')]});
+  owner.select('b', {range: true});
+  assert.deepEqual(owner.getSnapshot().selectedRowKeys, ['b']);
+  owner.select('c', {range: true, toggle: true});
+  assert.deepEqual(owner.getSnapshot().selectedRowKeys, ['b', 'c']);
+});
+
+test('Shift click and Shift Space select ranges without triggering playback or single-row inspection', async t => {
+  const value = await dom(t);
+  value.emit(value.row('a'), 'click');
+  value.emit(value.row('c'), 'click', {shiftKey: true});
+  assert.deepEqual(value.owner.getSnapshot().selectedRowKeys, ['a', 'b', 'c']);
+  value.emit(value.row('b'), 'keydown', {key: ' ', shiftKey: true});
+  assert.deepEqual(value.owner.getSnapshot().selectedRowKeys, ['a', 'b']);
+  assert.deepEqual(value.calls.inspect, ['a']);
+  assert.deepEqual(value.calls.play, []);
+});

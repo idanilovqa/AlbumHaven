@@ -154,7 +154,10 @@ test('Album Details delegates action geometry to ActionButton and aligns stacked
   assert.doesNotMatch(css, /\.album-details-header__action\s*\{[^}]*width:\s*34px[^}]*height:\s*34px/s);
   assert.match(css, /\.album-details-header\s*\{[^}]*width:\s*100%[^}]*align-items:\s*center/s);
   assert.match(css, /\.album-details-header__actions\s*\{[^}]*margin-left:\s*auto/s);
-  assert.match(css, /\.album-details-header__release-type\s*\{[^}]*letter-spacing:/s);
+  assert.match(
+    css,
+    /\.album-details-header__release-type,\s*\.album-details-header__tag\s*\{[^}]*--album-details-tag-accent:[^}]*padding:\s*2px 8px[^}]*border:\s*1px solid[^}]*color:\s*var\(--album-details-tag-accent\)[^}]*font-weight:\s*750/s,
+  );
   assert.match(css, /\.album-details-header__tag--missing\s*\{[^}]*--album-details-tag-accent:\s*var\(--appearance-error/s);
   assert.match(css, /data-album-details-layout="stacked_bar"[^}]*align-items:\s*flex-start/s);
 });

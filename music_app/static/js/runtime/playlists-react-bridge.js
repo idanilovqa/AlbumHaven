@@ -66,13 +66,16 @@ const PlaylistReactRuntime = (() => {
     } finally {owner.onDiscard();}
     return true;
   }
-  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard} = {}) {
+  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null} = {}) {
     const start = sync(), navigation = window.AlbumHavenSettingsNavigation?.instance;
-    if (draft || !start.visible || start.scopeKey !== scopeKey || typeof token !== 'string' || !token || /[\\/\x00-\x1f]/.test(token)
+    const home = externalScopeKey === null ? null : window.AlbumHavenHomeRuntime?.snapshot();
+    const external = home?.visible === true && home.authenticated === true && home.scopeKey === externalScopeKey;
+    if (draft || !(start.visible || external) || external && typeof syncMobileHome !== 'function' || start.scopeKey !== scopeKey || typeof token !== 'string' || !token || /[\\/\x00-\x1f]/.test(token)
       || typeof isCurrent !== 'function' || typeof confirmLeave !== 'function' || typeof onDiscard !== 'function'
       || !navigation?.setPlaylistDraftOwner || !navigation.writeLibraryHistory) return false;
     if (isCurrent() !== true) return false;
-    const owner = {token, scopeKey, isCurrent, onDiscard, parentPosition: start.entryKey};
+    const owner = {token, scopeKey, isCurrent, onDiscard, parentPosition: start.entryKey,
+      parentQuery: external ? new URL(window.location.href).search : null};
     draft = owner;
     owner.unregister = navigation.setPlaylistDraftOwner({token, scopeKey, isCurrent: () => draftCurrent(owner),
       confirmLeave: () => {interruptDraftNavigation(); return confirmLeave();}, discard: () => {releaseDraft(token); sync();}});
@@ -82,6 +85,7 @@ const PlaylistReactRuntime = (() => {
     try {navigation.writeLibraryHistory(url.href, {playlistDraft: {token, scopeKey}}, {mode: 'push'});}
     catch {releaseDraft(token); return false;}
     if (window.history.state?.playlistDraft?.token !== token) {releaseDraft(token); return false;}
+    if (external) syncMobileHome();
     sync(); return draftCurrent(owner);
   }
   function retainDraft(token, callback) {
@@ -96,7 +100,8 @@ const PlaylistReactRuntime = (() => {
       if (Number.isSafeInteger(owner.parentPosition) && Number.isSafeInteger(position) && position > owner.parentPosition) {
         window.history.go(owner.parentPosition - position); return true;
       }
-      return typeof fetchAndRender === 'function' ? fetchAndRender('/view-data?surface=playlists', true) : false;
+      return typeof fetchAndRender === 'function' ? fetchAndRender(owner.parentQuery === null
+        ? '/view-data?surface=playlists' : `/view-data${owner.parentQuery}`, true) : false;
     });
     return Promise.resolve(deferred || false);
   }
@@ -104,7 +109,9 @@ const PlaylistReactRuntime = (() => {
     const snapshot = sync();
     if (!snapshot.draftToken || document.getElementById('app-shell')?.hidden === true
       || new URL(window.location.href).pathname !== '/') return false;
-    interruptDraftNavigation(); sync(); return true;
+    interruptDraftNavigation();
+    if (typeof syncMobileHome === 'function') syncMobileHome();
+    sync(); return true;
   }
   function confirmDraft(token, message) {
     if (!draftCurrent(draft) || draft.token !== token || typeof showAppConfirmDialog !== 'function') return Promise.resolve(false);

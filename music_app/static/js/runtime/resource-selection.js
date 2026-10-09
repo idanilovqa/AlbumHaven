@@ -64,6 +64,7 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
     try {return sourceResource?.(target, context) || null;} catch {return null;}
   };
   const sourceKey = value => value ? JSON.stringify(value) : '';
+  const invalidateResourceSelections = () => {for (const invalidate of mounted) invalidate();};
   function retainedSource(target, context) {
     const matches = [];
     for (const record of artistAlbums) {
@@ -94,7 +95,7 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
     artistAlbums.add(record);
     return ({retire = false} = {}) => {
       if (retire && artistReadSequence === record.sequence) artistReadSequence++;
-      artistAlbums.delete(record); for (const invalidate of mounted) invalidate();
+      artistAlbums.delete(record); invalidateResourceSelections();
     };
   }
   const grants = {open: 'can_open_album', artwork: 'can_view_artwork', page: 'can_open_album_page',
@@ -312,7 +313,7 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       window.removeEventListener('albumhaven:resource-selection-available', attempt);
     }};
   }
-  return Object.freeze({canResourceIntent, resourceIntent, mountResourceSelection, retainArtistAlbums});
+  return Object.freeze({canResourceIntent, resourceIntent, mountResourceSelection, retainArtistAlbums, invalidateResourceSelections});
 }
 window.AlbumHavenResourceSelection = Object.freeze({create: createResourceSelection,
   projectTarget: detailSelection, projectOrigin: detailOrigin});

@@ -1,3 +1,4 @@
+const {installPrivateContext} = require('./private-context-harness.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -100,6 +101,7 @@ for (const width of [390, 1180]) {
     h.context.Event = Event; h.window.dispatchEvent = () => {};
     h.context.escapeHtml = String;
     h.context.buildUrl = () => '/?surface=home';
+    installPrivateContext(h.context);
     for (const name of ['track-actions.js', 'playtable-source.js', 'home-friends-bridge.js']) {
       vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../../music_app/static/js/runtime', name), 'utf8'), h.context);
     }
@@ -292,6 +294,7 @@ for (const kind of ['artist', 'all-artists']) test(`${kind} navigation asks befo
   Object.assign(h.context.state, {ui: {}, gallery: {}, view: {selected_artist: 'Artist', query: '', artists_sidebar: []}});
   Object.assign(h.context, {hideVersionContextMenu() {}, renderSidebar() {}, renderRelated() {}, renderLibraryLoader() {}, renderArtistGroups() {},
     scheduleBrowserAnimationFrame: callback => callback(),
+    resumeScanPageGalleryCoverLoads() {}, clearBrowserTimeout() {},
     applyImmediateSidebarArtistSelection: () => true,
     tryRenderOptimisticSidebarArtistSelection() {changes.push('optimistic'); return true;},
     getReusableRootBrowseView: view => ({...view, cached: true}),

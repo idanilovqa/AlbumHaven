@@ -1801,6 +1801,11 @@ function renderTrackModalRelease(album) {
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
+    if (album.read_only_subject) {
+      const summary = document.createElement('p'); summary.className = 'playlists__note';
+      summary.textContent = `Rating: ${album.album_rating ?? '–'} · Favorite: ${album.favorite === true ? 'Yes' : album.favorite === false ? 'No' : '–'}`;
+      els.header.appendChild(summary);
+    }
     els = getTrackModalElements();
   }
   if (els.folder) {
@@ -2152,7 +2157,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
       return {
-        path: trackPath,
+        path: trackPath, inventory_track_ref: source.inventory_track_ref,
+        subjectRating: album?.read_only_subject ? source.rating : null, subjectLove: album?.read_only_subject ? source.love_tier : null,
         src,
         title: displayTitle,
         playbackTitle: String(track.title || '').trim(),
@@ -2203,7 +2209,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
-    selection: 'multiple',
+    selection: 'multiple', subjectTaste: Boolean(album?.read_only_subject),
 
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
@@ -2217,7 +2223,7 @@ function buildPlayerTrackPayload(track, album = null) {
   if (!track) return null;
   return {
     src: `/track?path=${encodeURIComponent(track.path)}`,
-    path: String(track.path || ''),
+    path: String(track.path || ''), inventory_track_ref: track.inventory_track_ref || null,
     title: track.title || 'Track',
     artist: track.artist || track.album_artist || '',
     albumArtist: track.album_artist || album?.album_artist || '',
@@ -2344,6 +2350,11 @@ function setAlbumPlaybackQueue(album, startingTrackPath) {
 }
 
 function peekNextQueuedTrack() {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) return ExplicitQueueRuntime.peek();
+  return peekNextOrdinaryQueuedTrack();
+}
+
+function peekNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const currentPath = String(state.player.current?.path || '');
@@ -2359,13 +2370,18 @@ function peekNextQueuedTrack() {
 }
 
 function getNextQueuedTrack() {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) return ExplicitQueueRuntime.consume();
+  return getNextOrdinaryQueuedTrack();
+}
+
+function getNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
   if (queue?.playlistId && typeof playlistQueueNextIndex === 'function') {
     const index = playlistQueueNextIndex(queue, String(state.player.current?.path || ''));
     if (index === null || index < 0) {state.player.playbackQueue = null; return null;}
     queue.currentIndex = index; return queue.tracks[index];
   }
-  const nextTrack = peekNextQueuedTrack();
+  const nextTrack = peekNextOrdinaryQueuedTrack();
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length || !nextTrack) {
     if (queue && Array.isArray(queue.tracks)) {
       const currentPath = String(state.player.current?.path || '');

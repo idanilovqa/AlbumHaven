@@ -113,7 +113,7 @@ test('only normalized confirmed-missing rows receive additive shared missing sta
 
 test('missing-row tint uses the error theme while retaining native interaction and playback layers', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
-  const missingRules = [...css.matchAll(/\.album-track-table \.album-track-table__row--missing([^{}]*)\{([^}]+)\}/g)];
+  const missingRules = [...css.matchAll(/\.album-track-table \.album-track-table__row--missing([^{}]*)\{([^}]+)\}/g)].filter(([, selector]) => !selector.includes(' .'));
   assert.equal(missingRules.length, 2);
   assert.match(missingRules[0][2], /var\(--appearance-error, var\(--danger, #[a-f\d]+\)\) 13%, var\(--appearance-table-surface, var\(--panel\)\)/);
   assert.match(missingRules[1][1], /:is\(:hover, :focus-within, \[aria-selected="true"\]\)/);

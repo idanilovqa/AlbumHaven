@@ -33,6 +33,8 @@ const TrackActionsRuntime = (() => {
     const value = own(source, 'track_preference') ? overlay(source.track_preference) : null, track = ref(source), current = scope();
     if (!value || !track || !current.actor || !current.library) return null;
     if (!identities.has(track)) identities.set(track, `native-track:${++serial}`);
+    if (source.read_only_subject) return Object.freeze({identity: `subject:${source.read_only_subject}:${source.inventory_track_ref || track}`,
+      love_tier: value.love_tier, rating: value.rating, allowed_actions: Object.freeze({can_set_love_tier: false})});
     const saved = confirmed.get(track);
     return Object.freeze({identity: identities.get(track), love_tier: saved?.love_tier ?? value.love_tier,
       rating: saved ? saved.rating : value.rating,
@@ -40,6 +42,7 @@ const TrackActionsRuntime = (() => {
   }
   function readEpoch() {scope(); return preferenceEpoch;}
   function acceptRead(source, epoch) {
+    if (source?.read_only_subject) return;
     const track = ref(source);
     const value = own(source, 'track_preference') ? overlay(source.track_preference) : null;
     if (epoch === readEpoch() && track && value) {
@@ -100,7 +103,7 @@ const TrackActionsRuntime = (() => {
     if (!canPlay(source)) throw failure('This track action is unavailable.', 403);
     const button = document.createElement('button');
     const text = value => typeof value === 'string' ? value : '';
-    const attributes = {'data-src': `/track?path=${encodeURIComponent(source.path)}`, 'data-track-path': source.path,
+    const attributes = {'data-inventory-track-ref': text(source.inventory_track_ref), 'data-src': `/track?path=${encodeURIComponent(source.path)}`, 'data-track-path': source.path,
       'data-track-title': text(source.title), 'data-track-artist': text(source.artist || source.secondary_artist),
       'data-track-album': text(source.album_title), 'data-track-duration-seconds': source.duration_seconds};
     for (const [name, value] of Object.entries(attributes)) if (value !== undefined) button.setAttribute(name, String(value));

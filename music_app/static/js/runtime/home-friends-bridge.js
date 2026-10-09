@@ -93,8 +93,14 @@ const HomeFriendsRuntime = (() => {
         && reference(selected.targetRef) && (selected.snapshotRef == null || reference(selected.snapshotRef))
         ? Object.freeze({rowId: selected.rowId, targetKind: selected.targetKind, targetRef: selected.targetRef,
           snapshotRef: selected.snapshotRef ?? null}) : null;
-      selectionPresentation.push(Object.freeze({query: normalizedQuery, selected: normalizedSelection,
-        childAlbumRef: normalizedSelection?.targetKind === 'artist' ? reference(entry.childAlbumRef) : null,
+      const tracks = entry.tracks;
+      const normalizedTracks = ['tracks', 'listens'].includes(query.kind) && Array.isArray(tracks?.rowIds)
+        && tracks.rowIds.length > 0 && tracks.rowIds.length <= 5000 && tracks.rowIds.every(reference)
+        && new Set(tracks.rowIds).size === tracks.rowIds.length
+        && (tracks.snapshotRef == null || reference(tracks.snapshotRef))
+        ? Object.freeze({rowIds: Object.freeze([...tracks.rowIds]), snapshotRef: tracks.snapshotRef ?? null}) : null;
+      selectionPresentation.push(Object.freeze({query: normalizedQuery, selected: normalizedTracks ? null : normalizedSelection, tracks: normalizedTracks,
+        childAlbumRef: normalizedSelection?.targetKind === 'artist' || normalizedTracks ? reference(entry.childAlbumRef) : null,
         pane: choice(entry.pane, ['recent', 'artist', 'album'], 'recent'),
         expanded: choice(entry.expanded, ['recent', 'friends', 'artist', 'album'], null),
         scroll: Object.freeze({source: position(entry.scroll?.source), artist: position(entry.scroll?.artist), album: position(entry.scroll?.album)})}));
@@ -103,6 +109,7 @@ const HomeFriendsRuntime = (() => {
     return Object.freeze({
       kind: choice(value.kind, ['albums', 'tracks', 'artists'], 'albums'),
       kindExplicit: ['albums', 'tracks', 'artists'].includes(value.kind) && value.kindExplicit !== false,
+      homeSection: choice(value.homeSection, ['recent', 'queue'], 'recent'),
       period: choice(value.period, ['week', 'month', 'six', 'year', 'all'], 'week'),
       views: views(value.views),
       friendKind: choice(value.friendKind, ['albums', 'tracks', 'artists'], 'tracks'),
@@ -182,7 +189,7 @@ const HomeFriendsRuntime = (() => {
     if (owner.formUrl !== window.location.href || typeof mobilePageState === 'undefined') return false;
     const form = typeof getActiveAppFormPage === 'function' ? getActiveAppFormPage() : null;
     const page = mobilePageState.pages.find(value => value.kind === 'form' && value.formToken === form?.token);
-    if (form?.pageId === 'playlist-track-destination' && page?.parentPosition === owner.position) {
+    if (['playlist-track-destination', 'create-playlist'].includes(form?.pageId) && page?.parentPosition === owner.position) {
       if (!owner.formToken) owner.formToken = form.token;
       return owner.formToken === form.token && window.history.state?.mobilePages?.some(value => value.formToken === form.token);
     }
@@ -276,6 +283,50 @@ const HomeFriendsRuntime = (() => {
     return createPrivatePlaytableSource({scopeKey: context?.scopeKey, rows, instance, revision,
       isCurrent: () => isCurrent() && sync().scopeKey === context?.scopeKey && sync().visible
         && activity === sourceOwner && activityProvider === provider,
+      canQueueRow: row => row.availability === 'local' && row.source_readable !== false
+        && sourceOwner?.rows.get(row.id)?.allowed_actions?.can_resolve_native_play === true && typeof provider?.resolveNative === 'function',
+      captureQueueRows: typeof provider?.resolveNative === 'function' && sourceOwner?.snapshotRef ? selectedRows => {
+        const scope = context.scopeKey, snapshotRef = sourceOwner.snapshotRef;
+        const valid = () => sync().scopeKey === scope && activityProvider === provider
+          && (context.account_ref == null || friendActivityEpochs.get(context.account_ref) === friendEpoch);
+        return selectedRows.map(row => {
+          let inventoryRef = null;
+          return {display: {title: row.title, artist: row.artist, album: row.album_title,
+          albumTarget: row.album_target, artistTarget: row.artist_target}, isCurrent: valid,
+          async resolvePlaylistItem({signal} = {}) {
+            // Enqueue already established this inventory identity. It is only
+            // a candidate: the Browse-gated Queue source endpoint freshly
+            // validates the original activity receipt before any builder/write.
+            if (!valid() || signal?.aborted || !inventoryRef) throw superseded();
+            return {inventory_track_ref: inventoryRef,
+              source_provenance: {kind: 'activity', track_ref: inventoryRef, row_ref: row.id,
+                origin: {audience: context.account_ref == null ? 'own' : 'friend', subject_ref: context.account_ref ?? null,
+                  kind: context.kind, period: context.period, snapshot_ref: snapshotRef}}};
+          },
+          async resolveDetails(kind, {signal} = {}) {
+            const target = kind === 'album' ? row.album_target : kind === 'artist' ? row.artist_target : null;
+            if (!valid() || signal?.aborted || !target?.allowed_actions?.can_view_details) throw superseded();
+            const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'details', target_kind: kind, signal});
+            if (!valid() || signal?.aborted || value.allowed_actions?.can_view_details !== true) throw superseded();
+            const native = kind === 'album' ? {album_ref: value.album_ref, allowed_actions: {can_open_album: true, can_play_album: value.allowed_actions.can_play_album === true}}
+              : {artist_ref: value.artist_ref, allowed_actions: {can_open_artist_gallery: true}};
+            return {target: selectionApi().projectTarget({...target, native_actions: native}),
+              data: {kind, ref: target.ref, title: value.title || (kind === 'album' ? row.album_title : row.artist), artist: value.artist || row.artist,
+                metadata_state: 'current', source_label: 'Queued from Recent', ...(kind === 'album' ? {tracks: null} : {listened_albums: null, discography: null})},
+              ...(kind === 'artist' ? {gallery_target: {artist: value.artist_ref}} : {}),
+              subject_ref: null,
+              isCurrent: () => valid() && !signal?.aborted};
+          },
+          async resolve({signal} = {}) {
+            if (!valid() || signal?.aborted) throw superseded();
+            const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'play', signal});
+            if (!valid() || signal?.aborted || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value.inventory_track_ref || '')
+              || inventoryRef && inventoryRef !== value.inventory_track_ref) throw superseded();
+            inventoryRef = value.inventory_track_ref;
+            return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+          }};
+        });
+      } : null,
       resolveRow: row => currentActivityTrack(row, context),
       activitySource: selectedRows => sourceOwner?.snapshotRef && selectedRows.every(row => sourceOwner.nativeRows?.get(row.id)?.activity_row_ref)
         ? {origin: {audience: context.account_ref == null ? 'own' : 'friend', subject_ref: context.account_ref ?? null,
@@ -354,6 +405,8 @@ const HomeFriendsRuntime = (() => {
           for (const key of ['listen_count', 'duration_seconds', 'rating']) {
             if (own(row, key)) publicRow[key] = typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] >= 0 ? row[key] : null;
           }
+          if (own(row, 'favorite')) publicRow.favorite = typeof row.favorite === 'boolean' ? row.favorite : null;
+          if (own(row, 'taste_state')) publicRow.taste_state = typeof row.taste_state === 'string' ? row.taste_state : null;
           if (own(row, 'availability')) publicRow.availability = ['local', 'missing', 'unresolved'].includes(row.availability) ? row.availability : null;
           if (own(row, 'love_tier')) publicRow.love_tier = ['off', 'loved', 'obsessed'].includes(row.love_tier) ? row.love_tier : null;
           if (unreadableActivityRow(row)) {
@@ -455,7 +508,7 @@ const HomeFriendsRuntime = (() => {
     }
     const row = [...owner.resources.entries()].find(([, targets]) => targets[target.kind]?.ref === target.ref);
     if (!row) throw failure('This native source is unavailable.', 403);
-    const value = await owner.provider.resolveNative({...owner.context, snapshot_ref: owner.snapshotRef, rowId: row[0], intent: 'details', signal: context.signal});
+    const value = await owner.provider.resolveNative({...owner.context, snapshot_ref: owner.snapshotRef, rowId: row[0], intent: 'details', target_kind: target.kind, signal: context.signal});
     if (context.signal?.aborted || owner !== activity || !sourceResource(selection, context)) throw superseded();
     let admitted;
     if (target.kind === 'album' && typeof value.album_ref === 'string' && value.allowed_actions?.can_view_details === true) {
@@ -465,8 +518,42 @@ const HomeFriendsRuntime = (() => {
       admitted = {...target, native_actions: {artist_ref: value.artist_ref, allowed_actions: {can_open_artist_gallery: true}},
         gallery_target: {artist: value.artist_ref}};
     } else throw failure('This native target is unavailable.');
+    admitted = {...admitted, title: typeof value.title === 'string' ? value.title : '', artist: typeof value.artist === 'string' ? value.artist : '',
+      subject_taste: target.origin.account_ref != null ? value.subject_taste : null};
     owner.resources.set(row[0], Object.freeze({...row[1], [target.kind]: Object.freeze(admitted)}));
     return admitted;
+  }
+  function projectSubjectAlbum(album, selection, context = {}) {
+    const subject = selection.origin?.account_ref;
+    if (selection.origin?.source !== 'activity' || subject == null) return album;
+    const supplied = context.subjectTaste || sourceResource(selection, context)?.subject_taste;
+    const taste = supplied?.subject_ref === subject && supplied.read_only === true ? supplied : {tracks: [], rating: null, favorite: null};
+    const byRef = new Map((Array.isArray(taste.tracks) ? taste.tracks : []).map(row => [row.inventory_track_ref, row]));
+    // Clone every container before overlaying subject facts; fetched native album
+    // caches and the signed-in listener's preferences must remain untouched.
+    const personal = new Set(['love_tier', 'track_rating', 'play_count', 'last_listened_at_ms', 'added_at', 'added_at_ms', 'album_rating', 'rating', 'favorite', 'is_favorite', 'listen_count', 'last_listened_at',
+      'track_scrobble_count', 'scrobble_count', 'track_stats', 'listening_progress', 'listen_progress',
+      'album_preference', 'album_preference_overlay', 'track_preference', 'track_preference_overlay', 'tag_album_rating', 'tag_album_rating_source']);
+    const copy = value => {
+      if (Array.isArray(value)) return value.map(copy);
+      if (!value || typeof value !== 'object') return value;
+      const result = {};
+      for (const [key, child] of Object.entries(value)) result[key] = personal.has(key) ? null : copy(child);
+      result.can_edit_preferences = false; result.read_only_subject = subject;
+      if (typeof value.inventory_track_ref === 'string') {
+        const row = byRef.get(value.inventory_track_ref);
+        const rating = Number.isInteger(row?.rating) && row.rating >= 1 && row.rating <= 5 ? row.rating : null;
+        const tier = ['off', 'loved', 'obsessed'].includes(row?.love_tier) ? row.love_tier : null;
+        result.read_only_subject = subject; result.rating = rating; result.love_tier = tier;
+        result.track_preference = result.track_preference_overlay = {rating, love_tier: tier, allowed_actions: {can_set_love_tier: false}};
+      }
+      return result;
+    };
+    const result = copy(album);
+    result.read_only_subject = subject;
+    result.album_rating = Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
+    result.favorite = typeof taste.favorite === 'boolean' ? taste.favorite : null;
+    return result;
   }
   function retainResource(selection, context = {}) {
     if (context.signal?.aborted) return null;
@@ -512,7 +599,7 @@ const HomeFriendsRuntime = (() => {
       const provider = activityProvider, start = sync(), url = window.location.href;
       if (!start.authenticated || start.scopeKey !== context.scopeKey || signal?.aborted) throw superseded();
       const value = await provider.resolveNative({scopeKey: start.scopeKey, account_ref: origin.account_ref, kind: origin.kind,
-        period: origin.period, snapshot_ref: origin.snapshot_ref, rowId: target.ref, intent: 'details', signal});
+        period: origin.period, snapshot_ref: origin.snapshot_ref, rowId: target.ref, intent: 'details', target_kind: 'album', signal});
       const isCurrent = () => !signal?.aborted && sync().scopeKey === start.scopeKey && activityProvider === provider;
       if (!isCurrent() || window.location.href !== url || typeof value.album_ref !== 'string' || value.allowed_actions?.can_view_details !== true) throw superseded();
       const prior = target.native_actions?.allowed_actions || {};
@@ -520,7 +607,7 @@ const HomeFriendsRuntime = (() => {
         allowed_actions: {can_open_album: prior.can_open_album !== false,
           can_play_album: prior.can_play_album !== false && value.allowed_actions.can_play_album === true,
           ...(prior.can_open_album_page === false ? {can_open_album_page: false} : {}),
-          ...(prior.can_view_artwork === false ? {can_view_artwork: false} : {})}}}), isCurrent};
+          ...(prior.can_view_artwork === false ? {can_view_artwork: false} : {})}}}), isCurrent, subjectTaste: value.subject_taste};
     }
     // This reader is the real own-week Recent source. Other origins need their
     // own freshly resolved authority; an expired projection cannot substitute.
@@ -652,10 +739,10 @@ const HomeFriendsRuntime = (() => {
   async function readAlbumProjection({scopeKey, kind, ref, origin: requestedOrigin, signal} = {}) {
     if (requestedOrigin?.source === 'activity') {
       const selection = {kind, ref, origin: requestedOrigin, allowed_actions: {can_view_details: true}};
-      await resolveActivityResource(selection, {scopeKey, origin: requestedOrigin, signal});
+      const resolvedTarget = await resolveActivityResource(selection, {scopeKey, origin: requestedOrigin, signal});
       const row = activity?.rows.get(ref);
       if (!row) return {status: 'unavailable'};
-      return {kind, ref, origin: requestedOrigin, title: row.title, artist: row.artist, metadata_state: 'current',
+      return {kind, ref, origin: requestedOrigin, title: resolvedTarget.title || row.title, artist: resolvedTarget.artist || row.artist, metadata_state: 'current',
         source_label: 'Album Haven', ...(kind === 'album' ? {tracks: null} : {listened_albums: null, discography: null})};
     }
     if (kind !== 'album') return {status: 'unavailable'};
@@ -794,7 +881,7 @@ const HomeFriendsRuntime = (() => {
   if (shell && typeof MutationObserver === 'function') {
     new MutationObserver(sync).observe(shell, { attributes: true, attributeFilter: ['hidden', 'data-native-account-id', 'data-native-library-id', 'data-private-ui-context'] });
   }
-  const resourceSelection = selectionApi()?.create({sourceResource, retainResource, revalidateResource, authorizeResource: resolveActivityResource});
+  const resourceSelection = selectionApi()?.create({sourceResource, retainResource, revalidateResource, authorizeResource: resolveActivityResource, projectAlbum: projectSubjectAlbum});
   return {
     sync, snapshot: sync,
     subscribe(listener) {
@@ -804,6 +891,19 @@ const HomeFriendsRuntime = (() => {
     },
     readRecent, albumIntent, albumDetailSelection, readAlbumProjection, navigate, savePresentation, openForm, openFriendRequestForm, openFriendProfile,
     configureActivityProvider, canTrackIntent, trackIntent, trackPreference: activityPreference, setTrackLove, createPlaytableSource, retainPlaytablePresentation,
+    readPresencePlayback() {
+      const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
+      const locked = typeof isPlaybackLockedByAnotherTab !== 'function' || isPlaybackLockedByAnotherTab();
+      const track = state.player?.current;
+      const activeTrack = typeof streamingEngineState === 'function' ? streamingEngineState().roles?.current?.track : null;
+      if (locked || typeof playback?.paused !== 'boolean' || typeof playback?.ended !== 'boolean'
+        || !activeTrack || activeTrack.path !== track?.path || activeTrack.inventory_track_ref !== track?.inventory_track_ref
+        || String(playback.src || '') !== String(track?.src || '') || !playback?.src || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(track?.inventory_track_ref || '')) return null;
+      return {track_ref: track.inventory_track_ref, state: playback.ended === true ? 'stopped' : playback.paused === true ? 'paused' : 'playing'};
+    },
+    createQueueResourceSelection: options => window.AlbumHavenQueueResourceSelection?.create(options),
+    explicitQueue: () => window.AlbumHavenExplicitQueue,
+    openPlaytableContext: (...args) => window.AlbumHavenPlaytableUI?.context(...args) ?? false,
     openPlaylistAction: (...args) => window.AlbumHavenPlaytableUI?.open(...args) ?? false,
     retireFriendActivity,
     ...resourceSelection,

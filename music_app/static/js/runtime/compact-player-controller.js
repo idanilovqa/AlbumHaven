@@ -312,6 +312,10 @@ function currentQueueIndex() {
 }
 
 async function playCompactQueueOffset(offset) {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
+    const result = await ExplicitQueueRuntime.skip(offset);
+    if (result !== undefined) return result;
+  }
   const queue = state.player.playbackQueue;
   const index = currentQueueIndex();
   if (!queue?.tracks?.length || index < 0) return;
@@ -323,7 +327,7 @@ async function playCompactQueueOffset(offset) {
   queue.currentIndex = targetIndex;
   let started = false;
   try {
-    const playbackStart = playTrackFromPayload(track);
+    const playbackStart = playTrackFromPayload(track, {explicitQueueTransition: true});
     syncCompactPlayerUi();
     started = await playbackStart;
     return started;
@@ -392,7 +396,8 @@ function syncCompactPlayerUi(snapshot = {}) {
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });
   if (els.previous) els.previous.disabled = controls.previousDisabled || locked;
-  if (els.next) els.next.disabled = controls.nextDisabled || locked;
+  const explicitNext = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.hasNext();
+  if (els.next) els.next.disabled = (controls.nextDisabled && !explicitNext) || locked;
 }
 
 function initCompactPlayer() {

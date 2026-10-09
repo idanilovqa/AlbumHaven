@@ -4,6 +4,7 @@ const Dashboard = (() => {
   const sizePaths = {
     full: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
     widget: 'M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5',
+    back: 'm10 5-7 7 7 7M3 12h18',
   };
 
   function mount(root, options = {}) {
@@ -80,11 +81,11 @@ const Dashboard = (() => {
       });
       controls.forEach(({ widget, button, path }) => {
         const expanded = widget.key === expandedKey;
-        const label = expanded ? 'Widget size' : 'Full size';
+        const label = expanded ? options.returnPresentation === 'back' ? 'Back' : 'Widget size' : 'Full size';
         button.setAttribute('aria-label', label);
         button.setAttribute('title', label);
         button.setAttribute('aria-expanded', String(expanded));
-        path.setAttribute('d', expanded ? sizePaths.widget : sizePaths.full);
+        path.setAttribute('d', expanded ? options.returnPresentation === 'back' ? sizePaths.back : sizePaths.widget : sizePaths.full);
       });
     }
 

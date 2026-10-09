@@ -650,7 +650,7 @@ function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, 
 }
 
 function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false,
-  density, initialFocus = 'selected', updateTriggerLabel = true }) {
+  density, menuWidth, actionMenu = false, initialFocus = 'selected', updateTriggerLabel = true }) {
   if (utilityFoobarFormatCleanup) {
     const sameTrigger = utilityChoiceTrigger === trigger;
     utilityFoobarFormatCleanup();
@@ -666,10 +666,11 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
   menu.className = 'gallery-anchored-menu settings-foobar-format-menu'; menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', label);
   if (density === 'compact') menu.setAttribute('data-choice-density', 'compact');
-  menu.setAttribute('data-choice-width', matchTriggerWidth ? 'anchor' : 'fixed');
-  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label,
-    disabled: choice.disabled === true, className: 'gallery-menu-action', attributes: {role: 'menuitemradio',
-      'aria-checked': String(choice.value === String(selected)), 'data-foobar-format': choice.value}})).join('');
+  const widthMode = menuWidth === 'content' ? 'content' : matchTriggerWidth ? 'anchor' : 'fixed';
+  menu.setAttribute('data-choice-width', widthMode);
+  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label, title: choice.reason || choice.label,
+    disabled: choice.disabled === true, className: 'gallery-menu-action', attributes: {role: actionMenu ? 'menuitem' : 'menuitemradio',
+      ...(actionMenu ? {} : {'aria-checked': String(choice.value === String(selected))}), 'data-foobar-format': choice.value}})).join('');
   document.body.append(menu);
   let closed = false, escapeHeld = false;
   const close = ({restoreFocus = false} = {}) => {
@@ -695,7 +696,10 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
     const surface = trigger.closest?.('[role="dialog"], .confirm-modal, .trigger-anchor-surface');
     menu.style.zIndex = String(Math.max(130, (Number(surface && window.getComputedStyle?.(surface).zIndex) || 0) + 1));
     menu.style.maxWidth = `${availableWidth}px`; menu.style.minWidth = '0';
-    const width = matchTriggerWidth ? anchorWidth : Math.min(280, availableWidth);
+    menu.style.width = widthMode === 'content' ? 'max-content' : '';
+    const contentWidth = widthMode === 'content' ? menu.getBoundingClientRect().width : 0;
+    const width = widthMode === 'content' ? Math.min(availableWidth, Math.max(anchorWidth, contentWidth))
+      : matchTriggerWidth ? anchorWidth : Math.min(280, availableWidth);
     menu.style.width = `${width}px`;
     const start = window.getComputedStyle?.(trigger).direction === 'rtl' ? rect.right - width : rect.left;
     menu.style.left = `${Math.max(left, Math.min(start, right - width))}px`;

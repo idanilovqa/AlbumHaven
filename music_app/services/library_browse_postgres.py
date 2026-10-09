@@ -1920,40 +1920,94 @@ class PostgresLibraryBrowseRepository:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             connection.execute("SET LOCAL work_mem = '16MB'")
             connection.execute("SET LOCAL jit = off")
-            projected_items = [
-                (item, album)
-                for album in _problematic_album_projection_payloads(
-                    self._load_problematic_file_rows(connection=connection)
-                )
-                if (item := _problematic_album_summary_payload(album)) is not None
-            ]
-            for album in _missing_album_projection_payloads(
-                self._load_missing_album_rows(connection=connection)
-            ):
-                item = _problematic_album_summary_payload(album)
-                if item is not None:
-                    projected_items.append((item, album))
-            projected_items.sort(
-                key=lambda projected_item: (
-                    str(projected_item[0].get("name") or "").casefold(),
-                    str(projected_item[0].get("album_artist") or "").casefold(),
-                    str(projected_item[0].get("year") or ""),
-                )
+            return self._build_problematic_files_payload_from_rows(
+                connection=connection,
+                rows=self._load_problematic_file_rows(connection=connection),
             )
-            items = [item for item, _album in projected_items]
-            initial_detail = None
-            if projected_items:
-                first_album = projected_items[0][1]
-                first_key = str(first_album.get("key") or "")
-                first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
-                    connection=connection
-                ).get("alias_to_canonical", {})
-                initial_detail = _problematic_album_detail_payload(first_album)
-                if initial_detail is None:
-                    raise RuntimeError(
-                        "Problematic Files summary/detail snapshot invariant failed for "
-                        f"album {first_key!r}."
-                    )
+
+    def build_problematic_files_page(self, *, limit: int) -> dict[str, object]:
+        if limit < 1 or limit > 200:
+            raise ValueError("Problematic Files page limit must be between 1 and 200.")
+        cached_payload = self._get_cached_utility_projection("problematic-files")
+        if cached_payload is not None:
+            cached_items = list(cached_payload.get("items") or [])
+            cached_payload["items"] = cached_items[:limit]
+            cached_payload["count"] = len(cached_payload["items"])
+            cached_payload["complete"] = False
+            cached_payload["total_candidate_count"] = None
+            cached_payload["projection_cache_status"] = "bounded"
+            return cached_payload
+        with self._connect_to_database() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            connection.execute("SET LOCAL work_mem = '16MB'")
+            connection.execute("SET LOCAL jit = off")
+            album_ids = self._load_problematic_candidate_ids(
+                connection=connection,
+                limit=limit,
+            )
+            payload = self._build_problematic_files_payload_from_rows(
+                connection=connection,
+                rows=self._load_problematic_file_rows(
+                    connection=connection,
+                    album_ids=album_ids[:limit],
+                ),
+                missing_rows=self._load_missing_album_rows(
+                    connection=connection,
+                    limit=limit,
+                ),
+                limit=limit,
+            )
+        payload["complete"] = False
+        payload["total_candidate_count"] = None
+        payload["projection_cache_status"] = "bounded"
+        return payload
+
+    def _build_problematic_files_payload_from_rows(
+        self,
+        *,
+        connection: Any,
+        rows: list[object],
+        missing_rows: list[object] | None = None,
+        limit: int | None = None,
+    ) -> dict[str, object]:
+        projected_items = [
+            (item, album)
+            for album in _problematic_album_projection_payloads(rows)
+            if (item := _problematic_album_summary_payload(album)) is not None
+        ]
+        resolved_missing_rows = (
+            self._load_missing_album_rows(connection=connection)
+            if missing_rows is None
+            else missing_rows
+        )
+        for album in _missing_album_projection_payloads(resolved_missing_rows):
+            item = _problematic_album_summary_payload(album)
+            if item is not None:
+                projected_items.append((item, album))
+        projected_items.sort(
+            key=lambda projected_item: (
+                str(projected_item[0].get("name") or "").lower(),
+                str(projected_item[0].get("album_artist") or "").lower(),
+                str(projected_item[0].get("year") or ""),
+                str(projected_item[0].get("key") or "").lower(),
+            )
+        )
+        if limit is not None:
+            projected_items = projected_items[:limit]
+        items = [item for item, _album in projected_items]
+        initial_detail = None
+        if projected_items:
+            first_album = projected_items[0][1]
+            first_key = str(first_album.get("key") or "")
+            first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
+                connection=connection
+            ).get("alias_to_canonical", {})
+            initial_detail = _problematic_album_detail_payload(first_album)
+            if initial_detail is None:
+                raise RuntimeError(
+                    "Problematic Files summary/detail snapshot invariant failed for "
+                    f"album {first_key!r}."
+                )
         return {
             "items": items,
             "initial_detail": initial_detail,
@@ -2430,9 +2484,14 @@ class PostgresLibraryBrowseRepository:
         *,
         artist_names: list[str] | None = None,
         album_keys: list[str] | None = None,
+        limit: int | None = None,
         connection: Any | None = None,
     ) -> list[object]:
         params = {"album_key": str(album_key or "").strip() or None}
+        if limit is not None:
+            if limit < 1:
+                raise ValueError("Missing-album limit must be positive.")
+            params["limit"] = limit
         if album_keys is not None:
             params["album_keys"] = album_keys
         if artist_names is not None:
@@ -2440,7 +2499,12 @@ class PostgresLibraryBrowseRepository:
 
         def load_rows(active_connection: Any) -> list[object]:
             return list(active_connection.execute(
-                _missing_albums_sql(scoped_artists=artist_names is not None, scoped_albums=album_keys is not None), params,
+                _missing_albums_sql(
+                    scoped_artists=artist_names is not None,
+                    scoped_albums=album_keys is not None,
+                    bounded=limit is not None,
+                ),
+                params,
             ).fetchall())
 
         if connection is not None:
@@ -2620,15 +2684,33 @@ class PostgresLibraryBrowseRepository:
         *,
         candidate_summary: bool = True,
         connection: Any | None = None,
+        album_ids: list[int] | None = None,
     ) -> list[object]:
         normalized_album_key = str(album_key or "").strip() or None
-        use_candidate_summary = candidate_summary and normalized_album_key is None
+        selected_album_ids = [int(album_id) for album_id in (album_ids or [])]
+        use_selected_album_ids = candidate_summary and album_ids is not None
+        use_candidate_summary = (
+            candidate_summary
+            and normalized_album_key is None
+            and not use_selected_album_ids
+        )
         candidate_params = {
             "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
             "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
         }
 
         def load_rows(active_connection: Any) -> list[object]:
+            if use_selected_album_ids:
+                if not selected_album_ids:
+                    return []
+                cursor = active_connection.execute(
+                    _problematic_files_sql(
+                        candidate_summary=True,
+                        selected_album_ids=True,
+                    ),
+                    {"album_ids": selected_album_ids},
+                )
+                return list(cursor.fetchall())
             if use_candidate_summary:
                 cursor = active_connection.execute(
                     _problematic_files_sql(candidate_summary=True),
@@ -2645,6 +2727,26 @@ class PostgresLibraryBrowseRepository:
             return load_rows(connection)
         with self._connect_to_database() as owned_connection:
             return load_rows(owned_connection)
+
+    def _load_problematic_candidate_ids(
+        self,
+        *,
+        connection: Any,
+        limit: int,
+    ) -> list[int]:
+        cursor = connection.execute(
+            _problematic_files_sql(
+                candidate_summary=True,
+                candidate_ids_page=True,
+            ),
+            {
+                "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
+                "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+                "limit": limit,
+            },
+        )
+        rows = [_row_mapping(row) for row in cursor.fetchall()]
+        return [int(row["album_id"]) for row in rows]
 
     def _load_utility_rules_rows(self) -> list[object]:
         with self._connect_to_database() as connection:
@@ -8422,7 +8524,12 @@ def _mojibake_candidate_fields_sql(text_expressions: Iterable[str]) -> str:
     ) + "\n        )"
 
 
-def _missing_albums_sql(*, scoped_artists: bool = False, scoped_albums: bool = False) -> str:
+def _missing_albums_sql(
+    *,
+    scoped_artists: bool = False,
+    scoped_albums: bool = False,
+    bounded: bool = False,
+) -> str:
     artist_scope = """
             and exists (
               select 1 from library.local_artists candidate_artist
@@ -8431,6 +8538,15 @@ def _missing_albums_sql(*, scoped_artists: bool = False, scoped_albums: bool = F
                 and candidate_artist.artist_key = any(%(artist_keys)s::text[])
             )
     """ if scoped_artists else ""
+    bounded_order = """
+      order by
+        lower(coalesce(library.local_albums.title, '')) collate "C",
+        lower(coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''),
+                       missing_album_artist.name, '')) collate "C",
+        coalesce(library.local_albums.release_year::text, '') collate "C",
+        lower(coalesce(library.local_albums.album_key, '')) collate "C"
+      limit %(limit)s::integer
+    """ if bounded else ""
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -8455,6 +8571,8 @@ def _missing_albums_sql(*, scoped_artists: bool = False, scoped_albums: bool = F
             min(library.local_track_files.metadata #>> '{scan_cache,stale_marked_at}')
               as missing_since
           from library.local_albums
+          left join library.local_artists missing_album_artist
+            on missing_album_artist.id = library.local_albums.artist_id
           join bootstrap_context
             on bootstrap_context.library_id = library.local_albums.library_id
           join stale_album_candidates
@@ -8467,8 +8585,9 @@ def _missing_albums_sql(*, scoped_artists: bool = False, scoped_albums: bool = F
             on library.local_track_files.track_id = library.local_tracks.id
           where (%(album_key)s::text is null or library.local_albums.album_key = %(album_key)s::text)
           __ARTIST_SCOPE__
-          group by library.local_albums.id
+          group by library.local_albums.id, missing_album_artist.name
           having bool_and(library.local_track_files.scan_cache_stale)
+          __BOUNDED_ORDER__
         ),
         missing_album_featured_artists as (
           select
@@ -8532,7 +8651,7 @@ def _missing_albums_sql(*, scoped_artists: bool = False, scoped_albums: bool = F
         order by library.local_albums.album_key, library.local_tracks.id;
     """.replace("__ARTIST_SCOPE__", artist_scope + (
         " and library.local_albums.album_key = any(%(album_keys)s::text[])" if scoped_albums else ""
-    )).replace(
+    )).replace("__BOUNDED_ORDER__", bounded_order).replace(
         "__NON_ALBUM_EXCEPTION_VALUES__", _NON_ALBUM_EXCEPTION_SQL_VALUES,
     )
 
@@ -8541,12 +8660,13 @@ def _problematic_files_sql(
     *,
     candidate_summary: bool = False,
     candidate_ids_only: bool = False,
+    candidate_ids_page: bool = False,
     selected_album_ids: bool = False,
     targeted_problem_owners: bool = False,
 ) -> str:
-    if (candidate_ids_only or selected_album_ids) and not candidate_summary:
+    if (candidate_ids_only or candidate_ids_page or selected_album_ids) and not candidate_summary:
         raise ValueError("Problematic candidate query modes require candidate_summary=True.")
-    if candidate_ids_only and selected_album_ids:
+    if sum((candidate_ids_only, candidate_ids_page, selected_album_ids)) > 1:
         raise ValueError("Problematic candidate query modes are mutually exclusive.")
     candidate_ctes = ""
     selected_album_join = ""
@@ -8805,6 +8925,36 @@ def _problematic_files_sql(
             {candidate_ctes_sql}
             select candidate_album_ids.album_id
             from candidate_album_ids;
+        """
+    if candidate_ids_page:
+        candidate_ctes_sql = candidate_ctes.rstrip()
+        if candidate_ctes_sql.endswith(","):
+            candidate_ctes_sql = candidate_ctes_sql[:-1]
+        return f"""
+            with bootstrap_context as (
+              select library.libraries.id as library_id
+              from app.bootstrap_owners
+              join library.libraries
+                on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+               and library.libraries.name = 'Local Library'
+               and library.libraries.library_kind = 'local'
+              where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+              limit 1
+            ),
+            {candidate_ctes_sql}
+            select candidate_album_ids.album_id
+            from candidate_album_ids
+            join library.local_albums
+              on library.local_albums.id = candidate_album_ids.album_id
+            left join library.local_artists
+              on library.local_artists.id = library.local_albums.artist_id
+            order by
+              lower(coalesce(library.local_albums.title, '')) collate "C",
+              lower(coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''),
+                             library.local_artists.name, '')) collate "C",
+              coalesce(library.local_albums.release_year::text, '') collate "C",
+              lower(coalesce(library.local_albums.album_key, '')) collate "C"
+            limit %(limit)s::integer;
         """
     if selected_album_ids:
         selected_album_filter = (

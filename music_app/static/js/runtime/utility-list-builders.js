@@ -2978,14 +2978,6 @@ function getDraggableProblemSuggestions() {
     .filter(Boolean);
 }
 
-function extendProblemSuggestionRange(startIndex, endIndex, selected = true) {
-  const visible = getDraggableProblemSuggestions();
-  const from = Math.min(startIndex, endIndex), to = Math.max(startIndex, endIndex);
-  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to >= visible.length) return false;
-  visible.slice(from, to + 1).forEach(item => toggleProblemSuggestion(item.id, { selected }));
-  return true;
-}
-
 function formatProblemSuggestionLabel(proposal) {
   const label = { album: 'Album', album_artist: 'Album artist', artist: 'Artist', title: 'Title', year: 'Year', track_number: 'Track', disc_number: 'Disc', album_disc_marker: 'Album / disc' }[proposal.field] || proposal.field;
   const original = proposal.original === null || proposal.original === undefined || proposal.original === '' ? 'missing' : String(proposal.original);

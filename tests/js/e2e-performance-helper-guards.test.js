@@ -582,6 +582,9 @@ test('focused search browse resolves its timing budget from the central authorit
   );
   assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_BROWSE_BUDGET\.metricId/);
   assert.match(spec, /recordContractCompletion\(\)/);
+  assert.match(spec, /recordSubmissionBoundary/);
+  assert.match(spec, /Date\.now\(\)\s*-\s*searchSubmittedAt/);
+  assert.doesNotMatch(spec, /measureActionTime/);
   assert.doesNotMatch(spec, /benchmarkValidation\s*:/);
 });
 
@@ -1407,7 +1410,8 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.match(coldBlock, /readCompletedResponseDurationMs\(coldResponse\)/);
   assert.match(coldBlock, /await coldResponse\.text\(\)/);
   assert.match(coldBlock, /new TextEncoder\(\)\.encode\(coldResponseBody\)\.byteLength/);
-  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('rebuilt'\)/);
+  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('bounded'\)/);
+  assert.match(coldBlock, /completeSummaryResponse\.json\(\)/);
   assert.match(coldBlock, /evaluateProblematicFilesDatasetContract\(/);
   assert.match(coldBlock, /coldInitialDetail\.key\)\.toBe\(coldFirstSummaryItem\.key\)/);
   assert.doesNotMatch(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);

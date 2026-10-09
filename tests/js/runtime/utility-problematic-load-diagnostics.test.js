@@ -391,6 +391,123 @@ test('loadProblematicFiles records summary diagnostics after the summary payload
   assert.ok(summary.totalMs >= summary.requestMs);
 });
 
+test('loadProblematicFiles paints a bounded page before atomically committing the complete response', async () => {
+  const fullResponse = createDeferred();
+  const requestedUrls = [];
+  const { context, calls } = loadHelper({
+    async fetch(url) {
+      requestedUrls.push(String(url));
+      if (String(url).endsWith('?limit=50')) {
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              complete: false,
+              items: [{ key: 'first', name: 'First', detail_loaded: false }],
+              initial_detail: {
+                key: 'first',
+                name: 'First detail',
+                detail_loaded: true,
+                tracks: [],
+                repair_preview_rows: [],
+                track_problem_rows: [],
+                problematic_track_paths: [],
+              },
+            };
+          },
+        };
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/problematic-files?limit=50',
+    '/utilities/problematic-files',
+  ]);
+  assert.equal(context.state.utility.problematicFiles.length, 1);
+  assert.equal(context.state.utility.problematicFiles[0].name, 'First detail');
+  assert.equal(context.state.utility.problematicFilesComplete, false);
+  assert.ok(calls.renders >= 2, 'the bounded response must paint before completion');
+
+  context.state.utility.selectedProblematicKey = 'first';
+  fullResponse.resolve({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        items: [
+          { key: 'first', name: 'First canonical', detail_loaded: false },
+          { key: 'second', name: 'Second canonical', detail_loaded: false },
+        ],
+        initial_detail: {
+          key: 'first',
+          name: 'First canonical detail',
+          detail_loaded: true,
+          tracks: [],
+          repair_preview_rows: [],
+          track_problem_rows: [],
+          problematic_track_paths: [],
+        },
+      };
+    },
+  });
+  const result = await load;
+
+  assert.deepEqual(Array.from(result, (item) => item.key), ['first', 'second']);
+  assert.equal(context.state.utility.problematicFiles[0].name, 'First canonical detail');
+  assert.equal(context.state.utility.selectedProblematicKey, 'first');
+  assert.equal(context.state.utility.problematicFilesComplete, true);
+  assert.equal(context.state.utility.completeLoadPromise, null);
+});
+
+test('navigation-owned Problematic Files loading paints the bounded page before completion', async () => {
+  const fullResponse = createDeferred();
+  const { context, calls } = loadHelper({
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        problematicNavigationActiveToken: {},
+      },
+    },
+    async fetch(url) {
+      if (String(url).endsWith('?limit=50')) {
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              complete: false,
+              items: [{ key: 'first', name: 'First', detail_loaded: false }],
+            };
+          },
+        };
+      }
+      return fullResponse.promise;
+    },
+  });
+
+  const load = context.loadProblematicFiles(true, {
+    render: false,
+    renderInitialPage: true,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(context.state.utility.problematicFiles[0]?.key, 'first');
+  assert.ok(calls.renders >= 1, 'navigation must paint the bounded page');
+
+  fullResponse.resolve({
+    ok: true,
+    status: 200,
+    async json() { return { items: [{ key: 'first', name: 'First', detail_loaded: false }] }; },
+  });
+  await load;
+});
+
 test('loadProblematicFiles commits a forced canonical summary without initial or final rendering when render is false', async () => {
   const { context, calls } = loadHelper({
     async fetch() {
@@ -586,8 +703,9 @@ test('Settings defers an active full startup view request until the modal closes
   ]]);
 });
 
-test('utility modal suspends gallery work synchronously before rendering or loading and resumes on close', () => {
+test('utility modal paints its visible shell before rendering and loading', () => {
   const events = [];
+  const scheduledFrames = [];
   const overlay = { hidden: true };
   const { context } = loadHelper({
     document: {
@@ -605,6 +723,54 @@ test('utility modal suspends gallery work synchronously before rendering or load
       },
     },
     getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserAnimationFrame(callback) {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    },
+    clearBrowserTimeout(timerId) { events.push(`clear:${timerId}`); },
+    renderUtilityModalContent() { events.push('render'); },
+    async fetch() {
+      events.push('load');
+      return { ok: true, status: 200, async json() { return { items: [] }; } };
+    },
+  });
+  context.state.utility.pendingOpenLoadTimer = 12;
+
+  context.openUtilityModal({ forceLoad: true });
+  assert.equal(overlay.hidden, false);
+  assert.equal(context.state.utility.pendingOpenLoadTimer, 0);
+  assert.deepEqual(events, ['suspend', 'clear:12']);
+  assert.equal(scheduledFrames.length, 1);
+
+  scheduledFrames.shift()();
+  assert.deepEqual(events, ['suspend', 'clear:12']);
+  assert.equal(scheduledFrames.length, 1);
+
+  scheduledFrames.shift()();
+  assert.equal(events[0], 'suspend');
+  assert.ok(events.indexOf('render') > events.indexOf('clear:12'));
+  assert.ok(events.indexOf('load') > events.indexOf('render'));
+
+  context.closeUtilityModal();
+  assert.equal(overlay.hidden, true);
+  assert.ok(events.indexOf('resume:7') > events.indexOf('load'));
+});
+
+test('a stale deferred Settings open cannot render or load after close and reopen', () => {
+  const events = [];
+  const scheduledFrames = [];
+  const overlay = { hidden: true };
+  const { context } = loadHelper({
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return { hidden: true, classList: { remove() {} } }; },
+      querySelectorAll() { return []; },
+    },
+    getUtilityModalElements() { return { overlay }; },
+    scheduleBrowserAnimationFrame(callback) {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    },
     renderUtilityModalContent() { events.push('render'); },
     async fetch() {
       events.push('load');
@@ -613,14 +779,14 @@ test('utility modal suspends gallery work synchronously before rendering or load
   });
 
   context.openUtilityModal({ forceLoad: true });
-  assert.equal(overlay.hidden, false);
-  assert.equal(events[0], 'suspend');
-  assert.ok(events.indexOf('suspend') < events.indexOf('render'));
-  assert.ok(events.indexOf('suspend') < events.indexOf('load'));
-
   context.closeUtilityModal();
-  assert.equal(overlay.hidden, true);
-  assert.ok(events.indexOf('resume:7') > events.indexOf('load'));
+  context.openUtilityModal({ forceLoad: false });
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+
+  assert.deepEqual(events, ['render']);
 });
 
 test('utility modal production source is statically tied to scheduler suspension and resume without a test branch', () => {
@@ -634,11 +800,10 @@ test('utility modal production source is statically tied to scheduler suspension
   const openSource = helperSource.slice(openStart, openEnd);
   const closeSource = helperSource.slice(closeStart, closeEnd);
   const suspendIndex = openSource.indexOf('virtualGrid.suspendSelectedArtistCoverLoadsForUserAction()');
-  const renderIndex = openSource.indexOf('renderUtilityModalContent()');
-  const loadIndex = openSource.indexOf('loadActiveUtilityTab(true)');
+  const scheduleIndex = openSource.indexOf('scheduleUtilityModalOpenWorkAfterPaint(');
   assert.ok(suspendIndex >= 0);
-  assert.ok(suspendIndex < renderIndex);
-  assert.ok(suspendIndex < loadIndex);
+  assert.ok(suspendIndex < scheduleIndex);
+  assert.match(helperSource, /scheduleBrowserAnimationFrame\(\(\) => scheduleBrowserAnimationFrame\(run\)\)/);
   assert.match(closeSource, /virtualGrid\.resumeSelectedArtistCoverLoadsAfterUserAction\(coverLoadSuspensionToken\)/);
   assert.doesNotMatch(`${openSource}\n${closeSource}`, /galleryCoverLoadScheduler\.(?:suspend|resume)/);
   assert.doesNotMatch(`${openSource}\n${closeSource}`, /PLAYWRIGHT|__e2e|E2E_/i);
@@ -790,7 +955,7 @@ test('summary-provided initial detail avoids a detail request and second render'
   const detail = await context.loadProblematicAlbumDetail('album-1');
 
   assert.equal(detail.detail_loaded, true);
-  assert.deepEqual(requestedUrls, ['/utilities/problematic-files']);
+  assert.deepEqual(requestedUrls, ['/utilities/problematic-files?limit=50']);
   assert.equal(calls.renders, rendersAfterSummary);
   assert.equal(context.state.utility.problematicDiagnostics.lastDetailLoad, null);
   assert.equal(context.state.utility.problematicDiagnostics.summaryLoad.initialDetailKey, 'album-1');
@@ -800,7 +965,7 @@ test('summary-provided initial detail avoids a detail request and second render'
   const secondDetail = await context.loadProblematicAlbumDetail('album-2');
   assert.equal(secondDetail.detail_loaded, true);
   assert.deepEqual(requestedUrls, [
-    '/utilities/problematic-files',
+    '/utilities/problematic-files?limit=50',
     '/utilities/problematic-files/detail?album_key=album-2',
   ]);
 });
@@ -1418,7 +1583,7 @@ test('obsolete detail failure cannot poison a fresh same-key summary owner', asy
 
   assert.deepEqual(requestedUrls, [
     '/utilities/problematic-files/detail?album_key=album-1',
-    '/utilities/problematic-files',
+    '/utilities/problematic-files?limit=50',
   ]);
   assert.equal(context.state.utility.problematicFiles[0].name, 'Fresh summary owner');
   assert.equal(context.state.utility.problematicFiles[0].detail_loaded, false);
@@ -1693,7 +1858,7 @@ test('status summary refresh removes deleted selected albums without fetching ob
     problematicFiles: [{ key: 'removed', detail_loaded: true }] });
   await context.loadProblematicFiles(true, { preserveSelectedDetail: true });
   assert.equal(context.state.utility.problematicFiles.length, 0);
-  assert.deepEqual(requested, ['/utilities/problematic-files']);
+  assert.deepEqual(requested, ['/utilities/problematic-files?limit=50']);
 });
 
 for (const freshFirst of [true, false]) {

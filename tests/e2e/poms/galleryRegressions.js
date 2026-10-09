@@ -52,6 +52,64 @@ export class GalleryRegressions {
         loadedCount: state.view.artist_groups.reduce((count, group) => count + group.albums.length, 0) };
     });
   }
+  async captureVisibleGalleryAnchorOnNextScroll() {
+    // parity-check: allow-read-only-measurement-evaluate -- capture native scroll before continuation can merge
+    return this.page.evaluateHandle(() => new Promise((resolve, reject) => {
+      const scroll = document.getElementById('albums-scroll');
+      const initialLoadedCount = state.view.artist_groups.reduce(
+        (count, group) => count + group.albums.length,
+        0,
+      );
+      let frame;
+      let timeout;
+      let finished = false;
+      const cleanup = () => {
+        scroll.removeEventListener('scroll', onScroll);
+        if (frame !== undefined) cancelAnimationFrame(frame);
+        clearTimeout(timeout);
+      };
+      const fail = message => {
+        finished = true;
+        cleanup();
+        reject(new Error(message));
+      };
+      const sample = () => {
+        if (finished) return;
+        const loadedCount = state.view.artist_groups.reduce(
+          (count, group) => count + group.albums.length,
+          0,
+        );
+        if (loadedCount !== initialLoadedCount) {
+          fail('Gallery continuation merged before a pre-merge anchor rendered.');
+          return;
+        }
+        const bounds = scroll.getBoundingClientRect();
+        const element = [...document.querySelectorAll('#artist-groups .album-card')].find(card => {
+          const rect = card.getBoundingClientRect();
+          return rect.top < bounds.bottom && rect.bottom > bounds.top;
+        });
+        if (element) {
+          finished = true;
+          cleanup();
+          resolve({
+            element,
+            top: element.getBoundingClientRect().top,
+            scrollTop: scroll.scrollTop,
+            loadedCount,
+          });
+          return;
+        }
+        frame = requestAnimationFrame(sample);
+      };
+      const onScroll = () => { frame = requestAnimationFrame(sample); };
+      scroll.addEventListener('scroll', onScroll, { once: true });
+      timeout = setTimeout(
+        () => fail('Timed out waiting for a pre-merge gallery anchor to render.'),
+        1000,
+      );
+    }));
+  }
+
   async readGalleryAnchorContinuity(anchor) {
     // parity-check: allow-read-only-measurement-evaluate -- read card identity and compensate only for native wheel movement
     return anchor.evaluate(saved => ({

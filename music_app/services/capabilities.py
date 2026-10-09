@@ -12,12 +12,24 @@ from collections.abc import Iterable
 from types import MappingProxyType
 
 
+# Personal collections do not mutate library files. These actions still require
+# the collection service's owner/editor check; View never grants another
+# person's collection, media playback, file editing or account administration.
+PERSONAL_COLLECTION_ACTIONS = frozenset({
+    "library.playlists.create", "library.playlists.manage",
+    "library.playlists.items.manage", "library.playlists.cover.manage",
+    "library.playlists.settings.manage", "library.playlists.access.manage",
+    "library.album_tops.create", "library.album_tops.manage",
+    "library.album_tops.items.manage", "library.album_tops.settings.manage",
+    "library.album_tops.access.manage", "library.album_tops.progress.manage",
+})
+
 CAPABILITY_ACTIONS = MappingProxyType({
     "view": frozenset({
         "app.shell.read", "app.bootstrap.read", "app.status.read",
         "library.browse.read", "library.artwork.read",
         "library.virtual_discography.read", "library.virtual_discography.create",
-    }),
+    }) | PERSONAL_COLLECTION_ACTIONS,
     "social": frozenset({
         "library.social.read", "library.social.manage",
         "library.social.history.read", "library.social.taste.read",
@@ -81,7 +93,8 @@ def effective_capability_keys(keys: Iterable[str]) -> tuple[str, ...]:
 
 # Owner includes every existing library feature, but account administration is
 # separately assignable. These finite extras await a more granular user-facing
-# mapping; they must not accidentally become part of Listener or Musician.
+# mapping. Personal collection actions are also supplied by view; the other
+# extras must not accidentally become part of Listener or Musician.
 _OWNER_ADDITIONAL_ACTIONS = frozenset({
     "integration.settings.read", "integration.foobar.read",
     "integration.lastfm.manage", "integration.lastfm.scrobbles.submit",
@@ -112,6 +125,7 @@ ROLE_PRESETS = MappingProxyType({
 # Compatibility for fine-grained grants assigned before the artwork/custom-cover
 # split. These aliases never expand audio authority from a browse-only grant.
 ACTION_GRANT_ALIASES = MappingProxyType({
+    **{action: frozenset({"library.browse.read"}) for action in PERSONAL_COLLECTION_ACTIONS},
     "library.artwork.read": frozenset({"library.media.read", "library.browse.read"}),
     "library.covers.upload": frozenset({"library.covers.write"}),
     "library.covers.link": frozenset({"library.covers.write"}),

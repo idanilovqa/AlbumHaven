@@ -215,7 +215,7 @@ const PlaylistReactRuntime = (() => {
       projected = projection(payload); raw = projected ? authority(payload) : null;
     }
     if (current && current.visible !== visible) sequence++;
-    const next = {visible, scopeKey: `${identity}:${generation}`, payload: projected,
+    const next = {visible, authenticated: !denied && scopeOwner?.hidden !== true && Boolean(scopeOwner?.dataset?.nativeAccountId || document.getElementById('mobile-home')?.dataset?.homeAccountId), scopeKey: `${identity}:${generation}`, payload: projected,
       playlistId: draftPage ? null : String(state.view?.playlist_detail?.playlist_id || state.view?.playlist_sidebar?.active_playlist_id || '') || null,
       draftToken: draftPage ? draftToken : null, retainedDraftToken: draft?.token || null,
       entryKey: Number.isSafeInteger(window.history.state?.albumHavenNavigationPosition) ? window.history.state.albumHavenNavigationPosition : null};
@@ -600,6 +600,17 @@ const PlaylistReactRuntime = (() => {
   return {
     snapshot: sync, sync, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     readPlaylists, navigate, navigateFromPlaytable, createPlaytableSource,
+    notificationRegistry: () => window.AlbumHavenNotifications,
+    subscribeNotificationRegistry(listener) {
+      window.addEventListener('albumhaven:notifications-ready', listener);
+      return () => window.removeEventListener('albumhaven:notifications-ready', listener);
+    },
+    async openSharedPlaylist({playlist_id, isCurrent}) {
+      const start = sync();
+      if (!start.authenticated || start.retainedDraftToken || isCurrent?.() !== true) return false;
+      const open = () => navigateCurrent(playlist_id, start, isCurrent);
+      return (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(open)) || open();
+    },
     confirmRetryOriginal(scopeKey) {
       if (!PlaylistReactRuntime.acceptsPrivateScope(scopeKey) || typeof showAppConfirmDialog !== 'function') return Promise.resolve(false);
       return showAppConfirmDialog({title: 'Retry original request', acceptLabel: 'Retry', danger: false,

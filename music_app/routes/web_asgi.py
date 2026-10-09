@@ -628,7 +628,14 @@ def _build_bootstrap_payload(
     preview_mode = "empty_shell"
     embedded_view_patch = None
     if library_browse_uses_postgres:
-        if requested_root_albums_surface:
+        if active_surface == "album_tops":
+            # This shell carries only a navigation identity. React reads all Top
+            # content through the authenticated PostgreSQL-backed Top API.
+            initial_view = _build_empty_initial_view(config=config, query_raw="", selected_artist="",
+                                                    active_surface="album_tops")
+            initial_view["top_ref"] = str(query_args.get("top_ref") or "") or None
+            preview_mode = "full_view"
+        elif requested_root_albums_surface:
             (
                 initial_view,
                 embedded_view_patch,

@@ -1012,8 +1012,8 @@ async def index(request: Request) -> Response:
         if scan_jobs is not None:
             try:
                 evaluation = await require_action("library.refresh")(request)
-                _evaluation, library_id, origin_ref, root_ids = _authorized_scan_request(
-                    request
+                _evaluation, library_id, origin_ref, root_ids = await run_in_threadpool(
+                    _authorized_scan_request, request
                 )
                 await run_in_threadpool(
                     scan_jobs.enqueue_authorized_full_scan,
@@ -1170,7 +1170,9 @@ async def refresh_api(request: Request) -> JSONResponse:
     full_rescan = bool(payload.get("full_rescan"))
     scan_jobs = _scan_job_repository(request)
     if scan_jobs is not None:
-        evaluation, library_id, origin_ref, root_ids = _authorized_scan_request(request)
+        evaluation, library_id, origin_ref, root_ids = await run_in_threadpool(
+            _authorized_scan_request, request
+        )
         accepted = await run_in_threadpool(
             scan_jobs.enqueue_authorized_full_scan,
             policy_evaluation=evaluation,
@@ -1267,7 +1269,9 @@ async def refresh(request: Request) -> RedirectResponse:
     query_args = request.query_params
     scan_jobs = _scan_job_repository(request)
     if scan_jobs is not None:
-        evaluation, library_id, origin_ref, root_ids = _authorized_scan_request(request)
+        evaluation, library_id, origin_ref, root_ids = await run_in_threadpool(
+            _authorized_scan_request, request
+        )
         await run_in_threadpool(
             scan_jobs.enqueue_authorized_full_scan,
             policy_evaluation=evaluation,

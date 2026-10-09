@@ -416,22 +416,32 @@ set search_path = pg_catalog, ops
 as $$
 declare
   selected_task ops.cover_lookup_tasks%rowtype;
+  selected_job_id bigint;
   resulting_job_state text;
 begin
-  select * into selected_task
-    from ops.cover_lookup_tasks
-   where task_key = requested_task_key
-     and library_id = requested_library_id
-     and initiating_account_id = actor_account_id
-   for update;
-  if selected_task.id is null or selected_task.job_id is null then
+  select task.job_id into selected_job_id
+    from ops.cover_lookup_tasks as task
+   where task.task_key = requested_task_key
+     and task.library_id = requested_library_id
+     and task.initiating_account_id = actor_account_id;
+  if selected_job_id is null then
     return;
   end if;
 
   perform * from ops.request_job_cancellation(
-    selected_task.job_id, actor_account_id, observed_at
+    selected_job_id, actor_account_id, observed_at
   );
-  select state into resulting_job_state from ops.jobs where id = selected_task.job_id;
+  select * into selected_task
+    from ops.cover_lookup_tasks as task
+   where task.task_key = requested_task_key
+     and task.library_id = requested_library_id
+     and task.initiating_account_id = actor_account_id
+     and task.job_id = selected_job_id
+   for update;
+  if not found then
+    return;
+  end if;
+  select state into resulting_job_state from ops.jobs where id = selected_job_id;
 
   return query
   update ops.cover_lookup_tasks as task
@@ -465,6 +475,10 @@ begin
          end,
          row_revision = task.row_revision + 1
    where task.id = selected_task.id
+     and task.task_key = requested_task_key
+     and task.library_id = requested_library_id
+     and task.initiating_account_id = actor_account_id
+     and task.job_id = selected_job_id
      and task.status in ('pending', 'running')
   returning task.provider_payload;
 end;

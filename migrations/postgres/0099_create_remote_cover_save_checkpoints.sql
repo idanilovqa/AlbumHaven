@@ -376,6 +376,7 @@ begin
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
      and job.lease_expires_at > clock_timestamp()
+     and job.cancel_requested_at is null
    for update;
   if not found then return; end if;
 
@@ -385,6 +386,7 @@ begin
      and task.job_id = requested_job_id
      and task.row_revision = expected_task_revision
      and task.status = 'running'
+     and task.cancel_requested_at is null
    for update;
   if not found then return; end if;
 
@@ -414,10 +416,14 @@ begin
            'notification_completed_at', observed_at
          ),
          row_revision = task.row_revision + 1
+    from ops.jobs as job
    where task.id = requested_task_id
      and task.job_id = requested_job_id
      and task.row_revision = expected_task_revision
      and task.status = 'running'
+     and task.cancel_requested_at is null
+     and job.id = requested_job_id
+     and job.cancel_requested_at is null
   returning task.row_revision into task_revision;
   if task_revision is null then return; end if;
   update ops.cover_remote_save_checkpoints as checkpoint_row

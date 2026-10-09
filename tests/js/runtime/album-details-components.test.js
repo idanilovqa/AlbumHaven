@@ -39,6 +39,27 @@ test('Album Details headers never render library source markers', () => {
   assert.match(html, /album-details-header__actions/);
 });
 
+test('Album Details renders the backend poor-art classification as a focusable SmallAlert beside the title', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsHeaderHtml({
+    layout: 'classic_bar',
+    artist: 'Sandy Alex G',
+    album: 'Rocket',
+    year: '2017',
+    poorArtQuality: true,
+  });
+
+  assert.match(html, /album-details-header__primary-row/);
+  assert.match(html, /small-alert small-alert--warning album-details-header__quality-alert/);
+  assert.match(html, /aria-label="Poor art quality"/);
+  assert.match(html, /tabindex="0"/);
+  assert.match(html, /small-alert__text">Poor art quality</);
+  assert.doesNotMatch(
+    context.buildAlbumDetailsHeaderHtml({ album: 'Rocket', poorArtQuality: false }),
+    /Poor art quality|album-details-header__quality-alert/,
+  );
+});
+
 test('Album Details renders noninteractive source markers below the cover', () => {
   const context = loadComponents();
   const html = context.buildAlbumCoverSourceMarkersHtml({

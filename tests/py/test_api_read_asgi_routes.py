@@ -3286,7 +3286,8 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
     assert missing_status == 404
     assert _decode_json(missing_body) == {"ok": False, "error": "Album not found"}
     assert postgres_calls == [("3::to the power of three", "tv"), ("missing::album", "private_web")]
-    assert len(worker_calls) == 2
+    assert len(worker_calls) == 3
+    assert worker_calls[1] is asgi_read_routes._repair_album_detail_cover_identity
 
 
 def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(

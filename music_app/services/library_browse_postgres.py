@@ -1411,6 +1411,9 @@ class PostgresLibraryBrowseRepository:
             connection=connection,
         )
         _annotate_album_payload_problematic_tracks([detail_album], rows)
+        detail_album["poor_art_quality"] = (
+            "Poor art quality" in _problematic_album_reasons(detail_album)
+        )
         from music_app.services.album_details import _attach_album_detail_track_rows
 
         return _attach_album_detail_track_rows(

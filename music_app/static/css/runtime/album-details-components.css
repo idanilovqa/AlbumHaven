@@ -57,3 +57,14 @@
   .album-details-header__tags { display: none; }
   .album-details-header__primary { font-size: 0.95rem; }
 }
+
+.album-details-header__primary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.album-details-header__quality-alert {
+  flex: 0 0 auto;
+}

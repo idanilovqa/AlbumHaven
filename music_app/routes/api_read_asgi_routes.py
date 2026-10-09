@@ -36,6 +36,9 @@ from music_app.services.page_resource_seams import (
 )
 from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.album_cover_candidate_snapshots_postgres import (
+    AlbumCoverCandidateSnapshotRepository,
+)
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
     PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
@@ -61,6 +64,27 @@ from music_app.services.database_identity import load_database_identity_status
 from config import PERSISTENCE_BACKEND_POSTGRES
 
 router = APIRouter()
+
+
+def _repair_album_detail_cover_identity(
+    config: Mapping[str, object],
+    payload: dict[str, object],
+) -> None:
+    track_paths = {
+        str(track.get("path") or "").strip()
+        for track in payload.get("tracks", [])
+        if isinstance(track, Mapping) and str(track.get("path") or "").strip()
+    }
+    if not track_paths:
+        return
+    try:
+        resolved_album_id = AlbumCoverCandidateSnapshotRepository(
+            config
+        ).resolve_album_id_for_track_paths(track_paths=track_paths)
+    except Exception:
+        return
+    if resolved_album_id is not None:
+        payload["album_id"] = resolved_album_id
 
 
 def _project_missing_album_actions_for_request(
@@ -952,6 +976,11 @@ async def album_details(request: Request) -> JSONResponse:
         )
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
+        await run_in_threadpool(
+            _repair_album_detail_cover_identity,
+            _app_config(request),
+            payload,
+        )
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse({"ok": True, "album": payload})
 

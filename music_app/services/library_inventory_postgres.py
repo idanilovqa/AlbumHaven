@@ -40,6 +40,17 @@ class PostgresLibraryInventoryRepository:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
 
+    def load_inventory_library_id(self) -> int | None:
+        """Identify the same Local Library that supplies scan/browse inventory."""
+        with self._connect_to_database() as connection:
+            row = connection.execute(_bootstrap_context_sql()).fetchone()
+        if row is None:
+            return None
+        library_id = _row_mapping(row, ("library_id",)).get("library_id")
+        if type(library_id) is not int or library_id <= 0:
+            raise RuntimeError("Postgres inventory library context is invalid.")
+        return library_id
+
     def load_support_state(self, *, connection: Any | None = None) -> dict[str, object]:
         """Load version support state in one snapshot-safe, non-multiplying query."""
         if connection is None:

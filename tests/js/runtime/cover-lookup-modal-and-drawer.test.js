@@ -725,7 +725,7 @@ function createDrawerHarness(overrides = {}) {
       ok: true,
       json: async () => ({
         ok: true,
-        tasks: [{ id: 'task-1', status: 'failed' }],
+        tasks: [{ id: 'task-1', status: 'completed', result_kind: 'cover-updated' }],
       }),
     }),
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks.map((task) => ({ ...task, notification_action_taken: true })),
@@ -748,7 +748,9 @@ function createDrawerHarness(overrides = {}) {
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
-  assert.match(bodyElement.innerHTML, /Lookup failed/);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-open-cover-lookup-task="task-1"/);
+  assert.equal(badgeElement.hidden, true);
+  assert.equal(clearElement.disabled, true);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

@@ -27609,7 +27609,11 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
-  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const tasks = (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
+    .filter((task) => !(
+      String(task?.status || '') === 'completed'
+      && Boolean(task?.notification_action_taken)
+    ));
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -27662,8 +27666,6 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
-      : isCompleted && task?.notification_action_taken
-      ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'

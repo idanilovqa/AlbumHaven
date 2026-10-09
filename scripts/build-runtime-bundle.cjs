@@ -11,6 +11,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/response-state-helpers.js',
   'js/runtime/view-state-helpers.js',
   'js/runtime/browser-navigation-helpers.js',
+  'js/runtime/discovery-center-navigation.js',
   'js/runtime/browser-storage-helpers.js',
   'js/runtime/browser-dialog-helpers.js',
   'js/runtime/browser-viewport-helpers.js',

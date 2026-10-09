@@ -42,6 +42,7 @@ const expectedRuntimeOrder = [
   'response-state-helpers.js',
   'view-state-helpers.js',
   'browser-navigation-helpers.js',
+  'discovery-center-navigation.js',
   'browser-storage-helpers.js',
   'browser-dialog-helpers.js',
   'browser-viewport-helpers.js',

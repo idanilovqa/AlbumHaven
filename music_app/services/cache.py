@@ -486,6 +486,11 @@ def _rebase_non_cover_cache_entry_changes(
                 if key not in _AUTHORITATIVE_COVER_FIELDS
             }
             continue
+        if isinstance(baseline_entry, dict) and latest_entry is None:
+            # A newer inventory publication removed this path while the queued
+            # delta was waiting. Keep that authoritative removal instead of
+            # resurrecting the stale entry or failing an already-written edit.
+            continue
         if not isinstance(baseline_entry, dict) or not isinstance(latest_entry, dict):
             raise RuntimeError(
                 "Queued scan-cache update cannot rebase a missing inventory entry."

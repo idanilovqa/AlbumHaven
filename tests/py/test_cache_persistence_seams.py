@@ -1106,6 +1106,19 @@ def test_scheduled_cache_delta_preserves_structural_inventory_changed_before_wor
     assert store["file_cache"][track_path]["play_count"] == 1
 
 
+def test_cache_delta_rebase_preserves_newer_inventory_removal():
+    path = "C:/Music/Artist/Album/song.mp3"
+    baseline_entry = {"path": path, "title": "Old title"}
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={path: baseline_entry},
+        changed_entries={path: {**baseline_entry, "title": "New title"}},
+        latest_file_cache={},
+    )
+
+    assert rebased == {}
+
+
 def test_runtime_cover_selection_uses_targeted_postgres_mutation_without_republishing_snapshot(
     tmp_path,
     monkeypatch,

@@ -1,7 +1,7 @@
 /* Private source bindings for the shared React playtable owner. Media and write
    refs never enter its public snapshot, action packet, DOM keys or history. */
 function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCurrent, resolveRow,
-  creationSource = () => null, activitySource = () => null, subscribe, navigationCurrent = isCurrent, resolveNavigationRow = resolveRow, retainNavigationSource} = {}) {
+  creationSource = () => null, activitySource = () => null, subscribe, navigationCurrent = isCurrent, resolveNavigationRow = resolveRow, retainNavigationSource, captureQueueRows, canQueueRow} = {}) {
   const nativeScope = TrackActionsRuntime.scope(), baseline = new Set(rows || []), listeners = new Set();
   let visibleRows = Array.from(rows || []), viewRevision = revision, retired = false;
   const inventoryRef = source => {
@@ -52,6 +52,25 @@ function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCur
       const activity = activitySource(found.map(([row]) => row));
       return {rows: resolved, playlist_creation_source: creationSource(found.map(([row]) => row)),
         ...(activity ? {activity_source: activity} : {})};
+    },
+    canQueue(keys) {
+      return active() && typeof captureQueueRows === 'function' && Array.isArray(keys) && keys.length > 0
+        && new Set(keys).size === keys.length && keys.every(key => {
+          const matches = visibleRows.filter(row => keyFor(row) === key);
+          if (matches.length !== 1 || !readable(matches[0])) return false;
+          if (typeof canQueueRow === 'function') {try {return canQueueRow(matches[0]) === true;} catch {return false;}}
+          const source = resolveRow(matches[0]);
+          return Boolean(source && source.source_readable !== false && source.allowed_actions?.can_read !== false
+            && source.allowed_actions?.can_play !== false && !['missing', 'unknown', 'unresolved'].includes(source.availability)
+            && source.playback_state?.can_start_here === true);
+        });
+    },
+    async captureQueue(keys, {signal} = {}) {
+      if (!this.canQueue(keys) || signal?.aborted) return null;
+      const selected = keys.map(key => visibleRows.find(row => keyFor(row) === key)), capturedRevision = viewRevision;
+      const result = await captureQueueRows(selected, {signal});
+      if (!active() || signal?.aborted || capturedRevision !== viewRevision || !Array.isArray(result)) return null;
+      return result;
     },
     retainNavigation(keys) {
       if (!active() || !Array.isArray(keys) || !keys.length || new Set(keys).size !== keys.length) return null;
@@ -113,7 +132,10 @@ const NativePlaytables = (() => {
     owners.set(key, owner);
     owner.source = createPrivatePlaytableSource({scopeKey, rows, instance: identity, revision: identity,
       isCurrent: () => owners.get(key) === owner && state.view === sourceView && TrackActionsRuntime.scope().token === scope.token && isCurrent(),
-      resolveRow: row => mapping.get(row), creationSource: () => sourceView?.playlist_creation_source || null,
+      resolveRow: row => mapping.get(row),
+      ...(key === 'album-tracks' ? {captureQueueRows: selected => captureNativeAlbumQueueSources(sourceIdentity, selected.map(row => mapping.get(row)))}
+        : key === 'loose-tracks' ? {captureQueueRows: selected => captureNativeLooseQueueSources(sourceIdentity, selected.map(row => mapping.get(row)))} : {}),
+      creationSource: () => sourceView?.playlist_creation_source || null,
       ...(retainNavigationSource ? {retainNavigationSource} : {})});
     owner.check = () => {owner.mount?.update();};
     return owner;
@@ -131,7 +153,9 @@ const NativePlaytables = (() => {
         const button = rows.length === 1 && rows[0].querySelector('.play-track-button');
         if (button && !button.disabled) activateSharedTrackButton(button, {restart: options?.restart === true, focusTimeline: event?.isTrusted !== false});
       },
-      onPlaylistAction: (packet, lifetime, anchor) => ui.open(packet, lifetime, owner.source, anchor),
+      onPlaylistAction: (packet, lifetime, anchor, options) => ui.open(packet, lifetime, owner.source, anchor, options),
+      onContextAction: (packet, lifetime, anchor) => typeof ui.context === 'function'
+        ? ui.context(packet, lifetime, owner.source, anchor) : ui.open(packet, lifetime, owner.source, anchor),
       onError: () => showToast('The selected-track action is unavailable.', 'error', 3200),
     });
     if (typeof MutationObserver === 'function') {

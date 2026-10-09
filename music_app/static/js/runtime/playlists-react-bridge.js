@@ -142,6 +142,7 @@ const PlaylistReactRuntime = (() => {
         ? copy(row, ['playlist_item_id']) : {
         allowed_actions: {can_play: exactGrant(row.allowed_actions, 'can_play'), can_view_details: exactGrant(row.allowed_actions, 'can_view_details')},
         ...copy(row, ['playlist_item_id', 'inventory_track_ref', 'path', 'track_ref', 'canonical_track_ref', 'entry_ref', 'title', 'artist', 'secondary_artist', 'album_title', 'duration_seconds']),
+        album_ref: typeof row.album_ref === 'string' && row.album_ref.trim() && !/[\\/\x00-\x1f\x7f]/.test(row.album_ref) ? row.album_ref : null,
         album_target: albumTarget(row, origin),
         artist_target: privateResourceTarget(row.artist_target, resourceTarget(row.artist_target, 'artist', origin)),
         track_preference: Object.prototype.hasOwnProperty.call(row, 'track_preference') ? TrackActionsRuntime.overlay(row.track_preference) : null,
@@ -261,6 +262,45 @@ const PlaylistReactRuntime = (() => {
     return createPrivatePlaytableSource({scopeKey: context?.scopeKey, rows, instance, revision,
       isCurrent: () => isCurrent() && sync().visible && sync().scopeKey === context?.scopeKey
         && raw === source && playlistReadEpoch === epoch && sync().playlistId === context.playlist_id,
+      canQueueRow: row => row.source_readable === true && row.availability === 'local' && source?.playlist_detail?.allowed_actions?.can_play === true
+        && source.playlist_detail.track_rows.some(item => item.playlist_item_id === row.playlist_item_id && exactGrant(item.allowed_actions, 'can_play')),
+      captureQueueRows: selectedRows => {
+        const detail = source?.playlist_detail, stamp = PrivateUITransport.context();
+        if (!detail?.allowed_actions?.can_play) return null;
+        const valid = () => {try {return sync().scopeKey === context.scopeKey && PrivateUITransport.context() === stamp;} catch {return false;}};
+        return selectedRows.map(row => {
+          const original = detail.track_rows.find(item => item.playlist_item_id === row.playlist_item_id);
+          if (!original || !exactGrant(original.allowed_actions, 'can_play')) return null;
+          return {display: {title: row.title, artist: row.artist, album: row.album_title, albumTarget: row.album_target}, isCurrent: valid,
+            async resolvePlaylistItem({signal} = {}) {
+              if (!valid() || signal?.aborted) throw aborted();
+              const params = new URLSearchParams({surface: 'playlists', playlist_id: detail.playlist_id});
+              const response = await PrivateUITransport.request(`/view-data?${params}`, {signal});
+              const fresh = response?.playlist_detail;
+              const matches = fresh?.track_rows?.filter(item => item?.playlist_item_id === original.playlist_item_id) || [];
+              const item = matches[0];
+              if (!valid() || signal?.aborted || fresh?.playlist_id !== detail.playlist_id || fresh.revision !== detail.revision
+                || matches.length !== 1 || unreadable(item) || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(item?.inventory_track_ref || '')) throw aborted();
+              return {inventory_track_ref: item.inventory_track_ref, source_readable: true,
+                source_provenance: {kind: 'playlist', track_ref: item.inventory_track_ref, playlist_ref: detail.playlist_id, revision: detail.revision, item_ref: original.playlist_item_id}};
+            },
+            async resolveDetails(kind, {signal} = {}) {
+              if (!valid() || signal?.aborted || kind !== 'album' || !row.album_target?.allowed_actions?.can_view_details) throw aborted();
+              const value = await nativeTarget(original, detail, 'details', signal);
+              if (!valid() || signal?.aborted || value.allowed_actions?.can_view_details !== true) throw aborted();
+              return {target: window.AlbumHavenResourceSelection.projectTarget({...row.album_target,
+                native_actions: {album_ref: value.album_ref, allowed_actions: {can_open_album: true, can_play_album: value.allowed_actions.can_play_album === true}}}),
+                subject_ref: null, data: {kind, ref: row.album_target.ref, title: value.title || row.album_title, artist: value.artist || row.artist,
+                  metadata_state: 'current', source_label: 'Queued from Playlist', tracks: null}, isCurrent: () => valid() && !signal?.aborted};
+            },
+            async resolve({signal} = {}) {
+              if (!valid() || signal?.aborted) throw aborted();
+              const value = await nativeTarget(original, detail, 'play', signal);
+              if (!valid() || signal?.aborted) throw aborted();
+              return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+            }};
+        });
+      },
       resolveRow: row => currentTrackRow(row, context), creationSource: () => raw?.playlist_creation_source,
       navigationCurrent: () => sync().scopeKey === context?.scopeKey && raw === source && playlistReadEpoch === epoch,
       resolveNavigationRow: row => {
@@ -340,7 +380,7 @@ const PlaylistReactRuntime = (() => {
       nativeTracks.set(item.playlist_item_id, {owner, source: native});
       return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
         artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
-        playlistItemId: item.playlist_item_id};
+        playlistItemId: item.playlist_item_id, inventory_track_ref: target.inventory_track_ref, albumRef: byItem.get(item.playlist_item_id)?.album_ref || null};
     });
     const index = tracks.findIndex(track => track.playlistItemId === source.playlist_item_id);
     if (index < 0 || !current() || typeof playTrackFromPayload !== 'function') throw aborted();
@@ -583,8 +623,10 @@ const PlaylistReactRuntime = (() => {
       playbackListeners.add(emit); const unsubscribe = TrackActionsRuntime.subscribePlayback(emit);
       return () => {playbackListeners.delete(emit); unsubscribe();};
     },
+    openPlaytableContext: (...args) => window.AlbumHavenPlaytableUI?.context(...args) ?? false,
     openPlaylistAction: (...args) => window.AlbumHavenPlaytableUI?.open(...args) ?? false,
     canOpenPlaytableForm: () => !activeAppFormDialog && !(typeof isMobileFormReturning === 'function' && isMobileFormReturning()),
+    notifyQueueFailure: () => showToast('These tracks could not be queued. Refresh the source and try again.', 'error', 4000),
     notifyPlaytableCreation: () => showToast('Playlist saved. Open it from Playlists when access is available.', 'info', 4000),
     playtableFormRuntime(isCurrent) {
       const sourceView = state.view, sourceUrl = window.location.href, sourceScope = TrackActionsRuntime.scope().token;

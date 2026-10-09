@@ -51,7 +51,9 @@ function commitPlaylistQueue(next, expectedQueue) {
   if (!loopOwned && engine?.roles?.continuity && (typeof closeStreamingContinuityRole !== 'function'
     || closeStreamingContinuityRole('playlist-queue-mode') !== true)) throw new Error('Queue mode change was not accepted.');
   state.player.playbackQueue = next;
-  if (engine && !loopOwned) {
+  const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+  if (explicitProgression) ExplicitQueueRuntime.modeChanged(expectedQueue, next);
+  if (engine && !loopOwned && !explicitProgression) {
     engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
     const index = playlistQueueNextIndex(next, String(state.player.current?.path || '')), track = index >= 0 ? next.tracks[index] : null;
     if (track && typeof scheduleStreamingContinuity === 'function') {

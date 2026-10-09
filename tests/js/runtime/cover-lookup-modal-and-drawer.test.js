@@ -1432,9 +1432,10 @@ function createDrawerHarness(overrides = {}) {
     tracks: [{ path: 'C:/music/Saved/01.flac' }],
   };
   const fetchCalls = [];
+  const toastCalls = [];
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
-    showToast: () => {},
+    showToast: (...args) => toastCalls.push(args),
   });
   context.state.coverLookup.modal = {
     album,
@@ -1466,6 +1467,7 @@ function createDrawerHarness(overrides = {}) {
     candidate_id: 'saved-candidate',
     snapshot_generation: 'saved-generation',
   });
+  assert.deepEqual(toastCalls, []);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

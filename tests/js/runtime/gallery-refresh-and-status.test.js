@@ -3321,11 +3321,7 @@ test('pollStatus does not refresh the populated root browse when cover work fini
 
   assert.equal(pendingRequests.length, 1);
   assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
-  assert.deepEqual(calls.showToast, [{
-    message: 'Album covers updated.',
-    level: 'success',
-    durationMs: 3200,
-  }]);
+  assert.deepEqual(calls.showToast, []);
 });
 
 test('pollStatus reports an interrupted cover run without claiming covers were updated', async () => {
@@ -3414,11 +3410,7 @@ test('pollStatus defers cover reconciliation until an in-flight selected-artist 
     '/status',
     '/view-data?artist=A.C.T',
   ]);
-  assert.deepEqual(calls.showToast, [{
-    message: 'Album covers updated.',
-    level: 'success',
-    durationMs: 3200,
-  }]);
+  assert.deepEqual(calls.showToast, []);
 });
 
 test('pollStatus refreshes the current loaded gallery when a background scan completes', async () => {

@@ -2169,7 +2169,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       renderCoverLookupDrawer();
     }
     if (ownsModal()) closeCoverLookupModal();
-    showToast('Local cover art selected.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (previousAlbum) {
@@ -2239,7 +2238,6 @@ async function deleteLocalCoverFromLookup(sourcePath) {
         await refreshCoverLookupGallery(false);
       }
     }
-    showToast('Local cover art deleted.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
@@ -2323,10 +2321,6 @@ async function saveRemoteCoverFromLookup() {
     await loadCoverLookupTasks({ toast: false });
     ensureCoverLookupPolling();
     renderCoverLookupDrawer();
-    const successMessage = selectedMatch?.display_only
-      ? 'Remote cover art linked.'
-      : (data.queued ? 'Saving selected cover art in the background.' : 'Selected cover art saved.');
-    showToast(successMessage, 'success', 2400);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -2440,7 +2434,6 @@ async function savePastedCoverFromLookup(imageId) {
       markCoverLookupTaskActionTaken(taskId, album);
       renderCoverLookupDrawer();
     }
-    showToast('Pasted image saved as cover art.', 'success', 2200);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);

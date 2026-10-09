@@ -664,7 +664,7 @@ test('overlapping scan and cover completion observations each report once', asyn
   coverRefresh.resolve(true);
   await Promise.all([older, newer]);
   assert.equal(h.toasts.filter(toast => toast.message === 'Library scan complete.').length, 1);
-  assert.equal(h.toasts.filter(toast => toast.message === 'Album covers updated.').length, 1);
+  assert.equal(h.toasts.filter(toast => toast.message === 'Album covers updated.').length, 0);
   assert.equal(refreshes, 2);
 });
 
@@ -698,7 +698,7 @@ for (const kind of ['scan', 'covers']) {
     assert.equal(refreshCount, 1);
     refresh.resolve(true); await Promise.all([older, newer]);
     const message = kind === 'scan' ? 'Library scan complete.' : 'Album covers updated.';
-    assert.equal(h.toasts.filter(toast => toast.message === message).length, 1);
+    assert.equal(h.toasts.filter(toast => toast.message === message).length, kind === 'scan' ? 1 : 0);
     assert.equal(h.timers.size, 1);
   });
 }

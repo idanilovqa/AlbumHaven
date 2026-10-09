@@ -16159,9 +16159,7 @@ async function pollStatus() {
         if (!ownsStatus()) return;
       }
       const coverOutcome = String(normalizedStatus.covers_outcome || '').trim().toLowerCase();
-      if (coverOutcome === 'completed') {
-        showToast('Album covers updated.', 'success', 3200);
-      } else if (!['cancelled', 'failed'].includes(coverOutcome)) {
+      if (!['completed', 'cancelled', 'failed'].includes(coverOutcome)) {
         showToast('Cover search was interrupted.', 'warning', 4800);
       }
     }
@@ -28547,7 +28545,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       renderCoverLookupDrawer();
     }
     if (ownsModal()) closeCoverLookupModal();
-    showToast('Local cover art selected.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (previousAlbum) {
@@ -28617,7 +28614,6 @@ async function deleteLocalCoverFromLookup(sourcePath) {
         await refreshCoverLookupGallery(false);
       }
     }
-    showToast('Local cover art deleted.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
@@ -28701,10 +28697,6 @@ async function saveRemoteCoverFromLookup() {
     await loadCoverLookupTasks({ toast: false });
     ensureCoverLookupPolling();
     renderCoverLookupDrawer();
-    const successMessage = selectedMatch?.display_only
-      ? 'Remote cover art linked.'
-      : (data.queued ? 'Saving selected cover art in the background.' : 'Selected cover art saved.');
-    showToast(successMessage, 'success', 2400);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -28818,7 +28810,6 @@ async function savePastedCoverFromLookup(imageId) {
       markCoverLookupTaskActionTaken(taskId, album);
       renderCoverLookupDrawer();
     }
-    showToast('Pasted image saved as cover art.', 'success', 2200);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);

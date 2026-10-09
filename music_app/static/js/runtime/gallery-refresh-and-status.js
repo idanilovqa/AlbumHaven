@@ -1991,9 +1991,7 @@ async function pollStatus() {
         if (!ownsStatus()) return;
       }
       const coverOutcome = String(normalizedStatus.covers_outcome || '').trim().toLowerCase();
-      if (coverOutcome === 'completed') {
-        showToast('Album covers updated.', 'success', 3200);
-      } else if (!['cancelled', 'failed'].includes(coverOutcome)) {
+      if (!['completed', 'cancelled', 'failed'].includes(coverOutcome)) {
         showToast('Cover search was interrupted.', 'warning', 4800);
       }
     }

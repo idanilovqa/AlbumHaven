@@ -12,6 +12,7 @@ import socketserver
 import sys
 import tempfile
 import threading
+from threading import Condition
 from typing import Any, Callable
 from time import monotonic
 
@@ -36,6 +37,135 @@ from phase7PlaybackFixture import (
 
 OWNER_PASSWORD = "Phase Seven Owner Passphrase 2026!"
 CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS = 10
+APPLICATION_SHUTDOWN_TIMEOUT_SECONDS = 10
+
+
+class _ApplicationServers:
+    """Own every ASGI lifespan across fixture resets."""
+
+    def __init__(self, *, primary_port: int, secondary_port: int | None) -> None:
+        self._ports = [primary_port]
+        if secondary_port is not None:
+            self._ports.append(secondary_port)
+        self._entries: list[tuple[Any, threading.Thread, int, list[BaseException]]] = []
+        self._condition = Condition()
+        self._generation = 0
+        self._resetting = False
+
+    def start(self) -> None:
+        from music_app import create_asgi_app
+        import uvicorn
+
+        entries = []
+        for index, port in enumerate(self._ports):
+            server = uvicorn.Server(
+                uvicorn.Config(
+                    create_asgi_app(),
+                    host="127.0.0.1",
+                    port=port,
+                    log_level="warning",
+                )
+            )
+            failures: list[BaseException] = []
+
+            def run_server(
+                owned_server: Any = server,
+                owned_failures: list[BaseException] = failures,
+            ) -> None:
+                try:
+                    owned_server.run()
+                except BaseException as exc:
+                    owned_failures.append(exc)
+
+            thread = threading.Thread(
+                target=run_server,
+                name=(
+                    "album-haven-phase7-primary"
+                    if index == 0
+                    else "album-haven-phase7-secondary-worker"
+                ),
+                daemon=True,
+            )
+            entries.append((server, thread, port, failures))
+        started_entries = []
+        with self._condition:
+            self._entries = entries
+            self._generation += 1
+            try:
+                for entry in reversed(entries):
+                    entry[1].start()
+                    started_entries.append(entry)
+            except BaseException as start_error:
+                for server, _thread, _port, _failures in started_entries:
+                    server.should_exit = True
+                for _server, thread, _port, _failures in started_entries:
+                    thread.join(timeout=APPLICATION_SHUTDOWN_TIMEOUT_SECONDS)
+                live_ports = [
+                    port
+                    for _server, thread, port, _failures in started_entries
+                    if thread.is_alive()
+                ]
+                self._entries = []
+                self._condition.notify_all()
+                if live_ports:
+                    raise RuntimeError(
+                        "Partial application server startup cleanup is unproven for port(s): "
+                        + ", ".join(str(port) for port in live_ports)
+                    ) from start_error
+                raise
+            self._condition.notify_all()
+
+    def stop(self) -> None:
+        with self._condition:
+            entries = list(self._entries)
+        for server, _thread, _port, _failures in entries:
+            server.should_exit = True
+        for _server, thread, _port, _failures in entries:
+            thread.join(timeout=APPLICATION_SHUTDOWN_TIMEOUT_SECONDS)
+        live_ports = [
+            port
+            for _server, thread, port, _failures in entries
+            if thread.is_alive()
+        ]
+        if live_ports:
+            raise RuntimeError(
+                "Application server shutdown is unproven for port(s): "
+                + ", ".join(str(port) for port in live_ports)
+            )
+        with self._condition:
+            if self._entries == entries:
+                self._entries = []
+            self._condition.notify_all()
+
+    def begin_reset(self) -> None:
+        with self._condition:
+            self._resetting = True
+            self._condition.notify_all()
+
+    def finish_reset(self) -> None:
+        with self._condition:
+            self._resetting = False
+            self._condition.notify_all()
+
+    def wait_for_primary_exit(self) -> None:
+        while True:
+            with self._condition:
+                while not self._entries:
+                    self._condition.wait()
+                generation = self._generation
+                primary_thread = self._entries[0][1]
+                primary_failures = self._entries[0][3]
+            primary_thread.join(timeout=None)
+            if primary_failures:
+                raise primary_failures[0]
+            with self._condition:
+                if self._resetting or self._generation != generation:
+                    while self._resetting:
+                        self._condition.wait()
+                    if not self._entries:
+                        return
+                    continue
+                return
 
 
 class CaptureState:
@@ -466,7 +596,10 @@ def main() -> None:
     database_owned = False
     created_servers: list[Any] = []
     started_servers: list[Any] = []
-    application_servers: list[tuple[Any, threading.Thread]] = []
+    application_servers = _ApplicationServers(
+        primary_port=args.port,
+        secondary_port=args.worker_port,
+    )
     jobs_worker = None
     reset_lock = threading.Lock()
     original_failure: BaseException | None = None
@@ -512,36 +645,42 @@ def main() -> None:
         def reset_fixture() -> None:
             nonlocal jobs_worker
             with reset_lock:
-                state.delivery_gate.set()
-                if jobs_worker is not None:
-                    jobs_worker.stop()
-                    jobs_worker = None
-                state.clear()
-                reset_application_tables(setup_database_url)
-                seed_bootstrap_owner_and_library(setup_database_url)
-                _bootstrap_owner(runtime_database_url)
-                persist_settings_playback_inventory(
-                    setup_database_url,
-                    temp_root / "media",
-                    playback_inventory,
-                    rebuild_relations=args.extended_mobile_media,
-                    include_missing_inventory=(
-                        args.playback_media and not args.mobile_layout_media
-                    ),
-                )
-                if args.mobile_layout_media:
-                    seed_mobile_recent_history(setup_database_url)
-                    seed_mobile_demo_ratings(setup_database_url)
-                    if args.extended_mobile_media:
-                        seed_mobile_demo_loops(
-                            runtime_database_url,
-                            playback_inventory,
-                            temp_root / "app-data",
-                        )
-                jobs_worker = build_isolated_jobs_worker(runtime_database_url)
-                if jobs_worker is None:
-                    raise RuntimeError("Phase 7 E2E requires a durable worker database URL.")
-                jobs_worker.start()
+                application_servers.begin_reset()
+                try:
+                    state.delivery_gate.set()
+                    if jobs_worker is not None:
+                        jobs_worker.stop()
+                        jobs_worker = None
+                    application_servers.stop()
+                    state.clear()
+                    reset_application_tables(setup_database_url)
+                    seed_bootstrap_owner_and_library(setup_database_url)
+                    _bootstrap_owner(runtime_database_url)
+                    persist_settings_playback_inventory(
+                        setup_database_url,
+                        temp_root / "media",
+                        playback_inventory,
+                        rebuild_relations=args.extended_mobile_media,
+                        include_missing_inventory=(
+                            args.playback_media and not args.mobile_layout_media
+                        ),
+                    )
+                    if args.mobile_layout_media:
+                        seed_mobile_recent_history(setup_database_url)
+                        seed_mobile_demo_ratings(setup_database_url)
+                        if args.extended_mobile_media:
+                            seed_mobile_demo_loops(
+                                runtime_database_url,
+                                playback_inventory,
+                                temp_root / "app-data",
+                            )
+                    application_servers.start()
+                    jobs_worker = build_isolated_jobs_worker(runtime_database_url)
+                    if jobs_worker is None:
+                        raise RuntimeError("Phase 7 E2E requires a durable worker database URL.")
+                    jobs_worker.start()
+                finally:
+                    application_servers.finish_reset()
 
         state.reset_fixture = reset_fixture
         state.database_action = lambda action: _database_action(
@@ -566,28 +705,7 @@ def main() -> None:
             )
             provider_service.start()
 
-        from music_app import create_asgi_app
-
-        app = create_asgi_app()
-        import uvicorn
-
-        if args.worker_port is not None:
-            worker_app = create_asgi_app()
-            worker_server = uvicorn.Server(
-                uvicorn.Config(
-                    worker_app,
-                    host="127.0.0.1",
-                    port=args.worker_port,
-                    log_level="warning",
-                )
-            )
-            worker_thread = threading.Thread(
-                target=worker_server.run,
-                name="album-haven-phase7-secondary-worker",
-                daemon=True,
-            )
-            worker_thread.start()
-            application_servers.append((worker_server, worker_thread))
+        application_servers.start()
         print(
             f"Phase 7 production E2E app listening on http://127.0.0.1:{args.port}; "
             f"SMTP capture control on http://127.0.0.1:{args.control_port}"
@@ -598,7 +716,7 @@ def main() -> None:
             ),
             flush=True,
         )
-        uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+        application_servers.wait_for_primary_exit()
     except BaseException as exc:
         original_failure = exc
         raise
@@ -617,11 +735,11 @@ def main() -> None:
                 server.begin_shutdown()
             except Exception as exc:
                 capture_cleanup_failures.append(exc)
-        for server, thread in reversed(application_servers):
-            server.should_exit = True
-            thread.join(timeout=10)
-            if thread.is_alive():
-                application_shutdown_proven = False
+        try:
+            application_servers.stop()
+        except Exception as exc:
+            application_shutdown_proven = False
+            capture_cleanup_failures.append(exc)
         for server in reversed(created_servers):
             if server in started_servers:
                 try:
@@ -638,7 +756,7 @@ def main() -> None:
                     raise TimeoutError("Capture request handlers did not stop within the shutdown budget.")
             except Exception as exc:
                 capture_cleanup_failures.append(exc)
-        if jobs_worker is not None and not capture_cleanup_failures:
+        if jobs_worker is not None:
             try:
                 jobs_worker.stop()
             except Exception as exc:

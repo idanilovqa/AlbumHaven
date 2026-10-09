@@ -463,7 +463,7 @@ class PostgresLastfmRetryJobRepository:
             row = _mapping(connection.execute(_accept_pending_sql(), values).fetchone())
             if not row:
                 raise ValueError("pending scrobble is terminal, stale, or malformed")
-            return self._compose_job(
+            accepted = self._compose_job(
                 connection=connection,
                 row=row,
                 account_id=account_id,
@@ -474,6 +474,22 @@ class PostgresLastfmRetryJobRepository:
                 client_surface=client_surface,
                 scheduled_at=now,
             )
+            marked = connection.execute(
+                """
+                update integration.listen_history
+                   set metadata = coalesce(metadata, '{}'::jsonb)
+                     || '{"scrobble_durable_job_owned":true}'::jsonb
+                 where account_id = %(account_id)s
+                   and library_id = %(library_id)s
+                   and source_family = %(source_family)s
+                   and source_entry_id = %(source_key)s
+                returning id
+                """,
+                values,
+            ).fetchone()
+            if not marked:
+                raise ValueError("listen history durable ownership could not be marked")
+            return accepted
 
     def adopt_due_pending(
         self,

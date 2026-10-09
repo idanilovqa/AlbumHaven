@@ -36,12 +36,19 @@ _APPROVED_DEPLOYMENT_MODES = frozenset(
 class AuthorizationDecision:
     allowed: bool
     reason_code: str
+    indeterminate: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.allowed, bool) or not isinstance(
             self.reason_code, str
-        ) or not _REASON_CODE.fullmatch(self.reason_code):
+        ) or not _REASON_CODE.fullmatch(self.reason_code) or not isinstance(
+            self.indeterminate, bool
+        ):
             raise ValueError("authorization decision is invalid")
+        if self.indeterminate and (
+            self.allowed or self.reason_code != "authorization_unavailable"
+        ):
+            raise ValueError("indeterminate authorization decision is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +164,9 @@ def build_lastfm_retry_resource_validator(
                 accepted_attempt=claim.resource_revision,
             )
         except Exception:
-            return AuthorizationDecision(False, "lastfm_retry_scope_invalid")
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         if valid is not True:
             return AuthorizationDecision(False, "lastfm_retry_scope_stale")
         return AuthorizationDecision(True, "lastfm_retry_scope_current")
@@ -236,7 +245,9 @@ def build_auth_mail_resource_validator(
                 accepted_attempt=claim.resource_revision,
             )
         except Exception:
-            return AuthorizationDecision(False, "auth_mail_scope_invalid")
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         if valid is not True:
             return AuthorizationDecision(False, "auth_mail_scope_stale")
         return AuthorizationDecision(True, "auth_mail_scope_current")
@@ -324,7 +335,7 @@ class JobAuthorizationService:
                 )
             except Exception:
                 return AuthorizationDecision(
-                    False, "authorization_context_invalid"
+                    False, "authorization_unavailable", indeterminate=True
                 )
         if not _valid_context(context):
             return AuthorizationDecision(False, "authorization_context_invalid")
@@ -421,7 +432,9 @@ def _run_validator(
     try:
         decision = validator(claim, context, now)
     except Exception:
-        return AuthorizationDecision(False, "authorization_context_invalid")
+        return AuthorizationDecision(
+            False, "authorization_unavailable", indeterminate=True
+        )
     if not isinstance(decision, AuthorizationDecision):
         return AuthorizationDecision(False, "authorization_context_invalid")
     return decision

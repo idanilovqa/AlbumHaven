@@ -963,8 +963,8 @@ async def index(request: Request) -> Response:
     if (
         _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
         and int(initial_view.get("album_count") or 0) == 0
-        and not library_state.get("last_error")
-        and not library_state.get("scan_in_progress")
+        and not bootstrap_library_state.get("last_error")
+        and not bootstrap_library_state.get("scan_in_progress")
     ):
         with request.app.state.cold_scan_handoff_lock:
             if str(library_state.get("cold_scan_handoff_status") or "idle") == "idle":
@@ -1015,7 +1015,8 @@ async def index(request: Request) -> Response:
                 _evaluation, library_id, origin_ref, root_ids = _authorized_scan_request(
                     request
                 )
-                scan_jobs.enqueue_authorized_full_scan(
+                await run_in_threadpool(
+                    scan_jobs.enqueue_authorized_full_scan,
                     policy_evaluation=evaluation,
                     library_id=library_id,
                     request_origin_ref=origin_ref,
@@ -1170,7 +1171,8 @@ async def refresh_api(request: Request) -> JSONResponse:
     scan_jobs = _scan_job_repository(request)
     if scan_jobs is not None:
         evaluation, library_id, origin_ref, root_ids = _authorized_scan_request(request)
-        accepted = scan_jobs.enqueue_authorized_full_scan(
+        accepted = await run_in_threadpool(
+            scan_jobs.enqueue_authorized_full_scan,
             policy_evaluation=evaluation,
             library_id=library_id,
             request_origin_ref=origin_ref,
@@ -1194,7 +1196,8 @@ async def refresh_api(request: Request) -> JSONResponse:
     accepted_state_updates: dict[str, object] = {}
     if full_rescan:
         if not library_state.get("albums"):
-            state_service.hydrate_library_state_for_config(
+            await run_in_threadpool(
+                state_service.hydrate_library_state_for_config,
                 library_state,
                 config,
                 logger_for_prewarm=route_logger,
@@ -1248,7 +1251,8 @@ async def cancel_refresh_api(request: Request) -> JSONResponse:
         library_id = getattr(audit, "library_id", None)
         if not isinstance(library_id, int) or library_id < 1:
             raise RuntimeError("Authorized library scope is unavailable.")
-        result = scan_jobs.cancel_authorized_full_scan(
+        result = await run_in_threadpool(
+            scan_jobs.cancel_authorized_full_scan,
             policy_evaluation=evaluation,
             library_id=library_id,
             now=datetime.now(timezone.utc),
@@ -1264,7 +1268,8 @@ async def refresh(request: Request) -> RedirectResponse:
     scan_jobs = _scan_job_repository(request)
     if scan_jobs is not None:
         evaluation, library_id, origin_ref, root_ids = _authorized_scan_request(request)
-        scan_jobs.enqueue_authorized_full_scan(
+        await run_in_threadpool(
+            scan_jobs.enqueue_authorized_full_scan,
             policy_evaluation=evaluation,
             library_id=library_id,
             request_origin_ref=origin_ref,

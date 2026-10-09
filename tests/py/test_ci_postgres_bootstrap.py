@@ -155,6 +155,38 @@ def test_bootstrap_executes_worker_denied_delete_probe_with_worker_login():
     )
 
 
+def test_bootstrap_worker_probe_requires_every_table_and_column_privilege():
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+
+    assert "has_table_privilege(current_user,'ops.jobs','select,update')" not in source
+    for table, privilege in (
+        ("ops.jobs", "select"),
+        ("ops.job_transitions", "select"),
+        ("ops.job_transitions", "insert"),
+        ("ops.worker_instances", "select"),
+        ("ops.worker_instances", "insert"),
+        ("ops.worker_instances", "update"),
+    ):
+        assert f"has_table_privilege(current_user,'{table}','{privilege}')" in source
+    for column in (
+        "state",
+        "scheduled_at",
+        "attempt_count",
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+        "heartbeat_at",
+        "started_at",
+        "completed_at",
+        "outcome_code",
+        "updated_at",
+    ):
+        assert (
+            f"has_column_privilege(current_user,'ops.jobs','{column}','update')"
+            in source
+        )
+
+
 def test_direct_app_login_copies_inherited_column_privileges():
     source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
 

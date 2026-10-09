@@ -279,7 +279,7 @@ as $$
      and job.attempt_count = requested_attempt
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at
+     and job.lease_expires_at > clock_timestamp()
      and job.cancel_requested_at is null
      and candidate.value ->> 'id' = checkpoint_row.candidate_id
      and checkpoint_row.checkpoint not in ('publication_completed', 'rolled_back', 'ambiguous')
@@ -342,7 +342,7 @@ as $$
      and job.attempt_count = requested_attempt
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at
+     and job.lease_expires_at > clock_timestamp()
   returning checkpoint_row.row_revision;
 $$;
 
@@ -364,7 +364,42 @@ language plpgsql
 security definer
 set search_path = pg_catalog, ops
 as $$
+declare
+  selected_job ops.jobs%rowtype;
 begin
+  select job.* into selected_job
+    from ops.jobs as job
+   where job.id = requested_job_id
+     and job.kind = 'cover_remote_save'
+     and job.state = 'running'
+     and job.attempt_count = requested_attempt
+     and job.lease_owner = requested_worker_id
+     and job.lease_token = requested_lease_token
+     and job.lease_expires_at > clock_timestamp()
+   for update;
+  if not found then return; end if;
+
+  perform 1
+    from ops.cover_lookup_tasks as task
+   where task.id = requested_task_id
+     and task.job_id = requested_job_id
+     and task.row_revision = expected_task_revision
+     and task.status = 'running'
+   for update;
+  if not found then return; end if;
+
+  perform 1
+    from ops.cover_remote_save_checkpoints as checkpoint_row
+   where checkpoint_row.id = requested_checkpoint_id
+     and checkpoint_row.job_id = requested_job_id
+     and checkpoint_row.row_revision = expected_checkpoint_revision
+     and checkpoint_row.checkpoint = 'promotion_completed'
+   for update;
+  if not found then
+    raise exception 'remote cover publication checkpoint changed';
+  end if;
+  if selected_job.lease_expires_at <= clock_timestamp() then return; end if;
+
   update ops.cover_lookup_tasks as task
      set status = 'completed',
          completed_at = observed_at,
@@ -379,17 +414,10 @@ begin
            'notification_completed_at', observed_at
          ),
          row_revision = task.row_revision + 1
-    from ops.jobs as job
    where task.id = requested_task_id
      and task.job_id = requested_job_id
      and task.row_revision = expected_task_revision
      and task.status = 'running'
-     and job.id = requested_job_id
-     and job.state = 'running'
-     and job.attempt_count = requested_attempt
-     and job.lease_owner = requested_worker_id
-     and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at
   returning task.row_revision into task_revision;
   if task_revision is null then return; end if;
   update ops.cover_remote_save_checkpoints as checkpoint_row
@@ -400,9 +428,6 @@ begin
      and checkpoint_row.row_revision = expected_checkpoint_revision
      and checkpoint_row.checkpoint = 'promotion_completed'
   returning checkpoint_row.row_revision into checkpoint_revision;
-  if checkpoint_revision is null then
-    raise exception 'remote cover publication checkpoint changed';
-  end if;
   return next;
 end;
 $$;
@@ -426,24 +451,31 @@ set search_path = pg_catalog, ops, library
 as $$
 declare
   selected_checkpoint ops.cover_remote_save_checkpoints%rowtype;
+  selected_job ops.jobs%rowtype;
   selected_candidate jsonb;
   updated_album_count integer;
   updated_file_count integer;
 begin
-  select checkpoint_row.*
-    into selected_checkpoint
-    from ops.cover_remote_save_checkpoints as checkpoint_row
-    join ops.jobs as job on job.id = checkpoint_row.job_id
-   where checkpoint_row.id = requested_checkpoint_id
-     and checkpoint_row.job_id = requested_job_id
-     and checkpoint_row.row_revision = expected_checkpoint_revision
-     and checkpoint_row.checkpoint = 'artifact_written'
+  select job.* into selected_job
+    from ops.jobs as job
+   where job.id = requested_job_id
+     and job.kind = 'cover_remote_save'
      and job.state = 'running'
      and job.attempt_count = requested_attempt
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at
+     and job.lease_expires_at > clock_timestamp()
      and job.cancel_requested_at is null
+   for update;
+  if not found then return null; end if;
+
+  select checkpoint_row.*
+    into selected_checkpoint
+    from ops.cover_remote_save_checkpoints as checkpoint_row
+   where checkpoint_row.id = requested_checkpoint_id
+     and checkpoint_row.job_id = requested_job_id
+     and checkpoint_row.row_revision = expected_checkpoint_revision
+     and checkpoint_row.checkpoint = 'artifact_written'
    for update of checkpoint_row;
   if selected_checkpoint.id is null then return null; end if;
   select candidate.value into selected_candidate
@@ -465,6 +497,20 @@ begin
   ) then
     return null;
   end if;
+
+  perform album.id
+    from library.local_albums as album
+   where album.id = selected_checkpoint.local_album_id
+     and album.library_id = selected_checkpoint.library_id
+   for update;
+  perform file.id
+    from library.local_track_files as file
+    join library.local_tracks as track on track.id = file.track_id
+   where track.library_id = selected_checkpoint.library_id
+     and track.album_id = selected_checkpoint.local_album_id
+   order by file.id
+   for update of file;
+  if selected_job.lease_expires_at <= clock_timestamp() then return null; end if;
 
   update library.local_albums as album
      set cover_path = case when linked_remote then null else selected_cover_path end,

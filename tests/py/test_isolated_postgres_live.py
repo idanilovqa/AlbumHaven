@@ -261,6 +261,124 @@ def _durable_job_database_urls_or_skip(
     except psycopg.OperationalError as exc:
         _skip_or_fail_ci(f"Dedicated isolated Postgres role is unavailable: {exc}")
     return setup_url, runtime_url, worker_url, readonly_url
+
+
+def test_live_app_role_rejects_foreign_library_structural_album_retirement(
+    monkeypatch,
+):
+    import psycopg
+
+    setup_url, runtime_url, _worker_url, _readonly_url = (
+        _durable_job_database_urls_or_skip(monkeypatch)
+    )
+    cleanup_complete = False
+
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            account_id = int(connection.execute(
+                """
+                insert into app.accounts (
+                  display_name, account_kind, username_display,
+                  username_normalized, contact_email, contact_email_normalized
+                ) values (
+                  'Foreign Retirement Owner', 'owner', 'Foreign Retirement Owner',
+                  'foreign-retirement-owner', 'foreign-retirement-owner@example.test',
+                  'foreign-retirement-owner@example.test'
+                )
+                returning id
+                """
+            ).fetchone()["id"])
+            library_id = int(connection.execute(
+                """
+                insert into library.libraries (owner_account_id, name, library_kind)
+                values (%s, 'Foreign Library', 'local')
+                returning id
+                """,
+                (account_id,),
+            ).fetchone()["id"])
+            artist_id = int(connection.execute(
+                """
+                insert into library.local_artists (library_id, artist_key, name)
+                values (%s, 'foreign-retirement-artist', 'Foreign Retirement Artist')
+                returning id
+                """,
+                (library_id,),
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.separate_releases (library_id, release_key)
+                values (%s, 'foreign retirement artist::foreign album')
+                """,
+                (library_id,),
+            )
+            source_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                    library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, 'foreign-retirement-source', 'Foreign Album', 2001, '{}')
+                returning id
+                """,
+                (library_id, artist_id),
+            ).fetchone()["id"])
+            destination_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                    library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, 'foreign-retirement-destination', 'Foreign Album', 2001, '{}')
+                returning id
+                """,
+                (library_id, artist_id),
+            ).fetchone()["id"])
+
+        with isolatedPostgres._connect(runtime_url) as connection:
+            with pytest.raises(
+                psycopg.errors.RaiseException,
+                match="outside the bootstrap library",
+            ):
+                connection.execute(
+                    """
+                    select library.retire_vacated_structural_album(
+                      %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        library_id,
+                        source_id,
+                        destination_id,
+                        "foreign-retirement-source",
+                        "foreign-retirement-destination",
+                    ),
+                ).fetchone()
+
+        with isolatedPostgres._connect(runtime_url) as connection:
+            with pytest.raises(
+                psycopg.errors.RaiseException,
+                match="outside the bootstrap library",
+            ):
+                connection.execute(
+                    "select library.retire_vacated_structural_album_siblings(%s, %s)",
+                    (library_id, destination_id),
+                ).fetchone()
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            remaining_ids = {
+                int(row["id"])
+                for row in connection.execute(
+                    "select id from library.local_albums where library_id = %s",
+                    (library_id,),
+                ).fetchall()
+            }
+        assert remaining_ids == {source_id, destination_id}
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 @pytest.mark.parametrize(
     ("status", "built_from_fingerprint", "expected"),
     [
@@ -1748,16 +1866,23 @@ def test_live_vacated_structural_album_retirement_blocks_only_active_cover_save(
             destination_id = int(connection.execute(
                 """
                 insert into library.local_albums (
-                  library_id, artist_id, album_key, title, release_year, metadata
+                    library_id, artist_id, album_key, title, release_year, metadata
                 ) values (%s, %s, %s, 'Retirement Album', 1999, '{}')
                 returning id
                 """,
                 (library_id, artist_id, f"retirement-destination-{checkpoint}"),
             ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.separate_releases (library_id, release_key)
+                values (%s, 'retirement artist::retirement album')
+                """,
+                (library_id,),
+            )
             source_id = int(connection.execute(
                 """
                 insert into library.local_albums (
-                  library_id, artist_id, album_key, title, release_year, metadata
+                    library_id, artist_id, album_key, title, release_year, metadata
                 ) values (%s, %s, %s, 'Retirement Album', 1999, '{}')
                 returning id
                 """,

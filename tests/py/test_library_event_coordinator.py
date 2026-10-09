@@ -1112,6 +1112,66 @@ def test_failed_durable_emit_restores_batch_with_same_producer_key(tmp_path: Pat
     assert attempts[1].producer_request_key == "watcher-batch-retry"
 
 
+def test_ambiguous_flush_keeps_failed_and_concurrent_generations_separate(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    entered = Event()
+    release = Event()
+    attempts = []
+    errors = []
+    keys = iter(("watcher-generation-1", "watcher-generation-2"))
+
+    def emit(request):
+        attempts.append(request)
+        if len(attempts) == 1:
+            entered.set()
+            assert release.wait(2)
+            raise RuntimeError("commit outcome unknown")
+
+    def flush_once():
+        try:
+            coordinator.flush()
+        except Exception as exc:
+            errors.append(exc)
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=emit,
+        producer_request_key_factory=lambda: next(keys),
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    coordinator.accept(
+        _event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/01.flac")
+    )
+    flush_thread = Thread(target=flush_once)
+    flush_thread.start()
+    assert entered.wait(2)
+    coordinator.accept(
+        _event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/02.flac")
+    )
+    release.set()
+    flush_thread.join(2)
+    assert not flush_thread.is_alive()
+    assert len(errors) == 1
+
+    coordinator.flush()
+
+    assert [request.producer_request_key for request in attempts] == [
+        "watcher-generation-1",
+        "watcher-generation-1",
+        "watcher-generation-2",
+    ]
+    assert attempts[1].paths == frozenset(
+        {tmp_path / "Artist/Album/01.flac"}
+    )
+    assert attempts[2].paths == frozenset(
+        {tmp_path / "Artist/Album/02.flac"}
+    )
+
+
 def test_lifespan_enqueues_durable_targeted_work_without_weakening_watch_lifecycle():
     import inspect
 

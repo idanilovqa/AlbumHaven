@@ -226,7 +226,10 @@ def test_handler_reloads_private_intent_and_current_roots_before_publication():
     "load_claimed_targeted_reconciliation_scope",
     "load_claimed_targeted_reconciliation_preparation",
 ])
-def test_targeted_storage_failure_reports_failure_for_atomic_root_health(method):
+@pytest.mark.parametrize(
+    "attempt,expected", [(2, JobState.RETRY_WAIT), (3, JobState.FAILED)]
+)
+def test_targeted_storage_failure_retries_until_attempt_limit(method, attempt, expected):
     import psycopg
 
     repository = _ScanRepository()
@@ -236,8 +239,12 @@ def test_targeted_storage_failure_reports_failure_for_atomic_root_health(method)
 
     setattr(repository, method, unavailable)
     reconciler = _Reconciler()
-    outcome = _handler(repository, reconciler, [])(_claim(), _Context())
-    assert outcome == JobTransitionResult(JobState.FAILED, "targeted_reconciliation_failed")
+    outcome = _handler(repository, reconciler, [])(
+        replace(_claim(), attempt=attempt), _Context()
+    )
+    assert outcome.next_state is expected
+    assert outcome.reason_code == "targeted_reconciliation_unavailable"
+    assert (outcome.scheduled_at is not None) is (expected is JobState.RETRY_WAIT)
     assert reconciler.requests == []
 
 
@@ -254,6 +261,7 @@ def test_targeted_validator_distinguishes_unavailable_storage_from_invalid_scope
     )(_claim(), None, NOW)
     assert not decision.allowed
     assert decision.reason_code == "authorization_unavailable"
+    assert decision.indeterminate is True
 
 
 @pytest.mark.parametrize(
@@ -721,6 +729,36 @@ def _full_handler(repository, scanner, *, logged=None, watcher=None):
         watcher_coordinator=watcher,
         clock=lambda: NOW,
         log_event=(lambda message: logged.append(message)) if logged is not None else None,
+    )
+
+
+@pytest.mark.parametrize("failing_load", ("intent", "scope"))
+@pytest.mark.parametrize(
+    ("attempt", "expected_state"),
+    ((1, JobState.RETRY_WAIT), (2, JobState.FAILED)),
+)
+def test_full_scan_handler_retries_scope_storage_failure_until_attempt_limit(
+    failing_load, attempt, expected_state
+):
+    repository = _FullScanRepository()
+    method = (
+        "load_claimed_full_scan"
+        if failing_load == "intent"
+        else "load_claimed_full_scan_scope"
+    )
+    setattr(
+        repository,
+        method,
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    claim = replace(_full_claim(), attempt=attempt, max_attempts=2)
+
+    outcome = _full_handler(repository, _FullScanner())(claim, _FullContext())
+
+    assert outcome.next_state is expected_state
+    assert outcome.reason_code == "full_scan_scope_unavailable"
+    assert (outcome.scheduled_at == NOW + timedelta(seconds=5)) is (
+        expected_state is JobState.RETRY_WAIT
     )
 
 

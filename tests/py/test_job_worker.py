@@ -370,7 +370,9 @@ def test_authorization_denial_cancels_without_dispatch():
     )
 
 
-@pytest.mark.parametrize("attempt,expected", [(1, JobState.RETRY_WAIT), (2, JobState.FAILED)])
+@pytest.mark.parametrize(
+    "attempt,expected", [(1, JobState.RETRY_WAIT), (2, JobState.FAILED)]
+)
 def test_authorization_storage_failure_is_bounded_without_dispatch(attempt, expected):
     from dataclasses import replace
 
@@ -379,7 +381,11 @@ def test_authorization_storage_failure_is_bounded_without_dispatch(attempt, expe
     dispatched = []
     worker(
         repository,
-        authorization=Authorization(AuthorizationDecision(False, "authorization_unavailable")),
+        authorization=Authorization(
+            AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
+        ),
         handlers=registry(lambda *_: dispatched.append(True)),
     ).run_once()
 
@@ -390,17 +396,84 @@ def test_authorization_storage_failure_is_bounded_without_dispatch(attempt, expe
     assert dispatched == []
 
 
-def test_reauthorization_storage_failure_does_not_permanently_cancel_safe_work():
-    repository = Repository([claim()])
+@pytest.mark.parametrize(
+    "attempt,expected", [(1, JobState.RETRY_WAIT), (2, JobState.FAILED)]
+)
+def test_reauthorization_storage_failure_does_not_permanently_cancel_safe_work(
+    attempt, expected
+):
+    from dataclasses import replace
+
+    repository = Repository([replace(claim(), attempt=attempt)])
     authorization = Authorization()
 
     def handler(_claim, context):
-        authorization.decision = AuthorizationDecision(False, "authorization_unavailable")
+        authorization.decision = AuthorizationDecision(
+            False, "authorization_unavailable", indeterminate=True
+        )
         assert not context.reauthorize().allowed
+        assert context.cancel_requested is False
         return JobTransitionResult(JobState.CANCELED, "full_scan_canceled")
 
     worker(repository, authorization=authorization, handlers=registry(handler)).run_once()
-    assert repository.finishes[0][1].next_state is JobState.RETRY_WAIT
+    outcome = repository.finishes[0][1]
+    assert outcome.next_state is expected
+    assert outcome.reason_code == "authorization_unavailable"
+    assert (outcome.scheduled_at is not None) is (expected is JobState.RETRY_WAIT)
+
+
+def test_explicit_reauthorization_denial_dominates_earlier_storage_failure():
+    repository = Repository([claim()])
+    decisions = iter(
+        (
+            AuthorizationDecision(True, "authorized"),
+            AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            ),
+            AuthorizationDecision(False, "capability_revoked"),
+        )
+    )
+
+    class SequencedAuthorization:
+        def authorize(self, _claimed, _now):
+            return next(decisions)
+
+    def handler(_claim, context):
+        assert context.reauthorize().indeterminate is True
+        assert context.reauthorize().reason_code == "capability_revoked"
+        return JobTransitionResult(JobState.CANCELED, "capability_revoked")
+
+    worker(
+        repository,
+        authorization=SequencedAuthorization(),
+        handlers=registry(handler),
+    ).run_once()
+
+    assert repository.finishes[0][1] == JobTransitionResult(
+        JobState.CANCELED, "capability_revoked"
+    )
+
+
+@pytest.mark.parametrize(
+    "attempt,expected", [(1, JobState.RETRY_WAIT), (2, JobState.FAILED)]
+)
+def test_authorization_service_exception_is_bounded_without_cancellation(attempt, expected):
+    from dataclasses import replace
+
+    class UnavailableAuthorization:
+        def authorize(self, _claimed, _now):
+            raise RuntimeError("private storage detail")
+
+    repository = Repository([replace(claim(), attempt=attempt)])
+    worker(
+        repository,
+        authorization=UnavailableAuthorization(),
+        handlers=registry(lambda *_: pytest.fail("must not dispatch")),
+    ).run_once()
+
+    outcome = repository.finishes[0][1]
+    assert outcome.next_state is expected
+    assert outcome.reason_code == "authorization_unavailable"
 
 
 @pytest.mark.parametrize(

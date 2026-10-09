@@ -6510,7 +6510,7 @@ for (const mode of ['normal navigation', 'search', 'selected artist']) {
   });
 }
 
-for (const change of ['navigation', 'mutation', 'guard']) {
+for (const change of ['navigation', 'mutation']) {
   test(`bounded root refresh discards incomplete coverage after ${change} supersession`, async () => {
     const f = boundedRootRefreshFixture();
     let ownsMutation = true;
@@ -6527,6 +6527,26 @@ for (const change of ['navigation', 'mutation', 'guard']) {
     assert.equal(f.pendingRequests.length, 2);
   });
 }
+
+test('bounded root refresh validates the assembled payload after collecting loaded coverage', async () => {
+  const f = boundedRootRefreshFixture();
+  const guardPayloadSizes = [];
+  const request = f.start({
+    shouldApplyResponse(payload) {
+      const albumCount = payload.artist_groups.flatMap(group => group.albums).length;
+      guardPayloadSizes.push(albumCount);
+      return albumCount >= 108;
+    },
+  });
+  await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+  assert.equal(await request, true);
+  assert.deepEqual(guardPayloadSizes, [150]);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+});
 
 for (const failure of ['http', 'repeated cursor']) {
   test(`bounded root refresh retains the mounted window on ${failure}`, async () => {

@@ -290,6 +290,16 @@ begin
     raise exception 'targeted reconciliation preserved subtree scope is invalid';
   end if;
 
+  if p_client_surface = 'library_watcher' then
+    perform pg_catalog.pg_advisory_xact_lock(
+      pg_catalog.hashtextextended(
+        'album-haven:targeted-reconciliation-payload:'
+          || p_library_id::text || ':' || p_request_digest,
+        0
+      )
+    );
+  end if;
+
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(
       'album-haven:targeted-reconciliation:' || p_library_id::text || ':' || p_producer_request_key,
@@ -307,6 +317,23 @@ begin
     end if;
     return query select existing_intent_id, existing_job_id;
     return;
+  end if;
+
+  if p_client_surface = 'library_watcher' then
+    select intent.id, intent.job_id
+      into existing_intent_id, existing_job_id
+      from library.targeted_reconciliation_intents as intent
+      join ops.jobs as job on job.id = intent.job_id
+     where intent.library_id = p_library_id
+       and intent.request_digest = p_request_digest
+       and intent.client_surface = 'library_watcher'
+       and job.state in ('queued', 'retry_wait')
+     order by intent.id
+     limit 1;
+    if existing_intent_id is not null then
+      return query select existing_intent_id, existing_job_id;
+      return;
+    end if;
   end if;
 
   insert into library.targeted_reconciliation_intents (

@@ -59,7 +59,6 @@ def _start_library_warmup(
     runtime,
     hydrate,
     ensure_relations,
-    start_refresh,
     prewarm_postgres,
     hydrate_metadata=None,
     recover_persistence=None,
@@ -109,13 +108,12 @@ def _start_library_warmup(
             ):
                 if stop_requested.is_set():
                     return
-                start_refresh(
-                    library_state,
-                    runtime.config,
-                    runtime.logger,
-                    force=True,
-                    scan_mode="background",
-                )
+                with runtime.cold_scan_handoff_lock:
+                    library_state["cold_scan_pending"] = True
+                    library_state["cold_scan_force"] = True
+                    library_state["cold_scan_is_cold_start"] = False
+                    library_state["cold_scan_handoff_status"] = "pending"
+                    library_state["cold_scan_handoff_error"] = ""
             if (
                 not hydrated
                 and not library_state.get("last_error")
@@ -396,7 +394,6 @@ def create_asgi_app():
         hydrate_runtime_library_state_on_startup,
         hydrate_runtime_scan_metadata_on_startup,
         recover_runtime_library_persistence_on_startup,
-        start_background_refresh_for_state,
     )
 
     runtime = _create_asgi_runtime_state()
@@ -412,16 +409,7 @@ def create_asgi_app():
             runtime.config,
             logger=runtime.logger,
         )
-        _app.state.cover_preview_backfill.start()
-        _app.state.library_warmup_thread = _start_library_warmup(
-            runtime,
-            hydrate_runtime_library_state_on_startup,
-            ensure_runtime_relation_projection_ready,
-            start_background_refresh_for_state,
-            prewarm_connection_pool,
-            hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
-            recover_persistence=recover_runtime_library_persistence_on_startup,
-        )
+        _app.state.library_warmup_thread = None
         targeted_database_url = str(
             runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
         ).strip()
@@ -434,7 +422,9 @@ def create_asgi_app():
         runtime.library_watch_service = None
 
         async def shutdown_resources() -> None:
-            _app.state.library_warmup_thread.request_stop()
+            warmup = _app.state.library_warmup_thread
+            if warmup is not None:
+                warmup.request_stop()
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
@@ -444,7 +434,7 @@ def create_asgi_app():
                 ),
                 (
                     "library warmup",
-                    _app.state.library_warmup_thread.stop,
+                    warmup.stop if warmup is not None else lambda: None,
                 ),
                 (
                     "library filesystem watcher",
@@ -491,10 +481,13 @@ def create_asgi_app():
             else None
         )
         watcher_library_id = (
-            scan_jobs.resolve_local_library_id() if targeted_database_url else None
+            host_scope.library_id if targeted_database_url and host_scope is not None else None
         )
 
         def create_targeted_reconciliation(request) -> None:
+            nonlocal watcher_library_id
+            if watcher_library_id is None and targeted_database_url:
+                watcher_library_id = scan_jobs.resolve_local_library_id()
             if watcher_library_id is None:
                 return
             scan_jobs.enqueue_targeted_reconciliation(
@@ -534,6 +527,15 @@ def create_asgi_app():
                 runtime.library_event_coordinator.accept,
             )
             _app.state.library_watch_service = runtime.library_watch_service
+            _app.state.cover_preview_backfill.start()
+            _app.state.library_warmup_thread = _start_library_warmup(
+                runtime,
+                hydrate_runtime_library_state_on_startup,
+                ensure_runtime_relation_projection_ready,
+                prewarm_connection_pool,
+                hydrate_metadata=hydrate_runtime_scan_metadata_on_startup,
+                recover_persistence=recover_runtime_library_persistence_on_startup,
+            )
         except BaseException:
             await shutdown_resources()
             raise

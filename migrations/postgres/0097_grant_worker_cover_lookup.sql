@@ -181,7 +181,7 @@ as $$
        and job.attempt_count = requested_attempt
        and job.lease_owner = requested_worker_id
        and job.lease_token = requested_lease_token
-       and job.lease_expires_at > observed_at
+       and job.lease_expires_at > clock_timestamp()
        and job.cancel_requested_at is null
        and task.status in ('pending', 'running')
        and task.cancel_requested_at is null
@@ -297,7 +297,7 @@ as $$
   select coalesce((
     select job.cancel_requested_at is not null
         or task.cancel_requested_at is not null
-        or job.lease_expires_at <= observed_at
+        or job.lease_expires_at <= clock_timestamp()
         or job.state <> 'running'
         or job.attempt_count <> requested_attempt
         or job.lease_owner is distinct from requested_worker_id
@@ -339,7 +339,7 @@ as $$
      and job.attempt_count = requested_attempt
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at;
+     and job.lease_expires_at > clock_timestamp();
 $$;
 
 create or replace function ops.publish_claimed_cover_lookup(
@@ -515,7 +515,7 @@ as $$
      and job.attempt_count = requested_attempt
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at
+     and job.lease_expires_at > clock_timestamp()
      and (job.cancel_requested_at is not null or task.cancel_requested_at is not null)
   returning task.row_revision, task.status, true, task.provider_payload;
 $$;
@@ -707,7 +707,7 @@ begin
        and job.attempt_count = requested_attempt
        and job.lease_owner = requested_worker_id
        and job.lease_token = requested_lease_token
-       and job.lease_expires_at > observed_at
+       and job.lease_expires_at > clock_timestamp()
        and job.cancel_requested_at is null
   ) then
     return false;

@@ -18,7 +18,7 @@ from music_app.services.auth_mail_jobs_postgres import (
 )
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.jobs.authorization import AuthorizationDecision
-from music_app.services.jobs.models import ClaimedJob, JobState
+from music_app.services.jobs.models import ClaimedJob, JobState, JobTransitionResult
 
 
 NOW = datetime(2026, 9, 7, 16, 0, tzinfo=timezone.utc)
@@ -59,13 +59,18 @@ def _claim(category="welcome"):
 
 
 class _Context:
-    def __init__(self):
+    def __init__(self, *, indeterminate=False):
         self.cancel_requested = False
         self.lease_active = True
+        self.indeterminate = indeterminate
         self.decisions = []
 
     def reauthorize(self):
         self.decisions.append(True)
+        if self.indeterminate:
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         return AuthorizationDecision(True, "authorized")
 
 
@@ -123,6 +128,20 @@ def _handler(category, repository, send, **overrides):
     )
     values.update(overrides)
     return build_auth_mail_handler(**values)
+
+
+def test_indeterminate_authorization_never_cancels_auth_mail_domain_row():
+    repository = _Repository()
+    handler = _handler(
+        "welcome", repository, lambda *_args, **_kwargs: pytest.fail("must not send")
+    )
+
+    outcome = handler(_claim("welcome"), _Context(indeterminate=True))
+
+    assert outcome == JobTransitionResult(
+        JobState.FAILED, "authorization_unavailable"
+    )
+    assert repository.calls == []
 
 
 @pytest.mark.parametrize(

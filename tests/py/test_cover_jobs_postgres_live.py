@@ -348,6 +348,16 @@ def test_live_claimed_cover_lookup_is_worker_scoped_cancelable_and_fenced(
         task_payload={**scope.task_payload, "status": "running", "progress": 12},
     )
     assert running is not None and running.status == "running"
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set lease_expires_at = clock_timestamp() - interval '1 second' where id = %s",
+            (accepted.job_id,),
+        )
+    assert worker_covers.publish_claimed_candidate_lookup(
+        **{**claim_values, "now": claimed_at - timedelta(minutes=1)},
+        expected_row_revision=running.row_revision,
+        task_payload={**running.task_payload, "progress": 13},
+    ) is None
 
     canceled = app_covers.request_candidate_lookup_cancellation(
         task_key=task_key,
@@ -523,12 +533,12 @@ def test_live_bulk_cover_refresh_is_restartable_worker_scoped_and_cancelable(
     ] is True
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute(
-            "update ops.jobs set lease_expires_at = %s where id = %s",
-            (requested_at, accepted.job_id),
+            "update ops.jobs set lease_expires_at = clock_timestamp() - interval '1 second' where id = %s",
+            (accepted.job_id,),
         )
     with pytest.raises(RuntimeError, match="resource or lease fence"):
         worker_covers.persist_claimed_automatic_cover_selection(
-            **{**claim_values, "now": requested_at + timedelta(seconds=5)},
+            **{**claim_values, "now": requested_at - timedelta(minutes=1)},
             track_paths=set(scope.file_cache),
             selected_cover_path=selected_cover,
             cover_revision="stale-revision",
@@ -686,6 +696,22 @@ def test_live_remote_cover_save_accepts_candidate_and_fences_checkpoints(
     assert during_send.row_revision == scope.task_revision
 
     revision = scope.checkpoint_revision
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set lease_expires_at = clock_timestamp() - interval '1 second' where id = %s",
+            (accepted.job_id,),
+        )
+    assert worker_covers.checkpoint_claimed_remote_save(
+        **{**claim_values, "now": claimed_at - timedelta(minutes=1)},
+        checkpoint_id=scope.checkpoint_id,
+        expected_row_revision=revision,
+        next_checkpoint="download_started",
+    ) is None
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set lease_expires_at = clock_timestamp() + interval '60 seconds' where id = %s",
+            (accepted.job_id,),
+        )
     for checkpoint in ("download_started", "artifact_written"):
         next_revision = worker_covers.checkpoint_claimed_remote_save(
             **claim_values,

@@ -166,13 +166,7 @@ def record_playback_session_complete(
                         retry_values["reauthentication_required"] = True
                     accepted = record_retryable_scrobble(config, **retry_values)
                     if accepted is not None:
-                        stored = update_listen_history_entry(
-                            config,
-                            str(stored.get("id") or ""),
-                            {"scrobble_durable_job_owned": True},
-                            account_id=account_id,
-                            library_id=library_id,
-                        ) or stored
+                        stored = {**stored, "scrobble_durable_job_owned": True}
             public = {key: value for key, value in stored.items() if key not in ("path", "track_ref")}
             return {
                 "ok": True,
@@ -287,11 +281,10 @@ def record_playback_session_complete(
             retry_values["reauthentication_required"] = True
         durable_retry = retry_recorder(config, **retry_values)
         if durable_retry is not None:
-            stored_entry = update_listen_history_entry(
-                config,
-                listen_id,
-                {"scrobble_durable_job_owned": True},
-            ) or stored_entry
+            stored_entry = {
+                **stored_entry,
+                "scrobble_durable_job_owned": True,
+            }
     elif entry["scrobble_eligible"] and scrobble_error:
         clear_pending_scrobble(config, listen_id=listen_id)
 

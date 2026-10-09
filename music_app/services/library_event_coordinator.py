@@ -144,6 +144,7 @@ class LibraryEventCoordinator:
         self._clock = clock or monotonic
         self._timer_factory = timer_factory or Timer
         self._pending: dict[tuple[str, Path], _PendingGroup] = {}
+        self._retry_pending: list[_PendingGroup] = []
         self._pending_entry_count = 0
         self._lock = Lock()
         self._flush_lock = Lock()
@@ -182,7 +183,8 @@ class LibraryEventCoordinator:
                 for update in updates.values()
             )
             if (
-                len(self._pending) + group_delta > self._max_pending_groups
+                len(self._pending) + len(self._retry_pending) + group_delta
+                > self._max_pending_groups
                 or self._pending_entry_count + entry_delta > self._max_pending_entries
             ):
                 affected_roots = {event.root_id: event.path.parent}
@@ -308,13 +310,14 @@ class LibraryEventCoordinator:
         finally:
             with self._lock:
                 self._scheduled_flush_running = False
-                if self._pending and not self._stopped:
+                if (self._pending or self._retry_pending) and not self._stopped:
                     self._schedule_flush_locked()
 
     def flush(self) -> None:
         with self._flush_lock:
             with self._lock:
-                pending = list(self._pending.values())
+                pending = [*self._retry_pending, *self._pending.values()]
+                self._retry_pending.clear()
                 self._pending.clear()
                 self._pending_entry_count = 0
                 timer = self._timer
@@ -346,21 +349,10 @@ class LibraryEventCoordinator:
                     )
                 except Exception:
                     with self._lock:
-                        for uncommitted in ordered[index:]:
-                            key = (uncommitted.root_id, uncommitted.directory)
-                            current = self._pending.get(key)
-                            if current is None:
-                                self._pending[key] = uncommitted
-                            else:
-                                current.active_paths.update(uncommitted.active_paths)
-                                current.deleted_paths.update(uncommitted.deleted_paths)
-                                current.deleted_subtrees.update(
-                                    uncommitted.deleted_subtrees
-                                )
-                                current.moves.update(uncommitted.moves)
+                        self._retry_pending.extend(ordered[index:])
                         self._pending_entry_count = sum(
                             item.entry_count for item in self._pending.values()
-                        )
+                        ) + sum(item.entry_count for item in self._retry_pending)
                         if self._auto_schedule and not self._stopped:
                             self._schedule_flush_locked()
                     raise
@@ -497,6 +489,7 @@ class LibraryEventCoordinator:
             self._stopped = True
             self._stop_event.set()
             self._pending.clear()
+            self._retry_pending.clear()
             self._pending_entry_count = 0
             timer = self._timer
             self._timer = None

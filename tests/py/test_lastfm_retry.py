@@ -877,15 +877,3 @@ def test_reauthentication_required_retry_waits_for_successful_reconnect(monkeypa
     assert retried == {"attempted": True, "succeeded": True, "failed": False}
     assert len(calls) == 1
     assert updates[0]["scrobbled"] is True
-
-
-def test_process_local_retry_worker_remains_retired():
-    from music_app.services import lastfm_retry
-
-    with pytest.raises(
-        RuntimeError,
-        match="process-local Last.fm retry daemon has been retired",
-    ):
-        lastfm_retry.start_lastfm_retry_worker(object())
-
-    assert lastfm_retry.stop_lastfm_retry_worker() is False

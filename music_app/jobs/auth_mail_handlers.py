@@ -123,6 +123,10 @@ def build_auth_mail_handler(
             return JobTransitionResult(JobState.CANCELED, "auth_mail_lease_lost_before_send")
         decision = context.reauthorize()
         if not decision.allowed:
+            if decision.indeterminate:
+                return JobTransitionResult(
+                    JobState.FAILED, "authorization_unavailable"
+                )
             return cancel(claim, decision.reason_code)
         if provider_config.get(enabled_key) is not True:
             return cancel(claim, "auth_mail_category_disabled")
@@ -182,6 +186,10 @@ def build_auth_mail_handler(
                     )
                 decision = context.reauthorize()
                 if not decision.allowed:
+                    if decision.indeterminate:
+                        return JobTransitionResult(
+                            JobState.FAILED, "authorization_unavailable"
+                        )
                     return JobTransitionResult(
                         JobState.AMBIGUOUS, "auth_mail_token_issued_ambiguous"
                     )

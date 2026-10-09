@@ -14913,15 +14913,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     });
     let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
     if (rootRefreshCoverage > 0) {
-      const ownsRefresh = () => {
-        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
-          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
-        try {
-          return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
-        } catch (_error) {
-          return false;
-        }
-      };
+      const ownsRefresh = () => (
+        requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+        && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      );
       data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
       if (!data || !ownsRefresh()) return false;
     }
@@ -17555,6 +17550,27 @@ function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optim
   });
 }
 
+const CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS = [125, 250, 500, 1000, 2000];
+
+async function waitForCommittedInventoryRevision(committedInventoryRevision) {
+  const targetRevision = Number(committedInventoryRevision);
+  if (!Number.isSafeInteger(targetRevision) || targetRevision <= 0) return;
+  for (let attempt = 0; attempt <= CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch('/status');
+      if (response.ok) {
+        const status = await response.json();
+        if (Number(status?.inventory_mutation_revision || 0) >= targetRevision) return;
+      }
+    } catch (_error) {
+      // The canonical view request below remains the final source of truth.
+    }
+    if (attempt < CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length) {
+      await waitForBrowserTimeout(CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 function albumsShareTrackPath(left, rightPaths) {
   if (!rightPaths?.size) return false;
   return Array.from(getAlbumTrackPaths(left))
@@ -19098,46 +19114,36 @@ async function watchSaveTask(taskId, context = {}) {
               if (restoresAllSearchResults) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
-              const canonicalRefreshAttempts = structuralPartialMembershipRequiresCanonicalRefresh
-                ? 80
-                : 1;
-              for (
-                let refreshAttempt = 0;
-                refreshAttempt < canonicalRefreshAttempts;
-                refreshAttempt += 1
-              ) {
-                viewRefreshed = await fetchAndRender(
-                  buildApiUrl(refreshView),
-                  false,
-                  {
-                    ...currentViewRenderOptions(),
-                    preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
-                    ...(
-                      !structuralTagEditRequiresCanonicalView
-                      && !structuralPartialMembershipRequiresCanonicalRefresh
-                      ? { retainMountedGalleryIfEquivalent: true }
-                      : {}
-                    ),
-                    restartIfSameUrl: true,
-                    shouldApplyResponse: (payload) => (
-                      !mutationWasSuperseded()
-                      && (
-                        !structuralPartialMembershipRequiresCanonicalRefresh
-                        || canonicalViewPayloadCoversExpectedTagEdit(
-                          payload,
-                          originalAlbum,
-                          context.optimisticAlbums,
-                          data.inventory_mutation_revision,
-                        )
-                      )
-                    ),
-                  },
-                );
-                if (viewRefreshed || mutationWasSuperseded()) break;
-                if (refreshAttempt + 1 < canonicalRefreshAttempts) {
-                  await waitForBrowserTimeout(250);
-                }
+              if (structuralPartialMembershipRequiresCanonicalRefresh) {
+                await waitForCommittedInventoryRevision(data.inventory_mutation_revision);
               }
+              viewRefreshed = await fetchAndRender(
+                buildApiUrl(refreshView),
+                false,
+                {
+                  ...currentViewRenderOptions(),
+                  preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
+                  ...(
+                    !structuralTagEditRequiresCanonicalView
+                    && !structuralPartialMembershipRequiresCanonicalRefresh
+                    ? { retainMountedGalleryIfEquivalent: true }
+                    : {}
+                  ),
+                  restartIfSameUrl: true,
+                  shouldApplyResponse: (payload) => (
+                    !mutationWasSuperseded()
+                    && (
+                      !structuralPartialMembershipRequiresCanonicalRefresh
+                      || canonicalViewPayloadCoversExpectedTagEdit(
+                        payload,
+                        originalAlbum,
+                        context.optimisticAlbums,
+                        data.inventory_mutation_revision,
+                      )
+                    )
+                  ),
+                },
+              );
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
                 window.history.replaceState(
                   { ...window.history.state, ...state.view }, '', buildUrl(state.view),

@@ -266,6 +266,31 @@ def test_durable_owned_playback_failure_is_excluded_from_legacy_retry_selector()
     assert is_pending_scrobble_entry(response["entry"]) is False
 
 
+def test_retry_acceptance_does_not_require_a_second_history_persistence_write():
+    from music_app.services.lastfm import LastfmError
+
+    harness = _PlaybackCompleteHarness()
+    original_update = harness.update_entry
+
+    def reject_separate_owner_marker(config, listen_id, updates, **kwargs):
+        if updates == {"scrobble_durable_job_owned": True}:
+            raise AssertionError("durable ownership must commit with job acceptance")
+        return original_update(config, listen_id, updates, **kwargs)
+
+    harness.update_entry = reject_separate_owner_marker
+    harness.scrobble_track = lambda *_args: (_ for _ in ()).throw(
+        LastfmError("provider busy", retryable=True)
+    )
+
+    response, status = harness.record(
+        _complete_payload(),
+        record_retryable_scrobble=lambda *_args, **_kwargs: object(),
+    )
+
+    assert status == 200
+    assert response["entry"]["scrobble_durable_job_owned"] is True
+
+
 @pytest.mark.parametrize("error_kind", ["network_error", "malformed_response"])
 def test_possible_initial_send_is_marked_ambiguous_and_never_enqueued(
     error_kind, monkeypatch

@@ -468,6 +468,7 @@ begin
      and outbox.accepted_attempt = job_record.resource_revision
    for update;
   if not found then return; end if;
+  if job_record.lease_expires_at <= clock_timestamp() then return; end if;
 
   next_revision := outbox_record.row_revision + 1;
   if p_disposition = 'delivered' then

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -21,6 +21,19 @@ _CANDIDATE_REPOSITORY_FACTORY_KEY = (
 _CANDIDATE_PERSISTENCE_REQUIRED_KEY = (
     "COVER_CANDIDATE_SNAPSHOT_PERSISTENCE_REQUIRED"
 )
+_STORAGE_RETRY_DELAY = timedelta(seconds=5)
+
+
+def _storage_unavailable_outcome(
+    claim: ClaimedJob, reason_code: str, *, now: datetime
+) -> JobTransitionResult:
+    if claim.attempt < claim.max_attempts:
+        return JobTransitionResult(
+            JobState.RETRY_WAIT,
+            reason_code,
+            scheduled_at=now + _STORAGE_RETRY_DELAY,
+        )
+    return JobTransitionResult(JobState.FAILED, reason_code)
 
 
 class _ClaimedCandidateSnapshotRepository:
@@ -172,7 +185,9 @@ def build_cover_lookup_resource_validator(
                 **_claim_parameters(claim, now)
             )
         except Exception:
-            return AuthorizationDecision(False, "cover_lookup_scope_invalid")
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         if valid is not True:
             return AuthorizationDecision(False, "cover_lookup_scope_stale")
         return AuthorizationDecision(True, "cover_lookup_scope_current")
@@ -202,7 +217,9 @@ def build_cover_lookup_handler(
                 **_claim_parameters(claim, now())
             )
         except Exception:
-            return JobTransitionResult(JobState.FAILED, "cover_lookup_scope_unavailable")
+            return _storage_unavailable_outcome(
+                claim, "cover_lookup_scope_unavailable", now=now()
+            )
         if scope is None:
             return JobTransitionResult(JobState.CANCELED, "cover_lookup_scope_stale")
 
@@ -411,7 +428,9 @@ def build_cover_refresh_handler(
                 task_key=str(claim.subject_ref),
             )
         except Exception:
-            return JobTransitionResult(JobState.FAILED, "cover_refresh_scope_unavailable")
+            return _storage_unavailable_outcome(
+                claim, "cover_refresh_scope_unavailable", now=now()
+            )
         if scope is None:
             return JobTransitionResult(JobState.CANCELED, "cover_refresh_scope_stale")
 

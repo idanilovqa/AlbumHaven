@@ -3784,6 +3784,83 @@ def test_claimed_remote_cover_save_rolls_back_exact_promotion_when_artifact_chec
     assert rolled_back == [promotion]
 
 
+def test_claimed_remote_cover_save_does_not_replace_cover_after_lease_expires_waiting_for_selection_lock(
+    config, logger, monkeypatch, tmp_path: Path
+):
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "01.flac"
+    track_path.write_bytes(b"track")
+    cover_path = album_root / "cover.jpg"
+    original_bytes = _jpeg_bytes((180, 40, 40))
+    cover_path.write_bytes(original_bytes)
+    replacement_bytes = _jpeg_bytes((40, 180, 220))
+    lock_key = str(album_root.resolve(strict=False)).casefold()
+    blocking_promotion = cover_workflow.begin_external_cover_write_promotion(album_root)
+    lease_expired = Event()
+    result: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+    replacement_attempts: list[Path] = []
+    atomic_replace = cover_workflow._atomic_replace_file_bytes
+
+    def record_atomic_replace(target: Path, raw_bytes: bytes, **kwargs) -> None:
+        replacement_attempts.append(target)
+        atomic_replace(target, raw_bytes, **kwargs)
+
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "fetch_remote_cover_bytes",
+        lambda *_args, **_kwargs: (replacement_bytes, "image/jpeg"),
+    )
+    monkeypatch.setattr(cover_workflow, "_atomic_replace_file_bytes", record_atomic_replace)
+
+    def run_save() -> None:
+        try:
+            result.append(
+                cover_lookup_runtime.run_claimed_cover_remote_save(
+                    scope=SimpleNamespace(
+                        library_root_path=str(album_root),
+                        track_paths=(str(track_path),),
+                        selected_candidate={
+                            "id": "candidate-expired-while-waiting",
+                            "url": "https://images.invalid/cover.jpg",
+                        },
+                    ),
+                    config=config,
+                    logger=logger,
+                    should_cancel=lease_expired.is_set,
+                    checkpoint=lambda *_args, **_kwargs: 1,
+                    persist_selection=lambda **_kwargs: pytest.fail("expired lease must not persist"),
+                    publish=lambda **_kwargs: pytest.fail("expired lease must not publish"),
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=run_save)
+    worker.start()
+    try:
+        for _attempt in range(100):
+            with cover_workflow._LOCAL_COVER_SELECTION_LOCKS_GUARD:
+                lock_entry = cover_workflow._LOCAL_COVER_SELECTION_LOCKS.get(lock_key)
+            if lock_entry is not None and lock_entry[1] == 2:
+                break
+            assert worker.is_alive()
+            time.sleep(0.01)
+        else:
+            pytest.fail("remote save did not queue on the album selection lock")
+        lease_expired.set()
+    finally:
+        cover_workflow.complete_local_image_promotion(blocking_promotion)
+        worker.join(2)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert result == [{"status": "canceled", "reason_code": "canceled_before_promotion"}]
+    assert replacement_attempts == []
+    assert cover_path.read_bytes() == original_bytes
+
+
 def test_claimed_display_only_remote_cover_commits_link_without_fetch(
     config, logger, monkeypatch, tmp_path: Path
 ):

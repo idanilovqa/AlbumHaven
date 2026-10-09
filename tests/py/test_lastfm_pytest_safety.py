@@ -192,7 +192,6 @@ def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch)
     from music_app import create_asgi_app
     from music_app.services import (
         exception_overrides,
-        lastfm_retry,
         library_roots,
         runtime_shutdown,
         scan_cache_persistence,
@@ -202,7 +201,6 @@ def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch)
     class TargetedRepositoryStub:
         backend = "postgres"
 
-    captured_configs = []
     monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
     monkeypatch.setattr(
         state,
@@ -210,8 +208,6 @@ def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch)
         lambda _runtime: {},
         raising=False,
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda runtime: captured_configs.append(runtime.config))
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
     monkeypatch.setattr(
         scan_cache_persistence,
@@ -237,7 +233,6 @@ def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch)
 
     asyncio.run(exercise_lifespan())
 
-    assert captured_configs == []
     python_test_config._assert_safe_runtime_config(app.state.config)
 
 

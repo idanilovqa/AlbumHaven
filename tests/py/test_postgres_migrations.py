@@ -287,10 +287,27 @@ def test_vacated_structural_album_retirement_is_narrow_and_dependency_complete()
     )
 
     assert "function library.retire_vacated_structural_album(" in sql
+    assert "function library.retire_vacated_structural_album_internal(" in sql
     assert "security definer" in sql
     assert "set search_path = pg_catalog" in sql
     assert "grant execute on function library.retire_vacated_structural_album(" in sql
     assert "to album_haven_app" in sql
+    assert (
+        "grant execute on function library.retire_vacated_structural_album_internal("
+        not in sql
+    )
+    assert (
+        "revoke all on function library.retire_vacated_structural_album_internal("
+        in sql
+    )
+    app_wrapper = sql.split(
+        "create or replace function library.retire_vacated_structural_album(", 1
+    )[1].split("create or replace function", 1)[0]
+    assert "app.bootstrap_owners.owner_key = 'local-bootstrap-owner'" in app_wrapper
+    assert "library.libraries.name = 'local library'" in app_wrapper
+    assert "library.libraries.library_kind = 'local'" in app_wrapper
+    assert "p_library_id is distinct from bootstrap_library_id" in app_wrapper
+    assert "library.retire_vacated_structural_album_internal(" in app_wrapper
     assert "grant delete on" not in sql
     assert "preserved_track_tombstone" in sql
     assert "preserved_cover_checkpoint" in sql
@@ -332,8 +349,25 @@ def test_vacated_structural_album_sibling_sweep_is_exact_bounded_and_family_mark
     )
 
     assert "function library.retire_vacated_structural_album_siblings(" in sql
+    assert "function library.retire_vacated_structural_album_siblings_internal(" in sql
     assert "grant execute on function library.retire_vacated_structural_album_siblings(" in sql
     assert "to album_haven_app" in sql
+    assert (
+        "grant execute on function library.retire_vacated_structural_album_siblings_internal("
+        not in sql
+    )
+    assert (
+        "revoke all on function "
+        "library.retire_vacated_structural_album_siblings_internal("
+        in sql
+    )
+    app_wrapper = sql.split(
+        "create or replace function library.retire_vacated_structural_album_siblings(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "app.bootstrap_owners.owner_key = 'local-bootstrap-owner'" in app_wrapper
+    assert "p_library_id is distinct from bootstrap_library_id" in app_wrapper
+    assert "library.retire_vacated_structural_album_siblings_internal(" in app_wrapper
     assert "pg_advisory_xact_lock" in sql
     assert "candidate_album.artist_id = destination.artist_id" in sql
     assert "destination.artist_id is null" in sql
@@ -362,7 +396,13 @@ def test_targeted_reconciliation_album_retirement_is_claim_and_lease_scoped():
     assert "job.lease_expires_at > p_now" in sql
     assert "intent.publication_attempt = p_attempt" in sql
     assert "intent.committed_inventory_revision is not null" in sql
-    assert "library.retire_vacated_structural_album_siblings(" in sql
+    worker_wrapper = sql.split(
+        "create or replace function "
+        "library.retire_claimed_targeted_reconciliation_vacated_albums(",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    assert "library.retire_vacated_structural_album_siblings_internal(" in worker_wrapper
+    assert "library.retire_vacated_structural_album_siblings(" not in worker_wrapper
     assert "grant execute on function library.retire_claimed_targeted_reconciliation_vacated_albums(" in sql
     assert "to album_haven_worker" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
@@ -850,7 +890,7 @@ def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences()
         "finalize_claimed_cover_lookup_canceled",
     ):
         assert f"function ops.{function_name}" in sql
-    assert "job.lease_expires_at > observed_at" in sql
+    assert "job.lease_expires_at > clock_timestamp()" in sql
     assert "job.lease_token = requested_lease_token" in sql
     assert "task.row_revision = expected_row_revision" in sql
     assert "array_agg(file.private_path" in sql
@@ -874,7 +914,7 @@ def test_cover_refresh_worker_migration_uses_one_fenced_core_and_private_status(
     assert "job.kind in ('cover_bulk_refresh', 'post_scan_cover_refresh')" in sql
     assert "#variable_conflict use_column" in sql
     assert "count(distinct album.id) filter (where file.id is not null)::integer" in sql
-    assert "job.lease_expires_at > observed_at" in sql
+    assert "job.lease_expires_at > clock_timestamp()" in sql
     assert "refresh.row_revision = expected_row_revision" in sql
     assert "grant execute on function ops.begin_claimed_cover_refresh" in sql
     assert "grant execute on function ops.persist_claimed_automatic_cover_selection" in sql
@@ -905,8 +945,185 @@ def test_remote_cover_save_migration_has_private_checkpoints_and_claim_fences():
     ):
         assert f"function ops.{function_name}" in sql
     assert "job.lease_token = requested_lease_token" in sql
-    assert "job.lease_expires_at > observed_at" in sql
+    assert "job.lease_expires_at > clock_timestamp()" in sql
     assert "grant select on library.local_track_files" not in sql
+
+
+@pytest.mark.parametrize(
+    "migration",
+    (
+        COVER_LOOKUP_WORKER_MIGRATION,
+        COVER_REFRESH_WORKER_MIGRATION,
+        REMOTE_COVER_SAVE_MIGRATION,
+    ),
+)
+def test_cover_worker_lease_checks_use_post_lock_database_time(migration):
+    sql = _normalized_sql(migration.read_text(encoding="utf-8"))
+
+    assert "lease_expires_at > observed_at" not in sql
+    assert "lease_expires_at <= observed_at" not in sql
+    assert "clock_timestamp()" in sql
+
+
+def test_claimed_publication_rechecks_wall_clock_after_blocking_locks():
+    targeted_sql = _normalized_sql(
+        TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    targeted_fence = targeted_sql.split(
+        "create or replace function library.fence_targeted_reconciliation_publication", 1
+    )[1].split("create or replace function", 1)[0]
+    fence_lock = targeted_fence.rindex(
+        "for update;",
+        0,
+        targeted_fence.index("update library.targeted_reconciliation_intents"),
+    )
+    fence_recheck = targeted_fence.index(
+        "job.lease_expires_at > clock_timestamp()", fence_lock
+    )
+    assert fence_recheck < targeted_fence.index(
+        "update library.targeted_reconciliation_intents", fence_recheck
+    )
+
+    targeted = targeted_sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation", 1
+    )[1].split("revoke all on function", 1)[0]
+    targeted_lock = targeted.index(
+        "pg_advisory_xact_lock( hashtext('album-haven:local-inventory-publication')"
+    )
+    targeted_recheck = targeted.index(
+        "job.lease_expires_at > clock_timestamp()", targeted_lock
+    )
+    assert targeted_recheck < targeted.index(
+        "create temporary table targeted_album_key_map", targeted_recheck
+    )
+
+    full_scan = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function library.publish_claimed_full_scan", 1
+    )[1].split(
+        "create or replace function library.validate_claimed_post_scan_cover_refresh", 1
+    )[0]
+    full_scan_lock = full_scan.index(
+        "from library.libraries where id = claimed_library_id for update"
+    )
+    full_scan_recheck = full_scan.index(
+        "job.lease_expires_at > clock_timestamp()", full_scan_lock
+    )
+    assert full_scan_recheck < full_scan.index(
+        "insert into library.local_artists", full_scan_recheck
+    )
+
+
+@pytest.mark.parametrize(
+    ("migration", "function_name", "last_lock", "first_mutation"),
+    (
+        (
+            REMOTE_COVER_SAVE_MIGRATION,
+            "ops.publish_claimed_cover_remote_save",
+            "for update;",
+            "update ops.cover_lookup_tasks",
+        ),
+        (
+            REMOTE_COVER_SAVE_MIGRATION,
+            "ops.persist_claimed_remote_cover_selection",
+            "for update;",
+            "update library.local_albums",
+        ),
+        (
+            LASTFM_RETRY_WORKER_MIGRATION,
+            "ops.finish_claimed_lastfm_attempt",
+            "for update;",
+            "insert into ops.jobs",
+        ),
+        (
+            AUTH_MAIL_WORKER_MIGRATION,
+            "ops.finish_claimed_auth_mail",
+            "for update;",
+            "insert into ops.jobs",
+        ),
+    ),
+)
+def test_claimed_finalizers_recheck_wall_clock_after_domain_lock(
+    migration, function_name, last_lock, first_mutation
+):
+    function_sql = _normalized_sql(migration.read_text(encoding="utf-8")).split(
+        f"create or replace function {function_name}", 1
+    )[1].split("create or replace function", 1)[0]
+    lock_position = function_sql.rindex(
+        last_lock, 0, function_sql.index(first_mutation)
+    )
+    recheck_position = function_sql.index(
+        "lease_expires_at <= clock_timestamp()", lock_position
+    )
+    assert recheck_position < function_sql.index(first_mutation, recheck_position)
+
+
+def test_cover_refresh_cancellation_uses_job_then_refresh_lock_order():
+    function_sql = _normalized_sql(
+        COVER_REFRESH_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.request_cover_bulk_refresh_cancellation", 1
+    )[1].split("create or replace function ops.begin_claimed_cover_refresh", 1)[0]
+
+    job_lock = function_sql.index("from ops.request_job_cancellation(")
+    refresh_lock = function_sql.index("for update;", job_lock)
+    assert job_lock < refresh_lock < function_sql.index(
+        "update ops.cover_bulk_refreshes", refresh_lock
+    )
+
+
+def test_cover_lookup_cancellation_uses_job_then_task_lock_order_and_revalidates_binding():
+    function_sql = _normalized_sql(
+        COVER_LOOKUP_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.request_cover_lookup_cancellation", 1
+    )[1].split(
+        "create or replace function ops.finalize_claimed_cover_lookup_canceled", 1
+    )[0]
+
+    job_lock = function_sql.index("from ops.request_job_cancellation(")
+    assert "for update" not in function_sql[:job_lock]
+    task_lock = function_sql.index("for update;", job_lock)
+    task_update = function_sql.index("update ops.cover_lookup_tasks", task_lock)
+    rebound_scope = function_sql[job_lock:task_update]
+
+    assert job_lock < task_lock < task_update
+    assert "job_id = selected_job_id" in rebound_scope
+    assert "task_key = requested_task_key" in rebound_scope
+    assert "library_id = requested_library_id" in rebound_scope
+    assert "initiating_account_id = actor_account_id" in rebound_scope
+
+
+def test_remote_cover_publication_is_fenced_by_job_and_task_cancellation_under_locks():
+    function_sql = _normalized_sql(
+        REMOTE_COVER_SAVE_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.publish_claimed_cover_remote_save", 1
+    )[1].split(
+        "create or replace function ops.persist_claimed_remote_cover_selection", 1
+    )[0]
+
+    job_lock = function_sql.index("for update;")
+    task_query = function_sql.index("from ops.cover_lookup_tasks", job_lock)
+    task_lock = function_sql.index("for update;", task_query)
+
+    assert "job.cancel_requested_at is null" in function_sql[:job_lock]
+    assert "task.cancel_requested_at is null" in function_sql[task_query:task_lock]
+
+
+def test_lastfm_presend_cancellation_requires_current_active_lease():
+    function_sql = _normalized_sql(
+        LASTFM_RETRY_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.cancel_claimed_lastfm_before_send", 1
+    )[1].split("create or replace function ops.finish_claimed_lastfm_attempt", 1)[0]
+
+    assert "job.kind = 'lastfm_scrobble_retry'" in function_sql
+    assert "job.lease_expires_at > p_now" in function_sql
+    assert "job.lease_expires_at <= clock_timestamp()" in function_sql
+
+
 def test_album_raw_artist_search_index_matches_search_preview_expression():
     sql = _normalized_sql(
         (MIGRATIONS_DIR / "0083_add_album_raw_artist_search_index.sql").read_text(
@@ -4231,6 +4448,22 @@ def test_scan_job_intent_migration_gives_targeted_requests_a_stable_producer_ide
     assert "p_producer_request_key varchar" in create_function
     assert "on conflict" in create_function
     assert "producer_request_key" in create_function
+
+
+def test_scan_job_intent_migration_coalesces_identical_active_watcher_requests():
+    sql = _normalized_sql(scan_job_intents_sql())
+    create_function = sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+
+    assert "album-haven:targeted-reconciliation-payload:" in create_function
+    assert "p_client_surface = 'library_watcher'" in create_function
+    assert "intent.request_digest = p_request_digest" in create_function
+    assert "job.state in ('queued', 'retry_wait')" in create_function
+    assert "'running'" not in create_function.split(
+        "intent.request_digest = p_request_digest", 1
+    )[1].split("limit 1", 1)[0]
 
 
 def test_scan_job_link_function_binds_exact_library_account_and_parameters():

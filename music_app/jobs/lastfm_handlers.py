@@ -155,6 +155,10 @@ def build_lastfm_retry_handler(
             return cancel(claim, "lastfm_retry_lease_lost_before_send")
         decision = context.reauthorize()
         if not decision.allowed:
+            if decision.indeterminate:
+                return JobTransitionResult(
+                    JobState.FAILED, "authorization_unavailable"
+                )
             return cancel(claim, decision.reason_code)
 
         secret = retry_repository.load_claimed_session_secret(**_claim_values(claim, now()))
@@ -178,17 +182,22 @@ def build_lastfm_retry_handler(
         except Exception as error:
             provider_result = classify_lastfm_provider_error(error)
 
-        finalization = retry_repository.finalize_claimed_attempt(
-            **_claim_values(claim, now()),
-            expected_row_revision=scope.row_revision,
-            disposition=provider_result.disposition.value,
-            reason_code=provider_result.reason_code,
-            history_updates=_history_updates(
-                provider_result.disposition,
-                attempted_at=observed_at,
-                retry_count=scope.accepted_attempt,
-            ),
-        )
+        try:
+            finalization = retry_repository.finalize_claimed_attempt(
+                **_claim_values(claim, now()),
+                expected_row_revision=scope.row_revision,
+                disposition=provider_result.disposition.value,
+                reason_code=provider_result.reason_code,
+                history_updates=_history_updates(
+                    provider_result.disposition,
+                    attempted_at=observed_at,
+                    retry_count=scope.accepted_attempt,
+                ),
+            )
+        except Exception:
+            return JobTransitionResult(
+                JobState.AMBIGUOUS, "lastfm_scrobble_finalization_ambiguous"
+            )
         if provider_result.disposition is LastfmProviderDisposition.ACCEPTED:
             return JobTransitionResult(JobState.SUCCEEDED, "lastfm_scrobble_accepted")
         if provider_result.disposition is LastfmProviderDisposition.POSSIBLE_SEND_AMBIGUOUS:

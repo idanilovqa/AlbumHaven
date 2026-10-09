@@ -355,8 +355,11 @@ def run_claimed_cover_remote_save(
         album_root,
         raw_bytes,
         serialize_selection=True,
+        should_cancel=should_cancel,
     )
     if promotion is None:
+        if should_cancel():
+            return {"status": "canceled", "reason_code": "canceled_before_promotion"}
         return {"status": "failed", "reason_code": "image_validation_failed"}
     artifact_revision = str(promotion.promoted_cover_revision or "").strip()
     revision = checkpoint(

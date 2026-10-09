@@ -505,6 +505,74 @@ def test_live_claimed_attempt_state_machine_is_fenced_and_composes_domain_retry(
         assert int(pending["current_job_id"]) == result.next_job_id
 
 
+def test_live_expired_claim_cannot_cancel_lastfm_before_send(
+    live_lastfm_database,
+):
+    setup_url, _runtime_url = live_lastfm_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, session_id, origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    accepted = PostgresLastfmRetryJobRepository(
+        database_url=setup_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).accept_retryable_pending(
+        account_id=account_id,
+        library_id=library_id,
+        source_family="runtime_lastfm_sync_state_adapter",
+        source_key=f"expired-cancel-{uuid4().hex}",
+        track_key="opaque-track",
+        played_at=now - timedelta(minutes=5),
+        previous_attempts=1,
+        next_attempt_at=now,
+        active_session_id=session_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        payload={"source_payload": {"artist": "Artist", "title": "Song"}},
+    )
+    jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="lastfm-expired-cancel-live",
+        now=now + timedelta(seconds=1),
+        lease_seconds=1,
+        kinds=("lastfm_scrobble_retry",),
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set lease_expires_at = clock_timestamp() - interval '1 second' "
+            "where id = %s",
+            (claim.job_id,),
+        )
+    repository = PostgresLastfmRetryJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+
+    assert repository.cancel_claimed_before_send(
+        pending_scrobble_id=accepted.pending_scrobble_id,
+        active_session_id=session_id,
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=now - timedelta(minutes=5),
+        reason_code="expired_claim",
+    ) is False
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending = connection.execute(
+            "select status, last_provider_disposition, repair_reason_code "
+            "from integration.pending_scrobbles where id = %s",
+            (accepted.pending_scrobble_id,),
+        ).fetchone()
+    assert pending["status"] == "accepted"
+    assert pending["last_provider_disposition"] is None
+    assert pending["repair_reason_code"] is None
+
+
 def test_live_playback_failure_composition_converges_duplicate_listen_identity(
     live_lastfm_database,
 ):
@@ -515,10 +583,21 @@ def test_live_playback_failure_composition_converges_duplicate_listen_identity(
         connect_to_database=isolatedPostgres._connect,
     )
     now = datetime.now(timezone.utc)
+    listen_id = f"playback-{uuid4().hex}"
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            """
+            insert into integration.listen_history (
+              account_id, library_id, played_at, source_family,
+              source_entry_id, metadata
+            ) values (%s, %s, %s, 'runtime_lastfm_sync_state_adapter', %s, '{}'::jsonb)
+            """,
+            (account_id, library_id, now, listen_id),
+        )
     values = dict(
         account_id=account_id,
         library_id=library_id,
-        listen_id=f"playback-{uuid4().hex}",
+        listen_id=listen_id,
         entry={
             "artist": "Artist",
             "title": "Song",
@@ -548,8 +627,19 @@ def test_live_playback_failure_composition_converges_duplicate_listen_identity(
             "select active_session_id from integration.pending_scrobbles where id = %s",
             (first.pending_scrobble_id,),
         ).fetchone()
+        durable_owned = connection.execute(
+            """
+            select metadata->>'scrobble_durable_job_owned' as owned
+              from integration.listen_history
+             where account_id = %s and library_id = %s
+               and source_family = 'runtime_lastfm_sync_state_adapter'
+               and source_entry_id = %s
+            """,
+            (account_id, library_id, listen_id),
+        ).fetchone()["owned"]
     assert job_count == 1
     assert int(pending["active_session_id"]) == session_id
+    assert durable_owned == "true"
 
 
 def test_live_reauthentication_failure_creates_a_hold_without_a_generic_job(

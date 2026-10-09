@@ -258,33 +258,49 @@ create or replace function ops.cancel_claimed_lastfm_before_send(
   p_reason_code varchar
 )
 returns boolean
-language sql
+language plpgsql
 security definer
 set search_path = pg_catalog
 as $$
-  with canceled as (
-    update integration.pending_scrobbles as pending
-       set status = 'canceled',
-           last_provider_disposition = 'canceled_before_send',
-           repair_reason_code = p_reason_code,
-           next_attempt_at = null,
-           row_revision = pending.row_revision + 1,
-           updated_at = p_now
-      from ops.jobs as job
-     where pending.id = p_pending_scrobble_id
-       and pending.current_job_id = job.id
-       and pending.active_session_id = p_active_session_id
-       and pending.status = 'accepted'
-       and pending.row_revision = job.scope_version
-       and job.id = p_job_id
-       and job.state = 'running'
-       and job.attempt_count = p_attempt
-       and job.lease_owner = p_worker_id
-       and job.lease_token = p_lease_token
-       and octet_length(p_reason_code) between 1 and 128
-    returning 1
-  )
-  select exists (select 1 from canceled);
+declare
+  current_job ops.jobs%rowtype;
+  current_pending_id bigint;
+begin
+  if octet_length(p_reason_code) not between 1 and 128 then return false; end if;
+  select job.* into current_job
+    from ops.jobs as job
+   where job.id = p_job_id
+     and job.kind = 'lastfm_scrobble_retry'
+     and job.state = 'running'
+     and job.attempt_count = p_attempt
+     and job.lease_owner = p_worker_id
+     and job.lease_token = p_lease_token
+     and job.lease_expires_at > p_now
+   for update;
+  if not found then return false; end if;
+
+  select pending.id into current_pending_id
+    from integration.pending_scrobbles as pending
+   where pending.id = p_pending_scrobble_id
+     and pending.current_job_id = p_job_id
+     and pending.active_session_id = p_active_session_id
+     and pending.status = 'accepted'
+     and pending.row_revision = current_job.scope_version
+   for update;
+  if not found or current_job.lease_expires_at <= clock_timestamp() then
+    return false;
+  end if;
+
+  update integration.pending_scrobbles as pending
+     set status = 'canceled',
+         last_provider_disposition = 'canceled_before_send',
+         repair_reason_code = p_reason_code,
+         next_attempt_at = null,
+         row_revision = pending.row_revision + 1,
+         updated_at = p_now
+   where pending.id = current_pending_id;
+  return found;
+end;
 $$;
 
 create or replace function ops.finish_claimed_lastfm_attempt(
@@ -345,6 +361,7 @@ begin
      and pending.attempt_count < pending.accepted_attempt
    for update;
   if not found then return; end if;
+  if current_job.lease_expires_at <= clock_timestamp() then return; end if;
 
   if p_disposition = 'accepted' then v_domain_status := 'completed';
   elsif p_disposition = 'reauthentication_required' then v_domain_status := 'reauthentication_required';

@@ -610,6 +610,21 @@ begin
   select coalesce(nullif(metadata ->> 'inventory_mutation_revision', '')::bigint, 0)
     into committed_revision
     from library.libraries where id = claimed_library_id for update;
+  if not exists (
+    select 1
+      from ops.jobs as job
+     where job.id = p_job_id
+       and job.kind = 'full_scan'
+       and job.state = 'running'
+       and job.attempt_count = p_attempt
+       and job.lease_owner = p_worker_id
+       and job.lease_token = p_lease_token
+       and job.lease_expires_at > clock_timestamp()
+       and job.cancel_requested_at is null
+  ) then
+    return query select false, committed_revision;
+    return;
+  end if;
   if committed_revision <> p_expected_inventory_revision then
     return query select false, committed_revision;
     return;

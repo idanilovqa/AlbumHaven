@@ -126,8 +126,7 @@ begin
    where refresh.library_id = requested_library_id
      and refresh.initiating_account_id = requested_account_id
      and refresh.status in ('pending', 'running')
-   order by refresh.id desc limit 1
-   for update;
+   order by refresh.id desc limit 1;
   if selected_refresh.id is null or selected_refresh.job_id is null then
     return query select false, false;
     return;
@@ -135,6 +134,17 @@ begin
   perform * from ops.request_job_cancellation(
     selected_refresh.job_id, requested_account_id, observed_at
   );
+  select * into selected_refresh
+    from ops.cover_bulk_refreshes as refresh
+   where refresh.id = selected_refresh.id
+     and refresh.library_id = requested_library_id
+     and refresh.initiating_account_id = requested_account_id
+     and refresh.status in ('pending', 'running')
+   for update;
+  if selected_refresh.id is null then
+    return query select false, false;
+    return;
+  end if;
   select state into resulting_state from ops.jobs where id = selected_refresh.job_id;
   update ops.cover_bulk_refreshes as refresh
      set cancel_requested_at = coalesce(refresh.cancel_requested_at, observed_at),
@@ -191,7 +201,7 @@ begin
      and job.attempt_count = requested_attempt
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at
+     and job.lease_expires_at > clock_timestamp()
      and job.cancel_requested_at is null
      and job.kind in ('cover_bulk_refresh', 'post_scan_cover_refresh')
    for update;
@@ -347,7 +357,7 @@ as $$
         or job.attempt_count <> requested_attempt
         or job.lease_owner is distinct from requested_worker_id
         or job.lease_token is distinct from requested_lease_token
-        or job.lease_expires_at <= observed_at
+        or job.lease_expires_at <= clock_timestamp()
       from ops.jobs as job
       join ops.cover_bulk_refreshes as refresh on refresh.job_id = job.id
      where job.id = requested_job_id
@@ -396,7 +406,7 @@ as $$
      and job.attempt_count = requested_attempt
      and job.lease_owner = requested_worker_id
      and job.lease_token = requested_lease_token
-     and job.lease_expires_at > observed_at
+     and job.lease_expires_at > clock_timestamp()
      and job.cancel_requested_at is null
      and refresh.cancel_requested_at is null
   returning refresh.row_revision;
@@ -442,7 +452,7 @@ as $$
        and job.attempt_count = requested_attempt
        and job.lease_owner = requested_worker_id
        and job.lease_token = requested_lease_token
-       and job.lease_expires_at > observed_at
+       and job.lease_expires_at > clock_timestamp()
     returning refresh.id
   )
   select exists (select 1 from finished);
@@ -491,7 +501,7 @@ as $$
        and job.attempt_count = requested_attempt
        and job.lease_owner = requested_worker_id
        and job.lease_token = requested_lease_token
-       and job.lease_expires_at > observed_at
+       and job.lease_expires_at > clock_timestamp()
        and job.cancel_requested_at is null
   ),
   input_track_paths as materialized (
@@ -722,7 +732,7 @@ begin
        and job.attempt_count = requested_attempt
        and job.lease_owner = requested_worker_id
        and job.lease_token = requested_lease_token
-       and job.lease_expires_at > observed_at
+       and job.lease_expires_at > clock_timestamp()
        and job.cancel_requested_at is null
   ) then
     return false;

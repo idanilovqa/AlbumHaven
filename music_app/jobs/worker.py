@@ -22,7 +22,20 @@ from .dispatch import JobHandlerRegistry
 
 
 _COMPATIBLE_SCHEMA_VERSION = 1
+_AUTHORIZATION_RETRY_DELAY = timedelta(seconds=5)
 _LOGGER = logging.getLogger(__name__)
+
+
+def _authorization_unavailable_outcome(
+    claim: ClaimedJob, *, now: datetime
+) -> JobTransitionResult:
+    if claim.attempt < claim.max_attempts:
+        return JobTransitionResult(
+            JobState.RETRY_WAIT,
+            "authorization_unavailable",
+            scheduled_at=now + _AUTHORIZATION_RETRY_DELAY,
+        )
+    return JobTransitionResult(JobState.FAILED, "authorization_unavailable")
 
 
 def combine_due_reconcilers(
@@ -87,6 +100,7 @@ class ExecutionContext:
         self._lease_active = True
         self._cancel_requested = False
         self._finalization_claimed = False
+        self._authorization_indeterminate = False
 
     @property
     def lease_active(self) -> bool:
@@ -97,6 +111,11 @@ class ExecutionContext:
     def cancel_requested(self) -> bool:
         with self._lock:
             return self._cancel_requested
+
+    @property
+    def authorization_retry_required(self) -> bool:
+        with self._lock:
+            return self._authorization_indeterminate and not self._cancel_requested
 
     def observe_heartbeat(self, result: JobHeartbeatResult) -> None:
         with self._lock:
@@ -121,11 +140,19 @@ class ExecutionContext:
                 self.claim, self._clock()
             )
         except Exception:
-            decision = AuthorizationDecision(False, "authorization_context_invalid")
+            decision = AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         if not isinstance(decision, AuthorizationDecision):
             decision = AuthorizationDecision(False, "authorization_context_invalid")
-        if not decision.allowed:
-            self.request_cancellation()
+        if decision.indeterminate:
+            with self._lock:
+                if not self._cancel_requested:
+                    self._authorization_indeterminate = True
+        elif not decision.allowed:
+            with self._lock:
+                self._authorization_indeterminate = False
+                self._cancel_requested = True
         return decision
 
     def finish_if_active(self, finish: Callable[[], None]) -> bool:
@@ -376,9 +403,14 @@ class Worker:
 
         decision = self._authorize(claimed)
         if not decision.allowed:
+            outcome = (
+                _authorization_unavailable_outcome(claimed, now=self._clock())
+                if decision.indeterminate
+                else JobTransitionResult(JobState.CANCELED, decision.reason_code)
+            )
             self._repository.finish(
                 claimed,
-                JobTransitionResult(JobState.CANCELED, decision.reason_code),
+                outcome,
                 now=self._clock(),
             )
             return True
@@ -409,6 +441,10 @@ class Worker:
         finally:
             heartbeat_stop.set()
             heartbeat.join()
+        if context.authorization_retry_required:
+            outcome = _authorization_unavailable_outcome(
+                claimed, now=self._clock()
+            )
         try:
             context.finish_if_active(
                 lambda: self._repository.finish(claimed, outcome, now=self._clock())
@@ -577,7 +613,9 @@ class Worker:
         try:
             decision = self._authorization_service.authorize(claimed, self._clock())
         except Exception:
-            return AuthorizationDecision(False, "authorization_context_invalid")
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         if not isinstance(decision, AuthorizationDecision):
             return AuthorizationDecision(False, "authorization_context_invalid")
         return decision

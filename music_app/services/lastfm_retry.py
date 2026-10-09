@@ -19,13 +19,8 @@ from music_app.services.lastfm import (
     scrobble_track,
 )
 
-_RETRY_INTERVAL_SECONDS = 30 * 60
 _RETRY_BATCH_LIMIT = 100
 _RETRY_LOCK = threading.Lock()
-_WORKER_LOCK = threading.Lock()
-_WORKER_THREAD: threading.Thread | None = None
-_WORKER_APP_KEY = ""
-_WORKER_STOP_EVENT: threading.Event | None = None
 
 
 class LastfmRetryBatchError(RuntimeError):
@@ -225,23 +220,6 @@ def retry_pending_lastfm_scrobbles(
         if account_id is None and any(item.entry.get("measurement_version") != "rendered-pcm-v1" for item in pending_entries):
             record_retry_summary(config, summary)
         return summary
-
-
-def start_lastfm_retry_worker(_app: object) -> None:
-    """Fail closed for callers that have not migrated to the durable worker."""
-
-    raise RuntimeError("the process-local Last.fm retry daemon has been retired")
-
-
-def stop_lastfm_retry_worker(
-    _app: object | None = None, *, wait: bool = False, timeout: float = 5.0
-) -> bool:
-    """Report that no process-local retry daemon exists."""
-
-    del wait, timeout
-    return False
-
-
 __all__ = [
     "LastfmRetryBatchError",
     "pending_scrobble_count",

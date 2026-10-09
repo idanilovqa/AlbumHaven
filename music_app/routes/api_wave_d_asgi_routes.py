@@ -332,7 +332,7 @@ async def _serialize_cover_gallery_from_asgi(
         )
         file_cache = {**file_cache, **selected_entries}
     task_payload = serialize_cover_lookup_task_payload(
-        _lookup_task_payload_for_request(request, task_id)
+        await run_in_threadpool(_lookup_task_payload_for_request, request, task_id)
     )
     return serialize_cover_gallery_payload(
         album_root=album_root,
@@ -430,7 +430,12 @@ def _task_matches_album_context(
 async def utilities_cover_lookup_tasks(request: Request) -> JSONResponse:
     config = _app_config(request)
     return JSONResponse(
-        {"ok": True, "tasks": _list_cover_lookup_tasks_for_request(request, config)}
+        {
+            "ok": True,
+            "tasks": await run_in_threadpool(
+                _list_cover_lookup_tasks_for_request, request, config
+            ),
+        }
     )
 
 
@@ -442,14 +447,16 @@ async def utilities_cover_lookup_tasks_clear_completed(request: Request) -> JSON
     raw_task_ids = payload.get("task_ids") if isinstance(payload, dict) else None
     task_ids = _clean_string_list(raw_task_ids) if isinstance(raw_task_ids, list) else None
     config = _app_config(request)
-    removed_count = _clear_cover_lookup_tasks_for_request(
-        request, config, task_ids
+    removed_count = await run_in_threadpool(
+        _clear_cover_lookup_tasks_for_request, request, config, task_ids
     )
     return JSONResponse(
         {
             "ok": True,
             "removed_count": removed_count,
-            "tasks": _list_cover_lookup_tasks_for_request(request, config),
+            "tasks": await run_in_threadpool(
+                _list_cover_lookup_tasks_for_request, request, config
+            ),
         }
     )
 
@@ -460,8 +467,8 @@ async def utilities_cover_lookup_task_clear(request: Request, task_id: str) -> J
     if not normalized_id:
         return _json_response(_task_not_found_response("Lookup task"))
     config = _app_config(request)
-    removed_count = _clear_cover_lookup_tasks_for_request(
-        request, config, [normalized_id]
+    removed_count = await run_in_threadpool(
+        _clear_cover_lookup_tasks_for_request, request, config, [normalized_id]
     )
     if removed_count <= 0:
         return _json_response(_task_not_found_response("Lookup task"))
@@ -469,7 +476,9 @@ async def utilities_cover_lookup_task_clear(request: Request, task_id: str) -> J
         {
             "ok": True,
             "removed_count": removed_count,
-            "tasks": _list_cover_lookup_tasks_for_request(request, config),
+            "tasks": await run_in_threadpool(
+                _list_cover_lookup_tasks_for_request, request, config
+            ),
         }
     )
 
@@ -480,8 +489,8 @@ async def utilities_cover_lookup_task_mark_action_taken(request: Request, task_i
     if not normalized_id:
         return _json_response(_task_not_found_response("Lookup task"))
     config = _app_config(request)
-    task = _mark_cover_lookup_task_action_for_request(
-        request, config, normalized_id
+    task = await run_in_threadpool(
+        _mark_cover_lookup_task_action_for_request, request, config, normalized_id
     )
     if task is None:
         return _json_response(_task_not_found_response("Lookup task"))
@@ -489,7 +498,9 @@ async def utilities_cover_lookup_task_mark_action_taken(request: Request, task_i
         {
             "ok": True,
             "task": task,
-            "tasks": _list_cover_lookup_tasks_for_request(request, config),
+            "tasks": await run_in_threadpool(
+                _list_cover_lookup_tasks_for_request, request, config
+            ),
         }
     )
 
@@ -507,25 +518,32 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     task_id = str(payload.get("task_id") or "").strip()
-    repository, album_id, identity_error = _resolved_snapshot_album_context(
+    repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context,
         config,
         album or {},
         album_context.track_paths,
     )
     if identity_error is not None:
         return _json_response(identity_error)
-    task_payload = _lookup_task_payload_for_request(request, task_id)
-    if task_payload and not _task_matches_album_context(
+    task_payload = await run_in_threadpool(
+        _lookup_task_payload_for_request, request, task_id
+    )
+    task_matches = not task_payload or await run_in_threadpool(
+        _task_matches_album_context,
         task_payload,
         repository=repository,
         album_id=int(album_id),
         track_paths=album_context.track_paths,
-    ):
+    )
+    if not task_matches:
         return _json_response(
             ({"ok": False, "error": "Lookup task does not belong to this album"}, 409)
         )
     try:
-        candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
+        candidate_snapshot = await run_in_threadpool(
+            repository.get_for_album_context, album_id=int(album_id)
+        )
     except Exception:
         candidate_snapshot = _candidate_snapshot_read_failure(
             "candidate_snapshot_read_failed"
@@ -556,7 +574,8 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
             ({"ok": False, "error": "Album root could not be resolved"}, 400)
         )
     album_id = _album_id(album or {})
-    repository, album_id, identity_error = _resolved_snapshot_album_context(
+    repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context,
         config,
         album or {},
         album_context.track_paths,
@@ -564,10 +583,14 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
     if identity_error is not None:
         return _json_response(identity_error)
     try:
-        candidate_snapshot = repository.mark_seen(album_id=album_id)
+        candidate_snapshot = await run_in_threadpool(
+            repository.mark_seen, album_id=album_id
+        )
     except Exception:
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=album_id)
+            candidate_snapshot = await run_in_threadpool(
+                repository.get_for_album_context, album_id=album_id
+            )
         except Exception:
             candidate_snapshot = None
         failed_snapshot = dict(
@@ -637,21 +660,24 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             "album_id": _album_id(album or {}),
         }
         try:
-            repository.accept_candidate_lookup(
-                task_key=task_id,
-                library_id=audit.library_id,
-                album_key=album_key,
-                account_id=audit.account_id,
-                request_origin_ref=request_origin_ref_for_request(request),
-                deployment_mode=audit.deployment_mode,
-                client_surface=audit.client_surface_class,
-                candidate_generation=generation,
-                resource_revision=repository.current_inventory_revision(
-                    library_id=audit.library_id
-                ),
-                scheduled_at=datetime.now(timezone.utc),
-                task_payload=task_payload,
-            )
+            def accept_candidate_lookup():
+                return repository.accept_candidate_lookup(
+                    task_key=task_id,
+                    library_id=audit.library_id,
+                    album_key=album_key,
+                    account_id=audit.account_id,
+                    request_origin_ref=request_origin_ref_for_request(request),
+                    deployment_mode=audit.deployment_mode,
+                    client_surface=audit.client_surface_class,
+                    candidate_generation=generation,
+                    resource_revision=repository.current_inventory_revision(
+                        library_id=audit.library_id
+                    ),
+                    scheduled_at=datetime.now(timezone.utc),
+                    task_payload=task_payload,
+                )
+
+            await run_in_threadpool(accept_candidate_lookup)
         except ValueError as exc:
             return _json_response(({"ok": False, "error": str(exc)}, 409))
         except Exception:
@@ -699,7 +725,8 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
     if durable is not None:
         repository, audit = durable
         try:
-            task_payload = repository.request_candidate_lookup_cancellation(
+            task_payload = await run_in_threadpool(
+                repository.request_candidate_lookup_cancellation,
                 task_key=str(task_id or "").strip(),
                 library_id=audit.library_id,
                 actor_account_id=audit.account_id,
@@ -827,7 +854,8 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
 
     try:
         cover_revision = cover_revision_for_path(authoritative_cover)
-        persistence_result = persist_cover_selection_for_tracks(
+        persistence_result = await run_in_threadpool(
+            persist_cover_selection_for_tracks,
             authoritative_track_paths,
             authoritative_cover,
             config=config,
@@ -1014,32 +1042,37 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
-    deleted_cover_bytes = resolved.read_bytes()
-    next_cover = delete_local_cover_and_choose_next(
-        album_root=album_context.album_root,
-        source_path=resolved,
-        active_cover_path=active_cover_path_for_track_paths_in_state(
-            library_state.get("file_cache", {}) or {},
-            album_context.track_paths,
-        ),
-        image_extensions=set(config["IMAGE_EXTENSIONS"]),
-        image_dimensions=image_dimensions,
-        is_squareish_cover=_is_squareish_cover,
-        score_image=score_image,
-    )
-    try:
-        persist_cover_selection_for_tracks(
-            album_context.track_paths,
-            next_cover,
-            config=config,
-            logger=logger,
-            cover_selection_origin="user" if next_cover is not None else None,
-            clear_selection=next_cover is None,
+    def delete_and_persist_local_cover():
+        deleted_cover_bytes = resolved.read_bytes()
+        next_cover = delete_local_cover_and_choose_next(
+            album_root=album_context.album_root,
+            source_path=resolved,
+            active_cover_path=active_cover_path_for_track_paths_in_state(
+                library_state.get("file_cache", {}) or {},
+                album_context.track_paths,
+            ),
+            image_extensions=set(config["IMAGE_EXTENSIONS"]),
+            image_dimensions=image_dimensions,
+            is_squareish_cover=_is_squareish_cover,
+            score_image=score_image,
         )
-    except Exception:
-        resolved.write_bytes(deleted_cover_bytes)
-        raise
-    updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
+        try:
+            persist_cover_selection_for_tracks(
+                album_context.track_paths,
+                next_cover,
+                config=config,
+                logger=logger,
+                cover_selection_origin="user" if next_cover is not None else None,
+                clear_selection=next_cover is None,
+            )
+        except Exception:
+            resolved.write_bytes(deleted_cover_bytes)
+            raise
+        return next_cover
+
+    next_cover = await run_in_threadpool(delete_and_persist_local_cover)
+    updated_albums, updated_problematic_album = await run_in_threadpool(
+        apply_cover_path_for_tracks,
         album_context.track_paths,
         next_cover,
         config=config,
@@ -1079,32 +1112,51 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
     authoritative_cover_path = album_context.album_root / "cover.jpg"
-    prior_cover_bytes = (
-        authoritative_cover_path.read_bytes()
-        if authoritative_cover_path.is_file()
-        else None
-    )
-    try:
-        saved_cover_path = save_pasted_image_as_authoritative_cover(data_url, album_context.album_root)
-    except ValueError as exc:
-        return _json_response(({"ok": False, "error": str(exc)}, 400))
-    except Exception as exc:
-        return _json_response(({"ok": False, "error": str(exc or "Failed to save pasted image.")}, 500))
-    try:
-        persist_cover_selection_for_tracks(
-            album_context.track_paths,
-            saved_cover_path,
-            config=config,
-            logger=logger,
-            cover_selection_origin="user",
+    def save_and_persist_pasted_cover():
+        prior_cover_bytes = (
+            authoritative_cover_path.read_bytes()
+            if authoritative_cover_path.is_file()
+            else None
         )
-    except Exception:
-        if prior_cover_bytes is None:
-            saved_cover_path.unlink(missing_ok=True)
-        else:
-            saved_cover_path.write_bytes(prior_cover_bytes)
-        raise
-    updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
+        try:
+            saved_cover_path = save_pasted_image_as_authoritative_cover(
+                data_url, album_context.album_root
+            )
+        except ValueError as exc:
+            return None, exc, 400
+        except Exception as exc:
+            return None, exc, 500
+        try:
+            persist_cover_selection_for_tracks(
+                album_context.track_paths,
+                saved_cover_path,
+                config=config,
+                logger=logger,
+                cover_selection_origin="user",
+            )
+        except Exception:
+            if prior_cover_bytes is None:
+                saved_cover_path.unlink(missing_ok=True)
+            else:
+                saved_cover_path.write_bytes(prior_cover_bytes)
+            raise
+        return saved_cover_path, None, 200
+
+    saved_cover_path, save_error, save_status = await run_in_threadpool(
+        save_and_persist_pasted_cover
+    )
+    if save_error is not None:
+        return _json_response(
+            (
+                {
+                    "ok": False,
+                    "error": str(save_error or "Failed to save pasted image."),
+                },
+                save_status,
+            )
+        )
+    updated_albums, updated_problematic_album = await run_in_threadpool(
+        apply_cover_path_for_tracks,
         album_context.track_paths,
         saved_cover_path,
         config=config,
@@ -1145,17 +1197,21 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    task_payload = _lookup_task_payload_for_request(request, task_id)
+    task_payload = await run_in_threadpool(
+        _lookup_task_payload_for_request, request, task_id
+    )
     selected_match = None
     if task_payload:
-        repository, album_id, identity_error = _resolved_snapshot_album_context(
+        repository, album_id, identity_error = await run_in_threadpool(
+            _resolved_snapshot_album_context,
             config,
             album or {},
             album_context.track_paths,
         )
         if identity_error is not None:
             return _json_response(identity_error)
-        if not _task_matches_album_context(
+        if not await run_in_threadpool(
+            _task_matches_album_context,
             task_payload,
             repository=repository,
             album_id=int(album_id),
@@ -1178,7 +1234,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             None,
         )
     if selected_match is None and snapshot_generation:
-        repository, album_id, identity_error = _resolved_snapshot_album_context(
+        repository, album_id, identity_error = await run_in_threadpool(
+            _resolved_snapshot_album_context,
             config,
             album or {},
             album_context.track_paths,
@@ -1186,7 +1243,9 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         if identity_error is not None:
             return _json_response(identity_error)
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
+            candidate_snapshot = await run_in_threadpool(
+                repository.get_for_album_context, album_id=int(album_id)
+            )
         except Exception:
             return _json_response(
                 ({"ok": False, "error": "Saved cover candidates are unavailable"}, 503)
@@ -1235,23 +1294,26 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
                             "selected_candidate_id": "",
                             "result_kind": "possible-matches",
                         }
-                        durable_repository.persist_candidate_authority(
-                            task_key=task_id,
-                            library_id=audit.library_id,
-                            album_key=str((album or {}).get("key") or (album or {}).get("album_key") or ""),
-                            account_id=audit.account_id,
-                            request_origin_ref=request_origin_ref_for_request(request),
-                            deployment_mode=audit.deployment_mode,
-                            client_surface=audit.client_surface_class,
-                            candidate_generation=generation,
-                            resource_revision=durable_repository.current_inventory_revision(
-                                library_id=audit.library_id
-                            ),
-                            recorded_at=datetime.now(timezone.utc),
-                            task_payload=task_payload,
-                            candidates=task_payload["possible_matches"],
-                            best_candidate_id=str(candidate_snapshot.get("best_candidate_id") or "") or None,
-                        )
+                        def persist_candidate_authority():
+                            return durable_repository.persist_candidate_authority(
+                                task_key=task_id,
+                                library_id=audit.library_id,
+                                album_key=str((album or {}).get("key") or (album or {}).get("album_key") or ""),
+                                account_id=audit.account_id,
+                                request_origin_ref=request_origin_ref_for_request(request),
+                                deployment_mode=audit.deployment_mode,
+                                client_surface=audit.client_surface_class,
+                                candidate_generation=generation,
+                                resource_revision=durable_repository.current_inventory_revision(
+                                    library_id=audit.library_id
+                                ),
+                                recorded_at=datetime.now(timezone.utc),
+                                task_payload=task_payload,
+                                candidates=task_payload["possible_matches"],
+                                best_candidate_id=str(candidate_snapshot.get("best_candidate_id") or "") or None,
+                            )
+
+                        await run_in_threadpool(persist_candidate_authority)
                     except (TypeError, ValueError):
                         return _json_response(
                             ({"ok": False, "error": "Saved cover candidate generation was not found"}, 404)
@@ -1288,22 +1350,25 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     if durable is not None:
         repository, audit = durable
         try:
-            durable_task = repository.get_task(
-                task_key=task_id, library_id=audit.library_id
-            )
-            generation = uuid.UUID(str(durable_task["candidate_generation"]))
-            repository.accept_remote_save(
-                task_key=task_id,
-                library_id=audit.library_id,
-                account_id=audit.account_id,
-                request_origin_ref=request_origin_ref_for_request(request),
-                deployment_mode=audit.deployment_mode,
-                client_surface=audit.client_surface_class,
-                candidate_generation=generation,
-                candidate_id=candidate_id,
-                resource_revision=int(durable_task.get("resource_revision") or 0),
-                scheduled_at=datetime.now(timezone.utc),
-            )
+            def accept_remote_save():
+                durable_task = repository.get_task(
+                    task_key=task_id, library_id=audit.library_id
+                )
+                generation = uuid.UUID(str(durable_task["candidate_generation"]))
+                return repository.accept_remote_save(
+                    task_key=task_id,
+                    library_id=audit.library_id,
+                    account_id=audit.account_id,
+                    request_origin_ref=request_origin_ref_for_request(request),
+                    deployment_mode=audit.deployment_mode,
+                    client_surface=audit.client_surface_class,
+                    candidate_generation=generation,
+                    candidate_id=candidate_id,
+                    resource_revision=int(durable_task.get("resource_revision") or 0),
+                    scheduled_at=datetime.now(timezone.utc),
+                )
+
+            await run_in_threadpool(accept_remote_save)
             accepted_durably = True
         except (KeyError, TypeError, ValueError):
             return _json_response(
@@ -1330,7 +1395,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             job_contract=build_cover_lookup_job_contract("save_remote_selection"),
         )
     response_task_payload = serialize_cover_lookup_task_payload(
-        _lookup_task_payload_for_request(request, task_id)
+        await run_in_threadpool(_lookup_task_payload_for_request, request, task_id)
     )
     response_gallery_payload = await _serialize_cover_gallery_from_asgi(
         request,
@@ -1428,7 +1493,9 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
     if not matches:
         return _json_response(({"ok": False, "error": "No usable cover art could be extracted from those links"}, 400))
     durable = _durable_cover_request_context(request)
-    task_payload = _lookup_task_payload_for_request(request, task_id)
+    task_payload = await run_in_threadpool(
+        _lookup_task_payload_for_request, request, task_id
+    )
     if durable is None and not task_id:
         task_id, _cancel_event = create_cover_lookup_task(album or {}, album_context.track_paths)
         task_payload = cover_lookup_result(task_id)
@@ -1458,23 +1525,26 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
             "finished_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            repository.persist_candidate_authority(
-                task_key=task_id,
-                library_id=audit.library_id,
-                album_key=str((album or {}).get("key") or (album or {}).get("album_key") or ""),
-                account_id=audit.account_id,
-                request_origin_ref=request_origin_ref_for_request(request),
-                deployment_mode=audit.deployment_mode,
-                client_surface=audit.client_surface_class,
-                candidate_generation=generation,
-                resource_revision=repository.current_inventory_revision(
-                    library_id=audit.library_id
-                ),
-                recorded_at=datetime.now(timezone.utc),
-                task_payload=task_payload,
-                candidates=merged_matches,
-                best_candidate_id=str(merged_matches[0].get("id") or "") or None,
-            )
+            def persist_candidate_authority():
+                return repository.persist_candidate_authority(
+                    task_key=task_id,
+                    library_id=audit.library_id,
+                    album_key=str((album or {}).get("key") or (album or {}).get("album_key") or ""),
+                    account_id=audit.account_id,
+                    request_origin_ref=request_origin_ref_for_request(request),
+                    deployment_mode=audit.deployment_mode,
+                    client_surface=audit.client_surface_class,
+                    candidate_generation=generation,
+                    resource_revision=repository.current_inventory_revision(
+                        library_id=audit.library_id
+                    ),
+                    recorded_at=datetime.now(timezone.utc),
+                    task_payload=task_payload,
+                    candidates=merged_matches,
+                    best_candidate_id=str(merged_matches[0].get("id") or "") or None,
+                )
+
+            await run_in_threadpool(persist_candidate_authority)
         except ValueError as exc:
             return _json_response(({"ok": False, "error": str(exc)}, 409))
         except Exception:
@@ -1602,20 +1672,23 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
     try:
         if durable is not None:
             repository, audit = durable
-            accepted = repository.accept_bulk_refresh(
-                task_key=uuid.uuid4().hex,
-                library_id=audit.library_id,
-                account_id=audit.account_id,
-                request_origin_ref=request_origin_ref_for_request(request),
-                deployment_mode=audit.deployment_mode,
-                client_surface=audit.client_surface_class,
-                mode="manual",
-                force_search=force_search,
-                resource_revision=repository.current_inventory_revision(
-                    library_id=audit.library_id
-                ),
-                scheduled_at=datetime.now(timezone.utc),
-            )
+            def accept_bulk_refresh():
+                return repository.accept_bulk_refresh(
+                    task_key=uuid.uuid4().hex,
+                    library_id=audit.library_id,
+                    account_id=audit.account_id,
+                    request_origin_ref=request_origin_ref_for_request(request),
+                    deployment_mode=audit.deployment_mode,
+                    client_surface=audit.client_surface_class,
+                    mode="manual",
+                    force_search=force_search,
+                    resource_revision=repository.current_inventory_revision(
+                        library_id=audit.library_id
+                    ),
+                    scheduled_at=datetime.now(timezone.utc),
+                )
+
+            accepted = await run_in_threadpool(accept_bulk_refresh)
             start_result = {
                 "started": not accepted.already_running,
                 "already_running": accepted.already_running,
@@ -1688,7 +1761,8 @@ async def utilities_cancel_cover_scan(request: Request) -> JSONResponse:
     if durable is not None:
         repository, audit = durable
         try:
-            result = repository.request_bulk_refresh_cancellation(
+            result = await run_in_threadpool(
+                repository.request_bulk_refresh_cancellation,
                 library_id=audit.library_id,
                 account_id=audit.account_id,
                 now=datetime.now(timezone.utc),

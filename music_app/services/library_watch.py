@@ -438,10 +438,10 @@ class LibraryWatchService:
 
     def stop(self) -> bool:
         with self._lock:
-            self._start_requested = False
-            if not self._started:
+            if not (self._started or self._start_requested):
                 return False
             self._event_source.stop(timeout=self._stop_timeout)
+            self._start_requested = False
             self._started = False
         return True
 

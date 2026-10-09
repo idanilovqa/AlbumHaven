@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import ClaimedJob, JobKind, JobState, JobTransitionResult
+
+
+_STORAGE_RETRY_DELAY = timedelta(seconds=5)
+
+
+def _storage_unavailable_outcome(
+    claim: ClaimedJob, reason_code: str, *, now: datetime
+) -> JobTransitionResult:
+    if claim.attempt < claim.max_attempts:
+        return JobTransitionResult(
+            JobState.RETRY_WAIT,
+            reason_code,
+            scheduled_at=now + _STORAGE_RETRY_DELAY,
+        )
+    return JobTransitionResult(JobState.FAILED, reason_code)
 
 
 def _claim_intent_id(claim: ClaimedJob) -> int | None:
@@ -87,7 +102,9 @@ def build_post_scan_cover_refresh_resource_validator(
                 now=now,
             )
         except Exception:
-            return AuthorizationDecision(False, "post_scan_cover_scope_invalid")
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         if current is not True:
             return AuthorizationDecision(False, "post_scan_cover_scope_stale")
         return AuthorizationDecision(True, "post_scan_cover_scope_current")
@@ -201,7 +218,9 @@ def build_targeted_reconciliation_resource_validator(
                 now=now,
             )
         except Exception:
-            return AuthorizationDecision(False, "targeted_scope_invalid")
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         if not getattr(scope, "roots", ()):
             return AuthorizationDecision(False, "targeted_root_invalid")
         if getattr(scope, "scope_complete", None) is not True:
@@ -240,7 +259,9 @@ def build_full_scan_resource_validator(
                 now=now,
             )
         except Exception:
-            return AuthorizationDecision(False, "full_scan_scope_invalid")
+            return AuthorizationDecision(
+                False, "authorization_unavailable", indeterminate=True
+            )
         required_root_ids = set(getattr(intent, "root_ids", ()) or ())
         if getattr(scope, "scope_complete", None) is not True:
             return AuthorizationDecision(False, "full_scan_root_invalid")
@@ -306,7 +327,9 @@ def build_full_scan_handler(
                 lease_token=claim.lease_token,
             )
         except Exception:
-            return JobTransitionResult(JobState.CANCELED, "full_scan_scope_invalid")
+            return _storage_unavailable_outcome(
+                claim, "full_scan_scope_unavailable", now=now()
+            )
         if getattr(intent, "committed_inventory_revision", None) is not None:
             return JobTransitionResult(JobState.SUCCEEDED, "full_scan_completed")
         try:
@@ -320,7 +343,9 @@ def build_full_scan_handler(
                 now=now(),
             )
         except Exception:
-            return JobTransitionResult(JobState.CANCELED, "full_scan_scope_invalid")
+            return _storage_unavailable_outcome(
+                claim, "full_scan_scope_unavailable", now=now()
+            )
         roots = getattr(scope, "roots", ())
         required_root_ids = set(getattr(intent, "root_ids", ()) or ())
         if (
@@ -469,7 +494,11 @@ def build_targeted_reconciliation_handler(
                 )
             )
         except Exception:
-            return JobTransitionResult(JobState.CANCELED, "targeted_scope_invalid")
+            return _storage_unavailable_outcome(
+                claim,
+                "targeted_reconciliation_unavailable",
+                now=now(),
+            )
         request = getattr(intent, "request", intent)
         if (
             hasattr(intent, "intent_id")

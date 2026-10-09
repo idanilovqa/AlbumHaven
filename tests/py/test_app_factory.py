@@ -24,18 +24,6 @@ from tests.py.asgi_testing import runtime_app_from_asgi_app
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-
-
-class _FatalFlaskContextAccess:
-    def __init__(self, runtime) -> None:
-        self._runtime = runtime
-
-    def __getattr__(self, name: str):
-        if name in {"app_context", "test_request_context"}:
-            raise AssertionError("Last.fm retry worker must not access Flask context methods")
-        return getattr(self._runtime, name)
-
-
 @pytest.fixture(autouse=True)
 def _stub_relation_projection_startup(monkeypatch):
     from music_app.services import (
@@ -616,9 +604,6 @@ def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection()
         runtime,
         lambda _runtime: (_ for _ in ()).throw(AssertionError("hydrate must not run")),
         lambda _runtime: relation_calls.append("relations"),
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("scan must not start")
-        ),
         prewarm,
     )
     assert prewarm_started.wait(timeout=2)
@@ -787,7 +772,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
 ):
     from config import Config
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
+    from music_app.services import postgres_connections, runtime_shutdown, state
 
     monkeypatch.setattr(state, "hydrate_runtime_scan_metadata_on_startup", lambda _runtime: None)
     calls = []
@@ -819,8 +804,6 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
         "start_background_refresh_for_state",
         lambda *_args, **_kwargs: calls.append("scan"),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
     with caplog.at_level(logging.ERROR):
@@ -836,7 +819,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
 
 def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_starting_it(monkeypatch):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
 
     calls = []
     monkeypatch.setattr(
@@ -851,8 +834,6 @@ def test_create_asgi_app_lifespan_marks_empty_startup_scan_pending_without_start
             ("scan", library_state, config, logger, force, scan_mode)
         ),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda app: calls.append(("start", app)))
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda app: calls.append(("stop", app)))
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda app: calls.append(("shutdown", app)))
 
     asgi_app = create_asgi_app()
@@ -879,7 +860,7 @@ def test_create_asgi_app_lifespan_hands_incomplete_metadata_repair_to_durable_sc
     expected_pending,
 ):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
 
     def hydrate(runtime):
         runtime.library_state["file_cache"] = {
@@ -908,8 +889,6 @@ def test_create_asgi_app_lifespan_hands_incomplete_metadata_repair_to_durable_sc
             (force, scan_mode)
         ),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
     asgi_app = create_asgi_app()
@@ -931,7 +910,7 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     from config import Config
     from music_app import create_asgi_app
     from music_app.routes import web_asgi
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
     from music_app.services.library_roots import normalize_persisted_library_root_settings
 
     class MissingSnapshotAdapter:
@@ -985,11 +964,11 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         @staticmethod
         def load_authorized_full_scan_status(**_kwargs):
             return {
-                "state": "accepted",
+                "state": "idle",
                 "progress_current": 0,
                 "progress_total": 0,
-                "phase": "accepted",
-                "mode": "background",
+                "phase": "idle",
+                "mode": "idle",
             }
 
     monkeypatch.setattr(
@@ -1027,8 +1006,6 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         "submit",
         lambda function, *args, **kwargs: submissions.append((function, args, kwargs)),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _app: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _app: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _app: None)
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
     policy_evaluation = types.SimpleNamespace(
@@ -1126,7 +1103,7 @@ def test_create_asgi_app_lifespan_does_not_start_duplicate_or_masked_scan(
     state_patch,
 ):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import runtime_shutdown, state
 
     scan_calls = []
 
@@ -1140,8 +1117,6 @@ def test_create_asgi_app_lifespan_does_not_start_duplicate_or_masked_scan(
         "start_background_refresh_for_state",
         lambda *args, **kwargs: scan_calls.append((args, kwargs)),
     )
-    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _app: None)
-    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _app: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _app: None)
 
     asgi_app = create_asgi_app()
@@ -1183,239 +1158,6 @@ def test_create_asgi_app_lifespan_reports_background_hydration_exception_without
     ]
     assert hydration_attempted.wait(timeout=2)
     assert scan_calls == []
-
-
-def retired_test_lastfm_retry_worker_stops_on_request(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    attempts = 0
-    attempted = threading.Event()
-
-    def fake_retry(_config):
-        nonlocal attempts
-        attempts += 1
-        attempted.set()
-        return {
-            "pending_before": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "pending_after": 0,
-        }
-
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
-    app.config["TESTING"] = False
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(app)
-        assert attempted.wait(timeout=1)
-
-        assert lastfm_retry.stop_lastfm_retry_worker(app, wait=True, timeout=1) is True
-        assert lastfm_retry._WORKER_THREAD is None
-        assert attempts >= 1
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(wait=True, timeout=1)
-
-
-def retired_test_lastfm_retry_worker_restarts_after_signal_only_stop(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    attempts = 0
-    attempted = threading.Event()
-
-    def fake_retry(_config):
-        nonlocal attempts
-        attempts += 1
-        attempted.set()
-        return {
-            "pending_before": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "pending_after": 0,
-        }
-
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 1)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
-    app.config["TESTING"] = False
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(app)
-        assert attempted.wait(timeout=1)
-        first_thread = lastfm_retry._WORKER_THREAD
-
-        assert lastfm_retry.stop_lastfm_retry_worker(app) is True
-        attempted.clear()
-        lastfm_retry.start_lastfm_retry_worker(app)
-
-        assert attempted.wait(timeout=1)
-        assert lastfm_retry._WORKER_THREAD is not first_thread
-        assert attempts >= 2
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(wait=True, timeout=1)
-
-
-def retired_test_lastfm_retry_worker_pass_uses_captured_config_without_app_context(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    class OnePassStopEvent:
-        def __init__(self) -> None:
-            self.stopped = False
-            self.waited_interval: float | None = None
-
-        def is_set(self) -> bool:
-            return self.stopped
-
-        def set(self) -> None:
-            self.stopped = True
-
-        def wait(self, interval: float) -> bool:
-            self.waited_interval = interval
-            self.stopped = True
-            return True
-
-    class SynchronousThread:
-        def __init__(self, *, target, name: str, daemon: bool) -> None:
-            self.target = target
-            self.name = name
-            self.daemon = daemon
-            self.started = False
-
-        def is_alive(self) -> bool:
-            return False
-
-        def start(self) -> None:
-            self.started = True
-            self.target()
-
-        def join(self, timeout: float | None = None) -> None:
-            return None
-
-    retry_calls: list[object] = []
-    log_calls: list[dict[str, object]] = []
-    threads: list[SynchronousThread] = []
-    stop_event = OnePassStopEvent()
-
-    def fake_retry(config):
-        retry_calls.append(config)
-        return {
-            "pending_before": 1,
-            "attempted": 1,
-            "succeeded": 1,
-            "failed": 0,
-            "pending_after": 0,
-        }
-
-    def fake_log_app_event(config, logger, action, **kwargs):
-        log_calls.append({
-            "config": config,
-            "logger": logger,
-            "action": action,
-            **kwargs,
-        })
-
-    def make_thread(*, target, name: str, daemon: bool) -> SynchronousThread:
-        thread = SynchronousThread(target=target, name=name, daemon=daemon)
-        threads.append(thread)
-        return thread
-
-    monkeypatch.setattr(lastfm_retry.threading, "Event", lambda: stop_event)
-    monkeypatch.setattr(lastfm_retry.threading, "Thread", make_thread)
-    monkeypatch.setattr(lastfm_retry, "_RETRY_INTERVAL_SECONDS", 12.5)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fake_retry)
-    monkeypatch.setattr(lastfm_retry, "log_app_event", fake_log_app_event)
-    app.config["TESTING"] = False
-    guarded_app = _FatalFlaskContextAccess(app)
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(guarded_app)
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(guarded_app, wait=True, timeout=1)
-
-    assert retry_calls == [app.config]
-    assert log_calls == [
-        {
-            "config": app.config,
-            "logger": app.logger,
-            "action": "Last.fm retry pass completed",
-            "attempted": 1,
-            "succeeded": 1,
-            "failed": 0,
-            "pending_after": 0,
-        }
-    ]
-    assert stop_event.waited_interval == 12.5
-    assert threads[0].name == "albumhaven-lastfm-retry"
-    assert threads[0].daemon is True
-
-
-def retired_test_lastfm_retry_worker_exception_logging_uses_captured_config_without_app_context(app, monkeypatch):
-    from music_app.services import lastfm_retry
-
-    class OnePassStopEvent:
-        def __init__(self) -> None:
-            self.stopped = False
-
-        def is_set(self) -> bool:
-            return self.stopped
-
-        def set(self) -> None:
-            self.stopped = True
-
-        def wait(self, _interval: float) -> bool:
-            self.stopped = True
-            return True
-
-    class SynchronousThread:
-        def __init__(self, *, target, name: str, daemon: bool) -> None:
-            self.target = target
-            self.name = name
-            self.daemon = daemon
-
-        def is_alive(self) -> bool:
-            return False
-
-        def start(self) -> None:
-            self.target()
-
-        def join(self, timeout: float | None = None) -> None:
-            return None
-
-    log_calls: list[dict[str, object]] = []
-
-    def fail_retry(_config):
-        raise RuntimeError("retry exploded")
-
-    def fake_log_app_event(config, logger, action, **kwargs):
-        log_calls.append({
-            "config": config,
-            "logger": logger,
-            "action": action,
-            **kwargs,
-        })
-
-    monkeypatch.setattr(lastfm_retry.threading, "Event", OnePassStopEvent)
-    monkeypatch.setattr(lastfm_retry.threading, "Thread", SynchronousThread)
-    monkeypatch.setattr(lastfm_retry, "retry_pending_lastfm_scrobbles", fail_retry)
-    monkeypatch.setattr(lastfm_retry, "log_app_event", fake_log_app_event)
-    app.config["TESTING"] = False
-    guarded_app = _FatalFlaskContextAccess(app)
-
-    try:
-        lastfm_retry.start_lastfm_retry_worker(guarded_app)
-    finally:
-        lastfm_retry.stop_lastfm_retry_worker(guarded_app, wait=True, timeout=1)
-
-    assert log_calls == [
-        {
-            "config": app.config,
-            "logger": app.logger,
-            "action": "Last.fm retry worker failed",
-            "level": "error",
-            "error": "retry exploded",
-        }
-    ]
 
 
 def test_create_asgi_app_serves_status_without_http_flask_bridge():
@@ -1482,7 +1224,7 @@ def test_postgres_warmup_loads_scan_timestamp_without_inventory_hydration():
 
     handle = _start_library_warmup(
         runtime, unexpected_inventory_hydration, ensure_relations,
-        unexpected_inventory_hydration, lambda _url: None,
+        lambda _url: None,
         hydrate_metadata=load_metadata,
     )
     try:
@@ -1508,7 +1250,7 @@ def test_postgres_warmup_metadata_failure_does_not_skip_relation_initialization(
 
     handle = _start_library_warmup(
         runtime, lambda _app: None, lambda *_args, **_kwargs: completed.set(),
-        lambda _app: None, lambda _url: None, hydrate_metadata=broken_metadata,
+        lambda _url: None, hydrate_metadata=broken_metadata,
     )
     try:
         assert completed.wait(2), "Optional timestamp failure must not skip relation initialization"
@@ -1527,7 +1269,6 @@ def test_postgres_warmup_runs_recovery_before_metadata_without_full_hydration():
         runtime,
         lambda _runtime: calls.append("full_hydrate"),
         lambda _runtime, **_kwargs: calls.append("relations"),
-        lambda *_args, **_kwargs: calls.append("scan"),
         lambda _url: calls.append("prewarm"),
         hydrate_metadata=lambda _runtime: calls.append("metadata"),
         recover_persistence=lambda _runtime: calls.append("recovery"),

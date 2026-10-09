@@ -599,6 +599,25 @@ begin
     return false;
   end if;
 
+  perform 1
+    from library.targeted_reconciliation_intents as intent
+   where intent.id = p_intent_id
+     and intent.job_id = p_job_id
+     and intent.state = 'running'
+     and intent.publication_attempt is null
+   for update;
+  if not found then
+    return false;
+  end if;
+  if not exists (
+    select 1
+      from ops.jobs as job
+     where job.id = p_job_id
+       and job.lease_expires_at > clock_timestamp()
+  ) then
+    return false;
+  end if;
+
   update library.targeted_reconciliation_intents as intent
      set publication_attempt = p_attempt,
          updated_at = greatest(intent.updated_at, p_now)
@@ -909,6 +928,21 @@ begin
   perform pg_advisory_xact_lock(
     hashtext('album-haven:local-inventory-publication')
   );
+
+  if not exists (
+    select 1
+      from ops.jobs as job
+     where job.id = p_job_id
+       and job.kind = 'targeted_reconciliation'
+       and job.state = 'running'
+       and job.attempt_count = p_attempt
+       and job.lease_owner = p_worker_id
+       and job.lease_token = p_lease_token
+       and job.lease_expires_at > clock_timestamp()
+  ) then
+    return query select false, null::bigint, array[]::text[];
+    return;
+  end if;
 
   create temporary table targeted_album_key_map (
     input_album_key text primary key,

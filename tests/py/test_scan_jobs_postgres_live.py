@@ -612,6 +612,38 @@ def test_live_cancellation_ignores_unlinked_full_scan_job(live_scan_database):
         ).fetchone()["state"] == "queued"
 
 
+def test_live_identical_watcher_producers_converge_on_one_queued_job(
+    live_scan_database,
+):
+    setup_url, runtime_url, _worker_url = live_scan_database
+    _account_id, library_id = _seed_scope(setup_url, "watcher-coalescing")
+    repository = _scan_repository(runtime_url)
+    request = TargetedReconciliationRequest(
+        root_id="root-a",
+        paths=frozenset({Path(r"C:\Music\Shared\01.flac")}),
+    )
+    arguments = {
+        "library_id": library_id,
+        "request": request,
+        "deployment_mode": "self_hosted_private_web",
+        "client_surface": "library_watcher",
+        "scheduled_at": datetime(2099, 1, 1, tzinfo=timezone.utc),
+    }
+
+    first = repository.enqueue_targeted_reconciliation(
+        **arguments,
+        producer_request_key="watcher-process-a-0001",
+    )
+    second = repository.enqueue_targeted_reconciliation(
+        **arguments,
+        producer_request_key="watcher-process-b-0001",
+    )
+
+    assert second.intent_id == first.intent_id
+    assert second.job_id == first.job_id
+    assert second.created is False
+
+
 def test_live_targeted_producer_key_collision_rolls_back_without_extra_rows(
     live_scan_database,
 ):

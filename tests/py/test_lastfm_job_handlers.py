@@ -13,7 +13,7 @@ from music_app.jobs.lastfm_handlers import (
     retry_delay_seconds,
 )
 from music_app.services.jobs.authorization import AuthorizationDecision
-from music_app.services.jobs.models import ClaimedJob, JobState
+from music_app.services.jobs.models import ClaimedJob, JobState, JobTransitionResult
 from music_app.services.lastfm import LastfmError, LastfmSubmissionOutcome
 
 
@@ -48,8 +48,11 @@ def _claim(**overrides):
 
 
 class _Context:
-    def __init__(self, *, allowed=True, canceled=False, lease_active=True):
+    def __init__(
+        self, *, allowed=True, canceled=False, lease_active=True, indeterminate=False
+    ):
         self.allowed = allowed
+        self.indeterminate = indeterminate
         self.cancel_requested = canceled
         self.lease_active = lease_active
         self.calls = []
@@ -57,7 +60,11 @@ class _Context:
     def reauthorize(self):
         self.calls.append("reauthorize")
         return AuthorizationDecision(
-            self.allowed, "authorized" if self.allowed else "capability_revoked"
+            self.allowed,
+            "authorized" if self.allowed else "authorization_unavailable"
+            if self.indeterminate
+            else "capability_revoked",
+            indeterminate=self.indeterminate,
         )
 
 
@@ -213,6 +220,23 @@ def test_handler_cancels_before_send_without_loading_secret_or_calling_provider(
     assert [name for name, _ in repository.calls] == ["cancel"]
 
 
+def test_indeterminate_authorization_never_cancels_lastfm_domain_row():
+    repository = _Repository()
+    handler = build_lastfm_retry_handler(
+        retry_repository=repository,
+        config={},
+        scrobble_with_session=lambda *_args: pytest.fail("must not call provider"),
+        clock=lambda: NOW,
+    )
+
+    outcome = handler(_claim(), _Context(allowed=False, indeterminate=True))
+
+    assert outcome == JobTransitionResult(
+        JobState.FAILED, "authorization_unavailable"
+    )
+    assert repository.calls == []
+
+
 def test_handler_marks_network_loss_ambiguous_and_never_requests_generic_retry():
     repository = _Repository()
     handler = build_lastfm_retry_handler(
@@ -252,3 +276,24 @@ def test_handler_schedules_domain_retry_as_successful_one_attempt_orchestration(
     assert outcome.next_state is JobState.SUCCEEDED
     assert outcome.reason_code == "lastfm_retry_scheduled"
     assert repository.calls[-1][1]["disposition"] == "known_not_sent_retryable"
+
+
+def test_handler_marks_post_send_finalization_failure_ambiguous():
+    repository = _Repository()
+    repository.finalize_claimed_attempt = lambda **_values: (_ for _ in ()).throw(
+        RuntimeError("database unavailable after provider send")
+    )
+    handler = build_lastfm_retry_handler(
+        retry_repository=repository,
+        config={},
+        scrobble_with_session=lambda *_args: LastfmSubmissionOutcome(
+            sent=True, accepted=1, outcome="accepted"
+        ),
+        clock=lambda: NOW,
+    )
+
+    outcome = handler(_claim(), _Context())
+
+    assert outcome == JobTransitionResult(
+        JobState.AMBIGUOUS, "lastfm_scrobble_finalization_ambiguous"
+    )

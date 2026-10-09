@@ -3057,9 +3057,14 @@ test('watchSaveTask waits for a canonical structural projection before replacing
   context.state.view.family_artist_groups = [];
   context.buildApiUrl = () => '/view-data?surface=albums&artist=Merge%20Artist';
   context.waitForBrowserTimeout = async () => {};
+  let statusRequests = 0;
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({ inventory_mutation_revision: ++statusRequests === 1 ? 40 : 41 }),
+  });
   context.fetchAndRender = async (_url, _push, options) => {
     refreshOptions.push(options);
-    const payload = evaluatedPayloads.length ? readyPayload : stalePayload;
+    const payload = readyPayload;
     evaluatedPayloads.push(payload);
     if (!options.shouldApplyResponse(payload)) return false;
     context.state.view.artist_groups = payload.artist_groups;
@@ -3079,16 +3084,34 @@ test('watchSaveTask waits for a canonical structural projection before replacing
       status: 'completed',
       requires_view_refresh: true,
       updated_albums: [],
+      inventory_mutation_revision: 41,
     },
   });
 
-  assert.equal(evaluatedPayloads.length, 2);
+  assert.equal(statusRequests, 2);
+  assert.equal(evaluatedPayloads.length, 1);
   assert.equal(context.state.view.artist_groups[0].albums[0].track_count_preview, 16);
-  assert.equal(refreshOptions[1].preserveMountedGalleryChildren, false);
+  assert.equal(refreshOptions[0].preserveMountedGalleryChildren, false);
   assert.equal(
-    Object.prototype.hasOwnProperty.call(refreshOptions[1], 'retainMountedGalleryIfEquivalent'),
+    Object.prototype.hasOwnProperty.call(refreshOptions[0], 'retainMountedGalleryIfEquivalent'),
     false,
   );
+});
+
+test('canonical readiness polling is bounded and never repeats the full view request', async () => {
+  const context = loadHelpers();
+  const delays = [];
+  let statusRequests = 0;
+  context.fetch = async () => {
+    statusRequests += 1;
+    return { ok: true, json: async () => ({ inventory_mutation_revision: 40 }) };
+  };
+  context.waitForBrowserTimeout = async (delay) => delays.push(delay);
+
+  await context.waitForCommittedInventoryRevision(41);
+
+  assert.equal(statusRequests, 6);
+  assert.deepEqual(delays, [125, 250, 500, 1000, 2000]);
 });
 
 test('canonical structural readiness accepts filtered absence only at the committed revision', () => {
@@ -3123,12 +3146,16 @@ test(`watchSaveTask accepts a fresh filtered view after the edited album leaves 
   context.state.view.family_artist_groups = [];
   context.buildApiUrl = () => `/view-data?surface=albums&${filterQuery}`;
   context.waitForBrowserTimeout = async () => {};
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({ inventory_mutation_revision: 41 }),
+  });
   let requests = 0;
   context.fetchAndRender = async (_url, _push, options) => {
     requests += 1;
     const payload = {
       artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
-      inventory_mutation_revision: requests === 1 ? 40 : 41,
+      inventory_mutation_revision: 41,
     };
     if (!options.shouldApplyResponse(payload)) return false;
     context.state.view.artist_groups = payload.artist_groups;
@@ -3147,7 +3174,7 @@ test(`watchSaveTask accepts a fresh filtered view after the edited album leaves 
     },
   });
 
-  assert.equal(requests, 2);
+  assert.equal(requests, 1);
   assert.equal(context.state.view.artist_groups.length, 0);
 });
 }

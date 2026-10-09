@@ -1,4 +1,4 @@
-create or replace function library.retire_vacated_structural_album(
+create or replace function library.retire_vacated_structural_album_internal(
   p_library_id bigint,
   p_source_album_id bigint,
   p_destination_album_id bigint,
@@ -191,7 +191,7 @@ begin
 end;
 $$;
 
-create or replace function library.retire_vacated_structural_album_siblings(
+create or replace function library.retire_vacated_structural_album_siblings_internal(
   p_library_id bigint,
   p_destination_album_id bigint
 )
@@ -248,7 +248,7 @@ begin
     order by candidate_album.id
     for update of candidate_album
   loop
-    disposition := library.retire_vacated_structural_album(
+    disposition := library.retire_vacated_structural_album_internal(
       p_library_id,
       candidate_row.id,
       destination.id,
@@ -266,6 +266,78 @@ begin
   end loop;
 
   return retired_count;
+end;
+$$;
+
+create or replace function library.retire_vacated_structural_album(
+  p_library_id bigint,
+  p_source_album_id bigint,
+  p_destination_album_id bigint,
+  p_source_album_key text,
+  p_destination_album_key text
+)
+returns text
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  bootstrap_library_id bigint;
+begin
+  select library.libraries.id into bootstrap_library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1;
+
+  if bootstrap_library_id is null
+     or p_library_id is distinct from bootstrap_library_id then
+    raise exception 'structural album retirement is outside the bootstrap library';
+  end if;
+
+  return library.retire_vacated_structural_album_internal(
+    p_library_id,
+    p_source_album_id,
+    p_destination_album_id,
+    p_source_album_key,
+    p_destination_album_key
+  );
+end;
+$$;
+
+create or replace function library.retire_vacated_structural_album_siblings(
+  p_library_id bigint,
+  p_destination_album_id bigint
+)
+returns integer
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  bootstrap_library_id bigint;
+begin
+  select library.libraries.id into bootstrap_library_id
+  from app.bootstrap_owners
+  join library.libraries
+    on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+   and library.libraries.name = 'Local Library'
+   and library.libraries.library_kind = 'local'
+  where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+  limit 1;
+
+  if bootstrap_library_id is null
+     or p_library_id is distinct from bootstrap_library_id then
+    raise exception 'structural album retirement is outside the bootstrap library';
+  end if;
+
+  return library.retire_vacated_structural_album_siblings_internal(
+    p_library_id,
+    p_destination_album_id
+  );
 end;
 $$;
 
@@ -334,7 +406,7 @@ begin
       continue;
     end if;
     retired_count := retired_count
-      + library.retire_vacated_structural_album_siblings(
+      + library.retire_vacated_structural_album_siblings_internal(
           claimed_library_id,
           destination_row.id
         );
@@ -343,6 +415,14 @@ begin
   return retired_count;
 end;
 $$;
+
+revoke all on function library.retire_vacated_structural_album_internal(
+  bigint, bigint, bigint, text, text
+) from public;
+
+revoke all on function library.retire_vacated_structural_album_siblings_internal(
+  bigint, bigint
+) from public;
 
 revoke all on function library.retire_vacated_structural_album(
   bigint, bigint, bigint, text, text
@@ -359,6 +439,12 @@ revoke all on function library.retire_claimed_targeted_reconciliation_vacated_al
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
+    revoke all on function library.retire_vacated_structural_album_internal(
+      bigint, bigint, bigint, text, text
+    ) from album_haven_app;
+    revoke all on function library.retire_vacated_structural_album_siblings_internal(
+      bigint, bigint
+    ) from album_haven_app;
     grant execute on function library.retire_vacated_structural_album(
       bigint, bigint, bigint, text, text
     ) to album_haven_app;
@@ -372,6 +458,12 @@ $$;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then
+    revoke all on function library.retire_vacated_structural_album_internal(
+      bigint, bigint, bigint, text, text
+    ) from album_haven_worker;
+    revoke all on function library.retire_vacated_structural_album_siblings_internal(
+      bigint, bigint
+    ) from album_haven_worker;
     grant execute on function library.retire_claimed_targeted_reconciliation_vacated_albums(
       bigint, bigint, integer, varchar, varchar, timestamptz
     ) to album_haven_worker;

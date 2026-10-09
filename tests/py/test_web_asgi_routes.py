@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import threading
+import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -16,6 +17,7 @@ from tests.py.asgi_testing import create_test_asgi_app
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
+from tests.py.asgi_testing import run_asgi_request_async as _run_asgi_request_async
 from tests.py.asgi_testing import runtime_app_from_asgi_app
 
 
@@ -33,6 +35,49 @@ def _make_asgi_app(flask_app=None):
         asgi_app.state.library_state = flask_app.library_state
         asgi_app.state.logger = flask_app.logger
     return asgi_app
+
+
+def _assert_route_work_does_not_block_health(
+    asgi_app,
+    *,
+    method: str,
+    path: str,
+    started: threading.Event,
+    release: threading.Event,
+    json_body: dict[str, object] | None = None,
+) -> int:
+    async def exercise() -> tuple[float, int, int]:
+        release_timer = threading.Timer(0.75, release.set)
+        release_timer.start()
+        started_at = time.perf_counter()
+        route_task = asyncio.create_task(
+            _run_asgi_request_async(
+                asgi_app,
+                method,
+                path,
+                json_body=json_body,
+            )
+        )
+        try:
+            assert await asyncio.to_thread(started.wait, 1), "blocking route work did not start"
+            try:
+                health_status, _health_headers, _health_body = await asyncio.wait_for(
+                    _run_asgi_request_async(asgi_app, "GET", "/health"),
+                    timeout=0.25,
+                )
+            except TimeoutError as exc:
+                raise AssertionError("route work blocked the ASGI event loop") from exc
+            health_elapsed = time.perf_counter() - started_at
+        finally:
+            release.set()
+            release_timer.cancel()
+            route_status, _route_headers, _route_body = await route_task
+        return health_elapsed, health_status, route_status
+
+    health_elapsed, health_status, route_status = asyncio.run(exercise())
+    assert health_status == 200
+    assert health_elapsed < 0.5, "route work blocked the ASGI event loop"
+    return route_status
 
 
 def _configure_selected_postgres_library_roots(config, monkeypatch) -> None:
@@ -615,6 +660,103 @@ def test_asgi_index_does_not_cold_scan_when_a_filter_hides_existing_inventory(
     assert refresh_calls == []
     assert library_state["cold_scan_pending"] is False
     assert library_state["cold_scan_handoff_status"] == "idle"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body", "expected_status"),
+    (
+        ("GET", "/", None, 200),
+        ("POST", "/refresh-api", {"full_rescan": False}, 200),
+        ("GET", "/refresh", None, 302),
+    ),
+)
+def test_scan_scope_resolution_does_not_block_event_loop(
+    tmp_path,
+    monkeypatch,
+    method,
+    path,
+    json_body,
+    expected_status,
+):
+    from music_app.routes import web_asgi
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class ScanJobs:
+        def enqueue_authorized_full_scan(self, **_kwargs):
+            return SimpleNamespace(created=True)
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    asgi_app = create_test_asgi_app(tmp_path, monkeypatch)
+    asgi_app.state.scan_job_repository = ScanJobs()
+    asgi_app.state.library_state.update(
+        {
+            "albums": [],
+            "file_cache": {},
+            "scan_in_progress": False,
+            "cold_scan_pending": True,
+            "cold_scan_handoff_status": "pending",
+        }
+    )
+
+    def blocking_library_roots(_config):
+        started.set()
+        assert release.wait(2), "test release timer did not unblock library root resolution"
+        return [{"id": "root-1"}]
+
+    monkeypatch.setattr(web_asgi, "get_library_roots", blocking_library_roots)
+
+    status = _assert_route_work_does_not_block_health(
+        asgi_app,
+        method=method,
+        path=path,
+        started=started,
+        release=release,
+        json_body=json_body,
+    )
+
+    assert status == expected_status
+
+
+def test_empty_legacy_refresh_hydration_does_not_block_event_loop(
+    tmp_path,
+    monkeypatch,
+):
+    from music_app.routes import web_asgi
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_hydration(*_args, **_kwargs):
+        started.set()
+        assert release.wait(2), "test release timer did not unblock library hydration"
+        return True
+
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "hydrate_library_state_for_config",
+        blocking_hydration,
+    )
+    monkeypatch.setattr(
+        web_asgi.state_service,
+        "start_background_refresh_for_state",
+        lambda *_args, **_kwargs: True,
+    )
+    asgi_app = create_test_asgi_app(tmp_path, monkeypatch)
+    asgi_app.state.scan_job_repository = None
+    asgi_app.state.library_state["albums"] = []
+
+    status = _assert_route_work_does_not_block_health(
+        asgi_app,
+        method="POST",
+        path="/refresh-api",
+        started=started,
+        release=release,
+        json_body={"full_rescan": True},
+    )
+
+    assert status == 200
 
 
 @pytest.mark.parametrize(

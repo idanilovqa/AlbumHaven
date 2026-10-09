@@ -1501,7 +1501,7 @@ def test_isolated_jobs_worker_uses_one_second_polling_without_idle_backoff(monke
     assert captured_environment["ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"] == "1"
 
 
-@pytest.mark.parametrize("failure_point", ["prepare", "none"])
+@pytest.mark.parametrize("failure_point", ["prepare", "none", "worker_stop"])
 def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_cleanup(
     failure_point,
     tmp_path,
@@ -1539,6 +1539,15 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
 
         def stop(self):
             events.append("provider.stop")
+
+    class RecordingWorker:
+        def start(self):
+            events.append("worker.start")
+
+        def stop(self):
+            events.append("worker.stop")
+            if failure_point == "worker_stop":
+                raise RuntimeError("worker shutdown unproven")
 
     def prepare(_setup_url, _runtime_url):
         events.append("database.prepare")
@@ -1620,10 +1629,7 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     monkeypatch.setattr(
         isolatedLibraryApp,
         "build_isolated_jobs_worker",
-        lambda _url: SimpleNamespace(
-            start=lambda: events.append("worker.start"),
-            stop=lambda: events.append("worker.stop"),
-        ),
+        lambda _url: RecordingWorker(),
     )
     monkeypatch.setattr(
         isolatedLibraryApp,
@@ -1646,7 +1652,7 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "temp.cleanup",
             "lock.release",
         ]
-    else:
+    elif failure_point == "none":
         isolatedLibraryApp.main()
         assert events == [
             "lock.acquire",
@@ -1665,6 +1671,24 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "temp.cleanup",
             "lock.release",
         ]
+    else:
+        with pytest.raises(RuntimeError, match="shutdown"):
+            isolatedLibraryApp.main()
+        assert events == [
+            "lock.acquire",
+            "database.prepare",
+            "database.persist",
+            "provider-candidates.persist",
+            "rating-track.materialize",
+            "lastfm.timezone.seed",
+            "provider.create",
+            "provider.start",
+            "worker.start",
+            "server.run",
+            "worker.stop",
+            "provider.stop",
+        ]
+        assert temp_root.exists()
 
 
 @pytest.mark.parametrize("reuse_state", [False, True])

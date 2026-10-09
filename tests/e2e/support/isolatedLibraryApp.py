@@ -5344,38 +5344,49 @@ def main() -> None:
         original_failure = exc
         raise
     finally:
+        shutdown_failures: list[Exception] = []
         if jobs_worker is not None:
             try:
                 jobs_worker.stop()
             except Exception as cleanup_exc:
-                cleanup_failure = cleanup_exc
+                shutdown_failures.append(cleanup_exc)
                 if original_failure is not None:
                     print(f"Durable jobs worker cleanup failed: {cleanup_exc}", file=sys.stderr)
         if provider_service is not None:
             try:
                 provider_service.stop()
             except Exception as cleanup_exc:
-                if cleanup_failure is None:
-                    cleanup_failure = cleanup_exc
+                shutdown_failures.append(cleanup_exc)
                 if original_failure is not None:
                     print(f"Provider fixture cleanup failed: {cleanup_exc}", file=sys.stderr)
-        if database_preparation_started and not preserve_on_shutdown:
+        shutdown_proven = not shutdown_failures
+        if shutdown_proven:
+            if database_preparation_started and not preserve_on_shutdown:
+                try:
+                    reset_application_tables(setup_database_url)
+                except Exception as cleanup_exc:
+                    if cleanup_failure is None:
+                        cleanup_failure = cleanup_exc
+                    if original_failure is not None:
+                        print(f"Post-run isolated database cleanup failed: {cleanup_exc}", file=sys.stderr)
+            if not preserve_on_shutdown:
+                shutil.rmtree(temp_root, ignore_errors=True)
             try:
-                reset_application_tables(setup_database_url)
+                database_lock.release()
             except Exception as cleanup_exc:
                 if cleanup_failure is None:
                     cleanup_failure = cleanup_exc
                 if original_failure is not None:
-                    print(f"Post-run isolated database cleanup failed: {cleanup_exc}", file=sys.stderr)
-        if not preserve_on_shutdown:
-            shutil.rmtree(temp_root, ignore_errors=True)
-        try:
-            database_lock.release()
-        except Exception as cleanup_exc:
-            if cleanup_failure is None:
-                cleanup_failure = cleanup_exc
+                    print(f"Isolated database lock cleanup failed: {cleanup_exc}", file=sys.stderr)
+        else:
+            message = "Application shutdown is unproven; database, fixture, and ownership retained. "
+            message += "; ".join(repr(failure) for failure in shutdown_failures)
             if original_failure is not None:
-                print(f"Isolated database lock cleanup failed: {cleanup_exc}", file=sys.stderr)
+                original_failure.cleanup_failures = tuple(shutdown_failures)
+                print(message, file=sys.stderr, flush=True)
+            else:
+                cleanup_failure = RuntimeError(message)
+                cleanup_failure.cleanup_failures = tuple(shutdown_failures)
         if original_failure is None and cleanup_failure is not None:
             raise cleanup_failure
 

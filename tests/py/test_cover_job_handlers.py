@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import ClaimedJob, JobState
 
 
@@ -121,6 +124,52 @@ def test_cover_lookup_validator_rejects_malformed_or_stale_scope():
     decision = validator(_claim(), None, NOW)
     assert decision.allowed is False
     assert decision.reason_code == "cover_lookup_scope_stale"
+
+
+def test_cover_lookup_validator_marks_repository_failure_indeterminate():
+    from music_app.jobs.cover_handlers import build_cover_lookup_resource_validator
+
+    repository = _Repository()
+    repository.validate_claimed_candidate_lookup = lambda **_kwargs: (
+        _ for _ in ()
+    ).throw(RuntimeError("private database detail"))
+
+    decision = build_cover_lookup_resource_validator(
+        cover_repository=repository
+    )(_claim(), None, NOW)
+
+    assert decision == AuthorizationDecision(
+        False, "authorization_unavailable", indeterminate=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("attempt", "expected_state"),
+    ((1, JobState.RETRY_WAIT), (2, JobState.FAILED)),
+)
+def test_cover_lookup_handler_retries_scope_storage_failure_until_attempt_limit(
+    attempt, expected_state
+):
+    from music_app.jobs.cover_handlers import build_cover_lookup_handler
+
+    repository = _Repository()
+    repository.load_claimed_candidate_lookup = lambda **_kwargs: (
+        _ for _ in ()
+    ).throw(RuntimeError("database unavailable"))
+
+    outcome = build_cover_lookup_handler(
+        cover_repository=repository,
+        config={},
+        logger=SimpleNamespace(),
+        run_lookup=lambda **_kwargs: None,
+        clock=lambda: NOW,
+    )(_claim(attempt=attempt), _Context())
+
+    assert outcome.next_state is expected_state
+    assert outcome.reason_code == "cover_lookup_scope_unavailable"
+    assert (outcome.scheduled_at == NOW + timedelta(seconds=5)) is (
+        expected_state is JobState.RETRY_WAIT
+    )
 
 
 def test_cover_lookup_handler_starts_deadline_at_claim_and_fences_updates():
@@ -401,6 +450,47 @@ def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress
     assert repository.selections[0]["job_id"] == claim.job_id
     assert repository.selections[0]["task_id"] == scope.task_id
     assert repository.finished[0]["next_status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("attempt", "expected_state"),
+    ((1, JobState.RETRY_WAIT), (2, JobState.FAILED)),
+)
+def test_cover_refresh_handler_retries_scope_storage_failure_until_attempt_limit(
+    attempt, expected_state
+):
+    from music_app.jobs.cover_handlers import build_cover_refresh_handler
+
+    claim = _claim(
+        kind="post_scan_cover_refresh",
+        subject_kind="inventory_revision",
+        subject_ref="revision-12",
+        parameters={"inventory_revision": 12},
+        account_id=None,
+        capability_key=None,
+        request_origin_id=None,
+        idempotency_key="post-scan-cover-refresh:9:12",
+        attempt=attempt,
+    )
+    repository = SimpleNamespace(
+        begin_claimed_cover_refresh=lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("database unavailable")
+        )
+    )
+
+    outcome = build_cover_refresh_handler(
+        cover_repository=repository,
+        config={},
+        logger=SimpleNamespace(),
+        run_refresh=lambda **_kwargs: {},
+        clock=lambda: NOW,
+    )(claim, _Context())
+
+    assert outcome.next_state is expected_state
+    assert outcome.reason_code == "cover_refresh_scope_unavailable"
+    assert (outcome.scheduled_at == NOW + timedelta(seconds=5)) is (
+        expected_state is JobState.RETRY_WAIT
+    )
 
 
 def test_cover_refresh_handler_injects_lease_fenced_candidate_snapshot_repository():

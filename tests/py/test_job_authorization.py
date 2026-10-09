@@ -395,6 +395,33 @@ def test_production_lastfm_validator_fences_pending_attempt_and_opaque_session()
     ]
 
 
+def test_lastfm_validator_marks_repository_failure_indeterminate():
+    repository = SimpleNamespace(
+        validate_claimed_retry=lambda **_values: (_ for _ in ()).throw(
+            RuntimeError("private database detail")
+        )
+    )
+    claim = _claim(
+        kind="lastfm_scrobble_retry",
+        subject_kind="pending_scrobble",
+        subject_ref="53",
+        capability_key="integration.lastfm.scrobble",
+        parameters={"active_session_ref": "31"},
+        max_attempts=1,
+        scope_version=5,
+        resource_revision=2,
+        idempotency_key="lastfm-scrobble:53:attempt:2",
+    )
+
+    decision = build_lastfm_retry_resource_validator(
+        retry_repository=repository
+    )(claim, SimpleNamespace(integration_session_ref="31"), NOW)
+
+    assert decision == AuthorizationDecision(
+        False, "authorization_unavailable", indeterminate=True
+    )
+
+
 def test_production_lastfm_validator_rejects_session_replacement_before_domain_read():
     class RetryRepository:
         def __init__(self):
@@ -551,6 +578,32 @@ def test_auth_mail_validator_rejects_category_substitution_before_repository_acc
         False, "auth_mail_scope_invalid"
     )
     assert repository.calls == []
+
+
+def test_auth_mail_validator_marks_repository_failure_indeterminate():
+    repository = SimpleNamespace(
+        validate_claimed_delivery=lambda **_values: (_ for _ in ()).throw(
+            RuntimeError("private database detail")
+        )
+    )
+    validator = build_auth_mail_resource_validator(
+        mail_repository=repository, category="welcome"
+    )
+    claim = _claim(
+        kind="auth_welcome_delivery",
+        subject_kind="mail_outbox",
+        subject_ref="61",
+        parameters={},
+        capability_key="accounts.welcome.send",
+        max_attempts=3,
+        scope_version=4,
+        resource_revision=1,
+        idempotency_key="auth-mail:welcome:61:attempt:1",
+    )
+
+    assert validator(claim, SimpleNamespace(), NOW) == AuthorizationDecision(
+        False, "authorization_unavailable", indeterminate=True
+    )
 
 
 def test_public_auth_mail_validator_keeps_target_identity_in_private_repository():
@@ -812,7 +865,7 @@ def test_unavailable_authorization_storage_is_not_reported_as_revocation():
 
     repository.load_authorization_context = unavailable
     assert service.authorize(_claim(), NOW) == AuthorizationDecision(
-        False, "authorization_unavailable"
+        False, "authorization_unavailable", indeterminate=True
     )
 
 

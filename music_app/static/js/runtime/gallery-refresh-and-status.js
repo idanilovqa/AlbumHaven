@@ -1028,15 +1028,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     });
     let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
     if (rootRefreshCoverage > 0) {
-      const ownsRefresh = () => {
-        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
-          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
-        try {
-          return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
-        } catch (_error) {
-          return false;
-        }
-      };
+      const ownsRefresh = () => (
+        requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+        && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      );
       data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
       if (!data || !ownsRefresh()) return false;
     }

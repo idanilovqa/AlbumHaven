@@ -948,6 +948,7 @@ test('rating authority E2E action observes the real view-data response without i
       },
     },
     input: {
+        async click() { interactions.push('focus'); },
       async fill(value) { interactions.push(`fill:${value}`); },
       async press(value) { interactions.push(`press:${value}`); },
     },
@@ -960,6 +961,7 @@ test('rating authority E2E action observes the real view-data response without i
 
   assert.deepEqual(interactions, [
     'response-armed',
+      'focus',
     'fill:Rating Numeric Authority',
     'press:Enter',
   ]);
@@ -5945,20 +5947,21 @@ for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-a
 }
 
 
-test('search actions honor an explicit search-button submission', async () => {
+test('search actions wait for actionable input before explicit search-button submission', async () => {
   const { SearchToolbarActions } = await import(
     pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/searchToolbarActions.js')).href
   );
   const interactions = [];
   const actions = new SearchToolbarActions({
     input: {
+      async click() { interactions.push(['focus']); },
       async fill(value) { interactions.push(['fill', value]); },
       async press(key) { interactions.push(['press', key]); },
     },
     applyButton: { async click() { interactions.push(['click']); } },
   });
   await actions.search('Neal Morse', { clickApply: true });
-  assert.deepEqual(interactions, [['fill', 'Neal Morse'], ['click']]);
+  assert.deepEqual(interactions, [['focus'], ['fill', 'Neal Morse'], ['click']]);
 });
 
 test('album cover checkpoint accepts coherent production blobs and rejects stale display sources', async () => {

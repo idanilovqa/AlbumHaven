@@ -68,8 +68,9 @@
   .home-friends[data-home-section="friends"] [data-home-widget="recent"] { display: none; }
   .home-friends[data-home-section="recent"] [data-home-widget="recent"],
   .home-friends[data-home-section="friends"] [data-home-widget="friends"] { display: flex; }
-  .home-friends__widget-header .dashboard__size-icon { display: none; }
-  .home-friends__widget-header button:has(.dashboard__size-icon) { display: none; }
+  /* Native pane navigation owns narrow Home; retain desktop expansion without
+     exposing its Back in either the widget header or the shared page header. */
+  .home-friends .ui-button[data-dashboard-action] { display: none; }
   .home-friends__control-row { grid-template-columns: minmax(0,1fr) auto minmax(0,auto); column-gap: 8px; }
   .home-friends__control-row .in-page-tabs > [role="tab"] { font-size: .72rem; }
   .home-friends__catalog-controls .in-page-tabs > [role="tab"] { font-size: .8rem; }

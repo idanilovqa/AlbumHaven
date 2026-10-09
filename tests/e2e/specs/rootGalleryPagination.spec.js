@@ -84,10 +84,7 @@ test(CASE, { tag: '@area:gallery-search' }, async ({ page, galleryActions, testA
     const url = new URL(response.url());
     return url.pathname === '/view-data' && url.searchParams.get('gallery_cursor') === initial.gallery_page.next_cursor;
   }, { timeout: 30000 });
-  const anchorPromise = page.waitForRequest(request => {
-    const url = new URL(request.url());
-    return url.pathname === '/view-data' && url.searchParams.get('gallery_cursor') === initial.gallery_page.next_cursor;
-  }).then(() => ui.captureVisibleGalleryAnchor());
+  const anchorPromise = ui.captureVisibleGalleryAnchorOnNextScroll();
   await galleryActions.scrollGalleryBy(geometry.maxScrollTop);
   const anchor = await anchorPromise;
   // parity-check: allow-read-only-measurement-evaluate -- prove the retained visible card predates the continuation merge

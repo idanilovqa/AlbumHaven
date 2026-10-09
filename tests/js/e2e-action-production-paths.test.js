@@ -5947,7 +5947,7 @@ for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-a
 }
 
 
-test('search actions wait for actionable input before explicit search-button submission', async () => {
+test('search actions wait for actionable input before Enter submission', async () => {
   const { SearchToolbarActions } = await import(
     pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/searchToolbarActions.js')).href
   );
@@ -5960,8 +5960,46 @@ test('search actions wait for actionable input before explicit search-button sub
     },
     applyButton: { async click() { interactions.push(['click']); } },
   });
-  await actions.search('Neal Morse', { clickApply: true });
-  assert.deepEqual(interactions, [['focus'], ['fill', 'Neal Morse'], ['click']]);
+  await actions.search('Neal Morse', {
+    recordSubmissionBoundary() {
+      interactions.push(['boundary']);
+    },
+  });
+  assert.deepEqual(interactions, [
+    ['focus'],
+    ['fill', 'Neal Morse'],
+    ['boundary'],
+    ['press', 'Enter'],
+  ]);
+});
+
+test('search actions record the submission boundary before clicking Apply', async () => {
+  const { SearchToolbarActions } = await import(
+    pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/searchToolbarActions.js')).href
+  );
+  const interactions = [];
+  const actions = new SearchToolbarActions({
+    input: {
+      async click() { interactions.push(['focus']); },
+      async fill(value) { interactions.push(['fill', value]); },
+    },
+    applyButton: {
+      async click() { interactions.push(['click']); },
+    },
+  });
+
+  await actions.search('Neal Morse', {
+    clickApply: true,
+    recordSubmissionBoundary() {
+      interactions.push(['boundary']);
+    },
+  });
+  assert.deepEqual(interactions, [
+    ['focus'],
+    ['fill', 'Neal Morse'],
+    ['boundary'],
+    ['click'],
+  ]);
 });
 
 test('album cover checkpoint accepts coherent production blobs and rejects stale display sources', async () => {

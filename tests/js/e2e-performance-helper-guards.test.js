@@ -582,6 +582,9 @@ test('focused search browse resolves its timing budget from the central authorit
   );
   assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_BROWSE_BUDGET\.metricId/);
   assert.match(spec, /recordContractCompletion\(\)/);
+  assert.match(spec, /recordSubmissionBoundary/);
+  assert.match(spec, /Date\.now\(\)\s*-\s*searchSubmittedAt/);
+  assert.doesNotMatch(spec, /measureActionTime/);
   assert.doesNotMatch(spec, /benchmarkValidation\s*:/);
 });
 

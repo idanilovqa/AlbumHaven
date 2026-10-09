@@ -335,6 +335,8 @@
   max-width: calc(100% - 18px);
   pointer-events: none;
 }
+.gallery-card__source-actions--details { display: none; }
+.gallery-card__status-group { display: contents; }
 .album-card .gallery-source-action {
   display: inline-flex;
   flex: none;

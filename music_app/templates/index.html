@@ -192,6 +192,8 @@
         <button class="gallery-type-choice" type="button" data-gallery-album-type="{{ value }}" aria-pressed="{{ 'true' if value in ['studio', 'ep'] else 'false' }}" disabled aria-disabled="true"><span aria-hidden="true">✓</span>{{ label }}</button>
         {% endfor %}
         <div class="gallery-menu-divider"></div>
+        <button class="gallery-type-choice" type="button" data-gallery-featured-on="1" aria-pressed="true"><span aria-hidden="true">✓</span>Featured On</button>
+        <div class="gallery-menu-divider"></div>
         <button class="gallery-menu-action" type="button" data-open-non-album-tracks="1" disabled aria-disabled="true">Non-album tracks</button>
         <button class="gallery-menu-action" type="button" data-gallery-customize-preview="1" aria-disabled="true">Customize</button>
       </div>

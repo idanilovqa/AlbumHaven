@@ -10,6 +10,7 @@ function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
+    showFeaturedOn: overrides.showFeaturedOn !== false,
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
@@ -35,6 +36,8 @@ function reduceGalleryMainState(current, action = {}) {
   const next = createGalleryMainState(current || {});
   if (action.type === 'toggle-source' && Object.hasOwn(next.sources, action.source)) {
     next.sources[action.source] = !next.sources[action.source];
+  } else if (action.type === 'toggle-featured-on') {
+    next.showFeaturedOn = !next.showFeaturedOn;
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -114,6 +117,7 @@ function filterGalleryModel({ groups = [], filterState = createGalleryMainState(
     const albums = (Array.isArray(group.albums) ? group.albums : []).filter((album) => (
       resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
       && selectedTypes.has(classifyGalleryReleaseType(album))
+      && (filterState.showFeaturedOn !== false || String(album.artist_relationship || '').trim().toLowerCase() !== 'featured')
     ));
     return albums.length ? [{ ...group, albums }] : [];
   });
@@ -223,6 +227,7 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     filterState.familySelectionExplicit || filterState.familyArtists?.length
     || filterState.albumTypes?.length !== 2
     || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep')
+    || filterState.showFeaturedOn === false
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;

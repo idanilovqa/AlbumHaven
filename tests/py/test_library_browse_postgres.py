@@ -396,6 +396,152 @@ def _browse_album_row(*, artist: str, album_id: int, album_key: str, title: str)
     }
 
 
+def test_postgres_browse_payloads_preserve_owned_and_featured_relationships_per_artist_occurrence():
+    from music_app.services import library_browse_postgres as browse
+
+    base = _browse_album_row(
+        artist="Various Artists",
+        album_id=81,
+        album_key="various-sampler",
+        title="Sampler",
+    )
+    base["album_metadata"] = {
+        "album_artist": "Various Artists",
+        "artists": ["Various Artists"],
+    }
+    rows = browse._canonicalize_artist_rows(
+        [{
+            **base,
+            "album_featured_artists": [
+                {
+                    "artist_id": 1,
+                    "artist_name": "Various Artists",
+                    "artist_sort_name": "Various Artists",
+                    "featured_kind": "owner",
+                },
+                {
+                    "artist_id": 2,
+                    "artist_name": "Solo One",
+                    "artist_sort_name": "Solo One",
+                    "featured_kind": "featured_track_artist",
+                },
+                {
+                    "artist_id": 2,
+                    "artist_name": "Solo One",
+                    "artist_sort_name": "Solo One",
+                    "featured_kind": "featured_track_artist",
+                },
+                {
+                    "artist_id": 3,
+                    "artist_name": "Solo Two",
+                    "artist_sort_name": "Solo Two",
+                    "featured_kind": "featured_track_artist",
+                },
+            ],
+        }],
+        {},
+    )
+
+    groups = browse._root_album_browse_artist_groups(rows)
+
+    assert [(group["artist"], len(group["albums"])) for group in groups] == [
+        ("Solo One", 1),
+        ("Solo Two", 1),
+        ("Various Artists", 1),
+    ]
+    relationships = {
+        group["artist"]: group["albums"][0]["artist_relationship"]
+        for group in groups
+    }
+    assert relationships == {
+        "Solo One": "featured",
+        "Solo Two": "featured",
+        "Various Artists": "owned",
+    }
+    assert len({id(group["albums"][0]) for group in groups}) == 3
+
+
+def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
+    from music_app.services import library_browse_postgres as browse
+
+    featured = _browse_album_row(
+        artist="Solo One",
+        album_id=82,
+        album_key="shared-release",
+        title="Shared Release",
+    )
+    featured["album_metadata"] = {
+        "album_artist": "Various Artists",
+        "artists": ["Various Artists"],
+    }
+    featured["featured_kind"] = "featured_track_artist"
+    owner = dict(featured, featured_kind="owner")
+
+    assert browse._root_album_browse_album_payloads(
+        [featured], "Solo One"
+    )[0]["artist_relationship"] == "featured"
+    assert browse._selected_artist_album_payloads(
+        [featured], "Solo One"
+    )[0]["artist_relationship"] == "featured"
+    assert browse._root_album_browse_album_payloads(
+        [featured, owner], "Solo One"
+    )[0]["artist_relationship"] == "owned"
+    assert browse._selected_artist_album_payloads(
+        [featured, owner], "Solo One"
+    )[0]["artist_relationship"] == "owned"
+
+
+def test_postgres_paged_root_occurrences_keep_relationship_and_copy_album_payload():
+    from music_app.services import library_browse_postgres as browse
+
+    membership = [
+        {
+            "artist_id": 1,
+            "artist_name": "Various Artists",
+            "album_id": 83,
+            "album_key": "paged-sampler",
+            "album_title": "Paged Sampler",
+            "featured_kind": "owner",
+        },
+        {
+            "artist_id": 2,
+            "artist_name": "Solo One",
+            "album_id": 83,
+            "album_key": "paged-sampler",
+            "album_title": "Paged Sampler",
+            "featured_kind": "featured_track_artist",
+        },
+    ]
+    snapshot = browse._prepare_root_gallery_snapshot(membership, [], {}, {})
+    page = snapshot["ordered"]
+    hydrated = {"key": "paged-sampler", "name": "Paged Sampler"}
+    occurrences = [browse._copy_album_for_artist_occurrence(hydrated, row) for row in page]
+
+    assert [album["artist_relationship"] for album in occurrences] == [
+        "featured",
+        "owned",
+    ]
+    assert occurrences[0] is not occurrences[1]
+    assert occurrences[0] is not hydrated
+
+
+def test_postgres_relationship_sql_covers_root_selected_preview_and_exact_search():
+    import inspect
+
+    from music_app.services import library_browse_postgres as browse
+
+    for sql in (
+        browse._root_gallery_membership_sql(),
+        browse._root_album_browse_sql(),
+        browse._selected_artist_sql(),
+        browse._selected_artist_preview_sql(),
+    ):
+        assert "featured_kind" in sql
+
+    source = inspect.getsource(browse.PostgresLibraryBrowseRepository._build_search_payload_from_snapshot)
+    assert 'get("featured_kind") != "featured_track_artist"' not in source
+
+
 def test_family_preview_reuses_membership_snapshots_without_changing_results(monkeypatch):
     from music_app.services import library_browse_postgres as browse
     from music_app.services import selected_artist_membership as membership

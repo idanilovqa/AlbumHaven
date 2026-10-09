@@ -14,6 +14,57 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+const LIBRARY_SOURCE_MARKERS = Object.freeze({
+  hoard: Object.freeze({
+    label: 'Hoard',
+    drawing: '<path d="M5 22v-7A10 10 0 0 1 15 5h18a10 10 0 0 1 10 10v7H5Zm1 0v19h36V22M5 18h38M13 6v12m22-12v12M13 23v17m22-17v17M8 41v3m32-3v3"/><rect x="19" y="21" width="10" height="13" rx="2"/><path d="M21 21v-3a3 3 0 0 1 6 0v3M24 26v3"/><path d="M9 12h.1M39 12h.1M9 28h.1M39 28h.1M9 35h.1M39 35h.1"/>',
+  }),
+  new_arrivals: Object.freeze({
+    label: 'New Arrivals',
+    drawing: '<path d="M17 14a9 9 0 0 1 8-4h11a9 9 0 0 1 9 9v15H27V19a9 9 0 0 0-9-9M27 34h-9M30 34v12m3-12v12M34 15V2h7v4h-7"/><circle cx="16" cy="26" r="11"/><circle cx="16" cy="26" r="3"/><path d="M17 18a8 8 0 0 1 7 7M17 21a5 5 0 0 1 4 4M8 33l-6 5q8 3 16-1"/><path d="m8 5 1.2 3.8L13 10l-3.8 1.2L8 15l-1.2-3.8L3 10l3.8-1.2Z" fill="currentColor" stroke="none"/>',
+  }),
+});
+
+function normalizeLibrarySourceCategories(categories = []) {
+  const values = Array.isArray(categories) ? categories : [];
+  const normalized = new Set(values.map((value) => {
+    const category = String(value || '').trim().toLowerCase();
+    return category === 'main_library' ? 'main' : category;
+  }));
+  return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.has(category));
+}
+
+function resolveAlbumSourceMarkerCategories(album = {}) {
+  const provenance = Array.isArray(album?.root_provenance?.categories)
+    ? album.root_provenance.categories
+    : [];
+  return normalizeLibrarySourceCategories(provenance.length
+    ? provenance
+    : [album?.library_root_category || album?.source || 'main_library']);
+}
+
+function buildLibrarySourceGlyphHtml(category) {
+  const marker = LIBRARY_SOURCE_MARKERS[String(category || '')];
+  return marker
+    ? `<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">${marker.drawing}</svg>`
+    : '';
+}
+
+function buildAlbumSourceMarkerItemsHtml(categories = []) {
+  return normalizeLibrarySourceCategories(categories)
+    .filter((category) => LIBRARY_SOURCE_MARKERS[category])
+    .map((category) => {
+      const marker = LIBRARY_SOURCE_MARKERS[category];
+      return `<span class="album-details-source-marker album-details-source-marker--${category}" role="img" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}</span>`;
+    })
+    .join('');
+}
+
+function buildAlbumSourceMarkersHtml(categories = []) {
+  const items = buildAlbumSourceMarkerItemsHtml(categories);
+  return items ? `<div class="album-details-source-markers">${items}</div>` : '';
+}
+
 function buildFilterPillHtml(config = {}) {
   const label = String(config.label || '');
   const selected = Boolean(config.selected);
@@ -74,8 +125,7 @@ function buildGalleryDividerHtml(config = {}) {
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
-  const isSearch = Boolean(String(config.query ?? (typeof state !== 'undefined' ? state.view?.query : '') ?? '').trim());
-  const info = isSearch ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
+  const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
   return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
@@ -91,8 +141,9 @@ function buildGalleryRatingHtml(config = {}) {
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
   const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }

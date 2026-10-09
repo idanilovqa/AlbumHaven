@@ -680,6 +680,7 @@ class PostgresLibraryBrowseRepository:
                     album = occurrence.get("missing_album") or hydrated.get(occurrence["album_key"])
                     if album is None:
                         raise ValueError("Gallery changed; restart required.")
+                    album = _copy_album_for_artist_occurrence(album, occurrence)
                     group = groups.setdefault(occurrence["artist_id"], dict(artist=artist,
                         artist_display=_artist_tree_display_value(artist), albums=[], sections=[]))
                     group["albums"].append(album)
@@ -1705,7 +1706,6 @@ class PostgresLibraryBrowseRepository:
                         str(_row_mapping(row).get("artist_name") or "")
                     )
                     == exact_artist_key
-                    and _row_mapping(row).get("featured_kind") != "featured_track_artist"
                 ]
             delegated_params = _clone_query_params_mapping(params)
             delegated_params["artist"] = exact_artist_match
@@ -3293,7 +3293,13 @@ def _prepare_root_gallery_snapshot(
     for row in candidates:
         row["artist_name"] = displays[row["artist_id"]]
         row["artist_sort_name"] = sort_names[row["artist_id"]]
-        occurrences.setdefault((row["artist_id"], row["album_key"]), row)
+        occurrence_key = (row["artist_id"], row["album_key"])
+        existing = occurrences.get(occurrence_key)
+        if existing is None or (
+            _album_artist_relationship([existing]) == "featured"
+            and _album_artist_relationship([row]) == "owned"
+        ):
+            occurrences[occurrence_key] = row
     ordered = sorted(occurrences.values(), key=lambda row: (
         row["artist_sort_name"].casefold(), str(row["artist_name"]).casefold(), str(row["artist_id"]),
         _coerce_int(row.get("album_release_year")) if row.get("album_release_year") else 9999,
@@ -3302,7 +3308,8 @@ def _prepare_root_gallery_snapshot(
     # invalidate a continuation; each bounded hydration reads their current value.
     revision = hashlib.sha256(json.dumps([{key: view_state.get(key) for key in ("gallery_scope", "visible_library_categories")}, [
         [row["artist_id"], row["artist_name"], row["artist_sort_name"], row["album_key"],
-         str(row.get("album_release_year") or ""), str(row.get("album_title") or "")]
+         str(row.get("album_release_year") or ""), str(row.get("album_title") or ""),
+         _album_artist_relationship([row])]
         for row in ordered]], sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
     if revision_namespace:
         revision = hashlib.sha256(f"{revision_namespace}:{revision}".encode()).hexdigest()
@@ -6435,11 +6442,14 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
                 "tracks": [],
                 "open_directory_paths": [],
                 "preview_only": False,
+                "artist_relationship": _album_artist_relationship([row_payload]),
             }
             albums[album_identity] = album
             track_ids_by_album[album_identity] = set()
             directory_paths_by_album[album_identity] = []
             seen_directory_paths_by_album[album_identity] = set()
+        elif _album_artist_relationship([row_payload]) == "owned":
+            album["artist_relationship"] = "owned"
         track_id = row_payload.get("track_id")
         track_key = str(row_payload.get("track_key") or "").strip()
         track_identity = track_id if track_id is not None else track_key
@@ -6527,6 +6537,8 @@ def _root_album_browse_album_payloads(
             else ""
         )
         if album_identity in albums:
+            if _album_artist_relationship([row_payload]) == "owned":
+                albums[album_identity]["artist_relationship"] = "owned"
             if matched_artist:
                 existing_artists = albums[album_identity].setdefault("artists", [])
                 existing_artist_keys = {
@@ -6576,6 +6588,7 @@ def _root_album_browse_album_payloads(
             "track_count_preview": _coerce_int(row_payload.get("track_count")),
             "total_duration_display": format_duration(duration_seconds),
             "preview_only": True,
+            "artist_relationship": _album_artist_relationship([row_payload]),
         }
         if include_total_duration_seconds:
             album_payload["total_duration_seconds"] = duration_seconds
@@ -6606,6 +6619,23 @@ def _root_album_browse_album_payloads(
             str(album.get("key") or "").casefold(),
         ),
     )
+
+
+def _album_artist_relationship(rows: Iterable[object]) -> str:
+    kinds = {
+        str(_row_mapping(row).get("featured_kind") or "").strip().casefold()
+        for row in rows
+    }
+    return "featured" if kinds == {"featured_track_artist"} else "owned"
+
+
+def _copy_album_for_artist_occurrence(
+    album: Mapping[str, object],
+    occurrence: Mapping[str, object],
+) -> dict[str, object]:
+    copied = dict(album)
+    copied["artist_relationship"] = _album_artist_relationship([occurrence])
+    return copied
 
 
 def _cover_candidate_snapshot_summary(value: object) -> dict[str, object] | None:
@@ -6975,7 +7005,8 @@ def _root_gallery_membership_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1
         ), {_eligible_album_tracks_cte_sql(materialized=True, aggregate_tracks=False)}
         select distinct artist.id as artist_id, artist.name as artist_name,
-          artist.sort_name as artist_sort_name, album.id as album_id, album.album_key,
+          artist.sort_name as artist_sort_name, featured.featured_kind,
+          album.id as album_id, album.album_key,
           album.title as album_title, album.release_year as album_release_year
         from library.local_artists artist
         join bootstrap_context on bootstrap_context.library_id = artist.library_id
@@ -7073,6 +7104,7 @@ def _selected_artist_sql() -> str:
             target_artists.id as artist_id,
             target_artists.name as artist_name,
             target_artists.sort_name as artist_sort_name,
+            library.local_album_featured_artists.featured_kind,
             library.local_albums.library_id,
             library.local_albums.id as album_id,
             library.local_albums.album_key,
@@ -7092,6 +7124,7 @@ def _selected_artist_sql() -> str:
           selected_artist_albums.artist_id,
           selected_artist_albums.artist_name,
           selected_artist_albums.artist_sort_name,
+          selected_artist_albums.featured_kind,
           selected_artist_albums.album_id,
           selected_artist_albums.album_key,
           selected_artist_albums.album_title,
@@ -7352,6 +7385,7 @@ def _root_album_browse_sql() -> str:
             library.local_artists.id as artist_id,
             library.local_artists.name as artist_name,
             library.local_artists.sort_name as artist_sort_name,
+            library.local_album_featured_artists.featured_kind,
             library.local_albums.library_id,
             library.local_albums.id as album_id,
             library.local_albums.album_key,
@@ -7389,6 +7423,7 @@ def _root_album_browse_sql() -> str:
           album_rows.artist_id,
           album_rows.artist_name,
           album_rows.artist_sort_name,
+          album_rows.featured_kind,
           album_rows.album_id,
           album_rows.album_key,
           album_rows.album_title,
@@ -7610,6 +7645,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             preview_artists.artist_id,
             preview_artists.artist_name,
             preview_artists.artist_sort_name,
+            library.local_album_featured_artists.featured_kind,
             library.local_albums.library_id,
             library.local_albums.id as album_id,
             library.local_albums.album_key,
@@ -7682,6 +7718,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             matched_album_rows.artist_id,
             matched_album_rows.artist_name,
             matched_album_rows.artist_sort_name,
+            matched_album_rows.featured_kind,
             matched_album_rows.album_id,
             matched_album_rows.album_key,
             matched_album_rows.album_title,
@@ -8048,6 +8085,7 @@ def _selected_artist_preview_sql(
             target_artists.id as artist_id,
             target_artists.name as artist_name,
             target_artists.sort_name as artist_sort_name,
+            library.local_album_featured_artists.featured_kind,
             library.local_albums.library_id,
             library.local_albums.id as album_id,
             library.local_albums.album_key,
@@ -8083,6 +8121,7 @@ def _selected_artist_preview_sql(
           matched_album_rows.artist_id,
           matched_album_rows.artist_name,
           matched_album_rows.artist_sort_name,
+          matched_album_rows.featured_kind,
           matched_album_rows.album_id,
           matched_album_rows.album_key,
           matched_album_rows.album_title,
@@ -8147,6 +8186,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
             target_artists.id as artist_id,
             target_artists.name as artist_name,
             target_artists.sort_name as artist_sort_name,
+            library.local_album_featured_artists.featured_kind,
             library.local_albums.library_id,
             library.local_albums.id as album_id,
             library.local_albums.album_key,
@@ -8183,6 +8223,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
           matched_album_rows.artist_id,
           matched_album_rows.artist_name,
           matched_album_rows.artist_sort_name,
+          matched_album_rows.featured_kind,
           matched_album_rows.album_id,
           matched_album_rows.album_key,
           matched_album_rows.album_title,

@@ -4017,6 +4017,57 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+const LIBRARY_SOURCE_MARKERS = Object.freeze({
+  hoard: Object.freeze({
+    label: 'Hoard',
+    drawing: '<path d="M5 22v-7A10 10 0 0 1 15 5h18a10 10 0 0 1 10 10v7H5Zm1 0v19h36V22M5 18h38M13 6v12m22-12v12M13 23v17m22-17v17M8 41v3m32-3v3"/><rect x="19" y="21" width="10" height="13" rx="2"/><path d="M21 21v-3a3 3 0 0 1 6 0v3M24 26v3"/><path d="M9 12h.1M39 12h.1M9 28h.1M39 28h.1M9 35h.1M39 35h.1"/>',
+  }),
+  new_arrivals: Object.freeze({
+    label: 'New Arrivals',
+    drawing: '<path d="M17 14a9 9 0 0 1 8-4h11a9 9 0 0 1 9 9v15H27V19a9 9 0 0 0-9-9M27 34h-9M30 34v12m3-12v12M34 15V2h7v4h-7"/><circle cx="16" cy="26" r="11"/><circle cx="16" cy="26" r="3"/><path d="M17 18a8 8 0 0 1 7 7M17 21a5 5 0 0 1 4 4M8 33l-6 5q8 3 16-1"/><path d="m8 5 1.2 3.8L13 10l-3.8 1.2L8 15l-1.2-3.8L3 10l3.8-1.2Z" fill="currentColor" stroke="none"/>',
+  }),
+});
+
+function normalizeLibrarySourceCategories(categories = []) {
+  const values = Array.isArray(categories) ? categories : [];
+  const normalized = new Set(values.map((value) => {
+    const category = String(value || '').trim().toLowerCase();
+    return category === 'main_library' ? 'main' : category;
+  }));
+  return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.has(category));
+}
+
+function resolveAlbumSourceMarkerCategories(album = {}) {
+  const provenance = Array.isArray(album?.root_provenance?.categories)
+    ? album.root_provenance.categories
+    : [];
+  return normalizeLibrarySourceCategories(provenance.length
+    ? provenance
+    : [album?.library_root_category || album?.source || 'main_library']);
+}
+
+function buildLibrarySourceGlyphHtml(category) {
+  const marker = LIBRARY_SOURCE_MARKERS[String(category || '')];
+  return marker
+    ? `<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">${marker.drawing}</svg>`
+    : '';
+}
+
+function buildAlbumSourceMarkerItemsHtml(categories = []) {
+  return normalizeLibrarySourceCategories(categories)
+    .filter((category) => LIBRARY_SOURCE_MARKERS[category])
+    .map((category) => {
+      const marker = LIBRARY_SOURCE_MARKERS[category];
+      return `<span class="album-details-source-marker album-details-source-marker--${category}" role="img" aria-label="${marker.label}" title="${marker.label}">${buildLibrarySourceGlyphHtml(category)}</span>`;
+    })
+    .join('');
+}
+
+function buildAlbumSourceMarkersHtml(categories = []) {
+  const items = buildAlbumSourceMarkerItemsHtml(categories);
+  return items ? `<div class="album-details-source-markers">${items}</div>` : '';
+}
+
 function buildFilterPillHtml(config = {}) {
   const label = String(config.label || '');
   const selected = Boolean(config.selected);
@@ -4077,8 +4128,7 @@ function buildGalleryDividerHtml(config = {}) {
 }
 
 function buildFamilyArtistHeaderHtml(config = {}) {
-  const isSearch = Boolean(String(config.query ?? (typeof state !== 'undefined' ? state.view?.query : '') ?? '').trim());
-  const info = isSearch ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
+  const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
   return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}</h2>${info}<span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
@@ -4094,10 +4144,11 @@ function buildGalleryRatingHtml(config = {}) {
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
   const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -4116,6 +4167,7 @@ function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
     albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
+    showFeaturedOn: overrides.showFeaturedOn !== false,
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
   };
@@ -4141,6 +4193,8 @@ function reduceGalleryMainState(current, action = {}) {
   const next = createGalleryMainState(current || {});
   if (action.type === 'toggle-source' && Object.hasOwn(next.sources, action.source)) {
     next.sources[action.source] = !next.sources[action.source];
+  } else if (action.type === 'toggle-featured-on') {
+    next.showFeaturedOn = !next.showFeaturedOn;
   } else if (action.type === 'set-view') {
     next.view = normalizeGalleryView(action.view);
   } else if (action.type === 'toggle-family-artist') {
@@ -4220,6 +4274,7 @@ function filterGalleryModel({ groups = [], filterState = createGalleryMainState(
     const albums = (Array.isArray(group.albums) ? group.albums : []).filter((album) => (
       resolveGalleryAlbumSources(album).some((source) => filterState.sources?.[source] !== false)
       && selectedTypes.has(classifyGalleryReleaseType(album))
+      && (filterState.showFeaturedOn !== false || String(album.artist_relationship || '').trim().toLowerCase() !== 'featured')
     ));
     return albums.length ? [{ ...group, albums }] : [];
   });
@@ -4329,6 +4384,7 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     filterState.familySelectionExplicit || filterState.familyArtists?.length
     || filterState.albumTypes?.length !== 2
     || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep')
+    || filterState.showFeaturedOn === false
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
   )) return rootTotals;
@@ -4346,20 +4402,18 @@ function buildGalleryCardHtml(config = {}) {
   const displayMode = ['list', 'cards', 'covers'].includes(config.displayMode) ? config.displayMode : 'cards';
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
-  const sourceCategories = ['main', 'hoard', 'new_arrivals'].filter((category) => (
-    Array.isArray(config.sourceCategories) && config.sourceCategories.includes(category)
-  ));
+  const sourceCategories = normalizeLibrarySourceCategories(config.sourceCategories);
   const sourceColors = { main: 'var(--gallery-artbox-hover-frame, #fff)', hoard: 'var(--library-source-hoard)', new_arrivals: 'var(--library-source-arrivals)' };
   const sourceGradient = sourceCategories.length
     ? `conic-gradient(${sourceCategories.map((category, index) => `${sourceColors[category]} ${index * 100 / sourceCategories.length}% ${(index + 1) * 100 / sourceCategories.length}%`).join(', ')})`
     : 'none';
-  const sourceAction = (category, label, drawing) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" aria-label="${label}" ${openAttributes}><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false">${drawing}</svg><span>${label}</span></button>`;
+  const sourceAction = (category, label, glyphHtml) => `<button class="ui-button ui-button--small gallery-source-action gallery-source-action--${category}" type="button" aria-label="${label}" ${openAttributes}>${glyphHtml}<span>${label}</span></button>`;
   const sourceActions = [
-    sourceCategories.includes('hoard') ? sourceAction('hoard', 'Hoard', '<path d="M5 22v-7A10 10 0 0 1 15 5h18a10 10 0 0 1 10 10v7H5Zm1 0v19h36V22M5 18h38M13 6v12m22-12v12M13 23v17m22-17v17M8 41v3m32-3v3"/><rect x="19" y="21" width="10" height="13" rx="2"/><path d="M21 21v-3a3 3 0 0 1 6 0v3M24 26v3"/><path d="M9 12h.1M39 12h.1M9 28h.1M39 28h.1M9 35h.1M39 35h.1"/>') : '',
-    sourceCategories.includes('new_arrivals') ? sourceAction('new_arrivals', 'New Arrivals', '<path d="M17 14a9 9 0 0 1 8-4h11a9 9 0 0 1 9 9v15H27V19a9 9 0 0 0-9-9M27 34h-9M30 34v12m3-12v12M34 15V2h7v4h-7"/><circle cx="16" cy="26" r="11"/><circle cx="16" cy="26" r="3"/><path d="M17 18a8 8 0 0 1 7 7M17 21a5 5 0 0 1 4 4M8 33l-6 5q8 3 16-1"/><path d="m8 5 1.2 3.8L13 10l-3.8 1.2L8 15l-1.2-3.8L3 10l3.8-1.2Z" fill="currentColor" stroke="none"/>') : '',
+    sourceCategories.includes('hoard') ? sourceAction('hoard', 'Hoard', buildLibrarySourceGlyphHtml('hoard')) : '',
+    sourceCategories.includes('new_arrivals') ? sourceAction('new_arrivals', 'New Arrivals', buildLibrarySourceGlyphHtml('new_arrivals')) : '',
   ].join('');
   const duplicateAction = config.hasDuplicateFiles
-    ? sourceAction('duplicate', 'Duplicate files', '<path d="M24 6 45 42H3Z"/><path d="M24 18v11m0 6v1"/>')
+    ? sourceAction('duplicate', 'Duplicate files', '<svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path d="M24 6 45 42H3Z"/><path d="M24 18v11m0 6v1"/></svg>')
     : '';
   return `
     <section class="album-card" data-library-sources="${sourceCategories.join(' ')}" style="--library-source-gradient:${sourceGradient}" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
@@ -4367,11 +4421,17 @@ function buildGalleryCardHtml(config = {}) {
         ${String(config.artboxHtml || '')}
       </button>
       ${duplicateAction ? `<div class="gallery-card__source-overlay">${duplicateAction}</div>` : ''}
-      ${sourceActions ? `<div class="gallery-card__source-actions">${sourceActions}</div>` : ''}
+      ${sourceActions ? `<div class="gallery-card__source-actions gallery-card__source-actions--artwork">${sourceActions}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
         ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
-        : buildGalleryCardInfoHtml({ ...config, openAttributes })}
+        : buildGalleryCardInfoHtml({
+            ...config,
+            openAttributes,
+            sourceActionsHtml: sourceActions
+            ? `<div class="gallery-card__source-actions gallery-card__source-actions--details">${sourceActions}</div>`
+              : '',
+          })}
     </section>
   `;
 }
@@ -4465,7 +4525,8 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  const sourceMarkersHtml = buildAlbumSourceMarkersHtml(config.sourceCategories);
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${sourceMarkersHtml}${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -4575,6 +4636,17 @@ function syncMobileAlbumComposition(album) {
   if (inline && !identity) {
     identity = document.createElement('div');
     identity.className = 'mobile-album-identity';
+  }
+  let sourceMarkers = overview?.querySelector('.mobile-album-overview__source-markers');
+  const sourceMarkerItems = buildAlbumSourceMarkerItemsHtml(resolveAlbumSourceMarkerCategories(album));
+  if (inline && sourceMarkerItems && !sourceMarkers) {
+    sourceMarkers = document.createElement('div');
+    sourceMarkers.className = 'album-details-source-markers mobile-album-overview__source-markers';
+    overview.appendChild(sourceMarkers);
+  }
+  if (sourceMarkers) {
+    sourceMarkers.innerHTML = sourceMarkerItems;
+    sourceMarkers.hidden = !inline || !sourceMarkerItems;
   }
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
@@ -6226,6 +6298,10 @@ function updateGalleryMainControls() {
     button.disabled = true;
     button.setAttribute('aria-disabled', 'true');
   });
+  document.querySelectorAll('[data-gallery-featured-on]').forEach((button) => {
+    button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
+    button.disabled = false;
+  });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
   });
@@ -6494,6 +6570,8 @@ function handleGalleryMainClick(event) {
   }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
+  const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
+  if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');
@@ -30584,6 +30662,7 @@ function renderTrackModalRelease(album) {
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      sourceCategories: resolveAlbumSourceMarkerCategories(album),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     els = getTrackModalElements();
@@ -41191,7 +41270,8 @@ function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
   const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
-    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '', tab: kind === 'utilities' ? state.utility.activeTab : '' };
+    subtitle, coverSrc: album && typeof albumHasDisplayCover === 'function' && albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
+    sourceCategories: album ? resolveAlbumSourceMarkerCategories(album) : [], tab: kind === 'utilities' ? state.utility.activeTab : '' };
 }
 function syncMobilePageShell() {
   const mobile = usesMobilePageLayout();
@@ -41888,6 +41968,17 @@ function syncMobileAlbumHeader() {
     coverBottom: albumPage ? cover?.getBoundingClientRect().bottom : undefined,
     identityBottom: hasInlineIdentity ? identity.getBoundingClientRect().bottom : undefined,
   });
+  const sourceMarkerItems = albumPage ? buildAlbumSourceMarkerItemsHtml(active.sourceCategories) : '';
+  let sourceMarkers = header.querySelector(':scope > .mobile-album-source-markers');
+  if (sourceMarkerItems && !sourceMarkers) {
+    sourceMarkers = document.createElement('div');
+    sourceMarkers.className = 'album-details-source-markers mobile-album-source-markers';
+    header.querySelector('#mobile-settings-actions')?.before(sourceMarkers);
+  }
+  if (sourceMarkers) {
+    sourceMarkers.innerHTML = sourceMarkerItems;
+    sourceMarkers.hidden = !sourceMarkerItems;
+  }
   header.dataset.inlineAlbumLayout = String(Boolean(hasInlineIdentity));
   header.dataset.albumIdentityInBody = String(presentation.bodyOwnsIdentity);
   // One Back button: beside the cover initially, in the pinned bar after handoff.

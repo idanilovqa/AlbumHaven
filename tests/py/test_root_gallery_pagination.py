@@ -125,6 +125,16 @@ def test_root_page_revision_ignores_presentation_changes():
     changed = _root_gallery_page_selection(rows, [], {}, {"gallery_display_mode": "rows", "gallery_scale_percent": 75}, {})
     assert first[3]["revision"] == changed[3]["revision"]
 
+
+def test_root_page_revision_changes_when_artist_relationship_changes():
+    owned = [dict(row("Artist", "album"), featured_kind="owner")]
+    featured = [dict(row("Artist", "album"), featured_kind="featured_track_artist")]
+
+    owned_page = _root_gallery_page_selection(owned, [], {}, {}, {})
+    featured_page = _root_gallery_page_selection(featured, [], {}, {}, {})
+
+    assert owned_page[3]["revision"] != featured_page[3]["revision"]
+
 def test_root_membership_checks_eligible_files_without_full_library_track_rollups():
     from music_app.services.library_browse_postgres import _root_gallery_membership_sql
 

@@ -16,7 +16,7 @@ function loadComponents() {
     fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js'), 'utf8'),
     context,
   );
-  for (const filename of ['alert-components.js', 'album-details-components.js']) {
+  for (const filename of ['gallery-main-components.js', 'alert-components.js', 'album-details-components.js']) {
     vm.runInContext(
       fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', filename), 'utf8'),
       context,
@@ -24,6 +24,80 @@ function loadComponents() {
   }
   return context;
 }
+
+test('Album Details renders noninteractive source markers before header actions', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsHeaderHtml({
+    layout: 'classic_bar',
+    artist: 'Artist',
+    album: 'Album',
+    sourceCategories: ['main_library', 'hoard', 'new_arrivals'],
+    actionsHtml: '<button type="button">Close</button>',
+  });
+
+  assert.match(html, /album-details-source-markers/);
+  assert.match(html, /aria-label="Hoard"/);
+  assert.match(html, /aria-label="New Arrivals"/);
+  assert.ok(html.indexOf('album-details-source-markers') < html.indexOf('album-details-header__actions'));
+  const markers = html.match(/<div class="album-details-source-markers"[\s\S]*?<\/div>/)?.[0] || '';
+  assert.doesNotMatch(markers, /<button|data-open-tracklist/);
+});
+
+test('Album Details omits source markers for Main-only albums', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsHeaderHtml({
+    artist: 'Artist', album: 'Album', sourceCategories: ['main_library'],
+  });
+
+  assert.doesNotMatch(html, /album-details-source-markers|aria-label="Hoard"|aria-label="New Arrivals"/);
+});
+
+test('Album Details source markers reuse the gallery source glyphs and obey the icon preference', () => {
+  const context = loadComponents();
+  const hoardGlyph = context.buildLibrarySourceGlyphHtml('hoard');
+  const arrivalsGlyph = context.buildLibrarySourceGlyphHtml('new_arrivals');
+  assert.match(hoardGlyph, /viewBox="0 0 48 48"/);
+  assert.match(arrivalsGlyph, /viewBox="0 0 48 48"/);
+
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-details-components.css'),
+    'utf8',
+  );
+  assert.match(css, /\.album-details-source-markers\s*\{[^}]*display:\s*inline-flex/s);
+  assert.match(css, /:root\[data-library-source-icons="false"\][^}]*\.album-details-source-markers\s*\{[^}]*display:\s*none/s);
+});
+
+test('Album Details render path passes the album source categories into its header', () => {
+  const source = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'),
+    'utf8',
+  );
+  const renderStart = source.indexOf('function renderTrackModalRelease(album)');
+  const renderEnd = source.indexOf('\nfunction ', renderStart + 1);
+  const render = source.slice(renderStart, renderEnd < 0 ? undefined : renderEnd);
+  assert.match(render, /sourceCategories:\s*resolveAlbumSourceMarkerCategories\(album\)/);
+});
+
+test('mobile Album Details creates source marker hosts for classic and inline layouts', () => {
+  const navigation = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'mobile-navigation.js'),
+    'utf8',
+  );
+  const components = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'album-details-components.js'),
+    'utf8',
+  );
+  const mobileCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'),
+    'utf8',
+  );
+
+  assert.match(navigation, /mobile-album-source-markers/);
+  assert.match(navigation, /buildAlbumSourceMarkerItemsHtml/);
+  assert.match(components, /mobile-album-overview__source-markers/);
+  assert.match(mobileCss, /\.mobile-page-header\s*>\s*\.mobile-album-source-markers/);
+  assert.match(mobileCss, /\.mobile-album-overview__source-markers/);
+});
 
 test('AlbumDetailsHeader supports the three approved layouts and fat-dot identity separators', () => {
   const context = loadComponents();

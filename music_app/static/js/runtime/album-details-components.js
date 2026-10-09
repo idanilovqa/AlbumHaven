@@ -38,7 +38,8 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
+  const sourceMarkersHtml = buildAlbumSourceMarkersHtml(config.sourceCategories);
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${sourceMarkersHtml}${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -148,6 +149,17 @@ function syncMobileAlbumComposition(album) {
   if (inline && !identity) {
     identity = document.createElement('div');
     identity.className = 'mobile-album-identity';
+  }
+  let sourceMarkers = overview?.querySelector('.mobile-album-overview__source-markers');
+  const sourceMarkerItems = buildAlbumSourceMarkerItemsHtml(resolveAlbumSourceMarkerCategories(album));
+  if (inline && sourceMarkerItems && !sourceMarkers) {
+    sourceMarkers = document.createElement('div');
+    sourceMarkers.className = 'album-details-source-markers mobile-album-overview__source-markers';
+    overview.appendChild(sourceMarkers);
+  }
+  if (sourceMarkers) {
+    sourceMarkers.innerHTML = sourceMarkerItems;
+    sourceMarkers.hidden = !inline || !sourceMarkerItems;
   }
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);

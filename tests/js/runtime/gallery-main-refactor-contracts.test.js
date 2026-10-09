@@ -151,18 +151,17 @@ function requireContract(context, name) {
   return context[name];
 }
 
-test('search gallery hides artist information while retaining headings and album counts', () => {
+test('search gallery retains artist information and dividers in artist section headings', () => {
   const context = loadRuntime({ state: { view: { query: 'Neal Morse' } } });
   const config = { artist: 'Neal Morse', artistCount: 1, albumCount: 3, contextKind: 'artist' };
-  for (const render of [context.buildGalleryBarHtml, context.buildFamilyArtistHeaderHtml]) {
-    const html = render(config);
-    assert.doesNotMatch(html, /data-artist-info-trigger/);
-    assert.match(html, /Neal Morse/);
-    assert.match(html, /3 albums/);
-    context.state.view.query = '';
-    assert.match(render(config), /data-artist-info-trigger/);
-    context.state.view.query = 'Neal Morse';
-  }
+  const galleryBar = context.buildGalleryBarHtml(config);
+  const artistHeading = context.buildFamilyArtistHeaderHtml(config);
+
+  assert.doesNotMatch(galleryBar, /data-artist-info-trigger/);
+  assert.match(
+    artistHeading,
+    /class="artist-name"[^>]*>Neal Morse<\/h2>[\s\S]*?data-artist-info-trigger[\s\S]*?gallery-divider__line[\s\S]*?3 albums/,
+  );
   assert.doesNotThrow(() => context.openGalleryArtistInfo(null));
 });
 
@@ -410,6 +409,10 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     indexTemplateSource,
+    /\{% endfor %\}[\s\S]*?<div class="gallery-menu-divider"><\/div>[\s\S]*?data-gallery-featured-on="1"[^>]*aria-pressed="true"[\s\S]*?<div class="gallery-menu-divider"><\/div>[\s\S]*?data-open-non-album-tracks="1"/,
+  );
+  assert.match(
+    indexTemplateSource,
     /data-open-non-album-tracks="1"[^>]*disabled[^>]*aria-disabled="true"/,
   );
   assert.match(
@@ -522,6 +525,7 @@ test('client Gallery state defaults to all sources, Studio plus EP, cards, and a
  assert.deepEqual(plain(createGalleryMainState()), {
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
+    showFeaturedOn: true,
     view: 'cards',
     familyArtists: [],
   });
@@ -541,28 +545,107 @@ test('new primary artist navigation resets filters while preserving the display 
   assert.deepEqual(plain(reset), {
     sources: { main_library: true, new_arrivals: true, hoard: true },
     albumTypes: ['studio', 'ep'],
+    showFeaturedOn: true,
     view: 'covers',
     familyArtists: [],
   });
 });
 
-test('source, unavailable type, view, and family transitions retain durable cards and covers values', () => {
+test('source, featured relationship, unavailable type, view, and family transitions retain durable values', () => {
   const context = loadRuntime();
   const createGalleryMainState = requireContract(context, 'createGalleryMainState');
   const reduceGalleryMainState = requireContract(context, 'reduceGalleryMainState');
   let state = createGalleryMainState();
   state = reduceGalleryMainState(state, { type: 'toggle-source', source: 'hoard' });
+  state = reduceGalleryMainState(state, { type: 'toggle-featured-on' });
   state = reduceGalleryMainState(state, { type: 'toggle-album-type', albumType: 'compilation' });
   state = reduceGalleryMainState(state, { type: 'set-view', view: 'covers' });
   state = reduceGalleryMainState(state, { type: 'toggle-family-artist', artist: 'Flying Colors' });
   assert.deepEqual(plain(state), {
     sources: { main_library: true, new_arrivals: true, hoard: false },
     albumTypes: ['studio', 'ep'],
+    showFeaturedOn: false,
     view: 'covers',
     familyArtists: ['Flying Colors'],
   });
   assert.equal(reduceGalleryMainState(state, { type: 'set-view', view: 'No info' }).view, 'covers');
   assert.equal(reduceGalleryMainState(state, { type: 'set-view', view: 'Cards' }).view, 'cards');
+});
+
+test('Featured On is a relationship facet conjunctive with source and release filtering', () => {
+  const context = loadRuntime();
+  const createGalleryMainState = requireContract(context, 'createGalleryMainState');
+  const reduceGalleryMainState = requireContract(context, 'reduceGalleryMainState');
+  const filterGalleryModel = requireContract(context, 'filterGalleryModel');
+  const groups = [{
+    artist: 'Guest Artist',
+    albums: [
+      { key: 'owned-main-studio', artist_relationship: 'owned', release_type: 'studio', source: 'main_library' },
+      { key: 'featured-main-studio', artist_relationship: 'featured', release_type: 'studio', source: 'main_library' },
+      { key: 'featured-hoard-studio', artist_relationship: 'featured', release_type: 'studio', source: 'hoard' },
+      { key: 'featured-main-compilation', artist_relationship: 'featured', release_type: 'compilation', source: 'main_library', is_compilation: true },
+    ],
+  }];
+
+  let filterState = createGalleryMainState({
+    sources: { main_library: true, new_arrivals: false, hoard: false },
+    albumTypes: ['studio'],
+  });
+  assert.deepEqual(
+    plain(filterGalleryModel({ groups, filterState })).groups[0].albums.map(album => album.key),
+    ['owned-main-studio', 'featured-main-studio'],
+  );
+
+  filterState = reduceGalleryMainState(filterState, { type: 'toggle-featured-on' });
+  assert.deepEqual(plain(filterGalleryModel({ groups, filterState })), {
+    groups: [{ artist: 'Guest Artist', albums: [groups[0].albums[0]] }],
+    totals: { artistCount: 1, albumCount: 1 },
+  });
+});
+
+test('Featured On control synchronizes and dispatches without enabling release-type controls', () => {
+  const attributes = new Map();
+  const featured = {
+    dataset: { galleryFeaturedOn: '1' },
+    setAttribute(name, value) { attributes.set(name, value); },
+  };
+  const releaseType = {
+    dataset: { galleryAlbumType: 'studio' },
+    setAttribute() {},
+    disabled: false,
+  };
+  const state = { gallery: { mainState: {
+    sources: { main_library: true, new_arrivals: true, hoard: true },
+    albumTypes: ['studio', 'ep'],
+    showFeaturedOn: false,
+    view: 'cards',
+    familyArtists: [],
+  } }, view: {} };
+  const actions = [];
+  const context = loadRuntime({
+    state,
+    window: { innerWidth: 1440 },
+    document: {
+      querySelector: () => null,
+      querySelectorAll: selector => ({
+        '[data-gallery-featured-on]': [featured],
+        '[data-gallery-album-type]': [releaseType],
+      })[selector] || [],
+    },
+  });
+  context.updateGalleryMainControls();
+  assert.equal(attributes.get('aria-pressed'), 'false');
+  assert.equal(featured.disabled, false);
+  assert.equal(releaseType.disabled, true);
+
+  context.transitionGalleryMain = action => actions.push(action);
+  const prevented = [];
+  context.handleGalleryMainClick({
+    preventDefault: () => prevented.push(true),
+    target: { closest: selector => selector === '[data-gallery-featured-on]' ? featured : null },
+  });
+  assert.deepEqual(plain(actions), [{ type: 'toggle-featured-on' }]);
+  assert.equal(prevented.length, 1);
 });
 
 test('the first Artist Family click deselects that artist from the default all-selected state', () => {
@@ -1319,6 +1402,7 @@ test('full root gallery summary preserves client-filtered and query totals', () 
   const filters = [
     { sources: { hoard: false } },
     { albumTypes: ['studio'] },
+    { showFeaturedOn: false },
     { familyArtists: ['Artist'] },
     { familySelectionExplicit: true },
   ];

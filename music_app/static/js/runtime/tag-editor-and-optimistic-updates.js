@@ -1804,6 +1804,7 @@ function renderTrackModalRelease(album) {
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      sourceCategories: resolveAlbumSourceMarkerCategories(album),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     els = getTrackModalElements();

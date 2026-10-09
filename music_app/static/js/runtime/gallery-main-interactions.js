@@ -442,6 +442,10 @@ function updateGalleryMainControls() {
     button.disabled = true;
     button.setAttribute('aria-disabled', 'true');
   });
+  document.querySelectorAll('[data-gallery-featured-on]').forEach((button) => {
+    button.setAttribute('aria-pressed', mainState.showFeaturedOn === false ? 'false' : 'true');
+    button.disabled = false;
+  });
   document.querySelectorAll('[data-gallery-view-choice]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.galleryViewChoice === mainState.view);
   });
@@ -710,6 +714,8 @@ function handleGalleryMainClick(event) {
   }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
+  const featuredOn = event.target.closest?.('[data-gallery-featured-on]');
+  if (featuredOn) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-featured-on' }); return true; }
   const type = event.target.closest?.('[data-gallery-album-type]');
   if (type) { event.preventDefault(); return true; }
   const familyArtist = event.target.closest?.('[data-gallery-family-artist]');

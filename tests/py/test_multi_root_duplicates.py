@@ -11,7 +11,11 @@ from music_app.services.album_local_membership import (
     local_album_membership_ctes_sql,
     rejected_local_album_paths,
 )
-from music_app.services.library import build_albums_from_file_cache, get_album_duplicate_sources
+from music_app.services.library import (
+    _link_duplicate_album_sources,
+    build_albums_from_file_cache,
+    get_album_duplicate_sources,
+)
 
 
 def _track(folder, number=1, **changes):
@@ -286,3 +290,45 @@ def test_partial_duplicate_group_preserves_all_own_source_categories():
     albums = build_albums_from_file_cache({str(track.path): asdict(track) for track in tracks})
     assert len(albums) == 1
     assert set(albums[0].root_provenance["categories"]) == {"main_library", "hoard", "new_arrivals"}
+
+
+@pytest.mark.parametrize(
+    ("duplicate_track_count", "expected_categories"),
+    [
+        (1, {"main_library"}),
+        (2, {"main_library"}),
+        (3, {"main_library", "hoard"}),
+        (4, {"main_library", "hoard"}),
+    ],
+)
+def test_linked_duplicate_source_category_requires_strict_majority_track_coverage(
+    duplicate_track_count,
+    expected_categories,
+):
+    main_tracks = [
+        _track(
+            "main/album",
+            number,
+            library_root_id=1,
+            library_root_category="main_library_roots",
+        )
+        for number in range(1, 5)
+    ]
+    duplicate_tracks = [
+        _track(
+            "hoard/loose-copy",
+            number,
+            library_root_id=2,
+            library_root_category="hoarding_library_roots",
+        )
+        for number in range(1, duplicate_track_count + 1)
+    ]
+    albums = [
+        Album(key="main", name="Album One", album_artist="Artist One", tracks=main_tracks),
+        Album(key="loose", name="Album One", album_artist="Artist One", tracks=duplicate_tracks),
+    ]
+
+    _link_duplicate_album_sources(albums)
+
+    assert len(get_album_duplicate_sources(albums[0])) == 2
+    assert set(albums[0].root_provenance["categories"]) == expected_categories

@@ -1110,6 +1110,43 @@ def _duplicate_album_identity(tracks: list[Track]) -> tuple[str, str, int] | Non
     return next(iter(identities)) if len(identities) == 1 else None
 
 
+def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
+    disc_number = safe_int(track.disc_number) or 1
+    track_number = safe_int(track.track_number)
+    if track_number is not None:
+        return ("position", disc_number, track_number)
+    title = " ".join(unicodedata.normalize("NFC", str(track.title or "")).casefold().split())
+    return ("title", title)
+
+
+def _summarize_duplicate_album_provenance(
+    own_tracks: list[Track],
+    linked_tracks: list[Track],
+) -> dict[str, object]:
+    own_identities = {_duplicate_track_coverage_identity(track) for track in own_tracks}
+    category_identities: dict[str, set[tuple[object, ...]]] = {}
+    track_payloads: list[tuple[dict[str, object], Track]] = []
+    for track in [*own_tracks, *linked_tracks]:
+        payload = track.root_provenance or build_root_provenance_payload(
+            track.library_root_id,
+            track.library_root_category,
+        )
+        track_payloads.append((payload, track))
+        category_identities.setdefault(str(payload.get("category") or ""), set()).add(
+            _duplicate_track_coverage_identity(track)
+        )
+    qualifying_categories = {
+        category
+        for category, identities in category_identities.items()
+        if own_identities and len(identities & own_identities) * 2 > len(own_identities)
+    }
+    return summarize_root_provenance_payloads([
+        payload
+        for payload, _track in track_payloads
+        if str(payload.get("category") or "") in qualifying_categories
+    ])
+
+
 def _link_duplicate_album_sources(albums: list[Album]) -> None:
     """Link physical copies across edition records without changing their queues."""
     containers: dict[str, dict[str, Track]] = {}
@@ -1147,10 +1184,7 @@ def _link_duplicate_album_sources(albums: list[Album]) -> None:
         album._cached_duplicate_sources = sources
         if sources:
             linked_tracks = [track for identity in duplicate_identities for _, tracks in identities[identity] for track in tracks]
-            album.root_provenance = summarize_root_provenance_payloads([
-                track.root_provenance or build_root_provenance_payload(track.library_root_id, track.library_root_category)
-                for track in [*album.tracks, *linked_tracks]
-            ])
+            album.root_provenance = _summarize_duplicate_album_provenance(album.tracks, linked_tracks)
 
 
 def _build_album_duplicate_source_payload(

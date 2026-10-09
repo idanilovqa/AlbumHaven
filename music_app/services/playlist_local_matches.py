@@ -23,9 +23,10 @@ def normalize_request(payload, *, accept=False):
     fields={'source','entry_ref'} | ({'review_ref','candidate_ref'} if accept else set())
     if not isinstance(payload,dict) or set(payload)!=fields:raise PlaylistError('invalid_command')
     source=payload['source']
-    if not isinstance(source,dict) or set(source)!={'kind','ref','revision'} or source['kind']!='playlist':
+    if not isinstance(source,dict) or set(source)!={'kind','ref','revision'} or source['kind'] not in ('playlist','activity'):
         raise PlaylistError('invalid_command')
-    result={'source':{'kind':'playlist','ref':uuid_ref(source['ref']),'revision':playlist_revision(source['revision'])},
+    result={'source':{'kind':source['kind'],'ref':uuid_ref(source['ref']),
+        'revision':playlist_revision(source['revision']) if source['kind']=='playlist' else uuid_ref(source['revision'])},
         'entry_ref':uuid_ref(payload['entry_ref'])}
     if accept:result.update(review_ref=uuid_ref(payload['review_ref']),candidate_ref=uuid_ref(payload['candidate_ref']))
     return result
@@ -83,7 +84,9 @@ def _candidate_pool(connection,context,original):
     return rows[:CANDIDATE_POOL_LIMIT],complete
 
 
-def _fresh_now(owner,connection,context,source):
+def _fresh_now(owner,connection,context,source,*,constraints=None):
+    if source.get('source_kind')=='activity':
+        missing.require_origin(owner,connection,context,source,constraints=constraints)
     now=lock_current_actor_session(connection,actor_account_id=context.actor.account_id,
         actor_session_id=context.actor.session_id,clock=owner._clock)
     if source['expires_at']<=now:raise PlaylistError('source_expired',410)
@@ -98,17 +101,21 @@ def _proofs(owner,connection,context,rows,*,constraints):
 
 
 def _envelope(owner,context,request,**data):
-    return {'status':'ready','data':{'source':request['source'],'source_protocol':missing.MISSING_PROTOCOL,
+    return {'status':'ready','data':{'source':request['source'],'source_protocol':'missing_activity_selection_v1' if request['source']['kind']=='activity' else missing.MISSING_PROTOCOL,
         'entry_ref':request['entry_ref'],**data,'actor_scope':owner._scope(context)}}
 
 
 def review(owner,context,payload,*,constraints=None):
     request=normalize_request(payload)
-    with owner._authorized(context,constraints) as (connection,live,now):
+    target=None
+    if request['source']['kind']=='activity':
+        from music_app.services import playlist_activity_sources as activity
+        target=activity.lock_target(owner,context,source_ref=request['source']['ref'],constraints=constraints)
+    with owner._authorized(context,constraints,target_account_id=target) as (connection,live,now):
         owner._require(live,(BROWSE,CREATE),constraints)
         source=missing.load_source(connection,live,request['source'],request['entry_ref'],now)
         # Source Playlist authority is checked before any candidate lookup.
-        missing._playlist(owner,connection,live,request['source']['ref'],request['source']['revision'],constraints)
+        missing.require_origin(owner,connection,live,source,constraints=constraints)
         original=connection.execute('select * from app.playlist_creation_entries where source_ref=%s and ref=%s',
             (source['ref'],request['entry_ref'])).fetchone()
         if original is None:raise PlaylistError('source_unavailable',404)
@@ -124,7 +131,7 @@ def review(owner,context,payload,*,constraints=None):
         review_ref=str(uuid4())
         candidates=[{'candidate_ref':str(uuid4()),'track_id':row['original_local_track_id'],
             'evidence_digest':proofs[row['original_local_track_id']]} for row in eligible[:MAX_SUGGESTIONS]]
-        _fresh_now(owner,connection,live,source)
+        _fresh_now(owner,connection,live,source,constraints=constraints)
         connection.execute("""insert into app.playlist_local_match_receipts(source_ref,entry_ref,review_ref,candidates)
             values(%s,%s,%s,%s::jsonb) on conflict(source_ref,entry_ref) do update
               set review_ref=excluded.review_ref,candidates=excluded.candidates""",
@@ -142,10 +149,14 @@ def review(owner,context,payload,*,constraints=None):
 
 def accept(owner,context,payload,*,constraints=None):
     request=normalize_request(payload,accept=True)
-    with owner._authorized(context,constraints) as (connection,live,now):
+    target=None
+    if request['source']['kind']=='activity':
+        from music_app.services import playlist_activity_sources as activity
+        target=activity.lock_target(owner,context,source_ref=request['source']['ref'],constraints=constraints)
+    with owner._authorized(context,constraints,target_account_id=target) as (connection,live,now):
         owner._require(live,(BROWSE,CREATE),constraints)
         source=missing.load_source(connection,live,request['source'],request['entry_ref'],now)
-        missing._playlist(owner,connection,live,request['source']['ref'],request['source']['revision'],constraints)
+        missing.require_origin(owner,connection,live,source,constraints=constraints)
         receipt=connection.execute('''select * from app.playlist_local_match_receipts
             where source_ref=%s and entry_ref=%s for update''',(source['ref'],request['entry_ref'])).fetchone()
         if receipt is None:raise PlaylistError('match_review_changed',409)
@@ -164,7 +175,7 @@ def accept(owner,context,payload,*,constraints=None):
         proofs=_proofs(owner,connection,live,{identity:row for identity,row in current.items()
             if identity==candidate['track_id']},constraints=constraints)
         if proofs.get(candidate['track_id'])!=candidate['evidence_digest']:raise PlaylistError('match_unavailable',409)
-        _fresh_now(owner,connection,live,source)
+        _fresh_now(owner,connection,live,source,constraints=constraints)
         if not replay:
             connection.execute('''update app.playlist_local_match_receipts set chosen_review_ref=%s,
                 chosen_candidate_ref=%s,chosen_track_id=%s,chosen_evidence_digest=%s

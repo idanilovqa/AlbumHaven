@@ -271,13 +271,19 @@ class HomeActivityPostgresRepository:
             allowed_actions_for_resource=allowed_actions_for_resource,now=now,
             kinds={"tracks","listens"},audiences={"own","friend"})
 
+    def read_missing_selection(self, connection, *, scope, query, row_refs, allowed_actions_for_resource, now=None):
+        """Inspect all receipt rows, or selected occurrences, in source order."""
+        return self._read_selection(connection,scope=scope,query=query,row_refs=row_refs,
+            allowed_actions_for_resource=allowed_actions_for_resource,now=now,
+            kinds={"tracks","listens"},audiences={"own","friend"},source_order=True)
+
     def read_native_selection(self, connection, *, scope, query, row_refs, allowed_actions_for_resource, now=None):
         return self._read_selection(connection,scope=scope,query=query,row_refs=row_refs,
             allowed_actions_for_resource=allowed_actions_for_resource,now=now,
             kinds={"tracks","listens","albums","artists"},audiences={"own","friend","comparison"})
 
     def _read_selection(self, connection, *, scope, query, row_refs, allowed_actions_for_resource,
-                        now, kinds, audiences):
+                        now, kinds, audiences, source_order=False):
         """Export selected track metadata on the caller's still-open transaction.
 
         Internal canonical IDs are provenance, never media/playback authority.
@@ -290,9 +296,11 @@ class HomeActivityPostgresRepository:
                 or not query.snapshot_ref or query.cursor is not None or query.page is not None
                 or query.kind not in kinds
                 or scope.audience not in audiences
-                or not isinstance(row_refs, (list, tuple)) or not 1 <= len(row_refs) <= MAX_SELECTION_ROWS
-                or any(not isinstance(ref, str) or not re.fullmatch(r"activity_[a-f0-9]{64}", ref) for ref in row_refs)
-                or len(set(row_refs)) != len(row_refs) or not callable(allowed_actions_for_resource)):
+                or not (source_order and row_refs is None) and (
+                    not isinstance(row_refs, (list, tuple)) or not 1 <= len(row_refs) <= MAX_SELECTION_ROWS
+                    or any(not isinstance(ref, str) or not re.fullmatch(r"activity_[a-f0-9]{64}", ref) for ref in row_refs)
+                    or len(set(row_refs)) != len(row_refs))
+                or not callable(allowed_actions_for_resource)):
             raise HomeActivityError()
         from psycopg.pq import TransactionStatus
         if connection.info.transaction_status != TransactionStatus.INTRANS:
@@ -308,11 +316,23 @@ class HomeActivityPostgresRepository:
         policy_only.read_action = scope.read_action
         policy_only.scope_wide_policy = getattr(allowed_actions_for_resource, "scope_wide", False) is True
         with self._validated_snapshot(connection, scope, query, reference, policy_only) as (snapshot, _token, _friend):
-            stored = connection.execute("""select row_key,payload from app.activity_snapshot_rows
-                where snapshot_id=%s and ordinal is not null and payload->>'id'=any(%s)""", (snapshot["id"], list(row_refs))).fetchall()
+            if source_order and row_refs is None:
+                if snapshot["total_rows"] > MAX_SELECTION_ROWS:
+                    raise HomeActivityError("Activity source exceeds the selection limit.", 413, "activity_source_too_large")
+                stored = connection.execute("""select row_key,payload from app.activity_snapshot_rows
+                    where snapshot_id=%s and ordinal is not null order by ordinal limit %s""",
+                    (snapshot["id"], MAX_SELECTION_ROWS+1)).fetchall()
+                if len(stored)>MAX_SELECTION_ROWS:
+                    raise HomeActivityError("Activity source exceeds the selection limit.", 413, "activity_source_too_large")
+            else:
+                stored = connection.execute("""select row_key,payload from app.activity_snapshot_rows
+                    where snapshot_id=%s and ordinal is not null and payload->>'id'=any(%s) order by ordinal""",
+                    (snapshot["id"], list(row_refs))).fetchall()
             by_ref = {row["payload"]["id"]: row for row in stored}
-            if set(by_ref) != set(row_refs):
+            if row_refs is not None and set(by_ref) != set(row_refs):
                 raise HomeActivityError("Selection is outside the activity receipt.", 403, "activity_denied")
+            if source_order:
+                row_refs=[row["payload"]["id"] for row in stored]
             listen_events = {row["row_key"]: int(row["row_key"].split(":")[2]) for row in stored
                              if re.fullmatch(r"listen:event:[1-9][0-9]*", row["row_key"])}
             provenance = {}

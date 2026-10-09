@@ -61,25 +61,30 @@ def inspect(owner,context,playlist_ref,revision,*,constraints=None):
             actor_session_id=live.actor.session_id,clock=owner._clock)
         origin={"playlist_ref":playlist_ref,"playlist_revision":revision}
         source=_header(connection,live,now,protocol=MISSING_PROTOCOL,kind="playlist",origin=origin)
-        values=[]
-        for row in rows:
-            values.append({key:row.get(key) for key in (*sources._FACT_FIELDS,"original_local_track_id",
-                "source_row_ref","source_lineage","source_label","evidence_digest")})
-            values[-1].update(ref=str(uuid4()),source_ref=source["ref"],
-                selection_ref=str(uuid5(UUID(source["ref"]),row["source_row_ref"])))
-        connection.execute("""insert into app.playlist_creation_entries
-          (ref,source_ref,selection_ref,original_local_track_id,evidence_digest,title,artist,album_title,
-           original_album_id,release_year,disc_number,track_number,duration_seconds,availability,source_row_ref,source_lineage,source_label)
-          select ref,source_ref,selection_ref,original_local_track_id,evidence_digest,title,artist,album_title,
-           original_album_id,release_year,disc_number,track_number,duration_seconds,availability,source_row_ref,source_lineage,source_label
-          from jsonb_to_recordset(%s::jsonb) as input(ref uuid,source_ref uuid,selection_ref uuid,
-           original_local_track_id bigint,evidence_digest text,title text,artist text,album_title text,
-           original_album_id bigint,release_year integer,disc_number integer,track_number integer,
-           duration_seconds numeric,availability text,source_row_ref text,source_lineage jsonb,source_label text)""",
-          (json.dumps(values,allow_nan=False),))
+        values=store_rows(connection,source,rows)
         connection.execute("update app.playlist_creation_sources set origin_descriptor=%s where ref=%s",
             (Jsonb({**origin,"entry_order":[row["ref"] for row in values]}),source["ref"]))
         return _envelope(owner,live,source,values,playlist,constraints)
+
+
+def store_rows(connection,source,rows):
+    values=[]
+    for row in rows:
+        values.append({key:row.get(key) for key in (*sources._FACT_FIELDS,"original_local_track_id",
+            "source_row_ref","source_lineage","source_label","evidence_digest")})
+        values[-1].update(ref=str(uuid4()),source_ref=source["ref"],
+            selection_ref=str(uuid5(UUID(source["ref"]),row["source_row_ref"])))
+    connection.execute("""insert into app.playlist_creation_entries
+      (ref,source_ref,selection_ref,original_local_track_id,evidence_digest,title,artist,album_title,
+       original_album_id,release_year,disc_number,track_number,duration_seconds,availability,source_row_ref,source_lineage,source_label)
+      select ref,source_ref,selection_ref,original_local_track_id,evidence_digest,title,artist,album_title,
+       original_album_id,release_year,disc_number,track_number,duration_seconds,availability,source_row_ref,source_lineage,source_label
+      from jsonb_to_recordset(%s::jsonb) as input(ref uuid,source_ref uuid,selection_ref uuid,
+       original_local_track_id bigint,evidence_digest text,title text,artist text,album_title text,
+       original_album_id bigint,release_year integer,disc_number integer,track_number integer,
+       duration_seconds numeric,availability text,source_row_ref text,source_lineage jsonb,source_label text)""",
+      (json.dumps(values,allow_nan=False),))
+    return values
 
 
 def _envelope(owner,context,source,rows,playlist,constraints):
@@ -98,12 +103,26 @@ def _envelope(owner,context,source,rows,playlist,constraints):
             parent['completeness']='incomplete'
             retained=parents.setdefault(parent['album_ref'],{**parent,'entry_refs':[]})
             retained['entry_refs'].append(entry['entry_ref'])
-    origin=source['origin_descriptor']
     return {'status':'ready','data':{**sources.source_envelope(source),'mode':'missing',
-        'source':{'kind':'playlist','ref':origin['playlist_ref'],'revision':origin['playlist_revision']},
+        'source':source_descriptor(source),
         'capture_ref':str(source['ref']),'entries_complete':True,'entries':entries,
         'retained_parent_albums':list(parents.values()),
         'title':playlist['title']+' · Missing tracks','actor_scope':owner._scope(context)}}
+
+
+def source_descriptor(source):
+    if source.get('source_kind','playlist')=='activity':
+        return {'kind':'activity','ref':str(source['ref']),'revision':str(source['revision'])}
+    origin=source['origin_descriptor']
+    return {'kind':'playlist','ref':origin['playlist_ref'],'revision':origin['playlist_revision']}
+
+
+def require_origin(owner,connection,context,source,*,constraints):
+    if source.get('source_kind','playlist')=='activity':
+        from music_app.services import playlist_activity_missing as activity
+        return activity.export_source(owner,connection,context,source,constraints=constraints)
+    origin=source['origin_descriptor']
+    return _playlist(owner,connection,context,origin['playlist_ref'],origin['playlist_revision'],constraints)
 
 
 def read_capture(owner,context,playlist_ref,revision,capture_ref,*,constraints=None):
@@ -142,6 +161,14 @@ def source_for_command(connection,context,command,now):
 
 
 def load_source(connection,context,supplied,entry_ref,now):
+    if supplied['kind']=='activity':
+        from music_app.services.owned_playlists import MISSING_ACTIVITY_PROTOCOL
+        source=sources.load_source(connection,context,supplied['ref'],supplied['revision'],now,
+            protocol=MISSING_ACTIVITY_PROTOCOL,kind='activity')
+        row=connection.execute('select ref from app.playlist_creation_entries where source_ref=%s and ref=%s',
+            (source['ref'],entry_ref)).fetchone()
+        if row is None:raise PlaylistError('source_unavailable',404)
+        return source
     source=connection.execute("""select s.* from app.playlist_creation_sources s
         join app.playlist_creation_entries e on e.source_ref=s.ref
         where e.ref=%s and s.actor_account_id=%s and s.session_id=%s and s.library_id=%s
@@ -156,8 +183,7 @@ def load_source(connection,context,supplied,entry_ref,now):
 
 
 def validated_selection(owner,connection,context,source,entry_refs,*,constraints,extra_track_ids=(),write_receipts=False):
-    origin=source["origin_descriptor"]
-    playlist=_playlist(owner,connection,context,origin["playlist_ref"],origin["playlist_revision"],constraints)
+    authority=require_origin(owner,connection,context,source,constraints=constraints)
     rows=connection.execute("select * from app.playlist_creation_entries where source_ref=%s and ref=any(%s::uuid[])",
         (source["ref"],entry_refs)).fetchall()
     stored={str(row["ref"]):sources._plain(row) for row in rows}
@@ -174,16 +200,28 @@ def validated_selection(owner,connection,context,source,entry_refs,*,constraints
     allowed=[identity for identity in track_ids if identity is not None and owner._resource_allowed(
         context,BROWSE,ResourceScope('track',str(identity)),constraints)]
     current=sources.inventory_rows(connection,context.library_id,allowed,lock=True,config=owner._config)
-    fresh=_missing_rows(owner,connection,context,playlist,constraints=constraints,
-        item_refs=[row["source_row_ref"] for row in ordered],current=current)
+    if source.get('source_kind','playlist')=='activity':
+        from music_app.services import playlist_activity_missing as activity
+        wanted={row['source_row_ref'] for row in ordered}
+        fresh=activity.missing_rows(connection,context,[row for row in authority if row['row_ref'] in wanted],
+            config=owner._config,constraints=constraints,current=current)
+    else:
+        fresh=_missing_rows(owner,connection,context,authority,constraints=constraints,
+            item_refs=[row["source_row_ref"] for row in ordered],current=current)
     by_item={row["source_row_ref"]:row for row in fresh}
     if any(row["source_row_ref"] not in by_item or row["evidence_digest"]!=by_item[row["source_row_ref"]]["evidence_digest"]
            or row["source_lineage"]!=by_item[row["source_row_ref"]]["source_lineage"] for row in ordered):
         raise PlaylistError("source_changed",409)
+    if source.get('source_kind','playlist')=='activity':
+        # Reject a receipt that expired while inventory/file locks were held.
+        require_origin(owner,connection,context,source,constraints=constraints)
     return ordered,current,{str(row['entry_ref']):dict(row) for row in receipts}
 
 
 def selected(owner,connection,context,source,entry_refs,*,constraints):
     from music_app.services.playlist_local_matches import apply_choices
     ordered,current,receipts=validated_selection(owner,connection,context,source,entry_refs,constraints=constraints)
-    return apply_choices(owner,connection,context,ordered,current,receipts,constraints=constraints)
+    selected=apply_choices(owner,connection,context,ordered,current,receipts,constraints=constraints)
+    if source.get('source_kind','playlist')=='activity':
+        require_origin(owner,connection,context,source,constraints=constraints)
+    return selected

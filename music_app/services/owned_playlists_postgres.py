@@ -151,7 +151,7 @@ class PostgresOwnedPlaylistsService:
                 return self._replay(connection,live,prior,command,constraints)
             if command.action == "create":
                 self._require(live,(BROWSE,CREATE),constraints)
-                if command.data["source"]["kind"]=="playlist":
+                if command.data["mode"]=="missing":
                     from music_app.services import playlist_missing_sources as missing
                     source=missing.source_for_command(connection,live,command,now)
                 else:
@@ -159,7 +159,7 @@ class PostgresOwnedPlaylistsService:
                         protocol=command.data["source_protocol"], kind=command.data["source"]["kind"])
                 if queue.is_queue(source):
                     selected=queue.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
-                elif source.get("source_kind")=="playlist":
+                elif command.data["mode"]=="missing":
                     selected=missing.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
                 elif source.get("source_kind")=="activity":
                     from music_app.services import playlist_activity_sources as activity
@@ -275,6 +275,7 @@ class PostgresOwnedPlaylistsService:
                 "source_entry_ref": str(row["ref"]) if source else None,
                 "source_revision": str(source["revision"]) if source else None,
                 "source_kind": source.get("source_kind","library") if source else "library",
+                "source_protocol": source.get("protocol") if source else None,
                 "source_label": row.get("source_label"),
                 # Queue receipts authorize this transaction, not durable musical
                 # provenance. Keep existing Activity/Playlist lineage intact.
@@ -284,15 +285,15 @@ class PostgresOwnedPlaylistsService:
         connection.execute("""insert into app.playlist_items
             (ref,playlist_ref,library_id,position,original_local_track_id,local_track_id,
              title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,
-             source_ref,source_entry_ref,source_revision,source_kind,source_label,source_lineage)
+             source_ref,source_entry_ref,source_revision,source_kind,source_protocol,source_label,source_lineage)
             select ref,playlist_ref,library_id,position,original_local_track_id,local_track_id,
              title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,
-             source_ref,source_entry_ref,source_revision,source_kind,source_label,source_lineage
+             source_ref,source_entry_ref,source_revision,source_kind,source_protocol,source_label,source_lineage
             from jsonb_to_recordset(%s::jsonb) as input(
              ref uuid,playlist_ref uuid,library_id bigint,position integer,original_local_track_id bigint,
              local_track_id bigint,title text,artist text,album_title text,original_album_id bigint,
              release_year integer,disc_number integer,track_number integer,duration_seconds numeric,
-             source_ref uuid,source_entry_ref uuid,source_revision uuid,source_kind text,source_label text,source_lineage jsonb)""", (json.dumps(values, allow_nan=False),))
+             source_ref uuid,source_entry_ref uuid,source_revision uuid,source_kind text,source_protocol text,source_label text,source_lineage jsonb)""", (json.dumps(values, allow_nan=False),))
 
     @staticmethod
     def _set_order(connection,playlist_ref,order):

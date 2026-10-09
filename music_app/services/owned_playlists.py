@@ -18,9 +18,12 @@ PLAYLIST_SOURCE_PROTOCOL = "library_selection_v1"
 COMPLETE_INVENTORY_PROTOCOL = "complete_inventory_selection_v1"
 COMPLETE_ACTIVITY_PROTOCOL = "complete_activity_selection_v1"
 MISSING_PLAYLIST_PROTOCOL = "missing_playlist_selection_v1"
+MISSING_ACTIVITY_PROTOCOL = "missing_activity_selection_v1"
+MISSING_SOURCE_PROTOCOLS = frozenset((MISSING_PLAYLIST_PROTOCOL, MISSING_ACTIVITY_PROTOCOL))
 SOURCE_PROTOCOL_KINDS = {
     PLAYLIST_SOURCE_PROTOCOL: "library", COMPLETE_INVENTORY_PROTOCOL: "library",
     COMPLETE_ACTIVITY_PROTOCOL: "activity", MISSING_PLAYLIST_PROTOCOL: "playlist",
+    MISSING_ACTIVITY_PROTOCOL: "activity",
 }
 BROWSE = "library.browse.read"
 CREATE = "library.playlists.create"
@@ -130,7 +133,7 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
     if action == "create":
         protocol = payload.get("source_protocol")
         if (playlist_ref is not None or not isinstance(protocol,str) or protocol not in SOURCE_PROTOCOL_KINDS
-                or payload.get("mode") != ("missing" if protocol==MISSING_PLAYLIST_PROTOCOL else "ordinary")):
+                or payload.get("mode") != ("missing" if protocol in MISSING_SOURCE_PROTOCOLS else "ordinary")):
             raise PlaylistError("invalid_command")
         source = payload.get("source")
         if not isinstance(source, dict) or set(source) != {"kind", "ref", "revision"} or source["kind"] != SOURCE_PROTOCOL_KINDS[protocol]:
@@ -140,7 +143,7 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
                     "revision": playlist_revision(source["revision"]) if protocol==MISSING_PLAYLIST_PROTOCOL else uuid_ref(source["revision"])},
                 "title": _text(payload.get("title"), maximum=MAX_PLAYLIST_TITLE_LENGTH, title=True),
                 "description": _text(payload.get("description", ""), maximum=MAX_PLAYLIST_DESCRIPTION_LENGTH),
-                "entry_refs": _refs(payload.get("entry_refs"), empty=protocol!=MISSING_PLAYLIST_PROTOCOL)}
+                "entry_refs": _refs(payload.get("entry_refs"), empty=protocol not in MISSING_SOURCE_PROTOCOLS)}
         return PlaylistCommand(action, None, request_key, data)
     target = uuid_ref(playlist_ref)
     data = {"revision": playlist_revision(payload.get("revision"))}

@@ -306,6 +306,7 @@ function currentQueueIndex() {
   compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
+  if (queue.playlistId) return playlistQueueCurrentIndex(queue, path);
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }
@@ -341,7 +342,8 @@ async function playCompactQueueOffset(offset) {
       compactPlayerPendingSelection = null;
       if (!started && ownsQueueCursor) {
         const playingPath = String(state.player.current?.path || '');
-        const playingIndex = queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
+        const playingIndex = queue.playlistId ? playlistQueueCurrentIndex(queue, playingPath)
+          : queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
         queue.currentIndex = playingIndex >= 0 ? playingIndex : index;
       }
       syncCompactPlayerUi();

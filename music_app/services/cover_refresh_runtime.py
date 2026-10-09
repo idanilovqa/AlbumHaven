@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
+from functools import partial
 import time
 
 from music_app.services.cover_provider_cache import CoverSearchCache
@@ -457,42 +458,91 @@ def start_manual_cover_refresh(
     refresh_manual_cover_artwork_worker: Callable[..., None],
     get_file_cache_snapshot: FileCacheSnapshotGetter | None = None,
     force_search: bool = False,
+    defer_preparation: bool = False,
+    _reservation: tuple[dict[str, object], int, int] | None = None,
     app=None,
 ) -> dict[str, object]:
-    with cache_lock:
-        library_state = get_state()
-        if library_state.get("covers_in_progress"):
-            return {"started": False, "already_running": True, "queued_after_indexing": False}
-        needs_indexing = (
-            bool(library_state.get("scan_in_progress"))
-            or (
-                get_file_cache_snapshot is None
-                and (
-                    not bool(library_state.get("file_cache"))
-                    or not bool(library_state.get("albums"))
+    if _reservation is None:
+        with cache_lock:
+            library_state = get_state()
+            if library_state.get("covers_in_progress"):
+                return {"started": False, "already_running": True, "queued_after_indexing": False}
+            needs_indexing = (
+                bool(library_state.get("scan_in_progress"))
+                or (
+                    get_file_cache_snapshot is None
+                    and (
+                        not bool(library_state.get("file_cache"))
+                        or not bool(library_state.get("albums"))
+                    )
                 )
             )
-        )
+            if needs_indexing:
+                library_state["pending_cover_refresh_after_scan"] = True
+                library_state["pending_cover_refresh_force_search"] = bool(force_search)
+                start_indexing = not library_state.get("scan_in_progress")
+            else:
+                library_state["cover_generation"] = int(library_state.get("cover_generation") or 0) + 1
+                generation = library_state["cover_generation"]
+                scan_generation = int(library_state.get("scan_generation") or 0)
+                _reset_cover_refresh_progress(library_state, in_progress=True)
+                library_state["covers_run_mode"] = "manual-bulk"
         if needs_indexing:
-            library_state["pending_cover_refresh_after_scan"] = True
-            library_state["pending_cover_refresh_force_search"] = bool(force_search)
-            start_indexing = not library_state.get("scan_in_progress")
-        else:
-            library_state["cover_generation"] = int(library_state.get("cover_generation") or 0) + 1
-            generation = library_state["cover_generation"]
-            scan_generation = int(library_state.get("scan_generation") or 0)
-            _reset_cover_refresh_progress(library_state, in_progress=True)
-            library_state["covers_run_mode"] = "manual-bulk"
-    if needs_indexing:
-        if start_indexing:
-            start_background_refresh(force=True, scan_mode="background")
-        return {
-            "started": True,
-            "already_running": False,
-            "queued_after_indexing": True,
-            "queued_count": 0,
-            "current_folder": "",
-        }
+            if start_indexing:
+                start_background_refresh(force=True, scan_mode="background")
+            return {
+                "started": True,
+                "already_running": False,
+                "queued_after_indexing": True,
+                "queued_count": 0,
+                "current_folder": "",
+            }
+        if defer_preparation:
+            try:
+                submit_cover_job(partial(
+                    start_manual_cover_refresh,
+                    config=config,
+                    logger=logger,
+                    cache_lock=cache_lock,
+                    get_state=get_state,
+                    start_background_refresh=start_background_refresh,
+                    build_cover_jobs=build_cover_jobs,
+                    submit_cover_job=submit_cover_job,
+                    refresh_manual_cover_artwork_worker=refresh_manual_cover_artwork_worker,
+                    get_file_cache_snapshot=get_file_cache_snapshot,
+                    force_search=force_search,
+                    _reservation=(library_state, generation, scan_generation),
+                    app=app,
+                ))
+            except Exception as exc:
+                with cache_lock:
+                    if get_state() is library_state and library_state.get("cover_generation") == generation:
+                        _handle_cover_refresh_failure(library_state, exc)
+                raise
+            return {
+                "started": True,
+                "already_running": False,
+                "queued_after_indexing": False,
+                "queued_count": 0,
+                "current_folder": "",
+            }
+    else:
+        library_state, generation, scan_generation = _reservation
+        with cache_lock:
+            if (
+                get_state() is not library_state
+                or library_state.get("cover_generation") != generation
+                or int(library_state.get("scan_generation") or 0) != scan_generation
+                or library_state.get("scan_in_progress")
+                or not library_state.get("covers_in_progress")
+            ):
+                return {
+                    "started": False,
+                    "already_running": False,
+                    "queued_after_indexing": False,
+                    "queued_count": 0,
+                    "current_folder": "",
+                }
     try:
         file_cache = (
             get_file_cache_snapshot() if get_file_cache_snapshot is not None
@@ -577,6 +627,7 @@ def start_manual_cover_refresh_request(
     submit_cover_job: ExecutorSubmitter,
     refresh_unsuccessful_cover_artwork: RefreshRunnerWithForceSearch,
     force_search: bool = False,
+    defer_preparation: bool = False,
     app=None,
 ) -> dict[str, object]:
     return start_manual_cover_refresh(
@@ -598,6 +649,7 @@ def start_manual_cover_refresh_request(
             cache_lock=cache_lock,
         ),
         force_search=force_search,
+        defer_preparation=defer_preparation,
         app=app,
     )
 

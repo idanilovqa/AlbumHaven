@@ -168,6 +168,45 @@ def test_start_manual_cover_refresh_uses_persisted_snapshot_without_full_scan(
     assert library_state["file_cache"] is submitted[0][2][0].file_cache
 
 
+def test_start_manual_cover_refresh_can_defer_snapshot_preparation(
+    runtime_config, logger,
+):
+    submitted = []
+    library_state = {}
+    snapshot = {"track-1": {"album": "Album"}}
+
+    result = cover_refresh_runtime.start_manual_cover_refresh(
+        cache_lock=threading.Lock(),
+        config=runtime_config,
+        logger=logger,
+        get_state=lambda: library_state,
+        start_background_refresh=lambda **kwargs: pytest.fail("unexpected scan"),
+        build_cover_jobs=lambda **kwargs: [{"folder": "Artist/Album"}],
+        submit_cover_job=lambda *args: submitted.append(args),
+        refresh_manual_cover_artwork_worker=lambda force_search, prepared: None,
+        get_file_cache_snapshot=lambda: snapshot,
+        force_search=True,
+        defer_preparation=True,
+    )
+
+    assert result == {
+        "started": True,
+        "already_running": False,
+        "queued_after_indexing": False,
+        "queued_count": 0,
+        "current_folder": "",
+    }
+    assert library_state["covers_in_progress"] is True
+    assert len(submitted) == 1
+
+    prepare, *prepare_args = submitted.pop()
+    prepare(*prepare_args)
+
+    assert library_state["file_cache"] == snapshot
+    assert library_state["covers_total"] == 1
+    assert len(submitted) == 1
+
+
 def test_start_manual_cover_refresh_returns_direct_status_snapshot(runtime_config, logger):
     submitted = []
     invoked = []

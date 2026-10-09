@@ -1294,6 +1294,7 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
                 )
             ),
             force_search=force_search,
+            defer_preparation=True,
         )
     except Exception as exc:
         log_app_event(

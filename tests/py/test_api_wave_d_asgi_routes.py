@@ -2991,6 +2991,7 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
                 "snapshot": kwargs["get_file_cache_snapshot"](),
                 "submit_cover_job": kwargs.get("submit_cover_job"),
                 "force_search": kwargs.get("force_search"),
+                "defer_preparation": kwargs.get("defer_preparation"),
             }
         )
         kwargs["start_background_refresh"](force=True, scan_mode="manual")
@@ -3056,6 +3057,7 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
             "snapshot": {"snap": {"path": "snap"}},
             "submit_cover_job": asgi_routes.state_service._COVER_EXECUTOR.submit,
             "force_search": True,
+            "defer_preparation": True,
         }
     ]
     assert background_refresh_calls == [

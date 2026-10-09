@@ -456,7 +456,9 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert [group["artist"] for group in payload["initial_view"]["artist_groups"]] == ["Broadcast"]
     assert [item["artist"] for item in payload["initial_view"]["artists_sidebar"]] == ["Broadcast", "Mono"]
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
-    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
+    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == (
+        "/view-data?surface=albums&omit_sidebar=1&gallery_page_size=50"
+    )
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
     assert re.search(rb'<[^>]+id="library-loader"[^>]*\bhidden(?:\s|>)', body)
     loader_tag = re.search(rb'<section\b[^>]*\bid="library-loader"[^>]*>', body)
@@ -825,7 +827,9 @@ def test_index_surface_albums_uses_postgres_root_sidebar_startup_patch(asgi_app,
     assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
-    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
+    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == (
+        "/view-data?surface=albums&omit_sidebar=1&gallery_page_size=50"
+    )
     assert payload["bootstrap"]["startupHydration"]["embeddedViewPatch"] == {
         "artists_sidebar": [
             {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},

@@ -334,6 +334,15 @@ def _build_startup_hydration_endpoint(
         params.append(("payload_tier", normalized_payload_tier))
     if omit_sidebar:
         params.append(("omit_sidebar", "1"))
+    if (
+        normalized_surface == "albums"
+        and normalized_payload_tier != "sidebar"
+        and not query_raw
+        and not selected_artist
+        and not related_filter_artists
+        and not primary_filter_active
+    ):
+        params.append(("gallery_page_size", "50"))
     if query_raw:
         params.append(("q", query_raw))
     if selected_artist:

@@ -48,7 +48,10 @@ _NON_ALBUM_ALBUM_VALUE_RE = re.compile(r"^[!\-\s\[\(]*non[\s\-_]*album(?:\b.*)?$
 _DISC_FOLDER_RE = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?![A-Za-z0-9])", re.IGNORECASE)
 _VARIOUS_ARTIST_KEYS = {"va", "v.a.", "various artists", "various artist", "various"}
 _FEATURE_ARTIST_SPLIT_RE = re.compile(r"\s+(?:feat\.?|featuring|with|vs|x)\s+", re.IGNORECASE)
-_SPLIT_ARTIST_SPLIT_RE = re.compile(r"\s+(?:and|\u0438)\s+|(?:\s*&\s*)|/|;|,", re.IGNORECASE)
+_SPLIT_ARTIST_SPLIT_RE = re.compile(
+    r"\s+(?:and|\u0438)\s+|(?:\s*&\s*)|\s+/\s+|;|,",
+    re.IGNORECASE,
+)
 _ARTIST_PUNCT_TRANSLATION = str.maketrans({
     "\u2018": "'",
     "\u2019": "'",
@@ -111,7 +114,7 @@ def _normalize_display_artist_name(value: object) -> str:
     return repair_display_text(str(value or "")) or str(value or "")
 
 
-def _split_album_artist_members(value: object) -> list[str]:
+def split_album_artist_members(value: object) -> list[str]:
     text = _normalize_display_artist_name(value).strip()
     if not text or _is_various_artist(text):
         return []
@@ -295,7 +298,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     top_artist_share = (top_artist_count / total_tracks) if total_tracks else 1
     significant_artist_count = sum(1 for count in track_artist_counts.values() if count >= 2)
     explicit_various = any(_is_various_artist(value) for value in album_artist_values)
-    album_artist_members = _split_album_artist_members(album_artist_values[0]) if len({_normalize_artist_key(value) for value in album_artist_values if value}) <= 1 and album_artist_values else []
+    album_artist_members = split_album_artist_members(album_artist_values[0]) if len({_normalize_artist_key(value) for value in album_artist_values if value}) <= 1 and album_artist_values else []
     matched_album_artist_members = [
         member for member in album_artist_members
         if any(_normalize_artist_key(member) == _normalize_artist_key(track_artist) or _are_probable_artist_typos(member, track_artist) for track_artist in distinct_track_artists)

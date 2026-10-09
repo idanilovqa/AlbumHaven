@@ -289,6 +289,14 @@ function loadHelper(options = {}) {
       context.renderTrackModalReleaseCalls.push(album?.key || null);
       context.renderTrackModalReleaseAlbums.push(album);
     },
+    mobileAlbumPagePresentations: [],
+    presentMobileAlbumPage(album) {
+      context.mobileAlbumPagePresentations.push({
+        key: album?.key || null,
+        title: trackModalTitle.textContent,
+        list: trackModalList.innerHTML,
+      });
+    },
     attachSharedPlayerCalls: 0,
     attachSharedPlayer() {
       context.attachSharedPlayerCalls += 1;
@@ -789,6 +797,32 @@ test('opening a preview album renders all known edition tabs before details reso
   context.openTrackModal(album);
   assert.deepEqual(rendered, ['alpha', 'beta']);
   assert.deepEqual(context.renderTrackModalReleaseCalls, []);
+});
+
+test('opening another preview album presents only its loading shell on mobile', () => {
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => new Promise(() => {}),
+  });
+  const elements = context.getTrackModalElements();
+  elements.title.textContent = 'Previous Artist - Previous Album - 1999';
+  elements.list.innerHTML = '<li>Previous Track</li>';
+
+  context.openTrackModal({
+    key: 'next-album',
+    album_artist: 'Next Artist',
+    name: 'Next Album',
+    year: 2026,
+    preview_only: true,
+  });
+
+  const presentations = context.mobileAlbumPagePresentations.filter(
+    (presentation) => presentation.key === 'next-album',
+  );
+  assert.equal(presentations.length, 1);
+  assert.equal(presentations[0].title, 'Next Artist - Next Album - 2026');
+  assert.match(presentations[0].list, /Loading album details/);
+  assert.match(presentations[0].list, /library-loader-spinner/);
+  assert.doesNotMatch(presentations[0].list, /Previous Track/);
 });
 
 async function run() {

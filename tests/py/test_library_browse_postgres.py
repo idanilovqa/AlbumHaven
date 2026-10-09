@@ -8496,6 +8496,7 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     executed: list[object] = []
+    connect_calls: list[str] = []
 
     class FakeCursor:
         def fetchall(self):
@@ -8544,12 +8545,16 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
             executed.extend([sql, params])
             return FakeCursor()
 
+    def connect(database_url: str):
+        connect_calls.append(database_url)
+        return FakeConnection()
+
     repository = PostgresLibraryBrowseRepository(
         {
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
             "MUSIC_DIR": r"X:\SyntheticMusic",
         },
-        connect=lambda _database_url: FakeConnection(),
+        connect=connect,
     )
     album_details_module.build_scrobbled_play_count_lookup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
         AssertionError("Postgres album detail payload should use prehydrated scrobble counts.")
@@ -8581,6 +8586,7 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
     }
     assert payload["track_rows"][0]["track_stats"]["scrobble_count"] == 0
     assert payload["track_rows"][0]["track_preference"]["allowed_actions"]["can_rate"] is True
+    assert connect_calls == ["postgresql://album_haven_app@localhost/app"]
     assert payload["gallery_list_block"]["track_rows_source"] == "inline"
     assert executed[1] == {"album_key": "3::to the power of three"}
     sql = str(executed[0])
@@ -8948,7 +8954,7 @@ def test_postgres_album_detail_payload_excludes_persisted_non_album_override_and
     monkeypatch.setattr(
         repository,
         "_load_album_detail_rows",
-        lambda _album_key: [
+        lambda _album_key, **_kwargs: [
             _persisted_non_album_override_row(
                 track_id=9721,
                 title="Rarity",
@@ -9003,7 +9009,7 @@ def test_postgres_album_detail_blank_override_masks_embedded_non_album_value(
     monkeypatch.setattr(
         repository,
         "_load_album_detail_rows",
-        lambda _album_key: [row],
+        lambda _album_key, **_kwargs: [row],
     )
 
     payload = repository.build_album_detail_payload(
@@ -9027,7 +9033,7 @@ def test_postgres_album_detail_payload_omits_album_when_all_tracks_have_persiste
     monkeypatch.setattr(
         repository,
         "_load_album_detail_rows",
-        lambda _album_key: [
+        lambda _album_key, **_kwargs: [
             _persisted_non_album_override_row(
                 track_id=9731,
                 title="Rarity",
@@ -9152,7 +9158,11 @@ def test_postgres_album_projections_mark_full_scope_for_incomplete_track_order(m
         connect=lambda _database_url: _EmptyMissingAlbumConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
-    monkeypatch.setattr(repository, "_load_album_detail_rows", lambda _album_key: projection_rows)
+    monkeypatch.setattr(
+        repository,
+        "_load_album_detail_rows",
+        lambda _album_key, **_kwargs: projection_rows,
+    )
     monkeypatch.setattr(
         repository,
         "_load_album_rows_by_track_paths",
@@ -9249,7 +9259,7 @@ def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_a
     monkeypatch.setattr(
         repository,
         "_load_album_detail_rows",
-        lambda _album_key: [
+        lambda _album_key, **_kwargs: [
             {
                 "artist_id": 3,
                 "artist_name": "Various Artists",
@@ -11920,10 +11930,13 @@ def test_album_details_preserve_persisted_base_and_year_split_identities(monkeyp
         [18], album_id=502, album_key=split,
         year=2014, separate_release_keys=[base],
     )
-    repository = PostgresLibraryBrowseRepository({})
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection({}),
+    )
     loaded = []
 
-    def load_rows(key):
+    def load_rows(key, **_kwargs):
         loaded.append(key)
         return {base: base_rows, split: split_rows}.get(key, [])
 
@@ -11957,9 +11970,16 @@ def test_album_details_keep_legacy_virtual_year_resolution_isolated(monkeypatch)
         [3], album_id=501, album_key=base,
         year=2014, separate_release_keys=[base],
     )
-    repository = PostgresLibraryBrowseRepository({})
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection({}),
+    )
     monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [])
-    monkeypatch.setattr(repository, "_load_album_detail_rows", lambda key: older + newer if key == base else [])
+    monkeypatch.setattr(
+        repository,
+        "_load_album_detail_rows",
+        lambda key, **_kwargs: older + newer if key == base else [],
+    )
     monkeypatch.setattr(repository, "_attach_duplicate_sources", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(repository, "_apply_private_album_rating_overlays", lambda *_args, **_kwargs: None)
 
@@ -14683,7 +14703,7 @@ def test_postgres_album_detail_batch_loads_private_rating_and_keeps_tag_rating(m
     monkeypatch.setattr(
         repository,
         "_load_album_detail_rows",
-        lambda _album_key: [detail_row],
+        lambda _album_key, **_kwargs: [detail_row],
     )
     monkeypatch.setattr(
         album_details_module,

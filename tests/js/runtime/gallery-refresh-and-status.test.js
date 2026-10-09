@@ -6397,6 +6397,51 @@ test('restoring a cached root view schedules bounded viewport filling without a 
   assert.equal(pendingRequests.length, 0);
 });
 
+test('late gallery refresh does not restore an obsolete mobile return position after user scroll', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 1480, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? galleryScroll : originalGetElementById(id)
+  );
+  const renders = [];
+  context.renderArtistGroups = (options) => renders.push(options);
+
+  runtimeRenderView({
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPositionApplied: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveScroll, true);
+  assert.equal(renders[0].preserveAbsoluteScroll, false);
+  assert.equal(renders[0].absoluteScrollPosition, undefined);
+  assert.equal(renders[0].absoluteScrollPositionApplied, undefined);
+});
+
+test('unmounted gallery may apply its requested mobile return position after data arrives', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 0, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? galleryScroll : originalGetElementById(id)
+  );
+  const renders = [];
+  context.renderArtistGroups = (options) => renders.push(options);
+
+  runtimeRenderView({
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveAbsoluteScroll, true);
+  assert.deepEqual(renders[0].absoluteScrollPosition, { scrollTop: 800, scrollLeft: 0 });
+});
+
 
 function boundedRootRefreshFixture() {
   const fixture = createContext();

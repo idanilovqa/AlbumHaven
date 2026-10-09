@@ -944,7 +944,9 @@ async def album_details(request: Request) -> JSONResponse:
     browse_state = resolve_active_scan_browse_state(_library_state(request))
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload(
+        repository = PostgresLibraryBrowseRepository(_app_config(request))
+        payload = await run_in_threadpool(
+            repository.build_album_detail_payload,
             album_key,
             client_surface_class=client_surface_class,
         )

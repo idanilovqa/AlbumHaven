@@ -3229,6 +3229,11 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     postgres_calls: list[tuple[str, object]] = []
+    worker_calls: list[object] = []
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        worker_calls.append(function)
+        return function(*args, **kwargs)
 
     def fail_hydrate(*_args, **_kwargs):
         raise AssertionError("Postgres album-details should not hydrate file-backed library state first")
@@ -3249,6 +3254,7 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
     monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fail_build_album_detail_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakeRepository)
+    monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -3280,6 +3286,7 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
     assert missing_status == 404
     assert _decode_json(missing_body) == {"ok": False, "error": "Album not found"}
     assert postgres_calls == [("3::to the power of three", "tv"), ("missing::album", "private_web")]
+    assert len(worker_calls) == 2
 
 
 def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(

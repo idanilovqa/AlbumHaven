@@ -963,19 +963,43 @@ class VirtualArtistGrid {
     }
   }
 
-  getRowsForSection(section) {
-    const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
-    const rows = [];
-    for (let start = 0; start < albums.length; start += this.columns) {
-      rows.push(albums.slice(start, start + this.columns));
-    }
-    return rows;
-  }
-
   getBlocksForSection(section) {
+        const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
+        const uniqueAlbums = [];
+        const albumIndexByIdentity = new Map();
+        albums.forEach((album) => {
+            const identity = getAlbumIdentity(album);
+            if (!identity) {
+                uniqueAlbums.push(album);
+                return;
+            }
+            const existingIndex = albumIndexByIdentity.get(identity);
+            if (existingIndex === undefined) {
+                albumIndexByIdentity.set(identity, uniqueAlbums.length);
+                uniqueAlbums.push(album);
+                return;
+            }
+            const existingAlbum = uniqueAlbums[existingIndex];
+            if (
+                existingAlbum?.artist_relationship === 'featured'
+                && album?.artist_relationship !== 'featured'
+            ) {
+                uniqueAlbums[existingIndex] = album;
+            }
+        });
+        const ownedAlbums = uniqueAlbums.filter((album) => album?.artist_relationship !== 'featured');
+        const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
     const blocks = [];
-    const normalRows = this.getRowsForSection(section);
-    normalRows.forEach((albums) => blocks.push({ kind: 'row', albums }));
+        const appendRows = (rowAlbums) => {
+            for (let start = 0; start < rowAlbums.length; start += this.columns) {
+                blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
+            }
+        };
+        appendRows(ownedAlbums);
+        if (featuredAlbums.length) {
+            blocks.push({ kind: 'subheading', title: 'Featured On', count: featuredAlbums.length });
+            appendRows(featuredAlbums);
+        }
     return blocks.length ? blocks : [];
   }
 
@@ -1954,7 +1978,9 @@ class VirtualArtistGrid {
     const rowBlocks = blocks.slice(startIndex, endIndex + 1).map((block, visibleIndex) => {
       const blockIndex = startIndex + visibleIndex;
       if (block.kind === 'subheading') {
-        return `<div class="artist-subsection-label">${escapeHtml(block.title || 'Non-Album Tracks')}</div>`;
+                const count = Math.max(0, Number(block.count || 0));
+                const countLabel = `${count} ${count === 1 ? 'album' : 'albums'}`;
+                return `<div class="artist-subsection-label"><span>${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);

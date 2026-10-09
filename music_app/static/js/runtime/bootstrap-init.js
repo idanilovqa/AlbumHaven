@@ -394,6 +394,11 @@ window.addEventListener('focus', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    if (typeof reconcileBrowserPlaybackOnForeground === 'function') {
+      void Promise.resolve(reconcileBrowserPlaybackOnForeground()).catch((error) => {
+        console.warn('[AlbumHaven][Playback] Foreground recovery failed.', error);
+      });
+    }
     reconcileLoopEditSessionExpiry();
     handleViewportRefocusVisibilityChange();
     return;

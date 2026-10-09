@@ -135,6 +135,7 @@ function restoreMobileGalleryParent(descriptor) {
     // Restore before the request too: equivalent responses may retain the mounted
     // gallery. The virtual grid already owns stabilization and row materialization.
     if (typeof virtualGrid !== 'undefined' && virtualGrid?.restoreOwnedAbsoluteScrollPosition(position)) {
+      options.absoluteScrollPositionApplied = true;
       virtualGrid.render(true);
     }
   }

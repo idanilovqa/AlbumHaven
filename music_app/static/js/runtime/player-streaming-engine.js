@@ -31,6 +31,56 @@ function publishStreamingDiagnostics() {
   );
 }
 
+async function performInterruptedStreamingPlaybackRecovery(expectedContext) {
+  const engine = streamingEngineState();
+  const context = engine.context;
+  const current = engine.roles.current;
+  if (!context || !current) return 'inactive';
+  if (expectedContext && context !== expectedContext) return 'stale';
+  if (engine.snapshot.paused || engine.snapshot.ended) return 'paused';
+  if (context.state === 'running') return 'continued';
+  if (context.state !== 'suspended' && context.state !== 'interrupted') return 'failed';
+
+  const generation = engine.generation;
+  const streamId = current.streamId;
+  const startRequestId = engine.startRequestId;
+  let resumed = false;
+  try {
+    resumed = await resumeStreamingPlayback(startRequestId, null, current);
+  } catch (_error) {
+    resumed = false;
+  }
+  if (engine.context !== context
+      || engine.generation !== generation
+      || engine.roles.current?.streamId !== streamId
+      || engine.startRequestId !== startRequestId) return 'stale';
+  if (resumed && context.state === 'running') {
+    publishStreamingDiagnostics();
+    return 'resumed';
+  }
+  if (context.state !== 'suspended' && context.state !== 'interrupted') return 'failed';
+
+  engine.snapshot.paused = true;
+  if (engine.mode !== 'error') engine.mode = 'paused';
+  engine.node?.port?.postMessage?.({ type: 'pause', generation });
+  publishStreamingDiagnostics();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  return 'gesture-required';
+}
+
+function reconcileInterruptedStreamingPlayback(expectedContext = null) {
+  const engine = streamingEngineState();
+  if (engine.interruptionRecoveryPromise) return engine.interruptionRecoveryPromise;
+  const recovery = performInterruptedStreamingPlaybackRecovery(expectedContext);
+  const trackedRecovery = recovery.finally(() => {
+    if (engine.interruptionRecoveryPromise === trackedRecovery) {
+      engine.interruptionRecoveryPromise = null;
+    }
+  });
+  engine.interruptionRecoveryPromise = trackedRecovery;
+  return trackedRecovery;
+}
+
 function streamingRoleForId(streamId) {
   const engine = streamingEngineState();
   if (engine.roles.current?.streamId === streamId) return engine.roles.current;
@@ -1242,6 +1292,9 @@ async function prepareStreamingPlaybackEngine() {
     try {
       context = new AudioContextType({ sampleRate: STREAMING_SAMPLE_RATE });
       engine.context = context;
+      if (typeof observeBrowserPlaybackAudioContext === 'function') {
+        observeBrowserPlaybackAudioContext(context);
+      }
       await context.audioWorklet.addModule(STREAMING_WORKLET_URL);
       node = new AudioWorkletNode(context, STREAMING_PROCESSOR_NAME, {
         numberOfInputs: 0,

@@ -55,7 +55,12 @@ function renderTrackModalLoadingState(album) {
     els.duplicateTabs.hidden = true;
     els.duplicateTabs.innerHTML = '';
   }
-  els.list.innerHTML = '<li class="track-modal-loading-row">Loading album details...</li>';
+  els.list.innerHTML = `
+    <li class="track-modal-loading-row" role="status" aria-live="polite">
+      <span class="library-loader-spinner" aria-hidden="true"></span>
+      <span>Loading album details...</span>
+    </li>
+  `;
   if (els.footer) {
     els.footer.hidden = true;
     els.footer.textContent = '';
@@ -108,7 +113,6 @@ function clearTrackModalRenderedState() {
 }
 
 function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
-  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   state.modalReleases = Array.isArray(releaseSet?.releases) && releaseSet.releases.length
@@ -122,6 +126,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
 }
 
 function suspendGalleryCoverLoadsForTrackModal() {
@@ -547,7 +552,6 @@ function preloadTrackModalArtwork(album) {
 }
 
 function openTrackModal(album, options = {}) {
-  if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   preloadTrackModalArtwork(album);
@@ -603,6 +607,7 @@ function openTrackModal(album, options = {}) {
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   attachSharedPlayer();
 }
 

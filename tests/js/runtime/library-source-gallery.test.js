@@ -5,6 +5,10 @@ const vm = require('node:vm');
 const test = require('node:test');
 
 const runtime = path.join(__dirname, '../../../music_app/static/js/runtime');
+const mobileCss = fs.readFileSync(
+    path.join(__dirname, '../../../music_app/static/css/mobile-layout.css'),
+    'utf8',
+);
 function card(overrides = {}) {
   const context = vm.createContext({
     escapeHtml: (value) => String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'),
@@ -18,11 +22,40 @@ function card(overrides = {}) {
 }
 
 test('mixed-source cards retain Main, Hoard and New Arrivals categories for independent styling', () => {
-  const html = card();
+  const html = card({ hasDuplicateFiles: true });
   assert.match(html, /data-library-sources="main hoard new_arrivals"/);
   assert.match(html, /aria-label="Hoard"/);
   assert.match(html, /aria-label="New Arrivals"/);
   assert.match(html, /<svg\b/);
+  const sourceOverlay = html.match(/<div class="gallery-card__source-overlay">([\s\S]*?)<\/div>/)?.[1] || '';
+  assert.doesNotMatch(sourceOverlay, /gallery-card__source-actions/);
+  assert.ok(
+    html.indexOf('gallery-card__source-actions') > html.indexOf('gallery-card__source-overlay'),
+    'mobile source actions must be positioned independently from the artbox overlay',
+  );
+});
+
+test('mobile gallery source actions sit in card information space and never expand labels', () => {
+  assert.match(
+    mobileCss,
+    /@media \(max-width: 900px\)[\s\S]*?\.album-card \.gallery-card__source-actions[\s\S]*?bottom:/,
+  );
+  assert.match(
+    mobileCss,
+    /@media \(max-width: 900px\)[\s\S]*?\[data-gallery-display="covers"\][\s\S]*?gallery-card__source-actions[\s\S]*?display: none/,
+  );
+  assert.match(
+    mobileCss,
+    /@media \(max-width: 900px\)[\s\S]*?gallery-source-action span[\s\S]*?display: none/,
+  );
+  assert.match(
+    mobileCss,
+    /@media \(max-width: 900px\)[\s\S]*?\.album-card \.gallery-source-action \{[\s\S]*?min-height: 36px;[\s\S]*?min-width: 36px;[\s\S]*?border: 0;[\s\S]*?background: transparent;/,
+  );
+  assert.match(
+    mobileCss,
+    /:root:not\(\[data-library-source-icons="false"\]\)[\s\S]*?padding-bottom: 44px/,
+  );
 });
 
 test('duplicate warning opens album details as an independent accessible artbox action', () => {

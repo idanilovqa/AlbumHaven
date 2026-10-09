@@ -301,6 +301,7 @@ function createEngineHarness(options = {}) {
     start: startStreamingTrack,
     pause: pauseStreamingPlayback,
     resume: resumeStreamingPlayback,
+    reconcileInterruption: reconcileInterruptedStreamingPlayback,
     seek: seekStreamingPlayback,
     continuity: scheduleStreamingContinuity,
     setLoop: setStreamingLoop,
@@ -900,6 +901,80 @@ test('loads the AudioWorklet with the bootstrap runtime asset version', async ()
     harness.contexts[0].audioWorklet.modules,
     ['/static/js/audio-worklets/gapless-playback-processor.js?v=startup-runtime-digest'],
   );
+});
+
+test('interruption reconciliation resumes the same buffered stream', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const context = harness.contexts[0];
+  const generation = harness.engine.generation;
+  const streamId = harness.engine.roles.current.streamId;
+  const socket = harness.engine.socket;
+  const playMessagesBefore = harness.portMessages('play').length;
+
+  context.state = 'suspended';
+  assert.equal(await harness.api.reconcileInterruption(context), 'resumed');
+
+  assert.equal(context.state, 'running');
+  assert.equal(harness.engine.generation, generation);
+  assert.equal(harness.engine.roles.current.streamId, streamId);
+  assert.strictEqual(harness.engine.socket, socket);
+  assert.equal(harness.engine.snapshot.paused, false);
+  assert.equal(
+    harness.portMessages('play').length,
+    playMessagesBefore,
+    'resuming an externally suspended context must not restart the worklet timeline',
+  );
+});
+
+test('concurrent foreground signals share one interruption recovery attempt', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const context = harness.contexts[0];
+  let releaseResume;
+  context.state = 'suspended';
+  context.resumeCalls = 0;
+  context.resume = async function blockedResume() {
+    this.resumeCalls += 1;
+    await new Promise((resolve) => {
+      releaseResume = resolve;
+    });
+    this.state = 'running';
+  };
+
+  const first = harness.api.reconcileInterruption(context);
+  const second = harness.api.reconcileInterruption(context);
+  await harness.settle();
+
+  assert.equal(context.resumeCalls, 1);
+  releaseResume();
+  assert.deepEqual(await Promise.all([first, second]), ['resumed', 'resumed']);
+  assert.equal(harness.engine.snapshot.paused, false);
+});
+
+test('blocked interruption recovery becomes truthfully paused and remains user resumable', async () => {
+  const harness = createEngineHarness({ resumeLeavesSuspended: true });
+  await harness.api.start(makeTrack(), { allowSuspendedAutoplayFallback: true });
+  const context = harness.contexts[0];
+  context.state = 'running';
+  harness.engine.snapshot.paused = false;
+  harness.engine.mode = 'playing';
+
+  context.state = 'suspended';
+  const result = await harness.api.reconcileInterruption(context);
+
+  assert.equal(result, 'gesture-required');
+  assert.equal(harness.engine.snapshot.paused, true);
+  assert.equal(harness.engine.mode, 'paused');
+  assert.equal(harness.portMessages('pause').length, 1);
+
+  harness.contexts[0].state = 'suspended';
+  harness.contexts[0].resume = async function resumeAfterGesture() {
+    this.resumeCalls += 1;
+    this.state = 'running';
+  };
+  assert.equal(await harness.api.resume(), true);
+  assert.equal(harness.engine.snapshot.paused, false);
 });
 
 test('resumes the prepared context only through the explicit user-gesture API', async () => {

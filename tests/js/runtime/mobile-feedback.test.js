@@ -372,6 +372,7 @@ test('mobile gallery return restores saved coordinates before refreshing through
   assert.deepEqual(calls[1], ['render',true]);
   assert.equal(calls[2][1].preserveScroll,true);
   assert.equal(calls[2][1].preserveAbsoluteScroll,true);
+  assert.equal(calls[2][1].absoluteScrollPositionApplied,true);
   assert.equal(calls[2][1].absoluteScrollPosition,position);
 });
 
@@ -584,4 +585,12 @@ test('mobile action controls preserve a 40px touch target at phone width', () =>
       assert.ok(geometry.cardTrackWidth * columns + 12 * (columns - 1) <= availableWidth);
     }
   }
+});
+
+test('mobile gallery cards do not move when touch hover or focus changes during scroll', () => {
+  const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
+  assert.match(
+    css,
+    /\.album-card:is\(:hover, :focus-within\)\s*\{[^}]*transform:\s*none;/,
+  );
 });

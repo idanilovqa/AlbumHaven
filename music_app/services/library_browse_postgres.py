@@ -1340,17 +1340,34 @@ class PostgresLibraryBrowseRepository:
         normalized_album_key = str(album_key or "").strip()
         if not normalized_album_key:
             return None
+        with self._search_connection_context() as connection:
+            return self._build_album_detail_payload_with_connection(
+                normalized_album_key,
+                client_surface_class=client_surface_class,
+                connection=connection,
+            )
+
+    def _build_album_detail_payload_with_connection(
+        self,
+        normalized_album_key: str,
+        *,
+        client_surface_class: object,
+        connection: Any,
+    ) -> dict[str, object] | None:
         missing_albums = _missing_album_projection_payloads(
-            self._load_missing_album_rows(album_key=normalized_album_key)
+            self._load_missing_album_rows(
+                album_key=normalized_album_key,
+                connection=connection,
+            )
         )
         if missing_albums:
             return _missing_album_detail_payload(missing_albums[0])
-        rows = self._load_album_detail_rows(normalized_album_key)
+        rows = self._load_album_detail_rows(normalized_album_key, connection=connection)
         has_persisted_identity = bool(rows)
         if not rows:
             base_album_key = re.sub(r"::year::\d{4}$", "", normalized_album_key)
             if base_album_key != normalized_album_key:
-                rows = self._load_album_detail_rows(base_album_key)
+                rows = self._load_album_detail_rows(base_album_key, connection=connection)
         if not rows:
             return None
         first_row_payload = _row_mapping(rows[0])
@@ -1376,7 +1393,7 @@ class PostgresLibraryBrowseRepository:
         )
         if detail_album is None:
             return None
-        self._attach_duplicate_sources([detail_album])
+        self._attach_duplicate_sources([detail_album], connection=connection)
         detail_album["album_id"] = first_row_payload.get("album_id")
         detail_album["cover_candidate_snapshot"] = _cover_candidate_snapshot_summary(
             first_row_payload.get("cover_candidate_snapshot")
@@ -1384,6 +1401,7 @@ class PostgresLibraryBrowseRepository:
         self._apply_private_album_rating_overlays(
             [detail_album],
             source_rows=rows,
+            connection=connection,
         )
         _annotate_album_payload_problematic_tracks([detail_album], rows)
         from music_app.services.album_details import _attach_album_detail_track_rows
@@ -2473,12 +2491,22 @@ class PostgresLibraryBrowseRepository:
             cursor = owned_connection.execute(_artist_preview_rows_sql(family_only=family_only), params)
             return list(cursor.fetchall())
 
-    def _load_album_detail_rows(self, album_key: str) -> list[object]:
-        with self._connect_to_database() as connection:
+    def _load_album_detail_rows(
+        self,
+        album_key: str,
+        *,
+        connection: Any | None = None,
+    ) -> list[object]:
+        def load_rows(active_connection: Any) -> list[object]:
             sql = _album_detail_sql().replace("legacy_scrobble_counts as (", local_album_membership_ctes_sql(scope_album_key=True) + ", legacy_scrobble_counts as (", 1)
             sql = sql.replace("library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry", "(library.local_track_files.metadata #> '{scan_cache,file_entry}') || jsonb_build_object('local_album_membership_problem', (select problem from local_album_membership where file_id = library.local_track_files.id)) as file_entry", 1)
-            cursor = connection.execute(sql, {"album_key": album_key})
+            cursor = active_connection.execute(sql, {"album_key": album_key})
             return list(cursor.fetchall())
+
+        if connection is not None:
+            return load_rows(connection)
+        with self._connect_to_database() as owned_connection:
+            return load_rows(owned_connection)
 
     def _load_root_album_browse_rows(self, view_state: Mapping[str, object]) -> list[object]:
         with self._connect_to_database() as connection:

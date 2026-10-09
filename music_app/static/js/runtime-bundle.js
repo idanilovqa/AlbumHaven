@@ -4366,7 +4366,8 @@ function buildGalleryCardHtml(config = {}) {
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
       </button>
-      ${sourceActions || duplicateAction ? `<div class="gallery-card__source-overlay"><div class="gallery-card__source-actions">${sourceActions}</div>${duplicateAction}</div>` : ''}
+      ${duplicateAction ? `<div class="gallery-card__source-overlay">${duplicateAction}</div>` : ''}
+      ${sourceActions ? `<div class="gallery-card__source-actions">${sourceActions}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
         ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
@@ -6827,6 +6828,56 @@ function publishStreamingDiagnostics() {
   );
 }
 
+async function performInterruptedStreamingPlaybackRecovery(expectedContext) {
+  const engine = streamingEngineState();
+  const context = engine.context;
+  const current = engine.roles.current;
+  if (!context || !current) return 'inactive';
+  if (expectedContext && context !== expectedContext) return 'stale';
+  if (engine.snapshot.paused || engine.snapshot.ended) return 'paused';
+  if (context.state === 'running') return 'continued';
+  if (context.state !== 'suspended' && context.state !== 'interrupted') return 'failed';
+
+  const generation = engine.generation;
+  const streamId = current.streamId;
+  const startRequestId = engine.startRequestId;
+  let resumed = false;
+  try {
+    resumed = await resumeStreamingPlayback(startRequestId, null, current);
+  } catch (_error) {
+    resumed = false;
+  }
+  if (engine.context !== context
+      || engine.generation !== generation
+      || engine.roles.current?.streamId !== streamId
+      || engine.startRequestId !== startRequestId) return 'stale';
+  if (resumed && context.state === 'running') {
+    publishStreamingDiagnostics();
+    return 'resumed';
+  }
+  if (context.state !== 'suspended' && context.state !== 'interrupted') return 'failed';
+
+  engine.snapshot.paused = true;
+  if (engine.mode !== 'error') engine.mode = 'paused';
+  engine.node?.port?.postMessage?.({ type: 'pause', generation });
+  publishStreamingDiagnostics();
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  return 'gesture-required';
+}
+
+function reconcileInterruptedStreamingPlayback(expectedContext = null) {
+  const engine = streamingEngineState();
+  if (engine.interruptionRecoveryPromise) return engine.interruptionRecoveryPromise;
+  const recovery = performInterruptedStreamingPlaybackRecovery(expectedContext);
+  const trackedRecovery = recovery.finally(() => {
+    if (engine.interruptionRecoveryPromise === trackedRecovery) {
+      engine.interruptionRecoveryPromise = null;
+    }
+  });
+  engine.interruptionRecoveryPromise = trackedRecovery;
+  return trackedRecovery;
+}
+
 function streamingRoleForId(streamId) {
   const engine = streamingEngineState();
   if (engine.roles.current?.streamId === streamId) return engine.roles.current;
@@ -8038,6 +8089,9 @@ async function prepareStreamingPlaybackEngine() {
     try {
       context = new AudioContextType({ sampleRate: STREAMING_SAMPLE_RATE });
       engine.context = context;
+      if (typeof observeBrowserPlaybackAudioContext === 'function') {
+        observeBrowserPlaybackAudioContext(context);
+      }
       await context.audioWorklet.addModule(STREAMING_WORKLET_URL);
       node = new AudioWorkletNode(context, STREAMING_PROCESSOR_NAME, {
         numberOfInputs: 0,
@@ -11613,7 +11667,12 @@ function renderTrackModalLoadingState(album) {
     els.duplicateTabs.hidden = true;
     els.duplicateTabs.innerHTML = '';
   }
-  els.list.innerHTML = '<li class="track-modal-loading-row">Loading album details...</li>';
+  els.list.innerHTML = `
+    <li class="track-modal-loading-row" role="status" aria-live="polite">
+      <span class="library-loader-spinner" aria-hidden="true"></span>
+      <span>Loading album details...</span>
+    </li>
+  `;
   if (els.footer) {
     els.footer.hidden = true;
     els.footer.textContent = '';
@@ -11666,7 +11725,6 @@ function clearTrackModalRenderedState() {
 }
 
 function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
-  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   state.modalReleases = Array.isArray(releaseSet?.releases) && releaseSet.releases.length
@@ -11680,6 +11738,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
 }
 
 function suspendGalleryCoverLoadsForTrackModal() {
@@ -12105,7 +12164,6 @@ function preloadTrackModalArtwork(album) {
 }
 
 function openTrackModal(album, options = {}) {
-  if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   preloadTrackModalArtwork(album);
@@ -12161,6 +12219,7 @@ function openTrackModal(album, options = {}) {
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   attachSharedPlayer();
 }
 
@@ -14643,6 +14702,24 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  const renderOptions = { ...options };
+  const requestedScroll = options.absoluteScrollPosition;
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (
+    options.preserveAbsoluteScroll === true
+    && options.absoluteScrollPositionApplied === true
+    && Number.isFinite(Number(requestedScroll?.scrollTop))
+    && Number.isFinite(Number(requestedScroll?.scrollLeft))
+    && galleryScroll
+    && (
+      Math.abs(Number(galleryScroll.scrollTop || 0) - Number(requestedScroll.scrollTop)) > 1
+      || Math.abs(Number(galleryScroll.scrollLeft || 0) - Number(requestedScroll.scrollLeft)) > 1
+    )
+  ) {
+    renderOptions.preserveAbsoluteScroll = false;
+    delete renderOptions.absoluteScrollPosition;
+    delete renderOptions.absoluteScrollPositionApplied;
+  }
   const preserveMountedSelectedViewNodes = Boolean(
     options.preserveMountedGalleryChildren === true
     && options.retainMountedSelectedViewState
@@ -14687,7 +14764,7 @@ function renderView(options = {}) {
     renderRelated();
   }
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
-    renderArtistGroups(options);
+    renderArtistGroups(renderOptions);
   } else if (typeof updateGalleryMainChrome === 'function') {
     // Retained cards do not imply that search or artist context is unchanged.
     updateGalleryMainChrome();
@@ -34404,19 +34481,43 @@ class VirtualArtistGrid {
     }
   }
 
-  getRowsForSection(section) {
-    const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
-    const rows = [];
-    for (let start = 0; start < albums.length; start += this.columns) {
-      rows.push(albums.slice(start, start + this.columns));
-    }
-    return rows;
-  }
-
   getBlocksForSection(section) {
+        const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
+        const uniqueAlbums = [];
+        const albumIndexByIdentity = new Map();
+        albums.forEach((album) => {
+            const identity = getAlbumIdentity(album);
+            if (!identity) {
+                uniqueAlbums.push(album);
+                return;
+            }
+            const existingIndex = albumIndexByIdentity.get(identity);
+            if (existingIndex === undefined) {
+                albumIndexByIdentity.set(identity, uniqueAlbums.length);
+                uniqueAlbums.push(album);
+                return;
+            }
+            const existingAlbum = uniqueAlbums[existingIndex];
+            if (
+                existingAlbum?.artist_relationship === 'featured'
+                && album?.artist_relationship !== 'featured'
+            ) {
+                uniqueAlbums[existingIndex] = album;
+            }
+        });
+        const ownedAlbums = uniqueAlbums.filter((album) => album?.artist_relationship !== 'featured');
+        const featuredAlbums = uniqueAlbums.filter((album) => album?.artist_relationship === 'featured');
     const blocks = [];
-    const normalRows = this.getRowsForSection(section);
-    normalRows.forEach((albums) => blocks.push({ kind: 'row', albums }));
+        const appendRows = (rowAlbums) => {
+            for (let start = 0; start < rowAlbums.length; start += this.columns) {
+                blocks.push({ kind: 'row', albums: rowAlbums.slice(start, start + this.columns) });
+            }
+        };
+        appendRows(ownedAlbums);
+        if (featuredAlbums.length) {
+            blocks.push({ kind: 'subheading', title: 'Featured On', count: featuredAlbums.length });
+            appendRows(featuredAlbums);
+        }
     return blocks.length ? blocks : [];
   }
 
@@ -35395,7 +35496,9 @@ class VirtualArtistGrid {
     const rowBlocks = blocks.slice(startIndex, endIndex + 1).map((block, visibleIndex) => {
       const blockIndex = startIndex + visibleIndex;
       if (block.kind === 'subheading') {
-        return `<div class="artist-subsection-label">${escapeHtml(block.title || 'Non-Album Tracks')}</div>`;
+                const count = Math.max(0, Number(block.count || 0));
+                const countLabel = `${count} ${count === 1 ? 'album' : 'albums'}`;
+                return `<div class="artist-subsection-label"><span>${escapeHtml(block.title || 'Non-Album Tracks')}</span><span class="artist-subsection-count">${escapeHtml(countLabel)}</span></div>`;
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
@@ -37384,6 +37487,39 @@ function initCompactPlayer() {
 }
 
 // END js/runtime/compact-player-controller.js
+
+// BEGIN js/runtime/player-browser-playback-integration.js
+
+function isUnexpectedBrowserPlaybackSuspension(engine, context) {
+  return engine?.context === context
+    && (context.state === 'suspended' || context.state === 'interrupted')
+    && Boolean(engine.roles?.current)
+    && engine.snapshot?.paused === false
+    && engine.snapshot?.ended !== true
+    && engine.mode !== 'error';
+}
+
+function observeBrowserPlaybackAudioContext(context) {
+  if (!context) return;
+  const previousStateChange = context.onstatechange;
+  context.onstatechange = (event) => {
+    if (typeof previousStateChange === 'function') previousStateChange.call(context, event);
+    const engine = state?.player?.streaming;
+    if (engine?.context !== context) return;
+    publishStreamingDiagnostics();
+    if (!isUnexpectedBrowserPlaybackSuspension(engine, context)) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void reconcileInterruptedStreamingPlayback(context).catch((error) => {
+      console.warn('[AlbumHaven][Playback] Failed to reconcile interrupted audio.', error);
+    });
+  };
+}
+
+function reconcileBrowserPlaybackOnForeground() {
+  return reconcileInterruptedStreamingPlayback();
+}
+
+// END js/runtime/player-browser-playback-integration.js
 
 // BEGIN js/runtime/track-modal-and-gallery.js
 
@@ -41178,6 +41314,7 @@ function restoreMobileGalleryParent(descriptor) {
     // Restore before the request too: equivalent responses may retain the mounted
     // gallery. The virtual grid already owns stabilization and row materialization.
     if (typeof virtualGrid !== 'undefined' && virtualGrid?.restoreOwnedAbsoluteScrollPosition(position)) {
+      options.absoluteScrollPositionApplied = true;
       virtualGrid.render(true);
     }
   }
@@ -42556,6 +42693,11 @@ window.addEventListener('focus', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    if (typeof reconcileBrowserPlaybackOnForeground === 'function') {
+      void Promise.resolve(reconcileBrowserPlaybackOnForeground()).catch((error) => {
+        console.warn('[AlbumHaven][Playback] Foreground recovery failed.', error);
+      });
+    }
     reconcileLoopEditSessionExpiry();
     handleViewportRefocusVisibilityChange();
     return;

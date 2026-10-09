@@ -4449,3 +4449,84 @@ test('startup preview cards survive layout events until an authoritative virtual
   assert.ok(virtualGrid._renderGeneration > 0);
   assert.equal(containerEl.children.length, 0, 'An authoritative empty result must clear the old preview');
 });
+
+
+test('artist blocks place owned albums before a counted Featured On subsection', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 2;
+    const legacyOwned = { key: 'legacy-owned', name: 'Legacy owned' };
+    const explicitOwned = { key: 'explicit-owned', name: 'Explicit owned', artist_relationship: 'owned' };
+    const featured = { key: 'featured', name: 'Featured album', artist_relationship: 'featured' };
+    const duplicateFeatured = {
+        key: 'explicit-owned',
+        name: 'Explicit owned',
+        artist_relationship: 'featured',
+    };
+    const blocks = virtualGrid.getBlocksForSection({
+        group: { albums: [legacyOwned, featured, duplicateFeatured, explicitOwned] },
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+        { kind: 'row', albums: [legacyOwned, explicitOwned] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [featured] },
+    ]);
+});
+
+test('artist blocks render a Featured On subsection for a featured-only artist', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const albums = [
+        { key: 'guest-one', artist_relationship: 'featured' },
+        { key: 'guest-two', artist_relationship: 'featured' },
+    ];
+    assert.deepEqual(JSON.parse(JSON.stringify(
+        virtualGrid.getBlocksForSection({ group: { albums } }),
+    )), [
+        { kind: 'subheading', title: 'Featured On', count: 2 },
+        { kind: 'row', albums },
+    ]);
+});
+
+test('artist blocks omit Featured On when filtered albums contain no featured relationship', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 2;
+    const albums = [
+        { key: 'owned-one', artist_relationship: 'owned' },
+        { key: 'owned-two', artist_relationship: 'unexpected-value' },
+    ];
+    assert.deepEqual(JSON.parse(JSON.stringify(
+        virtualGrid.getBlocksForSection({ group: { albums } }),
+    )), [
+        { kind: 'row', albums },
+    ]);
+});
+
+test('Featured On subheading renders singular and plural album counts', () => {
+    for (const [count, label] of [[1, '1 album'], [2, '2 albums']]) {
+        const { context } = createRuntimeContext();
+        const virtualGrid = vm.runInContext('virtualGrid', context);
+        virtualGrid.columns = 3;
+        const albums = Array.from({ length: count }, (_unused, index) => ({
+            key: `featured-${index}`,
+            artist_relationship: 'featured',
+        }));
+        const section = {
+            kind: 'artist',
+            sectionType: 'primary',
+            sectionKey: 'artist:25-17',
+            top: 0,
+            group: { artist: '25/17', artist_display: '25/17', albums },
+        };
+        section.blocksData = virtualGrid.getBlocksForSection(section);
+        section.blockOffsets = [0, virtualGrid.subsectionLabelHeight];
+        section.blockHeights = [virtualGrid.subsectionLabelHeight, 200];
+        section.blocksHeight = virtualGrid.subsectionLabelHeight + 200;
+        const html = virtualGrid.renderSection(section, 0, Number.POSITIVE_INFINITY);
+        assert.match(html, /artist-subsection-label/);
+        assert.match(html, /Featured On/);
+        assert.match(html, new RegExp(label));
+    }
+});

@@ -74,6 +74,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/virtual-artist-grid.js',
   'js/runtime/player-loop-playback.js',
   'js/runtime/compact-player-controller.js',
+  'js/runtime/player-browser-playback-integration.js',
   'js/runtime/track-modal-and-gallery.js',
   'js/runtime/bootstrap-utility-event-handlers.js',
   'js/runtime/bootstrap-gallery-event-handlers.js',

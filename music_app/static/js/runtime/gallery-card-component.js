@@ -22,7 +22,8 @@ function buildGalleryCardHtml(config = {}) {
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
       </button>
-      ${sourceActions || duplicateAction ? `<div class="gallery-card__source-overlay"><div class="gallery-card__source-actions">${sourceActions}</div>${duplicateAction}</div>` : ''}
+      ${duplicateAction ? `<div class="gallery-card__source-overlay">${duplicateAction}</div>` : ''}
+      ${sourceActions ? `<div class="gallery-card__source-actions">${sourceActions}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
         ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`

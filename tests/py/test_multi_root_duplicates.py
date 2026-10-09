@@ -7,6 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from music_app.models.library import Album, Track
+from music_app.services.album_local_membership import (
+    local_album_membership_ctes_sql,
+    rejected_local_album_paths,
+)
 from music_app.services.library import build_albums_from_file_cache, get_album_duplicate_sources
 
 
@@ -101,6 +105,36 @@ def test_multidisc_album_is_one_physical_source():
         _track("main/original/CD1", disc_number=1),
         _track("main/original/CD2", disc_number=2),
     ) == []
+
+
+def test_separate_tagged_releases_in_sibling_disc_folders_are_not_mixed_metadata():
+    entries = [
+        {**asdict(_track("main/release/CD1", album="Main Album")), "library_root_id": 1},
+        {
+            **asdict(_track("main/release/CD2", album="Bonus Album")),
+            "library_root_id": 1,
+        },
+    ]
+
+    assert rejected_local_album_paths(entries) == {}
+
+
+def test_multidisc_folders_remain_one_source_when_compared_with_flat_copy():
+    entries = [
+        {**asdict(_track("main/release/CD1", 1)), "library_root_id": 1},
+        {**asdict(_track("main/release/CD2", 2)), "library_root_id": 1},
+        {**asdict(_track("hoard/flat-copy", 1)), "library_root_id": 2},
+        {**asdict(_track("hoard/flat-copy", 2)), "library_root_id": 2},
+    ]
+
+    assert rejected_local_album_paths(entries) == {}
+
+
+def test_scoped_postgres_membership_checks_mixed_tags_within_each_disc_folder():
+    sql = local_album_membership_ctes_sql(scope_album_key=True)
+
+    assert "physical_folder" in sql
+    assert "mixed.physical_folder = files.physical_folder" in sql
 
 
 def test_multidisc_copy_keeps_all_discs_in_its_own_source():

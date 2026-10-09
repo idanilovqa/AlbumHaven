@@ -294,6 +294,20 @@
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
 
+.track-modal-list li.track-modal-loading-row {
+  min-height: 120px;
+  margin-left: -20px;
+  justify-content: center;
+  color: var(--muted);
+  list-style: none;
+}
+
+.track-modal-loading-row .library-loader-spinner {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
 .track-modal-list li.is-current {
   background: rgba(16, 185, 129, 0.08);
 }

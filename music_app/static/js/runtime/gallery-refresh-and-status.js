@@ -605,6 +605,24 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  const renderOptions = { ...options };
+  const requestedScroll = options.absoluteScrollPosition;
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (
+    options.preserveAbsoluteScroll === true
+    && options.absoluteScrollPositionApplied === true
+    && Number.isFinite(Number(requestedScroll?.scrollTop))
+    && Number.isFinite(Number(requestedScroll?.scrollLeft))
+    && galleryScroll
+    && (
+      Math.abs(Number(galleryScroll.scrollTop || 0) - Number(requestedScroll.scrollTop)) > 1
+      || Math.abs(Number(galleryScroll.scrollLeft || 0) - Number(requestedScroll.scrollLeft)) > 1
+    )
+  ) {
+    renderOptions.preserveAbsoluteScroll = false;
+    delete renderOptions.absoluteScrollPosition;
+    delete renderOptions.absoluteScrollPositionApplied;
+  }
   const preserveMountedSelectedViewNodes = Boolean(
     options.preserveMountedGalleryChildren === true
     && options.retainMountedSelectedViewState
@@ -649,7 +667,7 @@ function renderView(options = {}) {
     renderRelated();
   }
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
-    renderArtistGroups(options);
+    renderArtistGroups(renderOptions);
   } else if (typeof updateGalleryMainChrome === 'function') {
     // Retained cards do not imply that search or artist context is unchanged.
     updateGalleryMainChrome();

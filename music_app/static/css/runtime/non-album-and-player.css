@@ -263,10 +263,19 @@ align-items: start;
 .artist-subsection-label {
 margin: 2px 0 -2px;
 color: #d6c8ab;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 font-size: 0.82rem;
 font-weight: 800;
 letter-spacing: 0.08em;
 text-transform: uppercase;
+}
+
+.artist-subsection-count {
+    color: var(--muted);
+    white-space: nowrap;
 }
 .album-subtitle {
 color: var(--muted);

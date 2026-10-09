@@ -64,6 +64,17 @@ def test_library_tests_do_not_depend_on_flask_runtime_helpers():
     assert not [term for term in forbidden_terms if term in source]
 
 
+def test_split_album_artist_members_requires_explicitly_spaced_slash():
+    from music_app.services.library import split_album_artist_members
+
+    assert split_album_artist_members("25/17") == []
+    assert split_album_artist_members("AC/DC") == []
+    assert split_album_artist_members("MONO / A.A. Williams") == [
+        "MONO",
+        "A.A. Williams",
+    ]
+
+
 def _entry(*, path: str, title: str, artist: str, album_artist: str, album: str, track_number: int) -> dict[str, object]:
     return {
         "path": path,

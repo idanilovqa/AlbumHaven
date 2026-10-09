@@ -105,6 +105,7 @@ const expectedRuntimeOrder = [
   'virtual-artist-grid.js',
   'player-loop-playback.js',
   'compact-player-controller.js',
+  'player-browser-playback-integration.js',
   'track-modal-and-gallery.js',
   'bootstrap-utility-event-handlers.js',
   'bootstrap-gallery-event-handlers.js',

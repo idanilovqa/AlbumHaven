@@ -21,6 +21,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     loopExpiryReconciles: 0,
     persistPlayerStateForUnload: [],
     resetPlayerUnloadPersistence: 0,
+    reconcileBrowserPlaybackOnForeground: 0,
     setLoopActive: [],
     stopStreamingPlayback: [],
   };
@@ -147,6 +148,10 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
       calls.prepareStreamingPlaybackEngine += 1;
       return Promise.reject(preparationFailure);
     },
+    reconcileBrowserPlaybackOnForeground() {
+      calls.reconcileBrowserPlaybackOnForeground += 1;
+      return Promise.resolve('continued');
+    },
     attachModalEvents() {},
     attachCoverLookupModalEvents() {},
     attachCoverLookupDeleteConfirmEvents() {},
@@ -180,6 +185,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
 
   assert.equal(typeof calls.visibilitychange, 'function');
   calls.visibilitychange();
+  assert.equal(calls.reconcileBrowserPlaybackOnForeground, 1);
   assert.ok(windowListeners.focus);
   windowListeners.focus();
   documentListeners.pointerdown();

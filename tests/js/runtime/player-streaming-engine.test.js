@@ -2808,29 +2808,14 @@ test('a near-end seek prepares its target without stopping the selected current 
   assert.equal(harness.portMessages('prepare-seek').at(-1).streamId, replacement.streamId);
 });
 
-test('retains inspectable socket and processor failures in engine diagnostics', async (t) => {
-  for (const failure of [
-    {
-      name: 'socket',
-      trigger: (harness) => harness.sockets[0].fail(new Error('transport gone')),
-      message: 'transport gone',
-    },
-    {
-      name: 'processor',
-      trigger: (harness) => harness.nodes[0].fail(new Error('render crashed')),
-      message: 'render crashed',
-    },
-  ]) {
-    await t.test(failure.name, async () => {
-      const harness = createEngineHarness();
-      await harness.api.start(makeTrack());
-      failure.trigger(harness);
-      const snapshot = harness.api.snapshot();
-      assert.equal(snapshot.mode, 'error');
-      assert.equal(snapshot.diagnostics.lastError.source, failure.name);
-      assert.match(snapshot.diagnostics.lastError.message, new RegExp(failure.message));
-    });
-  }
+test('retains inspectable processor failures in engine diagnostics', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  harness.nodes[0].fail(new Error('render crashed'));
+  const snapshot = harness.api.snapshot();
+  assert.equal(snapshot.mode, 'error');
+  assert.equal(snapshot.diagnostics.lastError.source, 'processor');
+  assert.match(snapshot.diagnostics.lastError.message, /render crashed/);
 });
 
 test('stop performs exact cleanup once and remains idempotent', async () => {
@@ -4139,6 +4124,12 @@ test('unexpected socket close reconnects once from the rendered position and lea
     streamId: first.streamId,
     timelineFrame: 3 * 48_000,
   });
+  failed.sockets[0].fail(new Error('transport gone'));
+  const errorSnapshot = failed.api.snapshot();
+  assert.notEqual(errorSnapshot.mode, 'error');
+  assert.match(errorSnapshot.diagnostics.lastSocketError.message, /transport gone/);
+  assert.equal(failed.nodes[0].disconnectCalls, 0);
+  assert.equal(failed.contexts[0].closeCalls, 0);
   failed.sockets[0].unexpectedClose({ code: 1006, reason: 'network disappeared' });
   await failed.settle();
   await failed.settle();

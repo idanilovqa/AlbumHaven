@@ -8519,7 +8519,12 @@ async function prepareStreamingPlaybackEngine() {
       socket.onopen = flushStreamingControls;
       socket.onerror = (event) => {
         if (engine.socket !== socket) return;
-        failStreamingEngine('socket', event, 'socket-error');
+        const detail = event?.error?.message || event?.message || 'Playback socket error';
+        engine.diagnostics.lastSocketError = {
+          message: String(detail),
+          atMs: performance.now(),
+        };
+        publishStreamingDiagnostics();
       };
       socket.onclose = (event) => {
         if (engine.expectedSocketClose === socket) {

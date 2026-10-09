@@ -274,6 +274,11 @@ def test_only_approved_playlist_methods_are_registered():
         assert not existing.intersection(route.methods), "Duplicate Playlist route method"
         existing.update(route.methods)
     assert registered == {
+        "/playlists/edit-requests": {"GET"},
+        "/playlists/{playlist_ref}/sharing": {"GET"},
+        "/playlists/{playlist_ref}/edit-requests": {"POST"},
+        "/playlists/{playlist_ref}/edit-requests/{request_ref}/decision": {"POST"},
+        "/playlists/{playlist_ref}/copy": {"POST"},
         "/playlists/destinations": {"GET"},
         "/playlists/creation-source/current": {"GET"},
         "/playlists/creation-source/entries": {"GET"},

@@ -42,7 +42,10 @@ def _missing_rows(owner,connection,context,playlist,*,constraints,item_refs=None
             source_lineage={"playlist_ref":str(playlist["ref"]),"playlist_item_ref":str(item["ref"]),
                             "playlist_revision":str(playlist["revision"])})
         row=sources._plain(row)
-        row["evidence_digest"]=sources.entry_evidence(row)
+        # Two authored occurrences can have identical track metadata. Bind the
+        # snapshot to the saved item without retaining private Activity proof.
+        row["evidence_digest"]=sources.evidence_digest({"playlist_item_ref":row["source_row_ref"],
+            "inventory":sources.entry_evidence(row)})
         result.append(row)
     return result
 

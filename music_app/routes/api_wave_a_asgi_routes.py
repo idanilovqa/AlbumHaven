@@ -53,7 +53,7 @@ from music_app.services.missing_album_removal_postgres import (
     MissingAlbumRootUnavailable,
     PostgresMissingAlbumRemovalService,
 )
-from music_app.services.policy_asgi import require_action
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 from music_app.services.library_roots import (
     library_root_cache_identity,
     load_library_root_settings,
@@ -65,6 +65,7 @@ from music_app.services.library_settings import (
 from music_app.services.log_history import append_log_history
 from music_app.services.manual_versions import load_manual_version_links, save_manual_version_links
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
+from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
 from music_app.services.problematic_albums import (
     find_problematic_album_by_track_paths as _find_problematic_album_by_track_paths_in_payload,
@@ -1664,6 +1665,38 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
     if _is_selected_postgres_library_browse_request(request) and _has_repair_album_media_write_rows(payload):
         result = _selected_postgres_media_write_response(result)
     return _json_response(result)
+
+
+@router.post("/utilities/tag-editor/folder-files")
+async def tag_editor_folder_files(request: Request) -> JSONResponse:
+    actions = allowed_actions_for_request(
+        request,
+        ("library.files.edit_tags", "library.paths.read"),
+    ).as_payload()
+    if not all(actions.get(action) for action in ("library.files.edit_tags", "library.paths.read")):
+        return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
+
+    payload = await _json_payload(request)
+    album, album_error = _require_album_payload(payload)
+    if album_error:
+        return _json_response(album_error)
+    track_paths, track_error = _require_album_track_paths(album)
+    if track_error:
+        return _json_response(track_error)
+    source_path = str(payload.get("source_path") or "").strip() if payload else ""
+    if not source_path or source_path not in track_paths:
+        return JSONResponse({"ok": False, "error": "Invalid source file"}, status_code=400)
+
+    try:
+        result = await run_in_threadpool(
+            load_tag_editor_folder_files,
+            _app_config(request),
+            source_path,
+            indexed_paths=track_paths,
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)
+    return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/utilities/edit-tags")

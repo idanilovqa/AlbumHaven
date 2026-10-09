@@ -37,17 +37,56 @@ test('exception editor uses an owned anchored listbox and keeps custom values ed
 });
 
 test('custom collection name is hidden at the form boundary unless selected', () => {
+  const template = fs.readFileSync(
+    path.join(root, 'music_app', 'templates', 'partials', 'primary-modals.html'),
+    'utf8',
+  );
   const css = fs.readFileSync(
     path.join(root, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
     'utf8',
   );
   assert.match(css, /\.tag-editor-form\s+label\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /label\[data-custom-collection-name-field\]\[hidden\]\s*\{[^}]*display:\s*flex[^}]*visibility:\s*hidden/s);
+  assert.match(css, /\.tag-editor-exception-menu\s*\{[^}]*position:\s*fixed/s);
+  assert.match(css, /#tag-editor-modal \.tag-editor-exception-field input:focus\s*\{[^}]*transition:\s*none/s);
+  assert.match(css, /\.tag-editor-exception-menu\s+\[role="option"\]\[aria-selected="true"\]\s*\{[^}]*color:\s*var\(--text\)/s);
+  assert.doesNotMatch(css, /\.tag-editor-exception-menu\s+\[role="option"\]\[aria-selected="true"\]\s*\{[^}]*--accent/s);
 
   const context = loadHelpers();
   assert.equal(context.isCustomCollectionException(''), false);
   assert.equal(context.isCustomCollectionException('Interview'), false);
   assert.equal(context.isCustomCollectionException('Custom Collection'), true);
   assert.equal(context.isCustomCollectionException('custom collection'), false);
+
+  const editionIndex = template.indexOf('data-tag-field="edition"');
+  const ratingIndex = template.indexOf('data-tag-field="album_rating"');
+  const exceptionIndex = template.indexOf('data-tag-field="exception_type"');
+  const collectionIndex = template.indexOf('data-tag-field="custom_collection_name"');
+  assert.ok(editionIndex < exceptionIndex);
+  assert.ok(ratingIndex < exceptionIndex);
+  assert.ok(exceptionIndex < collectionIndex);
+});
+
+test('exception menu flips above the fixed footer without changing form flow', () => {
+  const context = loadHelpers();
+  const layout = context.getTagEditorExceptionMenuLayout(
+    { top: 520, bottom: 558, left: 865, width: 274 },
+    115,
+    { top: 108, bottom: 644 },
+    1440,
+    720,
+  );
+
+  assert.equal(layout.placement, 'above');
+  assert.equal(layout.top, 406);
+  assert.equal(layout.left, 865);
+  assert.equal(layout.width, 274);
+  assert.equal(layout.maxHeight, 115);
+});
+
+test('missing tag artwork reuses the shared missing-album mark instead of text', () => {
+  assert.match(helperSource, /tag-editor-artwork-placeholder[^`]+\$\{buildMissingAlbumMarkHtml\(\)\}/s);
+  assert.doesNotMatch(helperSource, /tag-editor-artwork-placeholder">No artwork/);
 });
 
 test('exception listbox renders every library-scoped choice as a selectable option', () => {

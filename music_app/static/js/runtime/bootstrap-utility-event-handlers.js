@@ -6,6 +6,13 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
+  if (folderLoadButton) {
+    event.preventDefault();
+    void loadTagEditorFolderFiles();
+    return;
+  }
+
   const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
   if (exceptionOption) {
     event.preventDefault();

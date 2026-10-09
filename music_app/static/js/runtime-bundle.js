@@ -26515,12 +26515,61 @@ function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoi
   )).join('');
 }
 
+let tagEditorExceptionMenuCleanup = null;
+
+function getTagEditorExceptionMenuLayout(inputRect, menuHeight, boundaryRect, viewportWidth, viewportHeight) {
+  const inset = 8;
+  const maxMenuHeight = Math.min(240, Math.floor(viewportHeight * 0.4));
+  const boundaryTop = Math.max(inset, Number(boundaryRect?.top ?? inset));
+  const boundaryBottom = Math.min(viewportHeight - inset, Number(boundaryRect?.bottom ?? viewportHeight - inset));
+  const availableBelow = Math.max(0, boundaryBottom - inputRect.bottom);
+  const availableAbove = Math.max(0, inputRect.top - boundaryTop);
+  const placement = availableBelow >= Math.min(menuHeight, maxMenuHeight) || availableBelow >= availableAbove
+    ? 'below'
+    : 'above';
+  const availableHeight = placement === 'below' ? availableBelow : availableAbove;
+  const height = Math.max(0, Math.min(menuHeight, maxMenuHeight, availableHeight));
+  const width = Math.min(inputRect.width, viewportWidth - (inset * 2));
+  const left = Math.max(inset, Math.min(inputRect.left, viewportWidth - inset - width));
+  const top = placement === 'below' ? inputRect.bottom - 1 : inputRect.top - height + 1;
+  return { placement, top, left, width, maxHeight: height };
+}
+
+function positionTagEditorExceptionMenu(input, menu) {
+  const footer = document.getElementById('tag-editor-footer');
+  const dialog = input.closest('.tag-editor-dialog');
+  const viewportWidth = window.visualViewport?.width || window.innerWidth;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const dialogRect = dialog?.getBoundingClientRect();
+  const footerRect = footer?.getBoundingClientRect();
+  const layout = getTagEditorExceptionMenuLayout(
+    input.getBoundingClientRect(),
+    menu.scrollHeight,
+    {
+      top: dialogRect?.top ?? 0,
+      bottom: footerRect?.top ?? dialogRect?.bottom ?? viewportHeight,
+    },
+    viewportWidth,
+    viewportHeight,
+  );
+  menu.dataset.placement = layout.placement;
+  menu.style.position = 'fixed';
+  menu.style.top = `${layout.top}px`;
+  menu.style.left = `${layout.left}px`;
+  menu.style.width = `${layout.width}px`;
+  menu.style.maxHeight = `${layout.maxHeight}px`;
+}
+
 function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
   const form = getTagEditorElements().form;
   const input = form?.querySelector('[data-tag-field="exception_type"]');
   const menu = document.getElementById('tag-editor-exception-menu');
   if (!menu) return;
+  tagEditorExceptionMenuCleanup?.();
+  tagEditorExceptionMenuCleanup = null;
   menu.hidden = true;
+  delete menu.dataset.placement;
+  ['position', 'top', 'left', 'width', 'max-height'].forEach((name) => menu.style.removeProperty(name));
   input?.setAttribute('aria-expanded', 'false');
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
   if (restoreFocus) input?.focus?.({ preventScroll: true });
@@ -26531,10 +26580,22 @@ function openTagEditorExceptionMenu() {
   const input = form?.querySelector('[data-tag-field="exception_type"]');
   const menu = document.getElementById('tag-editor-exception-menu');
   if (!input || !menu || input.disabled) return false;
+  tagEditorExceptionMenuCleanup?.();
+  tagEditorExceptionMenuCleanup = null;
   menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), input.value);
   menu.hidden = false;
   input.setAttribute('aria-expanded', 'true');
-  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, input);
+  positionTagEditorExceptionMenu(input, menu);
+  const closeOnScroll = () => closeTagEditorExceptionMenu();
+  const reposition = () => positionTagEditorExceptionMenu(input, menu);
+  form.addEventListener('scroll', closeOnScroll, { once: true });
+  window.addEventListener('resize', reposition);
+  window.visualViewport?.addEventListener('resize', reposition);
+  tagEditorExceptionMenuCleanup = () => {
+    form.removeEventListener('scroll', closeOnScroll);
+    window.removeEventListener('resize', reposition);
+    window.visualViewport?.removeEventListener('resize', reposition);
+  };
   return true;
 }
 
@@ -26904,13 +26965,92 @@ function getTagEditorFieldDisplayValue(field, selectedPaths) {
 function renderTagEditorArtwork(selectedPaths) {
   const els = getTagEditorElements();
   if (!els.artwork) return;
-  const firstSelectedPath = selectedPaths[0] || '';
-  const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === firstSelectedPath);
+  const selectedPathSet = new Set(selectedPaths);
+  const focusedPath = selectedPathSet.has(String(state.tagEditor.anchorPath || ''))
+    ? String(state.tagEditor.anchorPath || '')
+    : (selectedPaths[0] || '');
+  const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === focusedPath);
   const coverPath = track?.cover_path || state.tagEditor.album?.cover_path || '';
-  const label = getFilenameFromPath(firstSelectedPath) || track?.title || 'selected track';
-  els.artwork.innerHTML = coverPath
+  const label = getFilenameFromPath(focusedPath) || track?.title || 'selected track';
+  const separatorIndex = Math.max(focusedPath.lastIndexOf('/'), focusedPath.lastIndexOf('\\'));
+  const folderPath = separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '';
+  const artwork = coverPath
     ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
-    : '<div class="tag-editor-artwork-placeholder">No artwork</div>';
+    : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
+}
+
+function getTagEditorFocusedPath() {
+  const tracks = state.tagEditor?.tracks || [];
+  const knownPaths = new Set(tracks.map((track) => String(track.path || '')).filter(Boolean));
+  const anchorPath = String(state.tagEditor?.anchorPath || '');
+  if (knownPaths.has(anchorPath)) return anchorPath;
+  const selectedPath = (state.tagEditor?.selectedPaths || [])
+    .map((path) => String(path || ''))
+    .find((path) => knownPaths.has(path));
+  return selectedPath || String(tracks[0]?.path || '');
+}
+
+function normalizeTagEditorPathKey(path) {
+  return String(path || '').replaceAll('/', '\\').toLocaleLowerCase();
+}
+
+async function loadTagEditorFolderFiles() {
+  const tagEditor = state.tagEditor;
+  const sourcePath = getTagEditorFocusedPath();
+  const button = document.getElementById('tag-editor-folder-load');
+  if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
+
+  tagEditor.folderLoading = true;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+  }
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        source_path: sourcePath,
+        album: {
+          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+        },
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
+    if (state.tagEditor !== tagEditor || getTagEditorElements().overlay?.hidden === true) return;
+
+    const existingPathKeys = new Set(
+      (tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)),
+    );
+    const addedTracks = [];
+    (Array.isArray(data.tracks) ? data.tracks : []).forEach((track) => {
+      const path = String(track?.path || '');
+      const pathKey = normalizeTagEditorPathKey(path);
+      if (!path || existingPathKeys.has(pathKey)) return;
+      existingPathKeys.add(pathKey);
+      addedTracks.push(track);
+      tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
+    });
+
+    if (!addedTracks.length) {
+      showRepairAlert('All supported files from this folder are already loaded.', 'success');
+      return;
+    }
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
+    renderTagEditor();
+  } catch (error) {
+    showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
+  } finally {
+    if (state.tagEditor === tagEditor) {
+      tagEditor.folderLoading = false;
+    }
+    if (button && state.tagEditor === tagEditor) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
 }
 
 function stageTagEditorTrackOrder(tracks) {
@@ -29784,6 +29924,11 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
+  const folderLoadButton = document.getElementById('tag-editor-folder-load');
+  if (folderLoadButton) {
+    folderLoadButton.disabled = false;
+    folderLoadButton.removeAttribute('aria-busy');
+  }
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;
   if (els.applyButton) els.applyButton.disabled = true;
@@ -38476,6 +38621,13 @@ function waitForUtilityTabPaint() {
 }
 
 async function handleUtilityBootstrapClick(event) {
+  const folderLoadButton = event.target.closest('[data-load-tag-editor-folder="1"]');
+  if (folderLoadButton) {
+    event.preventDefault();
+    void loadTagEditorFolderFiles();
+    return;
+  }
+
   const exceptionOption = event.target.closest('[data-tag-editor-exception-option]');
   if (exceptionOption) {
     event.preventDefault();

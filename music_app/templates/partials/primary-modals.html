@@ -50,7 +50,14 @@
         <button class="icon-button tag-editor-close" type="button" data-close-tag-editor="1" aria-label="Close tag editor">x</button>
       </div>
       <div class="tag-editor-body">
-        <aside class="tag-editor-track-list" id="tag-editor-track-list"></aside>
+        <aside class="tag-editor-track-pane">
+          <div class="tag-editor-track-list" id="tag-editor-track-list"></div>
+          <div class="tag-editor-track-footer">
+            <button class="tag-editor-folder-load" id="tag-editor-folder-load" type="button" data-load-tag-editor-folder="1" aria-label="Load all files from this folder" title="Load all files from this folder">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path><path d="M12 11v6M9 14h6"></path></svg>
+            </button>
+          </div>
+        </aside>
         <form class="tag-editor-form" id="tag-editor-form">
           <div class="tag-editor-artwork" id="tag-editor-artwork"></div>
           <label>Artist<input type="text" data-tag-field="artist"></label>
@@ -61,10 +68,10 @@
           <label>Year<input type="text" data-tag-field="year"></label>
           <label>Track Number<input type="text" data-tag-field="track_number"></label>
           <label>Disc Number<input type="text" data-tag-field="disc_number"></label>
-          <div class="tag-editor-exception-field" data-tag-editor-exception-anchor><label for="tag-editor-exception-input">Exception</label><input id="tag-editor-exception-input" type="text" data-tag-field="exception_type" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="tag-editor-exception-menu" aria-expanded="false" autocomplete="off" placeholder="None"><div class="tag-editor-exception-menu" id="tag-editor-exception-menu" role="listbox" aria-label="Exception types" hidden></div></div>
-          <label data-custom-collection-name-field hidden>Custom Collection name<input type="text" data-tag-field="custom_collection_name" autocomplete="off" placeholder="e.g. Road trip"></label>
           <label>Edition<input type="text" data-tag-field="edition"></label>
           <label>Album Rating<input type="text" data-tag-field="album_rating"></label>
+          <div class="tag-editor-exception-field" data-tag-editor-exception-anchor><label for="tag-editor-exception-input">Exception</label><input id="tag-editor-exception-input" type="text" data-tag-field="exception_type" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="tag-editor-exception-menu" aria-expanded="false" autocomplete="off" placeholder="None"><div class="tag-editor-exception-menu" id="tag-editor-exception-menu" role="listbox" aria-label="Exception types" hidden></div></div>
+          <label data-custom-collection-name-field hidden>Custom Collection name<input type="text" data-tag-field="custom_collection_name" autocomplete="off" placeholder="e.g. Road trip"></label>
         </form>
       </div>
       <div class="tag-editor-actions utility-modal-footer" id="tag-editor-footer">

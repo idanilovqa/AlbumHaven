@@ -750,6 +750,16 @@ function scheduleTagEditSaveTaskWatch(taskId, options) {
   });
 }
 
+function buildTagEditAlertCopy(album, editedTrackCount) {
+  const trackCount = Math.max(1, Number(editedTrackCount) || 0);
+  const trackLabel = trackCount === 1 ? 'track' : 'tracks';
+  const albumName = String(album?.name || '').trim() || 'this album';
+  return {
+    savingMessage: `Updating ${trackCount} ${trackLabel} in “${albumName}”.`,
+    completionMessage: `Saved changes to ${trackCount} ${trackLabel} in “${albumName}”.`,
+  };
+}
+
 async function confirmManualTagEdit() {
   const album = state.tagEditor.album;
   const updates = buildChangedTagEditorUpdates(album, state.tagEditor.tracks || [], state.tagEditor.values || {});
@@ -759,6 +769,7 @@ async function confirmManualTagEdit() {
     closeTagEditConfirmModal();
     return;
   }
+  const tagEditAlert = buildTagEditAlertCopy(album, editedPaths.length);
 
   const problematicMutationOriginKey = readProblematicMutationOriginKey();
   const inverseUpdates = buildInverseTagEditorUpdates(
@@ -823,7 +834,12 @@ async function confirmManualTagEdit() {
     tagEditMutationClaim,
   });
   renderView(renderOptions);
-  showRepairAlert('Writing tag changes...', 'success', null);
+  showRepairAlert(
+    tagEditAlert.savingMessage,
+    'info',
+    null,
+    { title: 'Saving tags', dismissible: false },
+  );
   let failedLogHistoryEntryId = '';
   try {
     const requestPayload = { confirmed: true, album, updates };
@@ -896,6 +912,7 @@ async function confirmManualTagEdit() {
       problematicMutationOriginKey,
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
+      tagEditAlert,
     };
     if (
       provisionalProblematicMutation
@@ -919,11 +936,14 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    showRepairAlert(
-      responseIsTerminal ? 'Tag changes saved.' : 'Tag changes queued. Finalizing library view...',
-      'success',
-      2000,
-    );
+    if (responseIsTerminal) {
+      showRepairAlert(
+        tagEditAlert.completionMessage,
+        'success',
+        2000,
+        { title: 'Tags updated', dismissible: false },
+      );
+    }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
       pendingProblematicEntry.settle();

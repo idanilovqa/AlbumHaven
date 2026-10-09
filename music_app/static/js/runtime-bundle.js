@@ -3630,11 +3630,21 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
-function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
+function buildFloatingNotificationAlertHtml(
+  message,
+  variant,
+  actionsHtml = '',
+  messageId = '',
+  compact = false,
+  title = '',
+) {
   const severity = normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
-    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    title: compact
+      ? ''
+      : String(title || '').trim()
+        || (severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update'),
     message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
     className: compact ? 'on-page-alert--compact' : '',
   });
@@ -3677,13 +3687,26 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
   const showLogHistoryLink = options.logHistoryLink === true
     && (!capabilities || capabilities.allows('library.logs.read'));
-  const actionsHtml = ButtonComponent.renderButton({
-    label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
-  }) + ButtonComponent.renderButton({
-    label: 'Dismiss', className: 'on-page-alert__dismiss',
-    attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
-  });
-  alert.innerHTML = buildFloatingNotificationAlertHtml(options.html ? '' : message, variant, actionsHtml, 'repair-alert-message');
+  const actions = [];
+  if (showLogHistoryLink) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
+    }));
+  }
+  if (options.dismissible !== false) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'Dismiss', className: 'on-page-alert__dismiss',
+      attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
+    }));
+  }
+  alert.innerHTML = buildFloatingNotificationAlertHtml(
+    options.html ? '' : message,
+    variant,
+    actions.join(''),
+    'repair-alert-message',
+    false,
+    options.title,
+  );
   const messageEl = document.getElementById('repair-alert-message');
   const logHistoryLink = document.getElementById('repair-alert-log-history');
   if (!messageEl) return;
@@ -19863,7 +19886,19 @@ async function watchSaveTask(taskId, context = {}) {
         }
         restoreOwnedAbsoluteScroll();
         if (!consumesProvidedTerminalPayload) {
-          showRepairAlert('Library view updated from saved files.', 'success', 1000);
+          const completionMessage = String(
+            context.tagEditAlert?.completionMessage || '',
+          ).trim();
+          if (completionMessage) {
+            showRepairAlert(
+              completionMessage,
+              'success',
+              2000,
+              { title: 'Tags updated', dismissible: false },
+            );
+          } else {
+            showRepairAlert('Library view updated from saved files.', 'success', 1000);
+          }
         }
         settleTagEditViewMutation(tagEditMutationClaim);
         return;
@@ -30029,6 +30064,16 @@ function scheduleTagEditSaveTaskWatch(taskId, options) {
   });
 }
 
+function buildTagEditAlertCopy(album, editedTrackCount) {
+  const trackCount = Math.max(1, Number(editedTrackCount) || 0);
+  const trackLabel = trackCount === 1 ? 'track' : 'tracks';
+  const albumName = String(album?.name || '').trim() || 'this album';
+  return {
+    savingMessage: `Updating ${trackCount} ${trackLabel} in “${albumName}”.`,
+    completionMessage: `Saved changes to ${trackCount} ${trackLabel} in “${albumName}”.`,
+  };
+}
+
 async function confirmManualTagEdit() {
   const album = state.tagEditor.album;
   const updates = buildChangedTagEditorUpdates(album, state.tagEditor.tracks || [], state.tagEditor.values || {});
@@ -30038,6 +30083,7 @@ async function confirmManualTagEdit() {
     closeTagEditConfirmModal();
     return;
   }
+  const tagEditAlert = buildTagEditAlertCopy(album, editedPaths.length);
 
   const problematicMutationOriginKey = readProblematicMutationOriginKey();
   const inverseUpdates = buildInverseTagEditorUpdates(
@@ -30102,7 +30148,12 @@ async function confirmManualTagEdit() {
     tagEditMutationClaim,
   });
   renderView(renderOptions);
-  showRepairAlert('Writing tag changes...', 'success', null);
+  showRepairAlert(
+    tagEditAlert.savingMessage,
+    'info',
+    null,
+    { title: 'Saving tags', dismissible: false },
+  );
   let failedLogHistoryEntryId = '';
   try {
     const requestPayload = { confirmed: true, album, updates };
@@ -30175,6 +30226,7 @@ async function confirmManualTagEdit() {
       problematicMutationOriginKey,
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
+      tagEditAlert,
     };
     if (
       provisionalProblematicMutation
@@ -30198,11 +30250,14 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    showRepairAlert(
-      responseIsTerminal ? 'Tag changes saved.' : 'Tag changes queued. Finalizing library view...',
-      'success',
-      2000,
-    );
+    if (responseIsTerminal) {
+      showRepairAlert(
+        tagEditAlert.completionMessage,
+        'success',
+        2000,
+        { title: 'Tags updated', dismissible: false },
+      );
+    }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
       pendingProblematicEntry.settle();

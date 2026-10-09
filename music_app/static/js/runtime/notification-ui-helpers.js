@@ -289,11 +289,21 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
-function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
+function buildFloatingNotificationAlertHtml(
+  message,
+  variant,
+  actionsHtml = '',
+  messageId = '',
+  compact = false,
+  title = '',
+) {
   const severity = normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
-    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    title: compact
+      ? ''
+      : String(title || '').trim()
+        || (severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update'),
     message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
     className: compact ? 'on-page-alert--compact' : '',
   });
@@ -336,13 +346,26 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
   const showLogHistoryLink = options.logHistoryLink === true
     && (!capabilities || capabilities.allows('library.logs.read'));
-  const actionsHtml = ButtonComponent.renderButton({
-    label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
-  }) + ButtonComponent.renderButton({
-    label: 'Dismiss', className: 'on-page-alert__dismiss',
-    attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
-  });
-  alert.innerHTML = buildFloatingNotificationAlertHtml(options.html ? '' : message, variant, actionsHtml, 'repair-alert-message');
+  const actions = [];
+  if (showLogHistoryLink) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
+    }));
+  }
+  if (options.dismissible !== false) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'Dismiss', className: 'on-page-alert__dismiss',
+      attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
+    }));
+  }
+  alert.innerHTML = buildFloatingNotificationAlertHtml(
+    options.html ? '' : message,
+    variant,
+    actions.join(''),
+    'repair-alert-message',
+    false,
+    options.title,
+  );
   const messageEl = document.getElementById('repair-alert-message');
   const logHistoryLink = document.getElementById('repair-alert-log-history');
   if (!messageEl) return;

@@ -663,6 +663,23 @@ test('repair alert auto-hide duration starts after its first visible frame', () 
   assert.equal(scheduledTimeoutCount(), 1);
 });
 
+test('repair progress alert supports a contextual title without an empty action row', () => {
+  const { alert, context, message } = createRepairAlertContext();
+
+  context.showRepairAlert(
+    'Updating 12 tracks in “Spiritual Romance”.',
+    'info',
+    null,
+    { title: 'Saving tags', dismissible: false },
+  );
+
+  assert.equal(message.textContent, 'Updating 12 tracks in “Spiritual Romance”.');
+  assert.match(alert.innerHTML, /Saving tags/u);
+  assert.doesNotMatch(alert.innerHTML, /data-dismiss-repair-alert/u);
+  assert.doesNotMatch(alert.innerHTML, /repair-alert-log-history/u);
+  assert.doesNotMatch(alert.innerHTML, /on-page-alert__actions/u);
+});
+
 test('showing a repair alert cancels a pending hide finalizer', () => {
   const {
     alert,

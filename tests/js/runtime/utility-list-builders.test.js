@@ -3845,6 +3845,9 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
   await context.watchSaveTask('queued-rename-terminal', {
     originalAlbum: staleAlbum,
     originatingViewStateRevision: 12,
+    tagEditAlert: {
+      completionMessage: 'Saved changes to 1 track in “New Album”.',
+    },
     tagEdits: {
       [trackPath]: { album: 'New Album', year: '2026' },
     },
@@ -3866,9 +3869,14 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
     ['Hydrated Track'],
     'canonical identity adoption must retain hydrated modal membership',
   );
-  assert.deepEqual(alerts, [
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
-    ['Library view updated from saved files.', 'success', 1000],
+    [
+      'Saved changes to 1 track in “New Album”.',
+      'success',
+      2000,
+      { title: 'Tags updated', dismissible: false },
+    ],
   ]);
 });
 

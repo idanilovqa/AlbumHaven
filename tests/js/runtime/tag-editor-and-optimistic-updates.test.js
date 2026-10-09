@@ -1815,7 +1815,20 @@ test('completed save-task response reconciles immediately without starting a wat
   assert.deepEqual(problematicCalls, [[album, null]]);
   assert.deepEqual(watchedTasks, []);
   assert.deepEqual(settledClaims, [mutationClaim]);
-  assert.deepEqual(alerts.at(-1), ['Tag changes saved.', 'success', 2000]);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
+    [
+      'Updating 1 track in “Album”.',
+      'info',
+      null,
+      { title: 'Saving tags', dismissible: false },
+    ],
+    [
+      'Saved changes to 1 track in “Album”.',
+      'success',
+      2000,
+      { title: 'Tags updated', dismissible: false },
+    ],
+  ]);
 });
 
 test('completed refresh-required response gives its terminal payload to canonical reconciliation before Saved', async () => {
@@ -1885,7 +1898,7 @@ test('completed refresh-required response gives its terminal payload to canonica
         { [trackPath]: { title: 'Committed' } },
         terminalPayload,
       ],
-      ['alert', 'Tag changes saved.'],
+      ['alert', 'Saved changes to 1 track in “Album”.'],
     ],
   );
   assert.deepEqual(settledClaims, [mutationClaim]);
@@ -1967,7 +1980,7 @@ test('completed loose-track membership edit refreshes canonically even when fina
   );
   assert.deepEqual(events.slice(-2), [
     ['watch', 'completed-loose-membership-task'],
-    ['alert', 'Tag changes saved.'],
+    ['alert', 'Saved changes to 1 track in “Non-album tracks”.'],
   ]);
 
   closedModal.hidden = false;
@@ -2404,10 +2417,11 @@ test('manual tag edit does not apply successful origin albums after navigation d
   assert.strictEqual(context.state.view, navigatedView);
   assert.equal(watchedTasks.length, 1);
   assert.equal(watchedTasks[0][1].originatingViewStateRevision, 21);
-  assert.deepEqual(alerts.at(-1), [
-    'Tag changes queued. Finalizing library view...',
-    'success',
-    2000,
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1))), [
+    'Updating 1 track in “Album”.',
+    'info',
+    null,
+    { title: 'Saving tags', dismissible: false },
   ]);
 });
 

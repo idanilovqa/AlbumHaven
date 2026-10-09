@@ -2273,7 +2273,19 @@ async function watchSaveTask(taskId, context = {}) {
         }
         restoreOwnedAbsoluteScroll();
         if (!consumesProvidedTerminalPayload) {
-          showRepairAlert('Library view updated from saved files.', 'success', 1000);
+          const completionMessage = String(
+            context.tagEditAlert?.completionMessage || '',
+          ).trim();
+          if (completionMessage) {
+            showRepairAlert(
+              completionMessage,
+              'success',
+              2000,
+              { title: 'Tags updated', dismissible: false },
+            );
+          } else {
+            showRepairAlert('Library view updated from saved files.', 'success', 1000);
+          }
         }
         settleTagEditViewMutation(tagEditMutationClaim);
         return;

@@ -192,9 +192,10 @@ async function dismissLibraryWatcherWarning(button) {
       const response = await fetch('/account/library-warning/dismiss', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
       });
-      if (!response.ok) throw new Error(response.status === 409
-        ? 'The library warning changed. Please review the latest warning.'
-        : 'Unable to dismiss the warning. Please try again.');
+      if (!response.ok) {
+        if (response.status === 409) return false;
+        throw new Error('Unable to dismiss the warning. Please try again.');
+      }
       state.ui.dismissedLibraryWarningToken = token;
       if (libraryWatcherHealth?.warning_token === token) {
         libraryWatcherHealth = { ...libraryWatcherHealth, dismissed: true };
@@ -251,11 +252,13 @@ function syncLibraryWatcherWarning(data = {}) {
     const openLibrary = event.target.closest('[data-watcher-library]');
     const button = dismiss || openLibrary;
     if (!button || button.disabled) return;
-    if (await dismissLibraryWatcherWarning(button) && openLibrary) {
+    if (openLibrary) {
       closeUtilityModal();
       openScanPage();
       syncScanLibraryWatcherHealth();
+      return;
     }
+    await dismissLibraryWatcherWarning(button);
   });
   layer.appendChild(libraryWatcherWarning);
   registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });

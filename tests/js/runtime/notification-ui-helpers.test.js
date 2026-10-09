@@ -328,7 +328,7 @@ for (const status of [409, 503, 'network']) test(`failed dismissal ${status} ret
   assert.equal(toasts[0], mounted);
   assert.equal(button.disabled, false);
   assert.equal(context.state.ui.dismissedLibraryWarningToken, '');
-  assert.equal(errors.length, 1);
+  assert.equal(errors.length, status === 409 ? 0 : 1);
 });
 
 for (const status of [200, 409]) test(`in-flight dismissal ${status} cannot hide a newer warning`, async () => {
@@ -380,25 +380,22 @@ for (const replaceQueuedWarning of [false, true]) test(`different warning acknow
   }
 });
 
-test('Go to Library awaits persisted acknowledgement before opening Scan Library', async () => {
+test('Go to Library opens Scan Library without changing warning acknowledgement', async () => {
   const { context, toasts } = createContext();
   const actions = [];
   context.buildOnPageAlertHtml = () => '<section>Warning</section>';
   context.closeUtilityModal = () => actions.push('close');
   context.openScanPage = () => actions.push('scan');
-  let complete;
-  context.fetch = () => new Promise(resolve => { complete = resolve; });
+  let calls = 0;
+  context.fetch = () => { calls += 1; throw new Error('dismissal should not run'); };
   const warning = watcherWarning();
   context.syncLibraryWatcherWarning(warning);
   const button = warningButton(toasts[0]);
   const clicked = toasts[0].click({ target: { closest: selector => selector === '[data-watcher-library]' ? button : null } });
-  assert.deepEqual(actions, []);
-  complete({ ok: true, status: 200, json: async () => ({ dismissed_token: firstWarningToken }) });
+  assert.equal(calls, 0);
   await clicked;
   assert.deepEqual(actions, ['close', 'scan']);
-  assert.equal(toasts.length, 0);
-  context.syncLibraryWatcherWarning(warning);
-  assert.equal(toasts.length, 0, 'polling must not reopen the dismissed alert');
+  assert.equal(toasts.length, 1);
 });
 
 test('toast placement is opt-in for the cover lookup start notification', () => {

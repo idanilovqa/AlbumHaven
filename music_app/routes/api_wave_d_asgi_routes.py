@@ -221,7 +221,8 @@ async def _serialize_cover_gallery_from_asgi(
         )
         file_cache = {**file_cache, **selected_entries}
     task_payload = serialize_cover_lookup_task_payload(cover_lookup_result(task_id) if task_id else {})
-    return serialize_cover_gallery_payload(
+    return await run_in_threadpool(
+        serialize_cover_gallery_payload,
         album_root=album_root,
         track_paths=track_paths,
         file_cache=file_cache,
@@ -1046,12 +1047,6 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     response_task_payload = serialize_cover_lookup_task_payload(
         cover_lookup_result(task_id)
     )
-    response_gallery_payload = await _serialize_cover_gallery_from_asgi(
-        request,
-        album_context.album_root,
-        album_context.track_paths,
-        task_id,
-    )
     queue_cover_lookup_save_remote_task(
         task_id,
         album_context.album_root,
@@ -1083,7 +1078,6 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             "optimistic_remote_width": int(selected_match.get("width") or 0),
             "optimistic_remote_height": int(selected_match.get("height") or 0),
             "task": response_task_payload,
-            "gallery": response_gallery_payload,
         }
     )
 

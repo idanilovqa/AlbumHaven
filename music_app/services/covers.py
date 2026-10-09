@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from threading import Lock, RLock
 
+from music_app.services.library_watch_suppression import suppress_library_watch_events
+
 try:
     from PIL import Image, ImageFilter
 except ImportError:
@@ -244,10 +246,11 @@ def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | Non
     while True:
         candidate = folder / f"cover-existing-{index}.jpg"
         try:
-            with candidate.open("xb") as reserve_file:
-                reserve_file.write(current_bytes)
-                reserve_file.flush()
-                os.fsync(reserve_file.fileno())
+            with suppress_library_watch_events((candidate,)):
+                with candidate.open("xb") as reserve_file:
+                    reserve_file.write(current_bytes)
+                    reserve_file.flush()
+                    os.fsync(reserve_file.fileno())
         except FileExistsError:
             index += 1
             continue

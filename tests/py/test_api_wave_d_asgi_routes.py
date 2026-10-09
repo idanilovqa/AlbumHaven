@@ -2275,7 +2275,7 @@ def test_asgi_cover_lookup_save_remote_queues_selected_candidate(app, monkeypatc
     assert payload["optimistic_remote_width"] == 1000
     assert payload["optimistic_remote_height"] == 1000
     assert payload["task"]["selected_candidate_id"] == "candidate-1"
-    assert payload["gallery"]["task"]["selected_candidate_id"] == "candidate-1"
+    assert "gallery" not in payload
     assert update_calls[0]["config"] is app.config
     assert update_calls[0]["job_contract"]["job_kind"] == "save_remote_selection"
     assert update_calls[0]["job_contract"]["provider_groups"] == [

@@ -133,6 +133,67 @@ def test_watchdog_mapping_keeps_child_delete_and_move_events(
     assert watchdog_event_kind("created") is LibraryEventKind.CREATED
 
 
+def test_watchdog_ignores_app_owned_cover_write(monkeypatch, tmp_path: Path):
+    from music_app.services import library_watch
+
+    root = tmp_path / "music"
+    cover = root / "Artist" / "Album" / "cover.jpg"
+    published = []
+    monkeypatch.setattr(
+        library_watch,
+        "is_library_watch_event_suppressed",
+        lambda path: Path(path) == cover.resolve(strict=False),
+    )
+    library_watch.publish_watchdog_event(
+        SimpleNamespace(event_type="modified", src_path=str(cover), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=published.append,
+        clock=lambda: 3.0,
+    )
+    assert published == []
+
+
+def test_watchdog_ignores_cover_transaction_temp_files(tmp_path: Path):
+    from music_app.services.library_reconciliation import publish_watchdog_event
+
+    root = tmp_path / "music"
+    artifact = root / "Artist" / "Album" / ".cover.jpg.abc.tmp"
+    published = []
+    publish_watchdog_event(
+        SimpleNamespace(event_type="modified", src_path=str(artifact), is_directory=False),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=published.append,
+        clock=lambda: 3.0,
+    )
+    assert published == []
+
+
+def test_external_cover_transaction_rename_is_published_as_cover_creation(tmp_path: Path):
+    from music_app.services.library_reconciliation import (
+        LibraryEventKind,
+        publish_watchdog_event,
+    )
+
+    root = tmp_path / "music"
+    artifact = root / "Artist" / "Album" / ".cover.jpg.abc.tmp"
+    cover = root / "Artist" / "Album" / "cover.jpg"
+    published = []
+    publish_watchdog_event(
+        SimpleNamespace(
+            event_type="moved",
+            src_path=str(artifact),
+            dest_path=str(cover),
+            is_directory=False,
+        ),
+        roots=[{"id": "main", "path": str(root)}],
+        publish=published.append,
+        clock=lambda: 3.0,
+    )
+    assert len(published) == 1
+    assert published[0].kind is LibraryEventKind.CREATED
+    assert published[0].path == cover.resolve(strict=False)
+
+
 @pytest.mark.parametrize("event_type", ["deleted", "moved"])
 @pytest.mark.parametrize("is_directory", [True, False])
 def test_watchdog_maps_configured_root_disappearance_to_unavailable_health_event(

@@ -2102,11 +2102,17 @@ test('gallery cover readiness requires decoded images or explicit final placehol
 
 test('gallery readiness uses hydration state instead of a fixed virtualized-card count', () => {
   const gallery = read('tests/e2e/actions/galleryActions.js');
+  const readinessStart = gallery.indexOf('async waitForGalleryReady');
+  const readinessEnd = gallery.indexOf('async expectCentralLoaderHidden');
+  assert.ok(readinessStart >= 0 && readinessEnd > readinessStart);
+  const readiness = gallery.slice(readinessStart, readinessEnd);
 
   assert.match(gallery, /options\.minimumCards === undefined\s*\? 1/);
   assert.match(gallery, /metrics\.initialRefreshCompleted/);
   assert.match(gallery, /metrics\.marks\?\.initial_refresh_complete/);
   assert.match(gallery, /libraryLoader\.hidden/);
+  assert.match(readiness, /startupProgress\.hidden/);
+  assert.match(readiness, /startupProgressSelector: this\.galleryPage\.startupProgressSelector/);
   assert.match(gallery, /visibleCards\.length >= selectors\.minimumCards/);
   assert.match(gallery, /bounds\.width > 0 && bounds\.height > 0/);
   assert.doesNotMatch(gallery, /minimumCards \?\? 10/);

@@ -532,6 +532,9 @@ def _transient_scan_view_response(
 
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
+    if str(request.query_params.get("surface") or "").strip().casefold() == "album_tops":
+        from music_app.routes.owned_album_tops_asgi import album_top_view_response
+        return album_top_view_response(request)
     if str(request.query_params.get("surface") or "").casefold() == "playlists":
         from music_app.routes.owned_playlists_asgi import playlist_view_response
         return playlist_view_response(request)

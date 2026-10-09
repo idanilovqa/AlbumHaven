@@ -4,7 +4,7 @@ import {Button, NativeHtml} from './components.jsx';
 
 // Native form ownership includes dismissal, focus trap and return focus. React
 // owns only a dedicated inner host, safe to unmount after native teardown.
-export function NativeDialog({runtime, title, pageId, presentationKey, parentSurface, returnFocus, beforeDismiss, onClose, children, contentOwnsFooter = true}) {
+export function NativeDialog({runtime, title, pageId, presentationKey, parentSurface, returnFocus, beforeDismiss, onClose, children, showCloseButton = false, dismissDisabled = false, contentOwnsFooter = true}) {
   const [host, setHost] = useState(null), [failed, setFailed] = useState(false);
   const latest = useRef(onClose), ownerRef = useRef(null), closeOptions = useRef(null); latest.current = onClose;
   const dismissal = useRef(beforeDismiss); dismissal.current = beforeDismiss;
@@ -12,7 +12,7 @@ export function NativeDialog({runtime, title, pageId, presentationKey, parentSur
   useLayoutEffect(() => {
     let disposed = false, owner;
     try {
-      owner = runtime.openForm({title, pageId, parentSurface, returnFocus: () => fallback.current?.(), contentOwnsFooter,
+      owner = runtime.openForm({title, pageId, parentSurface, returnFocus: () => fallback.current?.(), contentOwnsFooter, showCloseButton, dismissDisabled,
         beforeDismiss: beforeDismiss ? reason => dismissal.current?.(reason) : undefined,
         onMount: element => {if (!disposed) setHost(element);},
         onClose: (_host, options) => {if (!disposed) {setHost(null); latest.current?.({restoreFocus: false,
@@ -22,10 +22,11 @@ export function NativeDialog({runtime, title, pageId, presentationKey, parentSur
       ownerRef.current = owner;
     } catch (_error) {setFailed(true);}
     return () => {disposed = true; ownerRef.current = null; owner?.close(null, {force: true, restoreFocus: false, returnToParent: false});};
-  }, [runtime, presentationKey ?? title, presentationKey ?? pageId, parentSurface, contentOwnsFooter, Boolean(beforeDismiss)]);
+  }, [runtime, presentationKey ?? title, presentationKey ?? pageId, parentSurface, contentOwnsFooter, showCloseButton, Boolean(beforeDismiss)]);
   useLayoutEffect(() => {
     if (presentationKey) ownerRef.current?.updatePresentation?.({title, pageId});
   }, [presentationKey, title, pageId]);
+  useLayoutEffect(() => {ownerRef.current?.setDismissDisabled?.(dismissDisabled);}, [dismissDisabled]);
   if (failed) return <div><NativeHtml html={runtime.alertHtml({severity: 'info', role: 'status', message: 'This dialog is not available right now.'})}/>
     <Button runtime={runtime} onClick={() => latest.current?.()}>Close</Button></div>;
   const close = options => {

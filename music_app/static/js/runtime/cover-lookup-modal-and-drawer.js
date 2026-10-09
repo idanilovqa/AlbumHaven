@@ -1259,10 +1259,10 @@ function notificationDrawerFocusTarget(key) {
     || document.getElementById('cover-lookup-drawer-button');
 }
 
-function registerNotificationSource({name, scopeKey, isCurrent, onOpen, onShow} = {}) {
+function registerNotificationSource({name, label = 'Friend requests', scopeKey, isCurrent, onOpen, onShow} = {}) {
   if (typeof name !== 'string' || !name.trim() || typeof scopeKey !== 'string' || !scopeKey.trim()
     || typeof isCurrent !== 'function' || typeof onOpen !== 'function') throw new TypeError('A current notification scope and opener are required.');
-  const source = {name, scopeKey, isCurrent, onOpen, onShow, records: new Map(), status: 'idle', revision: 0};
+  const source = {name, label: String(label), scopeKey, isCurrent, onOpen, onShow, records: new Map(), status: 'idle', revision: 0};
   const current = () => notificationSources.get(name) === source && isCurrent() === true;
   notificationSources.set(name, source);
   renderCoverLookupDrawer();
@@ -1277,7 +1277,7 @@ function registerNotificationSource({name, scopeKey, isCurrent, onOpen, onShow} 
         const avatarUrl = typeof row.avatarUrl === 'string' && !/[\\\u0000-\u0020\u007f]/.test(row.avatarUrl)
           && (/^\/(?!\/)/.test(row.avatarUrl) || /^https:\/\//i.test(row.avatarUrl)) ? row.avatarUrl : '';
         next.set(row.id, Object.freeze({id: row.id, title: String(row.title || 'Friend request'),
-          byline: String(row.byline || ''), avatarUrl, createdAt: row.createdAt ?? null}));
+          byline: String(row.byline || ''), typeLabel: String(row.typeLabel || 'Friend request'), read: row.read === true, avatarUrl, createdAt: row.createdAt ?? null}));
       }
       source.records = next; source.status = status; source.revision++;
       renderCoverLookupDrawer();
@@ -1296,19 +1296,19 @@ function getRequestNotificationCards() {
   const cards = [];
   for (const [name, source] of notificationSources) {
     if (source.isCurrent() !== true) {notificationSources.delete(name); source.records.clear(); continue;}
-    const message = {idle: 'Friend requests have not been loaded.', loading: 'Loading friend requests…', error: 'Friend requests could not be loaded.',
-      denied: 'You do not have access to friend requests.', unavailable: 'Friend requests are unavailable.'}[source.status];
+    const message = {idle: `${source.label} have not been loaded.`, loading: `Loading ${source.label.toLowerCase()}…`, error: `${source.label} could not be loaded.`,
+      denied: `You do not have access to ${source.label.toLowerCase()}.`, unavailable: `${source.label} are unavailable.`}[source.status];
     if (message) cards.push({key: JSON.stringify([name, source.scopeKey]), createdAt: null, status: true,
       markup: `<div class="notification-source-status">${buildOnPageAlertHtml({message,
         severity: source.status === 'error' ? 'error' : 'info', role: source.status === 'error' ? 'alert' : 'status'})}</div>`,
     });
     for (const record of source.records.values()) {
       const key = JSON.stringify([name, source.scopeKey, record.id]);
-      cards.push({key, createdAt: record.createdAt, source, id: record.id,
-        markup: renderNotificationCard({title: record.title, typeLabel: 'Friend request', byline: record.byline,
+      cards.push({key, createdAt: record.createdAt, source, id: record.id, read: record.read,
+        markup: renderNotificationCard({title: record.title, typeLabel: record.typeLabel, byline: record.byline,
           statusLabel: 'Pending response', stateClass: 'is-pending',
           coverHtml: record.avatarUrl ? `<img class="cover-lookup-task-cover" src="${escapeHtml(record.avatarUrl)}" alt="">` : '',
-          openAttributes: {role: 'button', tabindex: '0', 'aria-label': `Open friend request from ${record.title}`,
+          openAttributes: {role: 'button', tabindex: '0', 'aria-label': record.typeLabel === 'Friend request' ? `Open friend request from ${record.title}` : `Open ${record.typeLabel.toLowerCase()} request: ${record.title}`,
             'data-open-request-notification': key},
         }),
       });
@@ -1430,7 +1430,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const opening = state.coverLookup.drawerOpen && !drawer.classList.contains('is-open');
   const requestCards = getRequestNotificationCards();
-  const requestCount = requestCards.filter(card => !card.status).length;
+  const requestCount = requestCards.filter(card => !card.status && !card.read).length;
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;

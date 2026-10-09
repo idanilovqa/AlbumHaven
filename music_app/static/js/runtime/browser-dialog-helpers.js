@@ -26,6 +26,7 @@ function showAppFormDialog(options = {}) {
   const get = name => document.getElementById(`app-form-${name}`);
   const modal = get('modal'), title = get('title'), content = get('content'), error = get('error'), cancel = get('cancel'), submit = get('submit');
   if (!modal || !title || !content || !error || !cancel || !submit) return Promise.resolve(null);
+  const headerClose = get('close');
   const previousFocus = document.activeElement;
   // Parent ownership belongs here, alongside native dismissal and focus. A
   // request form can retain the one drawer without another overlay or trap.
@@ -52,10 +53,12 @@ function showAppFormDialog(options = {}) {
   const guarded = typeof options.beforeDismiss === 'function';
   const contentInert = content.inert;
   let submitEnabled = options.submitEnabled !== false, submitting = false, finishing = false, dismissal = null;
+  let dismissDisabled = options.dismissDisabled === true;
   const syncSubmit = () => {
     if (activeAppFormDialog !== owner) return;
     submit.disabled = submitting || Boolean(dismissal) || !submitEnabled;
-    cancel.disabled = Boolean(dismissal) || (guarded && submitting);
+    cancel.disabled = dismissDisabled || Boolean(dismissal) || (guarded && submitting);
+    if (headerClose) headerClose.disabled = cancel.disabled;
     if (guarded) content.inert = Boolean(dismissal) || contentInert;
   };
   const controls = { setSubmitEnabled(value) {
@@ -105,6 +108,7 @@ function showAppFormDialog(options = {}) {
       }
       if (anchoredPanel) { clearTriggerAnchor(anchoredPanel); anchoredPanel.removeAttribute('style'); anchoredPanel.setAttribute('aria-modal', 'true'); modal.classList.remove('app-form-anchored'); }
       modal.classList?.remove('app-form-reading'); submit.hidden = false;
+      if (headerClose) {headerClose.hidden = true; headerClose.disabled = false;}
       content.inert = contentInert; cancel.disabled = false;
       content.innerHTML = ''; activeAppFormDialog = null;
       modal.style.zIndex = previousLayer;
@@ -123,6 +127,7 @@ function showAppFormDialog(options = {}) {
   const requestDismiss = (reason = 'cancel', closeOptions = {}, value = null) => {
     if (activeAppFormDialog !== owner || finishing || (guarded && submitting)) return Promise.resolve(false);
     if (dismissal) return dismissal;
+    if (dismissDisabled && closeOptions?.force !== true) return Promise.resolve(false);
     if (!guarded) return Promise.resolve(finish(value ?? null, closeOptions));
     const dismissFocus = document.activeElement;
     // Defer the callback until the shared pending token is installed. Reentrant
@@ -150,6 +155,7 @@ function showAppFormDialog(options = {}) {
     if (typeof updateMobileAppFormPresentation === 'function') updateMobileAppFormPresentation(owner);
     return true;
   };
+  controls.setDismissDisabled = value => {if (owner.isActive()) {dismissDisabled = value === true; syncSubmit();}};
   owner.close = controls.close;
   owner.dismiss = controls.dismiss;
   owner.isActive = () => activeAppFormDialog === owner && !finishing;
@@ -165,6 +171,7 @@ function showAppFormDialog(options = {}) {
   title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
   submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
   submit.hidden = contentOwnsFooter || options.mode === 'reading'; cancel.hidden = contentOwnsFooter;
+  if (headerClose) headerClose.hidden = options.showCloseButton !== true;
   if (footer) footer.hidden = true;
   if (contentOwnsFooter) content.setAttribute('tabindex', '-1');
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
@@ -215,6 +222,7 @@ function showAppFormDialog(options = {}) {
     }
   }
   if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
+  if (headerClose) listen(headerClose, 'click', () => {if (!headerClose.disabled) return requestDismiss('cancel');});
   listen(cancel, 'click', () => requestDismiss('cancel')); listen(submit, 'click', apply);
   const contentControls = () => [...content.querySelectorAll('input, button, textarea, select, a[href], [tabindex="0"]')]
     .filter(node => !node.disabled && !node.hidden && node.type !== 'hidden'
@@ -223,8 +231,9 @@ function showAppFormDialog(options = {}) {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); return requestDismiss('escape'); }
     if (event.key !== 'Tab') return;
     if (modal.classList?.contains?.('is-mobile-page')) return;
-    const controls = contentOwnsFooter ? contentControls()
-      : [...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
+    const headerControls = headerClose && !headerClose.hidden && !headerClose.disabled ? [headerClose] : [];
+    const controls = contentOwnsFooter ? [...headerControls, ...contentControls()]
+      : [...headerControls, ...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
     if (contentOwnsFooter && (!controls.length || !controls.includes(document.activeElement))) {
       event.preventDefault(); (event.shiftKey ? controls[controls.length - 1] || content : controls[0] || content).focus(); return;
     }
@@ -257,16 +266,16 @@ function showAppFormDialog(options = {}) {
   return promise;
 }
 
-function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, parentSurface, returnFocus, retainParentView, contentOwnsFooter = true} = {}, isAvailable = () => true) {
+function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, parentSurface, returnFocus, retainParentView, showCloseButton = false, dismissDisabled = false, contentOwnsFooter = true} = {}, isAvailable = () => true) {
   if (!isAvailable() || typeof showAppFormDialog !== 'function' || activeAppFormDialog) throw new Error('The form dialog is unavailable.');
   let controls, host;
   const close = (value, options) => controls?.close(value, options);
-  const promise = showAppFormDialog({title, pageId, beforeDismiss, parentSurface, returnFocus, retainParentView, mode: 'reading', contentOwnsFooter: contentOwnsFooter === true,
+  const promise = showAppFormDialog({title, pageId, beforeDismiss, parentSurface, returnFocus, retainParentView, showCloseButton, dismissDisabled, mode: 'reading', contentOwnsFooter: contentOwnsFooter === true,
     onMount(content, owner) {controls = owner; host = document.createElement('div'); content.appendChild(host); onMount?.(host, close);},
     onAfterClose(_content, closeOptions) {onClose?.(host, closeOptions);},
   });
   if (!controls) throw new Error('The form dialog is unavailable.');
-  return Object.freeze({promise, close, updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
+  return Object.freeze({promise, close, setDismissDisabled: value => controls?.setDismissDisabled(value), updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
 }
 
 function showBrowserAlert(message) {

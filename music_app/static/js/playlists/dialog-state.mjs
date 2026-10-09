@@ -13,9 +13,9 @@ export function playlistDialogVisible(dialog, state) {
     detail?.playlist_id === dialog.playlistId || !detail && state.mutation.status === 'loading'
       && ['saveDefaultSort', 'deletePlaylist'].includes(state.mutation.action) && state.mutation.playlist_id === dialog.playlistId);
   return dialog.kind === 'share' && state.resource.status !== 'denied' && Boolean(
-    detail?.playlist_id === dialog.playlistId && dialog.sharingGranted === granted(detail, 'can_share')
+    detail?.playlist_id === dialog.playlistId && dialog.sharingGranted === (granted(detail, 'can_view_sharing') || granted(detail, 'can_share'))
     || !detail && dialog.sharingGranted && state.mutation.status === 'loading'
-      && ['saveSharing', 'setPlaylistEditor'].includes(state.mutation.action) && state.mutation.playlist_id === dialog.playlistId);
+      && ['saveSharing', 'setPlaylistEditor', 'requestEditAccess', 'decideEditRequest'].includes(state.mutation.action) && state.mutation.playlist_id === dialog.playlistId);
 }
 export function restorePlaylistDialogFocus(root, action, document) {
   const active = document.activeElement;
@@ -31,5 +31,5 @@ export function playlistSharingCurrent(subject, state) {
     && state.mutation.playlist_id === state.selectedPlaylistId;
   return Boolean(subject && subject.playlist_id === state.selectedPlaylistId
     && (subject === detail || ownSave && state.resource.status !== 'denied'
-      && (!detail || granted(detail, 'can_share'))));
+      && (!detail || (granted(detail, 'can_view_sharing') || granted(detail, 'can_share')))));
 }

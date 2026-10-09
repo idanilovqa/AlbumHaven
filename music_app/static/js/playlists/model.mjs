@@ -13,7 +13,7 @@ const ref = value => typeof value === 'string' && value.trim() && !/[\x00-\x1f\x
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 export const granted = (resource, key) => own(resource?.allowed_actions, key) && resource.allowed_actions[key] === true;
 const ACTIONS = ['can_open', 'can_play', 'can_edit', 'can_rename', 'can_reorder', 'can_add', 'can_share',
-  'can_export', 'can_create', 'can_create_album_top', 'can_create_sample', 'can_view_details', 'can_review_matches', 'can_accept_match', 'can_save_default_sort', 'can_delete'];
+  'can_view_sharing', 'can_request_edit', 'can_copy', 'can_export', 'can_create', 'can_create_album_top', 'can_create_sample', 'can_view_details', 'can_review_matches', 'can_accept_match', 'can_save_default_sort', 'can_delete'];
 const grants = source => Object.freeze(Object.fromEntries(ACTIONS.map(key => [key, own(source, key) && source[key] === true])));
 const freeze = value => {
   if (Object.isFrozen(value)) return value;
@@ -27,6 +27,7 @@ const initial = scopeKey => freeze({scopeKey, resource: resource(), selectedPlay
 const failStatus = error => [401, 403].includes(error?.status) ? 'denied' : 'error';
 const GRANT_BY_ACTION = Object.freeze({savePlaylist: 'can_edit', addTracks: 'can_add', createPlaylist: 'can_create',
   createAlbumTop: 'can_create_album_top', createSamplePlaylist: 'can_create_sample', saveSharing: 'can_share',
+  requestEditAccess: 'can_request_edit', decideEditRequest: 'can_share', copyPlaylist: 'can_copy',
   setPlaylistEditor: 'can_share', saveDefaultSort: 'can_save_default_sort', deletePlaylist: 'can_delete'});
 
 function unique(values, key) {
@@ -109,6 +110,9 @@ export function normalizeSharing(value) {
     display_name: text(person.display_name), username_display: text(person.username_display), selected: person.selected === true, is_active: person.is_active !== false,
     role: 'editor', can_edit: own(person, 'can_edit') && person.can_edit === true}));
   return freeze({visibility: value.visibility, revision: value.revision, next_cursor: value.next_cursor, people,
+    can_request_edit: value.can_request_edit === true, can_copy: value.can_copy === true,
+    request_status: ['none', 'pending', 'approved', 'declined'].includes(value.request_status) ? value.request_status : 'none',
+    pending_requests: unique(value.pending_requests || [], 'request_ref').map(row => ({request_ref: row.request_ref, account_ref: ref(row.account_ref), display_name: text(row.display_name), username_display: text(row.username_display)})),
     can_manage: own(value, 'can_manage') && value.can_manage === true});
 }
 export const defaultFilters = Object.freeze({query: '', availability: 'all', ...DEFAULT_PLAYLIST_FILTERS});
@@ -260,7 +264,7 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
     },
     async readSharing({signal, q = '', cursor = null} = {}) {
       if (typeof configured.readSharing !== 'function') return resource();
-      if (!detail() || !granted(detail(), 'can_share')) return resource('denied');
+      if (!detail() || !(granted(detail(), 'can_view_sharing') || granted(detail(), 'can_share'))) return resource('denied');
       sharing = null;
       const request = begin('sharing'), scopeKey = state.scopeKey, playlist_id = state.selectedPlaylistId;
       const cancel = () => request.abort(); signal?.addEventListener('abort', cancel, {once: true});
@@ -306,7 +310,7 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
         if (latest?.playlist_id === playlist_id && draft && !draftDirty(latest, draft)) {
           const drafts = {...state.drafts}; delete drafts[playlist_id]; publish({drafts});
         }
-        result('ready'); return true;
+        publish({mutation: {status: 'ready', action, playlist_id, ...(action === 'copyPlaylist' ? {copied_playlist_id: response.playlist_id} : {})}}); return true;
       } catch (error) {if (active()) {if (failStatus(error) === 'denied') setRead(resource('denied')); if (active()) result(failStatus(error));} return false;}
       finally {if (pending.get('mutation') === request) pending.delete('mutation');}
     },
@@ -331,6 +335,14 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
         data = playlistAddRequest(value);
         if (!data) {result('error'); return false;}
         data.revision = saved.revision;
+      } else if (action === 'copyPlaylist' || action === 'requestEditAccess') {
+        data = {revision: saved.revision};
+      } else if (action === 'decideEditRequest') {
+        const currentSharing = sharing?.playlist_id === playlist_id ? sharing.data : null;
+        if (!currentSharing?.can_manage || currentSharing.revision !== saved.revision
+          || !currentSharing.pending_requests.some(row => row.request_ref === value?.request_ref)
+          || !['approve', 'decline'].includes(value?.decision)) {result('denied'); return false;}
+        data = {revision: saved.revision, request_ref: value.request_ref, decision: value.decision};
       } else if (action === 'saveSharing' || action === 'setPlaylistEditor') {
         const currentSharing = sharing?.playlist_id === playlist_id ? sharing.data : null;
         if (!currentSharing?.can_manage) {result('denied'); return false;}
@@ -375,7 +387,7 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
         if (!active()) return false;
         await load({afterMutation: true});
         if (!active()) return false;
-        result('ready'); return true;
+        publish({mutation: {status: 'ready', action, playlist_id, ...(action === 'copyPlaylist' ? {copied_playlist_id: response.playlist_id} : {})}}); return true;
       } catch (error) {
         if (active()) {if (failStatus(error) === 'denied') setRead(resource('denied')); if (active()) result(failStatus(error));}
         return false;

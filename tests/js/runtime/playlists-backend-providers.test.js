@@ -19,6 +19,7 @@ const fixture = custom => {
     calls.push({path, ...options});
     if (custom) {const result = await custom(path, options); if (result !== undefined) return result;}
     if (path === '/playlists/destinations') return structuredClone(destinations);
+    if (path === `/playlists/${id(9)}/sharing`) return {playlist_id: id(9), revision: '3', visibility: 'private', can_manage: true, can_request_edit: false, can_copy: true, request_status: 'none', pending_requests: [], actor_scope};
     if (path === '/playlists/creation-source/current') return {status: 'ready', data: structuredClone(header)};
     if (path.startsWith('/playlists/creation-source/entries')) return {status: 'ready', data: {...structuredClone(header), entries_complete: false,
       entries: [{entry_ref: id(3), selection_ref: id(4), inventory_track_ref: 'inventory-track:5:1', canonical_track_ref: null}],

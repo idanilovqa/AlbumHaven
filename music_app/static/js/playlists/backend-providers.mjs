@@ -99,7 +99,8 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
         preferences: preferences(value.preferences), scopeKey: operation.scopeKey};
     }
     if (value?.ok !== true || value.action !== operation.action || value.request_key !== operation.key || !uuid(value.playlist_id)
-      || operation.playlist_id && value.playlist_id !== operation.playlist_id || !revision(value.revision) || typeof value.changed !== 'boolean'
+      || (operation.action === 'copy' ? value.source_playlist_id !== operation.playlist_id || value.playlist_id === operation.playlist_id
+        : operation.playlist_id && value.playlist_id !== operation.playlist_id) || !revision(value.revision) || typeof value.changed !== 'boolean'
       || !actor || value.actor_scope?.account_id !== actor.account_id || value.actor_scope?.library_id !== actor.library_id) throw fail('Playlist mutation was not acknowledged.');
     revisions.set(value.playlist_id, value.revision);
     const {actor_scope, context_ref, ...safe} = value;
@@ -132,6 +133,7 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
   function pendingOperation(options) {
     const aliases = {savePlaylist: ['save'], addTracks: ['add'], saveSharing: ['visibility'],
       setPlaylistEditor: ['grant_editor', 'revoke_editor'], saveDefaultSort: ['default_sort'], deletePlaylist: ['delete'],
+      requestEditAccess: ['request_edit'], decideEditRequest: ['decide_edit_request'], copyPlaylist: ['copy'],
       create: ['create'], playlist_preferences: ['playlist_preferences']};
     const actions = aliases[options.action] || [options.action];
     return [...uncertain.values()].find(operation => (options.request_key ? operation.key === options.request_key
@@ -371,15 +373,66 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       identity(options.scopeKey);
       return mutate('delete', options, `/playlists/${encodeURIComponent(options.playlist_id)}`, 'DELETE', {revision: options.revision});
     },
+    requestEditAccess(options) {
+      identity(options.scopeKey);
+      return mutate('request_edit', options, `/playlists/${encodeURIComponent(options.playlist_id)}/edit-requests`, 'POST', {revision: options.revision});
+    },
+    decideEditRequest(options) {
+      identity(options.scopeKey);
+      if (!uuid(options.request_ref) || !['approve', 'decline'].includes(options.decision)) throw fail('Invalid edit request.', 400);
+      return mutate('decide_edit_request', options, `/playlists/${encodeURIComponent(options.playlist_id)}/edit-requests/${encodeURIComponent(options.request_ref)}/decision`,
+        'POST', {revision: options.revision, decision: options.decision});
+    },
+    copyPlaylist(options) {
+      identity(options.scopeKey);
+      return mutate('copy', options, `/playlists/${encodeURIComponent(options.playlist_id)}/copy`, 'POST', {revision: options.revision});
+    },
+    async readEditRequests(options) {
+      const token = identity(options.scopeKey);
+      const value = await transport.request(transport.query('/playlists/edit-requests', {cursor: options.cursor, limit: 50}), {signal: options.signal});
+      active(token, options.signal); acceptActor(value.actor_scope);
+      if (!Array.isArray(value.requests) || value.requests.some(row => !uuid(row.request_ref) || !uuid(row.playlist_id)
+        || !uuid(row.account_ref) || typeof row.title !== 'string' || typeof row.display_name !== 'string'
+        || typeof row.username_display !== 'string' || typeof row.created_at !== 'string')
+        || value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !value.next_cursor)) throw fail('Invalid edit request notifications.');
+      return {requests: value.requests.map(({request_ref, playlist_id, title, account_ref, display_name, username_display, created_at}) =>
+        ({request_ref, playlist_id, title, account_ref, display_name, username_display, created_at})), next_cursor: value.next_cursor, scopeKey: options.scopeKey};
+    },
     async readSharing(options) {
       const token = identity(options.scopeKey), playlist = options.playlist_id;
       if (!uuid(playlist)) throw fail('Invalid Playlist.');
       if (options.q !== undefined && (typeof options.q !== 'string' || options.q.length > 100)
         || options.cursor != null && (typeof options.cursor !== 'string' || !options.cursor)) throw fail('Invalid Playlist recipient search.', 400);
       const base = `/playlists/${encodeURIComponent(playlist)}`;
+      const summary = await transport.request(`${base}/sharing`, {signal: options.signal});
+      active(token, options.signal); acceptActor(summary.actor_scope);
+      if (summary.playlist_id !== playlist || !revision(summary.revision) || !visibilityModes.includes(summary.visibility)
+        || ['can_manage', 'can_request_edit', 'can_copy'].some(key => typeof summary[key] !== 'boolean')
+        || !['none', 'pending', 'approved', 'declined'].includes(summary.request_status) || !Array.isArray(summary.pending_requests)
+        || summary.pending_requests.some(row => !uuid(row.request_ref) || row.playlist_id !== playlist || !uuid(row.account_ref)
+          || typeof row.display_name !== 'string' || typeof row.username_display !== 'string' || typeof row.created_at !== 'string')) throw fail('Invalid Playlist sharing.');
+      const shared = {can_request_edit: summary.can_request_edit, can_copy: summary.can_copy,
+        request_status: summary.request_status, pending_requests: summary.pending_requests.map(row => ({...row}))};
+      if (!summary.can_manage) {
+        sharing.delete(playlist); revisions.set(playlist, summary.revision);
+        return {status: 'ready', data: {...shared, visibility: summary.visibility, revision: summary.revision,
+          can_manage: false, people: [], next_cursor: null, scopeKey: options.scopeKey}};
+      }
+      let pendingCursor = summary.next_pending_cursor; const seenPages = new Set();
+      while (pendingCursor) {
+        if (typeof pendingCursor !== 'string' || seenPages.has(pendingCursor)) throw fail('Invalid request continuation.');
+        seenPages.add(pendingCursor);
+        const page = await transport.request(transport.query(`${base}/sharing`, {cursor: pendingCursor}), {signal: options.signal});
+        active(token, options.signal); acceptActor(page.actor_scope);
+        if (page.playlist_id !== playlist || page.revision !== summary.revision || page.can_manage !== true
+          || !Array.isArray(page.pending_requests) || page.pending_requests.some(row => !uuid(row.request_ref)
+            || row.playlist_id !== playlist || !uuid(row.account_ref) || typeof row.display_name !== 'string'
+            || typeof row.username_display !== 'string')) throw fail('Playlist requests changed.');
+        shared.pending_requests.push(...page.pending_requests); pendingCursor = page.next_pending_cursor;
+      }
       const grants = await transport.request(`${base}/access-grants`, {signal: options.signal});
       active(token, options.signal);
-      if (grants.playlist_id !== playlist || !revision(grants.revision) || !visibilityModes.includes(grants.visibility)
+      if (grants.playlist_id !== playlist || grants.revision !== summary.revision || !revision(grants.revision) || !visibilityModes.includes(grants.visibility)
         || !Array.isArray(grants.grants) || grants.grants.some(row => !uuid(row.grant_ref) || !uuid(row.account_ref) || !Number.isSafeInteger(row.account_id) || row.account_id < 1 || row.role !== 'editor'
           || typeof row.display_name !== 'string' || typeof row.username_display !== 'string' || typeof row.is_active !== 'boolean')
         || new Set(grants.grants.map(row => row.grant_ref)).size !== grants.grants.length
@@ -410,7 +463,7 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
         authority.set(account_ref, {account_id: grant.account_id, grant_ref: grant.grant_ref, can_grant: false});
       }
       sharing.set(playlist, {revision: grants.revision, authority}); revisions.set(playlist, grants.revision);
-      return {status: 'ready', data: {visibility: grants.visibility, revision: grants.revision, can_manage: true,
+      return {status: 'ready', data: {...shared, visibility: grants.visibility, revision: grants.revision, can_manage: true,
         people, next_cursor: candidates.next_cursor, scopeKey: options.scopeKey}};
     },
     saveSharing(options) {

@@ -2273,6 +2273,7 @@ function showAppFormDialog(options = {}) {
   const get = name => document.getElementById(`app-form-${name}`);
   const modal = get('modal'), title = get('title'), content = get('content'), error = get('error'), cancel = get('cancel'), submit = get('submit');
   if (!modal || !title || !content || !error || !cancel || !submit) return Promise.resolve(null);
+  const headerClose = get('close');
   const previousFocus = document.activeElement;
   // Parent ownership belongs here, alongside native dismissal and focus. A
   // request form can retain the one drawer without another overlay or trap.
@@ -2299,10 +2300,12 @@ function showAppFormDialog(options = {}) {
   const guarded = typeof options.beforeDismiss === 'function';
   const contentInert = content.inert;
   let submitEnabled = options.submitEnabled !== false, submitting = false, finishing = false, dismissal = null;
+  let dismissDisabled = options.dismissDisabled === true;
   const syncSubmit = () => {
     if (activeAppFormDialog !== owner) return;
     submit.disabled = submitting || Boolean(dismissal) || !submitEnabled;
-    cancel.disabled = Boolean(dismissal) || (guarded && submitting);
+    cancel.disabled = dismissDisabled || Boolean(dismissal) || (guarded && submitting);
+    if (headerClose) headerClose.disabled = cancel.disabled;
     if (guarded) content.inert = Boolean(dismissal) || contentInert;
   };
   const controls = { setSubmitEnabled(value) {
@@ -2352,6 +2355,7 @@ function showAppFormDialog(options = {}) {
       }
       if (anchoredPanel) { clearTriggerAnchor(anchoredPanel); anchoredPanel.removeAttribute('style'); anchoredPanel.setAttribute('aria-modal', 'true'); modal.classList.remove('app-form-anchored'); }
       modal.classList?.remove('app-form-reading'); submit.hidden = false;
+      if (headerClose) {headerClose.hidden = true; headerClose.disabled = false;}
       content.inert = contentInert; cancel.disabled = false;
       content.innerHTML = ''; activeAppFormDialog = null;
       modal.style.zIndex = previousLayer;
@@ -2370,6 +2374,7 @@ function showAppFormDialog(options = {}) {
   const requestDismiss = (reason = 'cancel', closeOptions = {}, value = null) => {
     if (activeAppFormDialog !== owner || finishing || (guarded && submitting)) return Promise.resolve(false);
     if (dismissal) return dismissal;
+    if (dismissDisabled && closeOptions?.force !== true) return Promise.resolve(false);
     if (!guarded) return Promise.resolve(finish(value ?? null, closeOptions));
     const dismissFocus = document.activeElement;
     // Defer the callback until the shared pending token is installed. Reentrant
@@ -2397,6 +2402,7 @@ function showAppFormDialog(options = {}) {
     if (typeof updateMobileAppFormPresentation === 'function') updateMobileAppFormPresentation(owner);
     return true;
   };
+  controls.setDismissDisabled = value => {if (owner.isActive()) {dismissDisabled = value === true; syncSubmit();}};
   owner.close = controls.close;
   owner.dismiss = controls.dismiss;
   owner.isActive = () => activeAppFormDialog === owner && !finishing;
@@ -2412,6 +2418,7 @@ function showAppFormDialog(options = {}) {
   title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
   submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
   submit.hidden = contentOwnsFooter || options.mode === 'reading'; cancel.hidden = contentOwnsFooter;
+  if (headerClose) headerClose.hidden = options.showCloseButton !== true;
   if (footer) footer.hidden = true;
   if (contentOwnsFooter) content.setAttribute('tabindex', '-1');
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
@@ -2462,6 +2469,7 @@ function showAppFormDialog(options = {}) {
     }
   }
   if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
+  if (headerClose) listen(headerClose, 'click', () => {if (!headerClose.disabled) return requestDismiss('cancel');});
   listen(cancel, 'click', () => requestDismiss('cancel')); listen(submit, 'click', apply);
   const contentControls = () => [...content.querySelectorAll('input, button, textarea, select, a[href], [tabindex="0"]')]
     .filter(node => !node.disabled && !node.hidden && node.type !== 'hidden'
@@ -2470,8 +2478,9 @@ function showAppFormDialog(options = {}) {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); return requestDismiss('escape'); }
     if (event.key !== 'Tab') return;
     if (modal.classList?.contains?.('is-mobile-page')) return;
-    const controls = contentOwnsFooter ? contentControls()
-      : [...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
+    const headerControls = headerClose && !headerClose.hidden && !headerClose.disabled ? [headerClose] : [];
+    const controls = contentOwnsFooter ? [...headerControls, ...contentControls()]
+      : [...headerControls, ...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
     if (contentOwnsFooter && (!controls.length || !controls.includes(document.activeElement))) {
       event.preventDefault(); (event.shiftKey ? controls[controls.length - 1] || content : controls[0] || content).focus(); return;
     }
@@ -2504,16 +2513,16 @@ function showAppFormDialog(options = {}) {
   return promise;
 }
 
-function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, parentSurface, returnFocus, retainParentView, contentOwnsFooter = true} = {}, isAvailable = () => true) {
+function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, parentSurface, returnFocus, retainParentView, showCloseButton = false, dismissDisabled = false, contentOwnsFooter = true} = {}, isAvailable = () => true) {
   if (!isAvailable() || typeof showAppFormDialog !== 'function' || activeAppFormDialog) throw new Error('The form dialog is unavailable.');
   let controls, host;
   const close = (value, options) => controls?.close(value, options);
-  const promise = showAppFormDialog({title, pageId, beforeDismiss, parentSurface, returnFocus, retainParentView, mode: 'reading', contentOwnsFooter: contentOwnsFooter === true,
+  const promise = showAppFormDialog({title, pageId, beforeDismiss, parentSurface, returnFocus, retainParentView, showCloseButton, dismissDisabled, mode: 'reading', contentOwnsFooter: contentOwnsFooter === true,
     onMount(content, owner) {controls = owner; host = document.createElement('div'); content.appendChild(host); onMount?.(host, close);},
     onAfterClose(_content, closeOptions) {onClose?.(host, closeOptions);},
   });
   if (!controls) throw new Error('The form dialog is unavailable.');
-  return Object.freeze({promise, close, updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
+  return Object.freeze({promise, close, setDismissDisabled: value => controls?.setDismissDisabled(value), updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
 }
 
 function showBrowserAlert(message) {
@@ -28264,10 +28273,10 @@ function notificationDrawerFocusTarget(key) {
     || document.getElementById('cover-lookup-drawer-button');
 }
 
-function registerNotificationSource({name, scopeKey, isCurrent, onOpen, onShow} = {}) {
+function registerNotificationSource({name, label = 'Friend requests', scopeKey, isCurrent, onOpen, onShow} = {}) {
   if (typeof name !== 'string' || !name.trim() || typeof scopeKey !== 'string' || !scopeKey.trim()
     || typeof isCurrent !== 'function' || typeof onOpen !== 'function') throw new TypeError('A current notification scope and opener are required.');
-  const source = {name, scopeKey, isCurrent, onOpen, onShow, records: new Map(), status: 'idle', revision: 0};
+  const source = {name, label: String(label), scopeKey, isCurrent, onOpen, onShow, records: new Map(), status: 'idle', revision: 0};
   const current = () => notificationSources.get(name) === source && isCurrent() === true;
   notificationSources.set(name, source);
   renderCoverLookupDrawer();
@@ -28282,7 +28291,7 @@ function registerNotificationSource({name, scopeKey, isCurrent, onOpen, onShow} 
         const avatarUrl = typeof row.avatarUrl === 'string' && !/[\\\u0000-\u0020\u007f]/.test(row.avatarUrl)
           && (/^\/(?!\/)/.test(row.avatarUrl) || /^https:\/\//i.test(row.avatarUrl)) ? row.avatarUrl : '';
         next.set(row.id, Object.freeze({id: row.id, title: String(row.title || 'Friend request'),
-          byline: String(row.byline || ''), avatarUrl, createdAt: row.createdAt ?? null}));
+          byline: String(row.byline || ''), typeLabel: String(row.typeLabel || 'Friend request'), read: row.read === true, avatarUrl, createdAt: row.createdAt ?? null}));
       }
       source.records = next; source.status = status; source.revision++;
       renderCoverLookupDrawer();
@@ -28301,19 +28310,19 @@ function getRequestNotificationCards() {
   const cards = [];
   for (const [name, source] of notificationSources) {
     if (source.isCurrent() !== true) {notificationSources.delete(name); source.records.clear(); continue;}
-    const message = {idle: 'Friend requests have not been loaded.', loading: 'Loading friend requests…', error: 'Friend requests could not be loaded.',
-      denied: 'You do not have access to friend requests.', unavailable: 'Friend requests are unavailable.'}[source.status];
+    const message = {idle: `${source.label} have not been loaded.`, loading: `Loading ${source.label.toLowerCase()}…`, error: `${source.label} could not be loaded.`,
+      denied: `You do not have access to ${source.label.toLowerCase()}.`, unavailable: `${source.label} are unavailable.`}[source.status];
     if (message) cards.push({key: JSON.stringify([name, source.scopeKey]), createdAt: null, status: true,
       markup: `<div class="notification-source-status">${buildOnPageAlertHtml({message,
         severity: source.status === 'error' ? 'error' : 'info', role: source.status === 'error' ? 'alert' : 'status'})}</div>`,
     });
     for (const record of source.records.values()) {
       const key = JSON.stringify([name, source.scopeKey, record.id]);
-      cards.push({key, createdAt: record.createdAt, source, id: record.id,
-        markup: renderNotificationCard({title: record.title, typeLabel: 'Friend request', byline: record.byline,
+      cards.push({key, createdAt: record.createdAt, source, id: record.id, read: record.read,
+        markup: renderNotificationCard({title: record.title, typeLabel: record.typeLabel, byline: record.byline,
           statusLabel: 'Pending response', stateClass: 'is-pending',
           coverHtml: record.avatarUrl ? `<img class="cover-lookup-task-cover" src="${escapeHtml(record.avatarUrl)}" alt="">` : '',
-          openAttributes: {role: 'button', tabindex: '0', 'aria-label': `Open friend request from ${record.title}`,
+          openAttributes: {role: 'button', tabindex: '0', 'aria-label': record.typeLabel === 'Friend request' ? `Open friend request from ${record.title}` : `Open ${record.typeLabel.toLowerCase()} request: ${record.title}`,
             'data-open-request-notification': key},
         }),
       });
@@ -28435,7 +28444,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
   const opening = state.coverLookup.drawerOpen && !drawer.classList.contains('is-open');
   const requestCards = getRequestNotificationCards();
-  const requestCount = requestCards.filter(card => !card.status).length;
+  const requestCount = requestCards.filter(card => !card.status && !card.read).length;
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -46024,7 +46033,7 @@ const PlaylistReactRuntime = (() => {
       projected = projection(payload); raw = projected ? authority(payload) : null;
     }
     if (current && current.visible !== visible) sequence++;
-    const next = {visible, scopeKey: `${identity}:${generation}`, payload: projected,
+    const next = {visible, authenticated: !denied && scopeOwner?.hidden !== true && Boolean(scopeOwner?.dataset?.nativeAccountId || document.getElementById('mobile-home')?.dataset?.homeAccountId), scopeKey: `${identity}:${generation}`, payload: projected,
       playlistId: draftPage ? null : String(state.view?.playlist_detail?.playlist_id || state.view?.playlist_sidebar?.active_playlist_id || '') || null,
       draftToken: draftPage ? draftToken : null, retainedDraftToken: draft?.token || null,
       entryKey: Number.isSafeInteger(window.history.state?.albumHavenNavigationPosition) ? window.history.state.albumHavenNavigationPosition : null};
@@ -46409,6 +46418,17 @@ const PlaylistReactRuntime = (() => {
   return {
     snapshot: sync, sync, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     readPlaylists, navigate, navigateFromPlaytable, createPlaytableSource,
+    notificationRegistry: () => window.AlbumHavenNotifications,
+    subscribeNotificationRegistry(listener) {
+      window.addEventListener('albumhaven:notifications-ready', listener);
+      return () => window.removeEventListener('albumhaven:notifications-ready', listener);
+    },
+    async openSharedPlaylist({playlist_id, isCurrent}) {
+      const start = sync();
+      if (!start.authenticated || start.retainedDraftToken || isCurrent?.() !== true) return false;
+      const open = () => navigateCurrent(playlist_id, start, isCurrent);
+      return (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(open)) || open();
+    },
     confirmRetryOriginal(scopeKey) {
       if (!PlaylistReactRuntime.acceptsPrivateScope(scopeKey) || typeof showAppConfirmDialog !== 'function') return Promise.resolve(false);
       return showAppConfirmDialog({title: 'Retry original request', acceptLabel: 'Retry', danger: false,

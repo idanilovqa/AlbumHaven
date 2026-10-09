@@ -66,6 +66,60 @@ POST /playlists/P/default-sort accepts {sort:{key,direction}|null,revision,reque
 
 The command uses the same collection revision and durable operation receipt rules as metadata edits. It returns saved_default_sort with changed/revision. Same-value saves are no-ops. Detail reads return saved_default_sort separately from active_sort. Saved choices never mutate authored item positions; these server track_rows remain in authored order, with active_sort={key:playlist_position,direction:asc}. The client applies the saved metric-header choice as its view sort using current supplied metric facts; unknown values remain unknown. Native playback uses the displayed eligible-item order after that view sort. No missing metrics, playback rights or suggestion continuations are manufactured by persisting a choice.
 
+## Viewer requests and private copies
+
+Migration 0100 adds durable Playlist edit requests. It does not add role presets,
+Social grants or playback authority. A current authenticated reader can open
+Share; `can_share` remains owner access-management authority, while
+`can_view_sharing`, `can_request_edit` and `can_copy` are separate projections.
+
+- GET /playlists/P/sharing[?cursor=C] returns the current revision, visibility,
+  can_manage/can_request_edit/can_copy, the caller's request_status and
+  pending_requests. Only the owner with access.manage receives requester names.
+  Owner request pages contain at most 100 rows and next_pending_cursor.
+- GET /playlists/edit-requests[?cursor=C&limit=L] supplies normal Notifications
+  with owner-addressed pending requests across Playlists. Pages default to 50,
+  maximum 100; encrypted cursors bind to account, session and current library.
+  Rows include request_ref, playlist_id, title, account_ref, public display names
+  and created_at. Removed, disabled, revoked and no-longer-readable requests do
+  not appear. Notification opening navigates to the exact Playlist Share dialog.
+- POST /playlists/P/edit-requests accepts {revision,request_key}. Only a current
+  non-owner reader without an Editor grant may request. It creates at most one
+  pending request per reader/Playlist and never grants rights or changes the
+  Playlist revision. The receipt includes request_ref, request_status and
+  request_created; changed remains false because Playlist content/ACL is unchanged.
+- POST /playlists/P/edit-requests/R/decision accepts
+  {revision,request_key,decision:approve|decline}. Only the actual owner with
+  access.manage may decide a current pending request. Approval uses the existing
+  Editor grant operation; declining does not grant rights. Decisions increment
+  the Playlist revision and resolve the request atomically with their receipt.
+- POST /playlists/P/copy accepts {revision,request_key,title?}. Current source
+  read and independent create authority are both required. At most 5,000 ordered
+  occurrences become a fresh actor-owned private Playlist with new item IDs.
+  Source metadata/order and same-library track links are retained; source ACL,
+  personal taste/listening state and private activity lineage are not copied.
+  Only source Playlist/item/revision lineage is retained. Unknown availability
+  stays unknown and grants no playback. The original remains unchanged.
+
+Copy receipts use playlist_id for the new destination and source_playlist_id /
+source_revision for the source. Exact-key reconciliation returns that same copy,
+including after subsequent source access revocation; it cannot create another
+copy. The destination's current read and original-session checks still apply.
+Other actions retain the existing actor/library/key digest and replay rules.
+
+Requests retain the exact browse-authority grant IDs present at creation.
+Revocation, deletion or scope/key changes to those grants, account disable,
+membership removal, source deletion or making the source private retires an old
+pending request. Restoring access does not revive it. A new request uses a new
+request identity. Owner notification reads do not acquire requester locks after
+Playlist locks; decisions lock the requester account in the existing ordered
+account-lock transaction before evaluating it.
+
+The UI reuses the native Share form and notification drawer. The owner chooses
+Editor and applies explicitly; opening or reading a notification changes no
+access. Notification read paint is scoped to the active client lifecycle and is
+independent of pending-request persistence.
+
 ### Retained Queue selections
 
 `POST /playlists/creation-source/queue` accepts exactly `occurrences`, an ordered

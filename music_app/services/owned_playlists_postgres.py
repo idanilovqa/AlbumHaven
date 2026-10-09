@@ -15,7 +15,7 @@ from music_app.services.owned_playlists import (
     command_actions, inventory_identity, normalize_playlist_command,
     require_playlist_authority, uuid_ref,
 )
-from music_app.services.policy import ResourceScope
+from music_app.services.policy import PolicyContext, ResourceScope
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints, PolicyEvaluator
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import decode_social_cursor, encode_social_cursor
@@ -140,6 +140,14 @@ class PostgresOwnedPlaylistsService:
             else command.data.get("source_guard",{}).get("source",{}).get("ref"))
         queue_targets = queue.lock_targets(self,context,source_ref=queue_ref,constraints=constraints) if queue_ref else ()
         lock_target=command.data.get("account_id")
+        if command.action == "decide_edit_request":
+            if not isinstance(context,PolicyContext):
+                raise PlaylistError("forbidden",403)
+            with self._connect(self._url) as lookup:
+                request = lookup.execute("""select requester_account_id from app.playlist_edit_requests
+                    where ref=%s and playlist_ref=%s and library_id=%s""",
+                    (command.data["request_ref"],command.playlist_ref,context.library_id)).fetchone()
+                lock_target = request["requester_account_id"] if request else None
         if command.action=="create" and command.data["source"]["kind"]=="activity":
             from music_app.services import playlist_activity_sources as activity
             lock_target=activity.lock_target(self,context,source_ref=command.data["source"]["ref"],constraints=constraints)
@@ -149,7 +157,14 @@ class PostgresOwnedPlaylistsService:
                 (live.actor.account_id,live.library_id,command.request_key)).fetchone()
             if prior is not None:
                 return self._replay(connection,live,prior,command,constraints)
-            if command.action == "create":
+            if command.action == "copy":
+                from music_app.services import playlist_viewer_actions as viewers
+                playlist = self._playlist(connection,live,command.playlist_ref,write=True)
+                self._require(live,(BROWSE,),constraints,playlist)
+                if str(playlist["revision"]) != command.data["revision"]:
+                    raise PlaylistError("revision_conflict",409)
+                receipt = viewers.copy_playlist(self,connection,live,command,playlist,constraints)
+            elif command.action == "create":
                 self._require(live,(BROWSE,CREATE),constraints)
                 if command.data["source"]["kind"]=="playlist":
                     from music_app.services import playlist_missing_sources as missing
@@ -304,7 +319,13 @@ class PostgresOwnedPlaylistsService:
 
     def _mutate(self,connection,context,command,playlist,rows,order,*,constraints=None,source=None,selected=None):
         data=command.data
+        from music_app.services import playlist_viewer_actions as viewers
+        if command.action == "request_edit":
+            return viewers.request_edit(self,connection,context,command,playlist,constraints)
+        if command.action == "decide_edit_request":
+            return viewers.decide(self,connection,context,command,playlist,constraints)
         if command.action == "delete":
+            viewers.invalidate(connection,command.playlist_ref)
             connection.execute("update app.playlists set deleted_at=now() where ref=%s", (command.playlist_ref,))
             return True, {"deleted": True}
         if command.action == "default_sort":
@@ -316,6 +337,8 @@ class PostgresOwnedPlaylistsService:
         if command.action == "visibility":
             changed = playlist["visibility"] != data["visibility"]
             if changed:
+                if data["visibility"] == "private":
+                    viewers.invalidate(connection,command.playlist_ref)
                 connection.execute("update app.playlists set visibility=%s where ref=%s",
                                    (data["visibility"], command.playlist_ref))
             return changed, {"visibility": data["visibility"]}
@@ -332,6 +355,7 @@ class PostgresOwnedPlaylistsService:
                 where playlist_ref=%s and account_id=%s""",
                 (command.playlist_ref, data["account_id"])).fetchone()
             if prior is not None:
+                viewers.invalidate(connection,command.playlist_ref,account_id=data["account_id"],status="approved")
                 return False, {"grant_ref": str(prior["ref"])}
             lock_current_actor_session(connection, actor_account_id=context.actor.account_id,
                 actor_session_id=context.actor.session_id, clock=self._clock)
@@ -339,6 +363,7 @@ class PostgresOwnedPlaylistsService:
             connection.execute("""insert into app.playlist_access_grants
                 (ref,playlist_ref,library_id,account_id,role) values (%s,%s,%s,%s,'editor')""",
                 (grant_ref, command.playlist_ref, context.library_id, data["account_id"]))
+            viewers.invalidate(connection,command.playlist_ref,account_id=data["account_id"],status="approved")
             return True, {"grant_ref": grant_ref}
         if command.action == "revoke_editor":
             row = connection.execute("""delete from app.playlist_access_grants
@@ -448,6 +473,50 @@ class PostgresOwnedPlaylistsService:
                 actor_session_id=live.actor.session_id, clock=self._clock)
             return payload
 
+    def read_sharing(self,context,playlist_ref,*,cursor_secret=None,cursor=None,constraints=None):
+        from music_app.services import playlist_viewer_actions as viewers
+        ref = uuid_ref(playlist_ref)
+        with self._authorized(context,constraints) as (connection,live,_now):
+            playlist = self._playlist(connection,live,ref)
+            self._require(live,(BROWSE,),constraints,playlist)
+            manage = self._allows(live,(BROWSE,ACCESS),constraints,playlist,owner_only=True)
+            row = connection.execute("""select status from app.playlist_edit_requests
+                where playlist_ref=%s and requester_account_id=%s order by id desc limit 1""",
+                (ref,live.actor.account_id)).fetchone()
+            scope=["playlist-sharing-requests-v1",live.actor.account_id,live.actor.session_id,live.library_id,ref]
+            try:
+                after=decode_social_cursor(cursor,secret=cursor_secret,scope=scope)
+            except ValueError:
+                raise PlaylistError("invalid_cursor") from None
+            if cursor is not None and not manage:
+                raise PlaylistError("forbidden",403)
+            pending,after = viewers.pending(self,connection,live,constraints,playlist_ref=ref,after=after,limit=100) if manage else ([],None)
+            lock_current_actor_session(connection,actor_account_id=live.actor.account_id,
+                actor_session_id=live.actor.session_id,clock=self._clock)
+            return {"playlist_id":ref,"revision":str(playlist["revision"]),"visibility":playlist["visibility"],
+                "can_manage":manage,"can_request_edit":playlist["owner_account_id"]!=live.actor.account_id and not playlist["editor_grant"],
+                "can_copy":self._allows(live,(BROWSE,CREATE),constraints),
+                "request_status":row["status"] if row and row["status"]!="revoked" else "none",
+                "pending_requests":pending,"next_pending_cursor":encode_social_cursor(after,secret=cursor_secret,scope=scope),
+                "actor_scope":self._scope(live)}
+
+    def read_edit_requests(self,context,*,cursor_secret,cursor=None,limit=50,constraints=None):
+        from music_app.services import playlist_viewer_actions as viewers
+        if type(limit) is not int or not 1<=limit<=100:
+            raise PlaylistError("invalid_access_query")
+        with self._authorized(context,constraints) as (connection,live,_now):
+            self._require(live,(BROWSE,),constraints)
+            scope=["playlist-edit-requests-v1",live.actor.account_id,live.actor.session_id,live.library_id]
+            try:
+                after=decode_social_cursor(cursor,secret=cursor_secret,scope=scope)
+            except ValueError:
+                raise PlaylistError("invalid_cursor") from None
+            rows,after=viewers.pending(self,connection,live,constraints,after=after,limit=limit)
+            lock_current_actor_session(connection,actor_account_id=live.actor.account_id,
+                actor_session_id=live.actor.session_id,clock=self._clock)
+            return {"requests":rows,"next_cursor":encode_social_cursor(after,secret=cursor_secret,scope=scope),
+                "actor_scope":self._scope(live)}
+
     def read_access(self,context,playlist_ref,*,constraints=None):
         ref = uuid_ref(playlist_ref)
         with self._authorized(context,constraints) as (connection,live,_now):
@@ -529,7 +598,10 @@ class PostgresOwnedPlaylistsService:
                 "revision":str(row["revision"]),"item_count":int(row["item_count"]),"visibility":row["visibility"],"playlist_kind":"manual",
                 "allowed_actions":{"can_open":True,"can_read":True,"can_export":True,
                     "can_edit":manage,"can_rename":manage,"can_reorder":items,"can_add":items,"can_remove":items,
-                    "can_delete":delete,"can_play":False,"can_share":access,"can_save_default_sort":settings,"can_create_album_top":False,"can_create_sample":False}}
+                    "can_delete":delete,"can_play":False,"can_share":access,
+                    "can_view_sharing":True,
+                    "can_request_edit":row["owner_account_id"]!=context.actor.account_id and not row.get("editor_grant",False),
+                    "can_copy":cls._allows(context,(BROWSE,CREATE),constraints),"can_save_default_sort":settings,"can_create_album_top":False,"can_create_sample":False}}
 
     @classmethod
     def _track_row(cls,context,row,current,*,constraints=None):

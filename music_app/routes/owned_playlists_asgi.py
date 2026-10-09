@@ -143,9 +143,10 @@ def playlist_operation(request: Request, request_key: str):
         return _error(error)
 
 
-async def _write(request, action, playlist_ref=None, item_ref=None, grant_ref=None):
+async def _write(request, action, playlist_ref=None, item_ref=None, grant_ref=None, request_ref=None):
     try:
-        coarse = (CREATE if action == "create" else ACCESS if action in {"visibility", "grant_editor", "revoke_editor"}
+        coarse = (BROWSE if action == "request_edit" else CREATE if action in {"create", "copy"}
+                  else ACCESS if action in {"visibility", "grant_editor", "revoke_editor", "decide_edit_request"}
                   else SETTINGS if action == "default_sort" else MANAGE if action in {"save", "delete"} else ITEMS)
         context, constraints = _context(request, coarse)
         _require_context_header(request)
@@ -165,6 +166,10 @@ async def _write(request, action, playlist_ref=None, item_ref=None, grant_ref=No
             if not isinstance(payload, dict) or set(payload) != {"revision", "request_key"}:
                 raise PlaylistError("invalid_command")
             payload = {**payload, "grant_ref": grant_ref}
+        if request_ref is not None:
+            if not isinstance(payload,dict) or set(payload)!={"revision","request_key","decision"}:
+                raise PlaylistError("invalid_command")
+            payload={**payload,"request_ref":request_ref}
         command = normalize_playlist_command(action, payload, playlist_ref=playlist_ref)
         result = await run_in_threadpool(_service(request).execute, context, command, constraints=constraints)
         return _response(request, {"status": "ready", "data": result} if action == "create" else result)
@@ -291,3 +296,50 @@ def playlist_preference_operation(request: Request, request_key: str):
 @router.post("/playlists/{playlist_ref}/default-sort")
 async def playlist_default_sort(request: Request, playlist_ref: str):
     return await _write(request, "default_sort", playlist_ref)
+
+
+@router.get("/playlists/{playlist_ref}/sharing")
+def playlist_sharing(request: Request, playlist_ref: str):
+    try:
+        if set(request.query_params)-{"cursor"} or len(request.query_params.multi_items())!=len(request.query_params):
+            raise PlaylistError("invalid_access_query")
+        context,constraints=_context(request,BROWSE)
+        _context_ref(request)
+        return _response(request,_service(request).read_sharing(context,playlist_ref,
+            cursor_secret=request.app.state.auth_policy_config["hmac"]["secret"],
+            cursor=request.query_params.get("cursor"),constraints=constraints))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.get("/playlists/edit-requests")
+def playlist_edit_requests(request: Request):
+    try:
+        params=request.query_params
+        if set(params)-{"cursor","limit"} or len(params.multi_items())!=len(params):
+            raise PlaylistError("invalid_access_query")
+        limit=params.get("limit","50")
+        if len(limit)>3 or not limit.isascii() or not limit.isdecimal():
+            raise PlaylistError("invalid_access_query")
+        context,constraints=_context(request,BROWSE)
+        _context_ref(request)
+        return _response(request,_service(request).read_edit_requests(context,
+            cursor_secret=request.app.state.auth_policy_config["hmac"]["secret"],
+            cursor=params.get("cursor"),limit=int(limit),constraints=constraints))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post("/playlists/{playlist_ref}/edit-requests")
+async def request_playlist_edit(request: Request, playlist_ref: str):
+    return await _write(request,"request_edit",playlist_ref)
+
+
+@router.post("/playlists/{playlist_ref}/edit-requests/{request_ref}/decision")
+async def decide_playlist_edit_request(request: Request, playlist_ref: str, request_ref: str):
+    return await _write(request,"decide_edit_request",playlist_ref,request_ref=request_ref)
+
+
+@router.post("/playlists/{playlist_ref}/copy")
+async def copy_playlist(request: Request, playlist_ref: str):
+    return await _write(request,"copy",playlist_ref)

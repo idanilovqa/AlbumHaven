@@ -1398,6 +1398,15 @@
   box-shadow: 0 24px 64px rgba(0,0,0,0.36);
   padding: 20px;
 }
+.confirm-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.confirm-modal-header > .confirm-modal-title { min-width: 0; overflow-wrap: anywhere; }
+.confirm-modal-header > .action-button { flex: none; }
 .confirm-modal-title {
   margin: 0 0 10px;
   font-size: 1.05rem;

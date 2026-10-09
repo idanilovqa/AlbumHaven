@@ -22,7 +22,8 @@
     "test:e2e:performance:real-app": "node scripts/run-performance-playwright.cjs --group real-app",
     "test:e2e:performance:production-search": "playwright test --config=playwright.production-search-benchmark.config.cjs",
     "test:e2e:performance:paired-search-calibration": "node scripts/run-paired-search-calibration.cjs",
-    "release:prepare": "powershell -ExecutionPolicy Bypass -File scripts/prepare_release.ps1"
+    "release:prepare": "powershell -ExecutionPolicy Bypass -File scripts/prepare_release.ps1",
+    "build:home-friends": "node scripts/build-home-friends.cjs"
   },
   "repository": {
     "type": "git",
@@ -36,6 +37,11 @@
   },
   "homepage": "https://github.com/idanilovqa/AlbumHaven#readme",
   "devDependencies": {
-    "@playwright/test": "1.61.1"
+    "@playwright/test": "1.61.1",
+    "esbuild": "0.25.12"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
   }
 }

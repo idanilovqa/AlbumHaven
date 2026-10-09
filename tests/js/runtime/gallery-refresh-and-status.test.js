@@ -3236,6 +3236,7 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
   assert.equal(pendingRequests[0].url, '/status');
   pendingRequests[0].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3311,6 +3312,7 @@ test('pollStatus does not refresh the populated root browse when cover work fini
   assert.equal(pendingRequests.length, 1);
   pendingRequests[0].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3323,6 +3325,36 @@ test('pollStatus does not refresh the populated root browse when cover work fini
     message: 'Album covers updated.',
     level: 'success',
     durationMs: 3200,
+  }]);
+});
+
+test('pollStatus reports an interrupted cover run without claiming covers were updated', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    query: '',
+    selected_artist: '',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+  };
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.wasCoverPollingBusy = true;
+  context.state.wasPollingBusy = false;
+
+  const statusPromise = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    covers_in_progress: false,
+    covers_outcome: '',
+    scan_in_progress: false,
+    relations_in_progress: false,
+  });
+  await statusPromise;
+  await flushMicrotasks();
+
+  assert.deepEqual(calls.showToast, [{
+    message: 'Cover search was interrupted.',
+    level: 'warning',
+    durationMs: 4800,
   }]);
 });
 
@@ -3347,6 +3379,7 @@ test('pollStatus defers cover reconciliation until an in-flight selected-artist 
   assert.equal(pendingRequests[1].url, '/status');
   pendingRequests[1].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });

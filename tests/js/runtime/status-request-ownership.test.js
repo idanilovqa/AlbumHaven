@@ -654,9 +654,13 @@ test('overlapping scan and cover completion observations each report once', asyn
   let refreshes = 0;
   h.ctx.refreshCurrentViewAfterBackgroundCompletion = () => ++refreshes === 1 ? Promise.resolve(true) : coverRefresh.promise;
   const older = h.ctx.pollStatus();
-  h.requests.at(-1).resolve(h.status(false, { scan_outcome: 'completed' })); await settle();
+  h.requests.at(-1).resolve(h.status(false, {
+    scan_outcome: 'completed', covers_outcome: 'completed',
+  })); await settle();
   const newer = h.ctx.pollStatus();
-  h.requests.at(-1).resolve(h.status(false, { scan_outcome: 'completed' })); await settle();
+  h.requests.at(-1).resolve(h.status(false, {
+    scan_outcome: 'completed', covers_outcome: 'completed',
+  })); await settle();
   coverRefresh.resolve(true);
   await Promise.all([older, newer]);
   assert.equal(h.toasts.filter(toast => toast.message === 'Library scan complete.').length, 1);
@@ -684,11 +688,13 @@ for (const kind of ['scan', 'covers']) {
     let refreshCount = 0;
     h.ctx.refreshCurrentViewAfterBackgroundCompletion = () => { refreshCount++; return refresh.promise; };
     const older = h.ctx.pollStatus();
-    h.requests.at(-1).resolve(h.status()); await settle();
+    h.requests.at(-1).resolve(h.status(false,
+      kind === 'covers' ? { covers_outcome: 'completed' } : {})); await settle();
     const failed = h.ctx.pollStatus();
     h.requests.at(-1).reject(new Error('Unrelated status transport failed')); await failed;
     const newer = h.ctx.pollStatus();
-    h.requests.at(-1).resolve(h.status()); await settle();
+    h.requests.at(-1).resolve(h.status(false,
+      kind === 'covers' ? { covers_outcome: 'completed' } : {})); await settle();
     assert.equal(refreshCount, 1);
     refresh.resolve(true); await Promise.all([older, newer]);
     const message = kind === 'scan' ? 'Library scan complete.' : 'Album covers updated.';

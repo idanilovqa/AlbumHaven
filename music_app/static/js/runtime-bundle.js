@@ -16010,7 +16010,12 @@ async function pollStatus() {
         await loadProblematicFiles(true);
         if (!ownsStatus()) return;
       }
-      showToast('Album covers updated.', 'success', 3200);
+      const coverOutcome = String(normalizedStatus.covers_outcome || '').trim().toLowerCase();
+      if (coverOutcome === 'completed') {
+        showToast('Album covers updated.', 'success', 3200);
+      } else if (!['cancelled', 'failed'].includes(coverOutcome)) {
+        showToast('Cover search was interrupted.', 'warning', 4800);
+      }
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;

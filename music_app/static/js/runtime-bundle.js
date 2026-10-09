@@ -2292,7 +2292,7 @@ function showAppFormDialog(options = {}) {
   let positionObserver = null, focusObserver = null;
   const listen = (node, name, handler) => { node.addEventListener(name, handler); listeners.push([node, name, handler]); };
   let resolve; const promise = new Promise(done => { resolve = done; });
-  const pageId = typeof options.pageId === 'string' && options.pageId.trim() ? options.pageId : null;
+  let pageId = typeof options.pageId === 'string' && options.pageId.trim() ? options.pageId : null;
   const sequence = ++appFormSequence, scope = appFormScopeIdentity();
   const token = `app-form-${Date.now().toString(36)}-${sequence}-${Math.random().toString(36).slice(2)}`;
   const owner = { promise, anchor, pageId, token, title: options.title || 'Settings' }; activeAppFormDialog = owner;
@@ -2388,6 +2388,14 @@ function showAppFormDialog(options = {}) {
     });
     syncSubmit();
     return dismissal;
+  };
+  controls.updatePresentation = presentation => {
+    if (activeAppFormDialog !== owner || finishing || !presentation || typeof presentation.title !== 'string'
+      || typeof presentation.pageId !== 'string' || !presentation.pageId.trim() || !pageId) return false;
+    owner.title = presentation.title; owner.pageId = pageId = presentation.pageId;
+    title.textContent = presentation.title;
+    if (typeof updateMobileAppFormPresentation === 'function') updateMobileAppFormPresentation(owner);
+    return true;
   };
   owner.close = controls.close;
   owner.dismiss = controls.dismiss;
@@ -2505,7 +2513,7 @@ function openReactFormDialog({title, pageId, beforeDismiss, onMount, onClose, pa
     onAfterClose(_content, closeOptions) {onClose?.(host, closeOptions);},
   });
   if (!controls) throw new Error('The form dialog is unavailable.');
-  return Object.freeze({promise, close, dismiss: (reason, options) => controls?.dismiss(reason, options)});
+  return Object.freeze({promise, close, updatePresentation: value => controls?.updatePresentation(value), dismiss: (reason, options) => controls?.dismiss(reason, options)});
 }
 
 function showBrowserAlert(message) {
@@ -4769,6 +4777,7 @@ const Dashboard = (() => {
   const sizePaths = {
     full: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
     widget: 'M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5',
+    back: 'm10 5-7 7 7 7M3 12h18',
   };
 
   function mount(root, options = {}) {
@@ -4845,11 +4854,11 @@ const Dashboard = (() => {
       });
       controls.forEach(({ widget, button, path }) => {
         const expanded = widget.key === expandedKey;
-        const label = expanded ? 'Widget size' : 'Full size';
+        const label = expanded ? options.returnPresentation === 'back' ? 'Back' : 'Widget size' : 'Full size';
         button.setAttribute('aria-label', label);
         button.setAttribute('title', label);
         button.setAttribute('aria-expanded', String(expanded));
-        path.setAttribute('d', expanded ? sizePaths.widget : sizePaths.full);
+        path.setAttribute('d', expanded ? options.returnPresentation === 'back' ? sizePaths.back : sizePaths.widget : sizePaths.full);
       });
     }
 
@@ -9230,6 +9239,7 @@ function beginStreamingCleanup(reason, options = {}) {
 }
 
 async function stopStreamingPlayback(reason = 'stopped') {
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.stopped();
   return beginStreamingCleanup(reason);
 }
 function getStreamingPlaybackSnapshot() {
@@ -9660,7 +9670,7 @@ function attachAccountMenu(component, options = {}) {
 
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -10734,47 +10744,72 @@ function initPlaybackOwnershipCoordinator() {
 
 // BEGIN js/runtime/modal-and-overlay-helpers.js
 
-﻿function ensureAlbumCardContextMenu() {
-  let menu = document.getElementById('album-card-context-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'album-card-context-menu';
-  menu.className = 'album-card-context-menu';
-  menu.hidden = true;
-  menu.innerHTML = '';
-  document.body.appendChild(menu);
-  return menu;
-}
-
+// The existing shared React/native Choice owner renders every Album action.
+// Native code retains source authority; there is no second menu DOM renderer.
+let albumCardContextMenuOwner = null;
+let albumCardContextActionSequence = 0;
 function hideAlbumCardContextMenu() {
-  const menu = document.getElementById('album-card-context-menu');
-  if (!menu) return;
-  menu.hidden = true;
-  menu.dataset.albumKey = '';
+  albumCardContextMenuOwner?.close({restoreFocus: false});
+  albumCardContextMenuOwner = null;
 }
-
-function showAlbumCardContextMenu(x, y, album) {
-  if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
-  const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  menu.dataset.albumKey = getAlbumIdentity(album);
-  const albumKey = String(album?.key || '');
-  const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
-    ? state.view.manual_version_links
-    : {};
-  const isMarkedVersion = Boolean(albumKey && manualVersionLinks[albumKey]);
-  const moveActions = getAvailableAlbumMoveActions(album);
-  menu.innerHTML = [
-    '<button type="button" class="album-card-context-menu-item" data-album-card-action="open-explorer">Open in File Explorer</button>',
-    ...moveActions.map((item) => (
-      `<button type="button" class="album-card-context-menu-item" data-album-card-action="${escapeHtml(item.action)}">${escapeHtml(getAlbumMoveActionLabel(item))}</button>`
-    )),
-    isMarkedVersion
-      ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
-      : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
-  ].join('');
-  menu.hidden = false;
+function albumCardContextActions(album, {canQueue = true} = {}) {
+  const links = state.view?.manual_version_links || {};
+  const marked = Boolean(album?.key && links[album.key]);
+  const allowed = capability => !window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows(capability) === true;
+  return [
+    {value: 'open-explorer', label: 'Open in File Explorer'},
+    ...getAvailableAlbumMoveActions(album).map(item => ({value: item.action, label: getAlbumMoveActionLabel(item)})),
+    {value: marked ? 'unmark-version' : 'mark-version', label: marked ? 'Unmark as a version' : 'Mark as a version'},
+  ].filter(item => allowed(item.value === 'open-explorer' ? 'library.files.open_location'
+    : item.value.startsWith('move_') ? 'library.files.move' : 'library.versions.manage')).concat(
+    (window.AlbumHavenExplicitQueue?.timingOptions() || []).map(option => ({value: `queue:${option.value}`,
+      label: option.value === 'end' ? 'Add to queue at end' : option.label + (option.reason ? ` · ${option.reason}` : ''),
+      disabled: !canQueue || option.enabled !== true})),
+  );
+}
+function showAlbumCardContextMenu(_x, _y, album, anchor = document.activeElement, sourceCurrent = () => true) {
+  hideAlbumCardContextMenu();
+  if (isMobileClient() || usesMobilePageLayout() || !album || !anchor?.isConnected
+    || typeof window.AlbumHavenPlaytableUI?.actions !== 'function') return false;
+  const view = state.view, scope = TrackActionsRuntime.scope().token, sequence = ++albumCardContextActionSequence;
+  let selectedAction = false;
+  const current = () => {try {return sequence === albumCardContextActionSequence && state.view === view
+    && scope === TrackActionsRuntime.scope().token && anchor.isConnected && sourceCurrent() === true;} catch {return false;}};
+  const canQueue = () => current() && album.source_readable !== false && album.allowed_actions?.can_play_album !== false
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true);
+  albumCardContextMenuOwner = window.AlbumHavenPlaytableUI.actions(anchor, {
+    formats: albumCardContextActions(album, {canQueue: canQueue()}), label: 'Album actions',
+    onSelect: async action => {
+      if (!current() || selectedAction) return false;
+      const choice = albumCardContextActions(album, {canQueue: canQueue()}).find(item => item.value === action);
+      if (!choice || choice.disabled) return false;
+      selectedAction = true;
+      if (action === 'open-explorer') {openAlbumInExplorer(album); return true;}
+      if (action === 'move_to_hoard' || action === 'move_to_library') {performAlbumMove(album, action); return true;}
+      if (action === 'mark-version') {openVersionPickerModal(album); return true;}
+      if (action === 'unmark-version') {unmarkAlbumVersion(album.key || ''); return true;}
+      if (!action.startsWith('queue:')) return false;
+      const request = new AbortController();
+      try {
+        const fresh = await fetchTrackModalAlbumDetails(getAlbumPlaybackQueueRef(album), {signal: request.signal});
+        if (!current() || !canQueue() || getAlbumPlaybackQueueRef(fresh) !== getAlbumPlaybackQueueRef(album)) return false;
+        const rows = Array.isArray(fresh.track_rows) ? fresh.track_rows : [];
+        const ordered = groupAlbumTracks(fresh.tracks || []).groups.flatMap(group => group.tracks || []);
+        const selected = ordered.map(track => rows.filter(row => row.path === track.path))
+          .filter(matches => matches.length === 1 && matches[0].source_readable !== false
+            && matches[0].playback_state?.can_start_here === true && !['missing', 'unknown', 'unresolved'].includes(matches[0].availability))
+          .map(([row]) => row);
+        const captures = captureNativeAlbumQueueSources(fresh, selected);
+        if (!captures?.length || !current()) return false;
+        await window.AlbumHavenExplicitQueue.enqueue(captures, action.slice(6), {signal: request.signal, isCurrent: current});
+        return true;
+      } catch (error) {
+        if (current() && error.name !== 'AbortError') showToast('The Album could not be added to the Queue.', 'error', 3200);
+        return false;
+      }
+    },
+  });
+  return Boolean(albumCardContextMenuOwner);
 }
 
 function ensureVersionPickerModal() {
@@ -17622,7 +17657,7 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   const icon = ButtonComponent.renderIconSvg(iconName, {
     className: `album-track-table__play-icon ui-icon--${iconName}`,
   });
-  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}"${disabled ? ' disabled aria-disabled="true"' : ''}>${icon}</button>`;
+  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-inventory-track-ref="${escapeHtml(track.inventory_track_ref || '')}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}"${disabled ? ' disabled aria-disabled="true"' : ''}>${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
@@ -17660,6 +17695,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
+      rating: {content: escapeHtml(config.subjectTaste && Number.isInteger(track.subjectRating) ? track.subjectRating : '–')},
+      love: {content: config.subjectTaste && ['off', 'loved', 'obsessed'].includes(track.subjectLove)
+        ? `<span role="img" aria-label="${escapeHtml(track.subjectLove)}">${ButtonComponent.renderIconSvg(`love-${track.subjectLove}`)}</span>` : '–'},
       duration: { content: `<span class="track-duration" ${readOnly ? '' : `data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}"`}>${escapeHtml(track.duration || '')}</span>` },
     },
   };
@@ -17684,6 +17722,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       { key: 'number', label: '#' },
       { key: 'title', label: 'Track' },
       ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
+      ...(config.subjectTaste ? [{key: 'rating', label: 'Rating'}, {key: 'love', label: 'Love'}] : []),
       { key: 'problem', label: 'Problem', header: 'absent', action: true },
       { key: 'duration', label: 'Length', action: true },
     ];
@@ -17693,7 +17732,7 @@ function buildAlbumTrackTableHtml(config = {}) {
       headers: groupIndex === 0 ? 'visible' : 'absent',
       columns: showPath
         ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+        : config.subjectTaste ? '36px minmax(0,1fr) 52px 36px 20px minmax(54px,auto)' : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
       columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
@@ -21937,7 +21976,7 @@ function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, 
 }
 
 function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false,
-  density, initialFocus = 'selected', updateTriggerLabel = true }) {
+  density, menuWidth, actionMenu = false, initialFocus = 'selected', updateTriggerLabel = true }) {
   if (utilityFoobarFormatCleanup) {
     const sameTrigger = utilityChoiceTrigger === trigger;
     utilityFoobarFormatCleanup();
@@ -21953,10 +21992,11 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
   menu.className = 'gallery-anchored-menu settings-foobar-format-menu'; menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', label);
   if (density === 'compact') menu.setAttribute('data-choice-density', 'compact');
-  menu.setAttribute('data-choice-width', matchTriggerWidth ? 'anchor' : 'fixed');
-  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label,
-    disabled: choice.disabled === true, className: 'gallery-menu-action', attributes: {role: 'menuitemradio',
-      'aria-checked': String(choice.value === String(selected)), 'data-foobar-format': choice.value}})).join('');
+  const widthMode = menuWidth === 'content' ? 'content' : matchTriggerWidth ? 'anchor' : 'fixed';
+  menu.setAttribute('data-choice-width', widthMode);
+  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label, title: choice.reason || choice.label,
+    disabled: choice.disabled === true, className: 'gallery-menu-action', attributes: {role: actionMenu ? 'menuitem' : 'menuitemradio',
+      ...(actionMenu ? {} : {'aria-checked': String(choice.value === String(selected))}), 'data-foobar-format': choice.value}})).join('');
   document.body.append(menu);
   let closed = false, escapeHeld = false;
   const close = ({restoreFocus = false} = {}) => {
@@ -21982,7 +22022,10 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
     const surface = trigger.closest?.('[role="dialog"], .confirm-modal, .trigger-anchor-surface');
     menu.style.zIndex = String(Math.max(130, (Number(surface && window.getComputedStyle?.(surface).zIndex) || 0) + 1));
     menu.style.maxWidth = `${availableWidth}px`; menu.style.minWidth = '0';
-    const width = matchTriggerWidth ? anchorWidth : Math.min(280, availableWidth);
+    menu.style.width = widthMode === 'content' ? 'max-content' : '';
+    const contentWidth = widthMode === 'content' ? menu.getBoundingClientRect().width : 0;
+    const width = widthMode === 'content' ? Math.min(availableWidth, Math.max(anchorWidth, contentWidth))
+      : matchTriggerWidth ? anchorWidth : Math.min(280, availableWidth);
     menu.style.width = `${width}px`;
     const start = window.getComputedStyle?.(trigger).direction === 'rtl' ? rect.right - width : rect.left;
     menu.style.left = `${Math.max(left, Math.min(start, right - width))}px`;
@@ -31332,6 +31375,11 @@ function renderTrackModalRelease(album) {
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
+    if (album.read_only_subject) {
+      const summary = document.createElement('p'); summary.className = 'playlists__note';
+      summary.textContent = `Rating: ${album.album_rating ?? '–'} · Favorite: ${album.favorite === true ? 'Yes' : album.favorite === false ? 'No' : '–'}`;
+      els.header.appendChild(summary);
+    }
     els = getTrackModalElements();
   }
   if (els.folder) {
@@ -31683,7 +31731,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
       return {
-        path: trackPath,
+        path: trackPath, inventory_track_ref: source.inventory_track_ref,
+        subjectRating: album?.read_only_subject ? source.rating : null, subjectLove: album?.read_only_subject ? source.love_tier : null,
         src,
         title: displayTitle,
         playbackTitle: String(track.title || '').trim(),
@@ -31734,7 +31783,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
-    selection: 'multiple',
+    selection: 'multiple', subjectTaste: Boolean(album?.read_only_subject),
 
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
@@ -31748,7 +31797,7 @@ function buildPlayerTrackPayload(track, album = null) {
   if (!track) return null;
   return {
     src: `/track?path=${encodeURIComponent(track.path)}`,
-    path: String(track.path || ''),
+    path: String(track.path || ''), inventory_track_ref: track.inventory_track_ref || null,
     title: track.title || 'Track',
     artist: track.artist || track.album_artist || '',
     albumArtist: track.album_artist || album?.album_artist || '',
@@ -31875,6 +31924,11 @@ function setAlbumPlaybackQueue(album, startingTrackPath) {
 }
 
 function peekNextQueuedTrack() {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) return ExplicitQueueRuntime.peek();
+  return peekNextOrdinaryQueuedTrack();
+}
+
+function peekNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const currentPath = String(state.player.current?.path || '');
@@ -31890,13 +31944,18 @@ function peekNextQueuedTrack() {
 }
 
 function getNextQueuedTrack() {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) return ExplicitQueueRuntime.consume();
+  return getNextOrdinaryQueuedTrack();
+}
+
+function getNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
   if (queue?.playlistId && typeof playlistQueueNextIndex === 'function') {
     const index = playlistQueueNextIndex(queue, String(state.player.current?.path || ''));
     if (index === null || index < 0) {state.player.playbackQueue = null; return null;}
     queue.currentIndex = index; return queue.tracks[index];
   }
-  const nextTrack = peekNextQueuedTrack();
+  const nextTrack = peekNextOrdinaryQueuedTrack();
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length || !nextTrack) {
     if (queue && Array.isArray(queue.tracks)) {
       const currentPath = String(state.player.current?.path || '');
@@ -32095,6 +32154,7 @@ async function confirmProblemSuggestions() {
 
 function buildPersistedPlaybackQueue(currentTrackPath) {
   const queue = state.player.playbackQueue;
+  if (queue?.explicitQueue === true) return null;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const normalizedCurrentTrackPath = String(currentTrackPath || '');
   const queueTracks = queue.tracks
@@ -36698,6 +36758,7 @@ function setCurrentPlayerTrack(track, options = {}) {
     if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
   }
   state.player.current = track;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.currentChanged();
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
   if (typeof probeCachedWaveformPeaks === 'function') {
@@ -36771,24 +36832,33 @@ async function playTrackFromPayload(track, options = {}) {
   if (shouldAutoplay && typeof canStartPlaybackInThisTab === 'function' && !canStartPlaybackInThisTab(track)) {
     return false;
   }
-  if (!track?.path) return false;
+  if (!track?.path || options.signal?.aborted || options.isCurrent && options.isCurrent() !== true) return false;
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
   const selectionToken = ++playerTrackSelectionToken;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.selectionStarted();
   let startedRole;
+  const cancelSelection = () => {
+    if (selectionToken !== playerTrackSelectionToken || typeof stopStreamingPlayback !== 'function') return;
+    const stopped = stopStreamingPlayback('selection-cancelled');
+    if (typeof observeStreamingFacadeCallback === 'function') observeStreamingFacadeCallback(stopped, 'selection-cancelled');
+    else void Promise.resolve(stopped).catch(() => {});
+  };
+  options.signal?.addEventListener('abort', cancelSelection, {once: true});
   try {
     startedRole = await startStreamingTrack(track, {
       startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
       autoplay: shouldAutoplay,
     });
   } catch (error) {
-    if (selectionToken !== playerTrackSelectionToken) return false;
+    if (selectionToken !== playerTrackSelectionToken || options.signal?.aborted) return false;
     throw error;
-  }
+  } finally {options.signal?.removeEventListener('abort', cancelSelection);}
   if (selectionToken !== playerTrackSelectionToken) return false;
+  if (options.signal?.aborted || options.isCurrent && options.isCurrent() !== true) {cancelSelection(); return false;}
   if (startedRole === null) {
     throw new Error('Streaming playback did not start');
   }
@@ -36796,6 +36866,7 @@ async function playTrackFromPayload(track, options = {}) {
   if (startedTrackPath && startedTrackPath !== String(track.path)) {
     throw new Error('Streaming playback started an unexpected track identity');
   }
+  if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true) ExplicitQueueRuntime.replaced();
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
@@ -36838,12 +36909,13 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (!nextTrack || typeof scheduleStreamingContinuity !== 'function') {
+  const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+  if ((!nextTrack && !explicitProgression) || typeof scheduleStreamingContinuity !== 'function') {
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
-  const scheduling = Promise.resolve().then(() => scheduleStreamingContinuity(nextTrack));
+  const scheduling = Promise.resolve().then(() => explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack));
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
     await scheduling;
@@ -36880,6 +36952,7 @@ async function handleStreamingPlaybackEnded(event = {}) {
   const identity = [event.generation, event.streamId, trackPath].join(':');
   if (identity === handledStreamingEndedIdentity) return;
   handledStreamingEndedIdentity = identity;
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.ended();
   const playback = getPlayerPlaybackSnapshot();
   const session = state.player.listenSession;
   if (typeof releasePlaybackOwnership === 'function') {
@@ -36979,7 +37052,9 @@ async function handleStreamingPlaybackBoundary(event = {}) {
   const subsequentTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
     : null;
-  if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
+    await ExplicitQueueRuntime.prepareNext();
+  } else if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
     await scheduleStreamingContinuity(subsequentTrack);
   }
   if (typeof promoteWaveformPeaks === 'function') {
@@ -37155,8 +37230,9 @@ function setLoopActive(active) {
     const nextTrack = typeof peekNextQueuedTrack === 'function'
       ? peekNextQueuedTrack()
       : null;
-    if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
+    const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+    if ((nextTrack || explicitProgression) && typeof scheduleStreamingContinuity === 'function') {
+      const result = explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack, {
         kind: 'queued-next', startSeconds: 0,
       });
       if (typeof observeStreamingFacadeCallback === 'function') {
@@ -37467,7 +37543,7 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     : null);
   const playbackStart = playTrackFromPayload({
     src,
-    path: trackPath,
+    path: trackPath, inventory_track_ref: btn.getAttribute('data-inventory-track-ref') || null,
     title: btn.getAttribute('data-track-title') || 'Track',
     artist: btn.getAttribute('data-track-artist') || '',
     albumArtist: btn.getAttribute('data-track-album-artist') || '',
@@ -37981,6 +38057,10 @@ function currentQueueIndex() {
 }
 
 async function playCompactQueueOffset(offset) {
+  if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
+    const result = await ExplicitQueueRuntime.skip(offset);
+    if (result !== undefined) return result;
+  }
   const queue = state.player.playbackQueue;
   const index = currentQueueIndex();
   if (!queue?.tracks?.length || index < 0) return;
@@ -37992,7 +38072,7 @@ async function playCompactQueueOffset(offset) {
   queue.currentIndex = targetIndex;
   let started = false;
   try {
-    const playbackStart = playTrackFromPayload(track);
+    const playbackStart = playTrackFromPayload(track, {explicitQueueTransition: true});
     syncCompactPlayerUi();
     started = await playbackStart;
     return started;
@@ -38061,7 +38141,8 @@ function syncCompactPlayerUi(snapshot = {}) {
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });
   if (els.previous) els.previous.disabled = controls.previousDisabled || locked;
-  if (els.next) els.next.disabled = controls.nextDisabled || locked;
+  const explicitNext = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.hasNext();
+  if (els.next) els.next.disabled = (controls.nextDisabled && !explicitNext) || locked;
 }
 
 function initCompactPlayer() {
@@ -39904,38 +39985,6 @@ function handleGalleryBootstrapClick(event) {
   if (trackModalEditTagsButton) {
     event.preventDefault();
     openTagEditor(resolveTrackModalActionAlbum(trackModalEditTagsButton), { tracksMode: 'all' });
-    return;
-  }
-
-  const albumAction = event.target.closest('[data-album-card-action]');
-  if (albumAction) {
-    event.preventDefault();
-    const action = albumAction.getAttribute('data-album-card-action') || '';
-    const menu = document.getElementById('album-card-context-menu');
-    const album = getIndexedAlbum(menu?.dataset.albumKey || '');
-
-    hideAlbumCardContextMenu();
-
-    if (action === 'open-explorer') {
-      openAlbumInExplorer(album);
-      return;
-    }
-
-    if (action === 'move_to_hoard' || action === 'move_to_library') {
-      performAlbumMove(album, action);
-      return;
-    }
-
-    if (action === 'mark-version') {
-      openVersionPickerModal(album);
-      return;
-    }
-
-    if (action === 'unmark-version') {
-      unmarkAlbumVersion(album?.key || '');
-      return;
-    }
-
     return;
   }
 
@@ -41942,6 +41991,14 @@ function presentMobileAppFormPage(owner) {
   if (currentMobileFormOwner() !== owner) return false;
   return presentMobilePage({kind: 'form', formToken: owner.token, albumKey: '', title: owner.title, subtitle: ''});
 }
+function updateMobileAppFormPresentation(owner) {
+  if (currentMobileFormOwner() !== owner) return false;
+  const page = mobilePageState.pages.find(value => value.kind === 'form' && value.formToken === owner.token);
+  if (!page) return false;
+  page.title = owner.title;
+  syncMobilePageShell(); writeMobilePageHistory('replace');
+  return true;
+}
 function canRetainMobileFormParent(check) {
   try {return typeof check === 'function' && check() === true;} catch {return false;}
 }
@@ -43151,7 +43208,9 @@ function commitPlaylistQueue(next, expectedQueue) {
   if (!loopOwned && engine?.roles?.continuity && (typeof closeStreamingContinuityRole !== 'function'
     || closeStreamingContinuityRole('playlist-queue-mode') !== true)) throw new Error('Queue mode change was not accepted.');
   state.player.playbackQueue = next;
-  if (engine && !loopOwned) {
+  const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
+  if (explicitProgression) ExplicitQueueRuntime.modeChanged(expectedQueue, next);
+  if (engine && !loopOwned && !explicitProgression) {
     engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
     const index = playlistQueueNextIndex(next, String(state.player.current?.path || '')), track = index >= 0 ? next.tracks[index] : null;
     if (track && typeof scheduleStreamingContinuity === 'function') {
@@ -43202,6 +43261,8 @@ const TrackActionsRuntime = (() => {
     const value = own(source, 'track_preference') ? overlay(source.track_preference) : null, track = ref(source), current = scope();
     if (!value || !track || !current.actor || !current.library) return null;
     if (!identities.has(track)) identities.set(track, `native-track:${++serial}`);
+    if (source.read_only_subject) return Object.freeze({identity: `subject:${source.read_only_subject}:${source.inventory_track_ref || track}`,
+      love_tier: value.love_tier, rating: value.rating, allowed_actions: Object.freeze({can_set_love_tier: false})});
     const saved = confirmed.get(track);
     return Object.freeze({identity: identities.get(track), love_tier: saved?.love_tier ?? value.love_tier,
       rating: saved ? saved.rating : value.rating,
@@ -43209,6 +43270,7 @@ const TrackActionsRuntime = (() => {
   }
   function readEpoch() {scope(); return preferenceEpoch;}
   function acceptRead(source, epoch) {
+    if (source?.read_only_subject) return;
     const track = ref(source);
     const value = own(source, 'track_preference') ? overlay(source.track_preference) : null;
     if (epoch === readEpoch() && track && value) {
@@ -43269,7 +43331,7 @@ const TrackActionsRuntime = (() => {
     if (!canPlay(source)) throw failure('This track action is unavailable.', 403);
     const button = document.createElement('button');
     const text = value => typeof value === 'string' ? value : '';
-    const attributes = {'data-src': `/track?path=${encodeURIComponent(source.path)}`, 'data-track-path': source.path,
+    const attributes = {'data-inventory-track-ref': text(source.inventory_track_ref), 'data-src': `/track?path=${encodeURIComponent(source.path)}`, 'data-track-path': source.path,
       'data-track-title': text(source.title), 'data-track-artist': text(source.artist || source.secondary_artist),
       'data-track-album': text(source.album_title), 'data-track-duration-seconds': source.duration_seconds};
     for (const [name, value] of Object.entries(attributes)) if (value !== undefined) button.setAttribute(name, String(value));
@@ -43304,6 +43366,638 @@ window.AlbumHavenTrackPlayback = Object.freeze({sync: TrackActionsRuntime.syncPl
 
 // END js/runtime/track-actions.js
 
+// BEGIN js/runtime/explicit-queue-planner.js
+
+/* Deliberate requests only. Pure scheduling never owns audio, media references,
+   authorization, persistence, the ordinary queue, or a playback clock. */
+const EXPLICIT_QUEUE_TIMINGS = Object.freeze({next: 'Play next', end: 'At end of queue',
+  album: 'After current album', playlist: 'After current playlist'});
+function createExplicitQueuePlanner({canPlay = () => false} = {}) {
+  let serial = 0;
+  let state = Object.freeze({enabled: true, halted: false, entries: Object.freeze([]), currentId: null,
+    returnContext: null, revision: 0});
+  const live = q => Boolean(q && !q.ended && q.tracks?.[q.index]);
+  const order = q => JSON.stringify(q?.tracks || []);
+  const freezeState = value => Object.freeze({...value,
+    entries: Object.freeze(value.entries.map(entry => Object.freeze(entry)))});
+  const commit = patch => {state = freezeState({...state, ...patch, revision: state.revision + 1});};
+  function timingOptions(q) {
+    const active = live(q), album = active && q.albums?.[q.index], tail = active ? q.albums?.slice(q.index) || [] : [];
+    const other = tail.findIndex(value => value !== album);
+    const uninterrupted = other < 0 || !tail.slice(other).includes(album);
+    return Object.entries(EXPLICIT_QUEUE_TIMINGS).map(([value,label]) => Object.freeze({value,label,enabled:
+      value === 'album' ? Boolean(active && ['album','playlist','album-top'].includes(q.source) && !q.shuffle && album && tail.every(Boolean) && tail.length === q.tracks.length - q.index && uninterrupted && q.albumComplete !== false)
+        : value === 'playlist' ? active && q.source === 'playlist' : true,
+      ...(value === 'album' && q?.albumComplete === false ? {reason:'The active queue contains only part of the album.'} : {})}));
+  }
+  function capture(timing,q) {
+    if (!timingOptions(q).some(option => option.value === timing && option.enabled)) return null;
+    if (!live(q)) return {ready: true, anchor: null};
+    let boundary = q.index;
+    if (timing === 'album') while (boundary + 1 < q.tracks.length && q.albums[boundary+1] === q.albums[q.index]) boundary++;
+    if (timing === 'playlist') boundary = q.tracks.length-1;
+    return {ready: timing === 'end' && Boolean(state.currentId), anchor: Object.freeze({session:q.session,
+      entryId:q.source === 'explicit' ? q.entryId : null, index:q.index, track:q.tracks[q.index],
+      boundary, boundaryTrack:q.tracks[boundary], order:order(q)})};
+  }
+  function stale(entry,q) {
+    const a=entry.anchor;
+    if (!a) return false;
+    if (q?.source === 'explicit' && !a.entryId && state.returnContext) q=state.returnContext;
+    if (a.session !== q?.session) return true;
+    if (entry.ready || a.entryId) return false;
+    if(entry.timing==='album'&&q?.albumComplete===false)return true;
+    return ['album','playlist'].includes(entry.timing) ? a.order !== order(q)
+      : a.track === q?.tracks?.[q.index] && a.index !== q?.index;
+  }
+  const selected = (entry,context) => Object.freeze({session:entry.anchor?.session ?? context?.session,
+    source:'explicit', tracks:Object.freeze([entry.trackId]), albums:Object.freeze([]), index:0,
+    entryId:entry.id, repeat:'off', shuffle:false, ended:false});
+  function plan(before,after,{direction=1,stopPriority=false}={}) {
+    if (!before) return {state,next:after};
+    if (direction < 0) return {state,next:before.source === 'explicit' ? before : after};
+    let entries=state.entries.map(entry => {
+      const a=entry.anchor;
+      if (entry.id === state.currentId || entry.ready || entry.invalid || !a) return entry;
+      if (a.session !== before.session) return {...entry,invalid:'Playback context was replaced'};
+      if (a.entryId ? a.entryId !== before.entryId : before.source === 'explicit') return entry;
+      const reached=['next','end'].includes(entry.timing)
+        ? a.index === before.index && a.track === before.tracks[before.index]
+        : before.repeat !== 'one' && a.boundary === before.index && a.boundaryTrack === before.tracks[before.index];
+      return reached ? {...entry,ready:true} : entry;
+    });
+    let currentId=state.currentId, returnContext=state.returnContext;
+    const finishing=before.source === 'explicit' && before.entryId === currentId;
+    if (finishing) {entries=entries.filter(entry=>entry.id!==currentId);currentId=null;}
+    if (stopPriority) return {state:freezeState({...state,entries,currentId,returnContext:null,halted:true}),next:after};
+    const ready=state.enabled && !state.halted && entries.find(entry=>entry.id!==currentId && entry.ready && !entry.invalid && canPlay(entry.trackId));
+    if (ready) {
+      if (!finishing) returnContext=after;
+      currentId=ready.id;
+      return {state:freezeState({...state,entries,currentId,returnContext}),next:selected(ready,returnContext)};
+    }
+    if (finishing) {const resume=returnContext;returnContext=null;
+      return {state:freezeState({...state,entries,currentId,returnContext}),next:resume || after};}
+    return {state:freezeState({...state,entries,currentId,returnContext}),next:after};
+  }
+  return Object.freeze({
+    getSnapshot:()=>state, timingOptions,
+    restore(expected, previous) {if(state!==expected)return false;commit(previous);return true;},
+    enqueue(trackIds,timing='end',q=null) {
+      const captured=capture(timing,q); if (!captured || !Array.isArray(trackIds)) return [];
+      const blockId=`queue-block-${++serial}`;
+      const entries=trackIds.filter(id=>typeof id==='string' && id).map(trackId=>({id:`queue-entry-${++serial}`,blockId,trackId,timing,...captured,invalid:null}));
+      if (!entries.length) return [];
+      const current=state.entries.filter(entry=>entry.id===state.currentId),pending=state.entries.filter(entry=>entry.id!==state.currentId);
+      commit({entries:[...current,...(timing==='next'?[...entries,...pending]:[...pending,...entries])]});
+      return entries.map(entry=>entry.id);
+    },
+    retime(id,timing,q) {
+      const old=state.entries.find(entry=>entry.id===id),captured=capture(timing,q);
+      if (!old || id===state.currentId || !captured) return false;
+      const entry={...old,timing,...captured,invalid:null};
+      let entries=state.entries.map(value=>value.id===id?entry:value);
+      if (['next','end'].includes(timing)) {
+        const current=entries.filter(value=>value.id===state.currentId),pending=entries.filter(value=>value.id!==state.currentId&&value.id!==id);
+        entries=[...current,...(timing==='next'?[entry,...pending]:[...pending,entry])];
+      }
+      commit({entries});return true;
+    },
+    reorder(ids) {
+      const pending=state.entries.filter(entry=>entry.id!==state.currentId),byId=new Map(pending.map(entry=>[entry.id,entry]));
+      if (!Array.isArray(ids) || ids.length!==pending.length || new Set(ids).size!==ids.length || ids.some(id=>!byId.has(id))) return false;
+      commit({entries:[...state.entries.filter(entry=>entry.id===state.currentId),...ids.map(id=>byId.get(id))]});return true;
+    },
+    remove(id) {if(id===state.currentId || !state.entries.some(entry=>entry.id===id))return false;
+      commit({entries:state.entries.filter(entry=>entry.id!==id)});return true;},
+    clear(ids) {if(!Array.isArray(ids))return false;const captured=new Set(ids);
+      commit({entries:state.entries.filter(entry=>entry.id===state.currentId||!captured.has(entry.id))});return true;},
+    setEnabled(enabled) {if(typeof enabled!=='boolean')return false;commit({enabled,halted:enabled?false:state.halted});return true;},
+    reconcile(q) {const entries=state.entries.map(entry=>entry.id!==state.currentId&&!entry.invalid&&stale(entry,q)
+      ? {...entry,invalid:'Playback context or order changed'}:entry);
+      if(entries.some((entry,index)=>entry!==state.entries[index]))commit({entries});},
+    replaceContext() {commit({currentId:null,returnContext:null,halted:false,entries:state.entries.map(entry=>entry.anchor||entry.id===state.currentId
+      ? {...entry,invalid:'Playback context was replaced'}:entry)});},
+    canStart(id,q) {const entry=state.entries.find(value=>value.id===id);
+      return Boolean(entry&&state.enabled&&!state.currentId&&!live(q)&&entry.ready&&!entry.invalid&&canPlay(entry.trackId));},
+    start(id,q) {if(!this.canStart(id,q))return null;const entry=state.entries.find(value=>value.id===id);
+      commit({currentId:id,returnContext:q,halted:false});return selected(entry,q);},
+    preview:plan,
+    advance(before,after,options) {const result=plan(before,after,options);commit(result.state);return result.next;},
+    halt() {commit({halted:true,returnContext:null});},
+  });
+}
+
+// END js/runtime/explicit-queue-planner.js
+
+// BEGIN js/runtime/explicit-queue-runtime.js
+
+/* One session-local planner around the existing native queue and streaming
+   facade. Source callbacks hold private authority; public snapshots never do. */
+const ExplicitQueueRuntime = (() => {
+  let scopeToken=null, planner=null, serial=0, session=0, generation=0, snapshot=null;
+  let prepared=null, refreshController=null, pendingStart=null, snapshotFacts='', successorCache=null;
+  const sources=new Map(), listeners=new Set(), trackKeys=new WeakMap(), queues=new WeakMap();
+  const aborted=()=>Object.assign(new Error('Queue action was superseded.'),{name:'AbortError'});
+  const notify=()=>{snapshot=null;for(const listener of [...listeners])try{listener();}catch{/* Paint cannot change playback. */}};
+  const playback=()=>typeof getPlayerPlaybackSnapshot==='function'?getPlayerPlaybackSnapshot():{};
+  const permitted=()=>!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows?.('library.media.read')===true;
+  const sourceCurrent=(source,media=true)=>{try{return source?.scope===scopeToken&&source.capture.isCurrent()===true&&(!media||permitted());}catch{return false;}};
+  const denySource=source=>{
+    source.readable=false;source.authorityEpoch=(source.authorityEpoch||0)+1;
+    const entry=prepared?.next?.source==='explicit'&&planner?.getSnapshot().entries.find(value=>value.id===prepared.next.entryId);
+    if(entry&&sources.get(entry.trackId)===source){refreshController?.abort();generation++;prepared=null;retireContinuity('queue-source-revoked');}
+  };
+  const playable=id=>{const source=sources.get(id);return Boolean(sourceCurrent(source)&&source.readable!==false&&source.target&&TrackActionsRuntime.canPlay(source.target));};
+  function sync() {
+    const scope=TrackActionsRuntime.scope();
+    if(scope.token!==scopeToken) {
+      const retiring=prepared, wasExplicit=Boolean(planner?.getSnapshot().currentId), oldStart=pendingStart;
+      refreshController?.abort();generation++;prepared=null;successorCache=null;pendingStart=null;sources.clear();scopeToken=scope.token;
+      planner=createExplicitQueuePlanner({canPlay:playable});session++;snapshot=null;oldStart?.abort();
+      if(retiring)retireContinuity('queue-session-changed');
+      if(wasExplicit&&typeof stopStreamingPlayback==='function') {
+        const stopped=stopStreamingPlayback('queue-session-changed');
+        if(typeof observeStreamingFacadeCallback==='function')observeStreamingFacadeCallback(stopped,'queue-session-changed');else void Promise.resolve(stopped).catch(()=>{});
+      }
+    }
+    return Boolean(scope.actor&&scope.library);
+  }
+  function retireContinuity(reason) {
+    const engine=typeof streamingEngineState==='function'?streamingEngineState():null;
+    if(!engine||state.player.loopActive)return;
+    engine.pendingContinuityTrack=null;engine.pendingContinuityOptions=null;
+    if(engine.roles?.continuity&&closeStreamingContinuityRole(reason)!==true&&typeof stopStreamingPlayback==='function') {
+      const stopped=stopStreamingPlayback(reason);
+      if(typeof observeStreamingFacadeCallback==='function')observeStreamingFacadeCallback(stopped,reason);else void Promise.resolve(stopped).catch(()=>{});
+    }
+  }
+  const trackKey=track=>{if(!trackKeys.has(track))trackKeys.set(track,`ordinary-${++serial}`);return trackKeys.get(track);};
+  function describe(queue=state.player.playbackQueue,current=state.player.current,indexOverride=null) {
+    if(queue?.explicitQueue===true) return playback().ended ? Object.freeze({...queue.explicitContext,ended:true}) : queue.explicitContext;
+    let tracks=queue?.tracks;
+    if(!Array.isArray(tracks)||!tracks.length)tracks=current?[current]:[];
+    let index=indexOverride;
+    if(index===null) {
+      if(queue?.playlistId)index=playlistQueueCurrentIndex(queue,String(current?.path||''),current?.playlistItemId);
+      else {index=Number.isSafeInteger(queue?.currentIndex)&&tracks[queue.currentIndex]?.path===current?.path?queue.currentIndex:tracks.indexOf(current);
+        if(index<0)index=tracks.findIndex(track=>track.path===current?.path);}
+    }
+    if(queue&&!queues.has(queue))queues.set(queue,++session);
+    const source=queue?.playlistId?'playlist':queue?.albumRef?'album':'track';
+    const fullAlbumPaths=source==='album'?(queue.albumSnapshot?.tracks||[]).map(track=>String(track.path||'')):[];
+    const queuedPaths=tracks.map(track=>String(track.path||''));
+    const albumComplete=source!=='album'||fullAlbumPaths.length>0&&fullAlbumPaths.every(Boolean)
+      &&JSON.stringify([...fullAlbumPaths].sort())===JSON.stringify([...queuedPaths].sort());
+    const ids=tracks.map(trackKey),albums=tracks.map(track=>source==='album'?String(queue.albumRef):String(track.albumRef||track.album_ref||''));
+    return Object.freeze({session:queue?queues.get(queue):session,source,tracks:Object.freeze(ids),albums:Object.freeze(albums),
+      index,albumComplete,repeat:queue?.repeatMode||'off',shuffle:queue?.shuffle===true,ended:index<0||index>=tracks.length||indexOverride===null&&playback().ended===true,
+      nativeQueue:queue,nativeTracks:tracks});
+  }
+  function successor(before) {
+    if(before.source==='explicit')return Object.freeze({...before,ended:true});
+    const queue=before.nativeQueue;
+    if(!queue)return Object.freeze({...before,ended:true});
+    let index=before.index+1;
+    if(queue.playlistId)index=playlistQueueNextIndex(queue,String(state.player.current?.path||''));
+    if(index>=0&&index<queue.tracks.length)return describe(queue,queue.tracks[index],index);
+    if(successorCache&&sameContext(successorCache.before,before)&&successorCache.playbackContext===queue.playbackContext)return successorCache.next;
+    const next=queue.playlistId?null:resolveNextPlaybackContextQueue(queue);
+    if(next)queues.set(next,before.session);
+    const context=next?describe(next,next.tracks[0],0):Object.freeze({...before,ended:true});
+    successorCache={before,playbackContext:queue.playbackContext,next:context};return context;
+  }
+  const stopPriority=()=>state.player.loopActive===true || typeof isPlaybackLockedByAnotherTab==='function'&&isPlaybackLockedByAnotherTab();
+  function preview() {
+    sync();const before=describe();planner.reconcile(before);
+    return planner.preview(before,successor(before),{stopPriority:stopPriority()}).next;
+  }
+  function payload(context) {
+    if(!context||context.ended)return null;
+    if(context.source==='explicit') {
+      const item=planner.getSnapshot().entries.find(entry=>entry.id===context.entryId),target=sources.get(item?.trackId)?.target;
+      return target?{src:`/track?path=${encodeURIComponent(target.path)}`,path:target.path,title:target.title,
+        artist:target.artist||target.secondary_artist,album:target.album_title,durationSeconds:target.duration_seconds,
+        explicitEntryId:context.entryId,inventory_track_ref:target.inventory_track_ref}:null;
+    }
+    return context.nativeTracks?.[context.index]||null;
+  }
+  const sameContext=(a,b)=>a?.session===b?.session&&a?.source===b?.source&&a?.entryId===b?.entryId
+    &&a?.index===b?.index&&a?.tracks?.[a.index]===b?.tracks?.[b.index]&&a?.ended===b?.ended
+    &&a?.repeat===b?.repeat&&a?.shuffle===b?.shuffle&&a?.albumComplete===b?.albumComplete&&JSON.stringify(a?.tracks)===JSON.stringify(b?.tracks);
+  function editable() {
+    sync();const engine=typeof streamingEngineState==='function'?streamingEngineState():null;
+    if(pendingStart||engine?.pendingPromotion||engine?.roles?.current?.boundaryNotified)throw new Error('Wait for the current track transition before editing the Queue.');
+    if(!state.player.loopActive&&engine?.roles?.continuity
+      && (typeof closeStreamingContinuityRole!=='function'||closeStreamingContinuityRole('explicit-queue-change')!==true))throw new Error('The Queue transition is already starting.');
+    refreshController?.abort();generation++;prepared=null;
+    if(engine&&!state.player.loopActive){engine.pendingContinuityTrack=null;engine.pendingContinuityOptions=null;}
+  }
+  async function resolve(source,signal) {
+    if(signal.aborted||!sourceCurrent(source))throw aborted();
+    const authorityEpoch=source.authorityEpoch,target=await source.capture.resolve({signal});
+    if(signal.aborted||!sourceCurrent(source)||source.authorityEpoch!==authorityEpoch)throw aborted();
+    if(target?.source_readable===false||target?.allowed_actions?.can_read===false)throw Object.assign(new Error('This queued source is unreadable.'),{status:403});
+    if(!target||['missing','unknown','unresolved'].includes(target.availability)
+      ||target.allowed_actions?.can_play===false||target.playback_state?.can_start_here!==true||!TrackActionsRuntime.canPlay(target))throw new Error('This queued track is unavailable.');
+    return Object.freeze({...target});
+  }
+  async function refresh() {
+    sync();if(stopPriority())return null;
+    const engine=typeof streamingEngineState==='function'?streamingEngineState():null;
+    if(!engine?.roles?.current||engine.pendingPromotion||engine.roles.current.boundaryNotified)return null;
+    if(!planner.getSnapshot().entries.length&&!planner.getSnapshot().currentId) {
+      const ordinary=peekNextOrdinaryQueuedTrack();if(ordinary)await scheduleStreamingContinuity(ordinary);return ordinary;
+    }
+    if(prepared&&engine.roles.continuity&&closeStreamingContinuityRole('explicit-queue-refresh')!==true)return null;
+    prepared=null;engine.pendingContinuityTrack=null;engine.pendingContinuityOptions=null;
+    refreshController?.abort();const controller=new AbortController();refreshController=controller;
+    const token=++generation,before=describe();let candidate=preview();
+    try {
+      // Fresh authorization is required before handing media to native preload.
+      while(candidate?.source==='explicit'&&!candidate.ended) {
+        const entry=planner.getSnapshot().entries.find(value=>value.id===candidate.entryId),source=sources.get(entry?.trackId);
+        try {source.target=await resolve(source,controller.signal);source.readable=true;}
+        catch(error){if(controller.signal.aborted||token!==generation)throw aborted();if(source){source.target=null;if([401,403,404].includes(error.status))denySource(source);}notify();candidate=preview();continue;}
+        break;
+      }
+      if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority())return null;
+      let track=payload(candidate);
+      if(track&&candidate.source!=='explicit') {
+        try {track=await refreshExplicitQueueReturnTrack(candidate,track,{signal:controller.signal});}
+        catch(error) {if(controller.signal.aborted||token!==generation)throw aborted();prepared=null;planner.halt();notify();return null;}
+      }
+      if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority())return null;
+      if(!track){prepared=null;return null;}
+      prepared={before,next:candidate,track,generation:token};
+      await scheduleStreamingContinuity(track);
+      return track;
+    } finally {if(refreshController===controller)refreshController=null;}
+  }
+  function reschedule() {const pending=refresh();if(typeof observeStreamingFacadeCallback==='function')observeStreamingFacadeCallback(pending,'explicit-queue-refresh');else void pending.catch(()=>{});}
+  function prune() {const retained=new Set(planner.getSnapshot().entries.map(entry=>entry.trackId));for(const key of sources.keys())if(!retained.has(key))sources.delete(key);}
+  function changed() {prune();notify();reschedule();}
+  function install(context) {
+    if(context?.source==='explicit'&&!context.ended)state.player.playbackQueue={explicitQueue:true,explicitContext:context,
+      tracks:[payload(context)],currentIndex:0};
+    else if(context&&!context.ended){state.player.playbackQueue=context.nativeQueue;state.player.playbackQueue.currentIndex=context.index;}
+    else state.player.playbackQueue=null;
+  }
+  function getSnapshot() {
+    sync();let value=planner.getSnapshot();const context=describe();
+    const preparedEntry=prepared?.next?.source==='explicit'&&value.entries.find(entry=>entry.id===prepared.next.entryId);
+    if(preparedEntry&&!playable(preparedEntry.trackId)) {refreshController?.abort();generation++;prepared=null;retireContinuity('queue-source-revoked');value=planner.getSnapshot();}
+    const facts=JSON.stringify([value.revision,context.session,context.index,context.source,context.entryId,playback().ended,
+      Boolean(state.player.current),stopPriority(),value.entries.map(entry=>[playable(entry.trackId),sourceCurrent(sources.get(entry.trackId),false),sources.get(entry.trackId)?.readable])]);
+    if(snapshot&&snapshotFacts===facts)return snapshot;
+    snapshotFacts=facts;
+    const entries=value.entries.map(entry=>{
+      const source=sources.get(entry.trackId),available=playable(entry.trackId),current=entry.id===value.currentId;
+      return Object.freeze({id:entry.id,blockId:entry.blockId,...(sourceCurrent(source,false)&&source?.readable!==false?source?.display:{title:'Unavailable track',artist:'',album:''}),timing:entry.timing,ready:entry.ready,current,sourceReadable:sourceCurrent(source,false)&&source?.readable!==false,
+        canPlay:available&&!stopPriority()&&planner.canStart(entry.id,playback().ended||!state.player.current?null:context),
+        status:!available?'Unavailable · source or local track':current?'Current queued track':entry.invalid?`Unavailable · ${entry.invalid}`
+          :!value.enabled?'Paused · queue is deactivated':value.halted?'Paused · playback stopped'
+          :entry.ready?'Ready':`Waiting · ${EXPLICIT_QUEUE_TIMINGS[entry.timing].toLowerCase()}`});
+    });
+    snapshot=Object.freeze({enabled:value.enabled,halted:value.halted,currentId:value.currentId,entries:Object.freeze(entries),revision:value.revision});
+    return snapshot;
+  }
+  function playlistProvenance(value,trackRef) {
+    const exact=(record,keys)=>record&&typeof record==='object'&&!Array.isArray(record)
+      &&Object.keys(record).length===keys.length&&keys.every(key=>Object.hasOwn(record,key));
+    const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    if(value?.track_ref!==trackRef)throw new Error('This queued track has invalid source provenance.');
+    if(value.kind==='inventory'&&exact(value,['kind','track_ref']))return Object.freeze({kind:'inventory',track_ref:trackRef});
+    if(value.kind==='playlist'&&exact(value,['kind','track_ref','playlist_ref','revision','item_ref'])
+      &&uuid(value.playlist_ref)&&uuid(value.item_ref)&&typeof value.revision==='string'&&/^[1-9]\d*$/.test(value.revision))
+      return Object.freeze({kind:'playlist',track_ref:trackRef,playlist_ref:value.playlist_ref,revision:value.revision,item_ref:value.item_ref});
+    const origin=value?.origin;
+    if(value.kind==='activity'&&exact(value,['kind','track_ref','origin','row_ref'])
+      &&exact(origin,['audience','subject_ref','kind','period','snapshot_ref'])
+      &&(origin.audience==='own'?origin.subject_ref===null:origin.audience==='friend'&&uuid(origin.subject_ref))
+      &&['tracks','listens'].includes(origin.kind)&&['week','month','six','year','all'].includes(origin.period)
+      &&typeof origin.snapshot_ref==='string'&&/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(origin.snapshot_ref)
+      &&typeof value.row_ref==='string'&&/^activity_[0-9a-f]{64}$/.test(value.row_ref))
+      return Object.freeze({kind:'activity',track_ref:trackRef,row_ref:value.row_ref,origin:Object.freeze({
+        audience:origin.audience,subject_ref:origin.subject_ref,kind:origin.kind,period:origin.period,snapshot_ref:origin.snapshot_ref})});
+    throw new Error('This queued track has invalid source provenance.');
+  }
+  const api={getSnapshot,subscribe(listener){listeners.add(listener);return()=>listeners.delete(listener);},
+    timingOptions(){sync();return Object.freeze(planner.timingOptions(describe()));},
+    async enqueue(captures,timing='end',options={}) {
+      if(!sync()||!Array.isArray(captures)||!captures.length)throw new Error('Queue sources are unavailable.');
+      const actor=scopeToken,before=describe(),selection=playerTrackSelectionToken,controller=new AbortController();
+      if(!planner.timingOptions(before).some(option=>option.value===timing&&option.enabled))return [];
+      const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});
+      const active=()=>!controller.signal.aborted&&!options.signal?.aborted&&actor===TrackActionsRuntime.scope().token
+        &&(!options.isCurrent||options.isCurrent()===true)&&selection===playerTrackSelectionToken&&sameContext(before,describe());
+      const captured=[];
+      try {
+        if(!active())throw aborted();
+        for(const capture of captures) {
+          if(typeof capture?.resolve!=='function'||typeof capture.isCurrent!=='function')throw new Error('Queue source cannot be refreshed.');
+          const targets={};
+          for(const kind of ['album','artist']) {
+            const projected=window.AlbumHavenResourceSelection?.projectTarget(capture.display?.[`${kind}Target`]);
+            if(projected?.kind===kind) {const {native_actions,...publicTarget}=projected;targets[`${kind}Target`]=Object.freeze(publicTarget);}
+          }
+          const display=Object.freeze({title:String(capture.display?.title||''),artist:String(capture.display?.artist||''),album:String(capture.display?.album||''),...targets});
+          const source={scope:actor,capture,display,target:null,readable:true,authorityEpoch:0};captured.push(source);
+        }
+        await Promise.all(captured.map(async source=>{source.target=await resolve(source,controller.signal);}));
+        if(!active())throw aborted();editable();
+        const keys=captured.map(source=>{const key=`request-${++serial}`;sources.set(key,source);return key;});
+        const ids=planner.enqueue(keys,timing,before);if(!ids.length)keys.forEach(key=>sources.delete(key));changed();return ids;
+      } finally {options.signal?.removeEventListener('abort',cancel);}
+    },
+    async refresh(options={}) {
+      sync();const actor=scopeToken,token=generation,controller=new AbortController();
+      const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});
+      const entries=[...sources.values()];
+      if(!entries.length){options.signal?.removeEventListener('abort',cancel);return getSnapshot();}
+      try {
+        if(options.signal?.aborted)throw aborted();
+        const updates=await Promise.all(entries.map(async source=>{try{return {target:await resolve(source,controller.signal),readable:true};}
+          catch(error){if(controller.signal.aborted)throw error;return {target:null,readable:![401,403,404].includes(error.status)&&source.readable!==false};}}));
+        if(controller.signal.aborted||actor!==TrackActionsRuntime.scope().token||token!==generation)throw aborted();
+        editable();entries.forEach((source,index)=>{if(updates[index].readable===false)denySource(source);Object.assign(source,updates[index]);});changed();return getSnapshot();
+      } finally {options.signal?.removeEventListener('abort',cancel);}
+    },
+    async playlistSelection(ids,options={}) {
+      sync();const actor=scopeToken;
+      if(!Array.isArray(ids)||!ids.length||ids.length>5000||new Set(ids).size!==ids.length)throw new Error('Select queued tracks first.');
+      const captured=ids.map(id=>{const entry=planner.getSnapshot().entries.find(value=>value.id===id),source=sources.get(entry?.trackId);
+        if(!sourceCurrent(source,false)||typeof source?.capture.resolvePlaylistItem!=='function')throw new Error('This Queue source cannot be added to a Playlist.');
+        return {id,entry,source,epoch:source.authorityEpoch};});
+      let retired=false;
+      const current=()=>{try {if(!retired)retired=Boolean(options.signal?.aborted)||actor!==TrackActionsRuntime.scope().token
+        ||Boolean(options.isCurrent&&options.isCurrent()!==true)||captured.some(({id,entry,source,epoch})=>
+          !sourceCurrent(source,false)||source.authorityEpoch!==epoch||sources.get(entry.trackId)!==source
+          ||!planner.getSnapshot().entries.some(value=>value.id===id&&value.trackId===entry.trackId));
+        return !retired;}catch{retired=true;return false;}};
+      if(!current())throw aborted();
+      const rows=await Promise.all(captured.map(async ({id,source})=>{
+        let item;
+        try {item=await source.capture.resolvePlaylistItem({signal:options.signal});
+          if(item?.source_readable===false||item?.allowed_actions?.can_read===false)throw Object.assign(new Error('This queued source is unreadable.'),{status:403});}
+        catch(error){if(actor===TrackActionsRuntime.scope().token&&[401,403,404].includes(error.status)){denySource(source);notify();}throw error;}
+        if(!/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(item?.inventory_track_ref||''))throw new Error('This queued track has no current Playlist inventory identity.');
+        return Object.freeze({rowKey:id,track_ref:item.inventory_track_ref,
+          source_provenance:playlistProvenance(item.source_provenance,item.inventory_track_ref)});
+      }));
+      if(!current())throw aborted();
+      captured.forEach(({source})=>{source.readable=true;});notify();
+      return Object.freeze({rows:Object.freeze(rows),isCurrent:()=>current()&&captured.every(({source})=>source.readable!==false),
+        rejectSourceRead(status) {
+          if(![403,404].includes(status)||!current())return false;
+          retired=true;captured.forEach(({source})=>denySource(source));notify();return true;
+        }});
+    },
+    async details(id,kind,options={}) {
+      sync();const entry=planner.getSnapshot().entries.find(value=>value.id===id),source=sources.get(entry?.trackId),actor=scopeToken,authorityEpoch=source?.authorityEpoch;
+      if(!['album','artist'].includes(kind)||!sourceCurrent(source,false)||typeof source.capture.resolveDetails!=='function')throw new Error('Queued track details are unavailable.');
+      let result;
+      try {result=await source.capture.resolveDetails(kind,{signal:options.signal});}
+      catch(error) {if(actor===TrackActionsRuntime.scope().token&&[401,403,404].includes(error.status)){denySource(source);notify();}throw error;}
+      const current=()=>{try {return !options.signal?.aborted&&actor===TrackActionsRuntime.scope().token&&source.authorityEpoch===authorityEpoch&&sourceCurrent(source,false)
+        &&sources.get(entry.trackId)===source&&planner.getSnapshot().entries.some(value=>value.id===id&&value.trackId===entry.trackId)
+        &&(!options.isCurrent||options.isCurrent()===true)&&typeof result?.isCurrent==='function'&&result.isCurrent()===true;}catch{return false;}};
+      if(!current())throw aborted();
+      if(source.readable===false){source.readable=true;notify();}
+      let retired=false;
+      return Object.freeze({...result,isCurrent:()=>{if(!retired)retired=source.readable===false||!current();return !retired;}});
+    },
+    retime(id,timing){sync();if(!planner.getSnapshot().entries.some(entry=>entry.id===id&&entry.id!==planner.getSnapshot().currentId)
+      ||!planner.timingOptions(describe()).some(option=>option.value===timing&&option.enabled))return false;editable();const result=planner.retime(id,timing,describe());changed();return result;},
+    reorder(ids){sync();const pending=planner.getSnapshot().entries.filter(entry=>entry.id!==planner.getSnapshot().currentId);
+      if(!Array.isArray(ids)||ids.length!==pending.length||new Set(ids).size!==ids.length||ids.some(id=>!pending.some(entry=>entry.id===id)))return false;editable();const result=planner.reorder(ids);changed();return result;},
+    remove(id){sync();if(!planner.getSnapshot().entries.some(entry=>entry.id===id&&entry.id!==planner.getSnapshot().currentId))return false;editable();const result=planner.remove(id);changed();return result;},
+    clear(ids){if(!Array.isArray(ids))return false;editable();const result=planner.clear(ids);changed();return result;},
+    setEnabled(enabled){if(typeof enabled!=='boolean')return false;editable();const result=planner.setEnabled(enabled);changed();return result;},
+    async play(id,options={}) {
+      sync();const value=planner.getSnapshot(),entry=value.entries.find(item=>item.id===id),source=sources.get(entry?.trackId);
+      const current=playback().ended||!state.player.current?null:describe();
+      if(stopPriority()||!planner.canStart(id,current)||!source)throw new Error('This Queue entry is not ready to play.');
+      editable();const controller=new AbortController(),token=++generation,actor=scopeToken;
+      const previousQueue=state.player.playbackQueue;let installed=null,started=false,selectedToken=null;
+      const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});pendingStart=controller;
+      try {
+        try {source.target=await resolve(source,controller.signal);source.readable=true;}catch(error){source.target=null;if([401,403,404].includes(error.status))denySource(source);notify();throw error;}
+        if(options.signal?.aborted||controller.signal.aborted||token!==generation||actor!==TrackActionsRuntime.scope().token
+          ||options.isCurrent&&options.isCurrent()!==true||planner.getSnapshot()!==value)throw aborted();
+        const context=planner.start(id,current),track=payload(context);if(!context||!track)throw aborted();
+        install(context);installed=planner.getSnapshot();const authorityEpoch=source.authorityEpoch;notify();
+        const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,isCurrent:()=>
+          actor===TrackActionsRuntime.scope().token&&pendingStart===controller&&sourceCurrent(source)&&source.readable!==false&&source.authorityEpoch===authorityEpoch
+          &&planner.getSnapshot()===installed&&(!options.isCurrent||options.isCurrent()===true)});
+        selectedToken=playerTrackSelectionToken;started=await starting;
+        if(started!==true)throw new Error('Queue playback did not start.');return true;
+      } finally {
+        if(!started&&installed&&planner.getSnapshot().currentId===id&&playerTrackSelectionToken===selectedToken
+          &&pendingStart===controller&&state.player.playbackQueue?.explicitContext?.entryId===id) {
+          planner.restore(planner.getSnapshot(),{...value,halted:planner.getSnapshot().halted||value.halted});state.player.playbackQueue=previousQueue;notify();
+        }
+        if(pendingStart===controller)pendingStart=null;options.signal?.removeEventListener('abort',cancel);
+      }
+    },
+  };
+  TrackActionsRuntime.subscribePlayback?.(()=>notify());
+  PrivateUITransport.subscribe?.(()=>{sync();notify();});
+  window.AlbumHavenExplicitQueue=Object.freeze(api);
+  return Object.freeze({
+    currentChanged(){notify();},
+    selectionStarted(){refreshController?.abort();generation++;prepared=null;successorCache=null;},
+    hasNext(){sync();if(!planner.getSnapshot().entries.length&&!planner.getSnapshot().currentId)return false;return Boolean(payload(preview()));},
+    async skip(offset) {
+      sync();const before=describe();if(offset<0)return before.source==='explicit'?false:undefined;
+      if(offset!==1||stopPriority()||pendingStart)return false;
+      await refresh();const context=preview(),track=prepared&&sameContext(prepared.before,before)&&sameContext(prepared.next,context)?prepared.track:null;
+      if(!track||pendingStart||!sameContext(before,describe()))return false;
+      const previous=planner.getSnapshot(),previousQueue=state.player.playbackQueue,actor=scopeToken;
+      const controller=new AbortController();pendingStart=controller;
+      const next=planner.advance(before,successor(before)),selected=planner.getSnapshot();install(next);
+      const selectedQueue=state.player.playbackQueue,previousIndex=before.index;
+      const selectedEntry=selected.entries.find(entry=>entry.id===selected.currentId),selectedSource=sources.get(selectedEntry?.trackId),authorityEpoch=selectedSource?.authorityEpoch;
+      notify();let started=false,selectedToken=null;
+      try {const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,isCurrent:()=>
+        pendingStart===controller&&!controller.signal.aborted&&actor===TrackActionsRuntime.scope().token
+        &&(!selectedSource||sourceCurrent(selectedSource)&&selectedSource.readable!==false&&selectedSource.authorityEpoch===authorityEpoch)
+        &&planner.getSnapshot()===selected&&state.player.playbackQueue===selectedQueue});
+        selectedToken=playerTrackSelectionToken;started=await starting;if(started)prune();return started===true;}
+      finally {if(!started&&pendingStart===controller&&actor===TrackActionsRuntime.scope().token
+        &&planner.getSnapshot().currentId===selected.currentId&&state.player.playbackQueue===selectedQueue&&playerTrackSelectionToken===selectedToken) {
+        planner.restore(planner.getSnapshot(),{...previous,halted:planner.getSnapshot().halted||previous.halted});state.player.playbackQueue=previousQueue;if(previousQueue)previousQueue.currentIndex=previousIndex;notify();}
+        if(pendingStart===controller)pendingStart=null;}
+    },
+    ownsProgression(){sync();return planner.getSnapshot().entries.length>0||Boolean(planner.getSnapshot().currentId);},
+    peek(){sync();const next=preview();return prepared&&sameContext(prepared.before,describe())&&sameContext(prepared.next,next)?prepared.track:null;},
+    consume(){sync();const before=describe(),next=preview();
+      if(!prepared||!sameContext(prepared.before,before)||!sameContext(prepared.next,next))return null;
+      const context=planner.advance(before,successor(before),{stopPriority:stopPriority()}),track=payload(context);
+      const promoted=prepared&&sameContext(prepared.next,context)?prepared.track:track;
+      install(context);prepared=null;prune();snapshot=null;return promoted;},
+    prepareNext:refresh,
+    replaced(){sync();refreshController?.abort();generation++;prepared=null;successorCache=null;session++;
+      if(state.player.playbackQueue)queues.set(state.player.playbackQueue,session);planner.replaceContext();notify();},
+    modeChanged(previous,next){sync();successorCache=null;
+      const sameSource=previous?.playlistId===next?.playlistId&&previous?.playlistRevision===next?.playlistRevision
+        &&(previous?.regularTracks||previous?.tracks)===(next?.regularTracks||next?.tracks);
+      if(sameSource&&queues.has(previous))queues.set(next,queues.get(previous));
+      else {queues.set(next,++session);planner.replaceContext();}
+      planner.reconcile(describe(next));prepared=null;notify();reschedule();},
+    ended(){sync();refreshController?.abort();generation++;const before=describe();
+      planner.advance(before,{...before,ended:true},{stopPriority:true});prepared=null;prune();notify();},
+    stopped(){sync();refreshController?.abort();generation++;prepared=null;planner.halt();notify();},
+  });
+})();
+
+// END js/runtime/explicit-queue-runtime.js
+
+// BEGIN js/runtime/explicit-queue-sources.js
+
+/* Native Album captures survive navigation, but never survive actor/session
+   replacement. Fresh album details retain server authority over playback. */
+let explicitQueueAlbumSourceSerial = 0;
+function explicitQueueAlbumMetadata(album,row) {
+  // Table rows are authority projections. Their secondary_artist deliberately
+  // omits the primary artist; recover metadata only from the exact native track.
+  const matches=(album?.tracks||[]).filter(track=>track.path===row.path
+    &&(!row.inventory_track_ref||!track.inventory_track_ref||track.inventory_track_ref===row.inventory_track_ref));
+  const track=matches.length===1?matches[0]:null;
+  return {title:String(track?.title||row.title||''),
+    artist:String(track?.artist||row.artist||track?.album_artist||album?.album_artist||row.secondary_artist||''),
+    album_title:String(track?.album||row.album_title||album?.name||album?.album||album?.title||'')};
+}
+
+function captureNativeAlbumQueueSources(album, rows) {
+  const scope=TrackActionsRuntime.scope(),albumRef=getAlbumPlaybackQueueRef(album);
+  if(!scope.actor||!scope.library||!albumRef||!Array.isArray(rows)||!rows.length)return null;
+  const detailRef=`queue-album-source:${++explicitQueueAlbumSourceSerial}`;
+  let request=null;
+  const load=signal=>{
+    if(request&&request.signal===signal)return request.promise;
+    const pending={signal};pending.promise=fetchTrackModalAlbumDetails(albumRef,{signal}).finally(()=>{if(request===pending)request=null;});
+    request=pending;return pending.promise;
+  };
+  return rows.map(row=>{
+    const inventoryRef=row?.inventory_track_ref,path=String(row?.path||'');
+    if(!path||row.source_readable===false||row.availability==='missing')throw new Error('This Album track is unavailable.');
+    const metadata=explicitQueueAlbumMetadata(album,row);
+    return Object.freeze({display:Object.freeze({title:metadata.title,artist:metadata.artist,album:metadata.album_title}),
+      isCurrent:()=>TrackActionsRuntime.scope().token===scope.token,
+      async resolve({signal}={}) {
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const fresh=await load(signal);
+        if(fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false)throw Object.assign(new Error('This Album source is unavailable.'),{status:403});
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token||getAlbumPlaybackQueueRef(fresh)!==albumRef
+          ||fresh.source_readable===false||fresh.allowed_actions?.can_play_album===false)throw new Error('This Album source is unavailable.');
+        const matches=(fresh.track_rows||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(track?.source_readable===false||track?.allowed_actions?.can_read===false)throw Object.assign(new Error('This Album track is unavailable.'),{status:403});
+        if(!track||track.path!==path||track.source_readable===false||track.playback_state?.can_start_here!==true
+          ||['missing','unknown','unresolved'].includes(track.availability))throw new Error('This Album track is unavailable.');
+        return {...track,...explicitQueueAlbumMetadata(fresh,track)};
+      },
+      async resolvePlaylistItem({signal}={}) {
+        const fresh=await load(signal);
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const matches=(fresh?.track_rows||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(getAlbumPlaybackQueueRef(fresh)!==albumRef||fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false
+          ||!track||track.path!==path||track.source_readable===false||track.allowed_actions?.can_read===false)
+          throw Object.assign(new Error('This Album source is unavailable.'),{status:403});
+        return {...track,source_provenance:Object.freeze({kind:'inventory',track_ref:track.inventory_track_ref})};
+      },
+      async resolveDetails(kind,{signal}={}) {
+        if(kind!=='album')throw new Error('This queued source has no authorized Artist target.');
+        const current=()=>!signal?.aborted&&TrackActionsRuntime.scope().token===scope.token;
+        if(!current())throw new Error('This Album source is unavailable.');
+        const fresh=await load(signal);
+        const matches=(fresh?.track_rows||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        if(!current()||getAlbumPlaybackQueueRef(fresh)!==albumRef||fresh.source_readable===false
+          ||fresh.allowed_actions?.can_read===false||fresh.allowed_actions?.can_view_details===false
+          ||album.allowed_actions?.can_view_details===false||matches.length!==1||matches[0].source_readable===false
+          ||matches[0].allowed_actions?.can_read===false||matches[0].allowed_actions?.can_view_details===false)throw Object.assign(new Error('This Album source is unavailable.'),{status:403});
+        // This is a private receipt identity, not a claimed canonical catalog ID.
+        // The native album request key never enters the Queue display snapshot.
+        const canOpen=fresh.allowed_actions?.can_open_album!==false&&album.allowed_actions?.can_open_album!==false;
+        const target=Object.freeze({kind:'album',ref:detailRef,allowed_actions:Object.freeze({can_view_details:true}),
+          native_actions:Object.freeze({album_ref:albumRef,allowed_actions:Object.freeze({can_open_album:canOpen,
+            can_play_album:canOpen&&album.allowed_actions?.can_play_album!==false&&fresh.allowed_actions?.can_play_album!==false
+              &&(!window.AlbumHavenCapabilities||window.AlbumHavenCapabilities.allows('library.media.read')===true)&&fresh.track_rows.some(track=>track.playback_state?.can_start_here===true),
+            can_view_artwork:canOpen&&album.allowed_actions?.can_view_artwork!==false&&fresh.allowed_actions?.can_view_artwork!==false,
+            can_open_album_page:canOpen&&album.allowed_actions?.can_open_album_page!==false&&fresh.allowed_actions?.can_open_album_page!==false})})});
+        const data=Object.freeze({kind:'album',ref:detailRef,title:String(fresh.name||fresh.album||fresh.title||''),
+          artist:String(fresh.album_artist||fresh.artist||''),year:fresh.year==null?null:String(fresh.year),
+          metadata_state:['current','last_known'].includes(fresh.metadata_state)?fresh.metadata_state:'unknown',
+          source_label:'Local library',track_count:fresh.track_rows.length,tracks:null});
+        return Object.freeze({target,data,isCurrent:current});
+      }});
+  });
+}
+
+async function refreshExplicitQueueReturnTrack(context, track, {signal} = {}) {
+  const queue=context?.nativeQueue;
+  if(queue?.playlistId&&track?.playlistItemId) {
+    const reply=await PrivateUITransport.request(`/playlists/${encodeURIComponent(queue.playlistId)}/items/${encodeURIComponent(track.playlistItemId)}/native-target?intent=play`,{signal});
+    const value=reply?.data,target=value?.native_target;
+    if(reply.status!=='ready'||value.playlist_id!==queue.playlistId||value.playlist_item_id!==track.playlistItemId
+      ||value.revision!==queue.playlistRevision||value.intent!=='play'||target?.path!==track.path
+      ||target.playlist_item_id!==track.playlistItemId)throw new Error('The saved Playlist playback context is unavailable.');
+    return {...track,title:target.title,artist:target.artist,album:target.album_title,durationSeconds:target.duration_seconds};
+  }
+  if(queue?.albumRef&&queue.albumSnapshot) {
+    const row=(queue.albumSnapshot.track_rows||[]).find(value=>value.path===track.path);
+    const captures=captureNativeAlbumQueueSources(queue.albumSnapshot,[row||track]);
+    const fresh=await captures[0].resolve({signal});
+    return {...track,title:fresh.title,artist:fresh.artist,album:fresh.album_title,durationSeconds:fresh.duration_seconds};
+  }
+  throw new Error('This playback context cannot be refreshed.');
+}
+
+function captureNativeLooseQueueSources(view, rows) {
+  const scope=TrackActionsRuntime.scope(),url=buildApiUrl(view,{payloadTier:'full'});
+  if(!scope.actor||!scope.library||!Array.isArray(rows)||!rows.length||!url.startsWith('/view-data'))return null;
+  let request=null;
+  const load=signal=>{
+    if(request&&request.signal===signal)return request.promise;
+    const pending={signal};pending.promise=fetch(url,{headers:{Accept:'application/json'},credentials:'same-origin',cache:'no-store',signal})
+      .then(async response=>({response,fresh:await response.json()})).finally(()=>{if(request===pending)request=null;});
+    request=pending;return pending.promise;
+  };
+  return rows.map(row=>{
+    const inventoryRef=row?.inventory_track_ref,path=String(row?.path||'');
+    if(!path||row.source_readable===false||row.availability==='missing')throw new Error('This Loose Track is unavailable.');
+    return Object.freeze({display:Object.freeze({title:String(row.title||''),artist:String(row.artist||''),album:''}),
+      isCurrent:()=>TrackActionsRuntime.scope().token===scope.token,
+      async resolvePlaylistItem({signal}={}) {
+        const {response,fresh}=await load(signal);
+        if(!response.ok)throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:response.status});
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const matches=(fresh?.non_album_tracks||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(fresh?.ok===false||fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false
+          ||!track||track.path!==path||track.source_readable===false||track.allowed_actions?.can_read===false)
+          throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:403});
+        return {...track,source_provenance:Object.freeze({kind:'inventory',track_ref:track.inventory_track_ref})};
+      },
+      async resolve({signal}={}) {
+        const {response,fresh}=await load(signal);
+        if(!response.ok)throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:response.status});
+        if(fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false)throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:403});
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token||fresh?.ok===false)throw new Error('The Loose Tracks source is unavailable.');
+        const matches=(fresh.non_album_tracks||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(track?.source_readable===false||track?.allowed_actions?.can_read===false)throw Object.assign(new Error('This Loose Track is unavailable.'),{status:403});
+        if(!track||track.path!==path||track.source_readable===false||track.playback_state?.can_start_here!==true
+          ||['missing','unknown','unresolved'].includes(track.availability))throw new Error('This Loose Track is unavailable.');
+        return {...track,album_title:''};
+      }});
+  });
+}
+
+// END js/runtime/explicit-queue-sources.js
+
 // BEGIN js/runtime/resource-selection.js
 
 /* Native selection owns hydration and the one retained Album content lease.
@@ -43318,6 +44012,12 @@ const freeze = Object.freeze;
 const grant = (value, name) => object(value) && Object.hasOwn(value, name) && value[name] === true;
 
 function detailOrigin(value) {
+  if (object(value) && value.source === 'queue') {
+    if (Object.keys(value).some(key => !['source', 'occurrence_refs'].includes(key))
+      || !Array.isArray(value.occurrence_refs) || !value.occurrence_refs.length || value.occurrence_refs.length > 5000
+      || !value.occurrence_refs.every(reference) || new Set(value.occurrence_refs).size !== value.occurrence_refs.length) return null;
+    return freeze({source: 'queue', occurrence_refs: freeze([...value.occurrence_refs])});
+  }
   if (!object(value) || !['recent', 'activity', 'playlist', 'comparison'].includes(value.source)) return null;
   const playlist = value.source === 'playlist';
   if (value.account_ref != null && !reference(value.account_ref)) return null;
@@ -43337,6 +44037,7 @@ function detailSelection(value) {
   if (value.origin != null && !origin) return null;
   const native = nativeActions(value.native_actions, value.kind);
   return freeze({kind: value.kind, ref: value.ref,
+    ...(reference(value.identity_ref) ? {identity_ref: value.identity_ref} : {}),
     allowed_actions: freeze({can_view_details: grant(value.allowed_actions, 'can_view_details')}),
     ...(origin ? {origin} : {}),
     ...(native ? {native_actions: native} : {})});
@@ -43358,7 +44059,7 @@ function nativeActions(value, kind = 'album') {
 }
 const error = (message, status = 403) => Object.assign(new Error(message), {status});
 const stale = () => Object.assign(new Error('Resource selection was superseded.'), {name: 'AbortError'});
-function createResourceSelection({sourceResource, retainResource, revalidateResource, authorizeResource} = {}) {
+function createResourceSelection({sourceResource, retainResource, revalidateResource, authorizeResource, projectAlbum} = {}) {
   let sequence = 0, artistReadSequence = 0;
   const artistAlbums = new Set(), mounted = new Set();
   const readSource = (target, context) => {
@@ -43480,7 +44181,7 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
     if (fingerprint(source(selection, context, intent)) !== key) throw error('This resource action is no longer available.');
     if (!album || String(album.key || album.album_ref || '') !== admitted.actions.album_ref
       || typeof albumRequiresHydration === 'function' && albumRequiresHydration(album)) throw error('Album details did not match this selection.', 409);
-    return album;
+    return typeof projectAlbum === 'function' ? projectAlbum(album, selection, context) : album;
   }
   function replaySource(selection, context, original) {
     return async ({signal, albumKey}) => {
@@ -43501,7 +44202,7 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       if (!album || String(album.key || album.album_ref || '') !== actions.album_ref
         || typeof albumRequiresHydration === 'function' && albumRequiresHydration(album)) throw error('Album details did not match the restored source.', 409);
       const admitted = actions.allowed_actions, prior = original.allowed_actions;
-      return {album, isCurrent: fresh.isCurrent, presentationRestrictions: {
+      return {album: typeof projectAlbum === 'function' ? projectAlbum(album, selection, {...context, subjectTaste: fresh.subjectTaste}) : album, isCurrent: fresh.isCurrent, presentationRestrictions: {
         can_play_album: prior.can_play_album === true && admitted.can_play_album === true,
         can_view_artwork: prior.can_view_artwork !== false && admitted.can_view_artwork !== false,
         can_open_album_page: prior.can_open_album_page !== false && admitted.can_open_album_page !== false,
@@ -43621,12 +44322,199 @@ window.AlbumHavenResourceSelection = Object.freeze({create: createResourceSelect
 
 // END js/runtime/resource-selection.js
 
+// BEGIN js/runtime/queue-resource-selection.js
+
+/* Queue is an independent detail authority. Captured Activity/Playlist contexts
+   are refreshed by their source owner, never replayed as a live Home selection. */
+(() => {
+'use strict';
+const freeze = Object.freeze;
+const key = value => JSON.stringify(value);
+const stale = () => Object.assign(new Error('Queue selection was superseded.'), {name: 'AbortError'});
+const denied = () => Object.assign(new Error('Queued resource details are unavailable.'), {status: 403});
+const currentReceipt = receipt => {try {return typeof receipt?.isCurrent === 'function' && receipt.isCurrent() === true;} catch {return false;}};
+function create({queue, scopeKey, isCurrent} = {}) {
+  const api = window.AlbumHavenResourceSelection;
+  if (!api || typeof queue?.details !== 'function' || typeof queue?.subscribe !== 'function'
+    || typeof queue?.getSnapshot !== 'function' || typeof isCurrent !== 'function'
+    || typeof scopeKey !== 'string' || !scopeKey.trim()) throw new TypeError('Queue details require a current source owner.');
+  let disposed = false, request = null, sequence = 0;
+  let state = freeze({selectedIds: freeze([]), album: null, artist: null, status: 'unavailable'});
+  const records = new Map(), listeners = new Set(), mounts = new Set(), transfers = new Set();
+  const visible = () => {try {return !disposed && isCurrent() === true;} catch {return false;}};
+  const queued = ids => {
+    try {
+      const counts = new Map();
+      for (const row of queue.getSnapshot().entries) counts.set(row.id, (counts.get(row.id) || 0) + 1);
+      return ids.every(id => counts.get(id) === 1);
+    } catch {return false;}
+  };
+  const contains = ids => visible() && queued(ids);
+  const releaseMounts = kind => {for (const mounted of [...mounts]) if (!kind || mounted.kind === kind) mounted.dispose();};
+  function publish(patch) {state = freeze({...state, ...patch}); for (const listener of listeners) listener();}
+  function reset(preserveTransfers = false) {
+    for (const record of [...records.values(), ...transfers]) {
+      if (!preserveTransfers || !transfers.has(record)) record.retired = true;
+    }
+    if (!preserveTransfers) transfers.clear();
+    sequence++; const pending = request; request = null; pending?.abort(); records.clear(); releaseMounts();
+    publish({selectedIds: freeze([]), album: null, artist: null, status: 'unavailable'});
+  }
+  const clear = () => reset();
+  function retire(kind) {const record = records.get(kind); if (record) record.retired = true; records.delete(kind); releaseMounts(kind); publish({[kind]: null});}
+  function durable(record) {return !!record && !record.retired && queued(record.ids) && record.receipts.every(currentReceipt);}
+  function valid(record) {return durable(record) && record.sequence === sequence && visible();}
+  function normalize(receipt, kind, origin) {
+    const target = api.projectTarget(receipt?.target);
+    if (!target || target.kind !== kind || !target.allowed_actions.can_view_details || !currentReceipt(receipt)
+      || receipt.data?.kind !== kind || receipt.data.ref !== target.ref) return null;
+    return {...receipt, target: api.projectTarget({...target, origin})};
+  }
+  function consensus(receipts, kind, origin, ids, token) {
+    if (!receipts.length || receipts.some(value => !value)) return null;
+    const first = receipts[0], identity = first.target.identity_ref || first.target.ref;
+    const {native_actions, ...publicTarget} = first.target;
+    const nativeRef = kind === 'album' ? 'album_ref' : 'artist_ref';
+    const sameNative = native_actions && receipts.every(value => value.target.native_actions?.[nativeRef] === native_actions[nativeRef]
+      && (value.subject_ref ?? null) === (first.subject_ref ?? null));
+    // Activity identity aliases are snapshot-local. Independently refreshed
+    // private native references can prove the same resource across snapshots
+    // and source families without exposing those references to React.
+    if (!sameNative && !receipts.every(value => (value.target.identity_ref || value.target.ref) === identity)) return null;
+    let actions = native_actions;
+    if (!actions || !receipts.every(value => value.target.native_actions?.[nativeRef] === actions[nativeRef]
+      && (value.subject_ref ?? null) === (first.subject_ref ?? null)
+      && (kind !== 'artist' || value.gallery_target?.artist === actions.artist_ref))) actions = null;
+    else {
+      const names = kind === 'album' ? ['can_open_album', 'can_play_album', 'can_view_artwork', 'can_open_album_page'] : ['can_open_artist_gallery'];
+      const grants = {};
+      for (const name of names) grants[name] = receipts.every(value => {
+        const allowed = value.target.native_actions.allowed_actions;
+        return allowed[name] === true || ['can_view_artwork', 'can_open_album_page'].includes(name)
+          && !Object.hasOwn(allowed, name) && allowed.can_open_album === true;
+      });
+      actions = freeze({[nativeRef]: actions[nativeRef], allowed_actions: freeze(grants)});
+    }
+    const target = freeze({...publicTarget, origin});
+    const nativeTarget = freeze({...target, ...(actions ? {native_actions: actions} : {}),
+      ...(kind === 'artist' && typeof first.gallery_target?.artist === 'string' ? {gallery_target: freeze({artist: first.gallery_target.artist})} : {})});
+    return {sequence: token, ids, receipts, target, nativeTarget};
+  }
+  async function read(ids, kind, origin, signal, token, retained = null) {
+    // A completed source receipt must survive the UI request's later cleanup
+    // only when native navigation explicitly retains it. Pending work still
+    // follows the caller's abort signal and always rechecks its current owner.
+    const pending = new AbortController(), cancel = () => pending.abort();
+    signal?.addEventListener('abort', cancel, {once: true});
+    try {
+      if (signal?.aborted) throw stale();
+      const receipts = await Promise.all(ids.map(async id => {
+        try {return normalize(await queue.details(id, kind, {signal: pending.signal}), kind, origin);}
+        catch {return null;}
+      }));
+      if (pending.signal.aborted || (retained ? !durable(retained) : token !== sequence || !contains(ids))) throw stale();
+      return consensus(receipts, kind, origin, ids, token);
+    } finally {signal?.removeEventListener('abort', cancel);}
+  }
+  async function select(ids) {
+    clear();
+    const origin = api.projectOrigin({source: 'queue', occurrence_refs: ids});
+    if (disposed || !origin || !contains(origin.occurrence_refs)) return state;
+    const token = sequence, pending = new AbortController(); request = pending;
+    publish({selectedIds: origin.occurrence_refs, status: 'loading'});
+    const result = await Promise.all(['album', 'artist'].map(async kind => {
+      try {return [kind, await read(origin.occurrence_refs, kind, origin, pending.signal, token)];} catch {return [kind, null];}
+    }));
+    if (disposed || request !== pending || token !== sequence || pending.signal.aborted || !contains(origin.occurrence_refs)) return state;
+    request = null;
+    for (const [kind, record] of result) if (record && valid(record)) records.set(kind, record);
+    publish({album: records.get('album')?.target || null, artist: records.get('artist')?.target || null, status: 'ready'});
+    return state;
+  }
+  function recordFor(selection, context = {}) {
+    const target = api.projectTarget(selection), record = records.get(target?.kind);
+    return context.scopeKey === scopeKey && !context.signal?.aborted && valid(record)
+      && key(target) === key(record.target) && (!context.origin || key(api.projectOrigin(context.origin)) === key(record.target.origin)) ? record : null;
+  }
+  async function refresh(selection, context) {
+    const before = recordFor(selection, context);
+    if (!before) throw denied();
+    const next = await read(before.ids, selection.kind, before.target.origin, context.signal, before.sequence);
+    if (!recordFor(selection, context)) throw stale();
+    if (!next || key(next.nativeTarget) !== key(before.nativeTarget)) {retire(selection.kind); throw denied();}
+    records.set(selection.kind, next); return next;
+  }
+  function transferred(selection, context = {}) {
+    const target = api.projectTarget(selection);
+    return context.scopeKey === scopeKey ? [...transfers].find(record => durable(record)
+      && key(record.target) === key(target) && (!context.origin || key(api.projectOrigin(context.origin)) === key(target.origin))) : null;
+  }
+  const native = api.create({
+    sourceResource(selection, context) {return recordFor(selection, context)?.nativeTarget || null;},
+    authorizeResource: refresh,
+    retainResource(selection, context) {
+      const record = recordFor(selection, context);
+      if (!record) return null;
+      transfers.add(record);
+      return {target: record.nativeTarget, isCurrent: () => durable(record)};
+    },
+    async revalidateResource(selection, context, {signal} = {}) {
+      const record = transferred(selection, context);
+      if (!record || signal?.aborted) throw denied();
+      const fresh = await read(record.ids, selection.kind, record.target.origin, signal, record.sequence, record);
+      if (!fresh || !durable(record) || key(fresh.target) !== key(record.target)
+        || fresh.nativeTarget.native_actions?.album_ref !== record.nativeTarget.native_actions?.album_ref) {record.retired = true; throw denied();}
+      return {target: fresh.nativeTarget, isCurrent: () => !signal?.aborted && durable(record) && durable(fresh)};
+    },
+    projectAlbum(album, selection, context) {
+      const record = recordFor(selection, context) || transferred(selection, context);
+      if (!record) throw stale();
+      const project = record.receipts[0].projectAlbum;
+      return typeof project === 'function' ? project(album) : album;
+    },
+  });
+  const unsubscribe = queue.subscribe(() => {
+    if (!queued(state.selectedIds)) {clear(); return;}
+    if (!visible()) {reset(true); return;}
+    for (const [kind, record] of records) if (!valid(record)) retire(kind);
+  });
+  return freeze({
+    select, clear,
+    getSnapshot: () => state,
+    subscribe(listener) {if (typeof listener !== 'function') throw new TypeError('Queue details subscription requires a listener.');
+      if (disposed) return () => {}; listeners.add(listener); return () => listeners.delete(listener);},
+    async readAlbumProjection({kind, ref, origin, signal, scopeKey: requestedScope} = {}) {
+      const target = records.get(kind)?.target;
+      if (!target || target.ref !== ref) throw denied();
+      const record = await refresh(target, {scopeKey: requestedScope, origin, signal});
+      const data = record.receipts[0].data, result = {kind, ref, origin: target.origin};
+      for (const field of ['title', 'artist', 'year', 'release_type', 'summary', 'source_label', 'metadata_state']) if (typeof data[field] === 'string') result[field] = data[field];
+      for (const field of ['duration_seconds', 'track_count', 'release_count']) if (typeof data[field] === 'number' && Number.isFinite(data[field]) && data[field] >= 0) result[field] = data[field];
+      // Native Album owns its full hydrated track table. No private source DTO,
+      // path, subject taste or action receipt crosses this display boundary.
+      return kind === 'album' ? {...result, tracks: null} : {...result, listened_albums: null, discography: null};
+    },
+    canResourceIntent: native.canResourceIntent,
+    resourceIntent: native.resourceIntent,
+    mountResourceSelection(host, options = {}) {
+      const lease = native.mountResourceSelection(host, options);
+      const mounted = {kind: options.selection?.kind, dispose() {mounts.delete(mounted); lease?.dispose();}};
+      mounts.add(mounted); return mounted;
+    },
+    dispose() {if (disposed) return; reset(true); disposed = true; unsubscribe?.(); listeners.clear();},
+  });
+}
+window.AlbumHavenQueueResourceSelection = freeze({create});
+})();
+
+// END js/runtime/queue-resource-selection.js
+
 // BEGIN js/runtime/playtable-source.js
 
 /* Private source bindings for the shared React playtable owner. Media and write
    refs never enter its public snapshot, action packet, DOM keys or history. */
 function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCurrent, resolveRow,
-  creationSource = () => null, activitySource = () => null, subscribe, navigationCurrent = isCurrent, resolveNavigationRow = resolveRow, retainNavigationSource} = {}) {
+  creationSource = () => null, activitySource = () => null, subscribe, navigationCurrent = isCurrent, resolveNavigationRow = resolveRow, retainNavigationSource, captureQueueRows, canQueueRow} = {}) {
   const nativeScope = TrackActionsRuntime.scope(), baseline = new Set(rows || []), listeners = new Set();
   let visibleRows = Array.from(rows || []), viewRevision = revision, retired = false;
   const inventoryRef = source => {
@@ -43677,6 +44565,25 @@ function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCur
       const activity = activitySource(found.map(([row]) => row));
       return {rows: resolved, playlist_creation_source: creationSource(found.map(([row]) => row)),
         ...(activity ? {activity_source: activity} : {})};
+    },
+    canQueue(keys) {
+      return active() && typeof captureQueueRows === 'function' && Array.isArray(keys) && keys.length > 0
+        && new Set(keys).size === keys.length && keys.every(key => {
+          const matches = visibleRows.filter(row => keyFor(row) === key);
+          if (matches.length !== 1 || !readable(matches[0])) return false;
+          if (typeof canQueueRow === 'function') {try {return canQueueRow(matches[0]) === true;} catch {return false;}}
+          const source = resolveRow(matches[0]);
+          return Boolean(source && source.source_readable !== false && source.allowed_actions?.can_read !== false
+            && source.allowed_actions?.can_play !== false && !['missing', 'unknown', 'unresolved'].includes(source.availability)
+            && source.playback_state?.can_start_here === true);
+        });
+    },
+    async captureQueue(keys, {signal} = {}) {
+      if (!this.canQueue(keys) || signal?.aborted) return null;
+      const selected = keys.map(key => visibleRows.find(row => keyFor(row) === key)), capturedRevision = viewRevision;
+      const result = await captureQueueRows(selected, {signal});
+      if (!active() || signal?.aborted || capturedRevision !== viewRevision || !Array.isArray(result)) return null;
+      return result;
     },
     retainNavigation(keys) {
       if (!active() || !Array.isArray(keys) || !keys.length || new Set(keys).size !== keys.length) return null;
@@ -43738,7 +44645,10 @@ const NativePlaytables = (() => {
     owners.set(key, owner);
     owner.source = createPrivatePlaytableSource({scopeKey, rows, instance: identity, revision: identity,
       isCurrent: () => owners.get(key) === owner && state.view === sourceView && TrackActionsRuntime.scope().token === scope.token && isCurrent(),
-      resolveRow: row => mapping.get(row), creationSource: () => sourceView?.playlist_creation_source || null,
+      resolveRow: row => mapping.get(row),
+      ...(key === 'album-tracks' ? {captureQueueRows: selected => captureNativeAlbumQueueSources(sourceIdentity, selected.map(row => mapping.get(row)))}
+        : key === 'loose-tracks' ? {captureQueueRows: selected => captureNativeLooseQueueSources(sourceIdentity, selected.map(row => mapping.get(row)))} : {}),
+      creationSource: () => sourceView?.playlist_creation_source || null,
       ...(retainNavigationSource ? {retainNavigationSource} : {})});
     owner.check = () => {owner.mount?.update();};
     return owner;
@@ -43756,7 +44666,9 @@ const NativePlaytables = (() => {
         const button = rows.length === 1 && rows[0].querySelector('.play-track-button');
         if (button && !button.disabled) activateSharedTrackButton(button, {restart: options?.restart === true, focusTimeline: event?.isTrusted !== false});
       },
-      onPlaylistAction: (packet, lifetime, anchor) => ui.open(packet, lifetime, owner.source, anchor),
+      onPlaylistAction: (packet, lifetime, anchor, options) => ui.open(packet, lifetime, owner.source, anchor, options),
+      onContextAction: (packet, lifetime, anchor) => typeof ui.context === 'function'
+        ? ui.context(packet, lifetime, owner.source, anchor) : ui.open(packet, lifetime, owner.source, anchor),
       onError: () => showToast('The selected-track action is unavailable.', 'error', 3200),
     });
     if (typeof MutationObserver === 'function') {
@@ -43871,8 +44783,14 @@ const HomeFriendsRuntime = (() => {
         && reference(selected.targetRef) && (selected.snapshotRef == null || reference(selected.snapshotRef))
         ? Object.freeze({rowId: selected.rowId, targetKind: selected.targetKind, targetRef: selected.targetRef,
           snapshotRef: selected.snapshotRef ?? null}) : null;
-      selectionPresentation.push(Object.freeze({query: normalizedQuery, selected: normalizedSelection,
-        childAlbumRef: normalizedSelection?.targetKind === 'artist' ? reference(entry.childAlbumRef) : null,
+      const tracks = entry.tracks;
+      const normalizedTracks = ['tracks', 'listens'].includes(query.kind) && Array.isArray(tracks?.rowIds)
+        && tracks.rowIds.length > 0 && tracks.rowIds.length <= 5000 && tracks.rowIds.every(reference)
+        && new Set(tracks.rowIds).size === tracks.rowIds.length
+        && (tracks.snapshotRef == null || reference(tracks.snapshotRef))
+        ? Object.freeze({rowIds: Object.freeze([...tracks.rowIds]), snapshotRef: tracks.snapshotRef ?? null}) : null;
+      selectionPresentation.push(Object.freeze({query: normalizedQuery, selected: normalizedTracks ? null : normalizedSelection, tracks: normalizedTracks,
+        childAlbumRef: normalizedSelection?.targetKind === 'artist' || normalizedTracks ? reference(entry.childAlbumRef) : null,
         pane: choice(entry.pane, ['recent', 'artist', 'album'], 'recent'),
         expanded: choice(entry.expanded, ['recent', 'friends', 'artist', 'album'], null),
         scroll: Object.freeze({source: position(entry.scroll?.source), artist: position(entry.scroll?.artist), album: position(entry.scroll?.album)})}));
@@ -43881,6 +44799,7 @@ const HomeFriendsRuntime = (() => {
     return Object.freeze({
       kind: choice(value.kind, ['albums', 'tracks', 'artists'], 'albums'),
       kindExplicit: ['albums', 'tracks', 'artists'].includes(value.kind) && value.kindExplicit !== false,
+      homeSection: choice(value.homeSection, ['recent', 'queue'], 'recent'),
       period: choice(value.period, ['week', 'month', 'six', 'year', 'all'], 'week'),
       views: views(value.views),
       friendKind: choice(value.friendKind, ['albums', 'tracks', 'artists'], 'tracks'),
@@ -43960,7 +44879,7 @@ const HomeFriendsRuntime = (() => {
     if (owner.formUrl !== window.location.href || typeof mobilePageState === 'undefined') return false;
     const form = typeof getActiveAppFormPage === 'function' ? getActiveAppFormPage() : null;
     const page = mobilePageState.pages.find(value => value.kind === 'form' && value.formToken === form?.token);
-    if (form?.pageId === 'playlist-track-destination' && page?.parentPosition === owner.position) {
+    if (['playlist-track-destination', 'create-playlist'].includes(form?.pageId) && page?.parentPosition === owner.position) {
       if (!owner.formToken) owner.formToken = form.token;
       return owner.formToken === form.token && window.history.state?.mobilePages?.some(value => value.formToken === form.token);
     }
@@ -44054,6 +44973,50 @@ const HomeFriendsRuntime = (() => {
     return createPrivatePlaytableSource({scopeKey: context?.scopeKey, rows, instance, revision,
       isCurrent: () => isCurrent() && sync().scopeKey === context?.scopeKey && sync().visible
         && activity === sourceOwner && activityProvider === provider,
+      canQueueRow: row => row.availability === 'local' && row.source_readable !== false
+        && sourceOwner?.rows.get(row.id)?.allowed_actions?.can_resolve_native_play === true && typeof provider?.resolveNative === 'function',
+      captureQueueRows: typeof provider?.resolveNative === 'function' && sourceOwner?.snapshotRef ? selectedRows => {
+        const scope = context.scopeKey, snapshotRef = sourceOwner.snapshotRef;
+        const valid = () => sync().scopeKey === scope && activityProvider === provider
+          && (context.account_ref == null || friendActivityEpochs.get(context.account_ref) === friendEpoch);
+        return selectedRows.map(row => {
+          let inventoryRef = null;
+          return {display: {title: row.title, artist: row.artist, album: row.album_title,
+          albumTarget: row.album_target, artistTarget: row.artist_target}, isCurrent: valid,
+          async resolvePlaylistItem({signal} = {}) {
+            // Enqueue already established this inventory identity. It is only
+            // a candidate: the Browse-gated Queue source endpoint freshly
+            // validates the original activity receipt before any builder/write.
+            if (!valid() || signal?.aborted || !inventoryRef) throw superseded();
+            return {inventory_track_ref: inventoryRef,
+              source_provenance: {kind: 'activity', track_ref: inventoryRef, row_ref: row.id,
+                origin: {audience: context.account_ref == null ? 'own' : 'friend', subject_ref: context.account_ref ?? null,
+                  kind: context.kind, period: context.period, snapshot_ref: snapshotRef}}};
+          },
+          async resolveDetails(kind, {signal} = {}) {
+            const target = kind === 'album' ? row.album_target : kind === 'artist' ? row.artist_target : null;
+            if (!valid() || signal?.aborted || !target?.allowed_actions?.can_view_details) throw superseded();
+            const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'details', target_kind: kind, signal});
+            if (!valid() || signal?.aborted || value.allowed_actions?.can_view_details !== true) throw superseded();
+            const native = kind === 'album' ? {album_ref: value.album_ref, allowed_actions: {can_open_album: true, can_play_album: value.allowed_actions.can_play_album === true}}
+              : {artist_ref: value.artist_ref, allowed_actions: {can_open_artist_gallery: true}};
+            return {target: selectionApi().projectTarget({...target, native_actions: native}),
+              data: {kind, ref: target.ref, title: value.title || (kind === 'album' ? row.album_title : row.artist), artist: value.artist || row.artist,
+                metadata_state: 'current', source_label: 'Queued from Recent', ...(kind === 'album' ? {tracks: null} : {listened_albums: null, discography: null})},
+              ...(kind === 'artist' ? {gallery_target: {artist: value.artist_ref}} : {}),
+              subject_ref: null,
+              isCurrent: () => valid() && !signal?.aborted};
+          },
+          async resolve({signal} = {}) {
+            if (!valid() || signal?.aborted) throw superseded();
+            const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'play', signal});
+            if (!valid() || signal?.aborted || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value.inventory_track_ref || '')
+              || inventoryRef && inventoryRef !== value.inventory_track_ref) throw superseded();
+            inventoryRef = value.inventory_track_ref;
+            return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+          }};
+        });
+      } : null,
       resolveRow: row => currentActivityTrack(row, context),
       activitySource: selectedRows => sourceOwner?.snapshotRef && selectedRows.every(row => sourceOwner.nativeRows?.get(row.id)?.activity_row_ref)
         ? {origin: {audience: context.account_ref == null ? 'own' : 'friend', subject_ref: context.account_ref ?? null,
@@ -44132,6 +45095,8 @@ const HomeFriendsRuntime = (() => {
           for (const key of ['listen_count', 'duration_seconds', 'rating']) {
             if (own(row, key)) publicRow[key] = typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] >= 0 ? row[key] : null;
           }
+          if (own(row, 'favorite')) publicRow.favorite = typeof row.favorite === 'boolean' ? row.favorite : null;
+          if (own(row, 'taste_state')) publicRow.taste_state = typeof row.taste_state === 'string' ? row.taste_state : null;
           if (own(row, 'availability')) publicRow.availability = ['local', 'missing', 'unresolved'].includes(row.availability) ? row.availability : null;
           if (own(row, 'love_tier')) publicRow.love_tier = ['off', 'loved', 'obsessed'].includes(row.love_tier) ? row.love_tier : null;
           if (unreadableActivityRow(row)) {
@@ -44233,7 +45198,7 @@ const HomeFriendsRuntime = (() => {
     }
     const row = [...owner.resources.entries()].find(([, targets]) => targets[target.kind]?.ref === target.ref);
     if (!row) throw failure('This native source is unavailable.', 403);
-    const value = await owner.provider.resolveNative({...owner.context, snapshot_ref: owner.snapshotRef, rowId: row[0], intent: 'details', signal: context.signal});
+    const value = await owner.provider.resolveNative({...owner.context, snapshot_ref: owner.snapshotRef, rowId: row[0], intent: 'details', target_kind: target.kind, signal: context.signal});
     if (context.signal?.aborted || owner !== activity || !sourceResource(selection, context)) throw superseded();
     let admitted;
     if (target.kind === 'album' && typeof value.album_ref === 'string' && value.allowed_actions?.can_view_details === true) {
@@ -44243,8 +45208,42 @@ const HomeFriendsRuntime = (() => {
       admitted = {...target, native_actions: {artist_ref: value.artist_ref, allowed_actions: {can_open_artist_gallery: true}},
         gallery_target: {artist: value.artist_ref}};
     } else throw failure('This native target is unavailable.');
+    admitted = {...admitted, title: typeof value.title === 'string' ? value.title : '', artist: typeof value.artist === 'string' ? value.artist : '',
+      subject_taste: target.origin.account_ref != null ? value.subject_taste : null};
     owner.resources.set(row[0], Object.freeze({...row[1], [target.kind]: Object.freeze(admitted)}));
     return admitted;
+  }
+  function projectSubjectAlbum(album, selection, context = {}) {
+    const subject = selection.origin?.account_ref;
+    if (selection.origin?.source !== 'activity' || subject == null) return album;
+    const supplied = context.subjectTaste || sourceResource(selection, context)?.subject_taste;
+    const taste = supplied?.subject_ref === subject && supplied.read_only === true ? supplied : {tracks: [], rating: null, favorite: null};
+    const byRef = new Map((Array.isArray(taste.tracks) ? taste.tracks : []).map(row => [row.inventory_track_ref, row]));
+    // Clone every container before overlaying subject facts; fetched native album
+    // caches and the signed-in listener's preferences must remain untouched.
+    const personal = new Set(['love_tier', 'track_rating', 'play_count', 'last_listened_at_ms', 'added_at', 'added_at_ms', 'album_rating', 'rating', 'favorite', 'is_favorite', 'listen_count', 'last_listened_at',
+      'track_scrobble_count', 'scrobble_count', 'track_stats', 'listening_progress', 'listen_progress',
+      'album_preference', 'album_preference_overlay', 'track_preference', 'track_preference_overlay', 'tag_album_rating', 'tag_album_rating_source']);
+    const copy = value => {
+      if (Array.isArray(value)) return value.map(copy);
+      if (!value || typeof value !== 'object') return value;
+      const result = {};
+      for (const [key, child] of Object.entries(value)) result[key] = personal.has(key) ? null : copy(child);
+      result.can_edit_preferences = false; result.read_only_subject = subject;
+      if (typeof value.inventory_track_ref === 'string') {
+        const row = byRef.get(value.inventory_track_ref);
+        const rating = Number.isInteger(row?.rating) && row.rating >= 1 && row.rating <= 5 ? row.rating : null;
+        const tier = ['off', 'loved', 'obsessed'].includes(row?.love_tier) ? row.love_tier : null;
+        result.read_only_subject = subject; result.rating = rating; result.love_tier = tier;
+        result.track_preference = result.track_preference_overlay = {rating, love_tier: tier, allowed_actions: {can_set_love_tier: false}};
+      }
+      return result;
+    };
+    const result = copy(album);
+    result.read_only_subject = subject;
+    result.album_rating = Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
+    result.favorite = typeof taste.favorite === 'boolean' ? taste.favorite : null;
+    return result;
   }
   function retainResource(selection, context = {}) {
     if (context.signal?.aborted) return null;
@@ -44290,7 +45289,7 @@ const HomeFriendsRuntime = (() => {
       const provider = activityProvider, start = sync(), url = window.location.href;
       if (!start.authenticated || start.scopeKey !== context.scopeKey || signal?.aborted) throw superseded();
       const value = await provider.resolveNative({scopeKey: start.scopeKey, account_ref: origin.account_ref, kind: origin.kind,
-        period: origin.period, snapshot_ref: origin.snapshot_ref, rowId: target.ref, intent: 'details', signal});
+        period: origin.period, snapshot_ref: origin.snapshot_ref, rowId: target.ref, intent: 'details', target_kind: 'album', signal});
       const isCurrent = () => !signal?.aborted && sync().scopeKey === start.scopeKey && activityProvider === provider;
       if (!isCurrent() || window.location.href !== url || typeof value.album_ref !== 'string' || value.allowed_actions?.can_view_details !== true) throw superseded();
       const prior = target.native_actions?.allowed_actions || {};
@@ -44298,7 +45297,7 @@ const HomeFriendsRuntime = (() => {
         allowed_actions: {can_open_album: prior.can_open_album !== false,
           can_play_album: prior.can_play_album !== false && value.allowed_actions.can_play_album === true,
           ...(prior.can_open_album_page === false ? {can_open_album_page: false} : {}),
-          ...(prior.can_view_artwork === false ? {can_view_artwork: false} : {})}}}), isCurrent};
+          ...(prior.can_view_artwork === false ? {can_view_artwork: false} : {})}}}), isCurrent, subjectTaste: value.subject_taste};
     }
     // This reader is the real own-week Recent source. Other origins need their
     // own freshly resolved authority; an expired projection cannot substitute.
@@ -44430,10 +45429,10 @@ const HomeFriendsRuntime = (() => {
   async function readAlbumProjection({scopeKey, kind, ref, origin: requestedOrigin, signal} = {}) {
     if (requestedOrigin?.source === 'activity') {
       const selection = {kind, ref, origin: requestedOrigin, allowed_actions: {can_view_details: true}};
-      await resolveActivityResource(selection, {scopeKey, origin: requestedOrigin, signal});
+      const resolvedTarget = await resolveActivityResource(selection, {scopeKey, origin: requestedOrigin, signal});
       const row = activity?.rows.get(ref);
       if (!row) return {status: 'unavailable'};
-      return {kind, ref, origin: requestedOrigin, title: row.title, artist: row.artist, metadata_state: 'current',
+      return {kind, ref, origin: requestedOrigin, title: resolvedTarget.title || row.title, artist: resolvedTarget.artist || row.artist, metadata_state: 'current',
         source_label: 'Album Haven', ...(kind === 'album' ? {tracks: null} : {listened_albums: null, discography: null})};
     }
     if (kind !== 'album') return {status: 'unavailable'};
@@ -44572,7 +45571,7 @@ const HomeFriendsRuntime = (() => {
   if (shell && typeof MutationObserver === 'function') {
     new MutationObserver(sync).observe(shell, { attributes: true, attributeFilter: ['hidden', 'data-native-account-id', 'data-native-library-id', 'data-private-ui-context'] });
   }
-  const resourceSelection = selectionApi()?.create({sourceResource, retainResource, revalidateResource, authorizeResource: resolveActivityResource});
+  const resourceSelection = selectionApi()?.create({sourceResource, retainResource, revalidateResource, authorizeResource: resolveActivityResource, projectAlbum: projectSubjectAlbum});
   return {
     sync, snapshot: sync,
     subscribe(listener) {
@@ -44582,6 +45581,19 @@ const HomeFriendsRuntime = (() => {
     },
     readRecent, albumIntent, albumDetailSelection, readAlbumProjection, navigate, savePresentation, openForm, openFriendRequestForm, openFriendProfile,
     configureActivityProvider, canTrackIntent, trackIntent, trackPreference: activityPreference, setTrackLove, createPlaytableSource, retainPlaytablePresentation,
+    readPresencePlayback() {
+      const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
+      const locked = typeof isPlaybackLockedByAnotherTab !== 'function' || isPlaybackLockedByAnotherTab();
+      const track = state.player?.current;
+      const activeTrack = typeof streamingEngineState === 'function' ? streamingEngineState().roles?.current?.track : null;
+      if (locked || typeof playback?.paused !== 'boolean' || typeof playback?.ended !== 'boolean'
+        || !activeTrack || activeTrack.path !== track?.path || activeTrack.inventory_track_ref !== track?.inventory_track_ref
+        || String(playback.src || '') !== String(track?.src || '') || !playback?.src || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(track?.inventory_track_ref || '')) return null;
+      return {track_ref: track.inventory_track_ref, state: playback.ended === true ? 'stopped' : playback.paused === true ? 'paused' : 'playing'};
+    },
+    createQueueResourceSelection: options => window.AlbumHavenQueueResourceSelection?.create(options),
+    explicitQueue: () => window.AlbumHavenExplicitQueue,
+    openPlaytableContext: (...args) => window.AlbumHavenPlaytableUI?.context(...args) ?? false,
     openPlaylistAction: (...args) => window.AlbumHavenPlaytableUI?.open(...args) ?? false,
     retireFriendActivity,
     ...resourceSelection,
@@ -44800,6 +45812,7 @@ const PlaylistReactRuntime = (() => {
         ? copy(row, ['playlist_item_id']) : {
         allowed_actions: {can_play: exactGrant(row.allowed_actions, 'can_play'), can_view_details: exactGrant(row.allowed_actions, 'can_view_details')},
         ...copy(row, ['playlist_item_id', 'inventory_track_ref', 'path', 'track_ref', 'canonical_track_ref', 'entry_ref', 'title', 'artist', 'secondary_artist', 'album_title', 'duration_seconds']),
+        album_ref: typeof row.album_ref === 'string' && row.album_ref.trim() && !/[\\/\x00-\x1f\x7f]/.test(row.album_ref) ? row.album_ref : null,
         album_target: albumTarget(row, origin),
         artist_target: privateResourceTarget(row.artist_target, resourceTarget(row.artist_target, 'artist', origin)),
         track_preference: Object.prototype.hasOwnProperty.call(row, 'track_preference') ? TrackActionsRuntime.overlay(row.track_preference) : null,
@@ -44919,6 +45932,45 @@ const PlaylistReactRuntime = (() => {
     return createPrivatePlaytableSource({scopeKey: context?.scopeKey, rows, instance, revision,
       isCurrent: () => isCurrent() && sync().visible && sync().scopeKey === context?.scopeKey
         && raw === source && playlistReadEpoch === epoch && sync().playlistId === context.playlist_id,
+      canQueueRow: row => row.source_readable === true && row.availability === 'local' && source?.playlist_detail?.allowed_actions?.can_play === true
+        && source.playlist_detail.track_rows.some(item => item.playlist_item_id === row.playlist_item_id && exactGrant(item.allowed_actions, 'can_play')),
+      captureQueueRows: selectedRows => {
+        const detail = source?.playlist_detail, stamp = PrivateUITransport.context();
+        if (!detail?.allowed_actions?.can_play) return null;
+        const valid = () => {try {return sync().scopeKey === context.scopeKey && PrivateUITransport.context() === stamp;} catch {return false;}};
+        return selectedRows.map(row => {
+          const original = detail.track_rows.find(item => item.playlist_item_id === row.playlist_item_id);
+          if (!original || !exactGrant(original.allowed_actions, 'can_play')) return null;
+          return {display: {title: row.title, artist: row.artist, album: row.album_title, albumTarget: row.album_target}, isCurrent: valid,
+            async resolvePlaylistItem({signal} = {}) {
+              if (!valid() || signal?.aborted) throw aborted();
+              const params = new URLSearchParams({surface: 'playlists', playlist_id: detail.playlist_id});
+              const response = await PrivateUITransport.request(`/view-data?${params}`, {signal});
+              const fresh = response?.playlist_detail;
+              const matches = fresh?.track_rows?.filter(item => item?.playlist_item_id === original.playlist_item_id) || [];
+              const item = matches[0];
+              if (!valid() || signal?.aborted || fresh?.playlist_id !== detail.playlist_id || fresh.revision !== detail.revision
+                || matches.length !== 1 || unreadable(item) || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(item?.inventory_track_ref || '')) throw aborted();
+              return {inventory_track_ref: item.inventory_track_ref, source_readable: true,
+                source_provenance: {kind: 'playlist', track_ref: item.inventory_track_ref, playlist_ref: detail.playlist_id, revision: detail.revision, item_ref: original.playlist_item_id}};
+            },
+            async resolveDetails(kind, {signal} = {}) {
+              if (!valid() || signal?.aborted || kind !== 'album' || !row.album_target?.allowed_actions?.can_view_details) throw aborted();
+              const value = await nativeTarget(original, detail, 'details', signal);
+              if (!valid() || signal?.aborted || value.allowed_actions?.can_view_details !== true) throw aborted();
+              return {target: window.AlbumHavenResourceSelection.projectTarget({...row.album_target,
+                native_actions: {album_ref: value.album_ref, allowed_actions: {can_open_album: true, can_play_album: value.allowed_actions.can_play_album === true}}}),
+                subject_ref: null, data: {kind, ref: row.album_target.ref, title: value.title || row.album_title, artist: value.artist || row.artist,
+                  metadata_state: 'current', source_label: 'Queued from Playlist', tracks: null}, isCurrent: () => valid() && !signal?.aborted};
+            },
+            async resolve({signal} = {}) {
+              if (!valid() || signal?.aborted) throw aborted();
+              const value = await nativeTarget(original, detail, 'play', signal);
+              if (!valid() || signal?.aborted) throw aborted();
+              return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+            }};
+        });
+      },
       resolveRow: row => currentTrackRow(row, context), creationSource: () => raw?.playlist_creation_source,
       navigationCurrent: () => sync().scopeKey === context?.scopeKey && raw === source && playlistReadEpoch === epoch,
       resolveNavigationRow: row => {
@@ -44998,7 +46050,7 @@ const PlaylistReactRuntime = (() => {
       nativeTracks.set(item.playlist_item_id, {owner, source: native});
       return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
         artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
-        playlistItemId: item.playlist_item_id};
+        playlistItemId: item.playlist_item_id, inventory_track_ref: target.inventory_track_ref, albumRef: byItem.get(item.playlist_item_id)?.album_ref || null};
     });
     const index = tracks.findIndex(track => track.playlistItemId === source.playlist_item_id);
     if (index < 0 || !current() || typeof playTrackFromPayload !== 'function') throw aborted();
@@ -45241,8 +46293,10 @@ const PlaylistReactRuntime = (() => {
       playbackListeners.add(emit); const unsubscribe = TrackActionsRuntime.subscribePlayback(emit);
       return () => {playbackListeners.delete(emit); unsubscribe();};
     },
+    openPlaytableContext: (...args) => window.AlbumHavenPlaytableUI?.context(...args) ?? false,
     openPlaylistAction: (...args) => window.AlbumHavenPlaytableUI?.open(...args) ?? false,
     canOpenPlaytableForm: () => !activeAppFormDialog && !(typeof isMobileFormReturning === 'function' && isMobileFormReturning()),
+    notifyQueueFailure: () => showToast('These tracks could not be queued. Refresh the source and try again.', 'error', 4000),
     notifyPlaytableCreation: () => showToast('Playlist saved. Open it from Playlists when access is available.', 'info', 4000),
     playtableFormRuntime(isCurrent) {
       const sourceView = state.view, sourceUrl = window.location.href, sourceScope = TrackActionsRuntime.scope().token;
@@ -45813,27 +46867,22 @@ window.addEventListener('scroll', () => {
 
 
 document.addEventListener('contextmenu', (event) => {
+  const heading = event.target.closest('#track-modal-title');
+  if (heading) {
+    const album = getCurrentTrackModalAlbum();
+    if (!album || !isTrackModalSourceActionCurrent() || !canPlayTrackModalSelection(heading)) return;
+    event.preventDefault();
+    showAlbumCardContextMenu(event.clientX, event.clientY, album, heading, () =>
+      getCurrentTrackModalAlbum() === album && isTrackModalSourceActionCurrent() && canPlayTrackModalSelection(heading));
+    return;
+  }
   const albumCard = event.target.closest('.album-card');
   if (!albumCard) return;
   event.preventDefault();
   const trigger = albumCard.querySelector('[data-album-key]');
   const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
-  showAlbumCardContextMenu(event.clientX, event.clientY, album);
+  showAlbumCardContextMenu(event.clientX, event.clientY, album, trigger || albumCard);
 }, true);
-
-document.addEventListener('click', (event) => {
-  const insideAlbumMenu = event.target.closest('#album-card-context-menu');
-  const insideAlbumCard = event.target.closest('.album-card');
-  if (!insideAlbumMenu && !insideAlbumCard) {
-    hideAlbumCardContextMenu();
-  }
-});
-
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    hideAlbumCardContextMenu();
-  }
-});
 
 window.addEventListener('blur', () => {
   hideAlbumCardContextMenu();

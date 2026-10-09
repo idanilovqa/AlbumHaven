@@ -7,6 +7,15 @@ Owner workflows live in a separate private repository. If
 Otherwise, check `../album-haven-internal/AGENTS.md`. External contributors do
 not need the private repository to build or use Album Haven.
 
+Owner planning, technical designs, implementation plans, mockup decision
+records, acceptance handoffs, and retained planning history are private. Create
+and update them only in `album-haven-internal`; never add or copy them into this
+public repository. In particular, do not create `docs/superpowers/` or
+`docs/history/superpowers/` here. If owner-directed planning is required and no
+private checkout is readable, stop and ask for access to the internal repository.
+Public documentation is limited to material needed to build, use, audit, secure,
+operate, or contribute to the application.
+
 ## Application repository rules
 
 - Keep runtime persistence Postgres-backed. Do not add file or JSON persistence

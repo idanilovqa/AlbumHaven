@@ -333,12 +333,18 @@ export class GalleryActions {
         || Boolean(metrics.marks?.initial_refresh_complete);
       const libraryLoader = document.querySelector(selectors.libraryLoaderSelector);
       const loaderHidden = !(libraryLoader instanceof HTMLElement) || libraryLoader.hidden;
-      return visibleCards.length >= selectors.minimumCards && refreshFinished && loaderHidden;
+      const startupProgress = document.querySelector(selectors.startupProgressSelector);
+      const startupProgressHidden = !(startupProgress instanceof HTMLElement) || startupProgress.hidden;
+      return visibleCards.length >= selectors.minimumCards
+        && refreshFinished
+        && loaderHidden
+        && startupProgressHidden;
     }, {
       timeout: options.timeout || 60000,
     }, {
       albumCardSelector: this.galleryPage.albumCard.cardSelector,
       libraryLoaderSelector: this.galleryPage.libraryLoaderSelector,
+      startupProgressSelector: this.galleryPage.startupProgressSelector,
       minimumCards,
     });
   }

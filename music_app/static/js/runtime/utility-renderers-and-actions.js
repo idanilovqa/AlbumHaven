@@ -825,6 +825,11 @@ function renderUtilityModalContent(options = {}) {
     els.detail?.setAttribute('aria-labelledby', selectedTab.id);
   }
   syncUtilityTabAlignment(els);
+  if (options.shellOnly === true) {
+    if (typeof updateSearchClearAction === 'function') updateSearchClearAction(els.search);
+    if (typeof syncMobileUtilityContext === 'function') syncMobileUtilityContext();
+    return;
+  }
   if (activeTab === 'rules') {
     renderUtilityRules();
   } else if (activeTab === 'loops') {

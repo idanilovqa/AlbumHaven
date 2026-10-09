@@ -98,6 +98,6 @@ test('Problematic Files report copy matches the approved readiness ceiling', () 
   );
 
   assert.ok(summaryBuilder, 'Problematic Files summary builder should remain present');
-  assert.match(summaryBuilder[0], /1400 ms hard ceiling/u);
-  assert.doesNotMatch(summaryBuilder[0], /1200 ms hard ceiling/u);
+  assert.match(summaryBuilder[0], /1200 ms hard ceiling/u);
+  assert.doesNotMatch(summaryBuilder[0], /1400 ms hard ceiling/u);
 });

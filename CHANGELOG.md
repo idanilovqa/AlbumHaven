@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.50 - 2026-10-08
+
+- Made Settings, Edit Tags, and album-details dismissal respond immediately while slower cleanup and data loading continue in the background.
+- Cut Problematic Files startup work with bounded initial loading, reusable projections, cache-aware diagnostics, and complete background hydration without weakening search results.
+- Improved Problematic Files suggestion dragging and changed inactive suggestion labels to a neutral outline so selected labels remain clearly green.
+- Prevented collaboration albums with multiple Cyrillic artists from being reduced to an incorrect single-artist suggestion.
+- Smoothed and lengthened the startup progress bar, centered its percentage below the bar, and added player-color glow to both elements.
+- Kept Problematic Files performance reporting aligned with the 1,000 ms target and 1,200 ms hard ceiling.
+
 ## 0.9.49 - 2026-10-07
 
 - Kept notifications clear of transparent waveform seek controls so pointer

@@ -11,6 +11,7 @@ const trackModalHydratedAlbumDetailsLru = new Map();
 const TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT = 10;
 const TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT = 2;
 let trackModalActiveSpeculativePrewarms = 0;
+let trackModalCleanupGeneration = 0;
 const trackModalSpeculativePrewarmControllers = new Set();
 const trackModalCoverLoadSuspensionTokens = new Set();
 
@@ -107,6 +108,24 @@ function clearTrackModalRenderedState() {
   }
 }
 
+function scheduleTrackModalCleanupAfterPaint(generation, coverLoadSuspensionTokens = []) {
+  const cleanup = () => {
+    coverLoadSuspensionTokens.forEach((token) => resumeGalleryCoverLoadToken(token));
+    if (generation !== trackModalCleanupGeneration) return;
+    const els = getTrackModalElements();
+    if (!els.overlay?.hidden) return;
+    clearTrackModalRenderedState();
+    if (typeof compactCurrentViewForIdle === 'function') {
+      compactCurrentViewForIdle();
+    }
+  };
+  if (typeof scheduleBrowserAnimationFrame !== 'function') {
+    cleanup();
+    return;
+  }
+  scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(cleanup));
+}
+
 function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
@@ -140,6 +159,12 @@ function suspendGalleryCoverLoadsForTrackModal() {
 function resumeGalleryCoverLoadsAfterTrackModalAction(token = 0) {
   const normalizedToken = Number(token);
   if (!normalizedToken || !trackModalCoverLoadSuspensionTokens.delete(normalizedToken)) return false;
+  return resumeGalleryCoverLoadToken(normalizedToken);
+}
+
+function resumeGalleryCoverLoadToken(token = 0) {
+  const normalizedToken = Number(token);
+  if (!normalizedToken) return false;
   if (
     typeof virtualGrid !== 'undefined'
     && virtualGrid
@@ -150,10 +175,10 @@ function resumeGalleryCoverLoadsAfterTrackModalAction(token = 0) {
   return false;
 }
 
-function resumeAllGalleryCoverLoadsAfterTrackModalActions() {
-  Array.from(trackModalCoverLoadSuspensionTokens).forEach((token) => {
-    resumeGalleryCoverLoadsAfterTrackModalAction(token);
-  });
+function takeAllGalleryCoverLoadSuspensionTokens() {
+  const tokens = Array.from(trackModalCoverLoadSuspensionTokens);
+  tokens.forEach((token) => trackModalCoverLoadSuspensionTokens.delete(token));
+  return tokens;
 }
 
 function getTrackModalAlbumVersionKey(album) {
@@ -550,6 +575,7 @@ function openTrackModal(album, options = {}) {
   if (album && typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  trackModalCleanupGeneration += 1;
   preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
@@ -836,22 +862,20 @@ function closeTrackModal() {
   if (typeof dismissMobilePage === 'function' && dismissMobilePage('album')) return;
   const els = getTrackModalElements();
   if (!els.overlay) return;
+  const cleanupGeneration = ++trackModalCleanupGeneration;
+  const coverLoadSuspensionTokens = takeAllGalleryCoverLoadSuspensionTokens();
   els.overlay.hidden = true;
   els.overlay.classList.remove('is-above-settings');
   invalidatePendingTrackModalLoad();
-  resumeAllGalleryCoverLoadsAfterTrackModalActions();
   state.modalReleases = [];
   state.modalReleaseIndex = 0;
   hideVersionContextMenu();
-  clearTrackModalRenderedState();
-  if (typeof compactCurrentViewForIdle === 'function') {
-    compactCurrentViewForIdle();
-  }
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   if (!lightboxOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  scheduleTrackModalCleanupAfterPaint(cleanupGeneration, coverLoadSuspensionTokens);
 }
 
 function openTrackModalForButton(button) {
@@ -981,6 +1005,7 @@ function attachModalEvents() {
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
   els.overlay.addEventListener('click', (event) => {
+    if (els.overlay.hidden) return;
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-track-modal="1"]')) {
       closeTrackModal();
     }

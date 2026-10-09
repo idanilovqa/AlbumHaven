@@ -399,7 +399,7 @@ test('S02 tab alignment observers and scroll listeners are disposed on close and
   // Load the real close boundary without unrelated network loader initialization.
   const loaders = read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js');
   const close = loaders.slice(loaders.indexOf('function closeUtilityModal('), loaders.indexOf('let repairConfirmReturnFocus'));
-  vm.runInContext(`let utilityCoverLoadSuspensionToken = 0;\n${close}`, context);
+  vm.runInContext(`let utilityCoverLoadSuspensionToken = 0; let utilityOpenGeneration = 0;\n${close}`, context);
   context.syncUtilityTabAlignment(els);
   context.syncUtilityTabAlignment(els);
   assert.equal(observers.length, 1, 'repeated rendering reuses one observer');

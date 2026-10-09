@@ -40,6 +40,17 @@ const utilityLoadersPath = path.join(
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 const utilityListBuildersSource = fs.readFileSync(utilityListBuildersPath, 'utf8');
 const utilityLoadersSource = fs.readFileSync(utilityLoadersPath, 'utf8');
+const utilityRenderersSource = fs.readFileSync(path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'utility-renderers-and-actions.js',
+), 'utf8');
 const confirmModalsTemplate = fs.readFileSync(path.join(
   __dirname,
   '..',
@@ -213,6 +224,10 @@ function createContext(stateOverrides = {}) {
       if (typeof callback === 'function') callback();
       return 1;
     },
+    scheduleBrowserAnimationFrame(callback) {
+      if (typeof callback === 'function') callback();
+      return 1;
+    },
     selectTagEditorTrack() {},
     setTagEditorSelectedPaths() {},
     showToast() {},
@@ -293,8 +308,49 @@ test('editing a tag field refreshes the canonical pending-change presentation', 
 test('Problematic Files tab activation owns one settled render', () => {
   assert.match(
     helperSource,
-    /await loadProblematicFiles\(!state\.utility\.loaded, \{ render: false \}\);[\s\S]{0,500}renderUtilityModalContent\(\);/,
+    /await loadProblematicFiles\(!state\.utility\.loaded, \{[\s\S]{0,120}render: false,[\s\S]{0,120}renderInitialPage: true,[\s\S]{0,500}renderUtilityModalContent\(\);/,
   );
+});
+
+test('switching Settings tabs paints selected navigation before loading panel content', async () => {
+  const frames = [];
+  const events = [];
+  const { context } = createContext({ activeTab: 'problematic-files', rulesLoaded: false });
+  context.scheduleBrowserAnimationFrame = callback => {
+    frames.push(callback);
+    return frames.length;
+  };
+  context.setUtilityActiveTab = nextTab => {
+    context.state.utility.activeTab = nextTab;
+    events.push(`select:${nextTab}`);
+    return nextTab;
+  };
+  context.renderUtilityModalContent = options => {
+    events.push(options?.shellOnly ? 'shell' : 'render');
+  };
+  context.loadUtilityRules = () => events.push('load');
+  const click = createEvent({
+    '[data-utility-tab]': createElement({ 'data-utility-tab': 'rules' }),
+  });
+
+  const completion = context.handleUtilityBootstrapClick(click.event);
+
+  assert.deepEqual(events, ['select:rules', 'shell']);
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  await Promise.resolve();
+  assert.deepEqual(events, ['select:rules', 'shell']);
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  await completion;
+  assert.deepEqual(events, ['select:rules', 'shell', 'load', 'render']);
+});
+
+test('Settings shell-only render stops before active panel rendering', () => {
+  const shellReturn = utilityRenderersSource.indexOf('if (options.shellOnly === true) {');
+  const problematicRender = utilityRenderersSource.indexOf('renderProblematicFiles(options);');
+  assert.ok(shellReturn >= 0);
+  assert.ok(shellReturn < problematicRender);
 });
 
 test('switching away from Loops clears session-only Space ownership', () => {
@@ -378,6 +434,82 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   assert.equal(context.state.utility.selectedProblematicKey, '');
   assert.equal(context.state.utility.problemDropdownOpen, false);
 });
+
+test('applying a problem filter waits for the complete Problematic Files snapshot', async () => {
+  let releaseComplete;
+  const completeLoadPromise = new Promise((resolve) => { releaseComplete = resolve; });
+  const { context, calls } = createContext({
+    problematicFiles: [{ key: 'partial', problem_reasons: ['Missing cover art'] }],
+    problematicFilesComplete: false,
+    completeLoadPromise,
+  });
+  context.waitForProblematicFilesComplete = async () => {
+    await completeLoadPromise;
+    return context.state.utility.problematicFilesComplete;
+  };
+  const filterContainer = createElement();
+  const { event } = createEvent({
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
+    '[data-problem-filter-value]': createElement({
+      'data-problem-filter-value': 'Poor art quality',
+    }),
+  });
+
+  const click = context.handleUtilityBootstrapClick(event);
+  await Promise.resolve();
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), []);
+  assert.equal(calls.renders, 0);
+
+  context.state.utility.problematicFiles = [
+    { key: 'canonical', problem_reasons: ['Poor art quality'] },
+  ];
+  context.state.utility.problematicFilesComplete = true;
+  releaseComplete();
+  await click;
+
+  assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), ['Poor art quality']);
+  assert.equal(calls.renders, 1);
+});
+
+for (const initiallySelected of [false, true]) {
+  test(`Suggested Edit drag ${initiallySelected ? 'deselects' : 'selects'} from the origin without reprocessing a crossed label`, () => {
+    const { context } = createContext({
+      proposalSelections: initiallySelected ? { a: true, b: true, c: true } : {},
+    });
+    const suggestions = ['a', 'b', 'c'].map((id) => ({ id }));
+    const buttons = Object.fromEntries(suggestions.map(({ id }) => [id, createElement({
+      'data-problem-suggestion-id': id,
+    })]));
+    let syncs = 0;
+    context.getDraggableProblemSuggestions = () => suggestions;
+    context.toggleProblemSuggestion = (id, { selected }) => {
+      const selections = { ...(context.state.utility.proposalSelections || {}) };
+      if (selected) selections[id] = true;
+      else delete selections[id];
+      context.state.utility.proposalSelections = selections;
+      return true;
+    };
+    context.syncProblemSuggestionSelection = () => { syncs += 1; };
+    const suggestionEvent = (id) => createEvent({
+      '[data-problem-suggestion-id]': buttons[id],
+    }, { button: 0 }).event;
+
+    context.handleUtilityBootstrapMouseDown(suggestionEvent('a'));
+    assert.equal(Boolean(context.state.utility.proposalSelections.a), !initiallySelected);
+    assert.equal(context.state.utility.proposalDrag.lastIndex, 0);
+
+    context.handleUtilityBootstrapMouseOver(suggestionEvent('c'));
+    assert.deepEqual(
+      Object.keys(context.state.utility.proposalSelections).sort(),
+      initiallySelected ? [] : ['a', 'b', 'c'],
+    );
+    assert.equal(context.state.utility.proposalDrag.lastIndex, 2);
+    const syncsAfterCrossing = syncs;
+
+    context.handleUtilityBootstrapMouseOver(suggestionEvent('c'));
+    assert.equal(syncs, syncsAfterCrossing, 'remaining over the same label must do no work');
+  });
+}
 
 test('removing a problem filter preserves the selected album in the live bootstrap handler when it still matches', () => {
   const { context } = createContext({

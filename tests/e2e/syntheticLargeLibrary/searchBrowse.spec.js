@@ -3,7 +3,6 @@ import { expect, test } from '../support/performanceFixtures.js';
 import {
   expectPostgresLibraryBrowseTelemetry,
   expectTimingBudget,
-  measureActionTime,
   performanceTimingBudget,
 } from '../helpers/index.js';
 import {
@@ -37,16 +36,16 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
     });
 
     const searchQuery = pickSearchableArtistName(await navigationPanelActions.readSidebarArtistNames());
-    const searchReadyMs = await stepLogger.step('Search from the visible UI and wait for query results', async () => (
-      measureActionTime(
-        async () => {
-          await searchToolbarActions.search(searchQuery);
-        },
-        async () => {
-          await searchToolbarActions.waitForQuery(searchQuery, { timeout: 120000 });
-        },
-      )
-    ));
+  const searchReadyMs = await stepLogger.step('Search from the visible UI and wait for query results', async () => {
+    let searchSubmittedAt = 0;
+    await searchToolbarActions.search(searchQuery, {
+      recordSubmissionBoundary() {
+        searchSubmittedAt = Date.now();
+      },
+    });
+    await searchToolbarActions.waitForQuery(searchQuery, { timeout: 120000 });
+    return Date.now() - searchSubmittedAt;
+  });
 
     await stepLogger.step('Wait for the filtered gallery and visible covers to settle', async () => {
       await navigationPanelActions.waitForSidebarSelection(searchQuery, { timeout: 120000 });

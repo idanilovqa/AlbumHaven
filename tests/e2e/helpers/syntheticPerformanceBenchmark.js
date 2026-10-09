@@ -975,14 +975,14 @@ export const UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK = defineBenchmark({
       checkpointKey: 'problematic-files-cold-api',
       metricPath: 'coldProblematicApiMs',
       units: 'ms',
-      description: 'The cold Problematic Files API retains its 1000 ms target with an owner-approved temporary 1000 ms grace and 2000 ms ceiling pending Phase 9 investigation.',
+      description: 'The bounded cold Problematic Files API targets one second and must remain within the 1200 ms hard ceiling.',
       // Historical 15-row HTTP-probe timings are retained in the benchmark notes;
       // native fetch timing on the 706-row fixture has no established baseline.
       observedBaseline: null,
       observedRange: { min: null, max: null },
       targetMaximum: 1000,
-      graceMs: 1000,
-      maxAllowed: 2000,
+      graceMs: 200,
+      maxAllowed: 1200,
     },
     {
       key: 'problematicResponseBytes',
@@ -999,12 +999,12 @@ export const UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK = defineBenchmark({
       checkpointKey: 'problematic-files-ready',
       metricPath: 'problematicReadyMs',
       units: 'ms',
-      description: 'Opening Settings immediately after normal root navigation targets one second and must remain within the owner-approved 1400 ms hard ceiling; 1001-1400 ms is reported as grace usage.',
+      description: 'Opening Settings immediately after normal root navigation targets one second and must remain within the 1200 ms hard ceiling.',
       observedBaseline: 384,
       observedRange: { min: 346, max: 440 },
       targetMaximum: 1000,
-      graceMs: 400,
-      maxAllowed: 1400,
+      graceMs: 200,
+      maxAllowed: 1200,
     },
     {
       key: 'problematicCachedEnterMs',

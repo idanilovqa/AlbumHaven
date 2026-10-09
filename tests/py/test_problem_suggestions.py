@@ -49,9 +49,18 @@ def test_explicit_canonical_alias_is_used_without_generic_title_casing(suggestio
     assert any(item['updates'] == {'artist': 'the CANONICAL'} for item in proposals)
 
 
-@pytest.mark.parametrize('source,target', [('Artist feat. Guest', 'Artist'), ('Alias', 'Artist & Guest')])
+@pytest.mark.parametrize('source,target', [
+    ('Artist feat. Guest', 'Artist'),
+    ('Alias', 'Artist & Guest'),
+    ('Сергей Курёхин и Борис Гребенщиков', 'Сергей Курёхин'),
+])
 def test_collaboration_mapping_is_not_a_single_artist_proposal(suggestions, source, target):
-    assert not any(item['field'] == 'artist' for item in generate(suggestions, entry(artist=source), alias_to_canonical={source: target}))
+    proposals = generate(
+        suggestions,
+        entry(artist=source, album_artist=source),
+        alias_to_canonical={source: target},
+    )
+    assert not any(item['field'] in {'artist', 'album_artist'} for item in proposals)
 
 
 def test_single_disc_marker_is_one_coupled_album_and_disc_proposal(suggestions):

@@ -2,9 +2,8 @@
 
 Archived September 23, 2026: the owner brief and mock-approval handoff are complete.
 This record preserves the original request and approval history; implementation,
-verification, and release status belong to the active
-[completion plan](../superpowers/plans/2026-09-23-cover-branch-completion.md).
-Later owner decisions in that plan supersede historical proposals here.
+verification, and release status belong to the private owner planning record.
+Later owner decisions in the private record supersede historical proposals here.
 
 Requested branch: 2026-09-09-cover-look-up-refactor.
 Source task: 01a087ce-73e3-7c31-bf6c-ad516df231f4 (3 Settings refactor).
@@ -40,4 +39,4 @@ Read repository/private-owner guidance, component registry, complete gallery/set
 Created the local comprehensive [Remaining UI board](../design-mockups/screens/remaining-ui/v001/index.html) and [component coverage / open decisions](../design-mockups/screens/remaining-ui/v001/notes.md). Exact artifact status is `in_review`, with no approval recorded. HTML/CSS/JS hashes are stored beside review.json. Runtime implementation remains unchanged. Owner review of exact visuals is the next step before finalizing dependent implementation tasks.
 ## Approval and final plan — 2026-09-10
 
-The owner approved the final mocks. This supersedes the earlier in-review status above. See [implementation plan](../superpowers/plans/2026-09-10-cover-look-up-and-remaining-ui-implementation.md), [complete use cases](../superpowers/plans/2026-09-10-remaining-ui-use-cases.md), and the v001 approved-artifacts.json fingerprint manifest. The later owner correction explicitly preserves the real main app appearance; full-page.html is a folding/reflow behavior reference only. No production implementation, manual acceptance or publication is claimed.
+The owner approved the final mocks. This supersedes the earlier in-review status above. The private owner planning record contains the implementation plan and complete use cases; the v001 approved-artifacts.json fingerprint manifest remains public implementation evidence. The later owner correction explicitly preserves the real main app appearance; full-page.html is a folding/reflow behavior reference only. No production implementation, manual acceptance or publication is claimed.

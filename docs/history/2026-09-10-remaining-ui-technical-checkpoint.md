@@ -2,12 +2,12 @@
 
 Archived September 23, 2026: Task 1 intake completed on September 20. This archive
 does not close implementation Tasks 2–10 or their verification and release gates.
-The [completion plan](../superpowers/plans/2026-09-23-cover-branch-completion.md)
-owns current status and later decisions, including disabled Mobile/TV editing and
+The private owner planning record owns current status and later decisions,
+including disabled Mobile/TV editing and
 the historical mock-hash exception. Preserve the evidence below as recorded at
 intake; it does not certify current artifact hashes or supersede those decisions.
 
-Date: 2026-09-10. Owner plan: [implementation plan](../superpowers/plans/2026-09-10-cover-look-up-and-remaining-ui-implementation.md). Cases: [acceptance matrix](../superpowers/plans/2026-09-10-remaining-ui-use-cases.md).
+Date: 2026-09-10. The owner implementation plan and acceptance matrix are retained in the private owner repository.
 
 Task 1 completed on September 20, 2026. This checkpoint records approved technical contracts, fresh baseline evidence, ownership, delivery boundaries, and planned case mappings. It does not claim runtime implementation, manual acceptance, merge, publication, or release.
 

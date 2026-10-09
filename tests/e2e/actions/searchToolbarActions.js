@@ -13,6 +13,7 @@ export class SearchToolbarActions {
   }
 
   async search(query, options = {}) {
+    await this.searchToolbar.input.click();
     await this.searchToolbar.input.fill(query);
     // Search submission is explicit in the product flow. Keep the helper's
     // default aligned with that contract; callers that need draft-only input

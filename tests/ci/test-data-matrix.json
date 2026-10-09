@@ -3,7 +3,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/startupProgress.spec.js",
-    "case": "startup progress uses player colors and releases content at 390px",
+    "case": "startup progress glides with player-colored glow at 390px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -19,7 +19,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/startupProgress.spec.js",
-    "case": "startup progress uses player colors and releases content at 1280px",
+    "case": "startup progress glides with player-colored glow at 1280px",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -28,6 +28,21 @@
     "expectedContracts": [
       "startup-progress-player-colors",
       "startup-progress-content-release"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/startupProgress.spec.js",
+    "case": "startup progress honors reduced motion with an immediate stage update",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "startup-progress-reduced-motion"
     ],
     "ownerApproval": "approved"
   },

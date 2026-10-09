@@ -3,28 +3,17 @@ from dataclasses import replace
 from uuid import uuid4
 
 from music_app.services.capabilities import grant_keys_for_action
-from music_app.services.current_actor import ActorState, CapabilityGrant, LibraryRelationship
+from music_app.services.collection_member_authority import collection_member_context
 from music_app.services.owned_playlists import BROWSE, CREATE, ACCESS, MAX_PLAYLIST_ITEMS_PER_COMMAND, PlaylistError
 from music_app.services.policy import ResourceScope
 from music_app.services import playlist_creation_sources_postgres as sources
 
 
 def requester_context(connection, context, account_id, *, lock=False):
-    row = connection.execute('''select a.is_active,a.disabled_at,m.membership_role,
-        l.owner_account_id=a.id as is_primary_owner,
-        exists(select 1 from app.bootstrap_owners b where b.account_id=a.id
-            and b.owner_key='local-bootstrap-owner') as is_bootstrap_owner
-        from app.accounts a join library.library_memberships m on m.account_id=a.id
-        join library.libraries l on l.id=m.library_id
-        where a.id=%s and m.library_id=%s''' + (' for share of a,m' if lock else ''), (account_id,context.library_id)).fetchone()
-    if row is None or not row['is_active'] or row['disabled_at'] is not None:
+    actor_context = collection_member_context(connection, context, account_id, lock=lock)
+    if actor_context is None:
         raise PlaylistError('request_unavailable',404)
-    grants = connection.execute('''select capability_key,scope_kind,scope_id from app.capabilities
-        where account_id=%s and revoked_at is null order by id''' + (' for share' if lock else ''),(account_id,)).fetchall()
-    actor = replace(context.actor,account_id=account_id,state=ActorState.ACTIVE,is_bootstrap_owner=row['is_bootstrap_owner'],
-        library_relationships=(LibraryRelationship(context.library_id,row['membership_role'],row['is_primary_owner']),),
-        capability_grants=tuple(CapabilityGrant(g['capability_key'],g['scope_kind'],g['scope_id']) for g in grants))
-    return replace(context,actor=actor)
+    return actor_context
 
 
 def request_valid(owner, connection, context, playlist, account_id, constraints, *, lock=False):
@@ -99,9 +88,9 @@ def copy_playlist(owner, connection, context, command, playlist, constraints):
         values(%s,%s,%s,%s,%s,'private')''',(ref,context.actor.account_id,context.library_id,title,playlist['description']))
     connection.execute("""insert into app.playlist_items
         (ref,playlist_ref,library_id,position,original_local_track_id,local_track_id,
-         title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,source_kind,source_lineage)
+         title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,source_kind,source_protocol,source_lineage)
         select gen_random_uuid(),%s,library_id,position,original_local_track_id,local_track_id,
-         title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,'playlist',
+         title,artist,album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,'playlist','playlist_copy_v1',
          jsonb_build_object('playlist_ref',playlist_ref::text,'playlist_item_ref',ref::text,'playlist_revision',%s::text)
         from app.playlist_items where playlist_ref=%s order by position""",(ref,command.data['revision'],command.playlist_ref))
     return owner._receipt(context,command,ref,1,True,source_playlist_id=command.playlist_ref,

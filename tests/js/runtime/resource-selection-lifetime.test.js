@@ -10,6 +10,13 @@ const deferred = () => {let resolve; const promise = new Promise(done => {resolv
 const awaitNative = (completion, failure) => Promise.race([completion.promise, failure.promise.then(error => {throw error;})]);
 function environment() {
   const env = createNativeHomeRuntime(), c = env.context, d = env.document;
+  const frames = new Map(); let frameId = 0;
+  c.requestAnimationFrame = callback => {const id = ++frameId; frames.set(id, callback); return id;};
+  c.cancelAnimationFrame = id => frames.delete(id);
+  const paintFrame = () => {
+    const pending = [...frames.values()]; frames.clear();
+    for (const callback of pending) callback(0);
+  };
   // This fixture exercises native lifetime/focus ownership beyond the shared
   // component-only fixture. Supply browser primitives; keep native owners real.
   c.Element.prototype.blur = function() {if (d.activeElement === this) d.activeElement = d.body;};
@@ -35,7 +42,7 @@ function environment() {
   c.getAlbumRequestKey = value => value.key;
   vm.runInContext(read('track-modal-lightbox-helpers.js'), c);
   vm.runInContext(read('resource-selection.js'), c);
-  return {...env, c, host, overlay, queue};
+  return {...env, c, host, overlay, queue, paintFrame};
 }
 const target = () => ({kind: 'album', ref: 'catalog:one', allowed_actions: {can_view_details: true},
   native_actions: {album_ref: 'local:one', allowed_actions: {can_open_album: true, can_play_album: true,
@@ -70,6 +77,34 @@ test('a competing native modal retires the lease synchronously and stale release
   c.openTrackModal(second); assert.equal(c.getTrackModalSelectionLease(), null); assert.equal(overlay.hidden, false);
   assert.equal(c.state.modalReleases[0], second); assert.equal(host.childNodes.length, 0);
   lease.release(); assert.equal(c.state.modalReleases[0], second);
+});
+test('deferred modal close cleanup cannot clear a synchronously reacquired Album widget', () => {
+  const {c, host, overlay, queue} = environment(), frames = [];
+  c.scheduleBrowserAnimationFrame = callback => {frames.push(callback);};
+  const album = {key: 'local:one', tracks: []};
+  const title = overlay.querySelector('.album-details-header__primary');
+  c.getTrackModalElements = () => ({overlay, title, header: overlay.querySelector('.track-modal-header')});
+  c.openTrackModal(album);
+  title.textContent = 'Retained Album';
+  let lease;
+  c.addEventListener('albumhaven:resource-selection-available', () => {
+    lease = c.acquireTrackModalSelection(host, album, {isCurrent: () => true, canPlay: () => true});
+  });
+  c.closeTrackModal();
+  assert.ok(lease, 'closing must make the native dialog available to its widget owner');
+  assert.equal(frames.length, 1);
+  assert.equal(host.firstElementChild, lease.dialog);
+  frames.shift()();
+  assert.equal(title.textContent, 'Retained Album');
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.equal(title.textContent, 'Retained Album', 'old modal cleanup must not erase the active widget');
+  assert.equal(c.getTrackModalSelectionLease(), lease);
+  assert.equal(c.getTrackModalSelectionAlbumFor(title), album);
+  assert.equal(c.canPlayTrackModalSelection(host.querySelector('.play-track-button')), true);
+  assert.equal(c.state.player.playbackQueue, queue);
+  assert.equal(overlay.hidden, true);
+  lease.release();
 });
 test('native action rejects grant revocation during hydration and a competing modal token', async () => {
   for (const reason of ['revoked', 'modal']) {
@@ -165,6 +200,7 @@ test('closing native modal reacquires the same selection and focuses its recreat
   const first = host.querySelector('[data-resource-selection-open]'); first.focus(); env.click(first);
   await awaitNative(opened, failure); assert.equal(overlay.hidden, false); assert.equal(first.isConnected, false);
   c.closeTrackModal(); await awaitNative(resumed, failure);
+  env.paintFrame(); env.paintFrame();
   const next = host.querySelector('[data-resource-selection-open]');
   assert.notEqual(next, first); assert.equal(document.activeElement, next);
   mounted.dispose(); assert.equal(c.getTrackModalSelectionLease(), null);

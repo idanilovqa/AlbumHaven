@@ -12,6 +12,7 @@
     "test:js:all": "node scripts/ci/validate-foundation-gates.cjs --run-node-tests",
     "test:component": "playwright test --config=playwright.component.config.js",
     "check:e2e-production-parity": "node scripts/check-e2e-production-parity.cjs",
+    "test:e2e:home-feedback": "node scripts/run-playwright.cjs test --config=playwright.home-feedback.config.js",
     "test:e2e:functional": "node scripts/run-functional-playwright.cjs test",
     "test:e2e:functional:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-functional-e2e-local.ps1",
     "test:e2e:functional:local:list": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-functional-e2e-local.ps1 -List",
@@ -22,7 +23,8 @@
     "test:e2e:performance:real-app": "node scripts/run-performance-playwright.cjs --group real-app",
     "test:e2e:performance:production-search": "playwright test --config=playwright.production-search-benchmark.config.cjs",
     "test:e2e:performance:paired-search-calibration": "node scripts/run-paired-search-calibration.cjs",
-    "release:prepare": "powershell -ExecutionPolicy Bypass -File scripts/prepare_release.ps1"
+    "release:prepare": "powershell -ExecutionPolicy Bypass -File scripts/prepare_release.ps1",
+    "build:home-friends": "node scripts/build-home-friends.cjs"
   },
   "repository": {
     "type": "git",
@@ -36,6 +38,11 @@
   },
   "homepage": "https://github.com/idanilovqa/AlbumHaven#readme",
   "devDependencies": {
-    "@playwright/test": "1.61.1"
+    "@playwright/test": "1.61.1",
+    "esbuild": "0.25.12"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
   }
 }

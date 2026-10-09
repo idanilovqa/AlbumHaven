@@ -5,6 +5,8 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
 
 const { _private } = require('../../scripts/run-playwright.cjs');
 const TEST_RESULT_NONCE = 'unit-test-result-nonce';
@@ -3102,6 +3104,166 @@ test('startManagedIsolatedApp launches Python directly with safe managed env and
   );
   assert.deepEqual(probes, ['http://127.0.0.1:4320/health']);
 });
+
+test('Home feedback selects its dedicated managed launcher without shared-profile warmup', async () => {
+  const argv = ['test', '--config=playwright.home-feedback.config.js'];
+  assert.equal(_private.isHomeFeedbackConfig(argv), true);
+  assert.equal(_private.isManagedIsolatedLibraryConfig(argv), true);
+  assert.equal(_private.usesRunnerOwnedIsolatedTempRoot(argv, {}), true);
+  assert.equal(_private.resolveManagedFixtureProfile(argv), '');
+  assert.deepEqual(_private.resolveManagedIsolatedAppPorts(argv, {
+    realAppPort: 6270, supportAppPort: 4173, providerPort: 4175,
+  }), { appPort: 6270, providerPort: 6272 });
+  assert.equal(_private.isHomeFeedbackConfig(['test', '--config=playwright.config.js']), false);
+  const ownedRoot = path.resolve(os.tmpdir(), 'album-haven-e2e-home-launch-contract');
+  const manifest = path.join(ownedRoot, 'home-feedback-manifest.json');
+  const child = createFakeChildProcess(5460), calls = [];
+  await _private.startManagedIsolatedApp({
+    PLAYWRIGHT_PYTHON: 'python-home-contract',
+    ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot,
+    ALBUM_HAVEN_HOME_FEEDBACK_MANIFEST: manifest,
+    ALBUM_HAVEN_FIXTURE_PROFILE: 'functional-core',
+  }, {
+    homeFeedback: true, port: 6270, providerPort: 6272,
+    spawnFn(command, args, options) { calls.push({ command, args, options }); return child; },
+    readProcessCreationIdentityFn() { return 'home-launch-identity'; },
+    probeHttpStatusReadyFn: async url => { assert.equal(url, 'http://127.0.0.1:6270/health'); return true; },
+    authenticateFunctionalFixtureFn: async () => assert.fail('Home must not authenticate the shared fixture owner'),
+    prewarmFunctionalFixtureFn: async () => assert.fail('Home must not warm the shared fixture catalog'),
+    waitForFunctionalFixtureBackgroundIdleFn: async () => assert.fail('Home must not await the shared fixture background owner'),
+    stdout: { write() {} }, stderr: { write() {} },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'python-home-contract');
+  assert.deepEqual(calls[0].args, [_private.HOME_FEEDBACK_APP_PATH, '--port', '6270', '--manifest', manifest]);
+  assert.equal(calls[0].args.includes(_private.ISOLATED_LIBRARY_APP_PATH), false);
+  assert.equal(calls[0].options.env.PLAYWRIGHT_MANAGED_APP, '1');
+  assert.equal(calls[0].options.env.ALBUM_HAVEN_E2E_TEMP_ROOT, ownedRoot);
+  assert.equal(calls[0].options.shell, false);
+  assert.equal(calls[0].options.windowsHide, true);
+  for (const badEnv of [
+    { ALBUM_HAVEN_E2E_TEMP_ROOT: 'relative-root', ALBUM_HAVEN_HOME_FEEDBACK_MANIFEST: manifest },
+    { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot, ALBUM_HAVEN_HOME_FEEDBACK_MANIFEST: path.join(ownedRoot, 'wrong.json') },
+  ]) {
+    await assert.rejects(_private.startManagedIsolatedApp(badEnv, {
+      homeFeedback: true, spawnFn() { assert.fail('invalid ownership must reject before spawn'); },
+    }), /runner-owned temporary root and exact manifest path/);
+  }
+});
+
+for (const outcome of ['pass', 'test-failure', 'interrupted', 'readiness-failure', 'unproven-exit']) {
+  test(`Home managed ${outcome} proves process exit before database and owned-temp cleanup`, async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'home-runner-lifecycle-'));
+    const ownedRoot = _private.createOwnedIsolatedE2ETempRoot({
+      tempRoot, readProcessCreationIdentityFn: () => TEST_PROCESS_CREATION_IDENTITY,
+    });
+    const manifest = path.join(ownedRoot, 'home-feedback-manifest.json');
+    const child = createFakeChildProcess(5461), events = [];
+    let releaseExit, enteredExit;
+    const exitGate = new Promise(resolve => { releaseExit = resolve; });
+    const atExitGate = new Promise(resolve => { enteredExit = resolve; });
+    const argv = ['test', '--config=playwright.home-feedback.config.js'];
+    try {
+      const pending = _private.runManagedPlaywrightAttempt({
+        passthroughArgv: argv,
+        childEnv: {
+          ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot,
+          ALBUM_HAVEN_HOME_FEEDBACK_MANIFEST: manifest,
+          ALBUM_HAVEN_FIXTURE_PROFILE: 'functional-core',
+          PLAYWRIGHT_PORT: '4173', PLAYWRIGHT_REAL_APP_PORT: '6270',
+        },
+        runTimeoutMs: 1000, managesScanApp: false, managesIsolatedApp: true,
+        servesRealApp: false, supportAppPort: 4173, realAppPort: 6270,
+        isolatedAppPort: 6270, isolatedProviderPort: 6272, managedPorts: [6270, 6272],
+        ownedIsolatedTempRoot: ownedRoot, isHeadless: true, browserName: 'chromium',
+        startManagedIsolatedAppFn(env, options) {
+          assert.equal(options.homeFeedback, true);
+          return _private.startManagedIsolatedApp(env, {
+            ...options,
+            spawnFn(_command, args) {
+              assert.deepEqual(args, [_private.HOME_FEEDBACK_APP_PATH, '--port', '6270', '--manifest', manifest]);
+              events.push('home-spawn'); return child;
+            },
+            readProcessCreationIdentityFn: () => 'home-lifecycle-identity',
+            probeHttpStatusReadyFn: async () => {
+              if (outcome === 'readiness-failure') throw new Error('home readiness failed');
+              return true;
+            },
+            authenticateFunctionalFixtureFn: async () => assert.fail('no shared-profile Home warmup'),
+            stdout: { write() {} }, stderr: { write() {} },
+          });
+        },
+        createManagedIsolatedAppRestartControllerFn() { assert.fail('Home must not create a runtime restart controller'); },
+        async runPlaywrightProcessFn(_argv, activeEnv) {
+          events.push('playwright-settled');
+          assert.notEqual(outcome, 'readiness-failure');
+          assert.equal(activeEnv.PLAYWRIGHT_PORT, '6270');
+          const configFile = path.resolve(__dirname, '..', '..', 'playwright.home-feedback.config.js');
+          const module = { exports: {} };
+          vm.runInNewContext(fs.readFileSync(configFile, 'utf8'), {
+            module, require: createRequire(configFile), __dirname: path.dirname(configFile),
+            process: { pid: process.pid, argv: [process.execPath, 'playwright-cli'], env: { ...activeEnv } },
+          }, { filename: configFile });
+          assert.equal(module.exports.use.baseURL, 'http://127.0.0.1:6270');
+          return { exitCode: outcome === 'pass' ? 0 : 1,
+            signal: outcome === 'interrupted' ? 'SIGTERM' : null, lifecycle: {} };
+        },
+        stopManagedIsolatedAppFn(current, ports) {
+          assert.equal(current, child);
+          return _private.stopManagedIsolatedApp(current, ports, {
+            readProcessCreationIdentityFn: () => 'home-lifecycle-identity',
+            stopProcessTreeFn(pid, options) {
+              assert.equal(pid, child.pid);
+              assert.equal(options.expectedCreationIdentity, 'home-lifecycle-identity');
+              events.push('stop-tree');
+            },
+            async waitForReclaimedProcessesExitedFn(identities) {
+              assert.deepEqual(identities, [{ pid: child.pid, creationIdentity: 'home-lifecycle-identity' }]);
+              events.push('exit-proof-pending'); enteredExit(); await exitGate;
+              if (outcome === 'unproven-exit') throw new Error('home exit unproven');
+              events.push('exit-proven');
+            },
+            waitForPortReleasedFn: async port => { events.push(`port-proven:${port}`); return true; },
+          });
+        },
+        cleanupIsolatedLibraryDatabaseFn(_env, options) {
+          assert.equal(options, undefined, 'Home resets its own fixture rather than preserving the shared baseline');
+          assert.ok(events.includes('exit-proven'));
+          events.push('database-cleanup');
+        },
+        cleanupIsolatedE2ETempRootsFn(_root, ownedRoots) {
+          assert.deepEqual(ownedRoots, [ownedRoot]);
+          assert.equal(events.at(-1), 'database-cleanup');
+          events.push('temp-cleanup');
+          return _private.cleanupIsolatedE2ETempRoots(tempRoot, ownedRoots);
+        },
+        reportManagedPortOwnersFn() { return []; },
+      }).then(value => ({ value }), error => ({ error }));
+      await Promise.race([atExitGate, pending.then(settled => {
+        throw settled.error || new Error('Home attempt settled before reaching process-exit proof');
+      })]);
+      assert.equal(events.includes('database-cleanup'), false);
+      assert.equal(events.includes('temp-cleanup'), false);
+      assert.equal(fs.existsSync(ownedRoot), true);
+      releaseExit();
+      const settled = await pending;
+      if (outcome === 'unproven-exit') {
+        assert.match(settled.error.message, /home exit unproven/);
+        assert.equal(events.includes('database-cleanup'), false);
+        assert.equal(events.includes('temp-cleanup'), false);
+        assert.equal(fs.existsSync(ownedRoot), true);
+      } else {
+        if (outcome === 'readiness-failure') assert.match(settled.error.message, /home readiness failed/);
+        else { assert.equal(settled.error, undefined); assert.equal(settled.value.exitCode, outcome === 'pass' ? 0 : 1); }
+        assert.deepEqual(events.slice(-5), ['exit-proven', 'port-proven:6270', 'port-proven:6272', 'database-cleanup', 'temp-cleanup']);
+        assert.equal(fs.existsSync(ownedRoot), false);
+      }
+    } finally {
+      releaseExit();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+}
 
 test('non-album rescans and sparse metadata scans seed all unrelated functional cover misses', () => {
   assert.equal(

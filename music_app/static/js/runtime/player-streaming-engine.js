@@ -1978,6 +1978,7 @@ function beginStreamingCleanup(reason, options = {}) {
 }
 
 async function stopStreamingPlayback(reason = 'stopped') {
+  if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.stopped();
   return beginStreamingCleanup(reason);
 }
 function getStreamingPlaybackSnapshot() {

@@ -112,6 +112,8 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0083_add_album_raw_artist_search_index.sql
 0084_create_local_artist_search_projection.sql
 0085_add_stale_track_file_candidate_index.sql
+0086_create_root_gallery_projection.sql
+0087_reconcile_track_preferences_library_scope.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -212,3 +214,37 @@ Set `PGPASSFILE` when passwordless local automation is required. Keep migration 
 Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated stale-file predicate used by missing-album discovery. It avoids scanning every active file when the stale set is empty or small. The partial index is maintained by PostgreSQL as files become stale or return; it changes no rows, result semantics, or privileges. Older application versions remain compatible. Rollback removes only this index through a subsequent migration.
 
 This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.
+
+
+## Track preference scope upgrade
+
+`0087_reconcile_track_preferences_library_scope.sql` reconciles the Home branch's
+historical `0081_scope_track_preferences_by_library.sql` with main's canonical
+migration sequence. The original Home SQL is preserved unchanged under `legacy/`
+and must never be discovered by the active migration glob. Before pending SQL,
+restart-capable runners validate every applied filename and checksum against the
+active inventory or that one exact recognized legacy record. They also verify
+the expected exact track-preference index state.
+
+Stop all runtime taste writers and offline importers before starting the upgrade.
+Keep them stopped until the migration transaction and its ledger insert commit,
+and until the scoped application version is ready. The ordinary unique-index
+build takes a table lock and can wait for existing transactions. Set operational
+lock/statement deadlines appropriate to the deployment before beginning; do not
+interrupt the process by changing migration SQL or ledger history.
+
+For new and main-only databases, 0087 creates the unique
+`(account_id, library_id, track_key) NULLS NOT DISTINCT` index and removes the old
+`(account_id, track_key)` index in one transaction with its ledger entry. Rows and
+stored preferences are unchanged. For a recognized Home history, missing main
+migrations 0081 through 0086 apply first, then 0087 verifies the exact scoped shape
+without replaying the historical SQL. The original ledger checksum and applied
+timestamp remain unchanged. Repeated upgrades validate history and skip applied
+migrations. Unknown history, changed bytes, or incompatible index definitions
+stop before pending migrations; no automatic repair deletes an unexpected index.
+
+There is no automatic downgrade to the account/track-only writer. The scoped
+application can create rows for the same account and track in different libraries,
+which the old unique index cannot represent. Rollback requires stopping writers,
+inspecting those rows and an explicit data-preserving recovery plan. Never restore
+the old index or edit historical ledger rows merely to make older code start.

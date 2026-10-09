@@ -18,6 +18,10 @@ CAPABILITY_ACTIONS = MappingProxyType({
         "library.browse.read", "library.artwork.read",
         "library.virtual_discography.read", "library.virtual_discography.create",
     }),
+    "social": frozenset({
+        "library.social.read", "library.social.manage",
+        "library.social.history.read", "library.social.taste.read",
+    }),
     "play": frozenset({
         "library.media.read", "integration.lastfm.now_playing",
         "integration.lastfm.scrobble", "integration.lastfm.complete",
@@ -95,14 +99,14 @@ _OWNER_ADDITIONAL_ACTIONS = frozenset({
     "library.tasks.read", "library.track_preferences.manage",
 })
 ROLE_PRESETS = MappingProxyType({
-    "viewer": frozenset({"capability.view"}),
-    "listener": frozenset({"capability.view", "capability.play"}),
+    "viewer": frozenset({"capability.view", "capability.social"}),
+    "listener": frozenset({"capability.view", "capability.play", "capability.social"}),
     "musician": frozenset({
         "capability.view", "capability.play", "capability.create_loop",
-        "capability.practice",
+        "capability.practice", "capability.social",
     }),
     "owner": (CAPABILITY_KEYS - {"capability.admin"}) | _OWNER_ADDITIONAL_ACTIONS,
-    "admin": frozenset({"capability.view", "capability.admin"}),
+    "admin": frozenset({"capability.view", "capability.admin", "capability.social"}),
 })
 
 # Compatibility for fine-grained grants assigned before the artwork/custom-cover

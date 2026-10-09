@@ -638,69 +638,135 @@ function openUtilityFoobarFormats(trigger) {
     onSelect: value => { state.utility.foobarFormat = value; },
   });
 }
-function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, viewportBottom) {
-  const gap = 4;
-  const height = Math.max(80, Number(menuHeight) || 0);
-  const below = Math.max(80, Number(viewportBottom) - triggerRect.bottom - 12);
-  const above = Math.max(80, triggerRect.top - 12);
-  if (height > below && above > below) {
-    return { top: Math.max(8, triggerRect.top - gap - Math.min(height, above)), maxHeight: above };
+function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, viewportBottom, viewportTop = 8) {
+  const gap = 4, top = viewportTop, bottom = Math.max(top, Number(viewportBottom) - 8);
+  const height = Math.max(0, Number(menuHeight) || 0);
+  const below = Math.max(0, bottom - triggerRect.bottom - gap), above = Math.max(0, triggerRect.top - top - gap);
+  // Keep a useful scrolling menu below; flip when even one row cannot fit.
+  if (below < Math.min(80, height) && above > below) {
+    return {top: Math.max(top, triggerRect.top - gap - Math.min(height, above)), maxHeight: above};
   }
-  return { top: triggerRect.bottom + gap, maxHeight: below };
+  return {top: Math.max(top, Math.min(triggerRect.bottom + gap, bottom)), maxHeight: below};
 }
 
-function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false }) {
+function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false,
+  density, initialFocus = 'selected', updateTriggerLabel = true }) {
   if (utilityFoobarFormatCleanup) {
     const sameTrigger = utilityChoiceTrigger === trigger;
     utilityFoobarFormatCleanup();
-    if (sameTrigger) return;
+    if (sameTrigger) return null;
   }
-  const choices = formats.map(format => typeof format === 'string' ? { value: format, label: format } : format);
+  const available = () => trigger?.isConnected && !trigger.disabled && trigger.getAttribute?.('aria-disabled') !== 'true'
+    && !trigger.closest?.('[hidden], [inert], [aria-hidden="true"]');
+  if (!available()) return null;
+  const choices = (Array.isArray(formats) ? formats : []).map(format => typeof format === 'string'
+    ? {value: format, label: format} : {...format, value: String(format.value)});
+  if (!choices.length) return null;
   const menu = document.createElement('div');
   menu.className = 'gallery-anchored-menu settings-foobar-format-menu'; menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', label);
-  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label, className: 'gallery-menu-action', attributes: {role: 'menuitemradio', 'aria-checked': String(choice.value === selected), 'data-foobar-format': choice.value}})).join('');
+  if (density === 'compact') menu.setAttribute('data-choice-density', 'compact');
+  menu.setAttribute('data-choice-width', matchTriggerWidth ? 'anchor' : 'fixed');
+  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label,
+    disabled: choice.disabled === true, className: 'gallery-menu-action', attributes: {role: 'menuitemradio',
+      'aria-checked': String(choice.value === String(selected)), 'data-foobar-format': choice.value}})).join('');
   document.body.append(menu);
-  let closed = false;
-  const close = () => {
+  let closed = false, escapeHeld = false;
+  const close = ({restoreFocus = false} = {}) => {
     if (closed) return; closed = true;
     clearTriggerAnchor(menu); menu.remove(); trigger.setAttribute('aria-expanded', 'false');
-    document.removeEventListener('pointerdown', outside, true); window.removeEventListener('resize', position);
-    observer?.disconnect(); utilityFoobarFormatCleanup = null; utilityChoiceTrigger = null;
+    document.removeEventListener('pointerdown', outside, true);
+    window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true);
+    if (!escapeHeld) window.removeEventListener('keydown', escape, true);
+    window.visualViewport?.removeEventListener('resize', position); window.visualViewport?.removeEventListener('scroll', position);
+    observer?.disconnect(); resizeObserver?.disconnect();
+    // A React cleanup for an old owner must never clear a replacement menu.
+    if (utilityFoobarFormatCleanup === close) {utilityFoobarFormatCleanup = null; utilityChoiceTrigger = null;}
+    if (restoreFocus && available()) trigger.focus({preventScroll: true});
   };
   const position = () => {
-    if (!trigger.isConnected) { close(); return; }
-    const rect = trigger.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.zIndex = '130';
-    const menuWidth = matchTriggerWidth ? Math.min(rect.width, window.innerWidth - 16) : Math.min(280, window.innerWidth - 16);
-    menu.style.width = `${Math.max(0, menuWidth)}px`;
-    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
-    const playerRect = document.querySelector?.('.global-player')?.getBoundingClientRect?.();
-    const viewportBottom = playerRect?.height > 0 && playerRect.top < window.innerHeight
-      ? Math.max(0, playerRect.top)
-      : window.innerHeight;
-    const vertical = resolveUtilityChoiceDropdownVerticalPlacement(rect, menu.scrollHeight, viewportBottom);
+    if (!available() || menu.hidden || !menu.isConnected) {close(); return;}
+    const viewport = window.visualViewport, left = (viewport?.offsetLeft || 0) + 8, top = (viewport?.offsetTop || 0) + 8;
+    const right = (viewport?.offsetLeft || 0) + (viewport?.width || window.innerWidth) - 8;
+    const viewportBottom = (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight);
+    const rect = trigger.getBoundingClientRect(), availableWidth = Math.max(0, right - left);
+    const anchorWidth = Math.min(Math.max(0, rect.width || 0), availableWidth);
+    menu.style.position = 'fixed';
+    const surface = trigger.closest?.('[role="dialog"], .confirm-modal, .trigger-anchor-surface');
+    menu.style.zIndex = String(Math.max(130, (Number(surface && window.getComputedStyle?.(surface).zIndex) || 0) + 1));
+    menu.style.maxWidth = `${availableWidth}px`; menu.style.minWidth = '0';
+    const width = matchTriggerWidth ? anchorWidth : Math.min(280, availableWidth);
+    menu.style.width = `${width}px`;
+    const start = window.getComputedStyle?.(trigger).direction === 'rtl' ? rect.right - width : rect.left;
+    menu.style.left = `${Math.max(left, Math.min(start, right - width))}px`;
+    const player = document.querySelector?.('.global-player')?.getBoundingClientRect?.();
+    const bottom = player?.height > 0 && player.top < viewportBottom ? player.top : viewportBottom;
+    const height = menu.scrollHeight || menu.getBoundingClientRect?.().height || 0;
+    const vertical = resolveUtilityChoiceDropdownVerticalPlacement(rect, height, bottom, top);
     menu.style.top = `${vertical.top}px`; menu.style.maxHeight = `${vertical.maxHeight}px`;
     syncTriggerAnchor(menu, trigger);
   };
-  const outside = event => { if (!menu.contains(event.target) && !trigger.contains(event.target)) close(); };
-  const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => { if (menu.hidden || !trigger.isConnected) close(); }) : null;
-  observer?.observe(document.body, {childList:true,subtree:true,attributes:true,attributeFilter:['hidden']});
-  utilityFoobarFormatCleanup = close; utilityChoiceTrigger = trigger; trigger.setAttribute('aria-expanded', 'true'); position();
-  document.addEventListener('pointerdown', outside, true); window.addEventListener('resize', position);
+  const outside = event => {if (!menu.contains(event.target) && !trigger.contains(event.target)) close();};
+  // Window capture precedes native modal Escape capture, so dismissing this
+  // child menu cannot dismiss its parent dialog in the same keypress.
+  const releaseEscape = () => {
+    escapeHeld = false;
+    window.removeEventListener('keyup', escapeKeyup, true); window.removeEventListener('blur', releaseEscape);
+    if (closed) window.removeEventListener('keydown', escape, true);
+  };
+  const escapeKeyup = event => {if (event.key === 'Escape') releaseEscape();};
+  const escape = event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (escapeHeld || event.isComposing) return;
+    escapeHeld = true;
+    // Keep just this key-sequence guard after dismissal. Repeats must not
+    // reach a parent form or a newly opened menu before keyup (or blur).
+    window.addEventListener('keyup', escapeKeyup, true); window.addEventListener('blur', releaseEscape);
+    if (!event.repeat) close({restoreFocus: true});
+  };
+  const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
+    if (menu.hidden || !menu.isConnected || !available()) close();
+  }) : null;
+  const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(position) : null;
+  observer?.observe(document.body, {childList: true, subtree: true, attributes: true,
+    attributeFilter: ['hidden', 'inert', 'aria-hidden', 'disabled', 'aria-disabled']});
+  resizeObserver?.observe(trigger); if (trigger.parentElement) resizeObserver?.observe(trigger.parentElement);
+  utilityFoobarFormatCleanup = close; utilityChoiceTrigger = trigger; trigger.setAttribute('aria-expanded', 'true');
+  document.addEventListener('pointerdown', outside, true);
+  window.addEventListener('resize', position); window.addEventListener('scroll', position, true); window.addEventListener('keydown', escape, true);
+  window.visualViewport?.addEventListener('resize', position); window.visualViewport?.addEventListener('scroll', position);
   menu.addEventListener('click', event => {
-    const choice = event.target.closest('[data-foobar-format]'); if (!choice) return;
+    const choice = event.target.closest('[data-foobar-format]');
+    if (!choice || choice.disabled || closed || !available()) return;
     const value = choice.getAttribute('data-foobar-format');
-    const option = choices.find(item => item.value === value); if (!option) return;
-    if (onSelect(value) === false) { close(); return; }
-    const label = trigger.querySelector('.ui-button__content'); if (label) label.textContent = option.label;
-    close(); trigger.focus({preventScroll:true});
+    const option = choices.find(item => item.value === value); if (!option || option.disabled === true) return;
+    try {
+      const accepted = onSelect(value);
+      if (!closed && accepted !== false && updateTriggerLabel) {
+        const content = trigger.querySelector('.ui-button__content'); if (content) content.textContent = option.label;
+      }
+    } finally {close({restoreFocus: true});}
   });
+  const enabledButtons = () => Array.from(menu.querySelectorAll('button')).filter(button => !button.disabled);
   menu.addEventListener('keydown', event => {
-    const buttons = Array.from(menu.querySelectorAll('button')), index = buttons.indexOf(document.activeElement);
-    if (event.key === 'Escape' || event.key === 'Tab') { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); } close(); trigger.focus({preventScroll:true}); }
-    if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) { event.preventDefault(); buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }
+    const buttons = enabledButtons(), index = buttons.indexOf(document.activeElement);
+    if (event.key === 'Tab') {close({restoreFocus: true}); return;}
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation();
+      buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+        : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus({preventScroll: true});
+      document.activeElement?.scrollIntoView?.({block: 'nearest'});
+    }
   });
-  menu.querySelector('button')?.focus();
+  position();
+  if (!closed) {
+    const buttons = enabledButtons(), chosen = initialFocus === 'last' ? buttons.at(-1)
+      : initialFocus === 'first' ? buttons[0] : buttons.find(button => button.getAttribute('aria-checked') === 'true') || buttons[0];
+    chosen?.focus({preventScroll: true});
+    chosen?.scrollIntoView?.({block: 'nearest'});
+  }
+  return {close, get isOpen() {return !closed;}};
 }
 
 

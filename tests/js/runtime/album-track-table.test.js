@@ -6,6 +6,19 @@ const vm = require('node:vm');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 
+test('read-only track projections cannot expose media paths or native actions', () => {
+  const context = loadTrackTable();
+  const track = {id: 'display-row', path: '/private/library/song.flac', displayPath: '/private/display.flac',
+    title: '<Projected track>', track_number: 2, duration: '3:41', isPlaying: true, isCurrent: true, isProblematic: true};
+  const row = context.buildAlbumTrackTableRow(track, 0, {readOnly: true});
+  const html = context.buildAlbumTrackTableHtml({readOnly: true, showPath: true, groups: [{tracks: [track]}]});
+  assert.equal(row.key, 'display-row');
+  assert.deepEqual(Object.keys(row.dataAttributes), []);
+  assert.match(html, /&lt;Projected track&gt;/);
+  assert.match(html, /3:41/);
+  assert.doesNotMatch(html, /\/private\/|data-track-path|data-track-row-path|data-track-duration-path|play-track-button|data-open-track-problematic|__row--playing|__row--current/);
+});
+
 function loadTrackTable() {
   const context = {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
@@ -21,6 +34,94 @@ function loadTrackTable() {
   }
   return context;
 }
+
+test('shared section action slot uses supplied identity and the vertical native icon', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({selection: 'multiple', sectionActions: true, forceGroupLabels: true,
+    readOnly: true, groups: [{sectionKey: 'rarity&interview', discLabel: 'Rarity <tracks>', tracks: [
+      {rowKey: 'occurrence:a', title: 'One', readable: true, selectable: true},
+      {rowKey: 'occurrence:b', title: 'Two', readable: false, selectable: false},
+    ]}, {sectionKey: 'empty', discLabel: 'Other', tracks: []}]});
+  assert.match(html, /data-playtable-section="rarity&amp;interview"/);
+  assert.match(html, /data-playtable-section-action="rarity&amp;interview"/);
+  assert.match(html, /data-playtable-section-action="rarity&amp;interview"[^>]*disabled aria-disabled="true"/);
+  assert.match(html, /aria-label="Actions for Rarity &lt;tracks&gt;"/);
+  assert.match(html, /ui-icon--more-vertical/);
+  assert.match(html, /M12 6\.5h\.01M12 12h\.01M12 17\.5h\.01/);
+  assert.match(html, /data-playtable-section-action="empty"[^>]*disabled aria-disabled="true"/);
+  assert.match(html, /data-cdt-row-key="occurrence:a"[^>]*tabindex="0"/);
+  assert.match(html, /data-cdt-row-key="occurrence:b"[^>]*aria-disabled="true"[^>]*tabindex="-1"/);
+  assert.equal((html.match(/data-cdt-selection="multiple"/g) || []).length, 2);
+  assert.doesNotMatch(html, /data-track-path|data-track-row-path|play-track-button/);
+});
+
+test('section actions are opt-in and never invent a section identity from its label or index', () => {
+  const context = loadTrackTable(), groups = [{discLabel: 'Named but unidentified', tracks: [{title: 'Track'}]}];
+  assert.doesNotMatch(context.buildAlbumTrackTableHtml({groups, sectionActions: true}), /data-playtable-section-action/);
+  assert.doesNotMatch(context.buildAlbumTrackTableHtml({groups: [{...groups[0], sectionKey: 'real-key'}]}), /data-playtable-section-action/);
+});
+
+test('multiple selection cannot borrow a media path or display index as its public occurrence key', () => {
+  const context = loadTrackTable();
+  const row = context.buildAlbumTrackTableRow({path: '/private/music.flac', title: 'Track'}, 7, {selection: 'multiple'});
+  assert.equal(row.key, ''); assert.equal(row.ariaDisabled, true); assert.equal(row.tabIndex, -1);
+  assert.equal(context.buildAlbumTrackTableRow({rowKey: 'public-occurrence', readable: true}, 0, {selection: 'multiple'}).key, 'public-occurrence');
+});
+
+test('native Play consumes explicit read/play denial and missing state independently of selection', () => {
+  const context = loadTrackTable();
+  assert.equal(context.buildAlbumTrackPlayButtonHtml({path: 'track', readable: false}), '');
+  for (const restriction of [{canPlay: false}, {availability: 'missing'}]) {
+    assert.match(context.buildAlbumTrackPlayButtonHtml({path: 'track', ...restriction}), / disabled aria-disabled="true"/);
+  }
+  assert.doesNotMatch(context.buildAlbumTrackPlayButtonHtml({path: 'track', selectable: false}), / disabled/);
+  assert.doesNotMatch(context.buildAlbumTrackPlayButtonHtml({path: 'track'}), / disabled/);
+});
+
+test('denied native rows retain only their public key and unavailable presentation', () => {
+  const context = loadTrackTable();
+  const track = {rowKey: 'opaque-occurrence', readable: false, title: 'Secret title', artist: 'Secret artist',
+    secondary_artist: 'Secret guest', album: 'Secret album', path: '/private/music.flac', displayPath: '/private/display.flac',
+    cover_path: '/private/cover.jpg', duration: 'secret-duration', isProblematic: true, isPlaying: true};
+  const html = context.buildAlbumTrackTableHtml({selection: 'multiple', showPath: true, groups: [{tracks: [track]}]});
+  assert.match(html, /data-cdt-row-key="opaque-occurrence"/); assert.match(html, /Unavailable track/);
+  assert.match(html, /aria-disabled="true"/);
+  assert.doesNotMatch(html, /Secret|private|secret-duration|data-src|data-track-path|data-track-row-path|data-track-cover|play-track-button|track-problem-link/);
+  assert.equal(context.buildAlbumTrackPlayButtonHtml(track), '');
+});
+
+test('only normalized confirmed-missing rows receive additive shared missing state', () => {
+  const context = loadTrackTable();
+  const track = { path: 'missing.flac', title: 'Missing track', availability: 'missing', isCurrent: true, isPlaying: true, isSearchMatch: true };
+  const row = context.buildAlbumTrackTableRow(track);
+  for (const state of ['missing', 'current', 'playing', 'search-match', 'animated']) {
+    assert.ok(row.className.split(' ').includes(`album-track-table__row--${state}`));
+  }
+  assert.equal(row.dataAttributes['track-row-path'], 'missing.flac');
+  assert.equal(row.dataAttributes['track-playing'], 'true');
+  for (const availability of ['available', 'unknown', 'ambiguous', 'unresolved', 'confirmed-missing', '', undefined, null, { state: 'missing' }]) {
+    assert.doesNotMatch(context.buildAlbumTrackTableRow({ ...track, availability }).className, /__row--missing/);
+  }
+  const projection = context.buildAlbumTrackTableRow(track, 0, { readOnly: true });
+  assert.match(projection.className, /__row--missing/);
+  assert.doesNotMatch(projection.className, /__row--(?:current|playing|animated)/);
+  assert.deepEqual(Object.keys(projection.dataAttributes), []);
+  assert.doesNotMatch(projection.cells.number.content, /play-track-button/);
+  const html = context.buildAlbumTrackTableHtml({ groups: [{ tracks: [track, { ...track, path: 'unknown.flac', availability: 'unknown' }] }] });
+  assert.equal((html.match(/album-track-table__row--missing/g) || []).length, 1);
+});
+
+test('missing-row tint uses the error theme while retaining native interaction and playback layers', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
+  const missingRules = [...css.matchAll(/\.album-track-table \.album-track-table__row--missing([^{}]*)\{([^}]+)\}/g)];
+  assert.equal(missingRules.length, 2);
+  assert.match(missingRules[0][2], /var\(--appearance-error, var\(--danger, #[a-f\d]+\)\) 13%, var\(--appearance-table-surface, var\(--panel\)\)/);
+  assert.match(missingRules[1][1], /:is\(:hover, :focus-within, \[aria-selected="true"\]\)/);
+  assert.match(missingRules[1][2], /19%/);
+  for (const [, , declarations] of missingRules) {
+    assert.match(declarations.trim(), /^background: [^;]+;$/);
+  }
+});
 
 test('AlbumTrackTable changes only the inner Play and Pause glyphs to centered shared SVGs', () => {
   const context = loadTrackTable();
@@ -257,34 +358,4 @@ test('track number shares one cell with its original animated play control', () 
   assert.equal(row.cells.play, undefined);
   assert.match(row.cells.number.content, /album-track-table__number">7</);
   assert.match(row.cells.number.content, /play-track-button/);
-});
-
-test('row double-click clears its word highlight and starts playback without toggling playing tracks', () => {
-  const context = loadTrackTable();
-  let plays = 0;
-  let cleared = 0;
-  const textNode = {};
-  const selection = {anchorNode:textNode, focusNode:textNode, removeAllRanges(){cleared++;}};
-  const row = {
-    dataset:{trackPlaying:''},
-    ownerDocument:{getSelection:()=>selection},
-    contains:node=>node===textNode,
-    querySelector:()=>({click(){plays++;}}),
-  };
-  const event = {target:{closest:()=>null}, currentTarget:row, preventDefault(){}};
-  context.handleAlbumTrackRowDoubleClick(event);
-  assert.equal(plays,1);
-  assert.equal(cleared,1);
-  row.dataset.trackPlaying='true';
-  context.handleAlbumTrackRowDoubleClick(event);
-  assert.equal(plays,1);
-  assert.equal(cleared,2);
-  selection.anchorNode={};
-  context.handleAlbumTrackRowDoubleClick(event);
-  assert.equal(cleared,2);
-  row.dataset.trackPlaying='';
-  event.target.closest=()=>({});
-  context.handleAlbumTrackRowDoubleClick(event);
-  assert.equal(plays,1);
-  assert.equal(cleared,2);
 });

@@ -60,7 +60,7 @@ export class GalleryRegressions {
         const bounds = scroll.getBoundingClientRect();
         const element = [...document.querySelectorAll('#artist-groups .album-card')].find(card => {
           const rect = card.getBoundingClientRect();
-          return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+          return rect.top < bounds.bottom && rect.bottom > bounds.top;
         });
         resolve({
           element,

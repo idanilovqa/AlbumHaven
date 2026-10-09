@@ -174,19 +174,20 @@ def _observe_page(connection, source, rows):
         values = {key: row.get(key) for key in _FACT_FIELDS}
         values.update(ref=str(uuid4()), source_ref=str(source["ref"]),
             selection_ref=str(uuid5(UUID(str(source["ref"])), f"inventory:{source['library_id']}:{row['original_local_track_id']}")),
-            original_local_track_id=row["original_local_track_id"], evidence_digest=entry_evidence(row))
+            original_local_track_id=row["original_local_track_id"], evidence_digest=entry_evidence(row),
+            source_lineage=row.get("source_lineage"))
         observations.append(values)
     # One bounded page insert/read, not two network round trips per result.
     encoded = json.dumps(observations, allow_nan=False)
     connection.execute("""insert into app.playlist_creation_entries
       (ref,source_ref,selection_ref,original_local_track_id,evidence_digest,title,artist,
-       album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,availability)
+       album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,availability,source_lineage)
       select ref,source_ref,selection_ref,original_local_track_id,evidence_digest,title,artist,
-       album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,availability
+       album_title,original_album_id,release_year,disc_number,track_number,duration_seconds,availability,source_lineage
       from jsonb_to_recordset(%s::jsonb) as input(
        ref uuid,source_ref uuid,selection_ref uuid,original_local_track_id bigint,evidence_digest text,
        title text,artist text,album_title text,original_album_id bigint,release_year integer,
-       disc_number integer,track_number integer,duration_seconds numeric,availability text)
+       disc_number integer,track_number integer,duration_seconds numeric,availability text,source_lineage jsonb)
       on conflict(source_ref,original_local_track_id,evidence_digest) do nothing""", (encoded,))
     stored = connection.execute("""select e.* from app.playlist_creation_entries e
       join jsonb_to_recordset(%s::jsonb) as input(original_local_track_id bigint,evidence_digest text)

@@ -65,3 +65,36 @@ Same account/key/semantic command/original session reconciles to the original re
 POST /playlists/P/default-sort accepts {sort:{key,direction}|null,revision,request_key}. The exact keys are love_tier, play_count, popularity_count and duration; direction is asc|desc. There are no aliases. Null explicitly clears the saved choice. The action requires current browse plus library.playlists.settings.manage and actual owner or explicit editor eligibility; server_shared read access is insufficient.
 
 The command uses the same collection revision and durable operation receipt rules as metadata edits. It returns saved_default_sort with changed/revision. Same-value saves are no-ops. Detail reads return saved_default_sort separately from active_sort. Saved choices never mutate authored item positions; these server track_rows remain in authored order, with active_sort={key:playlist_position,direction:asc}. The client applies the saved metric-header choice as its view sort using current supplied metric facts; unknown values remain unknown. Native playback uses the displayed eligible-item order after that view sort. No missing metrics, playback rights or suggestion continuations are manufactured by persisting a choice.
+
+### Retained Queue selections
+
+`POST /playlists/creation-source/queue` accepts exactly `occurrences`, an ordered
+array of 1–5000 source occurrences. Each occurrence has an inventory `track_ref`
+and one of these exact shapes:
+
+- Inventory: `{kind: "inventory", track_ref}`.
+- Activity: `{kind: "activity", track_ref, origin, row_ref}`. `origin` is the
+  existing exact Activity audience, subject, kind, period and snapshot receipt;
+  the row must belong to that receipt and resolve to the supplied track.
+- Playlist: `{kind: "playlist", track_ref, playlist_ref, revision, item_ref}`.
+  The current readable Playlist revision and item must resolve to the track.
+
+The response uses the existing `complete_inventory_selection_v1` library source
+envelope, with first-occurrence canonical order. Repeated tracks produce one
+entry but retain every contributing source occurrence privately. No private
+lineage, media path or playback grant is exposed. Readable missing inventory
+remains selectable. Capture requires Browse; final Create and Add independently
+require their existing mutation grants.
+
+Queue Add commands include `source_guard: {source_protocol, source, entry_refs}`
+alongside their ordinary `track_refs`, destination revision and request key.
+The guard is part of the original command digest. Its selected entries must
+match the ordered track identities exactly. An ordinary inventory receipt
+cannot be substituted as a Queue guard. Create uses the existing source tuple.
+Both commands revalidate all retained selected occurrences, current inventory,
+actor/session, source expiry and source read authority inside the mutation
+transaction. Source and destination Playlist locks are ordered together, and
+all friend subjects are locked with the actor before current policy is loaded.
+An unchanged, committed request-key retry returns its existing receipt; changing
+or dropping the guard with that key is a conflict. Source revocation prevents a
+new write, without retroactively undoing an already committed operation.

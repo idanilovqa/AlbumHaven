@@ -25,9 +25,12 @@ def require_private_action(context, action, *, resource=None, constraints=None):
 
 
 @contextmanager
-def current_library_transaction(database_url,context,*,constraints=None,connect=None,clock=None,target_account_id=None,read_only=False):
+def current_library_transaction(database_url,context,*,constraints=None,connect=None,clock=None,target_account_id=None,target_account_ids=(),read_only=False):
     if not isinstance(context,PolicyContext):raise PrivateLibraryAuthorityError('Private library access is unavailable.')
     actor=context.actor
+    if not isinstance(target_account_ids, (tuple, list)) or len(target_account_ids)>5000 or any(
+            type(value) is not int or value<=0 for value in target_account_ids):
+        raise PrivateLibraryAuthorityError('Private library access is unavailable.')
     if (not actor.is_authenticated or any(type(value) is not int or value<=0 for value in
         (actor.account_id,actor.session_id,actor.current_library_id,context.library_id))
         or actor.current_library_id!=context.library_id
@@ -39,9 +42,13 @@ def current_library_transaction(database_url,context,*,constraints=None,connect=
     try:
         with (connect or pooled_connection)(database_url) as connection:
             connection.execute('set transaction isolation level read committed')
+            account_ids=sorted({actor.account_id,target_account_id or actor.account_id,*target_account_ids})
             if read_only:
                 connection.execute('select id from app.accounts where id=any(%s) order by id for share',
-                    (sorted({actor.account_id,target_account_id or actor.account_id}),)).fetchall()
+                    (account_ids,)).fetchall()
+            elif target_account_ids:
+                connection.execute('select id from app.accounts where id=any(%s) order by id for update',
+                    (account_ids,)).fetchall()
             else:
                 lock_admin_accounts(connection,actor.account_id,target_account_id or actor.account_id)
             account=connection.execute('select id,is_active,disabled_at from app.accounts where id=%s',

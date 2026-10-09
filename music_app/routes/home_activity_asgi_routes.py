@@ -13,7 +13,10 @@ from music_app.routes.activity_native_targets_asgi import native_activity_contex
 from music_app.services.private_library_authority import PrivateLibraryAuthorityError
 from music_app.services.private_native_targets import NativeTargetError
 
+from music_app.routes.live_activity_asgi import router as live_activity_router
+
 router = APIRouter()
+router.include_router(live_activity_router)
 _HEADERS = {"Cache-Control": "private, no-store"}
 
 

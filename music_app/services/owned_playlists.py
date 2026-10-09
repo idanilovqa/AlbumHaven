@@ -115,7 +115,7 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
     fields = {
         "create": {"mode", "source_protocol", "source", "title", "description", "entry_refs", "request_key"},
         "save": {"title", "description", "item_order", "revision", "request_key"},
-        "add": {"track_refs", "revision", "request_key"},
+        "add": {"track_refs", "revision", "request_key", "source_guard"},
         "remove": {"item_refs", "revision", "request_key"},
         "reorder": {"item_order", "revision", "request_key"},
         "visibility": {"visibility", "revision", "request_key"},
@@ -155,6 +155,19 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
             data["item_order"] = _refs(payload["item_order"], empty=True)
     elif action == "add":
         data["track_refs"] = _refs(payload.get("track_refs"), inventory=True)
+        if "source_guard" in payload:
+            guard = payload["source_guard"]
+            if (not isinstance(guard,dict) or set(guard)!={"source_protocol","source","entry_refs"}
+                    or guard["source_protocol"]!=COMPLETE_INVENTORY_PROTOCOL):
+                raise PlaylistError("invalid_command")
+            source=guard["source"]
+            if not isinstance(source,dict) or set(source)!={"kind","ref","revision"} or source["kind"]!="library":
+                raise PlaylistError("invalid_command")
+            refs=_refs(guard["entry_refs"])
+            if len(refs)!=len(data["track_refs"]):raise PlaylistError("invalid_command")
+            data["source_guard"]={"source_protocol":COMPLETE_INVENTORY_PROTOCOL,
+                "source":{"kind":"library","ref":uuid_ref(source["ref"]),"revision":uuid_ref(source["revision"])},
+                "entry_refs":refs}
     elif action == "remove":
         data["item_refs"] = _refs(payload.get("item_refs"))
     elif action == "reorder":

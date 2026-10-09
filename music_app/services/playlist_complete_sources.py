@@ -91,11 +91,13 @@ class CompletePlaylistSources:
     def read(self,context,*,ref,revision,protocol=COMPLETE_INVENTORY_PROTOCOL,constraints=None):
         owner=self._playlists
         ref,revision=uuid_ref(ref),uuid_ref(revision)
+        from music_app.services import playlist_queue_sources as queue
+        targets=queue.lock_targets(owner,context,source_ref=ref,constraints=constraints) if protocol==COMPLETE_INVENTORY_PROTOCOL else ()
         target=None
         if protocol==COMPLETE_ACTIVITY_PROTOCOL:
             from music_app.services import playlist_activity_sources as activity
             target=activity.lock_target(owner,context,source_ref=ref,constraints=constraints)
-        with owner._authorized(context,constraints,target_account_id=target) as (connection,live,now):
+        with owner._authorized(context,constraints,target_account_id=target,**({"target_account_ids":targets} if targets else {})) as (connection,live,now):
             owner._require(live,(BROWSE,CREATE),constraints)
             if protocol not in {COMPLETE_INVENTORY_PROTOCOL,COMPLETE_ACTIVITY_PROTOCOL}:
                 raise PlaylistError("invalid_source_query")
@@ -110,7 +112,9 @@ class CompletePlaylistSources:
             if (not isinstance(refs,list) or len(refs)!=len(rows) or len(refs)>MAX_PLAYLIST_ITEMS_PER_COMMAND
                     or set(refs)!={str(row["ref"]) for row in rows}):
                 raise PlaylistError("source_changed",409)
-            if protocol==COMPLETE_ACTIVITY_PROTOCOL:
+            if queue.is_queue(source):
+                selected=queue.selected(owner,connection,live,source,refs,constraints=constraints)
+            elif protocol==COMPLETE_ACTIVITY_PROTOCOL:
                 from music_app.services import playlist_activity_sources as activity
                 selected=activity.selected(connection,live,source,refs,config=self._config,constraints=constraints)
             else:

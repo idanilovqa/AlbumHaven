@@ -32,11 +32,11 @@ class PostgresOwnedPlaylistsService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     @contextmanager
-    def _authorized(self, context, constraints, *, target_account_id=None):
+    def _authorized(self, context, constraints, *, target_account_id=None, target_account_ids=()):
         # Shared library authority validates scope both before and after locks.
         try:
             with current_library_transaction(self._url,context,constraints=constraints,
-                    connect=self._connect,clock=self._clock,target_account_id=target_account_id) as (connection,live,now):
+                    connect=self._connect,clock=self._clock,target_account_id=target_account_id,target_account_ids=target_account_ids) as (connection,live,now):
                 yield connection,live,now
         except (RecentAuthenticationRequired,PrivateLibraryAuthorityError):
             raise PlaylistError("forbidden", 403) from None
@@ -135,11 +135,15 @@ class PostgresOwnedPlaylistsService:
             raise PlaylistError("invalid_command")
         command = normalize_playlist_command(command.action,
             {**command.data,"request_key":command.request_key},playlist_ref=command.playlist_ref)
+        from music_app.services import playlist_queue_sources as queue
+        queue_ref = (command.data["source"]["ref"] if command.action=="create" and command.data["source_protocol"]=="complete_inventory_selection_v1"
+            else command.data.get("source_guard",{}).get("source",{}).get("ref"))
+        queue_targets = queue.lock_targets(self,context,source_ref=queue_ref,constraints=constraints) if queue_ref else ()
         lock_target=command.data.get("account_id")
         if command.action=="create" and command.data["source"]["kind"]=="activity":
             from music_app.services import playlist_activity_sources as activity
             lock_target=activity.lock_target(self,context,source_ref=command.data["source"]["ref"],constraints=constraints)
-        with self._authorized(context,constraints,target_account_id=lock_target) as (connection,live,now):
+        with self._authorized(context,constraints,target_account_id=lock_target,target_account_ids=queue_targets) as (connection,live,now):
             prior = connection.execute("""select * from app.playlist_operations
                 where actor_account_id=%s and library_id=%s and request_key=%s for update""",
                 (live.actor.account_id,live.library_id,command.request_key)).fetchone()
@@ -153,7 +157,9 @@ class PostgresOwnedPlaylistsService:
                 else:
                     source = sources.load_source(connection,live,command.data["source"]["ref"],command.data["source"]["revision"],now,
                         protocol=command.data["source_protocol"], kind=command.data["source"]["kind"])
-                if source.get("source_kind")=="playlist":
+                if queue.is_queue(source):
+                    selected=queue.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
+                elif source.get("source_kind")=="playlist":
                     selected=missing.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
                 elif source.get("source_kind")=="activity":
                     from music_app.services import playlist_activity_sources as activity
@@ -176,6 +182,16 @@ class PostgresOwnedPlaylistsService:
                 self._insert_items(connection,live,ref,selected,offset=0,source=source)
                 receipt = self._receipt(live,command,ref,1,True,added_count=len(selected))
             else:
+                guard_source=None
+                guard_selected=None
+                if command.action=="add" and "source_guard" in command.data:
+                    guard=command.data["source_guard"]
+                    guard_source=sources.load_source(connection,live,guard["source"]["ref"],guard["source"]["revision"],now,
+                        protocol=guard["source_protocol"],kind="library")
+                    guard_selected=queue.selected(self,connection,live,guard_source,guard["entry_refs"],
+                        constraints=constraints,destination=command.playlist_ref)
+                    expected=[f"inventory-track:{live.library_id}:{row['original_local_track_id']}" for row in guard_selected]
+                    if expected!=command.data["track_refs"]:raise PlaylistError("source_changed",409)
                 playlist = self._playlist(connection,live,command.playlist_ref,write=True)
                 self._require(live,(BROWSE,MANAGE) if command.action == "save" else command_actions(command),
                     constraints,playlist, owner_only=command.action == "delete")
@@ -193,7 +209,8 @@ class PostgresOwnedPlaylistsService:
                 self._require(live,actions,constraints,playlist)
                 lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
                     actor_session_id=live.actor.session_id, clock=self._clock)
-                changed, counts = self._mutate(connection,live,command,playlist,rows,order,constraints=constraints)
+                changed, counts = self._mutate(connection,live,command,playlist,rows,order,constraints=constraints,
+                    source=guard_source,selected=guard_selected)
                 revision = playlist["revision"]
                 if changed:
                     updated = connection.execute("""update app.playlists set revision=revision+1,updated_at=now()
@@ -258,7 +275,11 @@ class PostgresOwnedPlaylistsService:
                 "source_entry_ref": str(row["ref"]) if source else None,
                 "source_revision": str(source["revision"]) if source else None,
                 "source_kind": source.get("source_kind","library") if source else "library",
-                "source_label": row.get("source_label"), "source_lineage":row.get("source_lineage"),
+                "source_label": row.get("source_label"),
+                # Queue receipts authorize this transaction, not durable musical
+                # provenance. Keep existing Activity/Playlist lineage intact.
+                "source_lineage": (None if (row.get("source_lineage") or {}).get("queue")=="queue_occurrences_v1"
+                    else row.get("source_lineage")),
             })
         connection.execute("""insert into app.playlist_items
             (ref,playlist_ref,library_id,position,original_local_track_id,local_track_id,
@@ -281,7 +302,7 @@ class PostgresOwnedPlaylistsService:
             from unnest(%s::uuid[]) with ordinality as o(ref,position)
             where i.playlist_ref=%s and i.ref=o.ref""",(order,playlist_ref))
 
-    def _mutate(self,connection,context,command,playlist,rows,order,*,constraints=None):
+    def _mutate(self,connection,context,command,playlist,rows,order,*,constraints=None,source=None,selected=None):
         data=command.data
         if command.action == "delete":
             connection.execute("update app.playlists set deleted_at=now() where ref=%s", (command.playlist_ref,))
@@ -358,6 +379,12 @@ class PostgresOwnedPlaylistsService:
             raise PlaylistError("duplicate_identity",409)
         if any(not self._resource_allowed(context,BROWSE,ResourceScope("track",str(track_id)),constraints) for track_id in ids):
             raise PlaylistError("item_unavailable",409)
+        if source is not None:
+            mutation_now=lock_current_actor_session(connection,actor_account_id=context.actor.account_id,
+                actor_session_id=context.actor.session_id,clock=self._clock)
+            if source["expires_at"]<=mutation_now:raise PlaylistError("source_expired",410)
+            self._insert_items(connection,context,command.playlist_ref,selected,offset=len(order),source=source)
+            return True,{"added_count":len(ids)}
         current=sources.inventory_rows(connection,context.library_id,ids,lock=True,config=self._config)
         if len(current)!=len(ids) or any(row["availability"]!="local" for row in current.values()):
             raise PlaylistError("item_unavailable",409)

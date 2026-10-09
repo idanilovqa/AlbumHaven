@@ -40,10 +40,12 @@ async def activity_native_target(request:Request):
         if len(supplied)!=64 or not supplied.isascii() or not hmac.compare_digest(supplied,current):
             raise NativeTargetError('stale_context',409)
         payload=await read_bounded_json_object(request)
-        if not isinstance(payload,dict) or set(payload)!={'origin','row_ref','intent'}:
+        if not isinstance(payload,dict) or set(payload) not in ({'origin','row_ref','intent'},{'origin','row_ref','intent','target_kind'}):
+            raise NativeTargetError('invalid_command',422)
+        if 'target_kind' in payload and (not isinstance(payload['target_kind'],str) or payload['target_kind'] not in {'album','artist'} or payload['intent']!='details'):
             raise NativeTargetError('invalid_command',422)
         result=await run_in_threadpool(ActivityNativeTargets(request.app.state.config).resolve,context,
-            origin=payload['origin'],row_ref=payload['row_ref'],intent=payload['intent'],constraints=constraints)
+            origin=payload['origin'],row_ref=payload['row_ref'],intent=payload['intent'],target_kind=payload.get('target_kind'),constraints=constraints)
         return JSONResponse(jsonable_encoder({'status':'ready','data':result,'context_ref':current}),headers=_HEADERS)
     except JSONBodyTooLarge:
         return JSONResponse({'error':'command_too_large'},status_code=413,headers=_HEADERS)

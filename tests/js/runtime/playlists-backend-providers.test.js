@@ -503,3 +503,90 @@ test('Missing Reload revalidates one retained capture and preserves removals, ac
   assert.equal(draft.getSnapshot().entries.length, 0); assert.equal(captures, 1);
   assert.doesNotMatch(JSON.stringify(draft.getSnapshot()), /capture_ref/);
 });
+
+test('Queue source captures ordered provenance and Add binds exact guard into its original body', async () => {
+  const occurrences = [{kind:'inventory',track_ref:'inventory-track:5:7'},
+    {kind:'playlist',track_ref:'inventory-track:5:7',playlist_ref:id(10),revision:'3',item_ref:id(11)}];
+  const f=fixture((path, request) => path === '/playlists/creation-source/queue' ? {status:'ready',data:{...header,
+    source_protocol:'complete_inventory_selection_v1',entries_complete:true,entries:[{entry_ref:id(3),inventory_track_ref:'inventory-track:5:7'}]}} : undefined);
+  const captured=await f.providers.beginPlaylistQueueSource({...options,occurrences});
+  assert.deepEqual(f.calls.at(-1).body,{occurrences});
+  const source_guard={source_protocol:'complete_inventory_selection_v1',source,entry_refs:captured.entry_refs};
+  await f.providers.addTracks({...options,playlist_id:id(9),revision:'3',track_refs:['inventory-track:5:7'],source_guard});
+  assert.deepEqual(f.calls.find(call=>call.path===`/playlists/${id(9)}/items`).body.source_guard,source_guard);
+  assert.throws(()=>f.providers.addTracks({...options,playlist_id:id(9),revision:'3',track_refs:['inventory-track:5:8'],source_guard}),/Invalid retained/);
+  assert.throws(()=>f.providers.addTracks({...options,playlist_id:id(9),revision:'3',track_refs:['inventory-track:5:7'],source_guard:{...source_guard,entry_refs:[id(88)]}}),/Invalid retained/);
+});
+
+test('uncertain guarded Queue Add retries the identical source guard and original key', async () => {
+  const occurrences=[{kind:'inventory',track_ref:'inventory-track:5:7'}], posts=[]; let committed=null;
+  const f=fixture((path,request)=>{
+    if(path==='/playlists/creation-source/queue') return {status:'ready',data:{...header,source_protocol:'complete_inventory_selection_v1',entries_complete:true,entries:[{entry_ref:id(3),inventory_track_ref:'inventory-track:5:7'}]}};
+    if(path.includes('/operations/')) return committed?{status:'committed',receipt:committed}:{status:'unknown'};
+    if(path===`/playlists/${id(9)}/items`) {posts.push(structuredClone(request.body));if(posts.length===1)throw TypeError('Connection lost');
+      committed={ok:true,action:'add',request_key:request.body.request_key,playlist_id:id(9),revision:'4',changed:true,actor_scope};return committed;}
+  });
+  const selected=await f.providers.beginPlaylistQueueSource({...options,occurrences});
+  const source_guard={source_protocol:'complete_inventory_selection_v1',source:{...source},entry_refs:[...selected.entry_refs]};
+  await assert.rejects(f.providers.addTracks({...options,playlist_id:id(9),revision:'3',track_refs:['inventory-track:5:7'],source_guard,request_key:id(70)}),/still unknown/);
+  source_guard.entry_refs[0]=id(999);
+  await f.providers.retryPlaylistOperation({...options,playlist_id:id(9),action:'addTracks'});
+  assert.equal(posts.length,2);assert.deepEqual(posts[1],posts[0]);assert.equal(posts[1].source_guard.entry_refs[0],id(3));
+});
+
+test('Queue source denial proof identifies only the exact capture transport invocation', async () => {
+  const {isQueueSourceCaptureDenial}=await import('../../../music_app/static/js/playlists/backend-providers.mjs');
+  for(const status of [403,404]) {
+    const token=Symbol('capture'),f=fixture(path=>{if(path==='/playlists/creation-source/queue')throw Object.assign(new Error('Capture denied'),{status});});
+    let failure;try{await f.providers.beginPlaylistQueueSource({...options,source_capture_token:token,occurrences:[{kind:'inventory',track_ref:'inventory-track:5:7'}]});}catch(error){failure=error;}
+    assert.equal(isQueueSourceCaptureDenial(failure,token),true);assert.equal(isQueueSourceCaptureDenial(failure,Symbol('other')),false);
+    assert.equal(isQueueSourceCaptureDenial({status},token),false);
+  }
+});
+
+test('pending Create recovery403/404 is never current Queue capture denial and performs no capture request', async () => {
+  const {isQueueSourceCaptureDenial}=await import('../../../music_app/static/js/playlists/backend-providers.mjs');
+  for(const status of [403,404]) {
+    let recoveryDenied=false;
+    const f=fixture((path,request)=>{
+      if(path==='/playlists'&&request.method==='POST')throw TypeError('Lost before commit');
+      if(path.startsWith('/playlists/operations/')) {if(recoveryDenied)throw Object.assign(new Error('Prior operation denied'),{status});return {status:'unknown'};}
+    });
+    await f.providers.readPlaylists(options);
+    await assert.rejects(f.providers.createPlaylistFromSelection({...options,source,source_protocol:'library_selection_v1',mode:'ordinary',title:'Prior',description:'',entry_refs:[],request_key:id(77)}));
+    recoveryDenied=true;const token=Symbol('new capture');let failure;
+    try{await f.providers.beginPlaylistQueueSource({...options,recoverCreate:true,source_capture_token:token,occurrences:[{kind:'inventory',track_ref:'inventory-track:5:7'}]});}catch(error){failure=error;}
+    assert.equal(failure.status,status);assert.equal(isQueueSourceCaptureDenial(failure,token),false);
+    assert.equal(f.calls.some(call=>call.path==='/playlists/creation-source/queue'),false);
+  }
+});
+
+test('post-capture actor projection rejection cannot be mistaken for source denial', async () => {
+  const {isQueueSourceCaptureDenial}=await import('../../../music_app/static/js/playlists/backend-providers.mjs');
+  const f=fixture(path=>path==='/playlists/creation-source/queue'?{status:'ready',data:{...header,actor_scope:{account_id:99,library_id:5},source_protocol:'complete_inventory_selection_v1',entries_complete:true,entries:[{entry_ref:id(3),inventory_track_ref:'inventory-track:5:7'}]}}:undefined);
+  await f.providers.readPlaylistDestinations(options);const token=Symbol('capture');let failure;
+  try{await f.providers.beginPlaylistQueueSource({...options,source_capture_token:token,occurrences:[{kind:'inventory',track_ref:'inventory-track:5:7'}]});}catch(error){failure=error;}
+  assert.equal(failure.status,403);assert.equal(isQueueSourceCaptureDenial(failure,token),false);
+});
+
+test('real pending Create recovery denial does not retire current Queue through the action controller', async () => {
+  const {createPlaylistActionController}=await import('../../../music_app/static/js/playlists/selection-actions.mjs');
+  for(const status of [403,404]) {
+    let recoveryDenied=false;const retired=[];
+    const f=fixture((path,request)=>{
+      if(path==='/playlists'&&request.method==='POST')throw TypeError('Lost before commit');
+      if(path.startsWith('/playlists/operations/')){if(recoveryDenied)throw Object.assign(new Error('Prior operation denied'),{status});return {status:'unknown'};}
+    });
+    await f.providers.readPlaylists(options);
+    await assert.rejects(f.providers.createPlaylistFromSelection({...options,source,source_protocol:'library_selection_v1',mode:'ordinary',title:'Prior',description:'',entry_refs:[],request_key:id(78)}));
+    recoveryDenied=true;
+    const snapshot={scopeKey:options.scopeKey,instance:{},revision:1,rows:[{rowKey:'queue:1',readable:true,selectable:true}]};
+    const sourceAdapter={snapshot:()=>snapshot,subscribe:()=>()=>{},rejectSourceRead:value=>retired.push(value),
+      resolveRows:()=>({rows:[{rowKey:'queue:1',track_ref:'inventory-track:5:7'}],queue_source:{occurrences:[{kind:'inventory',track_ref:'inventory-track:5:7'}]}})};
+    const controller=createPlaylistActionController({sourceAdapter,providers:f.providers,lifetime:{signal:options.signal,isCurrent:()=>true},
+      packet:{scopeKey:options.scopeKey,row_keys:['queue:1'],origin:{tableKey:'home-explicit-queue',target:'selection'}}});
+    assert.equal(await controller.load(),true);assert.equal(await controller.openCreate(),false);
+    assert.deepEqual(retired,[]);assert.equal(f.calls.some(call=>call.path==='/playlists/creation-source/queue'),false);
+    controller.dispose();
+  }
+});

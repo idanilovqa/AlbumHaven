@@ -1,3 +1,4 @@
+const {installPrivateContext} = require('./private-context-harness.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -49,6 +50,7 @@ function setup() {
   });
   // Execute both existing owners. Home must participate in native history
   // sequencing instead of providing a second navigation implementation.
+  installPrivateContext(context);
   for (const filename of ['settings-navigation.js', 'runtime/home-friends-bridge.js']) {
     vm.runInContext(fs.readFileSync(path.join(staticPath, filename), 'utf8'), context, {filename});
   }
@@ -67,7 +69,7 @@ function profileNavigation() {
   h.context.fetchAndRender = (url, push, options) => {
     const result = deferred(), id = Number(h.state.ui.activeViewRequestId || 0) + 1;
     h.state.ui.activeViewRequestId = id;
-    const payload = {surface: {active: 'home'}, recent_local_albums: [], recent_not_local_albums: []};
+    const payload = {context_ref: 'a'.repeat(64), surface: {active: 'home'}, recent_local_albums: [], recent_not_local_albums: []};
     reads.push({url, push, finish() {
       if (!options.shouldApplyResponse(payload)) {result.resolve(false); return;}
       h.state.view = payload;

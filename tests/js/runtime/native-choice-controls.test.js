@@ -239,3 +239,17 @@ test('NativeChoice can name a compact field inside its trigger without changing 
   assert.equal(trigger.getAttribute('aria-label'), 'Added: Last week');
   component.unmount();
 });
+
+test('content-width Choice measures its labels and retains the native anchor seam and viewport clamp', () => {
+  const h = nativeHarness(), trigger = h.trigger();
+  trigger.rect = {left: 20, right: 82, top: 40, bottom: 70, width: 62, height: 30};
+  const owner = h.runtime.openChoice(trigger, {...options, matchTriggerWidth: true, menuWidth: 'content'});
+  const menu = h.document.querySelector('[role="menu"]');
+  assert.equal(menu.getAttribute('data-choice-width'), 'content');
+  assert.equal(menu.style.width, '200px'); assert.equal(menu.style.left, '20px');
+  assert.equal(trigger.classList.contains('trigger-anchor-open'), true);
+  h.viewport.width = 160; h.viewport.dispatchEvent(new h.context.Event('resize'));
+  assert.equal(menu.style.width, '144px'); assert.equal(menu.style.left, '8px');
+  h.key(h.document.activeElement, 'Escape'); assert.equal(owner.isOpen, false);
+  assert.equal(h.document.activeElement, trigger);
+});

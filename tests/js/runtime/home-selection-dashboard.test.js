@@ -147,6 +147,8 @@ function dashboardFixture(initial = snapshot(), presentation = {kind: 'artists'}
     useState(value) {const index = cursor++; slots[index] ||= {value: typeof value === 'function' ? value() : value};
       return [slots[index].value, next => {const value = typeof next === 'function' ? next(slots[index].value) : next;
         if (!Object.is(value, slots[index].value)) {slots[index].value = value; dirty = true;}}];},
+    useMemo(factory, deps) {const index = cursor++, old = slots[index];
+      if (changed(old, deps)) slots[index] = {deps, value: factory()}; return slots[index].value;},
     useEffect: effect, useLayoutEffect: effect,
   };
   const fixture = {exports: {}};
@@ -362,4 +364,121 @@ test('Friend revocation hides both private activity and selected panes before ef
   tree = h.render({beforeEffects: true}); assert.equal(component(tree, 'ActivityPanel'), undefined); assert.equal(detail(tree, 'artist'), undefined);
   h.render(); h.state = {...h.state, friends}; tree = h.render();
   assert.ok(component(tree, 'ActivityPanel')); assert.equal(detail(tree, 'artist'), undefined);
+});
+
+test('track selection resolves Album and Artist consensus independently using canonical identities', async () => {
+  const {resolveActivityTrackSelection} = await helpers;
+  const q = {...query, kind: 'tracks'}, o = {...origin(), kind: 'tracks'};
+  const track = (id, album, artist) => row({id, kind: 'track', availability: id === 'a' ? 'missing' : 'local',
+    album_target: target('album', id, {origin: o, identity_ref: album}),
+    artist_target: target('artist', id, {origin: o, identity_ref: artist})});
+  const rows = [track('a', 'album:1', 'artist:1'), track('b', 'album:2', 'artist:1'), track('c', 'album:1', 'artist:2')];
+  const state = snapshot(rows, {activityNavigation: {query: {account_ref: null, kind: 'tracks', period: 'week'}}});
+  const selected = ids => resolveActivityTrackSelection(state, q, {rowIds: ids, snapshotRef: null});
+  assert.equal(selected(['a', 'b']).album, null);
+  assert.equal(selected(['a', 'b']).artist.identity_ref, 'artist:1');
+  assert.equal(selected(['a', 'c']).album.identity_ref, 'album:1');
+  assert.equal(selected(['a', 'c']).artist, null);
+  assert.deepEqual(selected(['b', 'a']).rows.map(row => row.id), ['a', 'b']);
+  assert.equal(selected(['a', 'a']), null); assert.equal(selected(['stale']), null);
+  assert.equal(resolveActivityTrackSelection(state, q, {rowIds: ['a'], snapshotRef: 'wrong'}), null);
+  rows[0].source_readable = false; assert.equal(selected(['a']), null);
+});
+
+test('Recent track sets restore widgets with independent mixed panes and retire on source replacement', t => {
+  const o = origin({kind: 'tracks'});
+  const tracks = ['a', 'b'].map((id, index) => row({id, kind: 'track', availability: index ? 'local' : 'missing',
+    album_target: target('album', id, {origin: o, identity_ref: `album:${index}`}),
+    artist_target: target('artist', id, {origin: o, identity_ref: 'artist:common'})}));
+  const state = snapshot(tracks, {activityNavigation: {query: {account_ref: null, kind: 'tracks', period: 'week'}}});
+  const h = dashboardFixture(state, {kind: 'tracks'}); t.after(h.dispose);
+  h.runtime.trackIntent = () => {throw new Error('Selection must not play');};
+  let tree = h.render();
+  assert.deepEqual(widgetKeys(tree), ['recent']);
+  component(tree, 'ActivityPanel').props.onTracksSelect(['a', 'b']); tree = h.render();
+  assert.deepEqual(widgetKeys(tree), ['recent', 'artist', 'album']);
+  assert.equal(h.dashboard.getAttribute('data-dashboard-expanded-key'), null);
+  assert.equal(detail(tree, 'album'), undefined);
+  assert.equal(detail(tree, 'artist').props.selection.identity_ref, 'artist:common');
+  assert.equal(tree.props['data-home-pane'], 'recent');
+  assert.doesNotMatch(JSON.stringify(h.saves.at(-1)), /artist:common|allowed_actions|Visible artist/);
+  const stale = component(tree, 'ActivityPanel').props.onTracksSelect;
+  h.state = {...h.state, activity: ready(tracks.map(row => ({...row})))};
+  tree = h.render(); assert.deepEqual(widgetKeys(tree), ['recent']);
+  stale(['a']); tree = h.render(); assert.deepEqual(widgetKeys(tree), ['recent']);
+  component(tree, 'ActivityPanel').props.onTracksSelect(['a']); tree = h.render();
+  assert.deepEqual(widgetKeys(tree), ['recent', 'artist', 'album']);
+});
+
+test('Queue is nested only in own Home and suppresses gallery controls and selected detail panes', t => {
+  const h = dashboardFixture(snapshot([]), {kind: 'tracks'}); t.after(h.dispose);
+  let tree = h.render();
+  const tabs = elements(tree).find(node => node.props.id === 'home-recent-sections');
+  assert.ok(tabs.props.items.some(([key]) => key === 'queue'));
+  tabs.props.onChange('queue'); tree = h.render();
+  assert.ok(component(tree, 'QueuePanel')); assert.equal(component(tree, 'ActivityPanel'), undefined);
+  assert.equal(component(tree, 'Period'), undefined);
+  assert.equal(elements(tree).find(node => node.props.className === 'home-friends__catalog-controls').props.hidden, true);
+  assert.deepEqual(widgetKeys(tree), ['recent']);
+  h.shell = {...h.shell, section: 'friends'}; tree = h.render();
+  assert.equal(elements(tree).find(node => node.props['data-home-widget'] === 'recent').props.hidden, true);
+});
+
+test('review: track Artist selection can open its admitted child Album', t => {
+  const o = origin({kind: 'tracks'}), artist = target('artist', 'row:a', {origin: o, identity_ref: 'artist:a'});
+  const state = snapshot([row({id: 'a', kind: 'track', artist_target: artist, album_target: null})],
+    {activityNavigation: {query: {account_ref: null, kind: 'tracks', period: 'week'}}});
+  const h = dashboardFixture(state, {kind: 'tracks'}); t.after(h.dispose);
+  let tree = h.render(); component(tree, 'ActivityPanel').props.onTracksSelect(['a']); tree = h.render();
+  const child = target('album', 'child:album', {origin: o});
+  detail(tree, 'artist').props.onDetailChange({status: 'ready', data: {kind: 'artist', ref: artist.ref, origin: o,
+    listened_albums: [{id: 'child:row', detail_target: child}]}}, detail(tree, 'artist').props.selection);
+  tree = h.render(); detail(tree, 'artist').props.onSelectAlbum(child); tree = h.render();
+  assert.equal(detail(tree, 'album')?.props.selection.ref, child.ref);
+});
+
+
+test('review: deliberate inspect of the same selected track restores Recent widgets', t => {
+  const o = origin({kind: 'tracks'});
+  const h = dashboardFixture(snapshot([row({id: 'a', kind: 'track', artist_target: target('artist', 'a', {origin: o})})],
+    {activityNavigation: {query: {account_ref: null, kind: 'tracks', period: 'week'}}}), {kind: 'tracks'});
+  t.after(h.dispose);
+  let tree = h.render(); component(tree, 'ActivityPanel').props.onTracksSelect(['a']); tree = h.render();
+  h.env.click(buttonNamed(h.nodes.get('recent'), /full size/i)); tree = h.render();
+  assert.equal(h.dashboard.getAttribute('data-dashboard-expanded-key'), 'recent');
+  component(tree, 'ActivityPanel').props.onTracksSelect(['a'], {inspect: true}); tree = h.render();
+  assert.equal(h.dashboard.getAttribute('data-dashboard-expanded-key'), null);
+});
+
+test('Queue occurrences use the existing three-widget dashboard and preserve deactivated selection', t => {
+  const queueListeners = new Set(), detailListeners = new Set();
+  let queue = {enabled: true, revision: 1, entries: [{id: 'queue:1', sourceReadable: true, title: 'Track'}]},
+    selected = {selectedIds: [], album: null, artist: null, status: 'empty'}, disposed = 0;
+  const api = {getSnapshot: () => queue, subscribe(fn) {queueListeners.add(fn); return () => queueListeners.delete(fn);}};
+  const origin = {source: 'queue', occurrence_refs: ['queue:1']};
+  const adapter = {getSnapshot: () => selected, subscribe(fn) {detailListeners.add(fn); return () => detailListeners.delete(fn);},
+    readAlbumProjection: async () => ({status: 'unavailable'}), dispose() {disposed++;},
+    select(ids) {selected = {selectedIds: ids, status: 'ready', album: target('album', 'queue:album', {origin}), artist: target('artist', 'queue:artist', {origin})};
+      detailListeners.forEach(fn => fn()); return Promise.resolve(selected);},
+    clear() {selected = {selectedIds: [], album: null, artist: null, status: 'empty'}; detailListeners.forEach(fn => fn());}};
+  const h = dashboardFixture(snapshot([]), {kind: 'tracks'}); t.after(h.dispose);
+  h.runtime.explicitQueue = () => api; h.runtime.createQueueResourceSelection = () => adapter;
+  let tree = h.render(); elements(tree).find(node => node.props.id === 'home-recent-sections').props.onChange('queue');
+  tree = h.render(); tree = h.render(); component(tree, 'QueuePanel').props.onSelect(['queue:1']); tree = h.render();
+  assert.deepEqual(widgetKeys(tree), ['recent', 'artist', 'album']);
+  assert.equal(detail(tree, 'album').props.selection.ref, 'queue:album');
+  assert.equal(detail(tree, 'artist').props.selection.ref, 'queue:artist');
+  h.env.click(buttonNamed(h.nodes.get('recent'), /full size/i)); tree = h.render();
+  component(tree, 'QueuePanel').props.onSelect(['queue:1'], {inspect: true}); tree = h.render();
+  assert.equal(h.dashboard.getAttribute('data-dashboard-expanded-key'), null);
+  const retiredAlbum = detail(tree, 'album'), retiredSelect = component(tree, 'QueuePanel').props.onSelect;
+  queue = {...queue, enabled: false, revision: 2}; queueListeners.forEach(fn => fn()); tree = h.render();
+  assert.deepEqual(widgetKeys(tree), ['recent', 'artist', 'album']);
+  h.shell = {...h.shell, section: 'friends'}; tree = h.render();
+  assert.equal(component(tree, 'QueuePanel'), undefined); assert.equal(detail(tree, 'album'), undefined);
+  assert.equal(disposed, 1);
+  const before = selected;
+  retiredAlbum.props.onError('Retired detail must not report'); retiredSelect(['queue:1']);
+  assert.equal(selected, before, 'retired Queue callbacks cannot recreate selection after navigation');
+  assert.equal(elements(h.render()).some(node => node.props.children === 'Retired detail must not report'), false);
 });

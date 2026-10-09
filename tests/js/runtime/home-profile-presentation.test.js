@@ -21,6 +21,7 @@ function renderer() {
       const index = cursor++; slots[index] ||= {value: typeof initial === 'function' ? initial() : initial};
       return [slots[index].value, next => {slots[index].value = typeof next === 'function' ? next(slots[index].value) : next;}];
     },
+    useMemo(factory) {cursor++; return factory();},
     useEffect() {}, useLayoutEffect() {},
   };
   const fixture = {exports: {}};

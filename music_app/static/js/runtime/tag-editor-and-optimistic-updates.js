@@ -1,3 +1,5 @@
+let tagEditorCleanupGeneration = 0;
+
 const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
@@ -254,6 +256,7 @@ function openTagEditor(album, options = {}) {
     showRepairAlert(tracksMode === 'all' ? 'No tracks to edit.' : 'No problematic tracks to edit.', 'error');
     return;
   }
+  tagEditorCleanupGeneration += 1;
   const values = {};
   tracks.forEach((track) => {
     const path = String(track.path || '');
@@ -345,12 +348,33 @@ function closeTagEditorFromBackdrop() {
   if (!Object.keys(changedUpdates).length) closeTagEditor();
 }
 
+function deferClosedTagEditorCleanup(elements, cleanupGeneration) {
+  const cleanup = () => {
+    if (!elements.overlay.hidden || cleanupGeneration !== tagEditorCleanupGeneration) return;
+    if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
+    elements.list?.replaceChildren?.();
+  };
+  const afterPaint = () => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(cleanup, { timeout: 100 });
+      return;
+    }
+    cleanup();
+  };
+  if (typeof requestAnimationFrame !== 'function') {
+    afterPaint();
+    return;
+  }
+  requestAnimationFrame(() => requestAnimationFrame(afterPaint));
+}
+
 function closeTagEditor() {
-  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
   els.overlay.hidden = true;
+  const cleanupGeneration = ++tagEditorCleanupGeneration;
+  deferClosedTagEditorCleanup(els, cleanupGeneration);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const confirmOpen = !document.getElementById('tag-edit-confirm-modal')?.hidden;

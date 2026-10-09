@@ -1830,8 +1830,12 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
-  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
-  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+  const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
+  state.loopCreateAllowed = loopCreateAllowed;
+  if (loopCreateCapabilityChanged && typeof syncLoopCreateCapability === 'function') {
+    syncLoopCreateCapability();
+  }
   return nextStatus;
 }
 
@@ -2981,6 +2985,24 @@ function buildCoverProgressDetail(data, currentAlbum = '') {
 
 // BEGIN js/runtime/status-ui-helpers.js
 
+let lastStatusPresentationSignature = null;
+
+function stableStatusPresentationSignature(value) {
+  const normalize = (current) => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (!current || typeof current !== 'object') return current;
+    return Object.keys(current).sort().reduce((result, key) => {
+      result[key] = normalize(current[key]);
+      return result;
+    }, {});
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function invalidateStatusIndicatorPresentation() {
+  lastStatusPresentationSignature = null;
+}
+
 function buildStatusIndicatorTitleParts(data = {}) {
   const progressText = {
     value: '',
@@ -3249,6 +3271,8 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
+  if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
   syncStatusContextMenu();
   const indicator = document.getElementById('scan-indicator');
@@ -3272,6 +3296,7 @@ function updateStatusIndicator(data) {
   }
 
   renderLibraryLoader(normalizedStatus);
+  lastStatusPresentationSignature = presentationSignature;
 }
 
 // END js/runtime/status-ui-helpers.js
@@ -3326,6 +3351,39 @@ const activeErrorToasts = new Map();
 const floatingNotifications = new Map();
 let floatingNotificationCleanup = null;
 let floatingNotificationFrame = null;
+const NOTIFICATION_COLLISION_SURFACE_SELECTOR = '.app-bar, .global-player, [role="dialog"], [aria-modal="true"]';
+const NOTIFICATION_MODAL_CONTROL_SELECTOR = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
+
+function isNotificationModalSurface(node) {
+  const ariaModal = node?.getAttribute?.('aria-modal');
+  return node?.getAttribute?.('role') === 'dialog'
+    || (ariaModal != null && ariaModal !== 'false');
+}
+
+function notificationSurfaceIsHidden(node) {
+  return Boolean(node?.hidden || node?.closest?.('[hidden], [inert], [aria-hidden="true"]'));
+}
+
+function getNotificationCollisionNodes() {
+  const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
+  const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
+  const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
+  if (activeModal) fixed.push(...Array.from(activeModal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
+    .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
+  return fixed;
+}
+
+function getNotificationObservationTargets() {
+  const targets = new Set();
+  for (const surface of Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || [])) {
+    targets.add(surface);
+    if (isNotificationModalSurface(surface) && surface.parentElement
+        && surface.parentElement !== document.body && surface.parentElement !== document.documentElement) {
+      targets.add(surface.parentElement);
+    }
+  }
+  return targets;
+}
 
 function findClearNotificationPosition(size, preferred, viewport, obstacles, gap = 8) {
   const left = viewport.left + gap, top = viewport.top + gap;
@@ -3378,23 +3436,12 @@ function placeFloatingNotifications() {
   const viewport = { left: visual?.offsetLeft || 0, top: visual?.offsetTop || 0 };
   viewport.right = viewport.left + (visual?.width || window.innerWidth);
   viewport.bottom = viewport.top + (visual?.height || window.innerHeight);
-  const isNotification = node => [...floatingNotifications.keys()].some(root => root === node || root.contains(node));
-  const selector = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
-  const obstacles = [];
-  document.querySelectorAll(selector).forEach(node => {
-    if (isNotification(node) || node.matches(':disabled') || node.closest('[inert], [hidden], [aria-hidden="true"], [aria-disabled="true"]')) return;
-    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
-    // Transparent range inputs still receive pointer input over their waveform canvas.
-    if (style.visibility !== 'visible' || !rect.width || !rect.height) return;
+  const obstacles = getNotificationCollisionNodes().flatMap(node => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) return [];
     const left = Math.max(viewport.left, rect.left), right = Math.min(viewport.right, rect.right);
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
-    if (right <= left || bottom <= top) return;
-    const points = [[(left + right) / 2, (top + bottom) / 2], [left + 1, top + 1], [right - 1, top + 1], [left + 1, bottom - 1], [right - 1, bottom - 1]];
-    const visible = points.some(([x, y]) => {
-      const hit = document.elementsFromPoint(x, y).find(element => !isNotification(element));
-      return hit && (hit === node || node.contains(hit));
-    });
-    if (visible) obstacles.push({ left, right, top, bottom });
+    return right > left && bottom > top ? [{ left, right, top, bottom }] : [];
   });
   for (const [node, entry] of floatingNotifications) {
     if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
@@ -3403,8 +3450,8 @@ function placeFloatingNotifications() {
       node.style.setProperty('--notification-available-width', availableWidth);
     }
     let size = { width: node.offsetWidth, height: node.offsetHeight };
-    const centered = entry.origin === 'top-center';
-    const bottom = entry.origin === 'bottom-right';
+    const centered = entry.lane === 'top-center';
+    const bottom = entry.lane === 'bottom-right';
     const playerHeight = entry.abovePlayer ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-height')) || 0 : 0;
     const preferred = {
       left: centered ? viewport.left + (viewport.right - viewport.left - size.width) / 2 : viewport.right - size.width - 16,
@@ -3444,17 +3491,19 @@ function placeFloatingNotifications() {
 
 function registerFloatingNotification(node, options = {}) {
   // Keep notification delivery available when the host has no geometry APIs.
-  if (!node?.getBoundingClientRect || !document.elementsFromPoint) { options.onPlaced?.(); return; }
-  floatingNotifications.set(node, { origin: 'top-right', ...options });
+  if (!node?.getBoundingClientRect || !document.querySelectorAll) { options.onPlaced?.(); return; }
+  const lane = options.lane || 'top-right';
+  floatingNotifications.set(node, { ...options, lane });
   node.classList.add('floating-notification-positioned');
+  node.setAttribute('data-notification-lane', lane);
   node.setAttribute('data-notification-deferred', '');
   if (!floatingNotificationCleanup) {
-    const insideNotification = target => [...floatingNotifications.keys()].some(root => root === target || root.contains(target));
-    const mutation = new MutationObserver(records => {
-      if (records.some(record => !insideNotification(record.target))) scheduleFloatingNotificationPlacement();
-    });
-    mutation.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'disabled', 'aria-disabled', 'aria-hidden'] });
+    const mutation = new MutationObserver(scheduleFloatingNotificationPlacement);
     const resize = new ResizeObserver(scheduleFloatingNotificationPlacement);
+    for (const target of getNotificationObservationTargets()) {
+      mutation.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'aria-modal'] });
+      resize.observe(target);
+    }
     floatingNotifications.forEach((_entry, root) => resize.observe(root));
     const targets = [[window, 'resize'], [document, 'scroll'], [document, 'load'], [document.fonts, 'loadingdone'], [window.visualViewport, 'resize'], [window.visualViewport, 'scroll'], [document, 'transitionend'], [document, 'animationend']].filter(([target]) => target);
     targets.forEach(([target, event]) => target.addEventListener(event, scheduleFloatingNotificationPlacement, true));
@@ -3473,6 +3522,7 @@ function unregisterFloatingNotification(node) {
   floatingNotificationCleanup?.resize.unobserve(node);
   floatingNotifications.delete(node);
   node?.classList?.remove('floating-notification-positioned');
+  node?.removeAttribute?.('data-notification-lane');
   node?.removeAttribute?.('data-notification-deferred');
   if (!floatingNotifications.size) { floatingNotificationCleanup?.dispose(); floatingNotificationCleanup = null; }
   else scheduleFloatingNotificationPlacement();
@@ -3577,7 +3627,7 @@ function syncLibraryWatcherWarning(data = {}) {
     await dismissLibraryWatcherWarning(button);
   });
   layer.appendChild(libraryWatcherWarning);
-  registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
+  registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
 function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
@@ -3608,7 +3658,7 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');
@@ -3661,7 +3711,7 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   alert.hidden = false;
   state.repairAlertPresentationVersion = Number(state.repairAlertPresentationVersion || 0) + 1;
   const presentationVersion = state.repairAlertPresentationVersion;
-  registerFloatingNotification(alert, { origin: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
+  registerFloatingNotification(alert, { lane: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
     scheduleBrowserAnimationFrame(() => {
       if (state.repairAlertPresentationVersion !== presentationVersion) return;
       alert.classList.add('is-visible');
@@ -3758,6 +3808,68 @@ function resolveSidebarArtistCount(view = {}, sidebarArtists = []) {
   return sidebarArtists.length;
 }
 
+const SIDEBAR_VIRTUALIZATION_THRESHOLD = 200;
+const SIDEBAR_VIRTUAL_WINDOW_SIZE = 160;
+const SIDEBAR_VIRTUAL_OVERSCAN = 40;
+const SIDEBAR_VIRTUAL_ROW_EXTENT = 47;
+
+function getSidebarVirtualSpacerHeight(rowCount) {
+  return Math.max(0, rowCount * SIDEBAR_VIRTUAL_ROW_EXTENT - 6);
+}
+
+function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
+  const total = sidebarArtists.length;
+  if (total <= SIDEBAR_VIRTUALIZATION_THRESHOLD) {
+    return { virtualized: false, start: 0, end: total, before: 0, after: 0 };
+  }
+  const maxStart = Math.max(0, total - SIDEBAR_VIRTUAL_WINDOW_SIZE);
+  const scrollTop = Math.max(0, Number(options.scrollTop) || 0);
+  const visibleStart = Math.floor(scrollTop / SIDEBAR_VIRTUAL_ROW_EXTENT);
+  const visibleCount = Math.max(
+    1,
+    Math.ceil((Number(options.viewportHeight) || SIDEBAR_VIRTUAL_ROW_EXTENT) / SIDEBAR_VIRTUAL_ROW_EXTENT),
+  );
+  const previousWindow = options.previousWindow;
+  const retainedMargin = Math.floor(SIDEBAR_VIRTUAL_OVERSCAN / 2);
+  if (
+    !options.forceSelected
+    && previousWindow?.virtualized
+    && (previousWindow.start === 0 || visibleStart >= previousWindow.start + retainedMargin)
+    && (
+      previousWindow.end === total
+      || visibleStart + visibleCount <= previousWindow.end - retainedMargin
+    )
+  ) {
+    return {
+      virtualized: true,
+      start: previousWindow.start,
+      end: previousWindow.end,
+      before: getSidebarVirtualSpacerHeight(previousWindow.start),
+      after: getSidebarVirtualSpacerHeight(total - previousWindow.end),
+    };
+  }
+  let start = Math.max(
+    0,
+    visibleStart - SIDEBAR_VIRTUAL_OVERSCAN,
+  );
+  const selectedArtist = String(options.selectedArtist || '').trim();
+  if (options.forceSelected && selectedArtist) {
+    const selectedIndex = sidebarArtists.findIndex(item => String(item?.artist || '') === selectedArtist);
+    if (selectedIndex >= 0) {
+      start = selectedIndex - Math.floor(SIDEBAR_VIRTUAL_WINDOW_SIZE / 2);
+    }
+  }
+  start = Math.min(maxStart, Math.max(0, start));
+  const end = Math.min(total, start + SIDEBAR_VIRTUAL_WINDOW_SIZE);
+  return {
+    virtualized: true,
+    start,
+    end,
+    before: getSidebarVirtualSpacerHeight(start),
+    after: getSidebarVirtualSpacerHeight(total - end),
+  };
+}
+
 function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const activeSurface = resolveSidebarSurface(view);
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
@@ -3770,11 +3882,18 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     ? Boolean(options.allArtistsActiveOverride)
     : Boolean(activeSurface === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
   const renderItem = window.NavigationTree.renderItem;
+  const virtualWindow = options.virtualWindow?.virtualized
+    ? options.virtualWindow
+    : { virtualized: false, start: 0, end: sidebarArtists.length, before: 0, after: 0 };
+  const visibleArtists = sidebarArtists.slice(virtualWindow.start, virtualWindow.end);
   let html = showAllArtistsLink ? renderItem({
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
   }) : '';
-  html += sidebarArtists.map(item => renderItem({
+  if (virtualWindow.virtualized && virtualWindow.before > 0) {
+    html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
+  }
+  html += visibleArtists.map((item, offset) => renderItem({
     label: item.artist_display || item.artist, key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
@@ -3782,8 +3901,17 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
       selected_artist: item.artist,
       all_artists_active: Boolean(view.query) ? Boolean(view.all_artists_active) : false,
     }),
-    attributes: { 'data-nav': '1', 'data-sidebar-artist': item.artist },
+    attributes: {
+      'data-nav': '1',
+      'data-sidebar-artist': item.artist,
+      ...(virtualWindow.virtualized
+        ? { 'data-sidebar-virtual-index': virtualWindow.start + offset }
+        : {}),
+    },
   })).join('');
+  if (virtualWindow.virtualized && virtualWindow.after > 0) {
+    html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="after" aria-hidden="true" style="height:${virtualWindow.after}px"></div>`;
+  }
   return html;
 }
 
@@ -3797,7 +3925,10 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
   ].join('\u001f')).join('\u001e');
-  return `${showAllArtistsLink}\u001d${artistSignature}`;
+  const virtualWindow = options.virtualWindow?.virtualized
+    ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
+    : 'all';
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -5135,6 +5266,73 @@ function getPreferredUserTimeZone() {
   return getDetectedBrowserTimeZone();
 }
 
+function resolveSidebarScrollContainer(sidebarList) {
+  if (
+    sidebarList instanceof HTMLElement
+    && sidebarList.clientHeight > 0
+    && sidebarList.scrollHeight > sidebarList.clientHeight + 1
+  ) {
+    return sidebarList;
+  }
+  const sidebar = sidebarList?.closest?.('.sidebar');
+  return sidebar instanceof HTMLElement ? sidebar : null;
+}
+
+function ensureSidebarVirtualScrollListeners(sidebarList) {
+  if (!(sidebarList instanceof HTMLElement)) return;
+  const sidebar = sidebarList.closest?.('.sidebar');
+  for (const scrollContainer of [sidebarList, sidebar]) {
+    if (
+      !(scrollContainer instanceof HTMLElement)
+      || typeof scrollContainer.addEventListener !== 'function'
+      || scrollContainer.albumHavenSidebarVirtualScrollBound
+    ) continue;
+    scrollContainer.addEventListener('scroll', () => {
+      sidebarList.albumHavenSidebarVirtualScrollTop = scrollContainer.scrollTop;
+      const previousWindow = sidebarList.albumHavenSidebarVirtualWindow;
+      const nextWindow = resolveSidebarVirtualWindow(
+        sidebarList.albumHavenSidebarArtistsSource || [],
+        {
+          scrollTop: scrollContainer.scrollTop,
+          viewportHeight: scrollContainer.clientHeight,
+          previousWindow,
+        },
+      );
+      if (
+        previousWindow
+        && nextWindow.start === previousWindow.start
+        && nextWindow.end === previousWindow.end
+      ) return;
+      if (sidebarList.albumHavenSidebarVirtualRenderScheduled) return;
+      sidebarList.albumHavenSidebarVirtualRenderScheduled = true;
+      scheduleBrowserAnimationFrame(() => {
+        sidebarList.albumHavenSidebarVirtualRenderScheduled = false;
+        renderSidebar();
+      });
+    }, { passive: true });
+    scrollContainer.albumHavenSidebarVirtualScrollBound = true;
+  }
+}
+
+function captureSidebarFocus(sidebarList) {
+  const activeLink = document.activeElement?.closest?.('.artist-link');
+  if (!activeLink || !sidebarList?.contains?.(activeLink)) return null;
+  if (activeLink.getAttribute?.('data-sidebar-all-artists') === '1') {
+    return { allArtists: true, artist: '' };
+  }
+  const artist = String(activeLink.getAttribute?.('data-sidebar-artist') || '');
+  return artist ? { allArtists: false, artist } : null;
+}
+
+function restoreSidebarFocus(sidebarList, focusIdentity) {
+  if (!focusIdentity) return;
+  const link = focusIdentity.allArtists
+    ? sidebarList.querySelector?.('[data-sidebar-all-artists="1"]')
+    : Array.from(sidebarList.querySelectorAll?.('[data-sidebar-artist]') || [])
+      .find(item => item.getAttribute?.('data-sidebar-artist') === focusIdentity.artist);
+  link?.focus?.({ preventScroll: true });
+}
+
 
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
@@ -5174,29 +5372,43 @@ function renderSidebar() {
       || (!String(effectiveView.query || '').trim() && !String(effectiveView.selected_artist || '').trim())
     )
   );
+  const scrollContainer = resolveSidebarScrollContainer(el);
+  const virtualWindow = resolveSidebarVirtualWindow(sidebarArtists, {
+    scrollTop: el.albumHavenSidebarVirtualScrollTop ?? scrollContainer?.scrollTop ?? 0,
+    viewportHeight: scrollContainer?.clientHeight ?? 0,
+    selectedArtist: effectiveView.selected_artist,
+    previousWindow: el.albumHavenSidebarVirtualWindow,
+    forceSelected: Boolean(state.ui.pendingSidebarRevealArtist)
+      || !el.albumHavenSidebarVirtualWindow,
+  });
   const sidebarRenderOptions = {
     view: effectiveView,
     usingSidebarOverride: Boolean(sidebarOverride && sidebarOverride.length),
     showAllArtistsOverride: sidebarOverride ? sidebarShowAllArtistsOverride : null,
     selectedArtistOverride: effectiveView.selected_artist,
     allArtistsActiveOverride: effectiveAllArtistsActive,
+    virtualWindow,
   };
+  el.dataset.sidebarVirtualized = virtualWindow.virtualized ? 'true' : 'false';
   const structureSignature = buildSidebarStructureSignature(sidebarArtists, sidebarRenderOptions);
   if (el.dataset.sidebarStructureSignature === structureSignature) {
     applySidebarSelectionMarkup(el, sidebarRenderOptions);
   } else {
+    const focusIdentity = captureSidebarFocus(el);
     el.innerHTML = buildSidebarHtml(v, sidebarArtists, sidebarRenderOptions);
     el.dataset.sidebarStructureSignature = structureSignature;
+    restoreSidebarFocus(el, focusIdentity);
   }
   el.albumHavenSidebarArtistsSource = sidebarArtists;
+  el.albumHavenSidebarVirtualWindow = virtualWindow;
   el.albumHavenSidebarShowAllArtists = sidebarRenderOptions.showAllArtistsOverride !== null
     ? Boolean(sidebarRenderOptions.showAllArtistsOverride)
     : v.show_all_artists_sidebar_link !== false;
   el.albumHavenActiveSidebarLink = el.querySelector('.artist-link.active');
+  ensureSidebarVirtualScrollListeners(el);
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
-      const scrollContainer = el.closest('.sidebar');
       if (!(scrollContainer instanceof HTMLElement)) return;
       const activeRect = activeLink.getBoundingClientRect();
       // Folded trees have zero-size rows; keep the reveal for their visible layout.
@@ -11917,6 +12129,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
 }
 
@@ -12315,16 +12528,19 @@ function cancelTrackModalAlbumDetailsPrewarms() {
 
 function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit = 2) {
   if (!(containerEl instanceof HTMLElement) || !(scrollEl instanceof HTMLElement)) return;
+  const boundedLimit = Math.max(0, Number(limit) || 0);
+  if (!boundedLimit) return;
   const scrollRect = scrollEl.getBoundingClientRect();
   const visibleButtons = [];
-  containerEl.querySelectorAll('.album-title-button[data-open-tracklist="1"][data-album-key]').forEach((button) => {
-    if (!(button instanceof HTMLElement)) return;
+  for (const button of containerEl.querySelectorAll('.album-title-button[data-open-tracklist="1"][data-album-key]')) {
+    if (!(button instanceof HTMLElement)) continue;
     const rect = button.getBoundingClientRect();
-    if (!(rect.width > 0 && rect.height > 0)) return;
-    if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) return;
+    if (!(rect.width > 0 && rect.height > 0)) continue;
+    if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) continue;
     visibleButtons.push(button);
-  });
-  if (!visibleButtons.length || visibleButtons.length > limit) return;
+    if (visibleButtons.length >= boundedLimit) break;
+  }
+  if (!visibleButtons.length) return;
   visibleButtons.forEach((button) => {
     const albumKey = String(button.getAttribute('data-album-key') || '').trim();
     if (!albumKey) return;
@@ -12352,7 +12568,6 @@ function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   trackModalCleanupGeneration += 1;
-  preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
   }
@@ -12388,6 +12603,7 @@ function openTrackModal(album, options = {}) {
     return;
   }
   invalidatePendingTrackModalLoad();
+  preloadTrackModalArtwork(albumWithPlaybackContext);
   // Edition hydration must not rebuild the tabs around a different base name.
   const preserved = options.releaseSet;
   const preservedAlbum = preserved?.releases?.[preserved.selectedIndex];
@@ -16312,6 +16528,9 @@ async function pollStatus() {
     if (ownsStatus()) {
       nextPollDelay = 3000;
       state.status = { ...state.status, status_connection_lost: true };
+      if (typeof invalidateStatusIndicatorPresentation === 'function') {
+        invalidateStatusIndicatorPresentation();
+      }
       if (typeof renderLibraryLoader === 'function') {
         renderLibraryLoader(state.status);
       }
@@ -29058,6 +29277,8 @@ async function saveCoverFromLookup() {
 
 // BEGIN js/runtime/tag-editor-and-optimistic-updates.js
 
+let tagEditorCleanupGeneration = 0;
+
 const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
@@ -29314,6 +29535,7 @@ function openTagEditor(album, options = {}) {
     showRepairAlert(tracksMode === 'all' ? 'No tracks to edit.' : 'No problematic tracks to edit.', 'error');
     return;
   }
+  tagEditorCleanupGeneration += 1;
   const values = {};
   tracks.forEach((track) => {
     const path = String(track.path || '');
@@ -29405,12 +29627,33 @@ function closeTagEditorFromBackdrop() {
   if (!Object.keys(changedUpdates).length) closeTagEditor();
 }
 
+function deferClosedTagEditorCleanup(elements, cleanupGeneration) {
+  const cleanup = () => {
+    if (!elements.overlay.hidden || cleanupGeneration !== tagEditorCleanupGeneration) return;
+    if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
+    elements.list?.replaceChildren?.();
+  };
+  const afterPaint = () => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(cleanup, { timeout: 100 });
+      return;
+    }
+    cleanup();
+  };
+  if (typeof requestAnimationFrame !== 'function') {
+    afterPaint();
+    return;
+  }
+  requestAnimationFrame(() => requestAnimationFrame(afterPaint));
+}
+
 function closeTagEditor() {
-  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
   els.overlay.hidden = true;
+  const cleanupGeneration = ++tagEditorCleanupGeneration;
+  deferClosedTagEditorCleanup(els, cleanupGeneration);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const confirmOpen = !document.getElementById('tag-edit-confirm-modal')?.hidden;
@@ -34142,6 +34385,8 @@ class VirtualArtistGrid {
     this._measureRaf = null;
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
+    this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
     this._absoluteScrollRestore = null;
@@ -34262,6 +34507,7 @@ class VirtualArtistGrid {
       cancelBrowserAnimationFrame(this._measureRaf);
       this._measureRaf = null;
     }
+    this.cancelVisibleAlbumDetailPrewarm();
     if (this._measureTimeout) {
       clearBrowserTimeout(this._measureTimeout);
       this._measureTimeout = 0;
@@ -34271,6 +34517,42 @@ class VirtualArtistGrid {
     if (typeof galleryCoverPreviewCache !== 'undefined' && typeof galleryCoverPreviewCache.destroy === 'function') {
       galleryCoverPreviewCache.destroy();
     }
+  }
+
+  cancelVisibleAlbumDetailPrewarm() {
+    this._albumDetailPrewarmGeneration += 1;
+    if (!this._albumDetailPrewarmRaf) return;
+    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+    this._albumDetailPrewarmRaf = 0;
+  }
+
+  scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
+    this.cancelVisibleAlbumDetailPrewarm();
+    if (
+      !this.isScrollSettled
+      || typeof queueVisibleTrackModalAlbumDetailsPrewarm !== 'function'
+    ) {
+      return;
+    }
+    const generation = this._albumDetailPrewarmGeneration;
+    const renderGeneration = this._renderGeneration;
+    const normalizedScrollTop = Number(scrollTop || 0);
+    this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
+      if (generation !== this._albumDetailPrewarmGeneration) return;
+      this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
+        if (generation !== this._albumDetailPrewarmGeneration) return;
+        this._albumDetailPrewarmRaf = 0;
+        if (
+          renderGeneration !== this._renderGeneration
+          || !this.isScrollSettled
+          || this.lastKey !== rangeKey
+          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+        ) {
+          return;
+        }
+        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+      });
+    });
   }
 
   onPointerDown(event) {
@@ -35181,6 +35463,7 @@ class VirtualArtistGrid {
     };
     this.diagnostics.latestRender = completedRender;
     this.recordDiagnosticEvent('render-completed', completedRender);
+    this.scheduleVisibleAlbumDetailPrewarm(rangeKey, viewportTop);
   }
 
   primeVisibleCoverImages() {

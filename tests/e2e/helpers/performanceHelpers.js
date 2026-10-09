@@ -183,6 +183,54 @@ export async function measureActionTime(action, readyCheck = null) {
   return Date.now() - startedAt;
 }
 
+async function discardInteractionMeasurement(page) {
+  await page.evaluate(() => {
+    window.__albumHavenInteractionMeasure?.observer?.disconnect?.();
+    delete window.__albumHavenInteractionMeasure;
+  });
+}
+
+export async function measureInteractionToPaint(page, action, readyCheck = null) {
+  await page.evaluate(() => {
+    const samples = [];
+    const observer = typeof PerformanceObserver === 'function'
+      && PerformanceObserver.supportedEntryTypes?.includes('longtask')
+      ? new PerformanceObserver((list) => samples.push(...list.getEntries().map((entry) => entry.duration)))
+      : null;
+    observer?.observe({ type: 'longtask', buffered: false });
+    window.__albumHavenInteractionMeasure = {
+      observer,
+      samples,
+      startedAt: performance.now(),
+    };
+  });
+  try {
+    await action();
+    if (readyCheck) await readyCheck();
+  } catch (error) {
+    await discardInteractionMeasurement(page);
+    throw error;
+  }
+  return page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const measurement = window.__albumHavenInteractionMeasure;
+      const durationMs = performance.now() - Number(measurement?.startedAt || performance.now());
+      const buffered = measurement?.observer?.takeRecords?.() || [];
+      const longTasks = [
+        ...(measurement?.samples || []),
+        ...buffered.map((entry) => entry.duration),
+      ];
+      measurement?.observer?.disconnect?.();
+      delete window.__albumHavenInteractionMeasure;
+      resolve({
+        durationMs,
+        longTaskCount: longTasks.length,
+        maxLongTaskMs: Math.max(0, ...longTasks),
+      });
+    }));
+  }));
+}
+
 export async function samplePeakMemory(page, options = {}) {
   const idleSamples = await sampleIdleMemory(page, options);
   const peakBytes = Math.max(...idleSamples.map((sample) => Number(sample.bytes || 0)), 0);

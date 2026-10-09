@@ -8773,6 +8773,53 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
     assert "coalesce(scrobble_counts.scrobble_count, 0) as track_scrobble_count" in sql
     assert "track_preferences.rating as track_preference_rating" in sql
     assert "local_album_cover_candidate_snapshots" in sql
+    assert "local_membership_candidate_file_ids as materialized" in sql
+    assert "local_membership_parent_index as materialized" in sql
+    assert "to_regclass('library.local_track_files_active_physical_parent_idx')" in sql
+    assert "join local_membership_candidate_file_ids candidate_scope" in sql
+    assert "jsonb_build_object('local_album_membership_problem'" in sql
+
+
+def test_album_detail_keeps_disc_folders_and_rejects_an_outside_duplicate():
+    from music_app.services.library_browse_postgres import _selected_artist_album_payloads
+
+    def row(track_id, title, track_number, path):
+        return {
+            "artist_id": 3,
+            "artist_name": "Fixture Artist",
+            "album_id": 301,
+            "album_key": "fixture-artist::one",
+            "album_title": "One",
+            "album_release_year": 2001,
+            "album_metadata": {"album_artist": "Fixture Artist", "artists": ["Fixture Artist"]},
+            "track_id": track_id,
+            "track_key": f"one-{track_id}",
+            "track_title": title,
+            "track_artist_name": "Fixture Artist",
+            "disc_number": 1 if "CD1" in path else 2,
+            "track_number": track_number,
+            "duration_seconds": 180 + track_number,
+            "file_private_path": path,
+            "file_entry": {
+                "album": "One",
+                "album_artist": "Fixture Artist",
+                "artist": "Fixture Artist",
+                "title": title,
+                "duration_seconds": 180 + track_number,
+            },
+        }
+
+    rows = [
+        row(1, "First", 1, r"X:\Music\Fixture Artist\One\CD1\01 First.flac"),
+        row(2, "Second", 2, r"X:\Music\Fixture Artist\One\CD1\02 Second.flac"),
+        row(3, "Third", 1, r"X:\Music\Fixture Artist\One\CD2\01 Third.flac"),
+        row(4, "First", 1, r"X:\Music\Loose copies\01 First.flac"),
+    ]
+
+    payload = _selected_artist_album_payloads(rows, "Fixture Artist")[0]
+
+    assert [track["title"] for track in payload["tracks"]] == ["First", "Second", "Third"]
+    assert all("Loose copies" not in track["path"] for track in payload["tracks"])
 
 
 def test_postgres_album_detail_deduplicates_header_artists_without_collapsing_distinct_credits():
@@ -9401,6 +9448,18 @@ def test_album_detail_sql_scopes_ignored_repairs_to_requested_album_paths():
     assert "library.ignored_repairs.metadata ->> 'album_key'" in structural_rollup
     assert "library.local_track_files.library_id" not in structural_rollup
     assert "matched_album_ids.album_id = library.local_albums.id" in structural_rollup
+
+
+def test_album_detail_sql_scopes_history_and_preferences_to_requested_album():
+    from music_app.services.library_browse_postgres import _album_detail_sql
+
+    sql = " ".join(_album_detail_sql().split()).lower()
+    legacy = sql.split("legacy_scrobble_counts as (", 1)[1].split("), measured_scrobble_counts", 1)[0]
+    measured = sql.split("measured_scrobble_counts as (", 1)[1].split("), scrobble_counts", 1)[0]
+    preferences = sql.split("track_preferences as (", 1)[1].split("), ignored_repair_rollup", 1)[0]
+
+    for scoped_cte in (legacy, measured, preferences):
+        assert "library.local_albums.album_key = %(album_key)s" in scoped_cte
 
 
 def test_album_detail_sql_excludes_tracks_without_an_active_file():

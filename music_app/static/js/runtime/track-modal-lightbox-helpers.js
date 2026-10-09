@@ -145,6 +145,7 @@ function openTrackModalShell(album, releaseSet = getAlbumReleaseSet(album)) {
   if (typeof renderTrackModalTabs === 'function') renderTrackModalTabs(els);
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(album);
 }
 
@@ -543,16 +544,19 @@ function cancelTrackModalAlbumDetailsPrewarms() {
 
 function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit = 2) {
   if (!(containerEl instanceof HTMLElement) || !(scrollEl instanceof HTMLElement)) return;
+  const boundedLimit = Math.max(0, Number(limit) || 0);
+  if (!boundedLimit) return;
   const scrollRect = scrollEl.getBoundingClientRect();
   const visibleButtons = [];
-  containerEl.querySelectorAll('.album-title-button[data-open-tracklist="1"][data-album-key]').forEach((button) => {
-    if (!(button instanceof HTMLElement)) return;
+  for (const button of containerEl.querySelectorAll('.album-title-button[data-open-tracklist="1"][data-album-key]')) {
+    if (!(button instanceof HTMLElement)) continue;
     const rect = button.getBoundingClientRect();
-    if (!(rect.width > 0 && rect.height > 0)) return;
-    if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) return;
+    if (!(rect.width > 0 && rect.height > 0)) continue;
+    if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) continue;
     visibleButtons.push(button);
-  });
-  if (!visibleButtons.length || visibleButtons.length > limit) return;
+    if (visibleButtons.length >= boundedLimit) break;
+  }
+  if (!visibleButtons.length) return;
   visibleButtons.forEach((button) => {
     const albumKey = String(button.getAttribute('data-album-key') || '').trim();
     if (!albumKey) return;
@@ -580,7 +584,6 @@ function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   trackModalCleanupGeneration += 1;
-  preloadTrackModalArtwork(album);
   if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
     els.overlay.classList.add('is-above-settings');
   }
@@ -616,6 +619,7 @@ function openTrackModal(album, options = {}) {
     return;
   }
   invalidatePendingTrackModalLoad();
+  preloadTrackModalArtwork(albumWithPlaybackContext);
   // Edition hydration must not rebuild the tabs around a different base name.
   const preserved = options.releaseSet;
   const preservedAlbum = preserved?.releases?.[preserved.selectedIndex];

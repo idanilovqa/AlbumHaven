@@ -162,67 +162,88 @@ test('floating notifications defer when the viewport has no unobstructed rectang
   assert.equal(context.findClearNotificationPosition({ width: 301, height: 100 }, { left: 0, top: 0 }, viewport, []), null);
 });
 
-test('notification owner ignores occluded background controls, retries deferred placement, and disposes observers', () => {
+test('notification lanes inspect and observe only the header, player, and active modal', () => {
   const { context } = createContext();
-  const callbacks = [], styles = new Map(), attributes = new Set(), listeners = new Set();
-  let mutations, resizes, disconnected = 0, shown = 0, occupied = true, intrinsicWidth = 240;
+  const callbacks = [], styles = new Map(), attributes = new Map(), listeners = new Set(), observed = [];
+  let mutations, resizes, disconnected = 0, shown = 0;
   const listen = (_name, callback) => listeners.add(callback);
   const unlisten = (_name, callback) => listeners.delete(callback);
-  const rect = { left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200 };
-  const control = { matches: () => false, closest: () => null, contains: node => node === control, getBoundingClientRect: () => rect };
-  const background = { ...control, contains: node => node === background };
+  const surface = (rect, options = {}) => ({
+    ...options,
+    hidden: options.hidden ?? false,
+    getAttribute: name => name === 'aria-modal' ? options.ariaModal ?? null
+      : name === 'role' ? options.role ?? null : null,
+    getBoundingClientRect: () => rect,
+    closest: options.closest || (() => null),
+  });
+  const header = surface({ left: 0, top: 0, right: 300, bottom: 20, width: 300, height: 20 });
+  const player = surface({ left: 0, top: 180, right: 300, bottom: 200, width: 300, height: 20 });
+  const body = {};
+  const directBodyDialog = surface({ left: 20, top: 20, right: 280, bottom: 180, width: 260, height: 160 },
+    { ariaModal: 'true', parentElement: body, querySelectorAll: () => [] });
+  const modalRoot = { hidden: false };
+  const modalAction = {
+    hidden: false,
+    matches: () => false,
+    closest: selector => selector.includes('[hidden]') && modalRoot.hidden ? modalRoot : null,
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200 }),
+  };
+  const modal = surface({ left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200 },
+    { ariaModal: 'true', parentElement: modalRoot,
+      closest: selector => selector.includes('[hidden]') && modalRoot.hidden ? modalRoot : null,
+      querySelectorAll: selector => {
+        assert.match(selector, /button/u);
+        assert.doesNotMatch(selector, /\.artist-link/u);
+        return [modalAction];
+      } });
   const node = {
     isConnected: true, hidden: false, offsetHeight: 100,
-    get offsetWidth() { return Math.min(intrinsicWidth, parseFloat(styles.get('--notification-available-width')) || intrinsicWidth); },
-    getBoundingClientRect: () => ({ ...rect, width: 240, height: 100 }), contains: candidate => candidate === node,
-    classList: { add() {}, remove() {} }, setAttribute: key => attributes.add(key), removeAttribute: key => attributes.delete(key),
+    offsetWidth: 240,
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 240, bottom: 100, width: 240, height: 100 }),
+    contains: candidate => candidate === node,
+    classList: { add() {}, remove() {} },
+    setAttribute: (key, value = '') => attributes.set(key, value), removeAttribute: key => attributes.delete(key),
     style: { getPropertyValue: key => styles.get(key), setProperty: (key, value) => styles.set(key, value) },
   };
   Object.assign(context.window, { innerWidth: 300, innerHeight: 200, addEventListener: listen, removeEventListener: unlisten });
   Object.assign(context.document, {
-    body: {}, documentElement: {}, addEventListener: listen, removeEventListener: unlisten,
+    body, documentElement: {}, addEventListener: listen, removeEventListener: unlisten,
     querySelectorAll: selector => {
-      assert.match(selector, /\[data-loop-range-surface\]/u, 'the pointer-driven waveform is an actionable obstacle');
-      assert.match(selector, /\[tabindex\]:not\(\[tabindex="-1"\]\)/u);
-      return occupied ? [control, background] : [background];
+      assert.match(selector, /\.app-bar/u);
+      assert.match(selector, /\.global-player/u);
+      assert.match(selector, /\[aria-modal="true"\]/u);
+      assert.doesNotMatch(selector, /button|a\[href\]|input|tabindex/u);
+      return [header, player, directBodyDialog, modal];
     },
-    elementsFromPoint: () => occupied ? [control] : [context.document.body],
+    elementsFromPoint: () => { throw new Error('notification placement must not hit-test the page'); },
   });
   Object.assign(context, {
     requestAnimationFrame: callback => { callbacks.push(callback); return callbacks.length; }, cancelAnimationFrame() {},
-    getComputedStyle: () => ({ visibility: 'visible', opacity: '1', getPropertyValue: () => '0px' }),
-    MutationObserver: class { constructor(callback) { mutations = callback; } observe() {} disconnect() { disconnected++; } },
-    ResizeObserver: class { constructor(callback) { resizes = callback; } observe() {} unobserve() {} disconnect() { disconnected++; } },
+    getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
+    MutationObserver: class { constructor(callback) { mutations = callback; } observe(target) { observed.push(target); } disconnect() { disconnected++; } },
+    ResizeObserver: class { constructor(callback) { resizes = callback; } observe(target) { observed.push(target); } unobserve() {} disconnect() { disconnected++; } },
   });
-  context.registerFloatingNotification(node, { origin: 'bottom-right', onPlaced: () => shown++ });
+  context.registerFloatingNotification(node, { lane: 'bottom-right', onPlaced: () => shown++ });
   callbacks.shift()();
   assert.equal(shown, 0, 'a deferred notification must not start its lifetime');
   assert.equal(attributes.has('data-notification-deferred'), true);
-  occupied = false;
-  mutations([{ target: context.document.body }]);
+  assert.equal(attributes.get('data-notification-lane'), 'bottom-right');
+  assert.equal(observed.includes(context.document.body), false, 'the page body must not be observed');
+  assert.ok(observed.includes(header));
+  assert.ok(observed.includes(player));
+  assert.ok(observed.includes(modal));
+  assert.ok(observed.includes(modalRoot));
+  modalRoot.hidden = true;
+  mutations([{ target: modalRoot }]);
   callbacks.shift()();
-  assert.equal(shown, 1, 'occluded background controls must not suppress the notification');
+  assert.equal(shown, 1, 'closing the active modal exposes its fixed lane');
   assert.equal(attributes.has('data-notification-deferred'), false);
   resizes();
   callbacks.shift()();
   assert.equal(shown, 1, 'layout changes must not restart its lifetime');
-  occupied = true;
-  resizes();
-  callbacks.shift()();
-  assert.equal(attributes.has('data-notification-deferred'), true,
-    'a persistent warning must defer when a new editor leaves no space, rather than intercept its controls');
-  assert.equal(node.isConnected, true, 'deferring must retain the warning for later presentation');
-  occupied = false;
-  intrinsicWidth = 358;
-  context.window.visualViewport = { offsetLeft: 50, offsetTop: 0, width: 195, height: 200 };
-  resizes();
-  callbacks.shift()();
-  assert.equal(styles.get('--notification-available-width'), '179px');
-  assert.equal(node.offsetWidth, 179, 'the host must apply the visual width before reading notification geometry');
-  assert.equal(attributes.has('data-notification-deferred'), false);
-  assert.equal(shown, 1, 'the warning must reappear without restarting notification delivery');
   assert.match(baseLayoutSource, /#toast-layer > \.toast\.floating-notification-positioned\s*\{[^}]*min-width:\s*0/u);
   context.unregisterFloatingNotification(node);
+  assert.equal(attributes.has('data-notification-lane'), false);
   assert.equal(disconnected, 2);
   assert.equal(listeners.size, 0);
 });
@@ -842,7 +863,7 @@ for (const opacity of ['1', '0']) for (const reflowHeight of [230, 650]) {
       MutationObserver: class { observe() {} disconnect() {} },
       ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
     });
-    context.registerFloatingNotification(node, { origin: 'bottom-right', onPlaced: () => { shown += 1; } });
+    context.registerFloatingNotification(node, { lane: 'bottom-right', onPlaced: () => { shown += 1; } });
     callbacks.shift()();
     assert.deepEqual(widths, ['984px', '224px'], 'natural width plus one reflow attempt only');
     assert.equal(attributes.has('data-notification-deferred'), reflowHeight === 650);

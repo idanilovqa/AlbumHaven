@@ -403,6 +403,7 @@ function createRuntimeContext() {
     },
     queuedTrackModalAlbumDetailPrewarms: [],
     queuedVisibleTrackModalAlbumDetailPrewarms: 0,
+    visibleTrackModalAlbumDetailPrewarmCalls: [],
     galleryCoverSchedulerEnqueues: [],
     galleryCoverSchedulerGeneration: 0,
     galleryCoverFamilyPrefetchEnsures: 0,
@@ -458,8 +459,9 @@ function createRuntimeContext() {
     queueTrackModalAlbumDetailsPrewarm(albumKey) {
       context.queuedTrackModalAlbumDetailPrewarms.push(albumKey);
     },
-    queueVisibleTrackModalAlbumDetailsPrewarm() {
+    queueVisibleTrackModalAlbumDetailsPrewarm(container, scroll, limit) {
       context.queuedVisibleTrackModalAlbumDetailPrewarms += 1;
+      context.visibleTrackModalAlbumDetailPrewarmCalls.push({ container, scroll, limit });
     },
   };
 
@@ -1718,6 +1720,7 @@ test('scroll render timer completes a pending frame when animation frames are st
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const scheduledFrames = new Map();
   let nextFrameId = 1000;
+  virtualGrid.scheduleVisibleAlbumDetailPrewarm = () => {};
   context.scheduleBrowserAnimationFrame = (callback) => {
     nextFrameId += 1;
     scheduledFrames.set(nextFrameId, callback);
@@ -2255,6 +2258,14 @@ test('scroll render timer completes a pending frame when animation frames are st
   const { context } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const events = [];
+  const scheduledFrames = [];
+  let nextFrameId = 0;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.push({ callback, id: nextFrameId });
+    return nextFrameId;
+  };
+  virtualGrid.scheduleMeasureRows = () => {};
   const groups = [
     {
       artist: 'Root Artist',
@@ -2272,7 +2283,19 @@ test('scroll render timer completes a pending frame when animation frames are st
 
   virtualGrid.setGroups(groups, [], null, {});
   assert.deepEqual(context.queuedTrackModalAlbumDetailPrewarms, []);
-  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 0);
+  assert.deepEqual(context.visibleTrackModalAlbumDetailPrewarmCalls, []);
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  assert.deepEqual(
+    context.visibleTrackModalAlbumDetailPrewarmCalls,
+    [],
+    'visible-detail scanning must wait until the second animation frame',
+  );
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  assert.deepEqual(context.visibleTrackModalAlbumDetailPrewarmCalls, [{
+    container: virtualGrid.containerEl,
+    scroll: virtualGrid.scrollEl,
+    limit: 2,
+  }], 'a settled render should schedule the bounded visible-detail prewarm after paint');
 
   context.queueTrackModalAlbumDetailsPrewarm = (albumKey) => {
     events.push(`prewarm:${albumKey}`);
@@ -2280,8 +2303,10 @@ test('scroll render timer completes a pending frame when animation frames are st
   };
   context.state.view.selected_artist = 'Root Artist';
   virtualGrid.setGroups(groups, [], null, {});
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
   assert.deepEqual(context.queuedTrackModalAlbumDetailPrewarms, []);
-  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 0);
+  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 2);
   assert.deepEqual(events, [], 'rendering must not speculate album-detail requests without user intent');
 
   assert.equal(
@@ -3406,6 +3431,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
     patchCount += 1;
   };
   virtualGrid.scheduleMeasureRows = () => {};
+  virtualGrid.scheduleVisibleAlbumDetailPrewarm = () => {};
   virtualGrid.sections = [];
   virtualGrid.totalHeight = 0;
 

@@ -1,3 +1,21 @@
+let lastStatusPresentationSignature = null;
+
+function stableStatusPresentationSignature(value) {
+  const normalize = (current) => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (!current || typeof current !== 'object') return current;
+    return Object.keys(current).sort().reduce((result, key) => {
+      result[key] = normalize(current[key]);
+      return result;
+    }, {});
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function invalidateStatusIndicatorPresentation() {
+  lastStatusPresentationSignature = null;
+}
+
 function buildStatusIndicatorTitleParts(data = {}) {
   const progressText = {
     value: '',
@@ -266,6 +284,8 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
+  if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
   syncStatusContextMenu();
   const indicator = document.getElementById('scan-indicator');
@@ -289,4 +309,5 @@ function updateStatusIndicator(data) {
   }
 
   renderLibraryLoader(normalizedStatus);
+  lastStatusPresentationSignature = presentationSignature;
 }

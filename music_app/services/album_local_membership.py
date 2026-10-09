@@ -80,7 +80,9 @@ def _duration(value: object) -> int:
 
 
 def physical_album_folder_sql(path_expression: str) -> str:
-    path = f"replace(library.local_path_key({path_expression}), chr(92), '/')"
+    path = f"""case when library.local_path_style({path_expression}) = 'windows'
+      then replace(library.local_path_key({path_expression}), chr(92), '/')
+      else library.local_path_key({path_expression}) end"""
     return f"regexp_replace({path}, '/[^/]*$', '')"
 
 
@@ -108,26 +110,51 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
         )
         """
     seeds = ""
-    scope = ""
+    scope_join = ""
     if scope_album_key:
-        seed_root = physical_album_root_sql("seed_files.private_path")
-        file_root = physical_album_root_sql("files.private_path")
+        seed_folder = physical_album_folder_sql("seed_files.private_path")
         seeds = f"""
         local_membership_selected_albums as materialized (
           select albums.id from library.local_albums albums join bootstrap_context
             on bootstrap_context.library_id = albums.library_id
           where albums.album_key = %(album_key)s
         ),
-        local_membership_selected_roots as materialized (
-          select distinct seed_files.library_root_id, {seed_root} as physical_root
+        local_membership_selected_files as materialized (
+          select seed_files.id as file_id, seed_files.library_root_id,
+            {seed_folder} as physical_folder
           from library.local_track_files seed_files join library.local_tracks seed_tracks
             on seed_tracks.id = seed_files.track_id
           where seed_tracks.album_id in (select id from local_membership_selected_albums)
             and seed_files.scan_cache_stale is false
+        ),
+        local_membership_selected_folders as materialized (
+          select distinct library_root_id, physical_folder
+          from local_membership_selected_files
+        ),
+        local_membership_parent_index as materialized (
+          select exists (
+            select 1
+            from pg_index
+            where indexrelid = to_regclass('library.local_track_files_active_physical_parent_idx')
+              and indisvalid and indisready and indislive
+          ) as available
+        ),
+        local_membership_candidate_file_ids as materialized (
+          select file_id from local_membership_selected_files
+          union
+          select candidate_files.id
+          from local_membership_selected_folders selected_folders
+          cross join lateral (
+            select scoped_files.id
+            from library.local_track_files scoped_files
+            where (select available from local_membership_parent_index)
+              and scoped_files.library_root_id = selected_folders.library_root_id
+              and {physical_album_folder_sql("scoped_files.private_path")} = selected_folders.physical_folder
+              and scoped_files.scan_cache_stale is false
+            offset 0
+          ) candidate_files
         ),"""
-        scope = f"""and (tracks.album_id in (select id from local_membership_selected_albums)
-          or (files.library_root_id, {file_root}) in (
-            select library_root_id, physical_root from local_membership_selected_roots))"""
+        scope_join = "join local_membership_candidate_file_ids candidate_scope on candidate_scope.file_id = files.id"
     return r"""
         __SCOPE_SEEDS__
         local_membership_track_overrides as materialized (
@@ -151,6 +178,7 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
               trunc(coalesce(tracks.duration_seconds, 0))::bigint
             )::text end as track_signature
           from library.local_track_files files
+          __SCOPE_JOIN__
           join library.local_tracks tracks on tracks.id = files.track_id
           join bootstrap_context on bootstrap_context.library_id = tracks.library_id
           join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
@@ -162,7 +190,6 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
             on membership_track_override.library_id = tracks.library_id and membership_track_override.track_id = tracks.id
            and membership_path_override.id is null
           where files.scan_cache_stale is false
-            __SCOPE_FILTER__
             and coalesce(files.scan_file_album, tracks.metadata ->> 'album', albums.title, '')
               !~* '^[![:space:]\[\(-]*non[[:space:]_-]*album([[:space:]]|$)'
             and lower(btrim(coalesce(case
@@ -216,4 +243,4 @@ def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
         )
     """.replace("__PHYSICAL_ROOT__", physical_album_root_sql("files.private_path")).replace(
         "__PHYSICAL_FOLDER__", physical_album_folder_sql("files.private_path")
-    ).replace("__SCOPE_SEEDS__", seeds).replace("__SCOPE_FILTER__", scope)
+    ).replace("__SCOPE_SEEDS__", seeds).replace("__SCOPE_JOIN__", scope_join)

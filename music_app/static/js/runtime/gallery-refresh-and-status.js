@@ -2030,6 +2030,9 @@ async function pollStatus() {
     if (ownsStatus()) {
       nextPollDelay = 3000;
       state.status = { ...state.status, status_connection_lost: true };
+      if (typeof invalidateStatusIndicatorPresentation === 'function') {
+        invalidateStatusIndicatorPresentation();
+      }
       if (typeof renderLibraryLoader === 'function') {
         renderLibraryLoader(state.status);
       }

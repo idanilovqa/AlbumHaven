@@ -567,6 +567,66 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
   );
 });
 
+test('closing the tag editor hides before deferred reorder cleanup', () => {
+  const scheduledFrames = [];
+  const scheduledIdle = [];
+  const overlay = { hidden: false };
+  const closedOverlay = { hidden: true };
+  let rowCleanupCount = 0;
+  let listReleaseCount = 0;
+  const list = { replaceChildren() { listReleaseCount += 1; } };
+  const context = loadHelper([], {
+    document: {
+      body: { classList: { remove() {} } },
+      getElementById() { return closedOverlay; },
+    },
+    getTagEditorElements() { return { overlay, list }; },
+    clearTagEditorReorderCue() { rowCleanupCount += 1; },
+    requestAnimationFrame(callback) { scheduledFrames.push(callback); },
+    requestIdleCallback(callback) { scheduledIdle.push(callback); },
+  });
+
+  context.closeTagEditor();
+
+  assert.equal(overlay.hidden, true);
+  assert.equal(rowCleanupCount, 0);
+  assert.equal(listReleaseCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
+  assert.equal(rowCleanupCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
+  assert.equal(rowCleanupCount, 0);
+  assert.equal(scheduledIdle.length, 1);
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 1);
+  assert.equal(listReleaseCount, 1);
+
+  overlay.hidden = false;
+  context.closeTagEditor();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  overlay.hidden = false;
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 1, 'reopening must cancel stale cleanup');
+  assert.equal(listReleaseCount, 1, 'reopening must retain the new editor rows');
+
+  overlay.hidden = false;
+  context.closeTagEditor();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  overlay.hidden = false;
+  context.closeTagEditor();
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 1, 'an older close must not clean a newer closed session');
+  assert.equal(listReleaseCount, 1, 'an older close must not release newer session rows');
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 2);
+  assert.equal(listReleaseCount, 2);
+});
+
 test('Problematic Files tag edits own the detail overlay before the edit request settles', async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';
   const album = {

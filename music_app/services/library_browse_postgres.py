@@ -1355,14 +1355,6 @@ class PostgresLibraryBrowseRepository:
         client_surface_class: object,
         connection: Any,
     ) -> dict[str, object] | None:
-        missing_albums = _missing_album_projection_payloads(
-            self._load_missing_album_rows(
-                album_key=normalized_album_key,
-                connection=connection,
-            )
-        )
-        if missing_albums:
-            return _missing_album_detail_payload(missing_albums[0])
         rows = self._load_album_detail_rows(normalized_album_key, connection=connection)
         has_persisted_identity = bool(rows)
         if not rows:
@@ -1370,7 +1362,17 @@ class PostgresLibraryBrowseRepository:
             if base_album_key != normalized_album_key:
                 rows = self._load_album_detail_rows(base_album_key, connection=connection)
         if not rows:
-            return None
+            missing_albums = _missing_album_projection_payloads(
+                self._load_missing_album_rows(
+                    album_key=normalized_album_key,
+                    connection=connection,
+                )
+            )
+            return (
+                _missing_album_detail_payload(missing_albums[0])
+                if missing_albums
+                else None
+            )
         first_row_payload = _row_mapping(rows[0])
         metadata = _row_json_mapping(first_row_payload.get("album_metadata"))
         artist_display = str(
@@ -2556,8 +2558,20 @@ class PostgresLibraryBrowseRepository:
         connection: Any | None = None,
     ) -> list[object]:
         def load_rows(active_connection: Any) -> list[object]:
-            sql = _album_detail_sql().replace("legacy_scrobble_counts as (", local_album_membership_ctes_sql(scope_album_key=True) + ", legacy_scrobble_counts as (", 1)
-            sql = sql.replace("library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry", "(library.local_track_files.metadata #> '{scan_cache,file_entry}') || jsonb_build_object('local_album_membership_problem', (select problem from local_album_membership where file_id = library.local_track_files.id)) as file_entry", 1)
+            sql = _album_detail_sql().replace(
+                "legacy_scrobble_counts as (",
+                local_album_membership_ctes_sql(scope_album_key=True)
+                + ", legacy_scrobble_counts as (",
+                1,
+            )
+            sql = sql.replace(
+                "library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry",
+                "(library.local_track_files.metadata #> '{scan_cache,file_entry}') || "
+                "jsonb_build_object('local_album_membership_problem', "
+                "(select problem from local_album_membership "
+                "where file_id = library.local_track_files.id)) as file_entry",
+                1,
+            )
             cursor = active_connection.execute(sql, {"album_key": album_key})
             return list(cursor.fetchall())
 
@@ -7324,6 +7338,13 @@ def _album_detail_sql() -> str:
           join bootstrap_context
             on bootstrap_context.library_id = integration.listen_history.library_id
            and bootstrap_context.account_id = integration.listen_history.account_id
+          join library.local_tracks
+            on library.local_tracks.library_id = integration.listen_history.library_id
+           and library.local_tracks.track_key = integration.listen_history.track_key
+          join library.local_albums
+            on library.local_albums.library_id = library.local_tracks.library_id
+           and library.local_albums.id = library.local_tracks.album_id
+           and library.local_albums.album_key = %(album_key)s
           where integration.listen_history.source_family in (
             'runtime_listen_history_adapter',
             'phase_6_json_file_backfill'
@@ -7336,6 +7357,10 @@ def _album_detail_sql() -> str:
           from integration.listen_history h
           join bootstrap_context b on b.library_id=h.library_id and b.account_id=h.account_id
           join library.local_tracks t on t.id=h.track_id and t.library_id=h.library_id
+          join library.local_albums
+            on library.local_albums.library_id = t.library_id
+           and library.local_albums.id = t.album_id
+           and library.local_albums.album_key = %(album_key)s
           where h.source_family='rendered_local_listen_session' and h.scrobble_status='scrobbled'
           group by t.track_key
         ),
@@ -7353,6 +7378,13 @@ def _album_detail_sql() -> str:
           join bootstrap_context
             on bootstrap_context.library_id = app.track_preferences.library_id
            and bootstrap_context.account_id = app.track_preferences.account_id
+          join library.local_tracks
+            on library.local_tracks.library_id = app.track_preferences.library_id
+           and library.local_tracks.track_key = app.track_preferences.track_key
+          join library.local_albums
+            on library.local_albums.library_id = library.local_tracks.library_id
+           and library.local_albums.id = library.local_tracks.album_id
+           and library.local_albums.album_key = %(album_key)s
         ),
         ignored_repair_rollup as (
           select

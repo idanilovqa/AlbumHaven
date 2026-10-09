@@ -1489,8 +1489,12 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
-  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
-  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+  const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
+  state.loopCreateAllowed = loopCreateAllowed;
+  if (loopCreateCapabilityChanged && typeof syncLoopCreateCapability === 'function') {
+    syncLoopCreateCapability();
+  }
   return nextStatus;
 }
 

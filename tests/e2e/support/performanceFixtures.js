@@ -1028,6 +1028,12 @@ export const test = base.extend({
       expectedTimingMetricIds: [
         'selected-artist.selectedArtistApiMs',
         'selected-artist.albumDetailsOpenMs',
+        'selected-artist.tagEditorFocusMs',
+        'selected-artist.tagEditorTypingMs',
+        'selected-artist.tagEditorCancelMs',
+        'selected-artist.notificationDrawerOpenMs',
+        'selected-artist.notificationDrawerCloseMs',
+        'selected-artist.galleryReturnMs',
       ],
     });
   },

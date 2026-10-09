@@ -135,6 +135,30 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       local: [1000, 400, 1400],
       ci: [1000, 400, 1400],
     },
+    'selected-artist.tagEditorFocusMs': {
+      local: [600, 300, 900],
+      ci: [600, 300, 900],
+    },
+    'selected-artist.tagEditorTypingMs': {
+      local: [600, 300, 900],
+      ci: [600, 300, 900],
+    },
+    'selected-artist.tagEditorCancelMs': {
+      local: [600, 300, 900],
+      ci: [600, 300, 900],
+    },
+    'selected-artist.notificationDrawerOpenMs': {
+      local: [500, 300, 800],
+      ci: [500, 300, 800],
+    },
+    'selected-artist.notificationDrawerCloseMs': {
+      local: [500, 300, 800],
+      ci: [500, 300, 800],
+    },
+    'selected-artist.galleryReturnMs': {
+      local: [1000, 400, 1400],
+      ci: [1000, 400, 1400],
+    },
     'root-album-browse.rootAlbumBrowseApiMs': {
       local: [6000, 400, 6400],
       ci: [6000, 400, 6400],

@@ -4,6 +4,7 @@ import {
   expectPostgresLibraryBrowseTelemetry,
   expectTimingBudget,
   measureActionTime,
+  measureInteractionToPaint,
   performanceTimingBudget,
 } from '../helpers/index.js';
 import {
@@ -20,15 +21,26 @@ const SELECTED_ARTIST_BUDGET = Object.freeze(
 const ALBUM_DETAILS_BUDGET = Object.freeze(
   performanceTimingBudget('selected-artist.albumDetailsOpenMs'),
 );
+const INTERACTION_BUDGETS = Object.freeze(Object.fromEntries([
+  'tagEditorFocusMs',
+  'tagEditorTypingMs',
+  'tagEditorCancelMs',
+  'notificationDrawerOpenMs',
+  'notificationDrawerCloseMs',
+  'galleryReturnMs',
+].map((key) => [key, Object.freeze(performanceTimingBudget(`selected-artist.${key}`))])));
+const MAX_INTERACTION_LONG_TASK_MS = 200;
 
 test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
 
   test('Selected artist UI reports library_browse telemetry and timing', async ({
+    coverLookupActions,
     galleryActions,
     navigationPanelActions,
     page,
     selectedArtistFocusedLocalReport,
     stepLogger,
+    tagEditorActions,
     trackModalActions,
   }) => {
     requirePostgresRuntimeEnv('the selected-artist benchmark');
@@ -92,9 +104,57 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       expect(firstTrackPath, 'Expected at least one playable track path after opening selected-artist album details.').not.toBe('');
     });
 
+    const interactionMetrics = {};
+    await stepLogger.step('Measure tag editor focus, typing, and immediate cancel paint', async () => {
+      await trackModalActions.openTagEditor();
+      await tagEditorActions.waitForOpen();
+      const input = tagEditorActions.tagEditor.albumNameInput;
+      interactionMetrics.tagEditorFocusMs = await measureInteractionToPaint(
+        page,
+        () => input.focus(),
+        () => expect(input).toBeFocused(),
+      );
+      const originalValue = await input.inputValue();
+      interactionMetrics.tagEditorTypingMs = await measureInteractionToPaint(
+        page,
+        async () => {
+          await input.press('End');
+          await input.type('x');
+          await input.press('Backspace');
+        },
+        () => expect(input).toHaveValue(originalValue),
+      );
+      interactionMetrics.tagEditorCancelMs = await measureInteractionToPaint(
+        page,
+        () => tagEditorActions.tagEditor.cancelButton.click(),
+        () => expect(tagEditorActions.tagEditor.overlay).toBeHidden(),
+      );
+    });
+
     await stepLogger.step('Close the selected-artist album details modal cleanly', async () => {
       await trackModalActions.clickClose();
       await trackModalActions.waitForClosed({ timeout: 60000 });
+    });
+
+    await stepLogger.step('Measure notification drawer and gallery return paint', async () => {
+      interactionMetrics.notificationDrawerOpenMs = await measureInteractionToPaint(
+        page,
+        () => coverLookupActions.coverLookup.drawerButton.click(),
+        () => coverLookupActions.coverLookup.waitForDrawerState(true),
+      );
+      interactionMetrics.notificationDrawerCloseMs = await measureInteractionToPaint(
+        page,
+        () => coverLookupActions.coverLookup.drawerCloseButton.click(),
+        () => coverLookupActions.coverLookup.waitForDrawerState(false),
+      );
+      interactionMetrics.galleryReturnMs = await measureInteractionToPaint(
+        page,
+        () => navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true }),
+        () => Promise.all([
+          navigationPanelActions.waitForSidebarSelection('', { timeout: 60000 }),
+          galleryActions.waitForInitialAllArtistsSections({ timeout: 60000 }),
+        ]),
+      );
     });
 
     await selectedArtistFocusedLocalReport.recordTimingCheckpoint({
@@ -130,6 +190,7 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
     selectedArtistFocusedLocalReport.setMetricsPayload({
       selectedArtistApiMs,
       albumDetailsOpenMs,
+      ...Object.fromEntries(Object.entries(interactionMetrics).map(([key, value]) => [key, value.durationMs])),
       selectedArtist,
       returnedSelectedArtist: selectedArtistPayload.selected_artist,
       albumCount: Number(selectedArtistPayload.album_count || 0),
@@ -147,6 +208,17 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       'selectedArtistApiMs',
       expectTimingBudget(expect.soft, selectedArtistApiMs, SELECTED_ARTIST_BUDGET, 'Selected artist UI readiness'),
     );
+    for (const [key, measurement] of Object.entries(interactionMetrics)) {
+      expect.soft(
+        measurement.maxLongTaskMs,
+        `${key} produced a ${measurement.maxLongTaskMs} ms browser main-thread task.`,
+      ).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+      selectedArtistFocusedLocalReport.recordTerminalTimingOutcome(
+        INTERACTION_BUDGETS[key].metricId,
+        key,
+        expectTimingBudget(expect.soft, measurement.durationMs, INTERACTION_BUDGETS[key], key),
+      );
+    }
     selectedArtistFocusedLocalReport.recordTerminalTimingOutcome(
       ALBUM_DETAILS_BUDGET.metricId,
       'albumDetailsOpenMs',

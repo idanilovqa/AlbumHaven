@@ -44,6 +44,7 @@ export {
   formatMegabytes,
   isRootAlbumsViewDataResponse,
   measureActionTime,
+  measureInteractionToPaint,
   sampleIdleMemory,
   sampleMemoryPoint,
   samplePeakMemory,

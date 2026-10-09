@@ -78,7 +78,7 @@ function harness() {
   });
   ctx.updateStatusIndicator(status());
   return {
-    ctx, requests, timers, toasts, primary, status, refreshes, renders, menu,
+    ctx, requests, timers, toasts, capabilities, indicator, primary, status, refreshes, renders, menu,
     advance(ms) { now += ms; },
     runTimer(id) {
       const timer = timers.get(id);
@@ -89,6 +89,102 @@ function harness() {
     },
   };
 }
+
+test('identical status updates apply state without repeating presentation writes', () => {
+  const h = harness();
+  const initialStatus = h.ctx.state.status;
+  const initialCapabilitySyncCount = h.capabilities.length;
+  const initialRenderCount = h.renders.length;
+  let classWrites = 0;
+  let menuSyncs = 0;
+  let titleWrites = 0;
+  let warningSyncs = 0;
+  const originalAdd = h.indicator.classList.add;
+  const originalRemove = h.indicator.classList.remove;
+  const originalMenuSync = h.ctx.syncStatusContextMenu;
+  let title = h.indicator.title;
+  h.indicator.classList.add = (...names) => {
+    classWrites += 1;
+    originalAdd(...names);
+  };
+  h.indicator.classList.remove = (...names) => {
+    classWrites += 1;
+    originalRemove(...names);
+  };
+  Object.defineProperty(h.indicator, 'title', {
+    configurable: true,
+    get: () => title,
+    set: (value) => {
+      titleWrites += 1;
+      title = value;
+    },
+  });
+  h.ctx.syncLibraryWatcherWarning = () => { warningSyncs += 1; };
+  h.ctx.syncStatusContextMenu = () => {
+    menuSyncs += 1;
+    return originalMenuSync();
+  };
+
+  h.ctx.updateStatusIndicator(h.status());
+
+  assert.notEqual(h.ctx.state.status, initialStatus, 'normalization must still publish fresh state');
+  assert.equal(h.capabilities.length, initialCapabilitySyncCount);
+  assert.equal(classWrites, 0);
+  assert.equal(titleWrites, 0);
+  assert.equal(warningSyncs, 0);
+  assert.equal(menuSyncs, 0);
+  assert.equal(h.renders.length, initialRenderCount);
+});
+
+test('status presentation signature is stable across nested key order', () => {
+  const h = harness();
+  const warning = {
+    state: 'warning',
+    problems: [{
+      root_key: 'library',
+      message: 'Watcher paused',
+      allowed_actions: { retry: true, dismiss: false },
+    }],
+  };
+  h.ctx.updateStatusIndicator(h.status(false, { watcher_health: warning }));
+  const initialRenderCount = h.renders.length;
+  let warningSyncs = 0;
+  h.ctx.syncLibraryWatcherWarning = () => { warningSyncs += 1; };
+
+  h.ctx.updateStatusIndicator(h.status(false, {
+    watcher_health: {
+      problems: [{
+        allowed_actions: { dismiss: false, retry: true },
+        message: 'Watcher paused',
+        root_key: 'library',
+      }],
+      state: 'warning',
+    },
+  }));
+
+  assert.equal(warningSyncs, 0);
+  assert.equal(h.renders.length, initialRenderCount);
+});
+
+test('changed status still refreshes warning, menu, indicator, and loader presentation', () => {
+  const h = harness();
+  const initialRenderCount = h.renders.length;
+  let menuSyncs = 0;
+  let warningSyncs = 0;
+  const originalMenuSync = h.ctx.syncStatusContextMenu;
+  h.ctx.syncLibraryWatcherWarning = () => { warningSyncs += 1; };
+  h.ctx.syncStatusContextMenu = () => {
+    menuSyncs += 1;
+    return originalMenuSync();
+  };
+
+  h.ctx.updateStatusIndicator(h.status(true));
+
+  assert.equal(warningSyncs, 1);
+  assert.equal(menuSyncs, 1);
+  assert.equal(h.indicator.classList.contains('is-busy'), true);
+  assert.equal(h.renders.length, initialRenderCount + 1);
+});
 async function settle() { for (let n = 0; n < 8; n++) await Promise.resolve(); }
 for (const queuedAfterIndexing of [false, true]) {
   test(`cover start clears completed results before and after acknowledgement queued=${queuedAfterIndexing}`, async () => {

@@ -320,6 +320,8 @@ class VirtualArtistGrid {
     this._measureRaf = null;
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
+    this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
     this._absoluteScrollRestore = null;
@@ -440,6 +442,7 @@ class VirtualArtistGrid {
       cancelBrowserAnimationFrame(this._measureRaf);
       this._measureRaf = null;
     }
+    this.cancelVisibleAlbumDetailPrewarm();
     if (this._measureTimeout) {
       clearBrowserTimeout(this._measureTimeout);
       this._measureTimeout = 0;
@@ -449,6 +452,42 @@ class VirtualArtistGrid {
     if (typeof galleryCoverPreviewCache !== 'undefined' && typeof galleryCoverPreviewCache.destroy === 'function') {
       galleryCoverPreviewCache.destroy();
     }
+  }
+
+  cancelVisibleAlbumDetailPrewarm() {
+    this._albumDetailPrewarmGeneration += 1;
+    if (!this._albumDetailPrewarmRaf) return;
+    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+    this._albumDetailPrewarmRaf = 0;
+  }
+
+  scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
+    this.cancelVisibleAlbumDetailPrewarm();
+    if (
+      !this.isScrollSettled
+      || typeof queueVisibleTrackModalAlbumDetailsPrewarm !== 'function'
+    ) {
+      return;
+    }
+    const generation = this._albumDetailPrewarmGeneration;
+    const renderGeneration = this._renderGeneration;
+    const normalizedScrollTop = Number(scrollTop || 0);
+    this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
+      if (generation !== this._albumDetailPrewarmGeneration) return;
+      this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
+        if (generation !== this._albumDetailPrewarmGeneration) return;
+        this._albumDetailPrewarmRaf = 0;
+        if (
+          renderGeneration !== this._renderGeneration
+          || !this.isScrollSettled
+          || this.lastKey !== rangeKey
+          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+        ) {
+          return;
+        }
+        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+      });
+    });
   }
 
   onPointerDown(event) {
@@ -1359,6 +1398,7 @@ class VirtualArtistGrid {
     };
     this.diagnostics.latestRender = completedRender;
     this.recordDiagnosticEvent('render-completed', completedRender);
+    this.scheduleVisibleAlbumDetailPrewarm(rangeKey, viewportTop);
   }
 
   primeVisibleCoverImages() {

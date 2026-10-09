@@ -9,7 +9,7 @@ from music_app.services.utils import looks_like_mojibake
 
 
 UNKNOWN_VALUES = {"", "unknown", "unknown artist", "unknown album", "none", "null"}
-COLLAB_MARKERS = ("&", "feat", "featuring", "with", "vs", " x ", "/", ";", ",")
+COLLAB_MARKERS = ("&", "feat", "featuring", "with", "vs", " x ", " и ", "/", ";", ",")
 
 
 def looks_like_collaboration_name(value: object) -> bool:

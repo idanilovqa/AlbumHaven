@@ -52,6 +52,26 @@ export class GalleryRegressions {
         loadedCount: state.view.artist_groups.reduce((count, group) => count + group.albums.length, 0) };
     });
   }
+  async captureVisibleGalleryAnchorOnNextScroll() {
+    // parity-check: allow-read-only-measurement-evaluate -- capture native scroll before continuation can merge
+    return this.page.evaluateHandle(() => new Promise(resolve => {
+      const scroll = document.getElementById('albums-scroll');
+      scroll.addEventListener('scroll', () => {
+        const bounds = scroll.getBoundingClientRect();
+        const element = [...document.querySelectorAll('#artist-groups .album-card')].find(card => {
+          const rect = card.getBoundingClientRect();
+          return rect.top < bounds.bottom && rect.bottom > bounds.top;
+        });
+        resolve({
+          element,
+          top: element?.getBoundingClientRect().top,
+          scrollTop: scroll.scrollTop,
+          loadedCount: state.view.artist_groups.reduce((count, group) => count + group.albums.length, 0),
+        });
+      }, { once: true });
+    }));
+  }
+
   async readGalleryAnchorContinuity(anchor) {
     // parity-check: allow-read-only-measurement-evaluate -- read card identity and compensate only for native wheel movement
     return anchor.evaluate(saved => ({

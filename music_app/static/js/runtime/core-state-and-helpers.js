@@ -172,6 +172,8 @@ const state = {
     loaded: false,
     loading: false,
     loadPromise: null,
+    completeLoadPromise: null,
+    problematicFilesComplete: false,
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,

@@ -8,7 +8,7 @@ import logging
 import time
 from collections.abc import Iterable, Mapping
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -1032,9 +1032,17 @@ def _unsupported_postgres_non_album_modal_response(
 
 
 @router.get("/utilities/problematic-files")
-def utilities_problematic_files(request: Request) -> JSONResponse:
+def utilities_problematic_files(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1, le=200),
+) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_problematic_files_payload()
+        repository = PostgresLibraryBrowseRepository(_app_config(request))
+        payload = (
+            repository.build_problematic_files_page(limit=limit)
+            if limit is not None
+            else repository.build_problematic_files_payload()
+        )
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)

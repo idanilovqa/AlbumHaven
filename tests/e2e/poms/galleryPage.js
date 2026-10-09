@@ -197,6 +197,10 @@ export class GalleryPage extends BasePage {
     return '#library-loader';
   }
 
+  get startupProgressSelector() {
+    return '[data-startup-progress]';
+  }
+
   get libraryLoaderSpinnerSelector() {
     return '#library-loader .library-loader-spinner';
   }

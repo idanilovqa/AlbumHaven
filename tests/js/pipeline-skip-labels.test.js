@@ -11,8 +11,9 @@ const scope = { mode: 'full', pipelineMode: 'full', functionalChange: true, func
 const trusted = { repository: 'owner/app', headRepository: 'owner/app' };
 
 for (const [labels, skipReviews, skipTests] of [
-  [[], false, false], [['skip_reviews'], true, false], [['skip_tests'], false, true],
-  [['skip_reviews', 'skip_tests'], true, true], [['skip_review'], false, false],
+  [[], true, false], [['skip_reviews'], true, false], [['run_reviews'], false, false],
+  [['skip_reviews', 'run_reviews'], false, false], [['skip_tests'], true, true],
+  [['skip_reviews', 'skip_tests'], true, true], [['skip_review'], true, false],
 ]) test(`pipeline controls honor exact labels: ${labels.join(',') || 'none'}`, () => {
   assert.deepEqual(applyPipelineSkips(scope, { ...trusted, labels }), {
     ...scope, mode: skipReviews ? 'none' : 'full', skipReviews, skipTests,
@@ -22,7 +23,7 @@ for (const [labels, skipReviews, skipTests] of [
 
 test('fork or missing repository context cannot activate pipeline skips', () => {
   for (const context of [{}, { repository: 'owner/app', headRepository: 'fork/app' }]) {
-    assert.deepEqual(applyPipelineSkips(scope, { ...context, labels: ['skip_reviews', 'skip_tests'] }), {
+    assert.deepEqual(applyPipelineSkips(scope, { ...context, labels: ['skip_reviews', 'run_reviews', 'skip_tests'] }), {
       ...scope, skipReviews: false, skipTests: false,
     });
   }
@@ -56,7 +57,7 @@ test('workflow honors test skips without publishing a false reviewed baseline', 
 test('CLI emits independent controls while retaining every full test family', () => {
   const filename = path.join(__dirname, '../../scripts/ci/classify-pr-review-scope.cjs');
   const localRequire = createRequire(filename);
-  for (const labels of [['skip_reviews'], ['skip_tests'], ['skip_reviews', 'skip_tests']]) {
+  for (const labels of [[], ['skip_reviews'], ['run_reviews'], ['skip_reviews', 'run_reviews'], ['skip_tests'], ['skip_reviews', 'skip_tests']]) {
     let output = '';
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
@@ -81,8 +82,9 @@ test('CLI emits independent controls while retaining every full test family', ()
     const values = Object.fromEntries(output.trim().split('\n').map(line => {
       const split = line.indexOf('='); return [line.slice(0, split), line.slice(split + 1)];
     }));
-    assert.equal(values.mode, labels.includes('skip_reviews') ? 'none' : 'full');
-    assert.equal(values.skip_reviews, String(labels.includes('skip_reviews')));
+    const runReviews = labels.includes('run_reviews');
+    assert.equal(values.mode, runReviews ? 'full' : 'none');
+    assert.equal(values.skip_reviews, String(!runReviews));
     assert.equal(values.skip_tests, String(labels.includes('skip_tests')));
     assert.equal(values.pipeline_mode, 'full');
     assert.equal(values.functional_change, 'true');

@@ -177,10 +177,13 @@ def project_library_watch_health(
         if allowed_actions.allows("library.refresh"):
             item["allowed_actions"] = {"library.refresh": True}
         projected.append(item)
-    return {
+    payload: dict[str, object] = {
         "state": "warning" if projected else "healthy",
         "problems": projected,
     }
+    if any(problem.get("incident_id") for problem in projected):
+        payload["repair_required"] = True
+    return payload
 
 
 # Keep a small service-backed compatibility seam for focused tests that monkeypatch

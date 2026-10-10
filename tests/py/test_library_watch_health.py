@@ -257,6 +257,7 @@ def test_reconciliation_failure_persists_path_free_warning():
             }
         ],
     }
+    assert "repair_required" not in projected or projected["repair_required"] is False
     assert "main-root" not in json.dumps(projected)
     assert service.root_allows_destructive_reconciliation("main-root") is False
 
@@ -686,6 +687,7 @@ def test_durable_health_projection_exposes_stable_identity_without_private_value
 
     assert payload == {
         "state": "warning",
+        "repair_required": True,
         "problems": [
             {
                 "root_key": opaque_root_key(private_root),

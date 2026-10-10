@@ -1022,6 +1022,7 @@ def test_real_watcher_status_metrics_and_logs_are_path_free(
 
     assert status_payload["warning_token"] == marked.warning_token
     assert status_payload["problems"]
+    assert status_payload["repair_required"] is True
     assert metrics_payload is not None
     assert set(metrics_payload) == {
         "ready",

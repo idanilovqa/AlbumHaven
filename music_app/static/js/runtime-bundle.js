@@ -3251,12 +3251,17 @@ function renderLibraryWarning(data = {}, options = {}) {
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
   const actionLabel = health.repair_required ? 'Repair library' : 'Full Rescan';
+  const operationalItemsHtml = problems
+    .map(() => '<span data-operational-item>Library recovery is required.</span>')
+    .join('');
+  const actionHtml = canRefresh
+    ? ButtonComponent.renderButton({label:actionLabel,attributes:{'data-status-action':'full-rescan'}})
+    : '';
   const message = unavailable
-    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? ', then run Full Rescan' : ''}.`
-    : `Some library changes may have been missed.${canRefresh ? ' Run Full Rescan to reconcile them.' : ''}`;
+    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? `, then run ${actionLabel}` : ''}.`
+    : `Some library changes may have been missed.${canRefresh ? ` Run ${actionLabel} to reconcile them.` : ''}`;
   const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
-    actionsHtml: canRefresh
-      ? ButtonComponent.renderButton({label:actionLabel,attributes:{'data-status-action':'full-rescan'}}) : ''});
+    actionsHtml: `${operationalItemsHtml}${actionHtml}`});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
 }
 
@@ -24207,8 +24212,10 @@ function validateProblematicSummaryPayload(payload) {
     const rootKey = String(item.root_key || '').trim();
     if (
       ![
+        'cross_root_uncertain',
         'overflow',
         'reconciliation_failed',
+        'rollback_pending_work',
         'root_unavailable',
         'stable_write_unavailable',
       ].includes(stateValue)

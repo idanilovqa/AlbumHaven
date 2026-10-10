@@ -14,6 +14,7 @@ function renderScanWarning(problem, {
   scanPageVisible = true,
   dismissed = true,
   repairRequired = false,
+  problems = [problem],
 } = {}) {
   const context = load();
   const elements = new Map(['library-scan-warning']
@@ -27,7 +28,7 @@ function renderScanWarning(problem, {
     '../../../music_app/static/js/runtime/alert-components.js'), 'utf8'), context);
   context.renderLibraryWarning({ watcher_health: {
     state: 'warning', warning_token: 'owned-warning', dismissed,
-    repair_required: repairRequired, problems: [problem],
+    repair_required: repairRequired, problems,
   } });
   const notice = elements.get('library-scan-warning');
   assert.equal(notice.hidden, !scanPageVisible);
@@ -79,6 +80,32 @@ test('repair-required watcher health omits the action for a read-only reviewer',
     );
   }
 });
+
+test('Library Status renders every operational incident without private path data', () => {
+  const html = renderScanWarning(null, {
+    repairRequired: true,
+    problems: [
+      {
+        state: 'overflow',
+        root_key: 'root_1234567890abcdef',
+        message: 'Private Music C:\\Private Music\\song.flac',
+        allowed_actions: { 'library.refresh': true },
+      },
+      {
+        state: 'rollback_pending_work',
+        root_key: 'root_fedcba0987654321',
+        message: '/srv/private/music/album.flac',
+        allowed_actions: { 'library.refresh': true },
+      },
+    ],
+  });
+
+  assert.equal((html.match(/data-operational-item/g) || []).length, 2);
+  assert.doesNotMatch(
+    html,
+    /Private Music|[A-Z]:\\|\/srv\/private|root_1234567890abcdef|root_fedcba0987654321/,
+  );
+});
 test('Library warning requires acknowledgement of the current warning token', () => {
   const context = load();
   const health = { state: 'warning', warning_token: 'first' };
@@ -89,12 +116,15 @@ test('Library warning requires acknowledgement of the current warning token', ()
   assert.equal(context.libraryWarningPresentation({ state: 'healthy' }, 'first').warning, false);
 });
 
-test('Library Status keeps an unresolved incident visible before acknowledgement', () => {
+test('Library Status keeps an acknowledged unresolved incident visible', () => {
   const html = renderScanWarning({
     state: 'overflow',
+    incident_id: '11111111-1111-1111-1111-111111111111',
+    acknowledged: true,
     allowed_actions: { 'library.refresh': true },
-  }, { dismissed: false, repairRequired: true });
+  }, { dismissed: true, repairRequired: true });
   assert.match(html, /role="alert"/);
+  assert.match(html, /data-operational-item/);
   assert.match(html, />Repair library</);
 });
 

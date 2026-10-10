@@ -6782,6 +6782,28 @@ test('Problematic Files accepts a path-free stable-write warning', () => {
   );
 });
 
+test('Problematic Files accepts every durable watcher operational state', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+
+  for (const state of ['cross_root_uncertain', 'rollback_pending_work']) {
+    const result = context.validateProblematicSummaryPayload({
+      ok: true,
+      items: [],
+      operational_items: [{
+        state,
+        root_key: 'root_1234567890abcdef',
+        detected_at: '2026-10-09T12:00:00+00:00',
+        message: 'Some library changes may have been missed.',
+        allowed_actions: { 'library.refresh': true },
+      }],
+    });
+
+    assert.equal(result.operationalItems[0].state, state);
+  }
+});
+
 test('Problematic Files excludes library-wide warnings from album rows and counts', () => {
   const elements = {
     overlay: {},

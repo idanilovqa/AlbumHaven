@@ -340,8 +340,10 @@ function validateProblematicSummaryPayload(payload) {
     const rootKey = String(item.root_key || '').trim();
     if (
       ![
+        'cross_root_uncertain',
         'overflow',
         'reconciliation_failed',
+        'rollback_pending_work',
         'root_unavailable',
         'stable_write_unavailable',
       ].includes(stateValue)

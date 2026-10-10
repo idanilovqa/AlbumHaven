@@ -16062,10 +16062,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       && data?.ok !== false
       && (
         (requestOptions.startupRefresh
-          && (
-            startupHydrationTier !== 'sidebar'
-            || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
-          ))
+          && !String(requestOptions.startupHydrationFollowupEndpoint || '').trim())
         || isCanonicalFullViewPayload(data, requestOptions)
       )
     ) {
@@ -16073,13 +16070,19 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (
       requestOptions.startupRefresh
-      && startupHydrationTier === 'sidebar'
       && String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
     ) {
+      const followupHydrationTier = startupHydrationTier === 'sidebar' ? 'full' : 'sidebar';
       queueStartupHydrationFollowup(
         requestOptions.startupHydrationFollowupEndpoint,
         {
-          startupHydrationTier: 'full',
+          startupHydrationTier: followupHydrationTier,
+          ...(followupHydrationTier === 'sidebar'
+            ? {
+              retainMountedSelectedViewState: { ...state.view },
+              skipPendingViewTransition: true,
+            }
+            : {}),
         },
       );
     }

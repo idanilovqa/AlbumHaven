@@ -81,24 +81,33 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
     monkeypatch.setattr(repository, "_load_non_album_entries", load_non_album)
     monkeypatch.setattr(browse, "build_non_album_track_list", lambda entries, **_options: list(entries))
     monkeypatch.setattr(browse, "configured_library_root_paths_snapshot", lambda _config, **_options: ())
-    payload = repository.build_root_startup_preview_payload(query_params={"gallery_page_size": "2", "omit_sidebar": "1"})
+    payload = repository.build_root_startup_preview_payload(query_params={"gallery_page_size": "2"})
     assert payload["non_album_tracks"] == [loose_track]
     assert len(non_album_calls) == 1
     assert non_album_calls[0]["connection"] is connection
     assert payload["album_count"] == 7
     assert payload["artists_sidebar"][0]["count"] == 7
     assert len(payload["artist_groups"][0]["albums"]) == 2
+
     assert payload["gallery_page"]["has_more"] is True
     assert payload["initial_view_partial"] is False
     bounded = [params["gallery_album_ids"] for _, params in calls if params and "gallery_album_ids" in params]
     assert len(bounded) == 1 and len(bounded[0]) == 2
     assert calls[0][0] == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
     assert calls[-2:] == [("rollback", None), ("close", None)]
+
+    first_page_without_sidebar = repository.build_root_startup_preview_payload(
+        query_params={
+            "gallery_page_size": "2",
+            "omit_sidebar": "1",
+        }
+    )
+    assert "artists_sidebar" not in first_page_without_sidebar
     next_page = repository.build_root_startup_preview_payload(query_params={
         "gallery_page_size": "2", "omit_sidebar": "1", "gallery_cursor": payload["gallery_page"]["next_cursor"]})
     assert "artists_sidebar" not in next_page
     assert "non_album_tracks" not in next_page
-    assert len(non_album_calls) == 1
+    assert len(non_album_calls) == 2
     assert next_page["album_count"] == 7
 
 

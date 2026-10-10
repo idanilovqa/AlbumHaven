@@ -816,7 +816,7 @@ class PostgresLibraryBrowseRepository:
             payload["all_artists_active"] = _request_flag((query_params or {}).get("all_artists"))
             if (query_params or {}).get("gallery_cursor"):
                 payload.pop("non_album_tracks", None)
-            if (query_params or {}).get("gallery_cursor") and _request_flag((query_params or {}).get("omit_sidebar")):
+            if _request_flag((query_params or {}).get("omit_sidebar")):
                 payload.pop("artists_sidebar", None)
         _queue_display_cover_variants_for_groups(
             self._config,

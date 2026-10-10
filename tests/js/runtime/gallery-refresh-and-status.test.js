@@ -2196,6 +2196,63 @@ test('fetchAndRender schedules a full startup followup after sidebar-only hydrat
   ]);
 });
 
+test('fetchAndRender schedules sidebar hydration after gallery-first startup without replacing the gallery', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const scheduledTimeouts = [];
+  const applyOptions = [];
+  const applyViewPayload = context.applyViewPayload;
+  context.applyViewPayload = (payload, options) => {
+    applyOptions.push(options);
+    applyViewPayload(payload, options);
+  };
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduledTimeouts.push({ callback, delayMs });
+    return scheduledTimeouts.length;
+  };
+  context.isEffectivelyEmptyView = () => false;
+
+  const galleryPromise = context.fetchAndRender('/view-data?omit_sidebar=1', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+    startupHydrationFollowupEndpoint: '/view-data?payload_tier=sidebar',
+  });
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+    artist_count: 1,
+    album_count: 1,
+    gallery_page: { has_more: false },
+    payload_tier: 'gallery_page',
+  });
+  await galleryPromise;
+  await flushMicrotasks();
+
+  assert.equal(context.startupMetrics.completed, 0);
+  assert.equal(scheduledTimeouts.length, 1);
+  assert.equal(scheduledTimeouts[0].delayMs, 350);
+  scheduledTimeouts[0].callback();
+  await flushMicrotasks();
+
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Broadcast', count: 3 }],
+    artist_count: 6274,
+    payload_tier: 'sidebar',
+  });
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.deepEqual(context.state.view.artist_groups, [
+    { artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] },
+  ]);
+  assert.deepEqual(context.state.view.artists_sidebar, [{ artist: 'Broadcast', count: 3 }]);
+  assert.equal(calls.applyViewPayload.length, 2);
+  assert.strictEqual(calls.applyViewPayload[1].artist_groups, calls.applyViewPayload[0].artist_groups);
+  assert.equal(applyOptions[1].preserveMountedGalleryChildren, true);
+});
+
 test('fetchAndRender still schedules the full startup followup when sidebar hydration leaves a non-empty root view', async () => {
   const { context, calls, pendingRequests } = createContext();
   const scheduledTimeouts = [];

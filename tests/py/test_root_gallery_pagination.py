@@ -96,6 +96,7 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
     assert calls[0][0] == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
     assert calls[-2:] == [("rollback", None), ("close", None)]
 
+    non_album_calls.clear()
     first_page_without_sidebar = repository.build_root_startup_preview_payload(
         query_params={
             "gallery_page_size": "2",
@@ -103,11 +104,13 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
         }
     )
     assert "artists_sidebar" not in first_page_without_sidebar
+    assert "non_album_tracks" not in first_page_without_sidebar
+    assert non_album_calls == []
     next_page = repository.build_root_startup_preview_payload(query_params={
         "gallery_page_size": "2", "omit_sidebar": "1", "gallery_cursor": payload["gallery_page"]["next_cursor"]})
     assert "artists_sidebar" not in next_page
     assert "non_album_tracks" not in next_page
-    assert len(non_album_calls) == 2
+    assert non_album_calls == []
     assert next_page["album_count"] == 7
 
 

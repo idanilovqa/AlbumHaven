@@ -608,6 +608,9 @@ class PostgresLibraryBrowseRepository:
     ) -> dict[str, object]:
         view_state = _root_sidebar_view_state(query_params)
         paged = (query_params or {}).get("gallery_page_size") is not None
+        include_non_album_tracks = not (
+            paged and _request_flag((query_params or {}).get("omit_sidebar"))
+        )
         if paged:
             _root_gallery_page_size(query_params or {})
         from music_app.services.gallery_projection_postgres import (
@@ -724,7 +727,11 @@ class PostgresLibraryBrowseRepository:
                 preview_artist_groups = _root_album_browse_artist_groups(preview_rows)[
                     :_STARTUP_PREVIEW_ARTIST_LIMIT
                 ]
-            if paged and not (query_params or {}).get("gallery_cursor"):
+            if (
+                paged
+                and include_non_album_tracks
+                and not (query_params or {}).get("gallery_cursor")
+            ):
                 non_album_entries = self._load_non_album_entries(
                     view_state=view_state,
                     alias_to_canonical=relation_alias_maps["alias_to_canonical"],
@@ -814,7 +821,7 @@ class PostgresLibraryBrowseRepository:
             payload["initial_view_partial"] = False
             payload["payload_tier"] = "gallery_page"
             payload["all_artists_active"] = _request_flag((query_params or {}).get("all_artists"))
-            if (query_params or {}).get("gallery_cursor"):
+            if not include_non_album_tracks or (query_params or {}).get("gallery_cursor"):
                 payload.pop("non_album_tracks", None)
             if _request_flag((query_params or {}).get("omit_sidebar")):
                 payload.pop("artists_sidebar", None)

@@ -1108,6 +1108,17 @@ def test_live_targeted_failure_persists_root_health_atomically(
             "select metadata -> 'library_watch_health' as health from library.libraries where id = %s",
             (library_id,),
         ).fetchone()["health"]
+        recorded_detected_at = {
+            row["root_id"]: row["detected_at"]
+            for row in connection.execute(
+                "select entry.key as root_id, "
+                "(entry.value ->> 'detected_at')::timestamptz as detected_at "
+                "from library.libraries "
+                "cross join lateral jsonb_each(metadata -> 'library_watch_health') as entry "
+                "where id = %s",
+                (library_id,),
+            ).fetchall()
+        }
     assert recorded is not None
     assert set(recorded) == {"root-a", "root-b"}
     for root_id in recorded:
@@ -1115,7 +1126,7 @@ def test_live_targeted_failure_persists_root_health_atomically(
             assert recorded[root_id] == prior_warning
         else:
             assert recorded[root_id]["state"] == health
-            assert datetime.fromisoformat(recorded[root_id]["detected_at"]) == now + timedelta(seconds=1)
+            assert recorded_detected_at[root_id] == now + timedelta(seconds=1)
             assert recorded[root_id]["event_id"]
 
 

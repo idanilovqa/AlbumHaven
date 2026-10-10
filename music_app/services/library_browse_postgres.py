@@ -175,6 +175,22 @@ def is_library_browse_postgres_available(config: dict[str, object] | None) -> bo
     return bool(database_url) and psycopg is not None and callable(getattr(psycopg, "connect", None))
 
 
+def _preferred_duplicate_source(
+    sources: list[dict[str, object]], *, album_artist: object
+) -> dict[str, object]:
+    owner = str(album_artist or "").strip().casefold()
+
+    def credit_score(source: dict[str, object]) -> int:
+        return sum(
+            1
+            for track in source.get("tracks", []) or []
+            if str(track.get("artist") or "").strip()
+            and str(track.get("artist") or "").strip().casefold() != owner
+        )
+
+    return max(sources, key=credit_score)
+
+
 class PostgresLibraryBrowseRepository:
     def __init__(
         self,
@@ -259,8 +275,22 @@ class PostgresLibraryBrowseRepository:
                     # A logical album queue must never concatenate physical copies.
                     own_tracks = {str(track.get("path") or ""): track for track in album.get("tracks", [])}
                     own_paths = set(own_tracks)
-                    source = next((source for source in sources if any(str(track.get("path")) in own_paths for track in source["tracks"])), sources[0])
-                    album["tracks"] = [{**track, **own_tracks.get(str(track.get("path") or ""), {})} for track in source["tracks"]]
+                    matching_sources = [
+                        candidate
+                        for candidate in sources
+                        if any(
+                            str(track.get("path")) in own_paths
+                            for track in candidate["tracks"]
+                        )
+                    ]
+                    source = _preferred_duplicate_source(
+                        matching_sources or sources,
+                        album_artist=album.get("album_artist"),
+                    )
+                    album["tracks"] = [
+                        {**track, **own_tracks.get(str(track.get("path") or ""), {})}
+                        for track in source["tracks"]
+                    ]
                     album["track_count_preview"] = source["track_count"]
                     album["total_duration_seconds"] = source["total_duration_seconds"]
                     album["total_duration_display"] = source["total_duration_display"]

@@ -11267,6 +11267,92 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
     browse.invalidate_postgres_utility_projection_cache()
 
 
+def test_preferred_duplicate_source_uses_complete_track_artist_credits():
+    import music_app.services.library_browse_postgres as browse
+
+    plain = {
+        "tracks": [
+            {"title": "Veil Of Insanity", "artist": "Hypersonic"},
+            {"title": "Mother Earth", "artist": "Hypersonic"},
+        ]
+    }
+    credited = {
+        "tracks": [
+            {"title": "Veil Of Insanity", "artist": "Hypersonic, Adam Cook"},
+            {"title": "Mother Earth", "artist": "Hypersonic"},
+        ]
+    }
+
+    assert browse._preferred_duplicate_source(
+        [plain, credited], album_artist="Hypersonic"
+    ) is credited
+
+
+def test_preferred_duplicate_source_keeps_stable_order_when_credits_tie():
+    import music_app.services.library_browse_postgres as browse
+
+    first = {"tracks": [{"artist": "Hypersonic"}]}
+    second = {"tracks": [{"artist": "Hypersonic"}]}
+
+    assert browse._preferred_duplicate_source(
+        [first, second], album_artist="Hypersonic"
+    ) is first
+
+
+def test_album_detail_duplicate_source_exposes_featured_track_credit(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    plain = {
+        "tracks": [{"path": "plain-03", "artist": "Hypersonic"}],
+        "track_count": 1,
+        "total_duration_seconds": 180,
+        "total_duration_display": "3:00",
+    }
+    credited = {
+        "tracks": [
+            {"path": "credited-03", "artist": "Hypersonic, Adam Cook"}
+        ],
+        "track_count": 1,
+        "total_duration_seconds": 180,
+        "total_duration_display": "3:00",
+    }
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: None)
+    monkeypatch.setattr(browse, "_load_duplicate_candidate_album_ids", lambda *_args, **_kwargs: [1])
+    monkeypatch.setattr(
+        browse,
+        "_duplicate_sources_from_rows",
+        lambda _rows: {
+            "hypersonic::kaosmogonia": {
+                "duplicate_sources": [plain, credited]
+            }
+        },
+    )
+
+    class Connection:
+        def execute(self, _sql, _params):
+            return self
+
+        def fetchall(self):
+            return []
+
+    album = {
+        "key": "hypersonic::kaosmogonia",
+        "album_artist": "Hypersonic",
+        "tracks": [
+            {"path": "plain-03", "artist": "Hypersonic"},
+            {"path": "credited-03", "artist": "Hypersonic, Adam Cook"},
+        ],
+    }
+
+    browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-source-credit-test"}
+    )._attach_duplicate_sources([album], connection=Connection())
+
+    assert album["tracks"] == [
+        {"path": "credited-03", "artist": "Hypersonic, Adam Cook"}
+    ]
+
+
 def test_problematic_files_cold_path_separates_candidate_discovery_from_indexed_row_fetch():
     from music_app.services.library_browse_postgres import _problematic_files_sql
 

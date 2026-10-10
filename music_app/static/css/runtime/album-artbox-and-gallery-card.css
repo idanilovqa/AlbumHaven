@@ -108,3 +108,57 @@
   gap: 8px;
   padding: 0 12px 12px;
 }
+
+/* Shared completion slot, approved for Top and future Goals cards. */
+.gallery-card__artwork { position: relative; min-width: 0; border-radius: inherit; }
+:root .gallery-card__completion.action-button {
+  --appearance-item-action-hover-background: transparent;
+  --appearance-item-action-pressed: transparent;
+  --gallery-completion-shadow: drop-shadow(0 1px 1px #000) drop-shadow(0 0 3px #000c);
+  --gallery-completion-glow: color-mix(in srgb, var(--appearance-ink, var(--text, #f3f6fa)) 36%, transparent);
+  position: absolute;
+  left: 5px;
+  bottom: 5px;
+  z-index: 4;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #b2b9bf;
+  box-shadow: none;
+  outline: none;
+  filter: var(--gallery-completion-shadow);
+  transform-origin: center;
+  transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease;
+}
+:root .gallery-card__completion .action-button__content,
+:root .gallery-card__completion .action-button__icon { width: 19px; height: 19px; }
+:root .gallery-card__completion .ui-icon { stroke-width: 2; }
+:root .gallery-card__completion:not(:disabled):not([aria-disabled="true"]) { opacity: 0; }
+:root .gallery-card__completion.action-button.action-button--toggle[aria-pressed="true"]:not(:disabled):not([aria-disabled="true"]) { color: var(--success, #34d399); opacity: 1; }
+:root .gallery-card__artwork:is(:hover, :focus-within) .gallery-card__completion:not(:disabled):not([aria-disabled="true"]) { opacity: 1; }
+@media (hover: hover) {
+  :root .gallery-card__completion:hover:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(1.08);
+    filter: var(--gallery-completion-shadow) drop-shadow(0 0 3px var(--gallery-completion-glow));
+  }
+}
+:root .gallery-card__completion:focus-visible:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(1.08);
+  filter: var(--gallery-completion-shadow) drop-shadow(0 0 1px var(--text, #fff)) drop-shadow(0 0 4px var(--gallery-completion-glow));
+}
+:root .gallery-card__completion:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(.96);
+  filter: var(--gallery-completion-shadow) drop-shadow(0 0 3px var(--gallery-completion-glow));
+}
+@media (hover: none), (pointer: coarse) {
+  :root .gallery-card__completion:not(:disabled):not([aria-disabled="true"]) { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root .gallery-card__completion.action-button { transition: none; }
+  :root .gallery-card__completion.action-button:not(:disabled):not([aria-disabled="true"]) { transform: none; }
+}

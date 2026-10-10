@@ -1236,7 +1236,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       ?? base?.surface_request
       ?? '',
   ).trim().toLowerCase();
-  const isPlaylistSurface = resolvedSurface === 'playlists';
+  const isCollectionSurface = resolvedSurface === 'playlists' || resolvedSurface === 'album_tops';
   const playbackContext = normalizeRuntimePlaybackContext(source.playback_context, base.playback_context);
   const hasSelectedArtistFamilyDisplayMode = Object.prototype.hasOwnProperty.call(source, 'selected_artist_family_display_mode')
     || Object.prototype.hasOwnProperty.call(base, 'selected_artist_family_display_mode')
@@ -1265,28 +1265,28 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...base,
     ...source,
     artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.artist_groups,
-      isPlaylistSurface ? [] : base.artist_groups,
+      isCollectionSurface ? [] : source.artist_groups,
+      isCollectionSurface ? [] : base.artist_groups,
     ),
     primary_artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.primary_artist_groups),
-      isPlaylistSurface ? [] : base.primary_artist_groups,
+      isCollectionSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.primary_artist_groups),
+      isCollectionSurface ? [] : base.primary_artist_groups,
     ),
     family_artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.family_artist_groups),
-      isPlaylistSurface ? [] : base.family_artist_groups,
+      isCollectionSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.family_artist_groups),
+      isCollectionSurface ? [] : base.family_artist_groups,
     ),
     artists_sidebar: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.artists_sidebar,
-      isPlaylistSurface ? [] : base.artists_sidebar,
+      isCollectionSurface ? [] : source.artists_sidebar,
+      isCollectionSurface ? [] : base.artists_sidebar,
     ),
     related_artists: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.related_artists,
-      isPlaylistSurface ? [] : base.related_artists,
+      isCollectionSurface ? [] : source.related_artists,
+      isCollectionSurface ? [] : base.related_artists,
     ),
     related_filter_artists: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.related_filter_artists,
-      isPlaylistSurface ? [] : base.related_filter_artists,
+      isCollectionSurface ? [] : source.related_filter_artists,
+      isCollectionSurface ? [] : base.related_filter_artists,
     ).map((artist) => String(artist || '')),
     search_filters: normalizeRuntimeSearchFilters(source.search_filters, base.search_filters),
     search_filter_contract: normalizeRuntimeSearchFilterContract(source.search_filter_contract, base.search_filter_contract),
@@ -1307,8 +1307,8 @@ function normalizeViewPayload(payload, fallbackView = null) {
     manual_version_links: cloneRuntimeObject(source.manual_version_links, base.manual_version_links),
     query: normalizeRuntimeString(source.query, base.query),
     selected_artist: normalizeRuntimeString(
-      isPlaylistSurface ? '' : source.selected_artist,
-      isPlaylistSurface ? '' : base.selected_artist,
+      isCollectionSurface ? '' : source.selected_artist,
+      isCollectionSurface ? '' : base.selected_artist,
     ),
     gallery_scope: normalizeRuntimeString(source.gallery_scope, base.gallery_scope),
     gallery_display_mode: normalizeRuntimeGalleryDisplayMode(source.gallery_display_mode, base.gallery_display_mode),
@@ -1319,16 +1319,16 @@ function normalizeViewPayload(payload, fallbackView = null) {
     album_count: normalizeRuntimeNumber(source.album_count, base.album_count),
     artist_count: normalizeRuntimeNumber(source.artist_count, base.artist_count),
     all_artists_active: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.all_artists_active,
-      isPlaylistSurface ? false : base.all_artists_active,
+      isCollectionSurface ? false : source.all_artists_active,
+      isCollectionSurface ? false : base.all_artists_active,
     ),
     show_all_artists_sidebar_link: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.show_all_artists_sidebar_link,
-      isPlaylistSurface ? false : base.show_all_artists_sidebar_link,
+      isCollectionSurface ? false : source.show_all_artists_sidebar_link,
+      isCollectionSurface ? false : base.show_all_artists_sidebar_link,
     ),
     primary_filter_active: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.primary_filter_active,
-      isPlaylistSurface ? false : base.primary_filter_active,
+      isCollectionSurface ? false : source.primary_filter_active,
+      isCollectionSurface ? false : base.primary_filter_active,
     ),
     initial_view_partial: normalizeRuntimeBoolean(
       source.initial_view_partial,
@@ -1338,12 +1338,12 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
   // A replacement search/artist payload must not inherit a root page cursor.
-  if (isPlaylistSurface || normalizedView.query || normalizedView.selected_artist
+  if (isCollectionSurface || normalizedView.query || normalizedView.selected_artist
     || (Array.isArray(source.artist_groups) && !Object.prototype.hasOwnProperty.call(source, 'gallery_page'))) {
     delete normalizedView.gallery_page;
     delete normalizedView.gallery_page_scope;
   }
-  if (isPlaylistSurface) {
+  if (isCollectionSurface) {
     delete normalizedView.artist_family_filters;
     delete normalizedView.artist_page;
     delete normalizedView.playback_context;
@@ -1354,6 +1354,16 @@ function normalizeViewPayload(payload, fallbackView = null) {
     if (!isRuntimePlainObject(source.playlist_index)) {
       delete normalizedView.playlist_index;
     }
+  }
+  if (resolvedSurface !== 'album_tops') delete normalizedView.top_ref;
+  if (resolvedSurface === 'album_tops') {
+    normalizedView.top_ref = typeof source.top_ref === 'string' ? source.top_ref : null;
+    delete normalizedView.playlist_detail;
+    delete normalizedView.playlist_index;
+    delete normalizedView.playlist_sidebar;
+    delete normalizedView.playlist_creation_source;
+    delete normalizedView.playlist_actions;
+    delete normalizedView.search_context;
   }
   return normalizedView;
 }
@@ -1769,8 +1779,11 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  if (typeof selectLibrarySidebarMode === 'function' && previousView.surface?.active !== nextView.surface?.active
+    && ['playlists', 'album_tops'].includes(nextView.surface?.active)) selectLibrarySidebarMode(nextView.surface.active);
   if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
   if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
+  if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
@@ -1975,8 +1988,8 @@ function resolveViewSurface(view = {}) {
   const selectedArtist = String(view.selected_artist || '').trim();
   const query = String(view.query || '').trim();
   const allArtistsActive = Boolean(view.all_artists_active);
-  if (normalizedSurface === 'playlists') {
-    return 'playlists';
+  if (normalizedSurface === 'playlists' || normalizedSurface === 'album_tops') {
+    return normalizedSurface;
   }
   if (normalizedSurface === 'home') {
     if (!selectedArtist && !query && !allArtistsActive) {
@@ -2014,6 +2027,11 @@ function appendPlaylistStateParams(params, view, resolvedSurface) {
 function buildUrl(view) {
   const params = new URLSearchParams();
   const resolvedSurface = resolveViewSurface(view);
+  if (resolvedSurface === 'album_tops') {
+    params.set('surface', resolvedSurface);
+    if (view.top_ref) params.set('top_ref', String(view.top_ref));
+    return `/?${params}`;
+  }
   if (resolvedSurface === 'home') {
     return '/';
   }
@@ -2052,6 +2070,10 @@ function buildApiUrl(view, options = {}) {
   }
   const params = new URLSearchParams();
   params.set('surface', resolvedSurface);
+  if (resolvedSurface === 'album_tops') {
+    if (view.top_ref) params.set('top_ref', String(view.top_ref));
+    return `/view-data?${params}`;
+  }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
@@ -2093,6 +2115,7 @@ function parseUrlStateFromUrl(url, baseOrigin) {
   return {
     surface_request: u.searchParams.get('surface') || '',
     playlist_id: u.searchParams.get('playlist_id') || '',
+    top_ref: u.searchParams.get('top_ref') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
@@ -2850,6 +2873,12 @@ function waitForBrowserTimeout(delay = 0) {
 
 function isEffectivelyEmptyView(view) {
   const v = view || {};
+  const surface = String(v.surface?.active || v.surface_request || '').trim().toLowerCase();
+  const contentKind = v.shell_layout?.slots?.main_content?.content_kind;
+  // Collections own their loading/empty state outside the album gallery. A
+  // complete collection shell must not start gallery hydration or scan UI.
+  if ((surface === 'playlists' && ['playlist_index', 'playlist_detail'].includes(contentKind))
+    || (surface === 'album_tops' && contentKind === 'album_tops')) return false;
   const sidebarCount = Array.isArray(v.artists_sidebar) ? v.artists_sidebar.length : 0;
   const groupCollections = [
     v.primary_artist_groups,
@@ -2948,6 +2977,7 @@ function shouldRunImmediateStartupHydration(view, bootstrap = {}) {
   const startupHydration = bootstrap?.startupHydration || {};
   const hydrationNeeded = Boolean(
     bootstrap?.partialView
+    || view?.initial_view_partial
     || isEffectivelyEmptyView(view)
     || startupHydration.required
   );
@@ -4783,11 +4813,6 @@ function syncMobileAlbumComposition(album) {
 /* Controlled placement of existing widgets; their components retain content ownership. */
 const Dashboard = (() => {
   const mountedRoots = new WeakSet();
-  const sizePaths = {
-    full: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
-    widget: 'M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5',
-    back: 'm10 5-7 7 7 7M3 12h18',
-  };
 
   function mount(root, options = {}) {
     if (!(root instanceof HTMLElement) || mountedRoots.has(root)
@@ -4802,17 +4827,19 @@ const Dashboard = (() => {
         || keys.has(descriptor.key)) {
         throw new TypeError('Dashboard widget keys must be nonempty and unique.');
       }
-      const { key, element, header, body } = descriptor;
+      const { key, element, header, body, backHost = header } = descriptor;
       const nodes = [element, header, body];
       if (nodes.some(node => !(node instanceof HTMLElement) || owners.has(node))
         || new Set(nodes).size !== nodes.length || element.parentNode !== root
         || !element.contains(header) || !element.contains(body)
-        || header.contains(body) || body.contains(header)) {
+        || header.contains(body) || body.contains(header)
+        || !(backHost instanceof HTMLElement) || backHost.ownerDocument !== root.ownerDocument
+        || body.contains(backHost)) {
         throw new TypeError('Dashboard widgets require distinct existing element, header and body owners.');
       }
       keys.add(key);
       nodes.forEach(node => owners.add(node));
-      return { key, element, header, body };
+      return { key, element, header, body, backHost };
     });
     const onSizeIntent = options.onSizeIntent;
     const attributes = [
@@ -4829,20 +4856,37 @@ const Dashboard = (() => {
         ariaLabel: 'Full size',
         title: 'Full size',
         presentation: 'bare',
+        icon: 'expand',
         iconClass: 'dashboard__size-icon',
-        attributes: { 'aria-expanded': 'false' },
+        attributes: { 'aria-expanded': 'false', 'data-dashboard-action': 'expand' },
       });
       const button = holder.firstElementChild;
-      button.querySelector('.dashboard__size-icon').innerHTML = `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${sizePaths.full}"/></svg>`;
-      const path = button.querySelector('path');
-      const parent = widget.header.querySelector('.gallery-bar__actions, .album-details-header__actions') || widget.header;
+      let parent = widget.header.querySelector('.gallery-bar__actions, .album-details-header__actions');
+      const ownsParent = !parent;
+      if (!parent) {
+        parent = root.ownerDocument.createElement('div');
+        parent.className = widget.header.classList.contains('album-details-header')
+          ? 'album-details-header__actions' : 'gallery-bar__actions';
+        widget.header.appendChild(parent);
+      }
+      holder.innerHTML = ButtonComponent.renderActionButton({
+        icon: 'back', ariaLabel: 'Back', title: 'Back', presentation: 'bare',
+        attributes: { 'data-dashboard-action': 'back' },
+      });
+      const back = holder.firstElementChild;
       const onClick = (event) => {
-        if (disposed) return;
+        if (disposed || expandedKey === widget.key) return;
         event.preventDefault();
         event.stopPropagation();
-        onSizeIntent(widget.key, expandedKey === widget.key ? null : widget.key);
+        onSizeIntent(widget.key, widget.key);
       };
-      return { widget, button, path, parent, onClick };
+      const onBack = (event) => {
+        if (disposed || expandedKey !== widget.key) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSizeIntent(widget.key, null);
+      };
+      return { widget, button, back, parent, ownsParent, onClick, onBack };
     }) : [];
 
     function update(state = {}) {
@@ -4851,6 +4895,8 @@ const Dashboard = (() => {
       if (nextKey !== null && !keys.has(nextKey)) {
         throw new TypeError('Dashboard expandedKey must be null or an existing widget key.');
       }
+      const previousKey = expandedKey;
+      const focused = controls.some(({button, back}) => [button, back].includes(root.ownerDocument.activeElement));
       // A sole widget already occupies the full container in every controlled state.
       expandedKey = widgets.length === 1 ? null : nextKey;
       root.setAttribute('data-dashboard-layout', widgets.length === 1 ? 'single' : expandedKey === null ? 'ordinary' : 'expanded');
@@ -4861,22 +4907,30 @@ const Dashboard = (() => {
           : widget.key === expandedKey ? 'expanded' : 'suppressed';
         widget.element.setAttribute('data-dashboard-widget-state', state);
       });
-      controls.forEach(({ widget, button, path }) => {
+      controls.forEach(({ widget, button, back, parent }) => {
         const expanded = widget.key === expandedKey;
-        const label = expanded ? options.returnPresentation === 'back' ? 'Back' : 'Widget size' : 'Full size';
-        button.setAttribute('aria-label', label);
-        button.setAttribute('title', label);
-        button.setAttribute('aria-expanded', String(expanded));
-        path.setAttribute('d', expanded ? options.returnPresentation === 'back' ? sizePaths.back : sizePaths.widget : sizePaths.full);
+        if (expanded) {
+          button.remove();
+          if (back.parentNode !== widget.backHost) widget.backHost.prepend(back);
+        } else {
+          back.remove();
+          if (button.parentNode !== parent) parent.prepend(button);
+        }
       });
+      if (focused && previousKey !== expandedKey) {
+        const control = controls.find(({widget}) => widget.key === (expandedKey ?? previousKey));
+        (expandedKey === null ? control?.button : control?.back)?.focus({preventScroll: true});
+      }
     }
 
     function dispose() {
       if (disposed) return;
       disposed = true;
-      controls.forEach(({ button, onClick }) => {
+      controls.forEach(({ button, back, parent, ownsParent, onClick, onBack }) => {
         button.removeEventListener('click', onClick);
-        button.remove();
+        back.removeEventListener('click', onBack);
+        button.remove(); back.remove();
+        if (ownsParent) parent.remove();
       });
       attributes.forEach(({ element, name, previous }) => {
         if (previous === null) element.removeAttribute(name);
@@ -4887,9 +4941,10 @@ const Dashboard = (() => {
 
     mountedRoots.add(root);
     root.setAttribute('data-dashboard', 'true');
-    controls.forEach(({ button, parent, onClick }) => {
-      parent.appendChild(button);
+    controls.forEach(({ button, back, parent, onClick, onBack }) => {
+      parent.prepend(button);
       button.addEventListener('click', onClick);
+      back.addEventListener('click', onBack);
     });
     update({ expandedKey: null });
     return { update, dispose };
@@ -9321,10 +9376,17 @@ function isArtistsDrawerElement(value) {
 
 function getArtistsDrawerElements() {
   return {
-    button: document.getElementById('artists-drawer-button'),
+    button: ['playlists', 'album_tops'].includes(String(state.view?.surface?.active || ''))
+      ? getLibraryDrawerTrigger() : document.getElementById('artists-drawer-button'),
     rail: document.getElementById('shell-navigation-rail'),
     backdrop: document.getElementById('shell-navigation-rail-backdrop'),
   };
+}
+function getLibraryDrawerTrigger() {
+  const surface = String(state.view?.surface?.active || '');
+  return ['playlists', 'album_tops'].includes(surface)
+    ? document.getElementById('collection-library-navigation-button')
+    : document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button');
 }
 
 function getArtistTreeFoldElements() {
@@ -9346,7 +9408,30 @@ function getArtistsDrawerNavigationContentKind(view = state.view || {}) {
 }
 
 function canUseArtistsDrawerForCurrentView() {
-  return getArtistsDrawerNavigationContentKind() === 'artists_sidebar';
+  return ['artists_sidebar', 'playlist_sidebar', 'album_tops_sidebar'].includes(getArtistsDrawerNavigationContentKind());
+}
+
+// Sidebar choice is shell presentation. Only opening a resource navigates.
+function getLibrarySidebarMode() {
+  if (['albums', 'playlists', 'album_tops'].includes(state.ui.librarySidebarMode)) return state.ui.librarySidebarMode;
+  const surface = String(state.view?.surface?.active || '');
+  return ['playlists', 'album_tops'].includes(surface) ? surface : 'albums';
+}
+function syncLibrarySidebarMode() {
+  const mode = getLibrarySidebarMode();
+  const folded = Boolean(!isArtistsDrawerMobileViewport() && state.ui.artistTreeFolded);
+  document.getElementById('sidebar-list')?.toggleAttribute('hidden', folded || mode !== 'albums');
+  document.getElementById('playlist-sidebar-root')?.toggleAttribute('hidden', mode !== 'playlists');
+  document.getElementById('album-tops-sidebar-root')?.toggleAttribute('hidden', mode !== 'album_tops');
+  const surface = String(state.view?.surface?.active || '');
+  document.getElementById('collection-library-navigation')?.toggleAttribute('hidden', !['playlists', 'album_tops'].includes(surface));
+}
+function selectLibrarySidebarMode(mode) {
+  if (!['albums', 'playlists', 'album_tops'].includes(mode)) return false;
+  state.ui.librarySidebarMode = mode;
+  syncLibrarySidebarMode();
+  window.dispatchEvent(new Event('albumhaven:library-sidebar-change'));
+  return true;
 }
 
 function isArtistsDrawerMobileViewport() {
@@ -9423,6 +9508,7 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (expandedTree) expandedTree.hidden = isFolded;
   if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
   if (list) list.hidden = isFolded;
+  syncLibrarySidebarMode();
   document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '240px');
   if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
   return isFolded;
@@ -9505,7 +9591,7 @@ function openArtistsDrawer() {
     return false;
   }
   const rail = document.getElementById('shell-navigation-rail');
-  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button') });
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: getLibraryDrawerTrigger() });
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
   document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
@@ -9518,7 +9604,7 @@ function closeArtistsDrawer(options = {}) {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(document.getElementById('shell-navigation-rail'));
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.({ preventScroll: true });
+    getLibraryDrawerTrigger()?.focus?.({ preventScroll: true });
   }
   return wasOpen;
 }
@@ -12188,7 +12274,7 @@ function decorateTrackModalSelection() {
     host.innerHTML = ButtonComponent.renderActionButton({icon: 'expand', ariaLabel: 'Full size', title: 'Full size', presentation: 'bare',
       attributes: {'data-resource-selection-page': '1'}});
     const button = host.firstElementChild;
-    actions.appendChild(button); button.addEventListener('click', lease.onPage);
+    actions.prepend(button); button.addEventListener('click', lease.onPage);
   } else if (!canPage && oldPage) {
     const restoreFocus = oldPage === document.activeElement || oldPage.contains(document.activeElement);
     oldPage.remove();
@@ -43240,6 +43326,7 @@ function syncMobileHome() {
   document.getElementById('shell-main-surface')?.classList.toggle('has-mobile-home', show);
   if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
   if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
+  if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
   if (!show && typeof showMobileGalleryPinchHint === 'function') showMobileGalleryPinchHint();
 }
 
@@ -44922,13 +45009,16 @@ const HomeFriendsRuntime = (() => {
       const query = entry?.query;
       if (!query || !['recent', 'friends'].includes(query.section) || !['albums', 'artists', 'tracks', 'listens'].includes(query.kind)
         || !['week', 'month', 'six', 'year', 'all'].includes(query.period)
+        || query.homeSection != null && query.homeSection !== 'queue'
+        || query.homeSection === 'queue' && (query.section !== 'recent' || query.kind !== 'tracks' || query.period !== 'week')
         || (query.section === 'friends' ? !reference(query.account_ref) : query.account_ref !== null)) continue;
-      const normalizedQuery = Object.freeze({section: query.section, account_ref: query.account_ref, kind: query.kind, period: query.period});
+      const normalizedQuery = Object.freeze({section: query.section, account_ref: query.account_ref, kind: query.kind, period: query.period,
+        ...(query.homeSection === 'queue' ? {homeSection: 'queue'} : {})});
       const key = JSON.stringify(normalizedQuery);
       if (seen.has(key)) continue;
       seen.add(key);
       const selected = entry.selected;
-      const normalizedSelection = reference(selected?.rowId) && ['album', 'artist'].includes(selected.targetKind)
+      const normalizedSelection = query.homeSection !== 'queue' && reference(selected?.rowId) && ['album', 'artist'].includes(selected.targetKind)
         && reference(selected.targetRef) && (selected.snapshotRef == null || reference(selected.snapshotRef))
         ? Object.freeze({rowId: selected.rowId, targetKind: selected.targetKind, targetRef: selected.targetRef,
           snapshotRef: selected.snapshotRef ?? null}) : null;
@@ -44937,9 +45027,9 @@ const HomeFriendsRuntime = (() => {
         && tracks.rowIds.length > 0 && tracks.rowIds.length <= 5000 && tracks.rowIds.every(reference)
         && new Set(tracks.rowIds).size === tracks.rowIds.length
         && (tracks.snapshotRef == null || reference(tracks.snapshotRef))
-        ? Object.freeze({rowIds: Object.freeze([...tracks.rowIds]), snapshotRef: tracks.snapshotRef ?? null}) : null;
+        ? Object.freeze({rowIds: Object.freeze([...tracks.rowIds]), snapshotRef: query.homeSection === 'queue' ? null : tracks.snapshotRef ?? null}) : null;
       selectionPresentation.push(Object.freeze({query: normalizedQuery, selected: normalizedTracks ? null : normalizedSelection, tracks: normalizedTracks,
-        childAlbumRef: normalizedSelection?.targetKind === 'artist' || normalizedTracks ? reference(entry.childAlbumRef) : null,
+        childAlbumRef: query.homeSection !== 'queue' && (normalizedSelection?.targetKind === 'artist' || normalizedTracks) ? reference(entry.childAlbumRef) : null,
         pane: choice(entry.pane, ['recent', 'artist', 'album'], 'recent'),
         expanded: choice(entry.expanded, ['recent', 'friends', 'artist', 'album'], null),
         scroll: Object.freeze({source: position(entry.scroll?.source), artist: position(entry.scroll?.artist), album: position(entry.scroll?.album)})}));
@@ -46113,6 +46203,21 @@ const PlaylistReactRuntime = (() => {
     }
   }
   async function readPlaylists(options) {return (await readPlaylistSource(options)).projection;}
+  async function readSidebarDirectory({scopeKey, signal} = {}) {
+    const start = sync();
+    const active = () => {
+      const next = sync();
+      return next.authenticated && next.scopeKey === start.scopeKey && getLibrarySidebarMode() === 'playlists'
+        && new URL(window.location.href).pathname === '/';
+    };
+    if (scopeKey !== start.scopeKey || !active()) throw failure('Playlist directory is unavailable.', 403);
+    const payload = await PrivateUITransport.request('/view-data?surface=playlists', {signal});
+    if (signal?.aborted || !active()) throw aborted();
+    const result = projection(payload);
+    if (!result?.playlist_index || result.playlist_detail) throw failure('Invalid Playlist directory.');
+    // Reading sidebar labels must not replace the active media/source authority.
+    return result;
+  }
   function createPlaytableSource({rows, context, instance, revision, isCurrent}) {
     const source = raw, epoch = playlistReadEpoch;
     return createPrivatePlaytableSource({scopeKey: context?.scopeKey, rows, instance, revision,
@@ -46324,7 +46429,8 @@ const PlaylistReactRuntime = (() => {
   }
   async function navigate({playlist_id = null} = {}) {
     const start = sync();
-    if (!start.visible || playlist_id !== null && (typeof playlist_id !== 'string' || !playlist_id.trim())) throw failure('Playlist navigation is unavailable.');
+    if ((!start.visible && !(start.authenticated && getLibrarySidebarMode() === 'playlists'))
+      || playlist_id !== null && (typeof playlist_id !== 'string' || !playlist_id.trim())) throw failure('Playlist navigation is unavailable.');
     const open = () => navigateCurrent(playlist_id, start);
     const deferred = typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(open);
     return deferred || open();
@@ -46455,7 +46561,7 @@ const PlaylistReactRuntime = (() => {
   const resourceSelection = selectionApi()?.create({sourceResource, retainResource, revalidateResource, authorizeResource: resolveNativeAlbum});
   return {
     snapshot: sync, sync, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
-    readPlaylists, navigate, navigateFromPlaytable, createPlaytableSource,
+    readPlaylists, readSidebarDirectory, navigate, navigateFromPlaytable, createPlaytableSource,
     notificationRegistry: () => window.AlbumHavenNotifications,
     subscribeNotificationRegistry(listener) {
       window.addEventListener('albumhaven:notifications-ready', listener);
@@ -46558,6 +46664,126 @@ window.AlbumHavenPlaylistRuntime = PlaylistReactRuntime;
 window.dispatchEvent(new Event('albumhaven:playlist-runtime-ready'));
 
 // END js/runtime/playlists-react-bridge.js
+
+// BEGIN js/runtime/album-tops-react-bridge.js
+
+/* Native shell/navigation adapter. Top data never enters gallery state/history. */
+const AlbumTopsRuntime = (() => {
+  const listeners = new Set();
+  let current = null, lastView = null, viewVersion = 0, confirmation = null;
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  const aborted = () => Object.assign(new Error('Album Top navigation was superseded.'), {name: 'AbortError'});
+  function sync() {
+    const shell = document.getElementById('app-shell'), host = document.getElementById('album-tops-root');
+    let context = null;
+    try {context = PrivateUITransport.context();} catch { /* A retired context cannot authorize private reads. */ }
+    const scopeKey = JSON.stringify([shell?.dataset?.nativeAccountId || '', shell?.dataset?.nativeLibraryId || '', context, PrivateUITransport.generation()]);
+    const authenticated = Boolean(context && shell?.dataset?.nativeAccountId && shell?.dataset?.nativeLibraryId);
+    const inLibrary = new URL(window.location.href).pathname === '/' && shell?.hidden !== true;
+    const active = inLibrary && String(state.view?.surface?.active || state.view?.surface_request || '') === 'album_tops';
+    if (lastView !== state.view) {lastView = state.view; viewVersion++;}
+    const next = {scopeKey, authenticated, inLibrary, active, visible: Boolean(host && active && !state.ui?.pendingViewTransition),
+      topRef: active && typeof state.view.top_ref === 'string' && state.view.top_ref ? state.view.top_ref : null,
+      sidebarMode: getLibrarySidebarMode(), viewVersion, viewRequestId: state.ui?.activeViewRequestId || 0};
+    if (confirmation && (!authenticated || confirmation.scopeKey !== scopeKey || confirmation.viewVersion !== viewVersion)) {
+      if (typeof activeAppConfirmDialog !== 'undefined' && activeAppConfirmDialog?.promise === confirmation.promise) activeAppConfirmDialog.cancel({restoreFocus: false});
+      confirmation = null;
+    }
+    if (host) host.hidden = !next.visible;
+    document.getElementById('shell-main-surface')?.classList.toggle('has-react-album-tops', next.visible);
+    if (current && Object.keys(next).every(key => current[key] === next[key])) return current;
+    current = Object.freeze(next);
+    for (const listener of [...listeners]) listener();
+    return current;
+  }
+  const acceptsPrivateScope = scopeKey => {
+    const snapshot = sync();
+    return snapshot.authenticated && snapshot.inLibrary && snapshot.scopeKey === scopeKey;
+  };
+  async function navigate({top_ref = null, isCurrent = () => true, expectedViewRequestId} = {}) {
+    const start = sync();
+    if (!acceptsPrivateScope(start.scopeKey) || top_ref !== null && !uuid(top_ref) || !isCurrent()
+      || expectedViewRequestId !== undefined && start.viewRequestId !== expectedViewRequestId) return false;
+    const open = async () => {
+      if (!isCurrent() || !acceptsPrivateScope(start.scopeKey) || sync().viewVersion !== start.viewVersion
+        || sync().viewRequestId !== start.viewRequestId) throw aborted();
+      const priorView = state.view, params = new URLSearchParams({surface: 'album_tops'});
+      if (top_ref) params.set('top_ref', top_ref);
+      let requestId = null;
+      const pending = fetchAndRender(`/view-data?${params}`, true, {source: 'library', shouldApplyResponse(payload) {
+        if (!isCurrent() || sync().scopeKey !== start.scopeKey || !sync().authenticated || state.view !== priorView
+          || !sync().inLibrary || requestId !== null && state.ui.activeViewRequestId !== requestId) return false;
+        try {PrivateUITransport.accept(payload);} catch {return false;}
+        return payload?.surface?.active === 'album_tops' && (payload.top_ref || null) === top_ref;
+      }});
+      requestId = state.ui.activeViewRequestId;
+      const applied = await pending, next = sync();
+      if (requestId !== state.ui.activeViewRequestId || next.scopeKey !== start.scopeKey || !next.authenticated) throw aborted();
+      if (applied === false || !next.visible || next.topRef !== top_ref) return false;
+      closeArtistsDrawer({restoreFocus: false});
+      return true;
+    };
+    return (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(open)) || open();
+  }
+  async function confirm(message, options = {}) {
+    const start = sync();
+    if (!start.visible || !start.authenticated || typeof showAppConfirmDialog !== 'function' || activeAppConfirmDialog) return false;
+    const owner = {scopeKey: start.scopeKey, viewVersion: start.viewVersion,
+      promise: showAppConfirmDialog({title: options.title || 'Discard Album Top changes', message,
+        acceptLabel: options.acceptLabel || 'Discard', danger: options.danger !== false})};
+    confirmation = owner;
+    try {
+      const accepted = await owner.promise, next = sync();
+      return accepted === true && confirmation === owner && next.visible && next.authenticated
+        && next.scopeKey === start.scopeKey && next.viewVersion === start.viewVersion;
+    } finally {if (confirmation === owner) confirmation = null;}
+  }
+  const components = window.AlbumHavenHomeRuntime;
+  PrivateUITransport.subscribe(sync);
+  window.addEventListener('popstate', sync);
+  window.addEventListener('albumhaven:library-sidebar-change', sync);
+  const shell = document.getElementById('app-shell');
+  if (shell && typeof MutationObserver === 'function') new MutationObserver(sync).observe(shell,
+    {attributes: true, attributeFilter: ['hidden', 'data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
+  return Object.freeze({
+    snapshot: sync, sync, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+    acceptsPrivateScope, navigate, selectSidebar: selectLibrarySidebarMode,
+    buttonHtml: components.buttonHtml, actionHtml: components.actionHtml, alertHtml: components.alertHtml,
+    searchHtml: components.searchHtml,
+    notificationRegistry: () => window.AlbumHavenNotifications,
+    subscribeNotificationRegistry(listener) {
+      window.addEventListener('albumhaven:notifications-ready', listener);
+      return () => window.removeEventListener('albumhaven:notifications-ready', listener);
+    },
+    galleryCardHtml: components.galleryCardHtml, artboxHtml: components.artboxHtml,
+    navigationItemHtml: components.navigationItemHtml, openChoice: components.openChoice,
+    openForm(options) {
+      const start = sync(), sourceView = state.view, sourceUrl = window.location.href;
+      let formOwner = null;
+      const currentView = () => {
+        const next = sync();
+        return next.visible && next.authenticated && next.scopeKey === start.scopeKey && next.viewVersion === start.viewVersion
+          && state.view === sourceView && window.location.href === sourceUrl;
+      };
+      const form = openReactFormDialog({...options, retainParentView: () => currentView()
+        && formOwner?.isCurrentContext() === true && (!activeAppFormDialog || activeAppFormDialog === formOwner)}, currentView);
+      formOwner = activeAppFormDialog;
+      return form;
+    },
+    deferFormNavigation: callback => typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(callback),
+    confirm,
+    confirmRetryOriginal(scopeKey) {
+      if (!acceptsPrivateScope(scopeKey)) return Promise.resolve(false);
+      return confirm('Retry the exact original request with its original operation key and unchanged data? This checks the server result without creating a duplicate change.',
+        {title: 'Retry original request', acceptLabel: 'Retry', danger: false});
+    },
+  });
+})();
+function syncAlbumTopsRuntime() {AlbumTopsRuntime.sync();}
+window.AlbumHavenAlbumTopsRuntime = AlbumTopsRuntime;
+window.dispatchEvent(new Event('albumhaven:album-tops-runtime-ready'));
+
+// END js/runtime/album-tops-react-bridge.js
 
 // BEGIN js/runtime/bootstrap-event-handlers.js
 
@@ -46783,6 +47009,15 @@ function resolveInitialHydrationEndpoint(startupHydration, options = {}) {
           serverUrl.searchParams.delete(param);
         }
       });
+      if (serverUrl.pathname === resolvedUrl.pathname
+        && serverUrl.searchParams.get('surface') === resolvedUrl.searchParams.get('surface')) {
+        // Hydration may choose a payload tier, but cannot change the native
+        // collection identity that the initial shell already resolved.
+        ['playlist_id', 'top_ref'].forEach((param) => {
+          if (resolvedUrl.searchParams.has(param)) serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
+          else serverUrl.searchParams.delete(param);
+        });
+      }
       return `${serverUrl.pathname}${serverUrl.search}`;
     }
   }

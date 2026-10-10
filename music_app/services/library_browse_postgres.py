@@ -6116,6 +6116,7 @@ def _queue_display_cover_variants_for_groups(
     try:
         from music_app.services.covers import (
             display_cover_variant_cache_root,
+            normalize_cover_variant_revision,
             queue_cover_display_variant_generation,
         )
     except Exception:
@@ -6141,10 +6142,18 @@ def _queue_display_cover_variants_for_groups(
             seen_cover_paths.add(cover_path)
             try:
                 source_path = Path(cover_path)
+                cover_revision = normalize_cover_variant_revision(album.get("cover_revision"))
+                revision_options = (
+                    {"revision": cover_revision} if cover_revision else {}
+                )
                 queue_cover_display_variant_generation(
                     source_path,
-                    cache_root=display_cover_variant_cache_root(source_path),
+                    cache_root=display_cover_variant_cache_root(
+                        source_path,
+                        data_dir=config.get("DATA_DIR") if cover_revision else None,
+                    ),
                     max_size=_DISPLAY_COVER_VARIANT_SIZE,
+                    **revision_options,
                     **priority_options,
                 )
             except Exception:

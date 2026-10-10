@@ -1779,3 +1779,36 @@ def test_paged_startup_sidebar_markup_is_bounded_without_truncating_metadata():
     assert 'Artist 039' in markup and 'Artist 040' not in markup
     assert len(view["artists_sidebar"]) == 51
     assert '>51<' in markup
+
+
+def test_asgi_revisioned_cover_route_serves_local_variant_without_source_file(app, asgi_app):
+    from music_app.services.covers import (
+        build_cover_variant_base_path,
+        display_cover_variant_cache_root,
+    )
+
+    source_path = app.config["MUSIC_DIR"] / "Offline Artist" / "Offline Album" / "cover.jpg"
+    revision = "b" * 64
+    cache_root = display_cover_variant_cache_root(
+        source_path,
+        data_dir=app.config["DATA_DIR"],
+    )
+    cached_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    cached_variant.parent.mkdir(parents=True, exist_ok=True)
+    cached_variant.write_bytes(b"local-revision-preview")
+
+    status, headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={"path": str(source_path), "size": "480", "v": revision},
+    )
+
+    assert status == 200
+    assert "max-age=31536000" in headers.get("cache-control", "")
+    assert body == b"local-revision-preview"

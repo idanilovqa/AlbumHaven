@@ -1490,3 +1490,69 @@ def test_executor_rejection_settles_and_clears_current_cover_work(tmp_path, monk
     assert shared_result is not None
     assert shared_result.result(timeout=2) is None
     assert str(variant_base) not in covers_module._COVER_VARIANT_PREWARM_INFLIGHT
+
+
+def test_revision_addressed_cover_variant_reuses_local_cache_without_source_probe(tmp_path, monkeypatch):
+    source_path = tmp_path / "offline-library" / "cover.jpg"
+    cache_root = tmp_path / "local-display-cache"
+    revision = "a" * 64
+    variant_base = covers_module.build_cover_variant_base_path(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    )
+    cached_variant = variant_base.with_suffix(".jpg")
+    cached_variant.parent.mkdir(parents=True, exist_ok=True)
+    cached_variant.write_bytes(b"cached-preview")
+
+    monkeypatch.setattr(
+        covers_module,
+        "_image_dimensions_signature",
+        lambda _path: pytest.fail("a revision-addressed cache hit must not probe the source image"),
+    )
+
+    assert covers_module.find_existing_cover_display_variant(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    ) == cached_variant
+
+
+def test_revision_addressed_cover_prewarm_skips_cached_variant_without_source_probe(tmp_path, monkeypatch):
+    source_path = tmp_path / "offline-library" / "cover.jpg"
+    cache_root = tmp_path / "local-display-cache"
+    revision = "c" * 64
+    cached_variant = covers_module.build_cover_variant_base_path(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    cached_variant.parent.mkdir(parents=True, exist_ok=True)
+    cached_variant.write_bytes(b"cached-preview")
+
+    monkeypatch.setattr(
+        covers_module,
+        "_image_dimensions_signature",
+        lambda _path: pytest.fail("prewarm must not probe a cached revision's source image"),
+    )
+    monkeypatch.setattr(
+        covers_module,
+        "_queue_cover_variant_generation",
+        lambda *_args, **_kwargs: pytest.fail("prewarm must not queue a cached revision"),
+    )
+
+    covers_module.queue_cover_display_variant_generation(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    )
+
+
+def test_cover_variant_revision_accepts_only_content_hashes():
+    assert covers_module.normalize_cover_variant_revision("A" * 64) == "a" * 64
+    assert covers_module.normalize_cover_variant_revision("process-session-token") == ""
+    assert covers_module.normalize_cover_variant_revision("1234567890") == ""

@@ -15939,3 +15939,31 @@ def test_root_startup_membership_materializes_shared_eligibility_once():
     sql = browse._root_gallery_membership_sql()
     assert browse._eligible_album_tracks_cte_sql(materialized=True, aggregate_tracks=False) in sql
     assert 'eligible_album_tracks as not materialized' not in sql
+
+
+def test_postgres_cover_variant_queue_uses_local_revision_cache(monkeypatch):
+    from music_app.services import covers as covers_module
+    from music_app.services.library_browse_postgres import _queue_display_cover_variants_for_groups
+
+    queued: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, *, cache_root, max_size, revision: queued.append(
+            (str(source_path), str(cache_root), revision)
+        ),
+    )
+
+    _queue_display_cover_variants_for_groups(
+        {"DATA_DIR": r"C:\AlbumHavenData"},
+        [{"albums": [{"cover_path": r"N:\Music\Artist\Album\cover.jpg", "cover_revision": "d" * 64}]}],
+        limit=1,
+    )
+
+    assert queued == [
+        (
+            r"N:\Music\Artist\Album\cover.jpg",
+            str(Path(r"C:\AlbumHavenData") / "display-cover-cache"),
+            "d" * 64,
+        )
+    ]

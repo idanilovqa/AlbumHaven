@@ -5,12 +5,16 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from music_app.services.owned_album_tops import (
-    AlbumTopError, AlbumTopCommand, BROWSE, CREATE, MANAGE, ITEMS, ACCESS, MAX_TOP_ITEMS,
+    AlbumTopError, AlbumTopCommand, BROWSE, CREATE, MANAGE, ITEMS, ACCESS, PROGRESS, MAX_TOP_ITEMS,
     command_actions, require_top_authority, top_uuid, normalize_top_command,
+    normalize_top_publication_preview,
 )
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.policy import PolicyContext, ResourceScope
 from music_app.services import album_top_viewer_actions as viewers
+from music_app.services import album_top_progress as progress
+from music_app.services import album_top_publication as publication
+from music_app.services import album_top_publication_evidence as publication_evidence
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import encode_social_cursor
 from music_app.services.private_library_authority import (
@@ -20,6 +24,7 @@ from music_app.services.private_library_authority import (
 
 class PostgresOwnedAlbumTopsService:
     def __init__(self, config, *, connect=None, clock=None):
+        self._config = config
         self._url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         if not self._url:
             raise RuntimeError("PostgreSQL configuration is required for Album Tops.")
@@ -100,6 +105,7 @@ class PostgresOwnedAlbumTopsService:
                 "can_delete": self._allows(context, (BROWSE, MANAGE), constraints, top, owner_only=True),
                 "can_share": self._allows(context, (BROWSE, ACCESS), constraints, top, owner_only=True),
                 "can_view_sharing": read,
+                "can_manage_own_progress": self._allows(context, (BROWSE, PROGRESS), constraints, top),
                 "can_request_edit": read and top["visibility"] == "server_shared"
                     and top["owner_account_id"] != context.actor.account_id and not top.get("editor_grant", False),
                 "can_copy": read and self._allows(context, (BROWSE, CREATE), constraints)}
@@ -201,6 +207,7 @@ class PostgresOwnedAlbumTopsService:
             return {"top_ref": ref, "title": top["title"], "description": top["description"],
                 "revision": str(top["revision"]), "visibility": top["visibility"],
                 "allowed_actions": self._actions(live, constraints, top),
+                "top_viewer_overlay": progress.read_overlay(connection, live, top),
                 "items": [{**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]}
 
     def execute(self, context, command: AlbumTopCommand, *, constraints=None):
@@ -211,6 +218,7 @@ class PostgresOwnedAlbumTopsService:
             raise AlbumTopError("invalid_command")
         command = normalize_top_command(command.action,
             {**command.data, "request_key": command.request_key}, top_ref=command.top_ref)
+        manual_progress = command.action == "set_manual_completion"
         lock_target = command.data.get("account_id")
         if command.action == "decide_edit_request":
             self._require(context, (BROWSE,), constraints)
@@ -223,13 +231,14 @@ class PostgresOwnedAlbumTopsService:
                 lock_target = request["requester_account_id"] if request else None
         with self._authorized(context, constraints, target_account_id=lock_target) as (connection, live, now):
             # Actor lock held by current_library_transaction serializes operation keys.
-            prior = connection.execute("""select command_digest,receipt,top_ref from app.album_list_operations
+            prior = connection.execute("""select command_digest,receipt,top_ref,required_actions,publication_ref from app.album_list_operations
                 where actor_account_id=%s and library_id=%s and request_key=%s""",
                 (live.actor.account_id, live.library_id, command.request_key)).fetchone()
             if prior:
                 if prior["command_digest"] != command.digest:
                     raise AlbumTopError("request_key_conflict", 409)
-                retained = self._top(connection, live, str(prior["top_ref"]), allow_deleted=True)
+                retained = self._top(connection, live, str(prior["top_ref"]),
+                                     allow_deleted=not manual_progress and prior["publication_ref"] is None)
                 self._require(live, (BROWSE,), constraints, retained)
                 self._require(live, command_actions(command), constraints,
                     retained if command.action not in {"create", "copy"} else None,
@@ -238,6 +247,9 @@ class PostgresOwnedAlbumTopsService:
                 # cannot duplicate a landed copy, including from a new session.
                 if command.action in {"create", "copy"} and retained["owner_account_id"] != live.actor.account_id:
                     raise AlbumTopError("top_unavailable", 404)
+                if manual_progress:
+                    progress.require_member(connection, live, retained, command.data["album_ref"])
+                publication.replay(self, connection, live, command, retained, prior, constraints)
                 return dict(prior["receipt"])
             if command.action == "create":
                 self._require(live, command_actions(command), constraints)
@@ -247,21 +259,29 @@ class PostgresOwnedAlbumTopsService:
                     command.data["title"], command.data["description"]))
                 top = self._top(connection, live, ref, write=True)
             else:
-                top = self._top(connection, live, command.top_ref, write=True)
+                # Self progress shares the parent lock with other viewers while
+                # excluding content/visibility edits through the existing owner.
+                top = self._top(connection, live, command.top_ref, write=not manual_progress)
                 self._require(live, (BROWSE,), constraints, top)
                 self._require(live, command_actions(command), constraints,
                               None if command.action == "copy" else top, owner_only=command.action == "delete")
-                if str(top["revision"]) != command.data["revision"]:
+                if not manual_progress and str(top["revision"]) != command.data["revision"]:
                     raise AlbumTopError("revision_conflict", 409)
-            if command.action == "copy":
+            required_actions = command_actions(command)
+            if command.action in {"save", "enable_external", "revoke_external"}:
+                receipt, required_actions = publication.save(self, connection, live, command, top, now, constraints)
+            elif manual_progress:
+                receipt = progress.set_manual_completion(connection, live, command, top, now)
+            elif command.action == "copy":
                 receipt = viewers.copy_top(connection, live, command, top)
             else:
                 receipt = self._mutate(connection, live, command, top, now, constraints,
                                        locked_target=lock_target)
             connection.execute("""insert into app.album_list_operations
-                (actor_account_id,library_id,request_key,original_session_id,action,top_ref,command_digest,receipt)
-                values(%s,%s,%s,%s,%s,%s,%s,%s)""", (live.actor.account_id, live.library_id,
-                command.request_key, live.actor.session_id, command.action, receipt["top_ref"], command.digest, Jsonb(receipt)))
+                (actor_account_id,library_id,request_key,original_session_id,action,top_ref,command_digest,receipt,required_actions,publication_ref)
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (live.actor.account_id, live.library_id,
+                command.request_key, live.actor.session_id, command.action, receipt["top_ref"], command.digest,
+                Jsonb(receipt), list(required_actions), receipt.get("publication", {}).get("publication_ref")))
             return receipt
 
     def _mutate(self, connection, live, command, top, now, constraints, *, locked_target=None):
@@ -307,10 +327,10 @@ class PostgresOwnedAlbumTopsService:
             connection.execute("""update app.album_list_items as item set curator_position=ordering.position
                 from unnest(%s::uuid[]) with ordinality as ordering(ref,position)
                 where item.ref=ordering.ref and item.top_ref=%s""", (order, ref))
-        elif command.action == "save":
-            connection.execute("update app.album_lists set title=%s,description=%s where ref=%s",
-                (command.data.get("title", top["title"]), command.data.get("description", top["description"]), ref))
         elif command.action == "delete":
+            link = publication.lock_link(connection, top, write=True)
+            if link is not None:
+                publication.revoke(connection, top, link, now)
             connection.execute("update app.album_lists set deleted_at=%s where ref=%s", (now, ref))
         revision = top["revision"]
         if changed and command.action != "create":
@@ -322,6 +342,26 @@ class PostgresOwnedAlbumTopsService:
         receipt = {"top_ref": ref, "revision": str(revision), "action": command.action,
                    "request_key": command.request_key, **counts}
         return receipt
+
+    def publication_preview(self, context, *, top_ref, payload, constraints=None):
+        """P1 service-only complete source review, without durable side effects."""
+        ref = top_uuid(top_ref)
+        preview = normalize_top_publication_preview(payload)
+        with self._authorized(context, constraints) as (connection, live, _):
+            top = self._top(connection, live, ref)
+            self._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
+            publication.lock_link(connection, top)
+            if str(top["revision"]) != preview["revision"]:
+                raise AlbumTopError("revision_conflict", 409)
+            current = publication.working_items(connection, top)
+            publication.validate_draft(self, connection, live, top, preview["items"], current, constraints)
+            captured = publication_evidence.capture(connection, live, top=top, items=preview["items"], constraints=constraints)
+            self._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
+            return {"top_ref": ref, "revision": preview["revision"],
+                "evidence_revision": captured["evidence_revision"],
+                "items": [{**row["item"], "title": row["metadata"]["title"],
+                    "artist": row["metadata"]["artist"], "year": row["metadata"]["year"],
+                    "track_count": len(row["metadata"]["tracks"])} for row in captured["items"]]}
 
     def read_sharing(self, context, top_ref, *, cursor_secret=None, cursor=None, constraints=None):
         ref = top_uuid(top_ref)

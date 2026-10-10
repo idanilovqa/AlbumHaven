@@ -26,7 +26,7 @@ const comparisonKinds = kinds.slice(0, 3);
 const homeSections = [['recent', 'Recent'], ['news', 'News', {disabled: true}], ['queue', 'Queue']];
 
 export function HomeFriendsView({runtime, controller, state, shell, readDetail, readNowPlaying}) {
-  const pageRoot = useRef(null), profileFocus = useRef(null), selectedFocus = useRef(null), selectionOpener = useRef(null);
+  const pageRoot = useRef(null), pageHeader = useRef(null), profileFocus = useRef(null), selectedFocus = useRef(null), selectionOpener = useRef(null);
   const root = useRef(null), recentWidget = useRef(null), friendsWidget = useRef(null), albumWidget = useRef(null), artistWidget = useRef(null), dashboard = useRef(null);
   const saved = shell.presentation;
   const [{kind, kindExplicit}, setKind] = useState(() => initialHomeKind(saved,
@@ -61,7 +61,6 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
   const scroll = useRef(createScrollState(savedScroll)), pendingScroll = useRef(savedScroll), scrollTimer = useRef(null);
   const section = shell.section === 'friends' ? 'friends' : 'recent';
   const queueMode = section === 'recent' && homeSection === 'queue';
-  const queueDetails = useQueueDetails({runtime, api: queue.api, scopeKey: state.scopeKey, enabled: queueMode});
   const friend = state.friends.data?.friends.find(person => person.account_ref === state.selectedFriendRef && person.account_ref === shell.friendRef);
   const invalidFriend = Boolean(section === 'friends' && shell.friendRef && ['ready', 'empty'].includes(state.friends.status)
     && !state.friends.data?.friends.some(person => person.account_ref === shell.friendRef));
@@ -85,13 +84,15 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
     section === 'friends' ? friendMode : 'activity']);
   const currentHistoryKey = useRef(historyKey); currentHistoryKey.current = historyKey;
   const query = {section, account_ref: section === 'friends' ? shell.friendRef : null,
-    kind: section === 'friends' ? friendActivityKind : recentKind, period: section === 'friends' ? friendPeriod : period};
+    kind: section === 'friends' ? friendActivityKind : recentKind, period: section === 'friends' ? friendPeriod : period,
+    ...(queueMode ? {homeSection: 'queue', kind: 'tracks', period: 'week'} : {})};
   const queryKey = selectionQueryKey(query), selectionEnabled = section === 'recent'
     || Boolean(friend && !profileRoute && friendMode === 'activity' && friend.allowed_actions?.can_view_activity === true);
   const source = section === 'recent' || !profileRoute && friendMode === 'activity'
     ? selectionSource(state, query) : {status: 'unavailable', data: null};
   const entry = selectionEntry(selections, query), expanded = entry.expanded;
-  const ownRecent = section === 'recent' && kind === 'albums' && period === 'week';
+  const queueDetails = useQueueDetails({runtime, api: queue.api, scopeKey: state.scopeKey, enabled: queueMode, selectedIds: entry.tracks?.rowIds});
+  const ownRecent = !queueMode && section === 'recent' && kind === 'albums' && period === 'week';
   const customDetail = typeof readDetail === 'function';
   const selectedRow = ownRecent && selectionEnabled && !queueMode ? recentSelectionRow(source, selectedAlbum, {customDetail}) : null;
   const recentOrigin = {source: 'recent', account_ref: null, kind: 'albums', period: 'week'};
@@ -100,8 +101,8 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
   const recentTarget = selectedRow && (customDetail
     ? {kind: 'album', ref: selectedRow.album_ref, allowed_actions: selectedRow.allowed_actions, origin: recentOrigin}
     : detailSelection({...runtime.albumDetailSelection?.(selectedRow.album_ref, state.scopeKey), origin: recentOrigin}));
-  const candidate = selectionEnabled && !ownRecent ? resolveActivitySelection(state, query, entry.selected) : null;
-  const trackCandidate = selectionEnabled ? resolveActivityTrackSelection(state, query, entry.tracks) : null;
+  const candidate = selectionEnabled && !ownRecent && !queueMode ? resolveActivitySelection(state, query, entry.selected) : null;
+  const trackCandidate = selectionEnabled && !queueMode ? resolveActivityTrackSelection(state, query, entry.tracks) : null;
   const detailProvider = queueMode ? queueDetails.adapter?.readAlbumProjection : customDetail ? readDetail : runtime.readAlbumProjection;
   const resourceLease = useRef(null);
   if (!queueMode) resourceLease.current = reconcileSelectionLease(resourceLease.current, {scopeKey: state.scopeKey, queryKey, descriptor: ownRecent ? null : entry.tracks || entry.selected,
@@ -134,7 +135,7 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
   const updateEntry = patch => setSelections(previous => updateSelectionEntry(previous, query, patch));
   const setExpanded = next => updateEntry({expanded: next});
   const sourceWidget = section === 'friends' ? friendsWidget : recentWidget;
-  const sourceBody = () => sourceWidget.current?.querySelector(section === 'friends'
+  const sourceBody = () => sourceWidget.current?.querySelector(section === 'friends' || queueMode
     ? ':scope > .home-friends__widget-body' : '.home-recent__body, .home-friends__scroll');
   const sourceCurrent = () => currentQuery.current?.owner === owner && controller.getSnapshot().scopeKey === state.scopeKey
     && owner.provider === (typeof readDetail === 'function' ? readDetail : runtime.readAlbumProjection)
@@ -143,7 +144,7 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
     : trackSelection ? Boolean(resolveActivityTrackSelection(controller.getSnapshot(), query, entry.tracks))
       : sameSelectionTarget(resolveActivitySelection(controller.getSnapshot(), query, entry.selected)?.target, selectedTarget));
   const albumCurrent = () => targetCurrent() && currentAlbum.current?.owner === owner && currentAlbum.current.key === albumTargetKey;
-  const restorationKey = JSON.stringify([section, shell.friendRef, shell.profileRef, kind, period, views, friendKind, friendPeriod, friendViews, friendMode]);
+  const restorationKey = JSON.stringify([section, homeSection, shell.friendRef, shell.profileRef, kind, period, views, friendKind, friendPeriod, friendViews, friendMode]);
   const originalRestorationKey = useRef(restorationKey);
   const changeView = setter => value => {pendingScroll.current = null; setter(value);};
 
@@ -160,11 +161,12 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
   }, []);
 
   useLayoutEffect(() => {
-    const descriptor = (key, element) => ({key, element, header: element.querySelector(':scope > header'), body: element.querySelector(':scope > .home-friends__widget-body')});
+    const descriptor = (key, element) => ({key, element, header: element.querySelector(':scope > header'), body: element.querySelector(':scope > .home-friends__widget-body'),
+      ...(pageHeader.current ? {backHost: pageHeader.current} : {})});
     const widgets = [descriptor(section, sourceWidget.current),
       ...(hasArtist ? [descriptor('artist', artistWidget.current)] : []),
       ...(hasAlbum ? [descriptor('album', albumWidget.current)] : [])];
-    dashboard.current = runtime.mountDashboard(root.current, {widgets, returnPresentation: 'back', onSizeIntent: (_key, next) => {
+    dashboard.current = runtime.mountDashboard(root.current, {widgets, onSizeIntent: (_key, next) => {
       if (currentQuery.current?.owner !== owner) return;
       pendingScroll.current = null; setExpanded(next);
     }});
@@ -195,6 +197,12 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
       pageRoot.current.querySelector(`[data-in-page-tab="${activePane}"]`)?.focus({preventScroll: true});
     }
   }, [activePane, queryKey]);
+  useLayoutEffect(() => {
+    if (!queueMode || !queueDetails.adapter || JSON.stringify(entry.tracks?.rowIds || []) === JSON.stringify(queueDetails.value.selectedIds)) return;
+    const ids = queueDetails.value.selectedIds;
+    updateEntry({tracks: ids.length ? {rowIds: ids, snapshotRef: null} : null,
+      ...(!ids.length ? {pane: 'recent', expanded: expanded === 'recent' ? 'recent' : null} : {})});
+  }, [queueMode, queueDetails.adapter, queueDetails.value, entry.tracks, expanded]);
   useLayoutEffect(() => {
     // A completed removal/denial permanently retires the descriptor, so an
     // identically named later row cannot resurrect a prior selection.
@@ -329,7 +337,7 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
     if (!inspect && JSON.stringify(queueDetails.value.selectedIds) === JSON.stringify(ids)) return;
     pendingScroll.current = null;
     selectionOpener.current = {queryKey, ref: ids[0], control: typeof document !== 'undefined' ? document.activeElement : null};
-    updateEntry({pane: 'recent', expanded: null, childAlbumRef: null});
+    updateEntry({tracks: ids.length ? {rowIds: ids, snapshotRef: null} : null, pane: 'recent', expanded: null, childAlbumRef: null});
     Promise.resolve(queueDetails.adapter.select(ids)).catch(() => {});
   }
   function selectTracks(rowIds, {inspect = false} = {}) {
@@ -396,12 +404,12 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
       restoredPaneScroll.current[name] = key;
       if (selections.some(value => selectionQueryKey(value.query) === queryKey)) element.scrollTop = entry.scroll[name];
     };
-    restore('source', queryKey, sourceBody(), ['ready', 'empty'].includes(source.status));
+    restore('source', queryKey, sourceBody(), queueMode ? Boolean(queue.api) : ['ready', 'empty'].includes(source.status));
     restore('artist', `${owner.generation}:${detailSelectionKey(artistTarget)}`, artistWidget.current?.querySelector(':scope > .home-friends__widget-body'),
       hasArtist && liveArtistDetail?.status === 'ready');
     restore('album', `${owner.generation}:${albumTargetKey}`, albumWidget.current?.querySelector(':scope > .home-friends__widget-body'),
       hasAlbum && albumDetail?.owner === owner && albumDetail.value.status === 'ready');
-  }, [queryKey, source.status, artistTarget, albumTarget, liveArtistDetail, albumDetail, hasArtist, hasAlbum, owner]);
+  }, [queryKey, queueMode, queue.api, source.status, artistTarget, albumTarget, liveArtistDetail, albumDetail, hasArtist, hasAlbum, owner]);
   const retryRecent = () => kind === 'albums' && period === 'week' ? controller.loadRecent() : controller.loadActivity({kind: recentKind, period});
   const friendControls = <div className="home-friends__control-row"><Tabs runtime={runtime} id="home-friend-kinds" label={friendMode === 'comparison' ? 'Comparison view' : 'Friend activity view'} items={comparisonKinds} value={friendKind} onChange={changeView(setFriendKind)}/>
     <Period runtime={runtime} value={friendPeriod} onChange={changeView(setFriendPeriod)} total={friendResource.data?.total_listens} range={friendResource.data?.range_label}/></div>;
@@ -419,7 +427,7 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
     onPage={page => navigateHistory('loadActivityPage', page)} onLoadMore={() => navigateHistory('loadMoreActivity')}
     onRetry={() => navigateHistory('retryActivityNavigation')}/>;
   return <div ref={pageRoot} className="home-friends" onScrollCapture={rememberScroll} data-home-section={section} data-home-pane={activePane}>
-    <header className="gallery-bar home-friends__page-header">
+    <header ref={pageHeader} className="gallery-bar home-friends__page-header">
       <div className={`gallery-bar__context${comparing ? ' home-comparison__header-context' : ''}`}>{profileRoute ? <ProfileIdentity runtime={runtime} profile={memberProfile} own={false} fallbackName="Profile"/>
         : comparing
         ? <><Button runtime={runtime} icon="back" attributes={{'data-home-comparison-back': 'true'}} onClick={() => navigate('friends')}>Back to friends</Button>
@@ -450,15 +458,15 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
             {homeSection === 'recent' && <Period runtime={runtime} value={period} onChange={changeView(setPeriod)} total={currentRecent.data?.total_listens} range={currentRecent.data?.range_label || (period === 'week' ? 'Last 7 days' : '')}/>}
             {section === 'recent' && homeSection === 'queue' && <QueueHeader runtime={runtime} {...queue}/>}
           </div>
-          <div className="home-friends__catalog-controls" hidden={homeSection === 'queue'}>
+          {homeSection !== 'queue' && <div className="home-friends__catalog-controls">
             <Tabs runtime={runtime} id="home-recent-kinds" label="Recent listening view" items={kinds} value={kind}
               onChange={changeView(value => setKind({kind: value, kindExplicit: true}))}/>
             <div className="gallery-bar__actions"><ActivityMissingAction runtime={runtime} value={currentRecent} scopeKey={state.scopeKey}
               kind={recentKind} period={period} selectedRowIds={trackSelection?.rows.map(row => row.id)}
               enabled={section === 'recent' && homeSection === 'recent'} onError={setActionError}/>{kind !== 'albums' && <ViewControl runtime={runtime} kind={kind} value={views[kind]} onChange={changeView(value => setViews({...views, [kind]: value}))}/>}</div>
-          </div>
+          </div>}
         </header>
-        <div className="home-friends__widget-body home-friends__recent-body">
+        <div className={`home-friends__widget-body ${queueMode ? 'gallery-scrollbar' : 'home-friends__recent-body'}`}>
           {homeSection === 'queue' ? section === 'recent' && <QueuePanel runtime={runtime} {...queue} scopeKey={state.scopeKey} selectedIds={queueDetails.value.selectedIds} onSelect={selectQueuedTracks}/> : kind === 'albums' && period === 'week' ? <RecentAlbums runtime={runtime} value={state.recent} retry={retryRecent} selected={selectedAlbum}
             selectionMode={customDetail ? 'details' : 'native'} onSelect={selectRecentAlbum} onError={setActionError}/>
             : <div className="home-friends__scroll gallery-scrollbar"><Status runtime={runtime} value={currentRecent} label="Listening activity" retry={retryRecent}/>

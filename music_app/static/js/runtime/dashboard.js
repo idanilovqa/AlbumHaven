@@ -1,11 +1,6 @@
 /* Controlled placement of existing widgets; their components retain content ownership. */
 const Dashboard = (() => {
   const mountedRoots = new WeakSet();
-  const sizePaths = {
-    full: 'M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5',
-    widget: 'M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5',
-    back: 'm10 5-7 7 7 7M3 12h18',
-  };
 
   function mount(root, options = {}) {
     if (!(root instanceof HTMLElement) || mountedRoots.has(root)
@@ -20,17 +15,19 @@ const Dashboard = (() => {
         || keys.has(descriptor.key)) {
         throw new TypeError('Dashboard widget keys must be nonempty and unique.');
       }
-      const { key, element, header, body } = descriptor;
+      const { key, element, header, body, backHost = header } = descriptor;
       const nodes = [element, header, body];
       if (nodes.some(node => !(node instanceof HTMLElement) || owners.has(node))
         || new Set(nodes).size !== nodes.length || element.parentNode !== root
         || !element.contains(header) || !element.contains(body)
-        || header.contains(body) || body.contains(header)) {
+        || header.contains(body) || body.contains(header)
+        || !(backHost instanceof HTMLElement) || backHost.ownerDocument !== root.ownerDocument
+        || body.contains(backHost)) {
         throw new TypeError('Dashboard widgets require distinct existing element, header and body owners.');
       }
       keys.add(key);
       nodes.forEach(node => owners.add(node));
-      return { key, element, header, body };
+      return { key, element, header, body, backHost };
     });
     const onSizeIntent = options.onSizeIntent;
     const attributes = [
@@ -47,20 +44,37 @@ const Dashboard = (() => {
         ariaLabel: 'Full size',
         title: 'Full size',
         presentation: 'bare',
+        icon: 'expand',
         iconClass: 'dashboard__size-icon',
-        attributes: { 'aria-expanded': 'false' },
+        attributes: { 'aria-expanded': 'false', 'data-dashboard-action': 'expand' },
       });
       const button = holder.firstElementChild;
-      button.querySelector('.dashboard__size-icon').innerHTML = `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${sizePaths.full}"/></svg>`;
-      const path = button.querySelector('path');
-      const parent = widget.header.querySelector('.gallery-bar__actions, .album-details-header__actions') || widget.header;
+      let parent = widget.header.querySelector('.gallery-bar__actions, .album-details-header__actions');
+      const ownsParent = !parent;
+      if (!parent) {
+        parent = root.ownerDocument.createElement('div');
+        parent.className = widget.header.classList.contains('album-details-header')
+          ? 'album-details-header__actions' : 'gallery-bar__actions';
+        widget.header.appendChild(parent);
+      }
+      holder.innerHTML = ButtonComponent.renderActionButton({
+        icon: 'back', ariaLabel: 'Back', title: 'Back', presentation: 'bare',
+        attributes: { 'data-dashboard-action': 'back' },
+      });
+      const back = holder.firstElementChild;
       const onClick = (event) => {
-        if (disposed) return;
+        if (disposed || expandedKey === widget.key) return;
         event.preventDefault();
         event.stopPropagation();
-        onSizeIntent(widget.key, expandedKey === widget.key ? null : widget.key);
+        onSizeIntent(widget.key, widget.key);
       };
-      return { widget, button, path, parent, onClick };
+      const onBack = (event) => {
+        if (disposed || expandedKey !== widget.key) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSizeIntent(widget.key, null);
+      };
+      return { widget, button, back, parent, ownsParent, onClick, onBack };
     }) : [];
 
     function update(state = {}) {
@@ -69,6 +83,8 @@ const Dashboard = (() => {
       if (nextKey !== null && !keys.has(nextKey)) {
         throw new TypeError('Dashboard expandedKey must be null or an existing widget key.');
       }
+      const previousKey = expandedKey;
+      const focused = controls.some(({button, back}) => [button, back].includes(root.ownerDocument.activeElement));
       // A sole widget already occupies the full container in every controlled state.
       expandedKey = widgets.length === 1 ? null : nextKey;
       root.setAttribute('data-dashboard-layout', widgets.length === 1 ? 'single' : expandedKey === null ? 'ordinary' : 'expanded');
@@ -79,22 +95,30 @@ const Dashboard = (() => {
           : widget.key === expandedKey ? 'expanded' : 'suppressed';
         widget.element.setAttribute('data-dashboard-widget-state', state);
       });
-      controls.forEach(({ widget, button, path }) => {
+      controls.forEach(({ widget, button, back, parent }) => {
         const expanded = widget.key === expandedKey;
-        const label = expanded ? options.returnPresentation === 'back' ? 'Back' : 'Widget size' : 'Full size';
-        button.setAttribute('aria-label', label);
-        button.setAttribute('title', label);
-        button.setAttribute('aria-expanded', String(expanded));
-        path.setAttribute('d', expanded ? options.returnPresentation === 'back' ? sizePaths.back : sizePaths.widget : sizePaths.full);
+        if (expanded) {
+          button.remove();
+          if (back.parentNode !== widget.backHost) widget.backHost.prepend(back);
+        } else {
+          back.remove();
+          if (button.parentNode !== parent) parent.prepend(button);
+        }
       });
+      if (focused && previousKey !== expandedKey) {
+        const control = controls.find(({widget}) => widget.key === (expandedKey ?? previousKey));
+        (expandedKey === null ? control?.button : control?.back)?.focus({preventScroll: true});
+      }
     }
 
     function dispose() {
       if (disposed) return;
       disposed = true;
-      controls.forEach(({ button, onClick }) => {
+      controls.forEach(({ button, back, parent, ownsParent, onClick, onBack }) => {
         button.removeEventListener('click', onClick);
-        button.remove();
+        back.removeEventListener('click', onBack);
+        button.remove(); back.remove();
+        if (ownsParent) parent.remove();
       });
       attributes.forEach(({ element, name, previous }) => {
         if (previous === null) element.removeAttribute(name);
@@ -105,9 +129,10 @@ const Dashboard = (() => {
 
     mountedRoots.add(root);
     root.setAttribute('data-dashboard', 'true');
-    controls.forEach(({ button, parent, onClick }) => {
-      parent.appendChild(button);
+    controls.forEach(({ button, back, parent, onClick, onBack }) => {
+      parent.prepend(button);
       button.addEventListener('click', onClick);
+      back.addEventListener('click', onBack);
     });
     update({ expandedKey: null });
     return { update, dispose };

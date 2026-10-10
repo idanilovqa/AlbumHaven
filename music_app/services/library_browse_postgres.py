@@ -670,9 +670,7 @@ class PostgresLibraryBrowseRepository:
     ) -> dict[str, object]:
         view_state = _root_sidebar_view_state(query_params)
         paged = (query_params or {}).get("gallery_page_size") is not None
-        include_non_album_tracks = not (
-            paged and _request_flag((query_params or {}).get("omit_sidebar"))
-        )
+        include_non_album_tracks = _should_load_non_album_tracks(query_params)
         if paged:
             _root_gallery_page_size(query_params or {})
         from music_app.services.gallery_projection_postgres import (
@@ -869,6 +867,7 @@ class PostgresLibraryBrowseRepository:
             "non_album_tracks": build_non_album_track_list(
                 non_album_entries, config=self._config, configured_root_paths=configured_root_paths,
             ),
+            "non_album_tracks_deferred": not include_non_album_tracks,
             "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             "viewer_opinion_preferences": build_viewer_opinion_preferences_payload({}),
             "popularity_browse": build_popularity_browse_payload(viewer_opinion_preferences={}),

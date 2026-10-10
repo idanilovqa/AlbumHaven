@@ -82,9 +82,9 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
     monkeypatch.setattr(browse, "build_non_album_track_list", lambda entries, **_options: list(entries))
     monkeypatch.setattr(browse, "configured_library_root_paths_snapshot", lambda _config, **_options: ())
     payload = repository.build_root_startup_preview_payload(query_params={"gallery_page_size": "2"})
-    assert payload["non_album_tracks"] == [loose_track]
-    assert len(non_album_calls) == 1
-    assert non_album_calls[0]["connection"] is connection
+    assert "non_album_tracks" not in payload
+    assert payload["non_album_tracks_deferred"] is True
+    assert non_album_calls == []
     assert payload["album_count"] == 7
     assert payload["artists_sidebar"][0]["count"] == 7
     assert len(payload["artist_groups"][0]["albums"]) == 2
@@ -96,6 +96,15 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
     assert calls[0][0] == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
     assert calls[-2:] == [("rollback", None), ("close", None)]
 
+    hydrated = repository.build_root_startup_preview_payload(query_params={
+        "gallery_page_size": "2",
+        "include_non_album": "1",
+    })
+    assert hydrated["non_album_tracks"] == [loose_track]
+    assert hydrated["non_album_tracks_deferred"] is False
+    assert len(non_album_calls) == 1
+    assert non_album_calls[0]["connection"] is connection
+
     non_album_calls.clear()
     first_page_without_sidebar = repository.build_root_startup_preview_payload(
         query_params={
@@ -105,11 +114,13 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
     )
     assert "artists_sidebar" not in first_page_without_sidebar
     assert "non_album_tracks" not in first_page_without_sidebar
+    assert first_page_without_sidebar["non_album_tracks_deferred"] is True
     assert non_album_calls == []
     next_page = repository.build_root_startup_preview_payload(query_params={
         "gallery_page_size": "2", "omit_sidebar": "1", "gallery_cursor": payload["gallery_page"]["next_cursor"]})
     assert "artists_sidebar" not in next_page
     assert "non_album_tracks" not in next_page
+    assert next_page["non_album_tracks_deferred"] is True
     assert non_album_calls == []
     assert next_page["album_count"] == 7
 

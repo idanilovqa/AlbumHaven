@@ -12,6 +12,9 @@ import {createFriendNotifications} from './friend-notifications.mjs';
 import {FriendNotifications} from './friend-notifications.jsx';
 import {mountPlaytableSelection} from '../playtables/selection.jsx';
 import {PlaylistActionSession} from '../playlists/selection-actions.jsx';
+import {mountAlbumTops} from '../album-tops/index.jsx';
+import {createAlbumTopBackendProviders} from '../album-tops/backend-providers.mjs';
+import {mountLibraryNavigation} from './library-navigation.jsx';
 
 let requestedProviders = null, providers = {}, providerGeneration = 0, activeController = null, root = null, mountedRuntime = null;
 let friendNotifications = null, ownedHomeProviders = null, presencePublisher = null;
@@ -224,3 +227,19 @@ window.AlbumHavenPlaylistUI = Object.freeze({
 });
 window.addEventListener('albumhaven:playlist-runtime-ready', mountPlaylistSurface);
 mountPlaylistSurface();
+
+let albumTopsMount = null, libraryNavigationMount = null;
+function mountAlbumTopSurface() {
+  const runtime = window.AlbumHavenAlbumTopsRuntime, transport = window.AlbumHavenPrivateUITransport;
+  const host = document.getElementById('album-tops-root'), navigationHost = document.getElementById('library-navigation-root');
+  if (!runtime || !transport || !host) return;
+  if (!albumTopsMount) albumTopsMount = mountAlbumTops({host, sidebarHost: document.getElementById('album-tops-sidebar-root'), runtime,
+    providers: createAlbumTopBackendProviders({transport, acceptsScope: runtime.acceptsPrivateScope})});
+  if (!libraryNavigationMount && navigationHost && window.AlbumHavenPlaylistRuntime) {
+    libraryNavigationMount = mountLibraryNavigation({host: navigationHost, playlistHost: document.getElementById('playlist-sidebar-root'),
+      runtime, playlistRuntime: window.AlbumHavenPlaylistRuntime});
+  }
+}
+window.addEventListener('albumhaven:album-tops-runtime-ready', mountAlbumTopSurface);
+window.addEventListener('albumhaven:playlist-runtime-ready', mountAlbumTopSurface);
+mountAlbumTopSurface();

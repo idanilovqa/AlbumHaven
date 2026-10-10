@@ -6,13 +6,17 @@ const reference = value => typeof value === 'string' && value.trim().length > 0
 const ready = value => ['ready', 'empty'].includes(value?.status);
 const position = value => Number.isFinite(value) && value >= 0 && value <= 10000000 ? value : 0;
 const pane = value => ['recent', 'artist', 'album'].includes(value) ? value : 'recent';
+const noActivity = Object.freeze({status: 'unavailable', data: null});
 
 export function selectionQuery(value) {
   if (!['recent', 'friends'].includes(value?.section)
     || !['albums', 'artists', 'tracks', 'listens'].includes(value.kind)
     || !['week', 'month', 'six', 'year', 'all'].includes(value.period)
+    || value.homeSection != null && value.homeSection !== 'queue'
+    || value.homeSection === 'queue' && (value.section !== 'recent' || value.kind !== 'tracks' || value.period !== 'week')
     || (value.section === 'friends' ? !reference(value.account_ref) : value.account_ref != null)) return null;
-  return {section: value.section, account_ref: value.account_ref ?? null, kind: value.kind, period: value.period};
+  return {section: value.section, account_ref: value.account_ref ?? null, kind: value.kind, period: value.period,
+    ...(value.homeSection === 'queue' ? {homeSection: 'queue'} : {})};
 }
 export const selectionQueryKey = value => {const query = selectionQuery(value); return query ? JSON.stringify(query) : '';};
 
@@ -24,7 +28,7 @@ export function selectionPresentation(value) {
     const query = selectionQuery(entry?.query), key = selectionQueryKey(query);
     if (!key || keys.has(key)) continue;
     const selected = entry.selected;
-    const descriptor = reference(selected?.rowId) && reference(selected.targetRef)
+    const descriptor = query.homeSection !== 'queue' && reference(selected?.rowId) && reference(selected.targetRef)
       && ['album', 'artist'].includes(selected.targetKind)
       && (selected.snapshotRef == null || reference(selected.snapshotRef))
       ? {rowId: selected.rowId, targetKind: selected.targetKind, targetRef: selected.targetRef, snapshotRef: selected.snapshotRef ?? null} : null;
@@ -33,9 +37,9 @@ export function selectionPresentation(value) {
       && tracks.rowIds.length > 0 && tracks.rowIds.length <= 5000 && tracks.rowIds.every(reference)
       && new Set(tracks.rowIds).size === tracks.rowIds.length
       && (tracks.snapshotRef == null || reference(tracks.snapshotRef))
-      ? {rowIds: [...tracks.rowIds], snapshotRef: tracks.snapshotRef ?? null} : null;
+      ? {rowIds: [...tracks.rowIds], snapshotRef: query.homeSection === 'queue' ? null : tracks.snapshotRef ?? null} : null;
     result.push({query, selected: trackDescriptor ? null : descriptor, tracks: trackDescriptor,
-      childAlbumRef: (descriptor?.targetKind === 'artist' || trackDescriptor) && reference(entry.childAlbumRef) ? entry.childAlbumRef : null,
+      childAlbumRef: query.homeSection !== 'queue' && (descriptor?.targetKind === 'artist' || trackDescriptor) && reference(entry.childAlbumRef) ? entry.childAlbumRef : null,
       pane: pane(entry.pane), expanded: ['recent', 'friends', 'artist', 'album'].includes(entry.expanded) ? entry.expanded : null,
       scroll: {source: position(entry.scroll?.source), artist: position(entry.scroll?.artist), album: position(entry.scroll?.album)}});
     keys.add(key);
@@ -70,7 +74,7 @@ export function retireFriendSelections(entries, friends) {
 }
 
 export function selectionSource(snapshot, query) {
-  if (!selectionQuery(query)) return {status: 'unavailable', data: null};
+  if (!selectionQuery(query) || query.homeSection === 'queue') return noActivity;
   if (query.section === 'friends') {
     if (!ready(snapshot.friends)) return {status: snapshot.friends?.status || 'unavailable', data: null};
     const owner = snapshot.friends.data?.friends.filter(person => person.account_ref === query.account_ref) ?? [];

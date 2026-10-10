@@ -40690,6 +40690,7 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
 function scrollRootGalleryToArtist(artist) {
   const targetArtist = String(artist || '').trim();
   if (!targetArtist) return Promise.resolve(false);
+  const priorGridGeneration = Number(virtualGrid?._renderGeneration || 0);
   const nextView = {
     ...state.view,
     surface_request: 'albums',
@@ -40703,10 +40704,19 @@ function scrollRootGalleryToArtist(artist) {
   renderLibraryLoader(state.status);
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
     if (result === false) return false;
-    if (typeof virtualGrid?.scrollToArtist === 'function' && virtualGrid.scrollToArtist(targetArtist)) {
-      return true;
-    }
-    scheduleBrowserAnimationFrame(() => virtualGrid?.scrollToArtist?.(targetArtist));
+    const galleryPage = state.view?.gallery_page;
+    const renderedArtist = String(
+      galleryPage?.anchor_artist === targetArtist
+        ? galleryPage?.anchor_group_artist || targetArtist
+        : targetArtist,
+    ).trim();
+    const scrollWhenRendered = (attemptsRemaining) => {
+      const hasNewGrid = Number(virtualGrid?._renderGeneration || 0) > priorGridGeneration;
+      if (hasNewGrid && virtualGrid?.scrollToArtist?.(renderedArtist)) return;
+      if (attemptsRemaining <= 0) return;
+      scheduleBrowserAnimationFrame(() => scrollWhenRendered(attemptsRemaining - 1));
+    };
+    scrollWhenRendered(8);
     return true;
   });
 }

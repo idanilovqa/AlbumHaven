@@ -882,9 +882,20 @@ test('handleGalleryBootstrapClick ignores the retired Home sidebar target', () =
 test('scrollRootGalleryToArtist requests an anchored root page and jumps after render', async () => {
   const { context, calls } = createContext({ useProductionBuildApiUrl: true });
   let scrolledArtist = '';
+  context.virtualGrid._renderGeneration = 1;
+  context.state.view.gallery_page = {
+    anchor_artist: 'A Forest Of Stars',
+    anchor_group_artist: 'A Forest of Stars',
+  };
   context.virtualGrid.scrollToArtist = (artist) => {
     scrolledArtist = artist;
     return true;
+  };
+  const fetchAndRender = context.fetchAndRender;
+  context.fetchAndRender = (...args) => {
+    const result = fetchAndRender(...args);
+    context.virtualGrid._renderGeneration = 2;
+    return result;
   };
 
   await context.scrollRootGalleryToArtist('A Forest Of Stars');
@@ -897,7 +908,34 @@ test('scrollRootGalleryToArtist requests an anchored root page and jumps after r
       .searchParams.get('gallery_anchor_artist'),
     'A Forest Of Stars',
   );
-  assert.equal(scrolledArtist, 'A Forest Of Stars');
+  assert.equal(scrolledArtist, 'A Forest of Stars');
+});
+
+test('scrollRootGalleryToArtist waits for the replacement grid before accepting the same artist', async () => {
+  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const frames = [];
+  const scrolledArtists = [];
+  context.virtualGrid._renderGeneration = 4;
+  context.state.view.gallery_page = {
+    anchor_artist: 'Anthony',
+    anchor_group_artist: 'Anthony',
+  };
+  context.virtualGrid.scrollToArtist = (artist) => {
+    scrolledArtists.push(artist);
+    return true;
+  };
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+
+  await context.scrollRootGalleryToArtist('Anthony');
+
+  assert.deepEqual(scrolledArtists, [], 'the old selected-artist grid must not own the jump');
+  assert.equal(frames.length, 1);
+  context.virtualGrid._renderGeneration = 5;
+  frames.shift()();
+  assert.deepEqual(scrolledArtists, ['Anthony']);
 });
 
 test('artist tree context action closes the menu before scrolling the root gallery', () => {

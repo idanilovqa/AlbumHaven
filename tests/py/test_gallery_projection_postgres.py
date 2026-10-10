@@ -45,11 +45,27 @@ def test_gallery_snapshot_artist_anchor_opens_page_with_leading_context():
     assert [item["artist_name"] for item in page] == ["Alpha", "Beta", "Beta"]
     assert metadata["anchor_artist"] == "Beta"
     assert metadata["anchor_offset"] == 4
+    assert metadata["anchor_group_artist"] == "Beta"
     with pytest.raises(ValueError, match="artist anchor"):
         browse._select_root_gallery_snapshot_page(
             snapshot,
             {"gallery_page_size": "3", "gallery_anchor_artist": "Missing"},
         )
+
+
+def test_gallery_anchor_metadata_targets_the_rendered_alias_group():
+    alias = membership("Anthony Ventura", "alias")
+    alias["artist_id"] = "shared"
+    target = membership("Anthony", "target")
+    target["artist_id"] = "shared"
+
+    assert browse._root_gallery_anchor_metadata(
+        [alias, target], "Anthony", 797,
+    ) == {
+        "anchor_artist": "Anthony",
+        "anchor_offset": 797,
+        "anchor_group_artist": "Anthony Ventura",
+    }
 
 
 def test_gallery_extraction_preserves_073f75b_golden_order_and_cursor():

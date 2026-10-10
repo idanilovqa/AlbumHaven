@@ -3503,6 +3503,26 @@ def _root_gallery_page_metadata(revision: str, count: int, size: int, offset: in
     return {"next_cursor": next_cursor, "has_more": has_more, "revision": revision, "page_size": size}
 
 
+def _root_gallery_anchor_metadata(page, anchor_artist: str, anchor_offset: int | None):
+    if anchor_offset is None:
+        return {}
+    anchor = next((
+        item for item in page
+        if str(item.get("artist_name") or "") == anchor_artist
+    ), None)
+    if anchor is None:
+        raise ValueError("Gallery artist anchor is unavailable.")
+    anchor_identity = anchor.get("artist_id")
+    rendered_group = next((
+        item for item in page if item.get("artist_id") == anchor_identity
+    ), anchor)
+    return {
+        "anchor_artist": anchor_artist,
+        "anchor_offset": anchor_offset,
+        "anchor_group_artist": str(rendered_group.get("artist_name") or anchor_artist),
+    }
+
+
 def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: Mapping[str, object]):
     ordered = snapshot["ordered"]
     anchor_artist = str(params.get("gallery_anchor_artist") or "").strip()
@@ -3521,8 +3541,7 @@ def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: M
     page = ordered[offset:offset + size]
     metadata = _root_gallery_page_metadata(
         snapshot["revision"], len(ordered), size, offset, len(page))
-    if anchor_offset is not None:
-        metadata.update(anchor_artist=anchor_artist, anchor_offset=anchor_offset)
+    metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset))
     return page, snapshot["sidebar"], snapshot["album_count"], metadata
 
 

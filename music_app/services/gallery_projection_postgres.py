@@ -88,7 +88,7 @@ def _latest_compatible_header(connection, context, view_state):
 
 def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
     from music_app.services.library_browse_postgres import (
-        _root_gallery_page_bounds, _root_gallery_page_metadata,
+        _root_gallery_anchor_metadata, _root_gallery_page_bounds, _root_gallery_page_metadata,
     )
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
@@ -135,8 +135,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     if len(page) != min(size, count - offset):
         return None
     metadata = _root_gallery_page_metadata(header["revision"], count, size, offset, len(page))
-    if anchor_offset is not None:
-        metadata.update(anchor_artist=anchor_artist, anchor_offset=anchor_offset)
+    metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset))
     if stale:
         metadata.update({
             "projection_stale": True,

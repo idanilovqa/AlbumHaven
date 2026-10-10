@@ -418,7 +418,7 @@ test('Queue is nested only in own Home and suppresses gallery controls and selec
   tabs.props.onChange('queue'); tree = h.render();
   assert.ok(component(tree, 'QueuePanel')); assert.equal(component(tree, 'ActivityPanel'), undefined);
   assert.equal(component(tree, 'Period'), undefined);
-  assert.equal(elements(tree).find(node => node.props.className === 'home-friends__catalog-controls').props.hidden, true);
+  assert.equal(elements(tree).find(node => node.props.className === 'home-friends__catalog-controls'), undefined);
   assert.deepEqual(widgetKeys(tree), ['recent']);
   h.shell = {...h.shell, section: 'friends'}; tree = h.render();
   assert.equal(elements(tree).find(node => node.props['data-home-widget'] === 'recent').props.hidden, true);

@@ -1,4 +1,5 @@
 import {prepareQueuePlaylistSource} from './queue-playlist-source.mjs';
+import {queueSelectionIds} from './queue-selection.mjs';
 import {PlaytableSelectionActions, usePlaytableSelection} from '../playtables/selection.jsx';
 import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Button, NativeHtml} from './components.jsx';
@@ -14,7 +15,7 @@ export function useExplicitQueue(runtime) {
   return {api, value};
 }
 const EMPTY_SELECTION = Object.freeze({selectedIds: Object.freeze([]), album: null, artist: null, status: 'empty'});
-export function useQueueDetails({runtime, api, scopeKey, enabled}) {
+export function useQueueDetails({runtime, api, scopeKey, enabled, selectedIds = []}) {
   const current = useRef(null), [held, setHeld] = useState(null);
   current.current = {runtime, api, scopeKey, enabled};
   useLayoutEffect(() => {
@@ -24,6 +25,10 @@ export function useQueueDetails({runtime, api, scopeKey, enabled}) {
     if (!adapter) {setHeld(null); return undefined;}
     const refresh = () => {if (owns()) setHeld({runtime, api, scopeKey, adapter, value: adapter.getSnapshot()});};
     const unsubscribe = adapter.subscribe(refresh); refresh();
+    // History carries occurrence identities only. A remounted Queue must
+    // admit those rows again through its current session/source authority.
+    const restored = queueSelectionIds(selectedIds, {entries: api.getSnapshot().entries.filter(row => row.sourceReadable === true)});
+    if (restored.length) Promise.resolve(adapter.select(restored)).catch(() => {});
     return () => {unsubscribe?.(); adapter.dispose();};
   }, [runtime, api, scopeKey, enabled]);
   const active = enabled && held?.runtime === runtime && held.api === api && held.scopeKey === scopeKey ? held : null;

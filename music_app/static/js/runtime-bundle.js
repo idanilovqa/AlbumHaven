@@ -29361,6 +29361,8 @@ function closeCoverLookupDeleteConfirm() {
 async function startCoverLookupForAlbum(album, options = {}) {
   if (!album) return;
   const backgroundOnly = Boolean(options?.backgroundOnly);
+  const triggerButton = backgroundOnly ? options?.triggerButton : null;
+  const triggerWasDisabled = Boolean(triggerButton?.disabled);
   const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
   if (!backgroundOnly) {
     const selectedLocalCard = document.getElementById('cover-lookup-modal-body')
@@ -29377,6 +29379,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
     }
   }
   try {
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.setAttribute?.('aria-busy', 'true');
+    }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;
       renderCoverLookupModal();
@@ -29424,6 +29430,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
   } finally {
+    if (triggerButton) {
+      triggerButton.disabled = triggerWasDisabled;
+      triggerButton.removeAttribute?.('aria-busy');
+    }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = false;
       renderCoverLookupModal();
@@ -39537,7 +39547,10 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalFetchCoverButton = event.target.closest('[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]');
   if (trackModalFetchCoverButton) {
     event.preventDefault();
-    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), { backgroundOnly: true });
+    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), {
+      backgroundOnly: true,
+      triggerButton: trackModalFetchCoverButton,
+    });
     return;
   }
 

@@ -729,7 +729,10 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalFetchCoverButton = event.target.closest('[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]');
   if (trackModalFetchCoverButton) {
     event.preventDefault();
-    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), { backgroundOnly: true });
+    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), {
+      backgroundOnly: true,
+      triggerButton: trackModalFetchCoverButton,
+    });
     return;
   }
 

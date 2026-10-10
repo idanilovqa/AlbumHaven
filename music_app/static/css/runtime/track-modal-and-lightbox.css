@@ -272,6 +272,25 @@
 .track-modal-cover-tool {
   position: relative;
 }
+.track-modal-cover-tool[aria-busy="true"] .action-button__icon {
+  visibility: hidden;
+}
+.track-modal-cover-tool[aria-busy="true"]::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(96, 165, 250, 0.3);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: track-modal-cover-tool-spin 0.7s linear infinite;
+}
+@keyframes track-modal-cover-tool-spin {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
 .track-modal-cover-tool.is-lookup.has-unseen-automatic-improvement::after {
   content: '';
   position: absolute;

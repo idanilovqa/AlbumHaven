@@ -736,6 +736,11 @@ class VirtualArtistGrid {
       && String(candidate.group?.artist || '') === normalizedArtist
     ));
     if (!section) return false;
+    if (this._scrollRestoreRaf) {
+      cancelBrowserAnimationFrame(this._scrollRestoreRaf);
+      this._scrollRestoreRaf = null;
+    }
+    this._absoluteScrollRestore = null;
     this.invalidateScrollStabilization();
     this.scrollEl.scrollTop = Math.max(0, Number(section.top || 0));
     this.lastKey = '';

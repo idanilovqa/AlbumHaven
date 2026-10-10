@@ -465,6 +465,7 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
 function scrollRootGalleryToArtist(artist) {
   const targetArtist = String(artist || '').trim();
   if (!targetArtist) return Promise.resolve(false);
+  if (virtualGrid?.scrollToArtist?.(targetArtist)) return Promise.resolve(true);
   const priorGridGeneration = Number(virtualGrid?._renderGeneration || 0);
   const nextView = {
     ...state.view,

@@ -4487,10 +4487,13 @@ test('scrollToArtist jumps to the modeled artist without applying an artist filt
   ], [], null, {});
   const target = virtualGrid.sections.find((section) => section.group?.artist === 'Beta');
   const selectedArtistBefore = context.state.view.selected_artist;
+  virtualGrid._scrollRestoreRaf = 73;
 
   assert.equal(virtualGrid.scrollToArtist('Beta'), true);
   assert.equal(scrollEl.scrollTop, target.top);
   assert.equal(context.state.view.selected_artist, selectedArtistBefore);
+  assert.equal(virtualGrid._scrollRestoreRaf, null);
+  assert.equal(context.canceledBrowserAnimationFrames.includes(73), true);
 });
 
 test('artist blocks place owned albums before a counted Featured On subsection', () => {

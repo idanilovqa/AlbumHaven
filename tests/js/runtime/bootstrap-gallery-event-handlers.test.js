@@ -888,6 +888,7 @@ test('scrollRootGalleryToArtist requests an anchored root page and jumps after r
     anchor_group_artist: 'A Forest of Stars',
   };
   context.virtualGrid.scrollToArtist = (artist) => {
+    if (context.virtualGrid._renderGeneration === 1) return false;
     scrolledArtist = artist;
     return true;
   };
@@ -911,6 +912,21 @@ test('scrollRootGalleryToArtist requests an anchored root page and jumps after r
   assert.equal(scrolledArtist, 'A Forest of Stars');
 });
 
+test('scrollRootGalleryToArtist uses the mounted grid without loading another page', async () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  const scrolledArtists = [];
+  context.virtualGrid.scrollToArtist = (artist) => {
+    scrolledArtists.push(artist);
+    return true;
+  };
+
+  assert.equal(await context.scrollRootGalleryToArtist('Anthony'), true);
+
+  assert.deepEqual(scrolledArtists, ['Anthony']);
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.deepEqual(calls.renderLibraryLoader, []);
+});
+
 test('scrollRootGalleryToArtist waits for the replacement grid before accepting the same artist', async () => {
   const { context } = createContext({ useProductionBuildApiUrl: true });
   const frames = [];
@@ -921,6 +937,7 @@ test('scrollRootGalleryToArtist waits for the replacement grid before accepting 
     anchor_group_artist: 'Anthony',
   };
   context.virtualGrid.scrollToArtist = (artist) => {
+    if (context.virtualGrid._renderGeneration === 4) return false;
     scrolledArtists.push(artist);
     return true;
   };

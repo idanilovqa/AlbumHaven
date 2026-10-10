@@ -742,4 +742,3 @@ test('read-only inventory command reports complete discovery and ownership total
     performanceTargets: 30,
   });
 });
-

@@ -417,12 +417,13 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     galleryMainInteractionsSource,
-    /getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
+    /Boolean\(state\.view\?\.non_album_tracks_deferred\) \|\| getVisibleNonAlbumTracks\(\{\s*libraryWide: button\.dataset\.libraryWide === '1',\s*\}\)/,
   );
   const context = loadRuntime();
   const hasGalleryNonAlbumTracks = requireContract(context, 'hasGalleryNonAlbumTracks');
   assert.equal(hasGalleryNonAlbumTracks({ non_album_tracks: [] }), false);
   assert.equal(hasGalleryNonAlbumTracks({ non_album_tracks: [{ title: 'Loose' }] }), true);
+  assert.equal(hasGalleryNonAlbumTracks({ non_album_tracks: [], non_album_tracks_deferred: true }), true);
 });
 
 test('artist info triggers use a larger plain information glyph with neutral envelope styling', () => {

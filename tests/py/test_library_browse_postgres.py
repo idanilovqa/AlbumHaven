@@ -1266,6 +1266,15 @@ def test_selected_artist_non_album_candidates_keep_raw_metadata_and_path_matchin
     assert [entry["title"] for entry in entries] == ["Alias Path Rarity"]
 
 
+def test_non_album_tracks_are_deferred_until_explicitly_requested():
+    from music_app.services.library_browse_postgres import _should_load_non_album_tracks
+
+    assert _should_load_non_album_tracks({}) is False
+    assert _should_load_non_album_tracks({"include_non_album": "0"}) is False
+    assert _should_load_non_album_tracks({"include_non_album": "1"}) is True
+    assert _should_load_non_album_tracks({"include_library_wide_non_album": "1"}) is True
+
+
 def test_inventory_backed_loose_track_reopen_honors_explicit_empty_exception_override(
     monkeypatch,
     committed_inventory_queries_for_legacy_browse_fakes,
@@ -1479,7 +1488,8 @@ def test_selected_family_alias_chips_keep_independent_variations_with_constant_i
     ]
     assert [group["artist"] for group in payload["primary_artist_groups"]] == ["Primary"]
     assert [group["artist"] for group in payload["family_artist_groups"]] == ["Family"]
-    assert [kind for kind, _sql, _params in inventory["queries"]] == ["support", "candidates"]
+    assert payload["non_album_tracks_deferred"] is True
+    assert [kind for kind, _sql, _params in inventory["queries"]] == ["support"]
 
 
 def test_selected_collaboration_artist_keeps_distinct_family_chip_outside_primary_scope(
@@ -1610,7 +1620,9 @@ def test_inventory_backed_search_keeps_existing_selection_semantics_without_n_pl
         lambda *_args, **_kwargs: {"loaded": True, "family_artists": []},
     )
 
-    payload = repository.build_search_payload(query_params={"q": "needle", "surface": "albums"})
+    payload = repository.build_search_payload(
+        query_params={"q": "needle", "surface": "albums", "include_non_album": "1"}
+    )
 
     assert payload["query"] == "needle"
     assert payload["selected_artist"] == "Broadcast"
@@ -5084,7 +5096,7 @@ def test_postgres_direct_search_queues_visible_covers_before_family_and_non_albu
     monkeypatch.setattr(browse_module, "_selected_artist_family_context_from_state", record_family_projection)
 
     payload = repository._build_search_payload_from_snapshot(
-        query_params={"surface": "albums", "q": "tender"},
+        query_params={"surface": "albums", "q": "tender", "include_non_album": "1"},
         connection=_EmptyMissingAlbumConnection(),
     )
 
@@ -7660,7 +7672,6 @@ def test_postgres_search_payload_reuses_one_read_snapshot_for_every_projection(m
         "support",
         "family",
         "family-preview",
-        "non-album",
         "ratings",
     ])
     assert all(active_connection is connection for _name, active_connection in seen)
@@ -7799,7 +7810,6 @@ def test_postgres_selected_artist_payload_reuses_one_read_snapshot_for_every_pro
         "support",
         "family",
         "family-preview",
-        "non-album",
         "ratings",
     ])
     assert all(active_connection is connection for _name, active_connection in seen)

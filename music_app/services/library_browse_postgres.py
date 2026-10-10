@@ -168,6 +168,13 @@ def _request_flag(value: object) -> bool:
     return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _should_load_non_album_tracks(query_params: Mapping[str, object] | None) -> bool:
+    params = query_params or {}
+    return _request_flag(params.get("include_non_album")) or _request_flag(
+        params.get("include_library_wide_non_album")
+    )
+
+
 def is_library_browse_postgres_available(config: dict[str, object] | None) -> bool:
     if not isinstance(config, dict):
         return False
@@ -1082,16 +1089,21 @@ class PostgresLibraryBrowseRepository:
             family_context["alias_to_canonical"],
             family_context["canonical_to_aliases"],
         )
-        loaded_non_album_entries = self._load_non_album_entries(
-            view_state=view_state,
-            alias_to_canonical=family_context["alias_to_canonical"],
-            canonical_to_aliases=family_context["canonical_to_aliases"],
-            visible_artist_names=full_family_artist_scope,
-            query=query,
-            connection=_connection,
-            include_library_wide=_request_flag(
-                (query_params or {}).get("include_library_wide_non_album")
-            ),
+        load_non_album_tracks = _should_load_non_album_tracks(query_params)
+        loaded_non_album_entries = (
+            self._load_non_album_entries(
+                view_state=view_state,
+                alias_to_canonical=family_context["alias_to_canonical"],
+                canonical_to_aliases=family_context["canonical_to_aliases"],
+                visible_artist_names=full_family_artist_scope,
+                query=query,
+                connection=_connection,
+                include_library_wide=_request_flag(
+                    (query_params or {}).get("include_library_wide_non_album")
+                ),
+            )
+            if load_non_album_tracks
+            else []
         )
         if isinstance(loaded_non_album_entries, tuple):
             non_album_entries, library_non_album_entries = loaded_non_album_entries
@@ -1323,6 +1335,7 @@ class PostgresLibraryBrowseRepository:
             "manual_version_links": support_state["manual_version_links"],
             "non_album_tracks": non_album_tracks,
             "library_non_album_tracks": library_non_album_tracks,
+            "non_album_tracks_deferred": not load_non_album_tracks,
             "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             "listen_through_scope_candidates": _selected_artist_listen_through_scope_candidates(
                 selected_artist=artist_display,
@@ -1968,21 +1981,26 @@ class PostgresLibraryBrowseRepository:
                 if str(group.get("artist") or "").strip()
             ]
         )
-        non_album_entries = self._load_non_album_entries(
-            view_state=view_state,
-            alias_to_canonical=(
-                family_context["alias_to_canonical"]
-                if selected_artist and not requested_all_artists
-                else alias_to_canonical
-            ),
-            canonical_to_aliases=(
-                family_context["canonical_to_aliases"]
-                if selected_artist and not requested_all_artists
-                else canonical_to_aliases
-            ),
-            visible_artist_names=non_album_scope_artists,
-            query=query,
-            connection=connection,
+        load_non_album_tracks = _should_load_non_album_tracks(params)
+        non_album_entries = (
+            self._load_non_album_entries(
+                view_state=view_state,
+                alias_to_canonical=(
+                    family_context["alias_to_canonical"]
+                    if selected_artist and not requested_all_artists
+                    else alias_to_canonical
+                ),
+                canonical_to_aliases=(
+                    family_context["canonical_to_aliases"]
+                    if selected_artist and not requested_all_artists
+                    else canonical_to_aliases
+                ),
+                visible_artist_names=non_album_scope_artists,
+                query=query,
+                connection=connection,
+            )
+            if load_non_album_tracks
+            else []
         )
         non_album_tracks = build_non_album_track_list(
             non_album_entries,
@@ -2065,6 +2083,7 @@ class PostgresLibraryBrowseRepository:
             "ignored_version_keys": support_state["ignored_version_keys"],
             "manual_version_links": support_state["manual_version_links"],
             "non_album_tracks": non_album_tracks,
+            "non_album_tracks_deferred": not load_non_album_tracks,
             "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
             "listen_through_scope_candidates": (
                 _selected_artist_listen_through_scope_candidates(

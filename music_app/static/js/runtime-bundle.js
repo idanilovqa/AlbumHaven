@@ -4557,7 +4557,8 @@ function reorderGalleryFamilyArtists(artists = [], artist = '', beforeArtist = '
 }
 
 function hasGalleryNonAlbumTracks(view = {}) {
-  return Array.isArray(view.non_album_tracks) && view.non_album_tracks.length > 0;
+  return Boolean(view.non_album_tracks_deferred)
+    || (Array.isArray(view.non_album_tracks) && view.non_album_tracks.length > 0);
 }
 
 function classifyGalleryReleaseType(album = {}) {
@@ -6734,7 +6735,7 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = getVisibleNonAlbumTracks({
+    const enabled = Boolean(state.view?.non_album_tracks_deferred) || getVisibleNonAlbumTracks({
       libraryWide: button.dataset.libraryWide === '1',
     }).length > 0;
     button.disabled = !enabled;
@@ -11183,6 +11184,45 @@ function getNonAlbumMenuLabel() {
   return state.view.selected_artist ? 'Non-album tracks' : 'Loose tracks';
 }
 
+let deferredNonAlbumHydrationPromise = null;
+
+async function hydrateDeferredNonAlbumTracks(options = {}) {
+  const view = state.view || {};
+  if (!view.non_album_tracks_deferred) return view.non_album_tracks || [];
+  if (deferredNonAlbumHydrationPromise) return deferredNonAlbumHydrationPromise;
+
+  const requestedArtist = String(view.selected_artist || '');
+  const requestUrl = new URL(buildApiUrl(view, { omitSidebar: true }), 'http://localhost');
+  requestUrl.searchParams.set('include_non_album', '1');
+  if (options.libraryWide === true) {
+    requestUrl.searchParams.set('include_library_wide_non_album', '1');
+  }
+  deferredNonAlbumHydrationPromise = (async () => {
+    const response = await fetch(`${requestUrl.pathname}${requestUrl.search}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const payload = await response.json();
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
+    }
+    if (String(state.view?.selected_artist || '') !== requestedArtist) {
+      return state.view?.non_album_tracks || [];
+    }
+    state.view.non_album_tracks = Array.isArray(payload.non_album_tracks)
+      ? payload.non_album_tracks
+      : [];
+    state.view.library_non_album_tracks = Array.isArray(payload.library_non_album_tracks)
+      ? payload.library_non_album_tracks
+      : state.view.non_album_tracks;
+    state.view.non_album_tracks_deferred = false;
+    if (typeof syncGalleryMainControls === 'function') syncGalleryMainControls();
+    return state.view.non_album_tracks;
+  })().finally(() => {
+    deferredNonAlbumHydrationPromise = null;
+  });
+  return deferredNonAlbumHydrationPromise;
+}
+
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
@@ -11367,6 +11407,7 @@ function openNonAlbumModal(options = {}) {
   bindOverlayPointerOrigin(els.overlay);
   const libraryWide = options.libraryWide === true;
   state.ui.nonAlbumLibraryWide = libraryWide;
+  const hydrationPending = Boolean(state.view?.non_album_tracks_deferred);
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide });
   const subtitle = !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
@@ -11382,9 +11423,11 @@ function openNonAlbumModal(options = {}) {
     });
   }
   if (typeof presentMobilePage === 'function') presentMobilePage(mobilePageDescriptor('non-album'));
-  els.table.innerHTML = looseTracks.length
-    ? buildNonAlbumTrackSectionsMarkup(looseTracks)
-    : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  els.table.innerHTML = hydrationPending
+    ? '<div class="utility-empty-state">Loading loose tracks…</div>'
+    : looseTracks.length
+      ? buildNonAlbumTrackSectionsMarkup(looseTracks)
+      : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
   els.table.querySelectorAll?.('.album-track-table__disc--collapsible').forEach((details) => {
     const summary = details.querySelector?.('summary');
     const syncExpanded = () => summary?.setAttribute('aria-expanded', details.open ? 'true' : 'false');
@@ -11394,6 +11437,17 @@ function openNonAlbumModal(options = {}) {
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
   attachSharedPlayer();
+  if (hydrationPending) {
+    hydrateDeferredNonAlbumTracks({ libraryWide })
+      .then(() => {
+        if (!els.overlay.hidden) openNonAlbumModal(options);
+      })
+      .catch((error) => {
+        if (!els.overlay.hidden) {
+          els.table.innerHTML = `<div class="utility-empty-state">${escapeHtml(error.message || 'Unable to load loose tracks.')}</div>`;
+        }
+      });
+  }
 }
 
 function openNonAlbumTagEditor() {

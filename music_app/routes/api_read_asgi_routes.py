@@ -171,6 +171,7 @@ _POSTGRES_SELECTED_ARTIST_PARAMS = {
     "client_surface",
     "client_surface_class",
     "include_library_wide_non_album",
+    "include_non_album",
 }
 
 _FILE_BACKED_SELECTED_ARTIST_HYDRATION_PARAMS = _POSTGRES_SELECTED_ARTIST_PARAMS | {

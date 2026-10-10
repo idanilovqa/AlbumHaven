@@ -280,6 +280,37 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
+test('deferred non-album tracks hydrate without rerendering the gallery', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.state.view = {
+    selected_artist: 'Agalloch',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.buildApiUrl = () => '/view-data?surface=albums&artist=Agalloch&omit_sidebar=1';
+  context.URL = URL;
+  context.fetch = async (url) => {
+    requested.push(url);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Agalloch',
+        non_album_tracks: [{ path: '/music/agalloch/loose.flac', title: 'Loose' }],
+        non_album_tracks_deferred: false,
+      }),
+    };
+  };
+
+  await context.hydrateDeferredNonAlbumTracks();
+
+  assert.equal(requested.length, 1);
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), '1');
+  assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Loose']);
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
+});
+
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
   const { context } = loadHelper();
   for (const filename of ['gallery-main-state.js', 'gallery-main-interactions.js']) {

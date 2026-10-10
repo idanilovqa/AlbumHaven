@@ -33945,7 +33945,7 @@ async function loadGalleryCoverPreviewImage(image, productionUrl, options = {}) 
 
 // BEGIN js/runtime/gallery-cover-load-scheduler.js
 
-const GALLERY_COVER_LOAD_CONCURRENCY = 2;
+const GALLERY_COVER_LOAD_CONCURRENCY = 6;
 const GALLERY_COVER_BACKGROUND_CONCURRENCY = 2;
 const GALLERY_COVER_PRIORITY_ORDER = Object.freeze({ visible: 0, near: 1, background: 2 });
 

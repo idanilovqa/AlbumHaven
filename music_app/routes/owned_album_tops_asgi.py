@@ -210,7 +210,7 @@ async def create_album_top(request: Request):
 @router.post("/album-tops/{top_ref}/{action}")
 async def mutate_album_top(request: Request, top_ref: str, action: str):
     if action not in {"save", "add", "remove", "reorder", "delete", "visibility", "grant_editor",
-                      "revoke_editor", "request_edit", "decide_edit_request", "copy"}:
+                      "revoke_editor", "request_edit", "decide_edit_request", "copy", "set_manual_completion"}:
         return _error(AlbumTopError("invalid_command"))
     return await _mutate(request, action, top_ref)
 

@@ -1,6 +1,6 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {Button, Status} from '../home-friends/components.jsx';
-import {NativeChoice} from '../home-friends/native-choice.jsx';
+import {SharingVisibility, SharingMember, SharingReaderAccess, SharingRequestDecision} from '../home-friends/resource-sharing.jsx';
 import {NativeDialog} from '../home-friends/native-dialog.jsx';
 import {CreationSearch} from './creation.jsx';
 import {MutationStatus} from './mutation-status.jsx';
@@ -8,18 +8,17 @@ import {draftDirty, playlistDraft} from './model.mjs';
 
 export function SharingFields({runtime, value, busy, onChange, onEditor}) {
   return <div className="playlists__sharing tag-editor-form">
-    <NativeChoice runtime={runtime} label="Playlist visibility" value={value.visibility} disabled={busy || !value.can_manage}
-      options={ [['private', 'Private'], ['server_shared', 'Shared with this server'], ['link', 'Public link unavailable', true]] }
-      onChange={visibility => {if (['private', 'server_shared'].includes(visibility)) onChange({...value, visibility});}}/>
-    <p className="playlists__note">Private playlists are visible to their owner and explicit editors. Server-shared playlists are visible to authorized members of this library. Public links are unavailable.</p>
+    <SharingVisibility runtime={runtime} label="Playlist visibility" visibility={value.visibility} disabled={busy || !value.can_manage}
+      publicUnavailable onChange={visibility => onChange({...value, visibility})}>
+      Private playlists are visible to their owner and explicit editors. Server-shared playlists are visible to authorized members of this library. Public links are unavailable.
+    </SharingVisibility>
     <fieldset disabled={busy || !value.can_manage}><legend>Editors</legend>
-      {value.people.map(person => <div key={person.account_ref} className="playlists__share-person">
-        <span>{person.display_name || person.username_display || 'Library member'}{person.username_display && person.username_display !== person.display_name ? ` (${person.username_display})` : ''}{person.is_active === false ? ' · Inactive account' : ''}</span>
+      {value.people.map(person => <SharingMember key={person.account_ref} person={person}>
         <Button runtime={runtime} disabled={busy || !value.can_manage || !person.can_edit}
           onClick={() => onEditor?.({account_ref: person.account_ref, selected: !person.selected})}>
           {person.selected ? 'Remove editor' : 'Add editor'}
         </Button>
-      </div>)}
+      </SharingMember>)}
       {!value.people.length && <p>No matching library members.</p>}
     </fieldset>
     <p className="playlists__note">Each editor change is saved separately. Personal ratings and listening progress are not shared here.</p>
@@ -69,24 +68,15 @@ export function SharePlaylist({runtime, controller, state, onClose}) {
           const latest = controller.getSnapshot();
           if (latest.scopeKey === scopeKey && latest.selectedPlaylistId === playlistId && controller.getLifecycleVersion() === version) await controller.load();
         }}>Refresh playlist</Button></>}
-      {data && !data.can_manage && <>
-        <p className="playlists__note">{data.visibility === 'server_shared' ? 'Shared with this library.' : 'Shared with you.'} Only the owner can change access.</p>
-        {data.request_status === 'pending' && <p role="status">Edit access requested. The owner can review it in Notifications.</p>}
-        {data.request_status === 'declined' && <p role="status">The owner declined your previous request.</p>}
-        {data.can_request_edit && <Button runtime={runtime} disabled={busy || revisionConflict || data.request_status === 'pending' || !controller.available('requestEditAccess')}
-          onClick={() => {if (writable()) controller.mutate('requestEditAccess');}}>Request edit access</Button>}
-      </>}
-      {data?.can_manage && data.pending_requests.map(request => <div key={request.request_ref} className="playlists__share-person">
-        <span>{request.display_name || request.username_display || 'Library member'} requested edit access.</span>
-        <NativeChoice runtime={runtime} label={`Access for ${request.display_name || request.username_display || 'Library member'}`}
-          value={decisions[request.request_ref] || 'viewer'} disabled={busy || metadataDirty || revisionConflict}
-          options={ [['viewer', 'Viewer'], ['editor', 'Editor']] }
-          onChange={role => {if (writable()) setDecisions(value => ({...value, [request.request_ref]: role}));}}/>
-        <Button runtime={runtime} disabled={busy || metadataDirty || revisionConflict || decisions[request.request_ref] !== 'editor'}
-          onClick={() => {if (writable() && decisions[request.request_ref] === 'editor') controller.mutate('decideEditRequest', {request_ref: request.request_ref, decision: 'approve'});}}>Apply</Button>
-        <Button runtime={runtime} disabled={busy || metadataDirty || revisionConflict}
-          onClick={() => {if (writable()) controller.mutate('decideEditRequest', {request_ref: request.request_ref, decision: 'decline'});}}>Decline</Button>
-      </div>)}
+      {data && !data.can_manage && <SharingReaderAccess runtime={runtime} value={data}
+        disabled={busy || revisionConflict || !controller.available('requestEditAccess')}
+        onRequest={() => {if (writable()) controller.mutate('requestEditAccess');}}/>}
+      {data?.can_manage && data.pending_requests.map(request => <SharingRequestDecision key={request.request_ref}
+        runtime={runtime} request={request} role={decisions[request.request_ref] || 'viewer'} disabled={busy || metadataDirty || revisionConflict}
+        onRole={role => {if (writable()) setDecisions(value => ({...value, [request.request_ref]: role}));}}
+        onDecision={decision => {if (writable() && (decision === 'decline' || decisions[request.request_ref] === 'editor')) {
+          controller.mutate('decideEditRequest', {request_ref: request.request_ref, decision});
+        }}}/>)}
       {display?.can_manage && <SharingFields runtime={runtime} value={display} busy={busy || metadataDirty || revisionConflict} onChange={value => {if (writable()) setVisibility(value.visibility);}}
         onEditor={value => {if (writable()) controller.mutate('setPlaylistEditor', value);}}/>}
       {cursor && <Button runtime={runtime} disabled={busy} onClick={() => {if (active()) {setCursor(null); seen.current.clear();}}}>First page</Button>}

@@ -497,10 +497,48 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
   };
 }
 
+let rootGalleryArtistAlignmentGeneration = 0;
+
+function cancelRootGalleryArtistAlignment() {
+  rootGalleryArtistAlignmentGeneration += 1;
+}
+
+function stabilizeRootGalleryArtistAlignment(artist) {
+  const targetArtist = String(artist || '').trim();
+  if (!targetArtist) return;
+  const generation = rootGalleryArtistAlignmentGeneration + 1;
+  rootGalleryArtistAlignmentGeneration = generation;
+  let attempts = 0;
+  let stableFrames = 0;
+  const align = () => {
+    if (rootGalleryArtistAlignmentGeneration !== generation) return;
+    attempts += 1;
+    const scroll = document.getElementById('albums-scroll');
+    if (!scroll) return;
+    const header = Array.from(document.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
+      String(candidate.getAttribute('data-scroll-artist') || '') === targetArtist
+    ));
+    const aligned = Boolean(scroll && header)
+      && Math.abs(header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1;
+    if (aligned) stableFrames += 1;
+    else {
+      stableFrames = 0;
+      virtualGrid?.scrollToArtist?.(targetArtist);
+    }
+    if (stableFrames >= 6 || attempts >= 60) return;
+    scheduleBrowserAnimationFrame(align);
+  };
+  scheduleBrowserAnimationFrame(align);
+}
+
 function scrollRootGalleryToArtist(artist) {
   const targetArtist = String(artist || '').trim();
   if (!targetArtist) return Promise.resolve(false);
-  if (virtualGrid?.scrollToArtist?.(targetArtist)) return Promise.resolve(true);
+  if (virtualGrid?.scrollToArtist?.(targetArtist)) {
+    stabilizeRootGalleryArtistAlignment(targetArtist);
+    return Promise.resolve(true);
+  }
+  clearPendingSelectedArtistReconcile();
   const nextView = {
     ...state.view,
     surface_request: 'albums',
@@ -523,7 +561,10 @@ function scrollRootGalleryToArtist(artist) {
     ).trim();
     const scrollWhenRendered = (attemptsRemaining) => {
       if (state.view?.gallery_page !== anchoredGalleryPage) return;
-      if (virtualGrid?.scrollToArtist?.(renderedArtist)) return;
+      if (virtualGrid?.scrollToArtist?.(renderedArtist)) {
+        stabilizeRootGalleryArtistAlignment(renderedArtist);
+        return;
+      }
       if (attemptsRemaining <= 0) return;
       scheduleBrowserAnimationFrame(() => scrollWhenRendered(attemptsRemaining - 1));
     };
@@ -706,6 +747,7 @@ function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
 }
 
 function handleGalleryBootstrapWheel(event) {
+  if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
   const lightboxImage = event.target.closest('#image-lightbox-image');
   if (!lightboxImage) return;
   const overlay = document.getElementById('image-lightbox');
@@ -722,7 +764,92 @@ function handleGalleryBootstrapWheel(event) {
   setLightboxZoom(state.lightbox.zoom + (direction * step), { originX, originY });
 }
 
+const ARTIST_TREE_LONG_PRESS_DELAY_MS = 500;
+const ARTIST_TREE_LONG_PRESS_MOVE_TOLERANCE_PX = 12;
+const ARTIST_TREE_LONG_PRESS_CLICK_GUARD_MS = 1000;
+let artistTreeLongPressGesture = null;
+let artistTreeLongPressClickGuard = null;
+
+function clearArtistTreeLongPressGesture() {
+  if (artistTreeLongPressGesture?.timeoutId) {
+    clearBrowserTimeout(artistTreeLongPressGesture.timeoutId);
+  }
+  artistTreeLongPressGesture = null;
+}
+
+function armArtistTreeLongPressClickGuard(artist) {
+  if (artistTreeLongPressClickGuard?.timeoutId) {
+    clearBrowserTimeout(artistTreeLongPressClickGuard.timeoutId);
+  }
+  const guard = { artist, timeoutId: 0 };
+  artistTreeLongPressClickGuard = guard;
+  guard.timeoutId = scheduleBrowserTimeout(() => {
+    if (artistTreeLongPressClickGuard === guard) artistTreeLongPressClickGuard = null;
+  }, ARTIST_TREE_LONG_PRESS_CLICK_GUARD_MS);
+}
+
+function beginArtistTreeLongPress(event) {
+  if (String(event?.pointerType || '').toLowerCase() !== 'touch' || event?.isPrimary === false) {
+    return false;
+  }
+  const artistLink = event.target?.closest?.('[data-sidebar-artist]');
+  const artist = String(artistLink?.getAttribute?.('data-sidebar-artist') || '').trim();
+  if (!artist) return false;
+  clearArtistTreeLongPressGesture();
+  const gesture = {
+    pointerId: event.pointerId,
+    x: Number(event.clientX || 0),
+    y: Number(event.clientY || 0),
+    artist,
+    opened: false,
+    timeoutId: 0,
+  };
+  artistTreeLongPressGesture = gesture;
+  gesture.timeoutId = scheduleBrowserTimeout(() => {
+    if (artistTreeLongPressGesture !== gesture) return;
+    gesture.opened = true;
+    gesture.timeoutId = 0;
+    armArtistTreeLongPressClickGuard(artist);
+    showArtistTreeContextMenu(gesture.x, gesture.y, artist);
+  }, ARTIST_TREE_LONG_PRESS_DELAY_MS);
+  return true;
+}
+
+function updateArtistTreeLongPress(event) {
+  const gesture = artistTreeLongPressGesture;
+  if (!gesture || event?.pointerId !== gesture.pointerId || gesture.opened) return false;
+  const deltaX = Number(event.clientX || 0) - gesture.x;
+  const deltaY = Number(event.clientY || 0) - gesture.y;
+  if (Math.hypot(deltaX, deltaY) <= ARTIST_TREE_LONG_PRESS_MOVE_TOLERANCE_PX) return false;
+  clearArtistTreeLongPressGesture();
+  return true;
+}
+
+function finishArtistTreeLongPress(event) {
+  const gesture = artistTreeLongPressGesture;
+  if (!gesture || event?.pointerId !== gesture.pointerId) return false;
+  const opened = gesture.opened;
+  clearArtistTreeLongPressGesture();
+  if (opened) event.preventDefault?.();
+  return opened;
+}
+
+function consumeArtistTreeLongPressClick(event) {
+  const guard = artistTreeLongPressClickGuard;
+  if (!guard) return false;
+  const artistLink = event.target?.closest?.('[data-sidebar-artist]');
+  const artist = String(artistLink?.getAttribute?.('data-sidebar-artist') || '').trim();
+  if (artist !== guard.artist) return false;
+  if (guard.timeoutId) clearBrowserTimeout(guard.timeoutId);
+  artistTreeLongPressClickGuard = null;
+  event.preventDefault?.();
+  event.stopPropagation?.();
+  return true;
+}
+
 function handleGalleryBootstrapPointerDown(event) {
+  if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
+  beginArtistTreeLongPress(event);
   const lightboxImage = event.target.closest('#image-lightbox-image');
   if (!lightboxImage || state.lightbox.zoom <= 1) return;
   event.preventDefault();
@@ -731,6 +858,7 @@ function handleGalleryBootstrapPointerDown(event) {
 }
 
 function handleGalleryBootstrapPointerMove(event) {
+  updateArtistTreeLongPress(event);
   updateLightboxDrag(event);
   if (String(event?.pointerType || '').toLowerCase() !== 'mouse') return;
   const albumCard = event.target?.closest?.('.album-card');
@@ -744,11 +872,13 @@ function handleGalleryBootstrapPointerMove(event) {
   }
 }
 
-function handleGalleryBootstrapPointerUp() {
+function handleGalleryBootstrapPointerUp(event) {
+  finishArtistTreeLongPress(event);
   stopLightboxDrag();
 }
 
 function handleGalleryBootstrapPointerCancel() {
+  clearArtistTreeLongPressGesture();
   stopLightboxDrag();
 }
 

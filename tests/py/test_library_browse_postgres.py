@@ -1227,7 +1227,7 @@ def test_inventory_backed_root_sidebar_uses_visible_non_album_candidate_scope(
     ]
 
 
-def test_selected_artist_non_album_candidates_remain_unscoped_for_raw_metadata_matches(
+def test_selected_artist_non_album_candidates_keep_raw_metadata_and_path_matching_when_scoped(
     committed_inventory_queries_for_legacy_browse_fakes,
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -1260,6 +1260,8 @@ def test_selected_artist_non_album_candidates_remain_unscoped_for_raw_metadata_m
     [(kind, sql, params)] = inventory["queries"]
     assert kind == "candidates"
     assert "artist_keys" not in params
+    assert params["artist_names"] == ["Neal Morse", "Morse, Portnoy & George"]
+    assert params["query_terms"] == ["morse", "neal"]
     assert sql == "caller-owned snapshot"
     assert [entry["title"] for entry in entries] == ["Alias Path Rarity"]
 
@@ -2688,6 +2690,7 @@ def test_postgres_library_browse_builds_selected_artist_payload_from_direct_memb
             "gallery_display": "list",
             "gallery_scale_percent": "125",
             "category": ["main_library"],
+            "include_library_wide_non_album": "1",
         },
     )
 
@@ -11238,6 +11241,7 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
 
     repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-positive-cache-test"})
     browse.invalidate_postgres_utility_projection_cache()
+
     fingerprint = {"fingerprint": (1, 1, 1, 1, 1), "observed_at": 1}
     monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda connection: fingerprint)
     monkeypatch.setattr(browse, "_load_duplicate_candidate_album_ids", lambda *args, **kwargs: [1])
@@ -11264,6 +11268,90 @@ def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypa
     assert connection.reads == 2
     assert album["has_duplicate_files"] is True
     assert repository._get_cached_utility_projection("duplicate-absence")["albums"] == {}
+    browse.invalidate_postgres_utility_projection_cache()
+
+
+def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_loaded(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "non-album-selected-scope-test"}
+    )
+    browse.invalidate_postgres_utility_projection_cache()
+    monkeypatch.setattr(
+        browse,
+        "_duplicate_inventory_fingerprint",
+        lambda _connection: {"fingerprint": (1, 1, 1, 1, 1, 1, 1), "observed_at": 1},
+    )
+    monkeypatch.setattr(
+        browse,
+        "_non_album_entries_from_inventory_candidates",
+        lambda rows, **_kwargs: list(rows),
+    )
+    calls = []
+    monkeypatch.setattr(
+        repository._inventory_repository,
+        "load_non_album_candidates",
+        lambda **kwargs: calls.append(kwargs) or [],
+    )
+
+    repository._load_non_album_entries(
+        view_state={},
+        alias_to_canonical={},
+        canonical_to_aliases={},
+        visible_artist_names=iter(["Radiohead", "Thom Yorke"]),
+        query="Kid A",
+        connection=object(),
+    )
+    repository._load_non_album_entries(
+        view_state={},
+        alias_to_canonical={},
+        canonical_to_aliases={},
+        visible_artist_names=["Broadcast"],
+        query="Tender Buttons",
+        connection=object(),
+    )
+
+    assert calls == [
+        {
+            "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
+            "connection": calls[0]["connection"],
+            "artist_names": ["Radiohead", "Thom Yorke"],
+            "query_terms": ["a", "kid"],
+        },
+        {
+            "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
+            "connection": calls[1]["connection"],
+            "artist_names": ["Broadcast"],
+            "query_terms": ["button", "tender"],
+        },
+    ]
+    browse.invalidate_postgres_utility_projection_cache()
+
+
+def test_duplicate_identity_lookup_borrows_read_only_cache_without_deepcopy(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-cache-read-test"}
+    )
+    browse.invalidate_postgres_utility_projection_cache()
+    fingerprint = {"fingerprint": (1, 1, 1, 1, 1, 1), "observed_at": 1}
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: fingerprint)
+
+    class ReadOnlyCache(dict):
+        def __deepcopy__(self, _memo):
+            raise AssertionError("Duplicate identity lookup must not copy the complete index")
+
+    cache_key = repository._utility_projection_cache_key("duplicate-identities")
+    with browse._UTILITY_PROJECTION_CACHE_LOCK:
+        browse._UTILITY_PROJECTION_CACHE[cache_key] = ReadOnlyCache(
+            {**fingerprint, "index": [(1, "one", None)]}
+        )
+
+    assert browse._load_duplicate_candidate_album_ids(
+        object(), ["one"], repository=repository
+    ) == [1]
     browse.invalidate_postgres_utility_projection_cache()
 
 

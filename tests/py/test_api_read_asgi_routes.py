@@ -2714,7 +2714,7 @@ def test_postgres_selected_artist_request_does_not_require_omit_sidebar(app, asg
             "type": "http",
             "method": "GET",
             "path": "/view-data",
-            "query_string": b"artist=Broadcast&surface=albums",
+            "query_string": b"artist=Broadcast&surface=albums&include_library_wide_non_album=1",
             "headers": [],
             "app": asgi_app,
         }

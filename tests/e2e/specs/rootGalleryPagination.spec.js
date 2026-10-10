@@ -366,6 +366,20 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
     })
       .toBeLessThan(localScrollBeforeWheel);
 
+    const selectedArtistResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && url.searchParams.get('artist') === localTarget
+        && response.ok();
+    });
+    // parity-check: allow-read-only-measurement-evaluate -- locate the selected artist in the rendered sidebar
+    const localSidebarIndex = await ui.sidebarArtists.evaluateAll((items, artist) => (
+      items.findIndex(candidate => candidate.getAttribute('data-sidebar-artist') === artist)
+    ), localTarget);
+    expect(localSidebarIndex, 'Mounted artist must remain available in Artist Tree').toBeGreaterThanOrEqual(0);
+    await ui.sidebarArtists.nth(localSidebarIndex).click();
+    await selectedArtistResponse;
+
     // parity-check: allow-read-only-measurement-evaluate -- choose a sidebar artist outside the loaded model
     const remoteTarget = await page.evaluate(sidebarSelector => {
       const loaded = new Set((state.view.artist_groups || []).map(group => String(group.artist || '')));
@@ -383,6 +397,7 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
     await openArtistTreeContextMenu(ui, remoteTarget);
     await ui.scrollToArtistAction.click();
     await anchorResponse;
+    await expect.poll(() => new URL(page.url()).searchParams.has('artist')).toBe(false);
 
     await expect.poll(() => {
       // parity-check: allow-read-only-measurement-evaluate -- measure exact remote artist alignment
@@ -413,7 +428,38 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
     expect(leading.loadedAlbums).toBe(leading.authoritativeAlbums);
     expect(leading.hasPrevious, 'Fixture target must leave earlier pages for upward traversal').toBe(true);
 
-    const previousResponse = page.waitForResponse(response => {
+    let resolvePrependAnchor;
+    let rejectPrependAnchor;
+    const prependAnchorAtRequest = new Promise((resolve, reject) => {
+      resolvePrependAnchor = resolve;
+      rejectPrependAnchor = reject;
+    });
+    const capturePrependAnchor = async request => {
+      const url = new URL(request.url());
+      if (url.pathname !== '/view-data'
+        || url.searchParams.get('gallery_page_direction') !== 'previous') return;
+      // parity-check: allow-read-only-measurement-evaluate -- capture visible ownership before prepend applies
+      const anchor = await page.evaluate(({ scrollSelector, headingSelector }) => {
+        const scroll = document.querySelector(scrollSelector);
+        const scrollTop = scroll.getBoundingClientRect().top;
+        const visible = [...document.querySelectorAll(headingSelector)]
+          .map(header => ({
+            artist: header.getAttribute('data-scroll-artist'),
+            top: header.getBoundingClientRect().top - scrollTop,
+          }))
+          .filter(item => item.artist && item.top >= 0 && item.top < scroll.clientHeight)
+          .sort((left, right) => left.top - right.top)[0];
+        return visible || null;
+      }, { scrollSelector: '#albums-scroll', headingSelector: ui.artistHeadingSelector });
+      resolvePrependAnchor(anchor);
+    };
+    page.on('request', capturePrependAnchor);
+    const prependTimeout = setTimeout(() => {
+      rejectPrependAnchor(new Error('Timed out waiting for a previous-page request'));
+    }, 20_000);
+    let retainedAnchor;
+    try {
+      const previousResponse = page.waitForResponse(response => {
       const url = new URL(response.url());
       return url.pathname === '/view-data'
         && url.searchParams.get('gallery_page_direction') === 'previous'
@@ -430,7 +476,28 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
       ));
       if (reachedTopBuffer) break;
     }
-    await previousResponse;
+      [retainedAnchor] = await Promise.all([prependAnchorAtRequest, previousResponse]);
+    } finally {
+      clearTimeout(prependTimeout);
+      page.off('request', capturePrependAnchor);
+    }
+    expect(retainedAnchor?.artist, 'Previous-page request must retain a visible artist anchor').toBeTruthy();
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- prepend must not visibly jump the retained artist
+      return page.evaluate(({ artist, expectedTop, scrollSelector, headingSelector }) => {
+        const scroll = document.querySelector(scrollSelector);
+        const header = [...document.querySelectorAll(headingSelector)]
+          .find(item => item.getAttribute('data-scroll-artist') === artist);
+        return header
+          ? Math.abs((header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) - expectedTop)
+          : 9999;
+      }, {
+        artist: retainedAnchor.artist,
+        expectedTop: retainedAnchor.top,
+        scrollSelector: '#albums-scroll',
+        headingSelector: ui.artistHeadingSelector,
+      });
+    }).toBeLessThanOrEqual(2);
 
     await expect.poll(() => {
       // parity-check: allow-read-only-measurement-evaluate -- wait for complete prepended leading artist data

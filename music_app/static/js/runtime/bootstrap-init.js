@@ -305,6 +305,7 @@ document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
   if (sidebarArtist) {
     event.preventDefault();
+    clearArtistTreeLongPressGesture();
     showArtistTreeContextMenu(
       event.clientX,
       event.clientY,

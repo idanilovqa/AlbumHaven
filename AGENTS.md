@@ -38,6 +38,11 @@ operate, or contribute to the application.
   copies or overrides of these rules.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
+- E2E tests for owner-reported regressions must assert every named
+  user-visible outcome and failure mode through the real UI. Internal calls,
+  request parameters, mocked helper success, or state inspection may support
+  diagnosis, but they do not replace assertions that the requested content is
+  rendered, positioned, stable, complete, and usable exactly as specified.
 - Report security problems through the process in `SECURITY.md`.
 
 ## Subagents and token burning

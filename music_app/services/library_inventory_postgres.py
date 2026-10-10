@@ -74,6 +74,8 @@ class PostgresLibraryInventoryRepository:
         *,
         track_ids: Iterable[object] | None = None,
         private_paths: Iterable[object] | None = None,
+        artist_names: Iterable[object] | None = None,
+        query_terms: Iterable[object] | None = None,
         limit: object = DEFAULT_NON_ALBUM_CANDIDATE_LIMIT,
         connection: Any | None = None,
         unassigned_only: bool = False,
@@ -93,6 +95,20 @@ class PostgresLibraryInventoryRepository:
                 if str(private_path or "").strip()
             }
         )
+        normalized_artist_names = sorted(
+            {
+                str(artist_name).strip().lower()
+                for artist_name in (artist_names or ())
+                if str(artist_name or "").strip()
+            }
+        )
+        normalized_query_terms = sorted(
+            {
+                str(term).strip().lower()
+                for term in (query_terms or ())
+                if str(term or "").strip()
+            }
+        )
         bounded_limit = max(1, min(int(limit), MAX_NON_ALBUM_CANDIDATE_LIMIT))
         params = {
             "track_ids": normalized_track_ids,
@@ -101,11 +117,23 @@ class PostgresLibraryInventoryRepository:
             "private_path_count": len(normalized_private_paths),
             "limit": bounded_limit,
         }
+        if normalized_artist_names:
+            params.update({
+                "artist_names": normalized_artist_names,
+                "artist_path_patterns": [f"%{name}%" for name in normalized_artist_names],
+            })
+        if normalized_query_terms:
+            params["query_patterns"] = [f"%{term}%" for term in normalized_query_terms]
+        sql = _non_album_candidates_sql(
+            unassigned_only=unassigned_only,
+            filter_artists=bool(normalized_artist_names),
+            filter_query=bool(normalized_query_terms),
+        )
         if connection is None:
             with self._connect_to_database() as owned_connection:
-                cursor = owned_connection.execute(_non_album_candidates_sql(unassigned_only=unassigned_only), params)
+                cursor = owned_connection.execute(sql, params)
                 return [dict(_row_mapping(row)) for row in cursor.fetchall()]
-        cursor = connection.execute(_non_album_candidates_sql(unassigned_only=unassigned_only), params)
+        cursor = connection.execute(sql, params)
         return [dict(_row_mapping(row)) for row in cursor.fetchall()]
 
     def _connect_to_database(self) -> Any:
@@ -189,7 +217,12 @@ def _support_state_sql() -> str:
     """
 
 
-def _non_album_candidates_sql(*, unassigned_only: bool = False) -> str:
+def _non_album_candidates_sql(
+    *,
+    unassigned_only: bool = False,
+    filter_artists: bool = False,
+    filter_query: bool = False,
+) -> str:
     stored_file_album = "coalesce(library.local_track_files.scan_file_album, '')"
     stored_non_album_predicate = _non_album_value_predicate_sql(stored_file_album)
     effective_album = """coalesce(
@@ -200,6 +233,37 @@ def _non_album_candidates_sql(*, unassigned_only: bool = False) -> str:
     )"""
     effective_non_album_predicate = _non_album_value_predicate_sql(effective_album)
     scanned_exception_predicate = "lower(btrim(coalesce(library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}', ''))) not in ('', 'none', 'null')"
+    artist_scope = """
+        and (
+            lower(btrim(coalesce(library.local_artists.name, ''))) = any(%(artist_names)s::text[])
+            or lower(btrim(coalesce(library.local_tracks.metadata ->> 'artist', ''))) = any(%(artist_names)s::text[])
+            or lower(btrim(coalesce(library.local_tracks.metadata ->> 'album_artist', ''))) = any(%(artist_names)s::text[])
+            or lower(coalesce(library.local_tracks.metadata -> 'artists', '[]'::jsonb)::text) like any(%(artist_path_patterns)s::text[])
+            or lower(btrim(coalesce(library.local_track_files.metadata #>> '{scan_cache,file_entry,artist}', ''))) = any(%(artist_names)s::text[])
+            or lower(btrim(coalesce(library.local_track_files.metadata #>> '{scan_cache,file_entry,album_artist}', ''))) = any(%(artist_names)s::text[])
+            or lower(coalesce(library.local_track_files.metadata #> '{scan_cache,file_entry,artists}', '[]'::jsonb)::text) like any(%(artist_path_patterns)s::text[])
+            or lower(active_track_files.private_path) like any(%(artist_path_patterns)s::text[])
+        )
+    """ if filter_artists else ""
+    query_scope = """
+        and not exists (
+            select 1
+            from unnest(%(query_patterns)s::text[]) as query_pattern(pattern)
+            where lower(concat_ws(
+                ' ',
+                library.local_tracks.title,
+                library.local_tracks.metadata ->> 'artist',
+                library.local_tracks.metadata -> 'artists',
+                library.local_tracks.metadata ->> 'album_artist',
+                library.local_tracks.metadata ->> 'album',
+                library.local_artists.name,
+                library.local_albums.title,
+                library.local_track_files.relative_path,
+                library.local_track_files.metadata #> '{scan_cache,file_entry,artists}',
+                active_track_files.private_path
+            )) not like query_pattern.pattern
+        )
+    """ if filter_query else ""
     return f"""
         with bootstrap_context as (
           {_bootstrap_context_sql()}
@@ -413,9 +477,11 @@ def _non_album_candidates_sql(*, unassigned_only: bool = False) -> str:
         where (
             %(track_id_count)s = 0
             or library.local_tracks.id = any(%(track_ids)s::bigint[])
-          )
-          {"and library.local_tracks.album_id is null" if unassigned_only else ""}
-          and (
+        )
+        {"and library.local_tracks.album_id is null" if unassigned_only else ""}
+        {artist_scope}
+        {query_scope}
+        and (
             {effective_non_album_predicate}
             or exists (select 1 from local_album_membership where file_id = library.local_track_files.id and problem is not null)
             or exception_override.exception_type is not null

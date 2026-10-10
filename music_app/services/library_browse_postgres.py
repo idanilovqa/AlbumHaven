@@ -369,16 +369,41 @@ class PostgresLibraryBrowseRepository:
     ) -> list[dict[str, object]] | tuple[list[dict[str, object]], list[dict[str, object]]]:
         kind = "non-album-candidates"
         fingerprint = _duplicate_inventory_fingerprint(connection) if connection is not None else {}
-        cached = self._get_cached_utility_projection(kind) if fingerprint else None
+        scoped_artist_names = [
+            str(value).strip()
+            for value in visible_artist_names
+            if str(value or "").strip()
+        ]
+        scoped_query = str(query or "").strip()
+        scope_inventory_query = bool(scoped_artist_names or scoped_query) and not include_library_wide
+        cached = (
+            self._get_cached_utility_projection(kind)
+            if fingerprint and not scope_inventory_query
+            else None
+        )
         reuse = bool(cached and cached.get("fingerprint") == fingerprint.get("fingerprint"))
         cache_key = self._utility_projection_cache_key(kind)
         with _UTILITY_PROJECTION_CACHE_LOCK:
             generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
         options = {"track_ids": cached["track_ids"]} if reuse else {}
+        if scope_inventory_query:
+            if scoped_artist_names:
+                options["artist_names"] = scoped_artist_names
+            if scoped_query:
+                from music_app.services.view_search import split_search_terms
+
+                options["query_terms"] = sorted(
+                    {
+                        word
+                        for term in split_search_terms(scoped_query)
+                        for word in term.split()
+                        if word
+                    }
+                )
         rows = [] if reuse and not options["track_ids"] else self._inventory_repository.load_non_album_candidates(
             limit=MAX_NON_ALBUM_CANDIDATE_LIMIT, connection=connection, **options,
         )
-        if fingerprint and not reuse:
+        if fingerprint and not scope_inventory_query and not reuse:
             _cache_compact_inventory_payload(connection, self, kind, fingerprint, {
                 "track_ids": sorted({_coerce_int(row.get("track_id")) for row in rows} - {0}),
             }, generation)
@@ -389,7 +414,7 @@ class PostgresLibraryBrowseRepository:
             ),
             alias_to_canonical=alias_to_canonical,
             canonical_to_aliases=canonical_to_aliases,
-            visible_artist_names=visible_artist_names,
+            visible_artist_names=scoped_artist_names,
             query=query,
         )
         if not include_library_wide:
@@ -1064,7 +1089,9 @@ class PostgresLibraryBrowseRepository:
             visible_artist_names=full_family_artist_scope,
             query=query,
             connection=_connection,
-            include_library_wide=True,
+            include_library_wide=_request_flag(
+                (query_params or {}).get("include_library_wide_non_album")
+            ),
         )
         if isinstance(loaded_non_album_entries, tuple):
             non_album_entries, library_non_album_entries = loaded_non_album_entries
@@ -3080,13 +3107,20 @@ class PostgresLibraryBrowseRepository:
             return None
         return (self._database_url, normalized_kind)
 
-    def _get_cached_utility_projection(self, kind: str) -> dict[str, object] | None:
+    def _get_cached_utility_projection(
+        self,
+        kind: str,
+        *,
+        copy_payload: bool = True,
+    ) -> dict[str, object] | None:
         cache_key = self._utility_projection_cache_key(kind)
         if cache_key is None:
             return None
         with _UTILITY_PROJECTION_CACHE_LOCK:
             payload = _UTILITY_PROJECTION_CACHE.get(cache_key)
-            return deepcopy(payload) if payload is not None else None
+            if payload is None:
+                return None
+            return deepcopy(payload) if copy_payload else payload
 
     def _set_cached_utility_projection(
         self,
@@ -3897,7 +3931,7 @@ def _load_duplicate_candidate_album_ids(
     # otherwise pull thousands of unrelated albums into every artist request.
     kind = "duplicate-identities"
     fingerprint = _duplicate_inventory_fingerprint(connection)
-    cached = repository._get_cached_utility_projection(kind)
+    cached = repository._get_cached_utility_projection(kind, copy_payload=False)
     if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
         candidate_ids = _duplicate_candidate_ids_from_index(cached["index"], album_keys)
         return candidate_ids

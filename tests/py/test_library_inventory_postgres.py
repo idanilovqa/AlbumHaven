@@ -151,6 +151,27 @@ def test_candidate_rows_retain_raw_inventory_credits_paths_root_category_and_fil
     assert result[0]["library_root_category"] == "Loose Singles"
 
 
+def test_candidate_query_pushes_artist_and_text_scope_into_postgres():
+    connection = FakeConnection([FakeCursor(rows=[])])
+
+    repository_for(connection).load_non_album_candidates(
+        artist_names=[" Radiohead ", "radiohead", "Thom Yorke"],
+        query_terms=[" Kid ", "A", "kid"],
+    )
+
+    sql, params = connection.calls[0]
+    normalized_sql = " ".join(sql.lower().split())
+    assert "%(artist_names)s::text[]" in normalized_sql
+    assert "lower(btrim(coalesce(library.local_artists.name, '')))" in normalized_sql
+    assert "library.local_tracks.metadata -> 'artists'" in normalized_sql
+    assert "{scan_cache,file_entry,artists}" in normalized_sql
+    assert "lower(active_track_files.private_path) like any(%(artist_path_patterns)s::text[])" in normalized_sql
+    assert "unnest(%(query_patterns)s::text[])" in normalized_sql
+    assert params["artist_names"] == ["radiohead", "thom yorke"]
+    assert params["artist_path_patterns"] == ["%radiohead%", "%thom yorke%"]
+    assert params["query_patterns"] == ["%a%", "%kid%"]
+
+
 @pytest.mark.parametrize(
     ("requested_limit", "expected_limit"),
     [

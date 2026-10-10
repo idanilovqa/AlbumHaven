@@ -72,8 +72,8 @@ function resolveViewSurface(view = {}) {
   const selectedArtist = String(view.selected_artist || '').trim();
   const query = String(view.query || '').trim();
   const allArtistsActive = Boolean(view.all_artists_active);
-  if (normalizedSurface === 'playlists') {
-    return 'playlists';
+  if (normalizedSurface === 'playlists' || normalizedSurface === 'album_tops') {
+    return normalizedSurface;
   }
   if (normalizedSurface === 'home') {
     if (!selectedArtist && !query && !allArtistsActive) {
@@ -111,6 +111,11 @@ function appendPlaylistStateParams(params, view, resolvedSurface) {
 function buildUrl(view) {
   const params = new URLSearchParams();
   const resolvedSurface = resolveViewSurface(view);
+  if (resolvedSurface === 'album_tops') {
+    params.set('surface', resolvedSurface);
+    if (view.top_ref) params.set('top_ref', String(view.top_ref));
+    return `/?${params}`;
+  }
   if (resolvedSurface === 'home') {
     return '/';
   }
@@ -149,6 +154,10 @@ function buildApiUrl(view, options = {}) {
   }
   const params = new URLSearchParams();
   params.set('surface', resolvedSurface);
+  if (resolvedSurface === 'album_tops') {
+    if (view.top_ref) params.set('top_ref', String(view.top_ref));
+    return `/view-data?${params}`;
+  }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
@@ -190,6 +199,7 @@ function parseUrlStateFromUrl(url, baseOrigin) {
   return {
     surface_request: u.searchParams.get('surface') || '',
     playlist_id: u.searchParams.get('playlist_id') || '',
+    top_ref: u.searchParams.get('top_ref') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),

@@ -95,7 +95,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .gallery-bar { align-items: flex-start; gap: 8px; padding: 0 0 10px; min-height: 40px; margin-bottom: 0; min-width: 0; flex-shrink: 0; }
   .gallery-bar__context { min-width: 0; flex: 1; }
   .gallery-bar__title { min-height: 40px; margin: 0; font-size: 18px; line-height: 1.3; min-width: 0; gap: 6px; }
-  .gallery-bar__title > [data-gallery-context-name] { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+  .gallery-bar__title > [data-gallery-context-name] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gallery-bar__summary { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
   .gallery-bar__actions { flex-shrink: 0; gap: 4px; align-self: flex-start; }
   .gallery-bar :is(.gallery-action-button, .action-button), .gallery-view-cluster { --unfolding-action-size: 40px; }

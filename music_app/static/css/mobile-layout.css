@@ -310,13 +310,14 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-page-header[data-inline-album-layout="true"] { position: absolute; inset: 0 12px auto; z-index: 3; padding: 14px 0; background: var(--appearance-main-surface, var(--bg)); }
   .mobile-page-header[data-inline-album-layout="true"][data-album-identity-in-body="true"] { visibility: hidden; pointer-events: none; }
   .mobile-album-overview { flex: 0 0 auto; display: grid; align-items: start; gap: 12px; min-width: 0; width: 100%; }
+  .mobile-album-overview__rail { grid-column: 1; grid-row: 1; align-self: start; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 32px; }
   #track-modal.is-mobile-page .album-details-cover-source-markers { flex-direction: column; gap: 2px; margin: 0; }
-  .mobile-album-overview > .album-details-cover-source-markers { grid-column: 1; grid-row: 1; align-self: start; justify-self: center; margin-top: 40px; }
+  .mobile-album-overview__rail > .album-details-cover-source-markers { margin: 0; }
   .mobile-page-header > .album-details-cover-source-markers { position: absolute; top: 52px; left: 6px; }
   .album-details-cover-source-markers .album-details-source-marker { width: 20px; height: 20px; }
   .album-details-cover-source-markers .album-details-source-marker svg { width: 14px; height: 14px; }
-  .mobile-album-overview > #mobile-back-button { grid-column: 1; grid-row: 1; align-self: start; width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
-  .mobile-album-overview > #mobile-back-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .mobile-album-overview__rail > #mobile-back-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
+  .mobile-album-overview__rail > #mobile-back-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   #track-modal.is-mobile-page .mobile-album-overview .track-modal-cover { grid-column: 2; grid-row: 1; align-self: start; width: 100%; margin: 0; aspect-ratio: auto; container-type: normal; contain-intrinsic-size: none; }
   #track-modal.is-mobile-page .mobile-album-overview .track-modal-cover :is(.track-modal-cover-shell, .album-artbox, .track-modal-cover-button) { aspect-ratio: 1; width: 100%; height: auto; box-sizing: border-box; }
   .mobile-album-overview .mobile-album-actions { position: static; inset: auto; display: flex; gap: 8px; opacity: 1; visibility: visible; transform: none; pointer-events: auto; z-index: auto; }

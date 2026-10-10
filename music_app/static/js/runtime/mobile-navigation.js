@@ -743,7 +743,8 @@ function syncMobileAlbumHeader() {
   // One Back button: beside the cover initially, in the pinned bar after handoff.
   const back = document.getElementById('mobile-back-button');
   const overview = document.querySelector('#track-modal .mobile-album-overview');
-  const backHost = presentation.bodyOwnsIdentity && overview ? overview : header;
+  const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
+  const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');

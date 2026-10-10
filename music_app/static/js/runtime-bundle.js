@@ -4952,9 +4952,10 @@ function syncMobileAlbumComposition(album) {
   overlay.dataset.mobileAlbumLayout = mobile ? layout : '';
   let overview = body.querySelector('.mobile-album-overview');
   let identity = body.querySelector('.mobile-album-identity');
+  let rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
   const mobileHeader = document.getElementById('mobile-page-header');
   const freshSourceMarkers = cover.querySelector(':scope > .album-details-cover-source-markers');
-  const retainedSourceMarkers = overview?.querySelector(':scope > .album-details-cover-source-markers')
+  const retainedSourceMarkers = overview?.querySelector('.album-details-cover-source-markers')
     || mobileHeader?.querySelector(':scope > .album-details-cover-source-markers');
   if (freshSourceMarkers && retainedSourceMarkers && freshSourceMarkers !== retainedSourceMarkers) {
     retainedSourceMarkers.remove();
@@ -4966,6 +4967,11 @@ function syncMobileAlbumComposition(album) {
     cover.before(overview);
     overview.appendChild(cover);
   }
+  if (inline && !rail) {
+    rail = document.createElement('div');
+    rail.className = 'mobile-album-overview__rail';
+    overview.prepend(rail);
+  }
   if (inline && !identity) {
     identity = document.createElement('div');
     identity.className = 'mobile-album-identity';
@@ -4973,7 +4979,7 @@ function syncMobileAlbumComposition(album) {
   // Classic/desktop keeps the copy outside its retired overview; reattach on return.
   if (inline && identity.parentElement !== overview) overview.appendChild(identity);
   if (sourceMarkers) {
-    if (inline && overview) overview.appendChild(sourceMarkers);
+    if (inline && rail) rail.appendChild(sourceMarkers);
     else if (mobile && mobileHeader) mobileHeader.appendChild(sourceMarkers);
     else cover.appendChild(sourceMarkers);
   }
@@ -43255,7 +43261,8 @@ function syncMobileAlbumHeader() {
   // One Back button: beside the cover initially, in the pinned bar after handoff.
   const back = document.getElementById('mobile-back-button');
   const overview = document.querySelector('#track-modal .mobile-album-overview');
-  const backHost = presentation.bodyOwnsIdentity && overview ? overview : header;
+  const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
+  const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');

@@ -1057,6 +1057,64 @@ test('library-home navigation clears active search state before opening All arti
   assert.equal(calls.buildApiUrl.at(-1).search_context, null);
 });
 
+test('library-home navigation already at the root responds by scrolling to the top without fetching', () => {
+  const { context, calls } = createContext({
+    currentUrl: 'http://localhost/?surface=albums&all_artists=1',
+  });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+  const albumsScroll = { scrollTop: 4800 };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? albumsScroll : getElementById(id)
+  );
+
+  const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
+  context.handleGalleryBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.equal(albumsScroll.scrollTop, 0);
+  assert.equal(calls.fetchAndRender.length, 0);
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 0);
+  assert.equal(calls.pushBrowserViewState.length, 1);
+});
+
+test('library-home navigation does not use the no-fetch shortcut while a view request is active', () => {
+  const { context, calls } = createContext({
+    currentUrl: 'http://localhost/?surface=albums&all_artists=1',
+  });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+  context.state.ui.activeViewRequestController = {};
+  const albumsScroll = { scrollTop: 4800 };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? albumsScroll : getElementById(id)
+  );
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.equal(albumsScroll.scrollTop, 4800);
+  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
+});
+
 test('handleSidebarArtistSelectionClick closes the mobile drawer before loading a selected artist', () => {
   const { context, calls } = createContext();
   const { event, wasPrevented } = createSidebarArtistEvent('Broadcast');

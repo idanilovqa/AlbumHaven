@@ -15849,7 +15849,6 @@ async function fetchAndRender(url, push = true, options = {}) {
   const requestCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
   const requestModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
   const requestModalCoverAuthority = requestModalAlbum ? { ...requestModalAlbum } : null;
-  const requestVisibleAlbums = typeof flattenVisibleAlbums === 'function' ? flattenVisibleAlbums() : [];
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
@@ -15979,7 +15978,10 @@ async function fetchAndRender(url, push = true, options = {}) {
       }
       : requestOptions;
     const responseModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
-    const requestKnownAlbum = requestVisibleAlbums.find((album) => album.key === responseModalAlbum?.key);
+    const requestKnownAlbum = !requestModalAlbum && responseModalAlbum
+      && typeof flattenVisibleAlbums === 'function'
+      ? flattenVisibleAlbums().find((album) => album.key === responseModalAlbum.key)
+      : null;
     const responseModalCoverAuthority = requestModalCoverAuthority || requestKnownAlbum;
     // Save replaces the known album object even when its selected bytes and
     // legacy selection fields are unchanged. Check before applying this view.
@@ -40622,6 +40624,41 @@ function handleGalleryBootstrapClick(event) {
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = activeSearchQuery;
     closeRecentSearchPopover();
+    const currentSurface = String(
+      state.view?.surface?.active || state.view?.surface_request || 'albums'
+    ).trim().toLowerCase();
+    const alreadyAtLibraryHome = Boolean(
+      isLibraryHome
+      && currentSurface === 'albums'
+      && !String(state.view?.query || '').trim()
+      && !String(state.view?.selected_artist || '').trim()
+      && state.view?.all_artists_active !== false
+      && !(Array.isArray(state.view?.related_filter_artists) && state.view.related_filter_artists.length)
+      && !Boolean(state.view?.primary_filter_active)
+      && !Boolean(state.view?.gallery_page?.has_previous)
+      && !String(state.view?.gallery_page?.anchor_artist || '').trim()
+      && !Boolean(state.busy)
+      && !Boolean(state.ui?.activeViewRequestController)
+      && !Boolean(state.ui?.pendingViewRequest)
+      && !String(state.ui?.pendingSidebarSelectedArtist || '').trim()
+    );
+    if (alreadyAtLibraryHome) {
+      releasePendingGallerySearchSuspensions();
+      const galleryScroll = document.getElementById('albums-scroll');
+      if (galleryScroll) galleryScroll.scrollTop = 0;
+      closeArtistsDrawer({ restoreFocus: false });
+      state.view.search_context = null;
+      pushBrowserViewState({
+        ...state.view,
+        query: '',
+        selected_artist: '',
+        all_artists_active: true,
+        related_filter_artists: [],
+        primary_filter_active: false,
+        search_context: null,
+      });
+      return;
+    }
     releasePendingGallerySearchSuspensions();
     let coverLoadSuspensionToken = 0;
     if (

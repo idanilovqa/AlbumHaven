@@ -1088,7 +1088,6 @@ async function fetchAndRender(url, push = true, options = {}) {
   const requestCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
   const requestModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
   const requestModalCoverAuthority = requestModalAlbum ? { ...requestModalAlbum } : null;
-  const requestVisibleAlbums = typeof flattenVisibleAlbums === 'function' ? flattenVisibleAlbums() : [];
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
@@ -1218,7 +1217,10 @@ async function fetchAndRender(url, push = true, options = {}) {
       }
       : requestOptions;
     const responseModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
-    const requestKnownAlbum = requestVisibleAlbums.find((album) => album.key === responseModalAlbum?.key);
+    const requestKnownAlbum = !requestModalAlbum && responseModalAlbum
+      && typeof flattenVisibleAlbums === 'function'
+      ? flattenVisibleAlbums().find((album) => album.key === responseModalAlbum.key)
+      : null;
     const responseModalCoverAuthority = requestModalCoverAuthority || requestKnownAlbum;
     // Save replaces the known album object even when its selected bytes and
     // legacy selection fields are unchanged. Check before applying this view.

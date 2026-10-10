@@ -586,6 +586,34 @@ test('fetchAndRender rejects JSON HTTP errors without applying their payload', a
   assert.equal(calls.applyViewPayload.length, 0);
 });
 
+test('fetchAndRender skips the loaded-album snapshot when no album modal is open', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [];
+  context.state.modalReleaseIndex = 0;
+  context.flattenVisibleAlbums = () => {
+    throw new Error('the loaded gallery must not be flattened');
+  };
+
+  const refresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
+});
+
+test('fetchAndRender uses the open-modal snapshot without flattening the loaded gallery', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [{ key: 'artist::album', cover_path: 'cover.jpg' }];
+  context.state.modalReleaseIndex = 0;
+  context.flattenVisibleAlbums = () => {
+    throw new Error('the loaded gallery must not be flattened');
+  };
+
+  const refresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
+});
+
 test('fetchAndRender rejects JSON application errors without applying their payload', async () => {
   const { context, calls, pendingRequests } = createContext();
   const request = context.fetchAndRender('/view-data?q=failed', false);

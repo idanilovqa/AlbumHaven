@@ -29,7 +29,7 @@ function mountDashboard(count = 2) {
   return { ...env, root, widgets, intents, dashboard };
 }
 function sizeButton(widget, expanded = false) {
-  return buttonNamed(widget.header, expanded ? /widget size/i : /full size/i);
+  return buttonNamed(widget.header, expanded ? /^back$/i : /full size/i);
 }
 
 // Owned presentation seam, not a route API or a geometry assertion. The same
@@ -146,11 +146,11 @@ test('Dashboard with a sole Recent widget fills composition without a redundant 
   const recent = HomeRecent.mount(element, { onSelectAlbum() {}, onOpenAlbum() {}, onPlayAlbum() {}, onRetry() {} });
   const dashboard = Dashboard.mount(root, { widgets: [{ key: 'recent', ...recent }], onSizeIntent() { assert.fail('sole widget cannot request sizing'); } });
   recent.update({ status: 'ready', payload: { recent_local_albums: [], recent_not_local_albums: [] }, selectedAlbumRef: null });
-  assert.equal(buttonNamed(recent.header, /full size|widget size/i, false) === null, true, 'sole Recent has no redundant sizing control');
+  assert.equal(buttonNamed(recent.header, /full size|widget size|^back$/i, false) === null, true, 'sole Recent has no redundant sizing control');
   assertComposition({ root, widgets: [{ key: 'recent', ...recent }] });
   assert.equal(recent.element.parentNode === root, true);
   dashboard.update({ expandedKey: null });
-  assert.equal(buttonNamed(recent.header, /full size|widget size/i, false) === null, true, 'sole Recent has no redundant sizing control');
+  assert.equal(buttonNamed(recent.header, /full size|widget size|^back$/i, false) === null, true, 'sole Recent has no redundant sizing control');
   assertComposition({ root, widgets: [{ key: 'recent', ...recent }] });
   dashboard.dispose(); recent.dispose();
 });

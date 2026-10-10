@@ -121,6 +121,46 @@ function loadHelper(albums, overrides = {}) {
   return context;
 }
 
+test('marking an album version completes without waiting for the canonical gallery refresh', async () => {
+  let resolveRefresh;
+  let refreshStarted = 0;
+  const context = loadHelper([], {
+    state: {
+      modalReleases: [],
+      modalReleaseIndex: 0,
+      view: { manual_version_links: {} },
+    },
+    document: { getElementById: () => null },
+    fetch: async () => ({
+      ok: true,
+      async json() {
+        return { ok: true, manual_version_links: { child: 'parent' } };
+      },
+    }),
+    mergeViewPayload(patch) {
+      context.state.view = { ...context.state.view, ...patch };
+    },
+    buildApiUrl: () => '/api/library',
+    fetchAndRender() {
+      refreshStarted += 1;
+      return new Promise((resolve) => { resolveRefresh = resolve; });
+    },
+    scheduleBrowserAnimationFrame(callback) { callback(); },
+    scheduleBrowserTimeout(callback) { callback(); },
+    showToast() {},
+  });
+
+  let saved = false;
+  const marking = context.markAlbumVersion('child', 'parent').then(() => { saved = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(saved, true);
+  assert.equal(refreshStarted, 1);
+  assert.equal(context.state.view.manual_version_links.child, 'parent');
+  resolveRefresh(true);
+  await marking;
+});
+
 test('album editions render the same keyboard tab component as Home', () => {
   const context = loadHelper([], { escapeHtml: value => String(value) });
   context.state.modalReleases = [

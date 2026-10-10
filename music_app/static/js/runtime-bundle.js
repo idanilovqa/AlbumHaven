@@ -31189,6 +31189,18 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbu
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
 }
 
+function scheduleVersionGalleryRefresh() {
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserTimeout(() => {
+      Promise.resolve()
+        .then(() => fetchAndRender(buildApiUrl(state.view), false))
+        .catch((error) => {
+          console.error('[AlbumHaven][Versions] Failed to refresh the gallery after saving.', error);
+        });
+    }, 0);
+  });
+}
+
 async function markAlbumVersion(albumKey, parentAlbumKey) {
   const childKey = String(albumKey || '');
   const targetKey = String(parentAlbumKey || '');
@@ -31209,8 +31221,8 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
         : {},
     }, { trackSidebarReveal: false });
     refreshOpenTrackModalVersionState(childKey);
-    await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Album marked as a version.', 'success', 2600);
+    scheduleVersionGalleryRefresh();
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to mark album as a version.', error);
     showToast(error.message || 'Failed to mark album as a version.', 'error', 3200);
@@ -31237,8 +31249,8 @@ async function unmarkAlbumVersion(albumKey) {
         : {},
     }, { trackSidebarReveal: false });
     refreshOpenTrackModalVersionState(key);
-    await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Album is no longer manually marked as a version.', 'success', 2600);
+    scheduleVersionGalleryRefresh();
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to unmark album version.', error);
     showToast(error.message || 'Failed to unmark album version.', 'error', 3200);

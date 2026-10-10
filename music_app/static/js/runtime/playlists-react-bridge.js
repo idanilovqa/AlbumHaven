@@ -264,6 +264,21 @@ const PlaylistReactRuntime = (() => {
     }
   }
   async function readPlaylists(options) {return (await readPlaylistSource(options)).projection;}
+  async function readSidebarDirectory({scopeKey, signal} = {}) {
+    const start = sync();
+    const active = () => {
+      const next = sync();
+      return next.authenticated && next.scopeKey === start.scopeKey && getLibrarySidebarMode() === 'playlists'
+        && new URL(window.location.href).pathname === '/';
+    };
+    if (scopeKey !== start.scopeKey || !active()) throw failure('Playlist directory is unavailable.', 403);
+    const payload = await PrivateUITransport.request('/view-data?surface=playlists', {signal});
+    if (signal?.aborted || !active()) throw aborted();
+    const result = projection(payload);
+    if (!result?.playlist_index || result.playlist_detail) throw failure('Invalid Playlist directory.');
+    // Reading sidebar labels must not replace the active media/source authority.
+    return result;
+  }
   function createPlaytableSource({rows, context, instance, revision, isCurrent}) {
     const source = raw, epoch = playlistReadEpoch;
     return createPrivatePlaytableSource({scopeKey: context?.scopeKey, rows, instance, revision,
@@ -475,7 +490,8 @@ const PlaylistReactRuntime = (() => {
   }
   async function navigate({playlist_id = null} = {}) {
     const start = sync();
-    if (!start.visible || playlist_id !== null && (typeof playlist_id !== 'string' || !playlist_id.trim())) throw failure('Playlist navigation is unavailable.');
+    if ((!start.visible && !(start.authenticated && getLibrarySidebarMode() === 'playlists'))
+      || playlist_id !== null && (typeof playlist_id !== 'string' || !playlist_id.trim())) throw failure('Playlist navigation is unavailable.');
     const open = () => navigateCurrent(playlist_id, start);
     const deferred = typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(open);
     return deferred || open();
@@ -606,7 +622,7 @@ const PlaylistReactRuntime = (() => {
   const resourceSelection = selectionApi()?.create({sourceResource, retainResource, revalidateResource, authorizeResource: resolveNativeAlbum});
   return {
     snapshot: sync, sync, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
-    readPlaylists, navigate, navigateFromPlaytable, createPlaytableSource,
+    readPlaylists, readSidebarDirectory, navigate, navigateFromPlaytable, createPlaytableSource,
     notificationRegistry: () => window.AlbumHavenNotifications,
     subscribeNotificationRegistry(listener) {
       window.addEventListener('albumhaven:notifications-ready', listener);

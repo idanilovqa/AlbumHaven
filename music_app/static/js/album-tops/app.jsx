@@ -3,6 +3,7 @@ import {Button, NativeHtml, Status} from '../home-friends/components.jsx';
 import {NativeDialog} from '../home-friends/native-dialog.jsx';
 import {MutationStatus} from '../playlists/mutation-status.jsx';
 import {albumTopActionAllowed} from './model.mjs';
+import {isManualProgress} from './progress.mjs';
 import {ShareAlbumTop} from './sharing.jsx';
 
 function MutationNotice({runtime, controller, value}) {
@@ -104,14 +105,34 @@ export function AlbumTopsView({runtime, controller, state, onOpen, onFormSaved, 
     {selected && detail?.description && <p>{detail.description}</p>}
     <Status runtime={runtime} value={resource} label={selected ? 'this Album Top' : 'Album Tops'}
       retry={() => selected ? controller.open(selected) : controller.load()}/>
+    {selected && ready && detail.items.length === 0 && <NativeHtml html={runtime.alertHtml({severity: 'info', role: 'status', message: 'No albums in this Top'})}/>}
     {ready && <div className="home-activity__cards home-activity__cards--albums">
       {(selected ? detail.items : state.directory.data.tops).map(row => {
         const ref = selected ? row.item_ref : row.top_ref;
-        return <NativeHtml key={ref} html={runtime.galleryCardHtml({identity: ref,
-          interaction: selected ? 'none' : 'controlled', actionRef: ref, actions: {open: !selected},
+        const progressRows = detail?.top_viewer_overlay?.item_progress;
+        const progress = selected && progressRows && Object.hasOwn(progressRows, row.album_ref) ? progressRows[row.album_ref] : null;
+        const complete = selected && albumTopActionAllowed(state, 'set_manual_completion') && isManualProgress(progress);
+        const completed = complete && progress.manual_completed_at !== null;
+        return <NativeHtml key={ref} preserveFocus={complete ? {selector: '[data-gallery-card-intent="complete"]', keyAttribute: 'data-gallery-card-ref'} : undefined}
+          html={runtime.galleryCardHtml({identity: ref,
+          interaction: !selected || complete ? 'controlled' : 'none', actionRef: selected ? row.album_ref : ref,
+          actions: {open: !selected, complete},
+          completion: complete ? {completed, disabled: busy,
+            label: `${completed ? 'Clear completion' : 'Mark completed'} in this Top: ${row.title}`} : undefined,
           title: row.title, artist: selected ? row.artist : row.description, year: row.year,
           displayMode: 'cards', artboxHtml: runtime.artboxHtml({state: 'empty', label: `${row.title} artwork`})})}
-          onClick={event => {if (!selected && event.target.closest('[data-gallery-card-intent="open"]')) onOpen(ref);}}/>;
+          onClick={event => {
+            if (!selected && event.target.closest('[data-gallery-card-intent="open"]')) {onOpen(ref); return;}
+            const button = event.target.closest('[data-gallery-card-intent="complete"]');
+            const current = controller.getSnapshot();
+            if (!complete || !button || button.disabled || button.getAttribute('aria-disabled') === 'true'
+              || button.getAttribute('data-gallery-card-ref') !== row.album_ref || current.scopeKey !== state.scopeKey
+              || current.detail.data !== detail || current.mutation.refreshing === true || ['loading', 'uncertain'].includes(current.mutation.status)
+              || !albumTopActionAllowed(current, 'set_manual_completion', selected)
+              || !current.detail.data.items.some(item => item.album_ref === row.album_ref)) return;
+            event.preventDefault(); event.stopPropagation();
+            return controller.mutate('set_manual_completion', {album_ref: row.album_ref, completed: !completed});
+          }}/>;
       })}
     </div>}
     <MutationNotice runtime={runtime} controller={controller} value={state.mutation}/>

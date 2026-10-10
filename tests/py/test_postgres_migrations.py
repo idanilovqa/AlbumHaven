@@ -142,8 +142,13 @@ def test_0107_declares_lane_invariants_and_partial_indexes():
     assert "where resolved_at is null" in sql
     assert "watcher_incidents_identity_immutable" in sql
     assert "revoke all on table library.watcher_lanes from public" in sql
-    assert "targeted_reconciliation_watcher_ready_idx" in sql
-    assert "watcher_generation_kind, accepted_at, id" in sql
+    assert (
+        "create index if not exists targeted_reconciliation_watcher_ready_idx "
+        "on library.targeted_reconciliation_intents (accepted_at, id) "
+        "where watcher_job_linked_at is null "
+        "and state = 'accepted' "
+        "and watcher_generation_kind in ('exact', 'root_catch_up');"
+    ) in sql
 
 
 def test_0107_migrates_watcher_scope_without_dropping_legacy_columns():

@@ -39,6 +39,15 @@ _SAFE_WORKER_LOGGER_PREFIXES = (
 )
 
 
+def _classify_logger_group(logger_name: object) -> str:
+    tokens = set(str(logger_name).casefold().replace(".", "_").split("_"))
+    if tokens & {"watcher", "scan", "library"}:
+        return "scan"
+    if "cover" in tokens:
+        return "cover"
+    return "dependency"
+
+
 class DurablePipelineLogger:
     """Expose a logger-shaped sink without forwarding legacy private fields."""
 
@@ -117,14 +126,7 @@ def install_durable_worker_logging_boundary():
         record = previous_factory(*args, **kwargs)
         if str(record.name).startswith(_SAFE_WORKER_LOGGER_PREFIXES):
             return record
-        logger_name = str(record.name).casefold()
-        logger_group = (
-            "cover"
-            if "cover" in logger_name
-            else "scan"
-            if "scan" in logger_name or "library" in logger_name
-            else "dependency"
-        )
+        logger_group = _classify_logger_group(record.name)
         record.msg = "durable_legacy_pipeline_event logger_group=%s level=%s"
         record.args = (logger_group, str(record.levelname).casefold())
         record.exc_info = None

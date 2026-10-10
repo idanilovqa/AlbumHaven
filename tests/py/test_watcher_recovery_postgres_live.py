@@ -30,7 +30,7 @@ def _skip_or_fail_ci(message: str) -> None:
     pytest.skip(message)
 
 
-def _urls_or_skip() -> tuple[str, str, str]:
+def _urls_or_skip() -> tuple[str, str, str, str]:
     try:
         setup_url, app_url = isolatedPostgres.resolve_isolated_database_urls()
     except RuntimeError:
@@ -39,6 +39,9 @@ def _urls_or_skip() -> tuple[str, str, str]:
     worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "").strip()
     if not worker_url:
         _skip_or_fail_ci("Dedicated watcher worker Postgres URL is unavailable.")
+    readonly_url = str(os.environ.get("DATABASE_READONLY_URL") or "").strip()
+    if not readonly_url:
+        _skip_or_fail_ci("Dedicated watcher read-only Postgres URL is unavailable.")
     if not Path(str(os.environ.get("PGPASSFILE") or "")).is_file():
         _skip_or_fail_ci("Dedicated isolated Postgres PGPASSFILE is unavailable.")
     identities = {
@@ -47,11 +50,11 @@ def _urls_or_skip() -> tuple[str, str, str]:
             urlparse(value).port or 5432,
             urlparse(value).path.lstrip("/"),
         )
-        for value in (setup_url, app_url, worker_url)
+        for value in (setup_url, app_url, worker_url, readonly_url)
     }
     if len(identities) != 1:
         _skip_or_fail_ci("Watcher role URLs do not share one isolated database.")
-    return setup_url, app_url, worker_url
+    return setup_url, app_url, worker_url, readonly_url
 
 
 def _drop_schemas(setup_url: str) -> None:
@@ -78,7 +81,7 @@ def _repository(database_url: str):
 
 @pytest.fixture
 def live_watcher_database(tmp_path_factory):
-    setup_url, app_url, worker_url = _urls_or_skip()
+    setup_url, app_url, worker_url, readonly_url = _urls_or_skip()
     private_root = tmp_path_factory.mktemp("watcher-recovery")
     root_paths = {
         "root-a": private_root / "root-a",
@@ -160,6 +163,7 @@ def live_watcher_database(tmp_path_factory):
             setup_url=setup_url,
             app_url=app_url,
             worker_url=worker_url,
+            readonly_url=readonly_url,
             account_id=account_id,
             library_id=library_id,
             root_paths=root_paths,
@@ -202,39 +206,147 @@ def test_runtime_roles_have_no_direct_watcher_table_privileges(live_watcher_data
         "watcher_generation_repairs",
         "watcher_legacy_health_imports",
         "watcher_incident_acknowledgements",
+        "watcher_runtime_state",
     )
     sequences = ("watcher_barriers_id_seq", "watcher_repairs_id_seq")
-    with isolatedPostgres._connect(scope.setup_url) as connection:
-        for role in ("album_haven_app", "album_haven_worker", "album_haven_readonly"):
-            for table in tables:
-                for privilege in (
-                    "SELECT",
-                    "INSERT",
-                    "UPDATE",
-                    "DELETE",
-                    "TRUNCATE",
-                    "REFERENCES",
-                    "TRIGGER",
-                ):
-                    privileges = connection.execute(
-                        "select has_table_privilege(%s, %s, %s) as allowed",
-                        (role, f"library.{table}", privilege),
-                    ).fetchone()
-                    assert privileges["allowed"] is False
-            for sequence in sequences:
-                for privilege in ("USAGE", "SELECT", "UPDATE"):
-                    privileges = connection.execute(
-                        "select has_sequence_privilege(%s, %s, %s) as allowed",
-                        (role, f"library.{sequence}", privilege),
-                    ).fetchone()
-                    assert privileges["allowed"] is False
+    role_urls = (
+        ("album_haven_app", scope.app_url),
+        ("album_haven_worker", scope.worker_url),
+        ("album_haven_readonly", scope.readonly_url),
+    )
+
+    from psycopg import sql
+
+    for role, database_url in role_urls:
+        for set_inherited_role in (False, True):
+            with isolatedPostgres._connect(database_url) as connection:
+                connection.autocommit = True
+                isolatedPostgres._assert_connected_role(connection, role)
+                identity = connection.execute(
+                    """
+                    select current_user as current_user,
+                           session_user as session_user,
+                           pg_has_role(current_user, %s, 'MEMBER') as inherited
+                    """,
+                    (role,),
+                ).fetchone()
+                assert identity["current_user"] == identity["session_user"]
+                assert identity["inherited"] is True
+                if set_inherited_role:
+                    connection.execute(
+                        sql.SQL("set role {}").format(sql.Identifier(role))
+                    )
+                    assert connection.execute(
+                        "select current_user as current_user"
+                    ).fetchone()["current_user"] == role
+
+                for table in tables:
+                    for privilege in (
+                        "SELECT",
+                        "INSERT",
+                        "UPDATE",
+                        "DELETE",
+                        "TRUNCATE",
+                        "REFERENCES",
+                        "TRIGGER",
+                    ):
+                        privileges = connection.execute(
+                            "select has_table_privilege(current_user, %s, %s) "
+                            "as allowed",
+                            (f"library.{table}", privilege),
+                        ).fetchone()
+                        assert privileges["allowed"] is False
+                for sequence in sequences:
+                    for privilege in ("USAGE", "SELECT", "UPDATE"):
+                        privileges = connection.execute(
+                            "select has_sequence_privilege(current_user, %s, %s) "
+                            "as allowed",
+                            (f"library.{sequence}", privilege),
+                        ).fetchone()
+                        assert privileges["allowed"] is False
 
 
-def test_watcher_function_privilege_matrix_and_raw_scope_denial(
+def test_actual_runtime_logins_keep_watcher_definer_allow_deny_matrix(
     live_watcher_database,
 ):
     import psycopg
+    from psycopg import sql
 
+    scope = live_watcher_database
+    cases = (
+        (
+            "album_haven_app",
+            scope.app_url,
+            "select * from library.load_watcher_status(%s)",
+            (scope.library_id,),
+            "select * from library.dispatch_ready_watcher_generations(%s, %s)",
+            (NOW, 1),
+        ),
+        (
+            "album_haven_worker",
+            scope.worker_url,
+            "select * from library.load_watcher_metrics(%s, %s)",
+            (scope.library_id, NOW),
+            "select * from library.load_watcher_status(%s)",
+            (scope.library_id,),
+        ),
+        (
+            "album_haven_readonly",
+            scope.readonly_url,
+            "select * from library.load_watcher_status(%s)",
+            (scope.library_id,),
+            "select * from library.load_watcher_metrics(%s, %s)",
+            (scope.library_id, NOW),
+        ),
+    )
+    for (
+        role,
+        database_url,
+        allowed_sql,
+        allowed_params,
+        denied_sql,
+        denied_params,
+    ) in cases:
+        for set_inherited_role in (False, True):
+            with isolatedPostgres._connect(database_url) as connection:
+                connection.autocommit = True
+                isolatedPostgres._assert_connected_role(connection, role)
+                if set_inherited_role:
+                    connection.execute(
+                        sql.SQL("set role {}").format(sql.Identifier(role))
+                    )
+                connection.execute(allowed_sql, allowed_params).fetchall()
+                with pytest.raises(psycopg.errors.InsufficientPrivilege) as denied:
+                    connection.execute(denied_sql, denied_params).fetchall()
+                assert denied.value.sqlstate == "42501"
+
+
+def test_readonly_login_cannot_select_raw_watcher_scope(live_watcher_database):
+    import psycopg
+    from psycopg import sql
+
+    scope = live_watcher_database
+    for set_inherited_role in (False, True):
+        with isolatedPostgres._connect(scope.readonly_url) as connection:
+            connection.autocommit = True
+            isolatedPostgres._assert_connected_role(
+                connection,
+                "album_haven_readonly",
+            )
+            if set_inherited_role:
+                connection.execute(
+                    sql.SQL("set role {}").format(
+                        sql.Identifier("album_haven_readonly")
+                    )
+                )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege) as denied:
+                connection.execute(
+                    "select * from library.targeted_reconciliation_intent_paths"
+                ).fetchall()
+            assert denied.value.sqlstate == "42501"
+
+
+def test_watcher_function_privilege_matrix(live_watcher_database):
     scope = live_watcher_database
     expectations = (
         (
@@ -305,12 +417,404 @@ def test_watcher_function_privilege_matrix_and_raw_scope_denial(
                 (role, signature),
             ).fetchone()
             assert row["allowed"] is allowed
-    with isolatedPostgres._connect(scope.app_url) as connection:
-        with pytest.raises(psycopg.errors.InsufficientPrivilege) as denied:
-            connection.execute(
-                "select * from library.targeted_reconciliation_intent_paths"
-            ).fetchall()
-    assert denied.value.sqlstate == "42501"
+
+
+def _explain_analyze_text(connection, query: str, params: tuple[object, ...]) -> str:
+    rows = connection.execute(
+        "explain (analyze, buffers, format text) " + query,
+        params,
+    ).fetchall()
+    return "\n".join(str(row["QUERY PLAN"]) for row in rows)
+
+
+def _seed_watcher_query_plan_rows(connection, scope, *, row_count: int) -> int:
+    connection.execute(
+        """
+        insert into library.libraries (name, library_kind)
+        select 'Watcher plan noise ' || ordinal::text, 'local'
+        from pg_catalog.generate_series(1, %s) as ordinal
+        """,
+        (row_count,),
+    )
+    connection.execute(
+        """
+        insert into library.library_roots (
+          library_id, root_path, root_kind, is_active, metadata
+        )
+        select target.id, 'watcher-plan-noise/' || target.id::text,
+               'main', true,
+               pg_catalog.jsonb_build_object(
+                 'root_id', 'watcher-plan-noise-' || target.id::text
+               )
+        from library.libraries as target
+        where target.name like 'Watcher plan noise %'
+        """
+    )
+    connection.execute(
+        """
+        insert into library.watcher_lanes (
+          library_id, root_id, accepted_sequence, applied_sequence,
+          next_eligible_at, disposition_code
+        )
+        select root.library_id, root.id, 1, 0, %s, 'coalesced'
+        from library.library_roots as root
+        join library.libraries as target on target.id = root.library_id
+        where target.name like 'Watcher plan noise %%'
+        """,
+        (NOW,),
+    )
+    connection.execute(
+        """
+        -- Accumulated job-linked history must stay outside the ready partial index.
+        insert into library.targeted_reconciliation_intents (
+          library_id, primary_root_id, producer_request_key, request_digest,
+          deployment_mode, client_surface, state, accepted_at, updated_at,
+          watcher_job_linked_at, watcher_generation_kind, accepted_sequence_lower,
+          accepted_sequence_upper, dirty_generation
+        )
+        select root.library_id, root.id,
+               'watcher-plan-noise:' || root.id::text,
+               pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+                 'watcher-plan-noise:' || root.id::text, 'UTF8'
+               )), 'hex'),
+               'self_hosted_private_web', 'library_watcher', 'accepted',
+               %s, %s, %s, 'root_catch_up', 1, 1, 0
+        from library.library_roots as root
+        join library.libraries as target on target.id = root.library_id
+        where target.name like 'Watcher plan noise %%'
+        """,
+        (NOW, NOW, NOW),
+    )
+    target_root_id = scope.root_database_ids["root-a"]
+    connection.execute(
+        """
+        insert into library.watcher_lanes (
+          library_id, root_id, accepted_sequence, applied_sequence,
+          next_eligible_at, disposition_code
+        ) values (%s, %s, 1, 0, %s, 'coalesced')
+        """,
+        (scope.library_id, target_root_id, NOW),
+    )
+    target_generation_id = int(
+        connection.execute(
+            """
+            insert into library.targeted_reconciliation_intents (
+              library_id, primary_root_id, producer_request_key, request_digest,
+              deployment_mode, client_surface, state, accepted_at, updated_at,
+              watcher_generation_kind, accepted_sequence_lower,
+              accepted_sequence_upper, dirty_generation
+            ) values (
+              %s, %s, 'watcher-plan-target', %s,
+              'self_hosted_private_web', 'library_watcher', 'accepted',
+              %s, %s, 'root_catch_up', 1, 1, 0
+            ) returning id
+            """,
+            (scope.library_id, target_root_id, "a" * 64, NOW, NOW),
+        ).fetchone()["id"]
+    )
+    connection.execute(
+        """
+        update library.watcher_lanes as lane
+        set successor_generation_id = intent.id
+        from library.targeted_reconciliation_intents as intent
+        where intent.library_id = lane.library_id
+          and intent.primary_root_id = lane.root_id
+          and intent.producer_request_key like 'watcher-plan-%'
+        """
+    )
+    connection.execute(
+        """
+        insert into library.watcher_generation_participants (
+          generation_id, library_id, root_id, accepted_sequence_lower,
+          accepted_sequence_upper, dirty_generation, created_at, updated_at
+        )
+        select intent.id, intent.library_id, intent.primary_root_id,
+               1, 1, 0, %s, %s
+        from library.targeted_reconciliation_intents as intent
+        where intent.producer_request_key like 'watcher-plan-%%'
+        """,
+        (NOW, NOW),
+    )
+    connection.execute(
+        """
+        insert into library.watcher_incidents (
+          library_id, root_id, incident_family, reason_code,
+          accepted_sequence, dirty_generation, first_seen_at, last_seen_at
+        )
+        select participant.library_id, participant.root_id,
+               'watcher_recovery', 'overflow', 1, 0, %s, %s
+        from library.watcher_generation_participants as participant
+        join library.targeted_reconciliation_intents as intent
+          on intent.id = participant.generation_id
+        where intent.producer_request_key like 'watcher-plan-%%'
+        """,
+        (NOW, NOW),
+    )
+    connection.execute(
+        """
+        insert into library.watcher_incidents (
+          library_id, root_id, incident_family, reason_code,
+          accepted_sequence, dirty_generation,
+          first_seen_at, last_seen_at, resolved_at
+        )
+        select participant.library_id, participant.root_id,
+               'watcher_recovery', 'root_unavailable', 1, 0,
+               %s - interval '2 seconds', %s - interval '1 second', %s
+        from library.watcher_generation_participants as participant
+        join library.targeted_reconciliation_intents as intent
+          on intent.id = participant.generation_id
+        where intent.producer_request_key like 'watcher-plan-noise:%%'
+        """,
+        (NOW, NOW, NOW),
+    )
+    connection.execute(
+        """
+        insert into library.watcher_barriers (library_id, created_at)
+        select intent.library_id, %s
+        from library.targeted_reconciliation_intents as intent
+        where intent.producer_request_key like 'watcher-plan-%%'
+        """,
+        (NOW,),
+    )
+    connection.execute(
+        """
+        insert into library.watcher_barrier_participants (
+          barrier_id, generation_id, library_id, root_id, accepted_sequence
+        )
+        select barrier.id, participant.generation_id,
+               participant.library_id, participant.root_id, 1
+        from library.watcher_barriers as barrier
+        join library.watcher_generation_participants as participant
+          on participant.library_id = barrier.library_id
+        join library.targeted_reconciliation_intents as intent
+          on intent.id = participant.generation_id
+        where intent.producer_request_key like 'watcher-plan-%'
+        """
+    )
+    noise_account_id = int(
+        connection.execute(
+            """
+            insert into app.accounts (
+              display_name, username_display, username_normalized,
+              contact_email, contact_email_normalized, account_kind, is_active
+            ) values (
+              'Watcher Plan Noise', 'watcher-plan-noise', 'watcher-plan-noise',
+              'watcher-plan-noise@example.invalid',
+              'watcher-plan-noise@example.invalid', 'managed', true
+            ) returning id
+            """
+        ).fetchone()["id"]
+    )
+    connection.execute(
+        """
+        insert into library.library_memberships (
+          library_id, account_id, membership_role
+        )
+        select target.id, %s, 'viewer'
+        from library.libraries as target
+        where target.name like 'Watcher plan noise %%'
+        """,
+        (noise_account_id,),
+    )
+    connection.execute(
+        """
+        insert into library.watcher_incident_acknowledgements (
+          incident_id, library_id, account_id, acknowledged_at
+        )
+        select incident.incident_id, incident.library_id, %s, %s
+        from library.watcher_incidents as incident
+        join library.libraries as target on target.id = incident.library_id
+        where target.name like 'Watcher plan noise %%'
+          and incident.resolved_at is null
+        """,
+        (noise_account_id, NOW),
+    )
+    connection.execute(
+        """
+        insert into library.watcher_incident_acknowledgements (
+          incident_id, library_id, account_id, acknowledged_at
+        )
+        select incident.incident_id, incident.library_id, %s, %s
+        from library.watcher_incidents as incident
+        where incident.library_id = %s
+          and incident.root_id = %s
+          and incident.resolved_at is null
+        """,
+        (scope.account_id, NOW, scope.library_id, target_root_id),
+    )
+    for table in (
+        "targeted_reconciliation_intents",
+        "watcher_generation_participants",
+        "watcher_lanes",
+        "watcher_barriers",
+        "watcher_barrier_participants",
+        "watcher_incidents",
+        "watcher_incident_acknowledgements",
+    ):
+        connection.execute(f"analyze library.{table}")
+    return target_generation_id
+
+
+def test_watcher_hot_path_query_plans_use_existing_indexes(live_watcher_database):
+    scope = live_watcher_database
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        generation_id = _seed_watcher_query_plan_rows(
+            connection,
+            scope,
+            row_count=2_000,
+        )
+        ready_plan = _explain_analyze_text(
+            connection,
+            """
+            select candidate.id
+            from library.targeted_reconciliation_intents as candidate
+            where candidate.watcher_generation_kind in ('exact', 'root_catch_up')
+              and candidate.watcher_job_linked_at is null
+              and candidate.state = 'accepted'
+              and exists (
+                select 1
+                from library.watcher_generation_participants as participant
+                join library.watcher_lanes as lane
+                  on lane.library_id = participant.library_id
+                 and lane.root_id = participant.root_id
+                where participant.generation_id = candidate.id
+                  and lane.next_eligible_at <= %s
+              )
+              and not exists (
+                select 1
+                from library.watcher_generation_participants as participant
+                join library.watcher_lanes as lane
+                  on lane.library_id = participant.library_id
+                 and lane.root_id = participant.root_id
+                left join library.library_roots as root
+                  on root.library_id = participant.library_id
+                 and root.id = participant.root_id
+                 and root.is_active is true
+                where participant.generation_id = candidate.id
+                  and (lane.successor_generation_id is distinct from candidate.id
+                       or lane.running_generation_id is not null
+                       or lane.running_job_id is not null
+                       or lane.next_eligible_at > %s
+                       or participant.accepted_sequence_lower
+                            <> lane.applied_sequence + 1
+                       or participant.accepted_sequence_upper
+                            <> lane.accepted_sequence
+                       or root.id is null)
+              )
+              and not (
+                candidate.watcher_generation_kind = 'exact'
+                and exists (
+                  select 1
+                  from library.watcher_generation_participants as participant
+                  join library.watcher_incidents as incident
+                    on incident.library_id = participant.library_id
+                   and incident.root_id = participant.root_id
+                   and incident.resolved_at is null
+                  where participant.generation_id = candidate.id
+                )
+              )
+              and not exists (
+                select 1
+                from library.watcher_barrier_participants as candidate_barrier
+                join library.watcher_barrier_participants as peer
+                  on peer.barrier_id = candidate_barrier.barrier_id
+                join library.watcher_lanes as peer_lane
+                  on peer_lane.library_id = peer.library_id
+                 and peer_lane.root_id = peer.root_id
+                where candidate_barrier.generation_id = candidate.id
+                  and peer_lane.applied_sequence < peer.accepted_sequence - 1
+              )
+            order by candidate.accepted_at, candidate.id
+            limit 32
+            """,
+            (NOW + timedelta(hours=1), NOW + timedelta(hours=1)),
+        )
+        unresolved_plan = _explain_analyze_text(
+            connection,
+            """
+            select incident.incident_id
+            from library.watcher_incidents as incident
+            where incident.library_id = %s
+              and incident.root_id = %s
+              and incident.incident_family = 'watcher_recovery'
+              and incident.resolved_at is null
+            """,
+            (scope.library_id, scope.root_database_ids["root-a"]),
+        )
+        acknowledgement_plan = _explain_analyze_text(
+            connection,
+            """
+            select incident.warning_token
+            from library.watcher_incidents as incident
+            join library.watcher_incident_acknowledgements as acknowledgement
+              on acknowledgement.incident_id = incident.incident_id
+             and acknowledgement.library_id = incident.library_id
+             and acknowledgement.account_id = %s
+            join library.library_memberships as membership
+              on membership.library_id = incident.library_id
+             and membership.account_id = %s
+            where incident.library_id = %s
+              and incident.resolved_at is null
+            order by incident.warning_token
+            """,
+            (scope.account_id, scope.account_id, scope.library_id),
+        )
+        barrier_plan = _explain_analyze_text(
+            connection,
+            """
+            select 1
+            from library.watcher_barrier_participants as candidate_barrier
+            join library.watcher_barrier_participants as peer
+              on peer.barrier_id = candidate_barrier.barrier_id
+            join library.watcher_lanes as peer_lane
+              on peer_lane.library_id = peer.library_id
+             and peer_lane.root_id = peer.root_id
+            where candidate_barrier.generation_id = %s
+              and peer_lane.applied_sequence < peer.accepted_sequence - 1
+            """,
+            (generation_id,),
+        )
+        generation_plan = _explain_analyze_text(
+            connection,
+            """
+            select pg_catalog.count(*)
+            from library.watcher_generation_participants as participant
+            where participant.generation_id = %s
+            """,
+            (generation_id,),
+        )
+
+    expectations = (
+        (
+            ready_plan,
+            "targeted_reconciliation_watcher_ready_idx",
+            "Seq Scan on targeted_reconciliation_intents",
+        ),
+        (
+            unresolved_plan,
+            "watcher_incidents_unresolved_root_family_idx",
+            "Seq Scan on watcher_incidents",
+        ),
+        (
+            acknowledgement_plan,
+            "watcher_incident_acknowledgements_account_id_idx",
+            "Seq Scan on watcher_incident_acknowledgements",
+        ),
+        (
+            barrier_plan,
+            "watcher_barrier_participants_generation_id_idx",
+            "Seq Scan on watcher_barrier_participants",
+        ),
+        (
+            generation_plan,
+            # PostgreSQL truncates this generated unique-index name to 63 bytes.
+            "watcher_generation_participan_generation_id_library_id_root_key",
+            "Seq Scan on watcher_generation_participants",
+        ),
+    )
+    for plan, expected_index, forbidden_scan in expectations:
+        assert expected_index in plan, plan
+        assert forbidden_scan not in plan, plan
 
 
 def _publish_watcher_generation(scope, generation_id: int, *, now: datetime, worker_id: str):
@@ -3068,12 +3572,25 @@ def test_targeted_publication_and_failure_share_lane_before_intent_lock_order(
         lease_token=claim.lease_token,
         now=now,
     )
+    publisher_connected = Event()
+    publisher_pids = []
+
+    def connect_publisher(database_url):
+        connection = isolatedPostgres._connect(database_url)
+        publisher_pids.append(connection.info.backend_pid)
+        publisher_connected.set()
+        return connection
+
+    publisher_scans = PostgresScanJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=connect_publisher,
+    )
     errors = []
     results = []
 
     def publish():
         try:
-            results.append(scans.publish_claimed_targeted_reconciliation(
+            results.append(publisher_scans.publish_claimed_targeted_reconciliation(
                 claim=claim,
                 intent_id=accepted.generation_id,
                 inventory={
@@ -3090,7 +3607,6 @@ def test_targeted_publication_and_failure_share_lane_before_intent_lock_order(
             errors.append(error)
 
     with isolatedPostgres._connect(scope.setup_url) as blocker:
-        blocker_pid = blocker.execute("select pg_backend_pid() as pid").fetchone()["pid"]
         blocker.execute(
             """
             select 1 from library.watcher_lanes
@@ -3100,47 +3616,43 @@ def test_targeted_publication_and_failure_share_lane_before_intent_lock_order(
             (scope.library_id, scope.root_database_ids["root-a"]),
         )
         thread = Thread(target=publish, daemon=True)
-        thread.start()
-        deadline = time.monotonic() + 15
-        blocked = False
-        with isolatedPostgres._connect(scope.setup_url) as observer:
-            while time.monotonic() < deadline:
-                blocked = bool(
-                    observer.execute(
-                        """
-                        select exists (
-                            select 1 from pg_catalog.pg_stat_activity as activity
-                            where %s = any(pg_catalog.pg_blocking_pids(activity.pid))
-                        ) as blocked
-                        """,
-                        (blocker_pid,),
-                    ).fetchone()["blocked"]
-                )
-                if blocked:
-                    break
-                time.sleep(0.02)
-        assert blocked, (
-            "targeted publication never reached the held watcher lane: "
-            f"results={results!r}, errors={errors!r}"
-        )
-        failure = blocker.execute(
-            """
-            select * from library.fail_claimed_watcher_generation(
-                %s, %s, %s, %s, %s, 'reconciliation_failed', %s
+        try:
+            thread.start()
+            assert publisher_connected.wait(timeout=5), (
+                "targeted publisher did not connect: "
+                f"results={results!r}, errors={errors!r}"
             )
-            """,
-            (
-                accepted.generation_id,
-                claim.job_id,
-                claim.attempt,
-                claim.worker_id,
-                claim.lease_token,
-                now,
-            ),
-        ).fetchone()
-        assert failure["failed"] is True
+            with isolatedPostgres._connect(scope.setup_url) as observer:
+                blocked = _wait_for_blocked_backend(
+                    observer,
+                    query_pid=publisher_pids[0],
+                    blocking_pid=blocker.info.backend_pid,
+                )
+            assert blocked, (
+                "targeted publication never reached the held watcher lane: "
+                f"results={results!r}, errors={errors!r}"
+            )
+            failure = blocker.execute(
+                """
+                select * from library.fail_claimed_watcher_generation(
+                  %s, %s, %s, %s, %s, 'reconciliation_failed', %s
+                )
+                """,
+                (
+                    accepted.generation_id,
+                    claim.job_id,
+                    claim.attempt,
+                    claim.worker_id,
+                    claim.lease_token,
+                    now,
+                ),
+            ).fetchone()
+            assert failure["failed"] is True
+        finally:
+            blocker.commit()
+            if thread.ident is not None:
+                thread.join(timeout=5)
 
-    thread.join(timeout=5)
     assert not thread.is_alive()
     assert len(errors) == 1
     assert isinstance(errors[0], psycopg.errors.SerializationFailure)

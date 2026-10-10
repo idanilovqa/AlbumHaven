@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import importlib
 import json
+import logging
 import multiprocessing
 import os
 from pathlib import Path
@@ -126,6 +127,50 @@ def _claim_in_process(
         queue.put(("error", type(exc).__name__, str(exc)))
 
 
+def _claim_and_block_in_process(
+    start,
+    block_connection,
+    queue,
+    worker_url: str,
+    worker_id: str,
+    claim_now: datetime,
+):
+    try:
+        from music_app.services.jobs.repository_postgres import PostgresJobRepository
+
+        module = importlib.import_module("music_app.services.watcher_recovery_postgres")
+        jobs = PostgresJobRepository(
+            database_url=worker_url,
+            connect_to_database=_connect,
+        )
+        recovery = module.PostgresWatcherRecoveryRepository(
+            database_url=worker_url,
+            connect_to_database=_connect,
+        )
+        start.wait(15)
+        claim = jobs.claim(worker_id=worker_id, now=claim_now, lease_seconds=30)
+        generation = (
+            recovery.claim_generation(claim=claim, now=claim_now)
+            if claim is not None
+            else None
+        )
+        queue.put(
+            (
+                "claimed",
+                None if claim is None else claim.job_id,
+                None if generation is None else generation.generation_id,
+                None if claim is None else claim.attempt,
+                None if claim is None else claim.worker_id,
+                None if claim is None else claim.lease_token,
+            )
+        )
+        block_connection.recv()
+    except BaseException as exc:
+        queue.put(("error", type(exc).__name__, str(exc)))
+    finally:
+        block_connection.close()
+
+
 def _skip_or_fail_ci(message: str) -> None:
     if any(
         str(os.environ.get(name) or "").strip().casefold() in {"1", "true", "yes"}
@@ -245,6 +290,40 @@ def _run_processes(processes, start, queue):
             if process.is_alive():
                 process.terminate()
             process.join(30)
+        queue.close()
+        queue.join_thread()
+
+
+def _claim_then_terminate(scope, *, worker_id: str, claim_now: datetime):
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    block_read, block_write = context.Pipe(duplex=False)
+    queue = context.Queue()
+    process = context.Process(
+        target=_claim_and_block_in_process,
+        args=(start, block_read, queue, scope.worker_url, worker_id, claim_now),
+    )
+    try:
+        process.start()
+        block_read.close()
+        start.set()
+        result = queue.get(timeout=30)
+        assert result[0] == "claimed", result
+        assert result[1] is not None and result[2] is not None
+        assert process.is_alive()
+        claimed_pid = process.pid
+        process.terminate()
+        process.join(30)
+        assert process.pid == claimed_pid
+        assert not process.is_alive()
+        return result
+    finally:
+        if process.pid is not None and process.is_alive():
+            process.terminate()
+        if process.pid is not None:
+            process.join(30)
+        block_read.close()
+        block_write.close()
         queue.close()
         queue.join_thread()
 
@@ -613,3 +692,408 @@ def test_cross_root_barrier_reclaim_rejects_the_stale_process_claim(
         accepted.generation_id
     }
     assert {row["running_job_id"] for row in lanes} == {second[1]}
+
+
+def test_killed_claim_reconciles_retryable_work_without_cross_root_overtake(
+    multiprocess_watcher_database,
+):
+    from music_app.services.jobs.repository_postgres import PostgresJobRepository
+
+    scope = multiprocess_watcher_database
+    now = datetime.now(timezone.utc)
+    module = importlib.import_module("music_app.services.watcher_recovery_postgres")
+    app_repository = module.PostgresWatcherRecoveryRepository(
+        database_url=scope.app_url,
+        connect_to_database=_connect,
+    )
+    worker_repository = module.PostgresWatcherRecoveryRepository(
+        database_url=scope.worker_url,
+        connect_to_database=_connect,
+    )
+    running = app_repository.accept_event(
+        library_id=scope.library_id,
+        event=LibraryEvent(
+            LibraryEventKind.MOVED,
+            "root-a",
+            scope.root_paths["root-a"] / "old" / "claimed.flac",
+            destination=scope.root_paths["root-b"] / "new" / "claimed.flac",
+            destination_root_id="root-b",
+        ),
+        accepted_at=now,
+    )
+    assert worker_repository.dispatch_ready(now=now, limit=32) == (
+        running.generation_id,
+    )
+    killed_claim = _claim_then_terminate(
+        scope,
+        worker_id="worker-killed-retryable",
+        claim_now=now,
+    )
+    successor = app_repository.accept_event(
+        library_id=scope.library_id,
+        event=LibraryEvent(
+            LibraryEventKind.CREATED,
+            "root-a",
+            scope.root_paths["root-a"] / "after-claim.flac",
+        ),
+        accepted_at=now + timedelta(milliseconds=1),
+    )
+
+    jobs = PostgresJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=_connect,
+    )
+    reconciled = jobs.reconcile_stale_leases(
+        now=now + timedelta(seconds=31),
+        limit=100,
+    )
+    assert reconciled.retried_count == 1
+    assert reconciled.failed_count == 0
+    assert worker_repository.reconcile_due(
+        now=now + timedelta(seconds=31),
+        limit=32,
+    ) == ()
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        lanes = connection.execute(
+            """
+            select root_id, running_generation_id, running_job_id,
+                   successor_generation_id
+            from library.watcher_lanes
+            where library_id = %s and root_id = any(%s::bigint[])
+            order by root_id
+            """,
+            (
+                scope.library_id,
+                [
+                    scope.root_database_ids["root-a"],
+                    scope.root_database_ids["root-b"],
+                ],
+            ),
+        ).fetchall()
+    assert {row["running_generation_id"] for row in lanes} == {
+        running.generation_id
+    }
+    assert {row["running_job_id"] for row in lanes} == {killed_claim[1]}
+    assert lanes[0]["successor_generation_id"] == successor.generation_id
+    assert lanes[1]["successor_generation_id"] is None
+
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    queue = context.Queue()
+    [reattached] = _run_processes(
+        [
+            context.Process(
+                target=_claim_in_process,
+                args=(
+                    start,
+                    queue,
+                    scope.worker_url,
+                    "worker-retry-attached",
+                    now + timedelta(seconds=31),
+                ),
+            )
+        ],
+        start,
+        queue,
+    )
+    assert reattached[1] == killed_claim[1]
+    assert reattached[2] == running.generation_id
+    assert reattached[3] == killed_claim[3] + 1
+
+
+def test_killed_exhausted_claim_becomes_one_dirty_cross_root_successor(
+    multiprocess_watcher_database,
+):
+    from music_app.services.jobs.repository_postgres import PostgresJobRepository
+
+    scope = multiprocess_watcher_database
+    now = datetime.now(timezone.utc)
+    module = importlib.import_module("music_app.services.watcher_recovery_postgres")
+    app_repository = module.PostgresWatcherRecoveryRepository(
+        database_url=scope.app_url,
+        connect_to_database=_connect,
+    )
+    worker_repository = module.PostgresWatcherRecoveryRepository(
+        database_url=scope.worker_url,
+        connect_to_database=_connect,
+    )
+    running = app_repository.accept_event(
+        library_id=scope.library_id,
+        event=LibraryEvent(
+            LibraryEventKind.MOVED,
+            "root-a",
+            scope.root_paths["root-a"] / "old" / "terminal.flac",
+            destination=scope.root_paths["root-b"] / "new" / "terminal.flac",
+            destination_root_id="root-b",
+        ),
+        accepted_at=now,
+    )
+    assert worker_repository.dispatch_ready(now=now, limit=32) == (
+        running.generation_id,
+    )
+    killed_claim = _claim_then_terminate(
+        scope,
+        worker_id="worker-killed-terminal",
+        claim_now=now,
+    )
+    accepted_during_claim = app_repository.accept_event(
+        library_id=scope.library_id,
+        event=LibraryEvent(
+            LibraryEventKind.CREATED,
+            "root-a",
+            scope.root_paths["root-a"] / "during-terminal-claim.flac",
+        ),
+        accepted_at=now + timedelta(milliseconds=1),
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update ops.jobs
+            set attempt_count = 3,
+                lease_expires_at = %s
+            where id = %s
+            """,
+            (now - timedelta(seconds=1), killed_claim[1]),
+        )
+
+    jobs = PostgresJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=_connect,
+    )
+    stale = jobs.reconcile_stale_leases(
+        now=now + timedelta(seconds=31),
+        limit=100,
+    )
+    assert stale.failed_count == 1
+    assert stale.retried_count == 0
+    assert running.generation_id in worker_repository.reconcile_due(
+        now=now + timedelta(seconds=31),
+        limit=32,
+    )
+
+    def recovery_state():
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            lanes = connection.execute(
+                """
+                select root_id, dirty_generation, running_generation_id,
+                       running_job_id, successor_generation_id
+                from library.watcher_lanes
+                where library_id = %s and root_id = any(%s::bigint[])
+                order by root_id
+                """,
+                (
+                    scope.library_id,
+                    [
+                        scope.root_database_ids["root-a"],
+                        scope.root_database_ids["root-b"],
+                    ],
+                ),
+            ).fetchall()
+            incidents = connection.execute(
+                """
+                select root_id, incident_id, warning_token, reason_code
+                from library.watcher_incidents
+                where library_id = %s and resolved_at is null
+                order by root_id
+                """,
+                (scope.library_id,),
+            ).fetchall()
+            return lanes, incidents
+
+    lanes, incidents = recovery_state()
+    successor_ids = {row["successor_generation_id"] for row in lanes}
+    assert None not in successor_ids
+    assert len(successor_ids) == 1
+    assert accepted_during_claim.generation_id in successor_ids
+    assert all(row["running_generation_id"] is None for row in lanes)
+    assert all(row["running_job_id"] is None for row in lanes)
+    assert {row["dirty_generation"] for row in lanes} == {1}
+    assert {row["reason_code"] for row in incidents} == {"reconciliation_failed"}
+    assert {row["root_id"] for row in incidents} == {
+        scope.root_database_ids["root-a"],
+        scope.root_database_ids["root-b"],
+    }
+    stable_incidents = {
+        row["root_id"]: (row["incident_id"], row["warning_token"])
+        for row in incidents
+    }
+
+    worker_repository.reconcile_due(
+        now=now + timedelta(seconds=32),
+        limit=32,
+    )
+    _lanes, repeated_incidents = recovery_state()
+    assert {
+        row["root_id"]: (row["incident_id"], row["warning_token"])
+        for row in repeated_incidents
+    } == stable_incidents
+
+
+def test_real_watcher_status_metrics_and_logs_are_path_free(
+    multiprocess_watcher_database,
+    monkeypatch,
+    caplog,
+):
+    from music_app.jobs.safe_logging import install_durable_worker_logging_boundary
+    from music_app.routes import api_read_asgi_routes
+    from music_app.services.allowed_actions import AllowedActions
+
+    scope = multiprocess_watcher_database
+    now = datetime.now(timezone.utc)
+    module = importlib.import_module("music_app.services.watcher_recovery_postgres")
+    repository = module.PostgresWatcherRecoveryRepository(
+        database_url=scope.app_url,
+        connect_to_database=_connect,
+    )
+    credential = "password=watcher-secret-credential"
+    account_name = "Private Account owner@example.invalid"
+    library_name = "Private Library API_KEY=library-secret"
+    exception_text = "OperationalError(private-host, password=watcher-secret)"
+    filename = f"{credential}.flac"
+    logical_root_id = "private-account-root-secret"
+    private_root = scope.root_paths["root-a"] / "Private Artist" / "Private Album"
+    private_root.mkdir(parents=True)
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update app.accounts
+            set display_name = %s
+            where id = (
+              select owner_account_id from library.libraries where id = %s
+            )
+            """,
+            (account_name, scope.library_id),
+        )
+        connection.execute(
+            "update library.libraries set name = %s where id = %s",
+            (library_name, scope.library_id),
+        )
+        connection.execute(
+            """
+            update library.library_roots
+            set root_path = %s,
+                metadata = jsonb_build_object('root_id', %s::text)
+            where id = %s
+            """,
+            (
+                str(private_root),
+                logical_root_id,
+                scope.root_database_ids["root-a"],
+            ),
+        )
+
+    repository.accept_event(
+        library_id=scope.library_id,
+        event=LibraryEvent(
+            LibraryEventKind.CREATED,
+            logical_root_id,
+            private_root / filename,
+        ),
+        accepted_at=now,
+    )
+    marked = repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id=logical_root_id,
+        reason_code="overflow",
+        observed_at=now + timedelta(milliseconds=1),
+    )
+    service = SimpleNamespace(
+        load_problems=lambda: repository.load_status(library_id=scope.library_id)
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(library_watch_health_service=service)
+        ),
+        state=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        api_read_asgi_routes,
+        "allowed_actions_for_request",
+        lambda *_args, **_kwargs: AllowedActions(()),
+    )
+
+    status_payload = api_read_asgi_routes._project_library_watch_health_for_request(
+        request
+    )
+    metrics_payload = api_read_asgi_routes._sanitize_watcher_metrics(
+        repository.load_metrics(library_id=scope.library_id)
+    )
+
+    assert status_payload["warning_token"] == marked.warning_token
+    assert status_payload["problems"]
+    assert metrics_payload is not None
+    assert set(metrics_payload) == {
+        "ready",
+        "running",
+        "coalesced",
+        "dirty",
+        "barrier_waiting",
+        "lag_1_9",
+        "lag_10_99",
+        "lag_100_plus",
+        "coalesced_events",
+        "catch_ups",
+        "oldest_ready_seconds",
+        "oldest_repair_seconds",
+    }
+    assert all(
+        isinstance(metrics_payload[key], int)
+        and not isinstance(metrics_payload[key], bool)
+        and 0 <= metrics_payload[key] <= 2_147_483_647
+        for key in (
+            "ready",
+            "running",
+            "coalesced",
+            "dirty",
+            "barrier_waiting",
+            "lag_1_9",
+            "lag_10_99",
+            "lag_100_plus",
+            "coalesced_events",
+            "catch_ups",
+        )
+    )
+    assert all(
+        0 <= metrics_payload[key] <= 2_147_483_647
+        for key in ("oldest_ready_seconds", "oldest_repair_seconds")
+    )
+    problem_text = json.dumps(status_payload["problems"], sort_keys=True)
+    metric_text = json.dumps(metrics_payload, sort_keys=True)
+    forbidden = (
+        credential,
+        account_name,
+        library_name,
+        exception_text,
+        filename,
+        logical_root_id,
+        str(private_root),
+        marked.warning_token,
+    )
+    assert all(value not in problem_text for value in forbidden)
+    assert all(value not in metric_text for value in forbidden)
+    assert marked.incident_id in problem_text
+
+    caplog.set_level(logging.ERROR)
+    previous_factory = install_durable_worker_logging_boundary()
+    try:
+        try:
+            raise RuntimeError(exception_text)
+        except RuntimeError:
+            logging.getLogger("music_app.services.watcher_recovery_postgres").exception(
+                "Watcher failure credential=%s account=%s library=%s path=%s "
+                "filename=%s token=%s payload=%r",
+                credential,
+                account_name,
+                library_name,
+                private_root,
+                filename,
+                marked.warning_token,
+                status_payload,
+            )
+    finally:
+        logging.setLogRecordFactory(previous_factory)
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "durable_legacy_pipeline_event" in log_text
+    assert all(value not in log_text for value in forbidden)

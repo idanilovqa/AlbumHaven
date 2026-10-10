@@ -292,9 +292,10 @@ create index if not exists watcher_lanes_running_job_idx
   where running_job_id is not null;
 create index if not exists targeted_reconciliation_watcher_ready_idx
   on library.targeted_reconciliation_intents
-    (watcher_generation_kind, accepted_at, id)
+    (accepted_at, id)
   where watcher_job_linked_at is null
-    and watcher_generation_kind is not null;
+    and state = 'accepted'
+    and watcher_generation_kind in ('exact', 'root_catch_up');
 
 create table if not exists library.watcher_generation_participants (
   generation_id bigint not null,

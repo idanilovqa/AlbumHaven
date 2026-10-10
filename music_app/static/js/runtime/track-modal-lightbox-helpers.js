@@ -153,7 +153,7 @@ function decorateTrackModalSelection() {
     host.innerHTML = ButtonComponent.renderActionButton({icon: 'expand', ariaLabel: 'Full size', title: 'Full size', presentation: 'bare',
       attributes: {'data-resource-selection-page': '1'}});
     const button = host.firstElementChild;
-    actions.appendChild(button); button.addEventListener('click', lease.onPage);
+    actions.prepend(button); button.addEventListener('click', lease.onPage);
   } else if (!canPage && oldPage) {
     const restoreFocus = oldPage === document.activeElement || oldPage.contains(document.activeElement);
     oldPage.remove();

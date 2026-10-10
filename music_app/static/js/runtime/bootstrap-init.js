@@ -302,6 +302,16 @@ if (shouldStartImmediateHydration) {
 
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarArtist = event.target.closest('[data-sidebar-artist]');
+  if (sidebarArtist) {
+    event.preventDefault();
+    showArtistTreeContextMenu(
+      event.clientX,
+      event.clientY,
+      sidebarArtist.getAttribute('data-sidebar-artist') || '',
+    );
+    return;
+  }
   const versionTab = event.target.closest('[data-version-context-key]');
   if (versionTab) {
     event.preventDefault();
@@ -316,6 +326,9 @@ document.addEventListener('contextmenu', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+  if (!event.target.closest('#artist-tree-context-menu') && typeof hideArtistTreeContextMenu === 'function') {
+    hideArtistTreeContextMenu();
+  }
   if (!event.target.closest('#status-context-menu')) {
     hideStatusContextMenu();
   }

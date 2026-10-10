@@ -1263,6 +1263,16 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
   assert.equal(context.__clearedSurfaces.at(-1), menu);
 }
 
+test('artist tree context menu retains its artist and exposes the scroll action', () => {
+  const { context } = loadHelper();
+  context.showArtistTreeContextMenu(18, 36, 'A Forest Of Stars');
+  const menu = context.document.getElementById('artist-tree-context-menu');
+  assert.equal(menu.dataset.artist, 'A Forest Of Stars');
+  assert.match(menu.innerHTML, /data-artist-tree-action="scroll-to-artist"/);
+  assert.match(menu.innerHTML, /Scroll to this artist/);
+  assert.equal(menu.hidden, false);
+});
+
 test('album context menu disables Edit Tags when the album lacks permission', () => {
   const { context } = loadHelper();
   context.showAlbumCardContextMenu(12, 24, {

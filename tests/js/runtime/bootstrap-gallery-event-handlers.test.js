@@ -879,6 +879,59 @@ test('handleGalleryBootstrapClick ignores the retired Home sidebar target', () =
   assert.equal(calls.renderSidebar, 0);
 });
 
+test('scrollRootGalleryToArtist requests an anchored root page and jumps after render', async () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  let scrolledArtist = '';
+  context.virtualGrid.scrollToArtist = (artist) => {
+    scrolledArtist = artist;
+    return true;
+  };
+
+  await context.scrollRootGalleryToArtist('A Forest Of Stars');
+
+  assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
+  assert.equal(calls.buildApiUrl.at(-1).query, '');
+  assert.equal(calls.buildApiUrlOptions.at(-1).galleryAnchorArtist, 'A Forest Of Stars');
+  assert.equal(
+    new URL(calls.fetchAndRender.at(-1).url, 'http://localhost')
+      .searchParams.get('gallery_anchor_artist'),
+    'A Forest Of Stars',
+  );
+  assert.equal(scrolledArtist, 'A Forest Of Stars');
+});
+
+test('artist tree context action closes the menu before scrolling the root gallery', () => {
+  const { context, calls } = createContext();
+  const menu = { dataset: { artist: 'A Forest Of Stars' } };
+  const action = {
+    closest(selector) {
+      return selector === '#artist-tree-context-menu' ? menu : null;
+    },
+  };
+  let prevented = false;
+  let hidden = false;
+  let requestedArtist = '';
+  context.hideArtistTreeContextMenu = () => { hidden = true; };
+  context.scrollRootGalleryToArtist = (artist) => {
+    requestedArtist = artist;
+    return Promise.resolve(true);
+  };
+
+  context.handleGalleryBootstrapClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-artist-tree-action="scroll-to-artist"]' ? action : null;
+      },
+    },
+    preventDefault() { prevented = true; },
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(hidden, true);
+  assert.equal(requestedArtist, 'A Forest Of Stars');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.closeArtistsDrawer)), [{ restoreFocus: false }]);
+});
+
 test('switching primary artist preserves the active search and requested-artist provenance', () => {
   const { context, calls } = createContext({
     searchInputValue: 'neal morse', useProductionBuildApiUrl: true,

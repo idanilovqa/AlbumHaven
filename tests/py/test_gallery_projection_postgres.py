@@ -27,6 +27,31 @@ def test_gallery_snapshot_excludes_blank_album_identity():
     assert snapshot["album_count"] == 0
 
 
+def test_gallery_snapshot_artist_anchor_opens_page_with_leading_context():
+    rows = [
+        membership("Alpha", f"alpha-{index}") for index in range(4)
+    ] + [
+        membership("Beta", f"beta-{index}") for index in range(3)
+    ] + [
+        membership("Gamma", f"gamma-{index}") for index in range(2)
+    ]
+    snapshot = browse._prepare_root_gallery_snapshot(rows, [], {}, {})
+
+    page, _, _, metadata = browse._select_root_gallery_snapshot_page(
+        snapshot,
+        {"gallery_page_size": "3", "gallery_anchor_artist": "Beta"},
+    )
+
+    assert [item["artist_name"] for item in page] == ["Alpha", "Beta", "Beta"]
+    assert metadata["anchor_artist"] == "Beta"
+    assert metadata["anchor_offset"] == 4
+    with pytest.raises(ValueError, match="artist anchor"):
+        browse._select_root_gallery_snapshot_page(
+            snapshot,
+            {"gallery_page_size": "3", "gallery_anchor_artist": "Missing"},
+        )
+
+
 def test_gallery_extraction_preserves_073f75b_golden_order_and_cursor():
     # Literal results captured from the unchanged 073f75b selector, before extraction.
     rows = [membership("Alias", "shared"), membership("Canonical", "shared"),

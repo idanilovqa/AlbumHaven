@@ -3464,7 +3464,13 @@ def _root_gallery_page_size(params: Mapping[str, object]) -> int:
     return int(raw_size)
 
 
-def _root_gallery_page_bounds(params: Mapping[str, object], revision: str, count: int) -> tuple[int, int]:
+def _root_gallery_page_bounds(
+    params: Mapping[str, object],
+    revision: str,
+    count: int,
+    *,
+    anchor_offset: int | None = None,
+) -> tuple[int, int]:
     size = _root_gallery_page_size(params)
     offset = 0
     cursor = params.get("gallery_cursor")
@@ -3484,6 +3490,9 @@ def _root_gallery_page_bounds(params: Mapping[str, object], revision: str, count
             if "restart" in str(error):
                 raise
             raise ValueError("Invalid gallery cursor.") from error
+    elif anchor_offset is not None:
+        leading_context = max(1, size // 3)
+        offset = max(0, min(anchor_offset - leading_context, max(0, count - size)))
     return size, offset
 
 
@@ -3496,10 +3505,25 @@ def _root_gallery_page_metadata(revision: str, count: int, size: int, offset: in
 
 def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: Mapping[str, object]):
     ordered = snapshot["ordered"]
-    size, offset = _root_gallery_page_bounds(params, snapshot["revision"], len(ordered))
+    anchor_artist = str(params.get("gallery_anchor_artist") or "").strip()
+    anchor_offset = next((
+        index for index, item in enumerate(ordered)
+        if str(item.get("artist_name") or "") == anchor_artist
+    ), None) if anchor_artist and not params.get("gallery_cursor") else None
+    if anchor_artist and not params.get("gallery_cursor") and anchor_offset is None:
+        raise ValueError("Gallery artist anchor is unavailable.")
+    size, offset = _root_gallery_page_bounds(
+        params,
+        snapshot["revision"],
+        len(ordered),
+        anchor_offset=anchor_offset,
+    )
     page = ordered[offset:offset + size]
-    return page, snapshot["sidebar"], snapshot["album_count"], _root_gallery_page_metadata(
+    metadata = _root_gallery_page_metadata(
         snapshot["revision"], len(ordered), size, offset, len(page))
+    if anchor_offset is not None:
+        metadata.update(anchor_artist=anchor_artist, anchor_offset=anchor_offset)
+    return page, snapshot["sidebar"], snapshot["album_count"], metadata
 
 
 def _root_sidebar_aggregate(

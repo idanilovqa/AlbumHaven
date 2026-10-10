@@ -1977,9 +1977,9 @@ test('scroll render timer completes a pending frame when animation frames are st
     context.canceledBrowserAnimationFrames.push(frameId);
   };
   let restoreCount = 0;
-  virtualGrid.restoreScrollAnchor = (anchor) => {
+  virtualGrid.restoreScrollAnchor = () => {
     restoreCount += 1;
-    scrollEl.scrollTop = Number(anchor?.scrollTop || 0);
+    scrollEl.scrollTop -= 130;
   };
   virtualGrid.primeVisibleCoverImages = () => {};
 
@@ -1987,7 +1987,7 @@ test('scroll render timer completes a pending frame when animation frames are st
   virtualGrid.stabilizeScrollAfterMeasurement({ scrollTop: 6336 });
   const stabilizeFrameId = virtualGrid._stabilizeRaf;
   const stabilizeFrame = scheduledFrames.get(stabilizeFrameId);
-  assert.equal(scrollEl.scrollTop, 6336);
+  assert.equal(scrollEl.scrollTop, 6190);
   assert.equal(restoreCount, 1);
 
   scrollEl.dispatchEvent({ type: 'scroll' });
@@ -1995,9 +1995,10 @@ test('scroll render timer completes a pending frame when animation frames are st
 
   assert.equal(
     restoreCount,
-    2,
-    'the scroll event from the immediate anchor restore must preserve its next-frame stabilization',
+    1,
+    'the next-frame stabilization must not apply the relative anchor delta twice',
   );
+  assert.equal(scrollEl.scrollTop, 6190);
   assert.equal(
     context.canceledBrowserAnimationFrames.includes(stabilizeFrameId),
     false,
@@ -4476,6 +4477,21 @@ test('startup preview cards survive layout events until an authoritative virtual
   assert.equal(containerEl.children.length, 0, 'An authoritative empty result must clear the old preview');
 });
 
+
+test('scrollToArtist jumps to the modeled artist without applying an artist filter', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.setGroups([
+    { artist: 'Alpha', albums: [{ key: 'alpha::one', name: 'One', tracks: [] }] },
+    { artist: 'Beta', albums: [{ key: 'beta::two', name: 'Two', tracks: [] }] },
+  ], [], null, {});
+  const target = virtualGrid.sections.find((section) => section.group?.artist === 'Beta');
+  const selectedArtistBefore = context.state.view.selected_artist;
+
+  assert.equal(virtualGrid.scrollToArtist('Beta'), true);
+  assert.equal(scrollEl.scrollTop, target.top);
+  assert.equal(context.state.view.selected_artist, selectedArtistBefore);
+});
 
 test('artist blocks place owned albums before a counted Featured On subsection', () => {
     const { context } = createRuntimeContext();

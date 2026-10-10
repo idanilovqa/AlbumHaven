@@ -1468,6 +1468,11 @@ test('rootFullPayload requests full root albums without changing other browse UR
   for (const scoped of [{ ...root, query: 'Neal Morse' }, { ...root, selected_artist: 'Neal Morse' }]) {
     assert.equal(new URL(buildApiUrl(scoped), 'https://localhost').searchParams.has('gallery_page_size'), false);
   }
+  assert.equal(
+    new URL(buildApiUrl(root, { galleryAnchorArtist: 'Björk' }), 'https://localhost')
+      .searchParams.get('gallery_anchor_artist'),
+    'Björk',
+  );
 }
 
 {

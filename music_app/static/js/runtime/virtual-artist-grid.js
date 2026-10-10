@@ -728,6 +728,21 @@ class VirtualArtistGrid {
     this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
   }
 
+  scrollToArtist(artist) {
+    const normalizedArtist = String(artist || '').trim();
+    if (!normalizedArtist) return false;
+    const section = this.sections.find((candidate) => (
+      candidate.kind === 'artist'
+      && String(candidate.group?.artist || '') === normalizedArtist
+    ));
+    if (!section) return false;
+    this.invalidateScrollStabilization();
+    this.scrollEl.scrollTop = Math.max(0, Number(section.top || 0));
+    this.lastKey = '';
+    this.render(true);
+    return true;
+  }
+
   invalidateScrollStabilization(options = {}) {
     this._stabilizeGeneration += 1;
     this._pendingStabilizationScroll = null;
@@ -1853,10 +1868,14 @@ class VirtualArtistGrid {
       this.primeVisibleCoverImages();
     };
     stabilize();
+    const stabilizedScroll = this._pendingStabilizationScroll;
     this._stabilizeRaf = scheduleBrowserAnimationFrame(() => {
       if (stabilizeGeneration !== this._stabilizeGeneration) return;
       this._stabilizeRaf = null;
-      stabilize();
+      if (this._pendingStabilizationScroll !== stabilizedScroll) return;
+      this.scrollEl.scrollLeft = stabilizedScroll.scrollLeft;
+      this.scrollEl.scrollTop = stabilizedScroll.scrollTop;
+      this.primeVisibleCoverImages();
     });
   }
 

@@ -47,6 +47,37 @@ function showAlbumCardContextMenu(x, y, album) {
   }
 }
 
+function ensureArtistTreeContextMenu() {
+  let menu = document.getElementById('artist-tree-context-menu');
+  if (menu) return menu;
+  menu = document.createElement('div');
+  menu.id = 'artist-tree-context-menu';
+  menu.className = 'album-card-context-menu';
+  menu.hidden = true;
+  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>';
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function hideArtistTreeContextMenu() {
+  const menu = document.getElementById('artist-tree-context-menu');
+  if (!menu) return;
+  menu.hidden = true;
+  menu.dataset.artist = '';
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+}
+
+function showArtistTreeContextMenu(x, y, artist) {
+  const menu = ensureArtistTreeContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.artist = String(artist || '');
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideArtistTreeContextMenu);
+  }
+}
+
 function ensureVersionPickerModal() {
   let modal = document.getElementById('version-picker-modal');
   if (modal) return modal;

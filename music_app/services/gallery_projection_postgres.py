@@ -101,7 +101,29 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     if not header:
         return None
     count = int(header["occurrence_count"])
-    size, offset = _root_gallery_page_bounds(params, header["revision"], count)
+    anchor_artist = str(params.get("gallery_anchor_artist") or "").strip()
+    anchor_offset = None
+    if anchor_artist and not params.get("gallery_cursor"):
+        anchor_row = _first(connection.execute("""
+            select min(ordinal) as ordinal
+            from library.gallery_projection_occurrences
+            where library_id = %(library_id)s and scope_key = %(scope_key)s
+              and payload->>'artist_name' = %(anchor_artist)s
+        """, {
+            "library_id": context["library_id"],
+            "scope_key": gallery_projection_scope_key(view_state),
+            "anchor_artist": anchor_artist,
+        }))
+        if anchor_row and anchor_row.get("ordinal") is not None:
+            anchor_offset = int(anchor_row["ordinal"])
+        else:
+            raise ValueError("Gallery artist anchor is unavailable.")
+    size, offset = _root_gallery_page_bounds(
+        params,
+        header["revision"],
+        count,
+        anchor_offset=anchor_offset,
+    )
     rows = connection.execute("""
         select payload from library.gallery_projection_occurrences
         where library_id = %(library_id)s and scope_key = %(scope_key)s
@@ -113,6 +135,8 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     if len(page) != min(size, count - offset):
         return None
     metadata = _root_gallery_page_metadata(header["revision"], count, size, offset, len(page))
+    if anchor_offset is not None:
+        metadata.update(anchor_artist=anchor_artist, anchor_offset=anchor_offset)
     if stale:
         metadata.update({
             "projection_stale": True,

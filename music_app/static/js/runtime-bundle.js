@@ -2084,6 +2084,8 @@ function buildApiUrl(view, options = {}) {
       .some(key => params.has(key))) {
     params.set('gallery_page_size', '50');
   }
+  const galleryAnchorArtist = String(options.galleryAnchorArtist || '').trim();
+  if (galleryAnchorArtist) params.set('gallery_anchor_artist', galleryAnchorArtist);
   if (options.omitSidebar) params.set('omit_sidebar', '1');
   if (options.rootSidebar) params.set('root_sidebar', '1');
   if (String(options.payloadTier || '').trim()) {
@@ -9854,7 +9856,7 @@ function attachAccountMenu(component, options = {}) {
 
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #artist-tree-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -10974,6 +10976,37 @@ function showAlbumCardContextMenu(x, y, album) {
   menu.hidden = false;
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
+  }
+}
+
+function ensureArtistTreeContextMenu() {
+  let menu = document.getElementById('artist-tree-context-menu');
+  if (menu) return menu;
+  menu = document.createElement('div');
+  menu.id = 'artist-tree-context-menu';
+  menu.className = 'album-card-context-menu';
+  menu.hidden = true;
+  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>';
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function hideArtistTreeContextMenu() {
+  const menu = document.getElementById('artist-tree-context-menu');
+  if (!menu) return;
+  menu.hidden = true;
+  menu.dataset.artist = '';
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+}
+
+function showArtistTreeContextMenu(x, y, artist) {
+  const menu = ensureArtistTreeContextMenu();
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.dataset.artist = String(artist || '');
+  menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
 }
 
@@ -35214,6 +35247,21 @@ class VirtualArtistGrid {
     this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
   }
 
+  scrollToArtist(artist) {
+    const normalizedArtist = String(artist || '').trim();
+    if (!normalizedArtist) return false;
+    const section = this.sections.find((candidate) => (
+      candidate.kind === 'artist'
+      && String(candidate.group?.artist || '') === normalizedArtist
+    ));
+    if (!section) return false;
+    this.invalidateScrollStabilization();
+    this.scrollEl.scrollTop = Math.max(0, Number(section.top || 0));
+    this.lastKey = '';
+    this.render(true);
+    return true;
+  }
+
   invalidateScrollStabilization(options = {}) {
     this._stabilizeGeneration += 1;
     this._pendingStabilizationScroll = null;
@@ -36339,10 +36387,14 @@ class VirtualArtistGrid {
       this.primeVisibleCoverImages();
     };
     stabilize();
+    const stabilizedScroll = this._pendingStabilizationScroll;
     this._stabilizeRaf = scheduleBrowserAnimationFrame(() => {
       if (stabilizeGeneration !== this._stabilizeGeneration) return;
       this._stabilizeRaf = null;
-      stabilize();
+      if (this._pendingStabilizationScroll !== stabilizedScroll) return;
+      this.scrollEl.scrollLeft = stabilizedScroll.scrollLeft;
+      this.scrollEl.scrollTop = stabilizedScroll.scrollTop;
+      this.primeVisibleCoverImages();
     });
   }
 
@@ -40173,6 +40225,16 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
 
 function handleGalleryBootstrapClick(event) {
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
+  const artistTreeAction = event.target.closest('[data-artist-tree-action="scroll-to-artist"]');
+  if (artistTreeAction) {
+    event.preventDefault();
+    const menu = artistTreeAction.closest('#artist-tree-context-menu');
+    const artist = String(menu?.dataset?.artist || '').trim();
+    hideArtistTreeContextMenu();
+    closeArtistsDrawer({ restoreFocus: false });
+    void scrollRootGalleryToArtist(artist);
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -40623,6 +40685,30 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
     originX: Math.round(Math.min(100, Math.max(0, originX)) * 1000000) / 1000000,
     originY: Math.round(Math.min(100, Math.max(0, originY)) * 1000000) / 1000000,
   };
+}
+
+function scrollRootGalleryToArtist(artist) {
+  const targetArtist = String(artist || '').trim();
+  if (!targetArtist) return Promise.resolve(false);
+  const nextView = {
+    ...state.view,
+    surface_request: 'albums',
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+  };
+  const url = buildApiUrl(nextView, { galleryAnchorArtist: targetArtist });
+  renderLibraryLoader(state.status);
+  return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
+    if (result === false) return false;
+    if (typeof virtualGrid?.scrollToArtist === 'function' && virtualGrid.scrollToArtist(targetArtist)) {
+      return true;
+    }
+    scheduleBrowserAnimationFrame(() => virtualGrid?.scrollToArtist?.(targetArtist));
+    return true;
+  });
 }
 
 function handleSidebarArtistSelectionClick(event) {
@@ -43691,6 +43777,16 @@ if (shouldStartImmediateHydration) {
 
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarArtist = event.target.closest('[data-sidebar-artist]');
+  if (sidebarArtist) {
+    event.preventDefault();
+    showArtistTreeContextMenu(
+      event.clientX,
+      event.clientY,
+      sidebarArtist.getAttribute('data-sidebar-artist') || '',
+    );
+    return;
+  }
   const versionTab = event.target.closest('[data-version-context-key]');
   if (versionTab) {
     event.preventDefault();
@@ -43705,6 +43801,9 @@ document.addEventListener('contextmenu', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+  if (!event.target.closest('#artist-tree-context-menu') && typeof hideArtistTreeContextMenu === 'function') {
+    hideArtistTreeContextMenu();
+  }
   if (!event.target.closest('#status-context-menu')) {
     hideStatusContextMenu();
   }

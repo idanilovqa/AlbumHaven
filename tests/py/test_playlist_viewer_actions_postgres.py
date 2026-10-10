@@ -115,16 +115,37 @@ def test_copy_is_private_ordered_new_identity_and_replay_safe(sharing, private_l
 
 
 def test_copy_requires_create_and_current_source_revision(sharing):
+    from music_app.services.owned_playlists import normalize_playlist_command
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+
     db = sharing
     original, viewer = shared(db), member(db)
     updated, _ = write(db, 'save', original, title='Updated')
     for action in ('copy', 'request_edit'):
         with pytest.raises(PlaylistError, match='revision_conflict'):
             write(db, action, original, actor=viewer)
-    with db.connect() as con:
-        con.execute('update app.capabilities set revoked_at=now() where account_id=%s and capability_key=%s', (viewer.account_id, CREATE))
+    command = normalize_playlist_command('copy', {
+        'revision': updated['revision'], 'request_key': str(uuid4()),
+    }, playlist_ref=updated['playlist_id'])
+    counts = (db.count('playlists'), db.count('playlist_operations'))
+    def deny_create(context):
+        return PolicyEvaluationConstraints(request_origin_allowed=context.action != CREATE)
     with pytest.raises(PlaylistError, match='forbidden'):
-        write(db, 'copy', updated, actor=viewer)
+        db.service.execute(db.context(viewer), command, constraints=deny_create)
+    assert (db.count('playlists'), db.count('playlist_operations')) == counts
+
+
+def test_copy_uses_browse_fallback_after_direct_create_grant_revocation(sharing):
+    db = sharing
+    original, viewer = shared(db), member(db)
+    with db.connect() as con:
+        con.execute('update app.capabilities set revoked_at=now() where account_id=%s and capability_key=%s',
+            (viewer.account_id, CREATE))
+    counts = (db.count('playlists'), db.count('playlist_operations'))
+    copied, _ = write(db, 'copy', original, actor=viewer)
+    assert copied['added_count'] == len(db.tracks)
+    assert db.service.read(db.context(viewer), playlist_ref=copied['playlist_id'])['playlist_detail']['allowed_actions']['can_edit']
+    assert (db.count('playlists'), db.count('playlist_operations')) == (counts[0] + 1, counts[1] + 1)
 
 
 def test_concurrent_identical_copy_and_request_keys_do_not_duplicate(sharing):

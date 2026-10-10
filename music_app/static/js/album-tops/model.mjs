@@ -1,9 +1,11 @@
 // Volatile, actor-scoped presentation state. PostgreSQL remains authoritative.
+import {isManualProgress} from './progress.mjs';
+
 const BROWSE = 'library.browse.read', CREATE = 'library.album_tops.create';
 const actionPermissions = Object.freeze({create: 'can_create', save: 'can_edit', delete: 'can_delete',
   add: 'can_add', remove: 'can_remove', reorder: 'can_reorder', view_sharing: 'can_view_sharing',
   visibility: 'can_share', grant_editor: 'can_share', revoke_editor: 'can_share', decide_edit_request: 'can_share',
-  request_edit: 'can_request_edit', copy: 'can_copy'});
+  request_edit: 'can_request_edit', copy: 'can_copy', set_manual_completion: 'can_manage_own_progress'});
 const sharingPermissions = ['can_share', 'can_copy', 'can_request_edit'];
 const empty = () => ({status: 'unavailable', data: null, error: null});
 const idle = () => ({status: 'idle', action: null, command: null, error: null});
@@ -13,6 +15,11 @@ const permitted = (data, action) => Object.hasOwn(projection(data), action) && p
 const required = action => Object.hasOwn(actionPermissions, action) ? actionPermissions[action] : null;
 const failure = error => error?.status === 401 || error?.status === 403 ? 'denied' : 'error';
 const clone = value => JSON.parse(JSON.stringify(value));
+const ownProgress = (data, albumRef) => {
+  const rows = data?.top_viewer_overlay?.item_progress;
+  const row = rows && Object.hasOwn(rows, albumRef) ? rows[albumRef] : null;
+  return isManualProgress(row) ? row : null;
+};
 
 export function albumTopActionAllowed(state, action, topRef = state?.selectedTopRef) {
   const permission = required(action), resource = action === 'create' ? state?.directory : state?.detail;
@@ -42,9 +49,14 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     if (!pending || !denied && (pending.action === 'create' ? topRef !== null : pending.command.top_ref !== topRef)) return;
     const permission = required(pending.action), grants = projection(data);
     const permissions = [BROWSE, permission, ...(pending.action === 'create' ? [CREATE] : [])];
-    const allowed = !denied && permissions.every(action => permitted(data, action));
-    const refused = denied || permissions.some(action => Object.hasOwn(grants, action) && grants[action] === false);
-    if (refused) {pending.retryVersion = readVersion; pending.retryDenied = true; return;}
+    const progress = pending.action === 'set_manual_completion';
+    const hasMembers = Array.isArray(data?.items);
+    const member = hasMembers && data.items.some(item => item.album_ref === pending.command.album_ref);
+    const allowed = !denied && permissions.every(action => permitted(data, action))
+      && (!progress || member && ownProgress(data, pending.command.album_ref));
+    const refused = denied || permissions.some(action => Object.hasOwn(grants, action) && grants[action] === false)
+      || progress && hasMembers && !member;
+    if (refused) {pending.retryVersion = readVersion; pending.denialVersion = readVersion; pending.retryDenied = true; return;}
     if (!allowed || version <= (pending.retryVersion || 0)) return;
     pending.retryVersion = version;
     pending.retryDenied = false;
@@ -87,10 +99,13 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
       return false;
     } finally {requests.delete(token.abort);}
   }
-  async function open(topRef) {
+  async function open(topRef, progressAlbumRef = null) {
     if (disposed || !state.scopeKey) return false;
+    const retain = progressAlbumRef && albumTopActionAllowed(state, 'set_manual_completion', topRef)
+      && ownProgress(state.detail.data, progressAlbumRef) && state.detail.data.items?.some(item => item.album_ref === progressAlbumRef);
     const version = ++detailVersion; sharingDenials.clear();
-    emit({selectedTopRef: topRef || null, detail: topRef ? {status: 'loading', data: null, error: null} : empty()});
+    emit({selectedTopRef: topRef || null, detail: retain ? {...state.detail, refreshing: true}
+      : topRef ? {status: 'loading', data: null, error: null} : empty()});
     if (!topRef) return true;
     const token = begin(), authorityVersion = ++readVersion;
     try {
@@ -100,7 +115,8 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
       emit({detail: {status: 'ready', data, error: null}}); return true;
     } catch (error) {
       if (current(token) && version === detailVersion) {
-        const denied = error?.status === 401 || error?.status === 403 && pending?.command.top_ref === topRef;
+        const denied = error?.status === 401 || pending?.command.top_ref === topRef
+          && (error?.status === 403 || pending.action === 'set_manual_completion' && error?.status === 404);
         recordRetryAuthority(null, topRef, authorityVersion, denied);
         if (error?.status === 401) listVersion++;
         emit({detail: {status: failure(error), data: null, error},
@@ -138,16 +154,26 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     } finally {options.signal?.removeEventListener('abort', cancel); requests.delete(token.abort);}
   }
   async function send(owner) {
-    const token = begin();
+    const token = begin(), denialVersion = owner.denialVersion || 0;
+    const progress = owner.action === 'set_manual_completion';
+    // A recovered progress attempt owns only the Top selected when it starts.
+    const navigationVersion = progress
+      ? (state.selectedTopRef === owner.command.top_ref ? detailVersion : null) : owner.navigationVersion;
     emit({mutation: {status: 'loading', action: owner.action, command: clone(owner.command), error: null}});
     try {
       const receipt = await providers.execute(owner.action, clone(owner.command), token.options);
       if (!current(token) || pending !== owner) return false;
+      // Restoration may authorize a new retry, never an attempt that began
+      // before a consumed denial. Keep its exact recovery identity unpublished.
+      if (progress && (token.abort.signal.aborted
+        || (owner.denialVersion || 0) !== denialVersion)) throw new Error('Album Top progress authority changed.');
       pending = null;
       emit({mutation: {status: 'ready', refreshing: true, action: owner.action, command: clone(owner.command), error: null, data: receipt}});
       // Acknowledged writes remain acknowledged even if the following read fails.
-      await Promise.all([load(), ...(owner.action !== 'copy' && owner.navigationVersion === detailVersion
-        ? [open(owner.action === 'delete' ? null : receipt.top_ref)] : [])]);
+      await Promise.all([load(), ...(owner.action !== 'copy' && navigationVersion === detailVersion
+        && (!progress || state.selectedTopRef === owner.command.top_ref)
+        ? [open(owner.action === 'delete' ? null : receipt.top_ref,
+          progress ? owner.command.album_ref : null)] : [])]);
       return current(token);
     } catch (error) {
       if (!current(token) || pending !== owner) return false;
@@ -177,7 +203,15 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     if (disposed || !state.scopeKey || pending || inFlight) return Promise.resolve(false);
     const detail = state.detail.data;
     if (action === 'view_sharing' || !albumTopActionAllowed(state, action)) return Promise.resolve(false);
-    const command = {...clone(data), request_key: requestKey(), ...(action === 'create' ? {} : {top_ref: state.selectedTopRef, revision: detail.revision})};
+    let command;
+    if (action === 'set_manual_completion') {
+      const row = ownProgress(detail, data.album_ref);
+      if (typeof data.completed !== 'boolean' || !row || !detail.items?.some(item => item.album_ref === data.album_ref)) return Promise.resolve(false);
+      command = {top_ref: state.selectedTopRef, request_key: requestKey(), album_ref: data.album_ref,
+        progress_revision: row.progress_revision, completed: data.completed};
+    } else {
+      command = {...clone(data), request_key: requestKey(), ...(action === 'create' ? {} : {top_ref: state.selectedTopRef, revision: detail.revision})};
+    }
     pending = {action, command, navigationVersion: detailVersion}; return startSend();
   }
   function startSend() {

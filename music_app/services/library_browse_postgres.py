@@ -671,13 +671,20 @@ class PostgresLibraryBrowseRepository:
                     _root_gallery_page_rows_sql(), {**_root_sidebar_params(view_state), "gallery_album_ids": album_ids}
                 ).fetchall()), root_alias_to_canonical) if album_ids else []
                 hydrated = {}
+                hydrated_by_id = {}
                 for group in _root_album_browse_artist_groups(preview_rows):
                     for album in group["albums"]:
                         hydrated[str(album.get("key") or "")] = album
+                        if album.get("album_id") is not None:
+                            hydrated_by_id[album["album_id"]] = album
                 groups = {}
                 for occurrence in page:
                     artist = occurrence["artist_name"]
-                    album = occurrence.get("missing_album") or hydrated.get(occurrence["album_key"])
+                    album = (
+                        occurrence.get("missing_album")
+                        or hydrated_by_id.get(occurrence.get("album_id"))
+                        or hydrated.get(occurrence["album_key"])
+                    )
                     if album is None:
                         raise ValueError("Gallery changed; restart required.")
                     album = _copy_album_for_artist_occurrence(album, occurrence)

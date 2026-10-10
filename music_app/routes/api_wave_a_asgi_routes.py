@@ -8,6 +8,7 @@ from music_app.services.log_history import history_scope_for_request
 import inspect
 import logging
 from collections.abc import Mapping
+from pathlib import Path
 from threading import Event
 from time import perf_counter
 from typing import Any
@@ -294,6 +295,58 @@ def _require_album_track_paths(
     if not track_paths:
         return None, _invalid_payload_response(error_message)
     return track_paths, None
+
+
+def _normalized_track_path_key(value: object) -> str:
+    text = str(value or "").strip()
+    return str(Path(text).resolve(strict=False)).casefold() if text else ""
+
+
+def _authoritative_tag_editor_track_paths(
+    request: Request,
+    album: Mapping[str, object],
+    source_path: str,
+) -> set[str]:
+    album_key = str(album.get("key") or album.get("album_key") or "").strip()
+    if _is_selected_postgres_library_browse_request(request):
+        if not album_key:
+            raise ValueError("The selected album has no authoritative identity.")
+        authoritative_album = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_album_detail_payload(album_key)
+    else:
+        source_key = _normalized_track_path_key(source_path)
+        authoritative_albums = [
+            dict(candidate)
+            if isinstance(candidate, Mapping)
+            else album_to_dict(candidate, config=_app_config(request))
+            for candidate in list(_library_state(request).get("albums", []) or [])
+        ]
+        candidates = []
+        for candidate in authoritative_albums:
+            candidate_key = str(
+                candidate.get("key") or candidate.get("album_key") or ""
+            ).strip()
+            candidate_paths = {
+                _normalized_track_path_key(path)
+                for path in _album_track_paths(candidate)
+            }
+            if (album_key and candidate_key == album_key) or (
+                not album_key and source_key in candidate_paths
+            ):
+                candidates.append(candidate)
+        authoritative_album = candidates[0] if len(candidates) == 1 else None
+    if not isinstance(authoritative_album, Mapping):
+        raise ValueError("The selected album is not in the authoritative inventory.")
+
+    authoritative_paths = _album_track_paths(authoritative_album)
+    source_key = _normalized_track_path_key(source_path)
+    authoritative_keys = {
+        _normalized_track_path_key(path) for path in authoritative_paths
+    }
+    if not source_key or source_key not in authoritative_keys:
+        raise ValueError("The selected source file is not in the authoritative album.")
+    return authoritative_paths
 
 
 def _json_response(value: ResponseValue) -> JSONResponse:
@@ -1688,11 +1741,17 @@ async def tag_editor_folder_files(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "Invalid source file"}, status_code=400)
 
     try:
+        authoritative_track_paths = await run_in_threadpool(
+            _authoritative_tag_editor_track_paths,
+            request,
+            album,
+            source_path,
+        )
         result = await run_in_threadpool(
             load_tag_editor_folder_files,
             _app_config(request),
             source_path,
-            indexed_paths=track_paths,
+            indexed_paths=authoritative_track_paths,
         )
     except (FileNotFoundError, OSError, ValueError):
         return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)

@@ -8,6 +8,8 @@ from threading import Lock
 
 from psycopg.types.json import Jsonb
 
+from music_app.services.library_roots import library_category_slugs
+
 BUILDER_VERSION = "root-gallery-v2"
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
@@ -19,7 +21,15 @@ _OCCURRENCE_FIELDS = frozenset({
 
 
 def gallery_projection_scope_key(view_state):
-    scope = {key: view_state.get(key) for key in ("gallery_scope", "visible_library_categories")}
+    scope = {
+        "builder_version": BUILDER_VERSION,
+        **{key: view_state.get(key) for key in ("gallery_scope", "visible_library_categories")},
+    }
+    selected_categories = set(scope.get("visible_library_categories") or ())
+    scope["visible_library_categories"] = [
+        category for category in library_category_slugs()
+        if category in selected_categories
+    ]
     return hashlib.sha256(json.dumps(scope, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 

@@ -527,6 +527,11 @@ class PostgresScanCacheAdapter:
             revision = int(
                 _row_mapping(revision_row).get("inventory_mutation_revision") or 0
             )
+            _commit_structural_relation_projection(
+                connection,
+                self._config,
+                reason="targeted_reconciliation",
+            )
             connection.commit()
         return {
             "inventory_mutation_revision": revision,
@@ -2269,6 +2274,8 @@ def _structural_destination_album_projection(
 def _commit_structural_relation_projection(
     connection: Any,
     config: dict[str, object],
+    *,
+    reason: str = "structural_tag_edit",
 ) -> dict[str, object]:
     snapshot_row = _first_row(connection.execute(_load_scan_snapshot_sql()))
     loaded_snapshot = (
@@ -2286,7 +2293,7 @@ def _commit_structural_relation_projection(
     relation_views_payload = serialize_relation_views(relation_views)
     projection_metadata = build_ready_relation_projection_metadata(
         source_fingerprint,
-        reason="structural_tag_edit",
+        reason=reason,
         duration_ms=0.0,
         source_row_count=len(relation_source_rows),
     )
@@ -5272,8 +5279,8 @@ def _load_targeted_album_memberships_sql() -> str:
           limit 1
         )
         select
-          library.local_track_files.private_path,
-          library.local_albums.album_key,
+            library.local_track_files.private_path,
+            library.local_albums.album_key,
           library.local_albums.title as album_title,
           library.local_albums.release_year,
           library.local_albums.metadata ->> 'edition' as edition,

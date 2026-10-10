@@ -320,7 +320,6 @@ export class GalleryActions {
     const minimumCards = options.minimumCards === undefined
       ? 1
       : Math.max(1, Number(options.minimumCards) || 1);
-    await this.galleryPage.waitForVisible(this.galleryPage.albumCards.first(), { timeout: options.timeout || 60000 });
     await this.galleryPage.waitForPageCondition((selectors) => {
       const visibleCards = Array.from(document.querySelectorAll(selectors.albumCardSelector))
         .filter((card) => {
@@ -1435,6 +1434,25 @@ export class GalleryActions {
       );
     }
     return { selected, album: payload.album };
+  }
+
+  async openAlbumContextMenu(albumName) {
+    const card = this.galleryPage.albumCard.cardByAlbumName(albumName).first();
+    await expect(card).toBeVisible();
+    await card.click({ button: 'right' });
+    await expect(this.galleryPage.albumCard.contextMenu).toBeVisible();
+  }
+
+  async dismissAlbumContextMenu() {
+    await this.galleryPage.page.locator('#search-form input').click();
+    await expect(this.galleryPage.albumCard.contextMenu).toBeHidden();
+  }
+
+  async openAlbumTagEditorFromContextMenu(albumName) {
+    await this.openAlbumContextMenu(albumName);
+    await expect(this.galleryPage.albumCard.contextEditTags).toBeEnabled();
+    await this.galleryPage.albumCard.contextEditTags.click();
+    await expect(this.galleryPage.albumCard.contextMenu).toBeHidden();
   }
 
   albumCoverByName(albumName) {

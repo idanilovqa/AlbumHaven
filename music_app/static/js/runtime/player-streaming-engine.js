@@ -1295,6 +1295,21 @@ function handleStreamingWorkletMessage(message) {
     if (roleState.role === 'current') maybeSchedulePendingStreamingContinuity();
     return;
   }
+  if (message.type === 'buffering-start') {
+    if (roleState.role !== 'current' || engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = true;
+    engine.mode = 'buffering';
+    grantStreamingCredit(roleState, STREAMING_MAX_CREDIT_FRAMES);
+    publishStreamingDiagnostics();
+    return;
+  }
+  if (message.type === 'buffering-end') {
+    if (roleState.role !== 'current' || !engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = false;
+    if (!engine.snapshot.paused && engine.mode !== 'error') engine.mode = 'playing';
+    publishStreamingDiagnostics();
+    return;
+  }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
     if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
@@ -1644,6 +1659,7 @@ async function startStreamingTrack(track, {
   engine.waveformReadyIdentity = null;
   engine.mode = 'starting';
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
@@ -2039,6 +2055,7 @@ async function cleanupStreamingResources(reason, {
     delete engine.diagnostics.lastError;
   }
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };

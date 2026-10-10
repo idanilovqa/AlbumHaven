@@ -3338,6 +3338,37 @@ test('fragmented current PCM waits for the transport low-water mark before refil
   );
 });
 
+test('one buffering episode requests one coarse refill and preserves play intent', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  harness.engine.diagnostics.bufferedFrames.current = 0;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  const creditCount = harness.sent('credit').length;
+  const event = {
+    type: 'buffering-start',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    timelineFrame: 12_000,
+  };
+
+  harness.nodes[0].port.dispatch(event);
+  harness.nodes[0].port.dispatch(event);
+
+  assert.equal(harness.sent('credit').length, creditCount + 1);
+  assert.equal(harness.sent('credit').at(-1).frames, 48_000);
+  assert.equal(harness.engine.mode, 'buffering');
+  assert.equal(harness.engine.snapshot.paused, false);
+  assert.equal(harness.engine.diagnostics.buffering, true);
+
+  harness.nodes[0].port.dispatch({ ...event, type: 'buffering-end' });
+
+  assert.equal(harness.engine.mode, 'playing');
+  assert.equal(harness.engine.snapshot.paused, false);
+  assert.equal(harness.engine.diagnostics.buffering, false);
+});
+
 test('a new current generation starts its cached waveform probe before playback readiness', async () => {
   const probes = [];
   const harness = createEngineHarness({

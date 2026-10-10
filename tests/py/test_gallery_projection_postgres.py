@@ -51,8 +51,8 @@ def test_gallery_extraction_preserves_073f75b_golden_order_and_cursor():
     assert snapshot["occurrence_count"] == 8
     page = browse._select_root_gallery_snapshot_page(snapshot, {"gallery_page_size": "2"})
     assert page[3] == {
-        "next_cursor": "WzEsICI3Yzg5NTVjMzNlNzI3ZTJhODdiZTE1MmRlOTFkZWVmMDdkMDJiY2MzMGZhYzQxNWFmMzI3ZjFmMTlkMzAwYTg2IiwgMl0",
-        "has_more": True, "revision": "7c8955c33e727e2a87be152de91deef07d02bcc30fac415af327f1f19d300a86", "page_size": 2,
+        "next_cursor": "WzEsICJmYWQ4YWU0ZTQzNDNiNDFiY2E3ZTI2ZTQzOTBlNmVjNGE0Y2QwYzM1ODUzYzY1Y2NkOGU0ZjI1ODExNDhmNGVhIiwgMl0",
+        "has_more": True, "revision": "fad8ae4e4343b41bca7e26e4390e6ec4a4cd0c35853c65ccd8e4f2581148f4ea", "page_size": 2,
     }
     continuation = browse._select_root_gallery_snapshot_page(snapshot, {
         "gallery_page_size": "2", "gallery_cursor": page[3]["next_cursor"]})
@@ -102,13 +102,18 @@ def test_prepared_snapshot_keeps_legacy_cursor_hash_for_presentation_changes():
     assert second[0][0]["album_key"] == "1"
 
 
-def test_projection_scope_preserves_category_order_but_ignores_presentation():
-    from music_app.services.gallery_projection_postgres import gallery_projection_scope_key
+def test_projection_scope_canonicalizes_category_order_and_namespaces_builder(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection
     first = {"gallery_scope": "all", "visible_library_categories": ["hoard", "main_library"]}
     changed = {**first, "gallery_display_mode": "rows", "gallery_scale_percent": 75}
-    reversed_categories = {**first, "visible_library_categories": ["main_library", "hoard"]}
-    assert gallery_projection_scope_key(first) == gallery_projection_scope_key(changed)
-    assert gallery_projection_scope_key(first) != gallery_projection_scope_key(reversed_categories)
+    reordered_categories = {**first, "visible_library_categories": ["main_library", "hoard"]}
+    repeated_categories = {**first, "visible_library_categories": ["hoard", "main_library", "hoard"]}
+    scope_key = projection.gallery_projection_scope_key(first)
+    assert scope_key == projection.gallery_projection_scope_key(changed)
+    assert scope_key == projection.gallery_projection_scope_key(reordered_categories)
+    assert scope_key == projection.gallery_projection_scope_key(repeated_categories)
+    monkeypatch.setattr(projection, "BUILDER_VERSION", "root-gallery-v3")
+    assert scope_key != projection.gallery_projection_scope_key(first)
 
 
 def test_projection_occurrences_exclude_mutable_missing_details_and_private_paths():
@@ -258,6 +263,7 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
             if "source_generation = %(generation)s" in sql:
                 return Cursor([])
             if "order by source_generation desc" in sql:
+                assert params["builder_version"] == "root-gallery-v2"
                 return Cursor([header])
             if "gallery_projection_occurrences" in sql:
                 return Cursor([{"payload": membership("Artist", "album-1")}])
@@ -366,6 +372,9 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
         for row in snapshot["ordered"]:
             row["missing_album_key"] = row["album_key"]
             row["album_id"] = None
+    else:
+        for row in snapshot["ordered"]:
+            row["album_key"] = f"legacy-{row['album_key']}"
     calls = []
     class Connection:
         def execute(self, sql, params=None):

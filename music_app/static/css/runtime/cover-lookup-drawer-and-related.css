@@ -61,6 +61,10 @@
   z-index: 135;
   width: min(370px, calc(100vw - 18px));
   height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 0;
   background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 96%, transparent);
   border-left: 1px solid var(--appearance-line, var(--border));
@@ -81,6 +85,7 @@
   pointer-events: auto;
 }
 .cover-lookup-drawer-header {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -114,9 +119,12 @@
 .cover-lookup-drawer-body {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 10px;
-  max-height: calc(100vh - 88px);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .cover-lookup-drawer-empty {
   padding: 14px;
@@ -234,9 +242,10 @@
   gap: 4px;
   overflow: hidden;
   padding: 0;
-  border-color: transparent;
+  min-height: 66px;
+  border-color: var(--appearance-line, var(--border));
   border-radius: 9px;
-  background: transparent;
+  background: var(--appearance-card, color-mix(in srgb, var(--appearance-ink, var(--text)) 3%, var(--appearance-panel-background, var(--panel))));
 }
 .cover-lookup-task-card:hover,
 .cover-lookup-task-card:focus-within {

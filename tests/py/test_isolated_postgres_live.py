@@ -5209,10 +5209,14 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
                   and library.local_album_featured_artists.featured_kind = 'featured_track_artist'
                 """
             ).fetchone()
-        browse_payload = PostgresLibraryBrowseRepository(
+        browse_repository = PostgresLibraryBrowseRepository(
             config,
             connect=isolatedPostgres._connect,
-        ).build_root_sidebar_payload()
+        )
+        browse_payload = browse_repository.build_root_sidebar_payload()
+        search_payload = browse_repository.build_search_payload(
+            query_params={"q": "Multi Disc Album", "surface": "albums"}
+        )
         guest_group = next(
             group
             for group in browse_payload["artist_groups"]
@@ -5223,6 +5227,11 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
         assert int(guest_membership["membership_count"]) == 1
         assert any(
             item["name"] == "Multi Disc Album" for item in guest_group["albums"]
+        )
+        assert any(
+            item["name"] == "Multi Disc Album"
+            for group in search_payload["artist_groups"]
+            for item in group["albums"]
         )
 
         isolatedPostgres.reset_application_tables(setup_url)

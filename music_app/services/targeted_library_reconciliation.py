@@ -16,6 +16,9 @@ from music_app.services.metadata import read_metadata_for_file
 from music_app.services.save_tasks import structural_tag_edit_resource_keys
 
 
+_DEFAULT_PUBLICATION_GUARD = object()
+
+
 @dataclass(frozen=True, slots=True)
 class TargetedReconciliationResult:
     revision: int
@@ -73,6 +76,7 @@ class TargetedLibraryReconciler:
         request: object,
         *,
         root_healthy: bool = True,
+        publication_guard: object = _DEFAULT_PUBLICATION_GUARD,
     ) -> TargetedReconciliationResult:
         if self._stop_event.is_set():
             return TargetedReconciliationResult(0, (), "cancelled")
@@ -262,13 +266,22 @@ class TargetedLibraryReconciler:
 
             if self._stop_event.is_set():
                 return TargetedReconciliationResult(0, (), "cancelled")
+            effective_publication_guard = (
+                self._publication_guard
+                if publication_guard is _DEFAULT_PUBLICATION_GUARD
+                else publication_guard
+            )
             persisted = self._repository.persist_targeted_inventory_mutation(
                 root_id=root_id,
                 active_file_entries=active_entries,
                 deleted_paths=tuple(dict.fromkeys(str(path) for path in deleted_paths)),
                 deleted_subtrees=tuple(dict.fromkeys(str(path) for path in deleted_subtrees)),
                 moves=tuple(normalized_moves),
-                **({"publication_guard": self._publication_guard} if self._publication_guard is not None else {}),
+                **(
+                    {"publication_guard": effective_publication_guard}
+                    if effective_publication_guard is not None
+                    else {}
+                ),
             )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),

@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
+const { validatePerformanceChangeImpact } = require('./performance-change-impact.cjs');
 
 const EXPECTED_TARGET_COUNT = 22;
 const EXPECTED_CASE_COUNT = 30;
@@ -251,6 +252,7 @@ function loadInputs(repoRoot) {
     contract: JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'ci', 'performance-targets.json'), 'utf8')),
     testDataMatrix: JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'), 'utf8')),
     runnerModule: require(path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs')),
+    changeImpact: JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'ci', 'performance-change-impact.json'), 'utf8')),
   };
 }
 
@@ -272,6 +274,10 @@ if (require.main === module) {
     const repoRoot = path.resolve(__dirname, '..', '..');
     const inputs = loadInputs(repoRoot);
     const errors = validateWorkflowContract(inputs.workflow, inputs.contract, inputs.runnerModule, inputs.testDataMatrix);
+    errors.push(...validatePerformanceChangeImpact(
+      inputs.changeImpact,
+      inputs.contract.targets.map(({ name }) => name),
+    ));
     if (process.argv.includes('--list')) errors.push(...validateDiscoveredCases(inputs.contract, discoverPerformanceCases(inputs.contract, { repoRoot })));
     if (errors.length > 0) {
       for (const error of errors) process.stderr.write(`${error}\n`);

@@ -3290,6 +3290,65 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
     assert worker_calls[1] is asgi_read_routes._repair_album_detail_cover_identity
 
 
+def test_asgi_album_details_unknown_query_parameter_never_falls_back_to_full_hydration(
+    asgi_app,
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    postgres_calls: list[str] = []
+
+    def fail_hydrate(*_args, **_kwargs):
+        raise AssertionError(
+            "Unknown album-detail parameters must not select full file-backed hydration"
+        )
+
+    def fail_file_backed_detail(*_args, **_kwargs):
+        raise AssertionError(
+            "Unknown album-detail parameters must not select the file-backed detail builder"
+        )
+
+    class FakeRepository:
+        def __init__(self, config):
+            assert config is app.config
+
+        def build_album_detail_payload(self, album_key, *, client_surface_class=None):
+            postgres_calls.append(album_key)
+            return {"key": album_key, "source": "postgres_repo"}
+
+    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
+    monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fail_file_backed_detail)
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakeRepository)
+    monkeypatch.setattr(asgi_read_routes, "_repair_album_detail_cover_identity", lambda *_args: None)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type(
+            "Selection",
+            (),
+            {"seam_id": seam_id, "effective_backend": "postgres"},
+        )(),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/album-details",
+        query={"album_key": "artist::album", "cache_buster": "revision-2"},
+    )
+
+    assert status in {200, 400, 422}
+    if status == 200:
+        assert _decode_json(body) == {
+            "ok": True,
+            "album": {"key": "artist::album", "source": "postgres_repo"},
+        }
+        assert postgres_calls == ["artist::album"]
+    else:
+        assert postgres_calls == []
+
+
 def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(
     asgi_app,
     app,

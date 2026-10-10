@@ -8579,6 +8579,21 @@ function handleStreamingWorkletMessage(message) {
     if (roleState.role === 'current') maybeSchedulePendingStreamingContinuity();
     return;
   }
+  if (message.type === 'buffering-start') {
+    if (roleState.role !== 'current' || engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = true;
+    engine.mode = 'buffering';
+    grantStreamingCredit(roleState, STREAMING_MAX_CREDIT_FRAMES);
+    publishStreamingDiagnostics();
+    return;
+  }
+  if (message.type === 'buffering-end') {
+    if (roleState.role !== 'current' || !engine.diagnostics.buffering) return;
+    engine.diagnostics.buffering = false;
+    if (!engine.snapshot.paused && engine.mode !== 'error') engine.mode = 'playing';
+    publishStreamingDiagnostics();
+    return;
+  }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
     if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
@@ -8928,6 +8943,7 @@ async function startStreamingTrack(track, {
   engine.waveformReadyIdentity = null;
   engine.mode = 'starting';
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
@@ -9323,6 +9339,7 @@ async function cleanupStreamingResources(reason, {
     delete engine.diagnostics.lastError;
   }
   engine.diagnostics.firstFrameAtMs = 0;
+  engine.diagnostics.buffering = false;
   resetStreamingPcmEvidence(null, { clearAll: true });
   engine.diagnostics.bufferedFrames = { current: 0, continuity: 0 };
   engine.diagnostics.inFlightFrames = { current: 0, continuity: 0 };
@@ -14758,10 +14775,12 @@ async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
   const scroll = document.getElementById('albums-scroll');
+  const prefetchViewportCount = 4;
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2 * scroll.clientHeight) return false;
+    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+      > prefetchViewportCount * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
     viewRevision: readViewStateRevision(),
@@ -14777,6 +14796,10 @@ async function loadNextRootGalleryPage() {
     && buildRootGalleryPageUrl(state.view) === request.url
     && state.view.gallery_page.next_cursor === request.cursor
     && state.view.gallery_page.revision === request.revision;
+  const ownsRootBrowseIdentity = () => rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && isPagedRootGallery()
+    && buildRootGalleryPageUrl(state.view) === request.url;
   const url = new URL(request.url, window.location.href);
   url.searchParams.set('gallery_page_size', '50');
   url.searchParams.set('gallery_cursor', request.cursor);
@@ -14788,7 +14811,7 @@ async function loadNextRootGalleryPage() {
     let restarted = false;
     if (response.status === 409) {
       const conflict = await response.json();
-      if (!ownsResponse() || conflict?.restart_required !== true) return false;
+      if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
       // Catalog changes invalidate the cursor. Replace atomically with one fresh
       // bounded page; keep the old cards visible until that response arrives.
       url.searchParams.delete('gallery_cursor');
@@ -14798,8 +14821,9 @@ async function loadNextRootGalleryPage() {
       });
       restarted = true;
     }
-    const data = await readGalleryResponse(response, ownsResponse);
-    if (!ownsResponse()) return false;
+    const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
+    const data = await readGalleryResponse(response, ownsDataResponse);
+    if (!ownsDataResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
@@ -28492,7 +28516,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
-      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
+      <div class="cover-lookup-task-card ${taskStateClass}">
         <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
           ${coverMarkup}
           <span class="cover-lookup-task-copy">
@@ -29924,10 +29948,10 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
-  const folderLoadButton = document.getElementById('tag-editor-folder-load');
+  const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
   if (folderLoadButton) {
     folderLoadButton.disabled = false;
-    folderLoadButton.removeAttribute('aria-busy');
+    folderLoadButton.removeAttribute?.('aria-busy');
   }
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;

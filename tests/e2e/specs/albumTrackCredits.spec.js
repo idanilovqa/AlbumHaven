@@ -129,7 +129,7 @@ test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a 
   });
 });
 
-test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split', { tag: '@area:album-details' }, async ({
+test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split', { tag: ['@area:album-details', '@area:tag-edit'] }, async ({
   galleryActions,
   page,
   searchToolbarActions,
@@ -139,6 +139,7 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
 }) => {
   let persistenceGate = null;
   let splitMayHaveBeenAccepted = false;
+  let sourceFolderPath = '';
   const expected = {
     destination: {
       credits: [{
@@ -176,6 +177,9 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       expect(await tagEditorActions.readSelectedTrackFilenames()).toEqual([
         FIRST_TRACK_FILENAME,
       ]);
+      const [sourceTrackPath] = await tagEditorActions.readTrackPaths();
+      sourceFolderPath = String(sourceTrackPath || '').replace(/[\\/][^\\/]+$/u, '');
+      expect(sourceFolderPath).not.toBe('');
       await tagEditorActions.setAlbumName(OPTIMISTIC_SPLIT_ALBUM);
       persistenceGate = await holdStructuralSavePersistence();
     });
@@ -196,9 +200,42 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
     });
 
     await stepLogger.step('Retain the same credits after authoritative save completion', async () => {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      await galleryActions.waitForGalleryReady();
-      expect(await readSplitCredits()).toEqual(expected);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await galleryActions.waitForGalleryReady();
+    expect(await readSplitCredits()).toEqual(expected);
+    });
+
+    await stepLogger.step('Load physical folder siblings without losing the selected row or pending edit', async () => {
+      await trackModalActions.closeIfOpen();
+      await searchToolbarActions.search(OPTIMISTIC_SPLIT_ALBUM, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(OPTIMISTIC_SPLIT_ALBUM);
+      await galleryActions.waitForAlbumVisible(OPTIMISTIC_SPLIT_ALBUM);
+
+      await galleryActions.openAlbumContextMenu(OPTIMISTIC_SPLIT_ALBUM);
+      await expect(galleryActions.galleryPage.albumCard.contextEditTags).toBeVisible();
+      await galleryActions.dismissAlbumContextMenu();
+      await galleryActions.openAlbumTagEditorFromContextMenu(OPTIMISTIC_SPLIT_ALBUM);
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+      await expect(tagEditorActions.tagEditor.dialog).toBeVisible();
+      expect(await tagEditorActions.readFolderPath()).toBe(sourceFolderPath);
+      const [artworkBounds, pathBounds] = await Promise.all([
+        tagEditorActions.tagEditor.artworkVisual.boundingBox(),
+        tagEditorActions.tagEditor.folderPath.boundingBox(),
+      ]);
+      expect(artworkBounds).not.toBeNull();
+      expect(pathBounds).not.toBeNull();
+      expect(pathBounds.x).toBeGreaterThanOrEqual(artworkBounds.x + artworkBounds.width);
+      await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('');
+
+      const pendingTitle = 'Pending folder expansion title';
+      await tagEditorActions.setTrackName(pendingTitle);
+      await expect(tagEditorActions.tagEditor.pendingMarkerForTrack(FIRST_TRACK_FILENAME)).toBeVisible();
+      await tagEditorActions.loadAllFilesFromFolder({ expectedTrackCount: TRACK_CREDIT_TRACK_COUNT });
+
+      expect(await tagEditorActions.readSelectedTrackFilenames()).toEqual([FIRST_TRACK_FILENAME]);
+      await expect(tagEditorActions.tagEditor.trackNameInput).toHaveValue(pendingTitle);
+      await expect(tagEditorActions.tagEditor.pendingMarkerForTrack(FIRST_TRACK_FILENAME)).toBeVisible();
+      await tagEditorActions.close();
     });
   } finally {
     if (persistenceGate) {

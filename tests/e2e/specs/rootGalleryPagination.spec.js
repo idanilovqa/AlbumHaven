@@ -3,6 +3,7 @@ import path from 'node:path';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import { expect, test } from '../support/baseFixtures.js';
 import { GalleryRegressions } from '../poms/galleryRegressions.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import { parseProductionBootstrapPayloadScriptSources } from '../poms/basePage.js';
 import { PERFORMANCE_AUTH_USERNAME, PERFORMANCE_AUTH_PASSWORD } from '../support/performanceAuthentication.js';
 
@@ -161,4 +162,118 @@ test(CASE, { tag: '@area:gallery-search' }, async ({ page, galleryActions, testA
   const screenshot = testArtifacts.outputPath('root-gallery-pagination.png');
   await page.screenshot({ path: screenshot });
   testArtifacts.queuePathAttachment('root-gallery-pagination.png', screenshot, 'image/png');
+});
+
+test('FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and advances beyond the first full-page boundary', { tag: '@area:gallery-search' }, async ({ page, galleryActions, testArtifacts }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = new MobileLayoutPage(page);
+  const requests = [];
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (url.pathname === '/view-data' && url.searchParams.has('gallery_cursor')) {
+      requests.push(url.searchParams.get('gallery_cursor'));
+    }
+  });
+
+  await page.goto('/login');
+  await page.getByLabel('Username').fill(PERFORMANCE_AUTH_USERNAME);
+  await page.getByLabel('Password', { exact: true }).fill(PERFORMANCE_AUTH_PASSWORD);
+  const documentResponse = page.waitForResponse(response => response.request().isNavigationRequest()
+    && new URL(response.url()).pathname === '/' && response.ok());
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await documentResponse;
+  await mobile.libraryButton.click();
+  await expect(mobile.artistRail).toHaveAttribute('aria-hidden', 'false');
+  await mobile.allArtists.click();
+  await expect(mobile.home).toBeHidden();
+  await galleryActions.waitForGalleryReady();
+  await galleryActions.waitForInitialRefreshCompleted();
+
+  const readLoaded = () => page.evaluate(() => ({
+    count: state.view.artist_groups.reduce((total, group) => total + group.albums.length, 0),
+    groups: state.view.artist_groups.map(group => ({
+      artist: group.artist,
+      keys: group.albums.map(album => album.key),
+    })),
+    page: { ...state.view.gallery_page },
+  }));
+  const scrollIncrementallyUntilRequest = async (cursor, maximumSteps = 80) => {
+    const samples = [];
+    for (let step = 0; step < maximumSteps && !requests.includes(cursor); step += 1) {
+      const before = await galleryActions.readGalleryScrollState();
+      await galleryActions.scrollGalleryBy(Math.max(160, Math.floor(before.clientHeight * 0.7)));
+      await page.waitForTimeout(25);
+      const after = await galleryActions.readGalleryScrollState();
+      samples.push({ before, after });
+    }
+    expect(requests, `Expected native mobile scrolling to request cursor ${cursor}.`).toContain(cursor);
+    return samples;
+  };
+
+  const firstFullPage = await readLoaded();
+  expect(firstFullPage.count).toBe(50);
+  const reportedBoundaryArtist = firstFullPage.groups.at(-1).artist;
+  const oldExtent = await galleryActions.readGalleryScrollState();
+  const secondCursor = firstFullPage.page.next_cursor;
+  expect(secondCursor).toBeTruthy();
+  const secondResponsePromise = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/view-data' && url.searchParams.get('gallery_cursor') === secondCursor;
+  });
+  const approachSamples = await scrollIncrementallyUntilRequest(secondCursor);
+  expect(approachSamples.length).toBeGreaterThan(0);
+  // The request event and a local response can both settle inside one browser turn.
+  // Derive the old-extent boundary from the geometry immediately before the
+  // triggering fixed-size native wheel so a fast response cannot inflate it.
+  const requestBoundary = approachSamples.at(-1).before;
+  const triggeringDelta = Math.max(160, Math.floor(requestBoundary.clientHeight * 0.7));
+  const remainingAtRequest = Math.max(
+    0,
+    requestBoundary.maxScrollTop - requestBoundary.scrollTop - triggeringDelta,
+  );
+  expect(
+    remainingAtRequest,
+    `Mobile continuation after ${reportedBoundaryArtist} must begin with at least three viewports of travel remaining.`,
+  ).toBeGreaterThanOrEqual(requestBoundary.clientHeight * 3);
+
+  let stationaryOldMaximum = false;
+  for (let step = 0; step < 24; step += 1) {
+    const before = await galleryActions.readGalleryScrollState();
+    if (before.maxScrollTop > oldExtent.maxScrollTop + 2) break;
+    await galleryActions.scrollGalleryBy(Math.max(160, Math.floor(before.clientHeight * 0.7)));
+    await page.waitForTimeout(25);
+    const after = await galleryActions.readGalleryScrollState();
+    stationaryOldMaximum ||= before.scrollTop >= before.maxScrollTop - 2
+      && after.scrollTop === before.scrollTop
+      && after.maxScrollTop === before.maxScrollTop;
+  }
+  const secondResponse = await secondResponsePromise;
+  expect(secondResponse.status()).toBe(200);
+  const secondPage = await secondResponse.json();
+  await expect.poll(async () => (await readLoaded()).count).toBeGreaterThan(50);
+  expect(stationaryOldMaximum, `Mobile scrolling stopped at the old ${reportedBoundaryArtist} extent.`).toBe(false);
+
+  let finalScroll = await galleryActions.readGalleryScrollState();
+  for (let step = 0; step < 24 && finalScroll.scrollTop <= oldExtent.maxScrollTop + 2; step += 1) {
+    await galleryActions.scrollGalleryBy(Math.max(160, Math.floor(finalScroll.clientHeight * 0.7)));
+    await page.waitForTimeout(25);
+    finalScroll = await galleryActions.readGalleryScrollState();
+  }
+  expect(finalScroll.maxScrollTop).toBeGreaterThan(oldExtent.maxScrollTop);
+  expect(finalScroll.scrollTop, `Expected native scrolling to advance beyond ${reportedBoundaryArtist}.`)
+    .toBeGreaterThan(oldExtent.maxScrollTop + 2);
+  const appendedKeys = new Set(occurrences(secondPage).map(item => item.split('\u0000')[1]));
+  // parity-check: allow-read-only-measurement-evaluate -- prove newly appended production cards reached the mobile viewport
+  const mountedKeys = await page.locator('.album-card[data-gallery-card-key]')
+    .evaluateAll(cards => cards.map(card => card.getAttribute('data-gallery-card-key')));
+  expect(mountedKeys.some(key => appendedKeys.has(key))).toBe(true);
+
+  testArtifacts.queueJsonAttachment('root-gallery-pagination-mobile.json', {
+    reportedBoundaryArtist,
+    remainingAtRequest,
+    requestBoundary,
+    oldExtent,
+    finalScroll,
+    requests,
+  });
 });

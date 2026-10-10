@@ -1316,7 +1316,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
-      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
+      <div class="cover-lookup-task-card ${taskStateClass}">
         <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
           ${coverMarkup}
           <span class="cover-lookup-task-copy">

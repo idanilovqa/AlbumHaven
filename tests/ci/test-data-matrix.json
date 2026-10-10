@@ -16,6 +16,28 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+    "case": "FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and advances beyond the first full-page boundary",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "early-mobile-native-page-prefetch",
+      "single-continuation-request-owner",
+      "no-stationary-first-page-boundary",
+      "mobile-mounted-card-continuation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/startupProgress.spec.js",
@@ -433,7 +455,11 @@
       "media-copy:mixed-credits-split"
     ],
     "expectedContracts": [
-      "mixed-credit-preservation"
+      "mixed-credit-preservation",
+      "tag-editor-full-folder-path",
+      "tag-editor-icon-only-folder-expansion",
+      "tag-editor-folder-expansion-preserves-selection-and-pending-edit",
+      "album-card-context-menu-outside-dismissal-and-edit-tags"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:mixed-credit-split",
@@ -1090,7 +1116,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
+    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3343,6 +3369,40 @@
       "selectable-copyable-task-text",
       "no-card-activation",
       "polling-preserves-pending-selection-anchor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupTaskCard.spec.js",
+    "case": "cover lookup drawer keeps full cards in a bounded scrolling lane on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-notification-scroll",
+      "full-card-layout",
+      "mobile-player-clearance"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupTaskCard.spec.js",
+    "case": "cover lookup drawer keeps full cards in a bounded scrolling lane on desktop",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-notification-scroll",
+      "full-card-layout",
+      "desktop-drawer-clearance"
     ],
     "ownerApproval": "approved"
   },
@@ -8221,6 +8281,52 @@
       "databaseIdentity": "case:ftc-covers-027",
       "filesystemCopy": "media/cases/ftc-covers-027"
     },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
+    "case": "FTC-ALBUM-DETAILS-024 desktop identifies cold album B before its details settle without restoring album A",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "album:mixed-credit-fixture",
+      "album:ordinary-numeric-disc-control"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "requested-album-loading-identity",
+      "stale-album-details-never-visible",
+      "desktop-album-details-transition"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
+    "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "album:mixed-credit-fixture",
+      "album:ordinary-numeric-disc-control"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "requested-album-loading-identity",
+      "stale-album-details-never-visible",
+      "mobile-album-details-transition"
+    ],
     "ownerApproval": "approved"
   }
 ]

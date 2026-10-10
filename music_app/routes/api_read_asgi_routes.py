@@ -65,6 +65,10 @@ from config import PERSISTENCE_BACKEND_POSTGRES
 
 router = APIRouter()
 
+_ALBUM_DETAIL_QUERY_PARAMS = frozenset(
+    {"album_key", "client_surface", "client_surface_class"}
+)
+
 
 def _repair_album_detail_cover_identity(
     config: Mapping[str, object],
@@ -949,6 +953,20 @@ async def home_data(request: Request) -> JSONResponse:
 
 @router.get("/album-details")
 async def album_details(request: Request) -> JSONResponse:
+    unsupported_params = sorted(
+        str(key)
+        for key in request.query_params.keys()
+        if str(key) not in _ALBUM_DETAIL_QUERY_PARAMS
+    )
+    if unsupported_params:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Unsupported album-details query parameter",
+                "unsupported_parameters": unsupported_params,
+            },
+            status_code=400,
+        )
     album_key = str(request.query_params.get("album_key") or "").strip()
     if not album_key:
         return JSONResponse({"ok": False, "error": "Missing album_key"}, status_code=400)
@@ -1007,12 +1025,10 @@ def _should_use_postgres_album_detail_path(
     selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
     if selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES:
         return False
-    allowed_detail_params = {
-        "album_key",
-        "client_surface",
-        "client_surface_class",
-    }
-    if any(str(key) not in allowed_detail_params for key in request.query_params.keys()):
+    if any(
+        str(key) not in _ALBUM_DETAIL_QUERY_PARAMS
+        for key in request.query_params.keys()
+    ):
         return False
     album_key = str(request.query_params.get("album_key") or "").strip()
     if not album_key or album_key.startswith("non-album::"):

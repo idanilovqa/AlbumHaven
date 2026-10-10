@@ -2123,6 +2123,7 @@ test('gallery readiness uses hydration state instead of a fixed virtualized-card
   assert.match(readiness, /startupProgressSelector: this\.galleryPage\.startupProgressSelector/);
   assert.match(gallery, /visibleCards\.length >= selectors\.minimumCards/);
   assert.match(gallery, /bounds\.width > 0 && bounds\.height > 0/);
+  assert.doesNotMatch(readiness, /albumCards\.first\(\)/);
   assert.doesNotMatch(gallery, /minimumCards \?\? 10/);
 });
 
@@ -2508,11 +2509,11 @@ test('terminal tag-save contracts keep one pending POST authoritative without st
 
   assert.match(
     actions,
-    /applyAndWaitForTerminalSavedResponse[\s\S]*?timeout = options\.timeout \|\| 35000[\s\S]*?Writing tag changes\.\.\.[\s\S]*?expect\(postSettled\)\.toBe\(false\)[\s\S]*?whilePostInFlight[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?Tag changes saved\.[\s\S]*?expect\(saveTaskPollCount\)\.toBe\(0\)/,
+    /applyAndWaitForTerminalSavedResponse[\s\S]*?timeout = options\.timeout \|\| 35000[\s\S]*?TAG_EDIT_RUNNING_MESSAGE[\s\S]*?expect\(postSettled\)\.toBe\(false\)[\s\S]*?whilePostInFlight[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?TAG_EDIT_SAVED_MESSAGE[\s\S]*?expect\(saveTaskPollCount\)\.toBe\(0\)/,
   );
   assert.match(
     actions,
-    /terminalAlertDismissalTimeout[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?Tag changes saved\.[\s\S]*?terminalAlertDismissalTimeout/,
+    /terminalAlertDismissalTimeout[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?TAG_EDIT_SAVED_MESSAGE[\s\S]*?terminalAlertDismissalTimeout/,
   );
   assert.doesNotMatch(actions, /applyAndWaitForProductionPollWindowExhaustion/);
   assert.match(
@@ -2532,7 +2533,7 @@ test('terminal tag-save contracts keep one pending POST authoritative without st
   const optimisticMethod = actions.slice(optimisticMethodStart);
   assert.ok(optimisticMethodStart >= 0);
   assert.match(optimisticMethod, /save_task_status\)\.toBe\('completed'\)/);
-  assert.match(optimisticMethod, /Tag changes saved\./);
+  assert.match(optimisticMethod, /TAG_EDIT_SAVED_MESSAGE/);
   assert.doesNotMatch(optimisticMethod, /saveTaskStatuses|\/utilities\/save-task\/|production poller/);
   assert.doesNotMatch(optimisticMethod, /Library view updated from saved files\./);
 });
@@ -2564,7 +2565,7 @@ test('FTC-TAGS-020 completion observation uses the authoritative edit POST witho
   assert.match(method, /save_task_status\)\.toBe\('completed'\)/);
   assert.match(
     method,
-    /const terminalSavedAlert = this\.tagEditor\.repairAlertMessage;[\s\S]*?waitForCompletion:\s*async\s*\([^)]*\)\s*=>\s*\{[\s\S]*?await expect\(terminalSavedAlert\)\.toHaveText\(\s*'Tag changes saved\.'[\s\S]*?return payload;/,
+    /const terminalSavedAlert = this\.tagEditor\.repairAlertMessage;[\s\S]*?waitForCompletion:\s*async\s*\([^)]*\)\s*=>\s*\{[\s\S]*?await expect\(terminalSavedAlert\)\.toHaveText\(\s*TAG_EDIT_SAVED_MESSAGE[\s\S]*?return payload;/,
     'completion must await the captured exact saved alert before returning the authoritative terminal POST payload',
   );
   assert.doesNotMatch(method, /saveTaskStatuses/);
@@ -3045,7 +3046,7 @@ test('terminal tag-edit failure waits for the failure notification before readin
   ).href;
   const { TagEditorActions } = await import(moduleUrl);
   const events = [];
-  let alertText = 'Writing tag changes...';
+  let alertText = 'Updating 1 track in “Fixture Album”.';
   const passingLocator = {
     _apiName: 'Locator',
     async _expect() {

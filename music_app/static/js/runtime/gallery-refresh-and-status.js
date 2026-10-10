@@ -47,10 +47,12 @@ async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
   const scroll = document.getElementById('albums-scroll');
+  const prefetchViewportCount = 4;
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2 * scroll.clientHeight) return false;
+    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+      > prefetchViewportCount * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
     viewRevision: readViewStateRevision(),
@@ -66,6 +68,10 @@ async function loadNextRootGalleryPage() {
     && buildRootGalleryPageUrl(state.view) === request.url
     && state.view.gallery_page.next_cursor === request.cursor
     && state.view.gallery_page.revision === request.revision;
+  const ownsRootBrowseIdentity = () => rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && isPagedRootGallery()
+    && buildRootGalleryPageUrl(state.view) === request.url;
   const url = new URL(request.url, window.location.href);
   url.searchParams.set('gallery_page_size', '50');
   url.searchParams.set('gallery_cursor', request.cursor);
@@ -77,7 +83,7 @@ async function loadNextRootGalleryPage() {
     let restarted = false;
     if (response.status === 409) {
       const conflict = await response.json();
-      if (!ownsResponse() || conflict?.restart_required !== true) return false;
+      if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
       // Catalog changes invalidate the cursor. Replace atomically with one fresh
       // bounded page; keep the old cards visible until that response arrives.
       url.searchParams.delete('gallery_cursor');
@@ -87,8 +93,9 @@ async function loadNextRootGalleryPage() {
       });
       restarted = true;
     }
-    const data = await readGalleryResponse(response, ownsResponse);
-    if (!ownsResponse()) return false;
+    const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
+    const data = await readGalleryResponse(response, ownsDataResponse);
+    if (!ownsDataResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor

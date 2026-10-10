@@ -30,6 +30,44 @@ export async function collectJsonResponsesDuringAction(page, matchesResponse, ac
   return Promise.all(responseJsonPromises);
 }
 
+export async function collectResponseTrafficDuringAction(page, matchesResource, action) {
+  const requests = [];
+  const responseBodyPromises = [];
+  const collectRequest = (request) => {
+    if (matchesResource(request)) requests.push(request.url());
+  };
+  const collectResponse = (response) => {
+    if (!matchesResource(response)) return;
+    responseBodyPromises.push((async () => ({
+      bodyBytes: (await response.body()).byteLength,
+      status: response.status(),
+      url: response.url(),
+    }))());
+  };
+
+  page.on('request', collectRequest);
+  page.on('response', collectResponse);
+  let result;
+  let actionError = null;
+  try {
+    result = await action();
+  } catch (error) {
+    actionError = error;
+  } finally {
+    page.off('request', collectRequest);
+    page.off('response', collectResponse);
+  }
+  if (actionError) {
+    await Promise.allSettled(responseBodyPromises);
+    throw actionError;
+  }
+  return {
+    requests,
+    responses: await Promise.all(responseBodyPromises),
+    result,
+  };
+}
+
 export function isRootAlbumsViewDataResponse(response) {
   const url = new URL(response.url());
   return url.pathname === '/view-data'

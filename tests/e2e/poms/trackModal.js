@@ -95,6 +95,48 @@ export class TrackModal extends BasePage {
     });
   }
 
+  async startVisibleContentObservation() {
+    const observation = await this.dialog.evaluateHandle((dialog) => {
+      const samples = [];
+      const inspect = (phase) => {
+        if (dialog.hidden || getComputedStyle(dialog).display === 'none') return;
+        samples.push({
+          phase,
+          title: String(dialog.querySelector('#track-modal-title')?.textContent || '').trim(),
+          subtitle: String(dialog.querySelector('#track-modal-subtitle')?.textContent || '').trim(),
+          loading: Boolean(dialog.querySelector('.track-modal-loading-row')),
+          tracks: Array.from(
+            dialog.querySelectorAll('[data-track-row-path] .album-track-table__title'),
+            (node) => String(node.textContent || '').trim(),
+          ).filter(Boolean),
+        });
+      };
+      const observer = new MutationObserver(() => inspect('mutation'));
+      observer.observe(dialog, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      return {
+        finish() {
+          if (observer.takeRecords().length) inspect('pending-mutation');
+          inspect('final');
+          observer.disconnect();
+          return samples;
+        },
+      };
+    });
+    let finished = false;
+    return {
+      async finish() {
+        if (finished) return [];
+        finished = true;
+        return observation.evaluate((ownedObservation) => ownedObservation.finish());
+      },
+    };
+  }
+
   get subtitleSelector() {
     return '#track-modal-subtitle';
   }

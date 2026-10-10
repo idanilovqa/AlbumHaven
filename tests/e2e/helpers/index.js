@@ -39,6 +39,7 @@ export {
 } from './syntheticPerformanceBenchmark.js';
 export {
   collectJsonResponsesDuringAction,
+  collectResponseTrafficDuringAction,
   expectAtLeastOnePostgresLibraryBrowseTelemetryPayload,
   expectPostgresLibraryBrowseTelemetry,
   formatMegabytes,

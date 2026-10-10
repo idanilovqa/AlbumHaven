@@ -1,6 +1,7 @@
 import { expect, test } from '../support/performanceFixtures.js';
 
 import {
+  collectResponseTrafficDuringAction,
   expectPostgresLibraryBrowseTelemetry,
   expectTimingBudget,
   measureActionTime,
@@ -21,6 +22,9 @@ const SELECTED_ARTIST_BUDGET = Object.freeze(
 const ALBUM_DETAILS_BUDGET = Object.freeze(
   performanceTimingBudget('selected-artist.albumDetailsOpenMs'),
 );
+const ALBUM_DETAILS_CLOSE_BUDGET = Object.freeze(
+  performanceTimingBudget('all-artists-local-managed-chrome.albumDetailsCloseMs'),
+);
 const INTERACTION_BUDGETS = Object.freeze(Object.fromEntries([
   'tagEditorFocusMs',
   'tagEditorTypingMs',
@@ -30,6 +34,11 @@ const INTERACTION_BUDGETS = Object.freeze(Object.fromEntries([
   'galleryReturnMs',
 ].map((key) => [key, Object.freeze(performanceTimingBudget(`selected-artist.${key}`))])));
 const MAX_INTERACTION_LONG_TASK_MS = 200;
+const MAX_MOUNTED_SIDEBAR_ARTISTS = 160;
+const MAX_TOTAL_DOM_NODES = 8000;
+const MAX_SELECTED_ARTIST_VIEW_DATA_RESPONSES = 1;
+const MAX_SELECTED_ARTIST_VIEW_DATA_BYTES = 2 * 1024 * 1024;
+const TAG_TYPING_PROBE = 'perf';
 
 test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
 
@@ -50,22 +59,51 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       await waitForPostgresBrowseWarmRoot(page, galleryActions, navigationPanelActions);
     });
 
+    const domMountMetrics = await stepLogger.step('Assert the hydrated large library keeps sidebar and document mounts bounded', async () => {
+      const metrics = await page.evaluate((selectors) => {
+        const sidebarList = document.querySelector(selectors.sidebarListSelector);
+        return {
+          logicalSidebarArtists: Array.isArray(state?.view?.artists_sidebar)
+            ? state.view.artists_sidebar.length
+            : 0,
+          mountedSidebarArtists: document.querySelectorAll(selectors.sidebarArtistSelector).length,
+          sidebarVirtualized: sidebarList?.dataset?.sidebarVirtualized === 'true',
+          totalDomNodes: document.querySelectorAll('*').length,
+        };
+      }, {
+        sidebarArtistSelector: navigationPanelActions.navigationPanel.sidebarArtistSelector,
+        sidebarListSelector: '#sidebar-list',
+      });
+      expect(metrics.logicalSidebarArtists).toBeGreaterThan(MAX_MOUNTED_SIDEBAR_ARTISTS);
+      expect(metrics.sidebarVirtualized, 'Expected the synthetic-large artist sidebar to use its virtual window.').toBe(true);
+      expect(metrics.mountedSidebarArtists).toBeGreaterThan(0);
+      expect(metrics.mountedSidebarArtists).toBeLessThanOrEqual(MAX_MOUNTED_SIDEBAR_ARTISTS);
+      expect(metrics.mountedSidebarArtists).toBeLessThan(metrics.logicalSidebarArtists);
+      expect(metrics.totalDomNodes).toBeLessThanOrEqual(MAX_TOTAL_DOM_NODES);
+      return metrics;
+    });
+
     let selectedArtist = '';
-    const selectedArtistApiMs = await stepLogger.step('Select one sidebar artist and wait for the gallery to switch visibly', async () => (
-      measureActionTime(
-        async () => {
-          selectedArtist = await navigationPanelActions.selectSidebarArtistAt(0);
-        },
-        async () => {
-          await navigationPanelActions.waitForSidebarSelection(selectedArtist, { timeout: 120000 });
-          await galleryActions.waitForSelectedArtistGallery(selectedArtist, { timeout: 120000 });
-          await galleryActions.waitForVisibleGalleryCoversLoaded({
-            minimumCount: 1,
-            timeout: 120000,
-          });
-        },
+    const selectedArtistTraffic = await stepLogger.step('Select one sidebar artist and wait for the gallery to switch visibly', async () => (
+      collectResponseTrafficDuringAction(
+        page,
+        (response) => new URL(response.url()).pathname === '/view-data',
+        () => measureActionTime(
+          async () => {
+            selectedArtist = await navigationPanelActions.selectSidebarArtistAt(0);
+          },
+          async () => {
+            await navigationPanelActions.waitForSidebarSelection(selectedArtist, { timeout: 120000 });
+            await galleryActions.waitForSelectedArtistGallery(selectedArtist, { timeout: 120000 });
+            await galleryActions.waitForVisibleGalleryCoversLoaded({
+              minimumCount: 1,
+              timeout: 120000,
+            });
+          },
+        ),
       )
     ));
+    const selectedArtistApiMs = selectedArtistTraffic.result;
 
     const selectedArtistPayload = await readRuntimeView(page);
     let albums = [];
@@ -81,6 +119,21 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       expect(albums.length).toBeGreaterThan(0);
       firstAlbumName = String(albums[0]?.name || '').trim();
       expect(firstAlbumName, 'Expected a visible selected-artist album name to open in the details modal.').not.toBe('');
+    });
+
+    const selectedArtistViewDataBytes = selectedArtistTraffic.responses.reduce(
+      (total, response) => total + response.bodyBytes,
+      0,
+    );
+    await stepLogger.step('Assert selected-artist navigation does not reload full-library view data', async () => {
+      expect(selectedArtistTraffic.requests).toHaveLength(MAX_SELECTED_ARTIST_VIEW_DATA_RESPONSES);
+      expect(selectedArtistTraffic.responses).toHaveLength(MAX_SELECTED_ARTIST_VIEW_DATA_RESPONSES);
+      const [response] = selectedArtistTraffic.responses;
+      const responseUrl = new URL(response.url);
+      expect(response.status).toBe(200);
+      expect(responseUrl.searchParams.get('artist')).toBe(selectedArtist);
+      expect(responseUrl.searchParams.get('omit_sidebar')).toBe('1');
+      expect(selectedArtistViewDataBytes).toBeLessThanOrEqual(MAX_SELECTED_ARTIST_VIEW_DATA_BYTES);
     });
 
     let trackModalSummary = null;
@@ -115,15 +168,33 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
         () => expect(input).toBeFocused(),
       );
       const originalValue = await input.inputValue();
+      await input.evaluate((element) => {
+        window.__albumHavenTagTypingFocusLosses = 0;
+        window.__albumHavenTagTypingFocusAbort = new AbortController();
+        element.addEventListener('focusout', () => {
+          window.__albumHavenTagTypingFocusLosses += 1;
+        }, { signal: window.__albumHavenTagTypingFocusAbort.signal });
+      });
       interactionMetrics.tagEditorTypingMs = await measureInteractionToPaint(
         page,
         async () => {
           await input.press('End');
-          await input.type('x');
-          await input.press('Backspace');
+          await input.pressSequentially(TAG_TYPING_PROBE);
+          for (let index = 0; index < TAG_TYPING_PROBE.length; index += 1) {
+            await input.press('Backspace');
+          }
         },
-        () => expect(input).toHaveValue(originalValue),
+        () => Promise.all([
+          expect(input).toBeFocused(),
+          expect(input).toHaveValue(originalValue),
+        ]),
       );
+      expect(await page.evaluate(() => window.__albumHavenTagTypingFocusLosses)).toBe(0);
+      await page.evaluate(() => {
+        window.__albumHavenTagTypingFocusAbort.abort();
+        delete window.__albumHavenTagTypingFocusAbort;
+        delete window.__albumHavenTagTypingFocusLosses;
+      });
       interactionMetrics.tagEditorCancelMs = await measureInteractionToPaint(
         page,
         () => tagEditorActions.tagEditor.cancelButton.click(),
@@ -131,10 +202,13 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       );
     });
 
-    await stepLogger.step('Close the selected-artist album details modal cleanly', async () => {
-      await trackModalActions.clickClose();
-      await trackModalActions.waitForClosed({ timeout: 60000 });
-    });
+    const albumDetailsClose = await stepLogger.step('Close the selected-artist album details modal cleanly', async () => (
+      measureInteractionToPaint(
+        page,
+        () => trackModalActions.clickClose(),
+        () => trackModalActions.waitForClosed({ timeout: 60000 }),
+      )
+    ));
 
     await stepLogger.step('Measure notification drawer and gallery return paint', async () => {
       interactionMetrics.notificationDrawerOpenMs = await measureInteractionToPaint(
@@ -190,6 +264,12 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
     selectedArtistFocusedLocalReport.setMetricsPayload({
       selectedArtistApiMs,
       albumDetailsOpenMs,
+      albumDetailsCloseMs: albumDetailsClose.durationMs,
+      albumDetailsCloseMaxLongTaskMs: albumDetailsClose.maxLongTaskMs,
+      domMountMetrics,
+      selectedArtistViewDataRequestCount: selectedArtistTraffic.requests.length,
+      selectedArtistViewDataBytes,
+      tagEditorTypingCharacterCount: TAG_TYPING_PROBE.length,
       ...Object.fromEntries(Object.entries(interactionMetrics).map(([key, value]) => [key, value.durationMs])),
       selectedArtist,
       returnedSelectedArtist: selectedArtistPayload.selected_artist,
@@ -223,6 +303,16 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
       ALBUM_DETAILS_BUDGET.metricId,
       'albumDetailsOpenMs',
       expectTimingBudget(expect.soft, albumDetailsOpenMs, ALBUM_DETAILS_BUDGET, 'Selected artist album details readiness'),
+    );
+    expect.soft(
+      albumDetailsClose.maxLongTaskMs,
+      `Closing album details produced a ${albumDetailsClose.maxLongTaskMs} ms browser main-thread task.`,
+    ).toBeLessThanOrEqual(MAX_INTERACTION_LONG_TASK_MS);
+    expectTimingBudget(
+      expect.soft,
+      albumDetailsClose.durationMs,
+      ALBUM_DETAILS_CLOSE_BUDGET,
+      'Selected artist album details close',
     );
     selectedArtistFocusedLocalReport.recordContractCompletion();
   });

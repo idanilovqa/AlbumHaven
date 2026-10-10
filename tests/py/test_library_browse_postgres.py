@@ -13963,6 +13963,55 @@ def test_postgres_library_browse_caches_problematic_files_payload_per_database_u
     assert second_payload is not first_payload
 
 
+def test_postgres_library_browse_settings_prewarm_includes_duplicate_identity_index(monkeypatch):
+    from music_app.services import library_browse_postgres as module
+
+    submissions = []
+
+    class RecordingExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+
+    monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    with module._UTILITY_PROJECTION_CACHE_LOCK:
+        module._UTILITY_PROJECTION_CACHE.clear()
+        module._UTILITY_PROJECTION_PREWARM_INFLIGHT.clear()
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+    })
+
+    repository.queue_settings_projection_prewarm()
+
+    assert [submission[1] for submission in submissions] == [
+        "problematic-files",
+        "rules",
+        "duplicate-identities",
+    ]
+
+
+def test_postgres_library_browse_duplicate_identity_prewarm_builds_compact_index(monkeypatch):
+    from contextlib import nullcontext
+    from music_app.services import library_browse_postgres as module
+
+    connection = object()
+    calls = []
+    repository = module.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+    })
+    monkeypatch.setattr(repository, "_search_connection_context", lambda: nullcontext(connection))
+    monkeypatch.setattr(
+        module,
+        "_load_duplicate_candidate_album_ids",
+        lambda active_connection, album_keys, *, repository: calls.append(
+            (active_connection, album_keys, repository)
+        ) or [],
+    )
+    cache_key = repository._utility_projection_cache_key("duplicate-identities")
+
+    repository._run_utility_projection_prewarm("duplicate-identities", cache_key)
+
+    assert calls == [(connection, [], repository)]
+
 def test_postgres_library_browse_can_disable_background_utility_projection_prewarm(monkeypatch):
     from music_app.services import library_browse_postgres as module
 

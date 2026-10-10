@@ -794,9 +794,9 @@ def refresh_unsuccessful_cover_artwork_for_state(
 
 def _queue_problematic_albums_prewarm_for_state(library_state, config, logger) -> None:
     if library_browse_postgres_is_effective(config):
-        PostgresLibraryBrowseRepository(config).queue_utility_projection_prewarm(
-            "problematic-files"
-        )
+        repository = PostgresLibraryBrowseRepository(config)
+        repository.queue_utility_projection_prewarm("problematic-files")
+        repository.queue_utility_projection_prewarm("duplicate-identities")
         return
     __import__(
         "music_app.services.problematic_albums",

@@ -874,7 +874,7 @@ def test_state_utility_prewarm_routes_to_authoritative_postgres_projections_when
     state_module._queue_utility_rules_prewarm_for_state(library_state, config, logger)
 
     assert repository_configs == [config, config]
-    assert queued_kinds == ["problematic-files", "rules"]
+    assert queued_kinds == ["problematic-files", "duplicate-identities", "rules"]
     assert legacy_calls == []
 
 

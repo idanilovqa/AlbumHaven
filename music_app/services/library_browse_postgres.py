@@ -3079,7 +3079,7 @@ class PostgresLibraryBrowseRepository:
     def queue_settings_projection_prewarm(self) -> None:
         if not self._allow_background_prewarm:
             return
-        for kind in ("problematic-files", "rules"):
+        for kind in ("problematic-files", "rules", "duplicate-identities"):
             self.queue_utility_projection_prewarm(kind)
 
     def queue_utility_projection_prewarm(self, kind: str) -> None:
@@ -3102,6 +3102,9 @@ class PostgresLibraryBrowseRepository:
                 self.build_problematic_files_payload()
             elif kind == "rules":
                 self.build_utility_rules_payload()
+            elif kind == "duplicate-identities":
+                with self._search_connection_context() as connection:
+                    _load_duplicate_candidate_album_ids(connection, [], repository=self)
         finally:
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 _UTILITY_PROJECTION_PREWARM_INFLIGHT.discard(cache_key)

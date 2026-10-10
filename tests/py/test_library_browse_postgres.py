@@ -461,6 +461,104 @@ def test_postgres_browse_payloads_preserve_owned_and_featured_relationships_per_
     assert len({id(group["albums"][0]) for group in groups}) == 3
 
 
+def test_postgres_split_release_suppresses_composite_owner_artist_group():
+    from music_app.services import library_browse_postgres as browse
+
+    base = _browse_album_row(
+        artist="Aarni / Persistence In Mourning",
+        album_id=85,
+        album_key="aarni / persistence in mourning::aarni / persistence in mourning",
+        title="Aarni / Persistence In Mourning",
+    )
+    base["album_metadata"] = {
+        "album_artist": "Aarni / Persistence In Mourning",
+        "artists": ["Aarni", "Persistence In Mourning"],
+    }
+    rows = browse._canonicalize_artist_rows(
+        [{
+            **base,
+            "album_featured_artists": [
+                {
+                    "artist_id": 1,
+                    "artist_name": "Aarni / Persistence In Mourning",
+                    "artist_sort_name": "Aarni / Persistence In Mourning",
+                    "featured_kind": "owner",
+                },
+                {
+                    "artist_id": 2,
+                    "artist_name": "Aarni",
+                    "artist_sort_name": "Aarni",
+                    "featured_kind": "featured_track_artist",
+                },
+                {
+                    "artist_id": 3,
+                    "artist_name": "Persistence In Mourning",
+                    "artist_sort_name": "Persistence In Mourning",
+                    "featured_kind": "featured_track_artist",
+                },
+            ],
+        }],
+        {},
+    )
+
+    groups = browse._root_album_browse_artist_groups(rows)
+
+    assert [group["artist"] for group in groups] == ["Aarni", "Persistence In Mourning"]
+    assert all(group["albums"][0]["artist_relationship"] == "featured" for group in groups)
+    assert all(
+        group["albums"][0]["album_artist"] == "Aarni / Persistence In Mourning"
+        for group in groups
+    )
+
+
+def test_postgres_slash_owner_remains_when_track_artists_do_not_match_credit_members():
+    from music_app.services import library_browse_postgres as browse
+
+    base = _browse_album_row(
+        artist="Project One / Project Two",
+        album_id=86,
+        album_key="project one / project two::shared",
+        title="Shared",
+    )
+    base["album_metadata"] = {
+        "album_artist": "Project One / Project Two",
+        "artists": ["Project One / Project Two"],
+    }
+    rows = browse._canonicalize_artist_rows(
+        [{
+            **base,
+            "album_featured_artists": [
+                {
+                    "artist_id": 1,
+                    "artist_name": "Project One / Project Two",
+                    "artist_sort_name": "Project One / Project Two",
+                    "featured_kind": "owner",
+                },
+                {
+                    "artist_id": 2,
+                    "artist_name": "Guest One",
+                    "artist_sort_name": "Guest One",
+                    "featured_kind": "featured_track_artist",
+                },
+                {
+                    "artist_id": 3,
+                    "artist_name": "Guest Two",
+                    "artist_sort_name": "Guest Two",
+                    "featured_kind": "featured_track_artist",
+                },
+            ],
+        }],
+        {},
+    )
+
+    groups = browse._root_album_browse_artist_groups(rows)
+
+    assert [group["artist"] for group in groups] == [
+        "Guest One",
+        "Guest Two",
+        "Project One / Project Two",
+    ]
+
 def test_postgres_selected_full_and_preview_payloads_use_owned_precedence():
     from music_app.services import library_browse_postgres as browse
 

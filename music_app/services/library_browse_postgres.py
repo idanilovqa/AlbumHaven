@@ -5935,7 +5935,60 @@ def _canonicalize_artist_rows(
                 next_payload["artist_sort_name"] = canonical_name.casefold()
                 next_payload["sort_name"] = canonical_name.casefold()
             canonical_rows.append(next_payload)
-    return canonical_rows
+    return _suppress_split_release_composite_owner_rows(
+        canonical_rows,
+        alias_to_canonical=alias_to_canonical,
+    )
+
+
+def _suppress_split_release_composite_owner_rows(
+    rows: list[object],
+    *,
+    alias_to_canonical: Mapping[str, object],
+) -> list[object]:
+    rows_by_album: dict[tuple[str, object], list[object]] = {}
+    for row in rows:
+        payload = _row_mapping(row)
+        album_id = payload.get("album_id")
+        album_key = str(payload.get("album_key") or "").strip()
+        if album_id is not None:
+            identity = ("id", album_id)
+        elif album_key:
+            identity = ("key", album_key)
+        else:
+            continue
+        rows_by_album.setdefault(identity, []).append(row)
+
+    suppressed_row_ids: set[int] = set()
+    for album_rows in rows_by_album.values():
+        track_artist_keys = {
+            _artist_display_dedupe_key(str(payload.get("artist_name") or ""))
+            for payload in map(_row_mapping, album_rows)
+            if str(payload.get("featured_kind") or "").strip().casefold()
+            == "featured_track_artist"
+            and _artist_display_dedupe_key(str(payload.get("artist_name") or ""))
+        }
+        if len(track_artist_keys) < 2:
+            continue
+        for row in album_rows:
+            payload = _row_mapping(row)
+            if str(payload.get("featured_kind") or "").strip().casefold() != "owner":
+                continue
+            owner_name = str(payload.get("artist_name") or "").strip()
+            owner_members = [
+                _canonical_artist_name(member, alias_to_canonical)
+                for member in re.split(r"\s+/\s+", owner_name)
+                if member.strip()
+            ]
+            owner_member_keys = {
+                _artist_display_dedupe_key(member)
+                for member in owner_members
+                if _artist_display_dedupe_key(member)
+            }
+            if len(owner_members) >= 2 and owner_member_keys == track_artist_keys:
+                suppressed_row_ids.add(id(row))
+
+    return [row for row in rows if id(row) not in suppressed_row_ids]
 
 
 def _row_album_id_set(row_payload: Mapping[str, object]) -> set[object]:

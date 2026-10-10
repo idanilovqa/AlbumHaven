@@ -172,6 +172,24 @@ def validate_public_base_url(value: str) -> str:
     )
 
 
+def build_public_sharing_config(env: Mapping[str, str]) -> dict[str, object]:
+    """Require explicit deployment consent independently of the auth base URL."""
+
+    key = "ALBUM_HAVEN_PUBLIC_SHARING_ENABLED"
+    raw = env.get(key, "false")
+    if type(raw) is not str or raw.strip().lower() not in {"true", "false"}:
+        raise ValueError(f"{key} must be true or false")
+    if raw.strip().lower() == "false":
+        return {"enabled": False, "origin": None}
+    base_key = "ALBUM_HAVEN_PUBLIC_BASE_URL"
+    base = env.get(base_key)
+    if type(base) is not str or not base:
+        raise ValueError(f"{base_key} is required when public sharing is enabled")
+    # Do not strip a mount path (including //) into a root-route exemption.
+    origin = _validated_https_url(base, base_key, origin_only=True)
+    return {"enabled": True, "origin": origin}
+
+
 def _normalize_email(value: str, key: str) -> str:
     if value.count("@") != 1:
         raise ValueError(f"{key} must be a valid email address")

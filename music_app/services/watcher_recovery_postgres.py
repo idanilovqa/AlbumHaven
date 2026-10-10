@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from music_app.services.library_event_coordinator import CoordinatorProblem
 from music_app.services.library_watch import LibraryEvent, LibraryEventKind
+from music_app.services.library_watch_health import LibraryWatchHealthProblem
 
 
 _FAILURE_REASONS = frozenset(
@@ -41,8 +43,14 @@ class AcceptedWatcherGeneration:
     participants: tuple[WatcherParticipantFence, ...]
     coalesced: bool = False
     needs_dispatch: bool = True
-    incident_id: str | None = None
-    warning_token: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MarkedDirtyWatcherGeneration:
+    generation_id: int
+    participants: tuple[WatcherParticipantFence, ...]
+    incident_id: str
+    warning_token: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +67,22 @@ class ClaimedWatcherGeneration:
 class WatcherRollbackResult:
     retained_generation_ids: tuple[int, ...]
     affected_root_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WatcherMetrics:
+    ready: int
+    running: int
+    coalesced: int
+    dirty: int
+    barrier_waiting: int
+    lag_1_9: int
+    lag_10_99: int
+    lag_100_plus: int
+    coalesced_events: int
+    catch_ups: int
+    oldest_ready_seconds: float
+    oldest_repair_seconds: float
 
 
 def _relative_path(path: Path, root: Path) -> str:
@@ -124,6 +148,14 @@ def _aware_utc(value: datetime, name: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise ValueError(f"{name} must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+def _timestamp_text(value: object) -> str:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            raise ValueError("watcher timestamp must be timezone-aware")
+        return value.astimezone(timezone.utc).isoformat()
+    return str(value or "").strip()
 
 
 def _default_connect(database_url: str) -> Any:
@@ -258,7 +290,7 @@ class PostgresWatcherRecoveryRepository:
         logical_root_id: str,
         reason_code: str,
         observed_at: datetime,
-    ) -> AcceptedWatcherGeneration:
+    ) -> MarkedDirtyWatcherGeneration:
         observed_at = _aware_utc(observed_at, "observed_at")
         if reason_code not in {"root_unavailable", "overflow"}:
             raise ValueError("watcher dirty reason is invalid")
@@ -273,13 +305,115 @@ class PostgresWatcherRecoveryRepository:
         if len(generation_ids) != 1:
             raise RuntimeError("watcher dirty request returned ambiguous generations")
         first = rows[0]
-        return AcceptedWatcherGeneration(
+        incident_id = str(first.get("incident_id") or "").strip()
+        warning_token = str(first.get("warning_token") or "").strip()
+        if not incident_id or not warning_token:
+            raise RuntimeError("watcher dirty request returned no incident identity")
+        return MarkedDirtyWatcherGeneration(
             generation_id=generation_ids.pop(),
             participants=_participant_fences(rows),
-            coalesced=True,
-            incident_id=str(first.get("incident_id") or "") or None,
-            warning_token=str(first.get("warning_token") or "") or None,
+            incident_id=incident_id,
+            warning_token=warning_token,
         )
+
+    def record_problem(
+        self,
+        *,
+        library_id: int,
+        problem: CoordinatorProblem,
+        observed_at: datetime,
+    ) -> LibraryWatchHealthProblem:
+        marked = self.mark_dirty(
+            library_id=library_id,
+            logical_root_id=problem.root_id,
+            reason_code=problem.code,
+            observed_at=observed_at,
+        )
+        for current in self.load_status(library_id=library_id):
+            if current.incident_id == marked.incident_id:
+                return current
+        raise RuntimeError("watcher incident was not visible after durable admission")
+
+    def load_status(self, *, library_id: int) -> list[LibraryWatchHealthProblem]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "select * from library.load_watcher_status(%s)",
+                (_positive_id(library_id, "library_id"),),
+            ).fetchall()
+        problems: list[LibraryWatchHealthProblem] = []
+        for row in rows:
+            root_id = str(row.get("logical_root_id") or "").strip()
+            state = str(row.get("state") or "").strip()
+            detected_at = _timestamp_text(row.get("detected_at"))
+            incident_id = str(row.get("incident_id") or "").strip()
+            warning_token = str(row.get("warning_token") or "").strip()
+            occurrence_count = int(row.get("occurrence_count") or 0)
+            if (
+                not root_id
+                or state not in _FAILURE_REASONS | {"rollback_pending_work"}
+                or not detected_at
+                or not incident_id
+                or not warning_token
+                or occurrence_count < 1
+            ):
+                raise RuntimeError("watcher status returned an invalid incident")
+            problems.append(
+                LibraryWatchHealthProblem(
+                    root_id=root_id,
+                    state=state,
+                    detected_at=detected_at,
+                    incident_id=incident_id,
+                    warning_token=warning_token,
+                    occurrence_count=occurrence_count,
+                    acknowledged=bool(row.get("acknowledged")),
+                )
+            )
+        return problems
+
+    def load_metrics(self, *, library_id: int) -> WatcherMetrics:
+        now = datetime.now(timezone.utc)
+        with self._connect() as connection:
+            row = connection.execute(
+                "select * from library.load_watcher_metrics(%s, %s)",
+                (_positive_id(library_id, "library_id"), now),
+            ).fetchone()
+        if not row:
+            raise RuntimeError("watcher metrics returned no result")
+        return WatcherMetrics(
+            ready=int(row.get("ready") or 0),
+            running=int(row.get("running") or 0),
+            coalesced=int(row.get("coalesced") or 0),
+            dirty=int(row.get("dirty") or 0),
+            barrier_waiting=int(row.get("barrier_waiting") or 0),
+            lag_1_9=int(row.get("lag_1_9") or 0),
+            lag_10_99=int(row.get("lag_10_99") or 0),
+            lag_100_plus=int(row.get("lag_100_plus") or 0),
+            coalesced_events=int(row.get("coalesced_events") or 0),
+            catch_ups=int(row.get("catch_ups") or 0),
+            oldest_ready_seconds=float(row.get("oldest_ready_seconds") or 0.0),
+            oldest_repair_seconds=float(row.get("oldest_repair_seconds") or 0.0),
+        )
+
+    def acknowledge(
+        self,
+        *,
+        library_id: int,
+        account_id: int,
+        warning_token: str,
+        now: datetime,
+    ) -> bool:
+        now = _aware_utc(now, "now")
+        with self._connect() as connection:
+            row = connection.execute(
+                "select library.acknowledge_watcher_incident(%s, %s, %s::uuid, %s) as acknowledged",
+                (
+                    _positive_id(library_id, "library_id"),
+                    _positive_id(account_id, "account_id"),
+                    warning_token,
+                    now,
+                ),
+            ).fetchone()
+        return bool(row and row.get("acknowledged"))
 
     def claim_generation(self, *, claim: object, now: datetime) -> ClaimedWatcherGeneration | None:
         now = _aware_utc(now, "now")
@@ -325,6 +459,30 @@ class PostgresWatcherRecoveryRepository:
             ).fetchone()
         return bool(row and row.get("failed"))
 
+    def complete_repair(
+        self,
+        *,
+        claim: object,
+        repair_id: int,
+        inventory_revision: int,
+        now: datetime,
+    ) -> bool:
+        now = _aware_utc(now, "now")
+        with self._connect() as connection:
+            row = connection.execute(
+                "select library.complete_watcher_repair(%s, %s, %s, %s, %s, %s, %s) as repair_completed",
+                (
+                    _positive_id(repair_id, "repair_id"),
+                    _positive_id(claim.job_id, "job_id"),
+                    _positive_id(claim.attempt, "attempt"),
+                    claim.worker_id,
+                    claim.lease_token,
+                    _positive_id(inventory_revision, "inventory_revision"),
+                    now,
+                ),
+            ).fetchone()
+        return bool(row and row.get("repair_completed"))
+
     def disable_acceptance(self, *, now: datetime) -> None:
         now = _aware_utc(now, "now")
         with self._connect() as connection:
@@ -360,7 +518,9 @@ class PostgresWatcherRecoveryRepository:
 __all__ = [
     "AcceptedWatcherGeneration",
     "ClaimedWatcherGeneration",
+    "MarkedDirtyWatcherGeneration",
     "PostgresWatcherRecoveryRepository",
+    "WatcherMetrics",
     "WatcherParticipantFence",
     "WatcherRollbackResult",
     "WatcherRootRecord",

@@ -1,3 +1,4 @@
+from inspect import signature
 from pathlib import Path
 
 import pytest
@@ -66,56 +67,53 @@ def test_admission_failure_propagates_without_reporting_success():
         coordinator.accept(_event())
 
 
-@pytest.mark.parametrize("failure", ["admission", "mark_dirty"])
-def test_database_outage_retries_root_dirty_after_storage_recovers(failure):
+def test_storage_failure_is_not_replayed_by_a_later_admission():
     available = False
+    accepted = []
     durable_problems = []
-    scheduled = []
 
-    class Timer:
-        daemon = False
-
-        def __init__(self, _delay, callback):
-            self.callback = callback
-
-        def start(self):
-            scheduled.append(self)
-
-        def cancel(self):
-            pass
-
-    def accept_event(_event):
-        if failure == "admission" and not available:
-            raise RuntimeError("database unavailable")
-
-    def record_problem(problem):
+    def accept_event(event):
         if not available:
             raise RuntimeError("database unavailable")
-        durable_problems.append(problem)
+        accepted.append(event)
 
     coordinator = LibraryEventCoordinator(
         accept_event,
-        record_problem=record_problem,
-        retry_timer_factory=Timer,
-    )
-    event = (
-        _event()
-        if failure == "admission"
-        else LibraryEvent(
-            LibraryEventKind.ROOT_UNAVAILABLE,
-            "root-a",
-            Path("C:/Music"),
-        )
+        record_problem=durable_problems.append,
     )
 
     with pytest.raises(RuntimeError, match="database unavailable"):
-        coordinator.accept(event)
-    assert len(scheduled) == 1
+        coordinator.accept(_event())
 
     available = True
-    scheduled.pop().callback()
+    later = _event(1)
+    assert coordinator.accept(later) is True
+    assert accepted == [later]
+    assert durable_problems == []
 
-    assert durable_problems == [CoordinatorProblem("root_unavailable", "root-a")]
+
+def test_coordinator_has_no_process_local_capacity_retry_or_suspension_controls():
+    parameters = signature(LibraryEventCoordinator).parameters
+    coordinator = LibraryEventCoordinator(
+        lambda _event: None,
+        record_problem=lambda _problem: None,
+    )
+
+    assert set(parameters) == {"accept_event", "record_problem"}
+    assert {
+        "_pending",
+        "_pending_problems",
+        "_pending_entry_count",
+        "_retry_pending",
+        "_retry_timer",
+        "_retry_timer_factory",
+        "_retry_delay_seconds",
+        "max_pending_groups",
+        "suspend_targeted_reconciliation",
+        "resume_targeted_reconciliation",
+    }.isdisjoint(vars(coordinator))
+    assert not hasattr(coordinator, "suspend_targeted_reconciliation")
+    assert not hasattr(coordinator, "resume_targeted_reconciliation")
 
 
 def test_stop_is_idempotent_and_rejects_later_events():
@@ -129,47 +127,3 @@ def test_stop_is_idempotent_and_rejects_later_events():
     assert coordinator.stop() is False
     assert coordinator.accept(_event()) is False
     assert accepted == []
-
-
-def test_cancelled_retry_callback_does_not_write_after_stop():
-    available = False
-    durable_problems = []
-    scheduled = []
-
-    class Timer:
-        daemon = False
-
-        def __init__(self, _delay, callback):
-            self.callback = callback
-
-        def start(self):
-            scheduled.append(self)
-
-        def cancel(self):
-            pass
-
-    def record_problem(problem):
-        if not available:
-            raise RuntimeError("database unavailable")
-        durable_problems.append(problem)
-
-    coordinator = LibraryEventCoordinator(
-        lambda _event: None,
-        record_problem=record_problem,
-        retry_timer_factory=Timer,
-    )
-    event = LibraryEvent(
-        LibraryEventKind.ROOT_UNAVAILABLE,
-        "root-a",
-        Path("C:/Music"),
-    )
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        coordinator.accept(event)
-    timer = scheduled.pop()
-    coordinator.stop()
-    available = True
-
-    timer.callback()
-
-    assert durable_problems == []

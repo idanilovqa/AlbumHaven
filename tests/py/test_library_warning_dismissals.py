@@ -96,8 +96,12 @@ def test_health_store_outages_remain_visible_and_cannot_be_dismissed():
 
 
 def test_repository_scopes_acknowledgements_to_the_authenticated_account():
-    from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals
-    from music_app.services.library_watch_health import opaque_root_key
+    from datetime import datetime, timezone
+
+    from music_app.services.library_warning_dismissals import (
+        PostgresLibraryWarningDismissals,
+    )
+
     acknowledged = {}
     calls = []
 
@@ -105,50 +109,43 @@ def test_repository_scopes_acknowledgements_to_the_authenticated_account():
         def __enter__(self): return self
         def __exit__(self, *_args): pass
         def execute(self, statement, params):
-            calls.append((statement, params))
-            if "acknowledge_local_watcher_incidents" in statement:
-                acknowledged[params[0]] = [{
-                    "root_id": "root-a",
-                    "state": "overflow",
-                    "detected_at": "2026-09-12T10:00:00Z",
-                    "event_id": "6ecc97df-bc41-4191-87fc-8ceb9ab0e80e",
-                }]
-                self.rows = [{"acknowledged_count": 1}]
+            normalized = " ".join(statement.split())
+            calls.append((normalized, params))
+            if "acknowledge_watcher_incident" in normalized:
+                acknowledged[params[1]] = params[2]
+                self.rows = [(True,)]
             else:
-                self.rows = acknowledged.get(params[0], [])
+                token = acknowledged.get(params[1])
+                self.rows = ([{"warning_token": token}] if token else [])
             return self
         def fetchall(self): return self.rows
         def fetchone(self): return self.rows[0] if self.rows else None
         def commit(self): pass
 
     repo = PostgresLibraryWarningDismissals({}, connect=lambda _: Connection())
-    warning_one = warning_token({"state": "warning", "problems": [{
-        "root_key": opaque_root_key("root-a"),
-        "state": "overflow",
-        "detected_at": "2026-09-12T10:00:00Z",
-        "event_id": "6ecc97df-bc41-4191-87fc-8ceb9ab0e80e",
-    }]})
-    warning_health = {"state": "warning", "problems": [{
-        "root_key": opaque_root_key("root-a"),
-        "state": "overflow",
-        "detected_at": "2026-09-12T10:00:00Z",
-        "event_id": "6ecc97df-bc41-4191-87fc-8ceb9ab0e80e",
-    }]}
-    repo.save(7, warning_one, warning_health)
-    assert repo.load(7) == warning_one
+    repo.library_id = 19
+    repo.now = lambda: datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    warning = "22222222-2222-2222-2222-222222222222"
+
+    repo.save(7, warning)
+
+    assert repo.load(7) == warning
     assert repo.load(8) == ""
-    assert any("load_local_watcher_incident_acknowledgements" in sql for sql, _ in calls)
+    assert any("acknowledge_watcher_incident" in sql for sql, _ in calls)
+    assert any("acknowledge_watcher_incident" not in sql for sql, _ in calls)
     assert all("library.libraries.metadata" not in sql for sql, _ in calls)
 
 
-def test_repository_rejects_partial_durable_acknowledgement():
+def test_repository_rejects_stale_durable_incident_token_without_committing():
+    from datetime import datetime, timezone
+
     import pytest
     from music_app.services.library_warning_dismissals import (
         PostgresLibraryWarningDismissals,
-        warning_token,
     )
 
     committed = []
+    executed = []
 
     class Connection:
         def __enter__(self):
@@ -157,34 +154,32 @@ def test_repository_rejects_partial_durable_acknowledgement():
         def __exit__(self, *_args):
             pass
 
-        def execute(self, _statement, _params):
+        def execute(self, statement, params):
+            executed.append((" ".join(statement.split()), params))
             return self
 
         def fetchone(self):
-            return {"acknowledged_count": 0}
+            return (False,)
 
         def commit(self):
             committed.append(True)
 
-    event_id = "6ecc97df-bc41-4191-87fc-8ceb9ab0e80e"
-    health = {
-        "state": "warning",
-        "problems": [
-            {
-                "root_key": "root-key",
-                "state": "overflow",
-                "detected_at": "2026-10-09T20:27:01.137130-06:00",
-                "event_id": event_id,
-            }
-        ],
-    }
     repository = PostgresLibraryWarningDismissals(
         {}, connect=lambda _url: Connection()
     )
+    repository.library_id = 19
+    repository.now = lambda: datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    token = "22222222-2222-2222-2222-222222222222"
 
-    with pytest.raises(RuntimeError, match="acknowledgement changed"):
-        repository.save(7, warning_token(health), health)
+    with pytest.raises(ValueError, match="incident is not current"):
+        repository.save(7, token)
 
+    assert executed == [
+        (
+            "select library.acknowledge_watcher_incident(%s, %s, %s::uuid, %s)",
+            (19, 7, token, repository.now()),
+        )
+    ]
     assert committed == []
 
 
@@ -194,7 +189,9 @@ def test_dismiss_route_rejects_a_newer_warning_and_uses_only_current_actor(monke
     from music_app.routes import api_read_asgi_routes as routes
     health = {"state": "warning", "problems": [{"root_key": "root", "state": "overflow", "detected_at": "new"}]}
     saved = []
-    repo = SimpleNamespace(save=lambda account, token, _health: saved.append((account, token)))
+    repo = SimpleNamespace(
+        save=lambda account, token, *_health: saved.append((account, token))
+    )
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(library_warning_dismissals=repo)), state=SimpleNamespace(current_actor=SimpleNamespace(account_id=7)))
     payload = {"token": "a" * 64, "account_id": 8}
     async def read(_request): return payload
@@ -209,62 +206,54 @@ def test_dismiss_route_rejects_a_newer_warning_and_uses_only_current_actor(monke
     assert asyncio.run(routes.dismiss_library_warning(request)).status_code == 400
 
 
-def test_dismiss_route_rejects_recovered_same_clock_warning_from_stale_alert(monkeypatch):
+def test_dismiss_route_returns_conflict_when_durable_token_is_stale(monkeypatch):
     import asyncio
-    from datetime import datetime, timezone
-    from pathlib import Path
     from types import SimpleNamespace
+
     from music_app.routes import api_read_asgi_routes as routes
-    from music_app.services import library_watch_health as health
 
-    class Store:
-        def __init__(self):
-            self.problems = {}
+    incident_id = "11111111-1111-1111-1111-111111111111"
+    durable_token = "22222222-2222-2222-2222-222222222222"
+    health = {
+        "state": "warning",
+        "problems": [
+            {
+                "root_key": "root_opaque",
+                "state": "overflow",
+                "detected_at": "2026-10-09T12:00:00+00:00",
+                "incident_id": incident_id,
+                "event_id": incident_id,
+                "warning_token": durable_token,
+            }
+        ],
+    }
+    token = warning_token(health)
+    calls = []
 
-        def upsert(self, problem):
-            self.problems[problem.root_id] = problem
+    def reject_stale(*args):
+        calls.append(args)
+        raise ValueError("watcher incident is not current")
 
-        def load(self):
-            return list(self.problems.values())
-
-        def clear(self, roots, *, detected_before):
-            cleared = [root for root in roots if root in self.problems
-                       and self.problems[root].detected_at <= detected_before]
-            for root in cleared:
-                del self.problems[root]
-            return len(cleared)
-
-    tick = datetime(2026, 9, 10, tzinfo=timezone.utc)
-    service = health.LibraryWatchHealthService(Store(), now=lambda: tick)
-    event = health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main", Path("C:/Music"))
-    service.record_event(event)
-
-    def projection(_request):
-        return {"state": "warning", "problems": [
-            problem.as_public_dict() for problem in service.load_problems()
-        ]}
-
-    saved = []
-    repo = SimpleNamespace(save=lambda account, token, _health: saved.append((account, token)))
     request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(library_warning_dismissals=repo)),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                library_warning_dismissals=SimpleNamespace(save=reject_stale)
+            )
+        ),
         state=SimpleNamespace(current_actor=SimpleNamespace(account_id=7)),
     )
-    payload = {"token": warning_token(projection(request))}
 
     async def read(_request):
-        return payload
+        return {"token": token}
 
     monkeypatch.setattr(routes, "read_bounded_json_object", read)
-    monkeypatch.setattr(routes, "_project_library_watch_health_for_request", projection)
-    assert asyncio.run(routes.dismiss_library_warning(request)).status_code == 200
-    acknowledged = saved[:]
-    service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main"])
-    service.record_event(event)
+    monkeypatch.setattr(
+        routes,
+        "_project_library_watch_health_for_request",
+        lambda _request: health,
+    )
 
-    assert asyncio.run(routes.dismiss_library_warning(request)).status_code == 409
-    assert saved == acknowledged, "the old alert must not acknowledge the new same-clock event"
-    payload["token"] = warning_token(projection(request))
-    assert asyncio.run(routes.dismiss_library_warning(request)).status_code == 200
-    assert saved[-1] == (7, payload["token"])
-    assert saved[-1] != acknowledged[-1]
+    response = asyncio.run(routes.dismiss_library_warning(request))
+
+    assert response.status_code == 409
+    assert calls

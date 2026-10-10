@@ -5,9 +5,11 @@ from music_app.services.log_history import history_scope_for_request, normalize_
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
 
 import logging
+import math
 import time
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -111,10 +113,26 @@ def _project_library_watch_health_for_request(
             exc_info=True,
         )
         return {"state": "warning", "problems": []}
-    return project_library_watch_health(
+    payload = project_library_watch_health(
         problems,
         allowed_actions_for_request(request, ("library.refresh",)),
     )
+    durable_tokens = sorted({
+        str(getattr(problem, "warning_token", "") or "").strip()
+        for problem in problems
+        if str(getattr(problem, "warning_token", "") or "").strip()
+    })
+    unacknowledged_tokens = sorted({
+        str(getattr(problem, "warning_token", "") or "").strip()
+        for problem in problems
+        if str(getattr(problem, "warning_token", "") or "").strip()
+        and not bool(getattr(problem, "acknowledged", False))
+    })
+    if unacknowledged_tokens:
+        payload["warning_token"] = unacknowledged_tokens[0]
+    if durable_tokens:
+        payload.setdefault("warning_token", durable_tokens[0])
+    return payload
 
 
 def _attach_library_watch_health(
@@ -388,7 +406,25 @@ def _client_surface_class_from_asgi(request: Request) -> str:
 
 
 def _warning_dismissals(request):
-    return getattr(request.app.state, "library_warning_dismissals", None) or PostgresLibraryWarningDismissals(_app_config(request))
+    repository = getattr(request.app.state, "library_warning_dismissals", None)
+    if repository is not None:
+        return repository
+    repository = PostgresLibraryWarningDismissals(_app_config(request))
+    repository.library_id = getattr(
+        request.app.state, "media_host_library_id", None
+    )
+    return repository
+
+
+def _is_warning_token(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    if len(value) == 64:
+        return all(character in "0123456789abcdef" for character in value)
+    try:
+        return str(UUID(value)) == value.casefold()
+    except (AttributeError, ValueError):
+        return False
 
 
 @router.post("/account/library-warning/dismiss")
@@ -397,21 +433,23 @@ async def dismiss_library_warning(request: Request) -> JSONResponse:
     try:
         body = await read_bounded_json_object(request)
         token = (body or {}).get("token")
-        if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+        if not _is_warning_token(token):
             return JSONResponse({"error": "invalid_warning_token"}, status_code=400, headers=headers)
     except (ValueError, UnicodeDecodeError, JSONBodyTooLarge):
         return JSONResponse({"error": "invalid_warning_token"}, status_code=400, headers=headers)
     health = await run_in_threadpool(_project_library_watch_health_for_request, request)
     # A stale alert cannot acknowledge a warning that arrived while it was open.
-    if token != warning_token(health):
+    current_token = str(health.get("warning_token") or warning_token(health))
+    if token != current_token:
         return JSONResponse({"error": "warning_changed"}, status_code=409, headers=headers)
     try:
         await run_in_threadpool(
             _warning_dismissals(request).save,
             request.state.current_actor.account_id,
             token,
-            health,
         )
+    except ValueError:
+        return JSONResponse({"error": "warning_changed"}, status_code=409, headers=headers)
     except Exception:
         return JSONResponse({"error": "dismissal_unavailable"}, status_code=503, headers=headers)
     return JSONResponse({"dismissed_token": token}, headers=headers)
@@ -468,7 +506,9 @@ async def status(request: Request) -> JSONResponse:
         request,
     )
     health = payload["watcher_health"]
-    health["warning_token"] = warning_token(health)
+    health["warning_token"] = str(
+        health.get("warning_token") or warning_token(health)
+    )
     health["dismissed"] = False
     actor = getattr(request.state, "current_actor", None)
     if health["warning_token"] and getattr(actor, "account_id", None) is not None:
@@ -535,6 +575,28 @@ async def status(request: Request) -> JSONResponse:
         job_status = _sanitize_operator_job_status(result)
         payload["worker_status"] = job_status["worker_status"]
         payload["job_status"] = job_status
+        watcher_repository = getattr(
+            request.app.state, "watcher_recovery_repository", None
+        )
+        watcher_library_id = getattr(
+            request.app.state, "media_host_library_id", None
+        )
+        load_metrics = getattr(watcher_repository, "load_metrics", None)
+        if (
+            callable(load_metrics)
+            and isinstance(watcher_library_id, int)
+            and watcher_library_id > 0
+        ):
+            try:
+                watcher_metrics = await run_in_threadpool(
+                    load_metrics,
+                    library_id=watcher_library_id,
+                )
+            except Exception:
+                watcher_metrics = None
+            sanitized_metrics = _sanitize_watcher_metrics(watcher_metrics)
+            if sanitized_metrics is not None:
+                payload["watcher_metrics"] = sanitized_metrics
     else:
         public_health = getattr(service, "public_health", None)
         try:
@@ -548,6 +610,43 @@ async def status(request: Request) -> JSONResponse:
         worker_health = _sanitize_public_worker_health(result)
         payload["worker_status"] = worker_health["worker_status"]
     return JSONResponse(payload)
+
+
+_WATCHER_METRIC_COUNTS = (
+    "ready",
+    "running",
+    "coalesced",
+    "dirty",
+    "barrier_waiting",
+    "lag_1_9",
+    "lag_10_99",
+    "lag_100_plus",
+    "coalesced_events",
+    "catch_ups",
+)
+_WATCHER_METRIC_AGES = ("oldest_ready_seconds", "oldest_repair_seconds")
+
+
+def _sanitize_watcher_metrics(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    projected: dict[str, object] = {}
+    for key in _WATCHER_METRIC_COUNTS:
+        candidate = getattr(value, key, None)
+        if not _is_bounded_status_integer(candidate):
+            return None
+        projected[key] = candidate
+    for key in _WATCHER_METRIC_AGES:
+        candidate = getattr(value, key, None)
+        if (
+            not isinstance(candidate, (int, float))
+            or isinstance(candidate, bool)
+            or not math.isfinite(float(candidate))
+            or not 0 <= float(candidate) <= 2_147_483_647
+        ):
+            return None
+        projected[key] = float(candidate)
+    return projected
 
 
 def _sanitize_operator_job_status(value: object) -> dict[str, object]:

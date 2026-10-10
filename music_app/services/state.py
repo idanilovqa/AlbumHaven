@@ -62,7 +62,6 @@ from music_app.services.relation_projection_postgres import (
 )
 
 _CACHE_LOCK = threading.Lock()
-_WATCH_RECOVERY_LOCK = threading.Lock()
 _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-scan")
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
@@ -120,37 +119,12 @@ def sync_durable_inventory_revision(
             publication = load_publication()
             durable_revision = max(0, int(publication.get("inventory_mutation_revision") or 0))
         else:
-            publication = {}
             load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
             if not callable(load_revision):
                 return current_revision
             durable_revision = max(0, int(load_revision() or 0))
     except Exception:
         return current_revision
-    recovery = publication.get("manual_scan_recovery")
-    recover = config.get("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK")
-    if isinstance(recovery, Mapping) and callable(recover):
-        try:
-            recovery_revision = int(recovery["inventory_mutation_revision"])
-            cutoff = recovery["scan_started_at"]
-            roots = recovery["observed_root_ids"]
-            if (
-                0 < recovery_revision <= durable_revision
-                and isinstance(cutoff, str) and cutoff
-                and isinstance(roots, list) and roots
-            ):
-                with _WATCH_RECOVERY_LOCK:
-                    if recovery_revision > int(library_state.get("_manual_scan_recovery_revision") or 0):
-                        recover(
-                            scan_mode="manual_full_rescan",
-                            scan_started_at=cutoff,
-                            observed_root_ids=roots,
-                        )
-                        library_state["_manual_scan_recovery_revision"] = recovery_revision
-        except Exception:
-            logging.getLogger("music_app").warning(
-                "Durable manual scan watcher recovery remains pending."
-            )
     if durable_revision <= current_revision:
         return current_revision
     invalidate_targeted_library_projections(
@@ -1045,9 +1019,6 @@ def refresh_library_for_state(
                 logger,
                 kwargs,
             ),
-        ),
-        recover_library_watch_health=config.get(
-            "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"
         ),
         expected_inventory_mutation_revision=expected_inventory_mutation_revision,
         before_commit=before_commit,

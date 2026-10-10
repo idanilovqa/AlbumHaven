@@ -20,7 +20,7 @@ class FakeCursor:
         return self._rows[0] if self._rows else None
 
 
-def test_inventory_publication_load_includes_manual_scan_recovery(monkeypatch):
+def test_inventory_publication_load_excludes_legacy_timestamp_recovery(monkeypatch):
     from contextlib import nullcontext
     from music_app.services import scan_cache_persistence as persistence
 
@@ -40,9 +40,9 @@ def test_inventory_publication_load_includes_manual_scan_recovery(monkeypatch):
     monkeypatch.setattr(adapter, "_connect_to_database", lambda: nullcontext(connection))
 
     assert adapter.load_inventory_publication() == {
-        "inventory_mutation_revision": 41, "manual_scan_recovery": marker,
+        "inventory_mutation_revision": 41,
     }
-    assert "manual_scan_recovery" in statements[0]
+    assert "manual_scan_recovery" not in statements[0]
 
 
 def test_load_separate_release_keys_accepts_dict_rows():

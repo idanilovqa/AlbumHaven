@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,8 +9,6 @@ from music_app.jobs import full_scan_executor
 @pytest.mark.parametrize("observed_roots", [{"root-a"}, set(), None])
 def test_full_scan_only_publishes_roots_successfully_observed(monkeypatch, observed_roots):
     published = []
-    started_at = 1_800_000_000.0
-    monkeypatch.setattr(full_scan_executor.time, "time", lambda: started_at)
 
     def scan_music_incremental(**kwargs):
         if observed_roots is not None:
@@ -44,9 +41,90 @@ def test_full_scan_only_publishes_roots_successfully_observed(monkeypatch, obser
     )
 
     assert set(published[0]["observed_root_ids"]) == (observed_roots or set())
-    assert published[0]["inventory"]["scan_started_at"] == datetime.fromtimestamp(
-        started_at, timezone.utc
-    ).isoformat()
+    assert "scan_started_at" not in published[0]["inventory"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "repair_id", "expected_repairs"),
+    (
+        ("manual_full_rescan", 613, 1),
+        ("background", 613, 0),
+        ("manual_full_rescan", None, 0),
+    ),
+)
+def test_full_scan_completes_only_linked_manual_watcher_repair_after_publication(
+    monkeypatch, mode, repair_id, expected_repairs
+):
+    calls = []
+
+    def scan_music_incremental(**kwargs):
+        kwargs["publication_state"]["observed_library_root_ids"] = {"root-a"}
+        return ({}, 1.0)
+
+    class Adapter:
+        def __init__(self, _config):
+            pass
+
+        def prepare_full_scan_inventory(self, _cache, **_kwargs):
+            return {"artists": [], "albums": [], "tracks": [], "track_files": []}
+
+    class Repository:
+        def load_claimed_full_scan_cache(self, **_kwargs):
+            return {}
+
+        def publish_claimed_full_scan(self, **values):
+            calls.append(("publish", values))
+            return {"publication_won": True, "inventory_mutation_revision": 41}
+
+    class Recovery:
+        def complete_repair(self, **values):
+            calls.append(("repair", values))
+            return True
+
+    monkeypatch.setattr(
+        full_scan_executor.state_service,
+        "scan_music_incremental",
+        scan_music_incremental,
+    )
+    monkeypatch.setattr(full_scan_executor, "PostgresScanCacheAdapter", Adapter)
+    claim = SimpleNamespace(
+        job_id=1,
+        attempt=2,
+        worker_id="worker-a",
+        lease_token="lease-a",
+    )
+    executor = full_scan_executor.DurableFullScanExecutor(
+        config={},
+        scan_repository=Repository(),
+        watcher_recovery=Recovery(),
+    )
+    executor.bind_claim(claim)
+    executor.bind_scope(SimpleNamespace(separate_release_keys=()))
+
+    result = executor.run(
+        SimpleNamespace(
+            intent_id=2,
+            mode=mode,
+            force=True,
+            watcher_repair_id=repair_id,
+        ),
+        roots=({"id": "root-a", "path": Path("C:/Music")},),
+        checkpoint=lambda **_values: None,
+        should_cancel=lambda: False,
+        expected_revision=40,
+    )
+
+    assert result.inventory_mutation_revision == 41
+    assert [kind for kind, _values in calls] == ["publish"] + (
+        ["repair"] if expected_repairs else []
+    )
+    if expected_repairs:
+        assert calls[1][1] == {
+            "claim": claim,
+            "repair_id": 613,
+            "inventory_revision": 41,
+            "now": calls[1][1]["now"],
+        }
 
 
 def test_full_scan_progress_is_bounded_and_phase_changes_are_immediate(monkeypatch):

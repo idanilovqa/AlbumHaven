@@ -1421,31 +1421,36 @@ def test_mark_dirty_is_atomic_stable_and_single_successor(
     assert generation["watcher_generation_kind"] == "root_catch_up"
 
 
-def test_unresolved_watcher_incident_is_projected_through_health_store(
+def test_unresolved_watcher_incident_is_projected_through_durable_status(
     live_watcher_database,
 ):
-    from music_app.services.library_watch_health import (
-        PostgresLibraryWatchHealthStore,
-    )
-
     scope = live_watcher_database
-    accepted = _repository(scope.app_url).mark_dirty(
+    repository = _repository(scope.app_url)
+    accepted = repository.mark_dirty(
         library_id=scope.library_id,
         logical_root_id="root-a",
         reason_code="overflow",
         observed_at=NOW,
     )
-
-    store = PostgresLibraryWatchHealthStore(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
-        connect=isolatedPostgres._connect,
-    )
-    problems = store.load()
+    problems = repository.load_status(library_id=scope.library_id)
 
     assert [
-        (problem.root_id, problem.state, problem.event_id)
+        (
+            problem.root_id,
+            problem.state,
+            problem.incident_id,
+            problem.warning_token,
+        )
         for problem in problems
-    ] == [("root-a", "overflow", accepted.warning_token)]
+    ] == [
+        (
+            "root-a",
+            "overflow",
+            accepted.incident_id,
+            accepted.warning_token,
+        )
+    ]
+    assert problems[0].event_id == accepted.incident_id
 
 
 def test_app_acknowledges_durable_incidents_without_table_access(
@@ -1453,53 +1458,41 @@ def test_app_acknowledges_durable_incidents_without_table_access(
 ):
     from music_app.services.library_warning_dismissals import (
         PostgresLibraryWarningDismissals,
-        warning_token,
-    )
-    from music_app.services.library_watch_health import (
-        PostgresLibraryWatchHealthStore,
     )
 
     scope = live_watcher_database
-    _repository(scope.app_url).mark_dirty(
+    repository = _repository(scope.app_url)
+    accepted = repository.mark_dirty(
         library_id=scope.library_id,
         logical_root_id="root-a",
         reason_code="overflow",
         observed_at=NOW,
     )
-    health = PostgresLibraryWatchHealthStore(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
-        connect=isolatedPostgres._connect,
-    ).load()
-    expected = warning_token({
-        "state": "warning",
-        "problems": [problem.as_public_dict() for problem in health],
-    })
+    [problem] = repository.load_status(library_id=scope.library_id)
     acknowledgements = PostgresLibraryWarningDismissals(
         {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
         connect=isolatedPostgres._connect,
     )
+    acknowledgements.library_id = scope.library_id
 
     assert acknowledgements.load(scope.account_id) == ""
-    acknowledgements.save(
-        scope.account_id,
-        expected,
-        {
-            "state": "warning",
-            "problems": [problem.as_public_dict() for problem in health],
-        },
-    )
-    assert acknowledgements.load(scope.account_id) == expected
+    acknowledgements.save(scope.account_id, problem.warning_token)
+    assert acknowledgements.load(scope.account_id) == problem.warning_token
 
     with isolatedPostgres._connect(scope.setup_url) as connection:
-        count = connection.execute(
+        row = connection.execute(
             """
-            select count(*) as count
+            select incident_id::text as incident_id, library_id, account_id
             from library.watcher_incident_acknowledgements
-            where account_id = %s
+            where library_id = %s and account_id = %s
             """,
-            (scope.account_id,),
-        ).fetchone()["count"]
-        assert count == 1
+            (scope.library_id, scope.account_id),
+        ).fetchone()
+    assert row == {
+        "incident_id": accepted.incident_id,
+        "library_id": scope.library_id,
+        "account_id": scope.account_id,
+    }
 
 
 def test_running_full_scan_repairs_a_later_incident_through_root_catch_up(
@@ -1907,6 +1900,134 @@ def test_manual_full_scan_automatically_completes_durable_watcher_repair(
     assert completed["resolved_at"] is not None
 
 
+def test_imported_legacy_health_is_cleared_only_after_its_captured_repair(
+    live_watcher_database,
+):
+    from music_app.services.library_watch_health import (
+        PostgresLibraryWatchHealthStore,
+    )
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    legacy_health = {
+        "root-a": {
+            "state": "overflow",
+            "detected_at": now.isoformat(),
+            "event_id": "legacy-root-a",
+        },
+        "root-b": {
+            "state": "root_unavailable",
+            "detected_at": (now - timedelta(seconds=1)).isoformat(),
+            "event_id": "legacy-root-b",
+        },
+    }
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            update library.libraries
+            set metadata = pg_catalog.jsonb_set(
+                coalesce(metadata, '{}'::jsonb),
+                '{library_watch_health}',
+                %s::jsonb,
+                true
+            )
+            where id = %s
+            """,
+            (json.dumps(legacy_health), scope.library_id),
+        )
+
+    recovery = _repository(scope.app_url)
+    incident = recovery.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-a",
+        reason_code="overflow",
+        observed_at=now,
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(
+            """
+            insert into library.watcher_legacy_health_imports (
+                library_id, root_id, source_key, imported_at
+            ) values (%s, %s, 'legacy_library_watch_health_v1', %s)
+            """,
+            (
+                scope.library_id,
+                scope.root_database_ids["root-a"],
+                now,
+            ),
+        )
+
+    legacy_store = PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": scope.app_url},
+        connect=isolatedPostgres._connect,
+    )
+    assert {problem.root_id for problem in legacy_store.load()} == {
+        "root-a",
+        "root-b",
+    }
+
+    scans = PostgresScanJobRepository(
+        database_url=scope.app_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    accepted = scans.enqueue_full_scan(
+        library_id=scope.library_id,
+        account_id=scope.account_id,
+        capability_key="library.refresh",
+        request_origin_ref="watcher:legacy-health-cleanup",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        root_ids=("root-a",),
+        mode="manual_full_rescan",
+        force=True,
+        scheduled_at=now - timedelta(seconds=1),
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        pending_health = connection.execute(
+            """
+            select metadata -> 'library_watch_health' as health
+            from library.libraries
+            where id = %s
+            """,
+            (scope.library_id,),
+        ).fetchone()["health"]
+    assert set(pending_health) == {"root-a", "root-b"}
+
+    worker_scans, claim, intent, claimed_scope = _claim_enqueued_full_scan(
+        scope,
+        now=now,
+        request_ref="watcher:legacy-health-cleanup",
+        worker_id="watcher-legacy-health-cleanup-worker",
+    )
+    publication = _publish_linked_full_scan(
+        worker_scans,
+        accepted,
+        claim,
+        intent,
+        claimed_scope,
+        now=now + timedelta(seconds=1),
+    )
+    assert publication["publication_won"] is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        completed = connection.execute(
+            """
+            select library_record.metadata -> 'library_watch_health' as health,
+                   incident.resolved_at
+            from library.libraries as library_record
+            join library.watcher_incidents as incident
+              on incident.library_id = library_record.id
+             and incident.incident_id = %s
+            where library_record.id = %s
+            """,
+            (incident.incident_id, scope.library_id),
+        ).fetchone()
+    assert completed["resolved_at"] is not None
+    assert set(completed["health"]) == {"root-b"}
+    assert {problem.root_id for problem in legacy_store.load()} == {"root-b"}
+
+
 def test_mark_dirty_rolls_back_lane_generation_and_incident_together(
     live_watcher_database,
 ):
@@ -2263,6 +2384,80 @@ def test_full_scan_publication_completes_linked_watcher_repair(
     assert repair["inventory_revision"] == publication["inventory_mutation_revision"]
     assert repair["completed_at"] is not None
     assert incident["resolved_at"] is not None
+
+
+def test_complete_repair_is_idempotent_after_atomic_full_scan_publication(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=NOW,
+        request_origin_ref="watcher:repair-idempotent-completion",
+        worker_id="watcher-repair-idempotent-worker",
+    )
+    publication = seeded.worker_scans.publish_claimed_full_scan(
+        claim=seeded.claim,
+        intent_id=seeded.full_scan.intent_id,
+        expected_inventory_mutation_revision=(
+            seeded.intent.inventory_mutation_revision
+        ),
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        observed_root_ids=[root["id"] for root in seeded.scope.roots],
+        now=NOW,
+    )
+    assert publication["publication_won"] is True
+
+    def load_repair_completion():
+        with isolatedPostgres._connect(scope.setup_url) as connection:
+            return connection.execute(
+                """
+                select repair.state, repair.completed_at,
+                       repair.inventory_revision, incident.resolved_at,
+                       lane.successor_generation_id,
+                       (
+                         select count(*)
+                         from library.watcher_generation_repairs as link
+                         where link.repair_id = repair.id
+                       ) as repair_link_count
+                from library.watcher_repairs as repair
+                join library.watcher_repair_roots as repair_root
+                  on repair_root.repair_id = repair.id
+                join library.watcher_incidents as incident
+                  on incident.incident_id = repair_root.incident_id
+                join library.watcher_lanes as lane
+                  on lane.library_id = repair_root.library_id
+                 and lane.root_id = repair_root.root_id
+                where repair.id = %s
+                """,
+                (seeded.repair_id,),
+            ).fetchone()
+
+    completed = load_repair_completion()
+    assert completed == {
+        "state": "complete",
+        "completed_at": completed["completed_at"],
+        "inventory_revision": publication["inventory_mutation_revision"],
+        "resolved_at": completed["resolved_at"],
+        "successor_generation_id": None,
+        "repair_link_count": 0,
+    }
+    assert completed["completed_at"] is not None
+    assert completed["resolved_at"] is not None
+
+    assert seeded.worker_repository.complete_repair(
+        claim=seeded.claim,
+        repair_id=seeded.repair_id,
+        inventory_revision=publication["inventory_mutation_revision"],
+        now=NOW + timedelta(seconds=1),
+    ) is True
+    assert load_repair_completion() == completed
 
 
 def test_full_scan_publication_routes_late_repair_through_root_catch_up(

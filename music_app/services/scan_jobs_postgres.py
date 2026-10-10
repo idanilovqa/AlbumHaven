@@ -45,6 +45,7 @@ class ClaimedFullScanIntent:
     root_ids: tuple[str, ...]
     inventory_mutation_revision: int
     committed_inventory_revision: int | None
+    watcher_repair_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,7 +366,7 @@ class PostgresScanJobRepository:
                 row = connection.execute(
                     """
                     select intent_id, job_id, created
-                      from library.create_full_scan_intent_v2(
+                      from library.create_full_scan_intent_v3(
                         %(library_id)s, %(account_id)s, %(capability_key)s,
                         %(request_origin_ref)s, %(deployment_mode)s,
                         %(client_surface)s, %(mode)s, %(force)s,
@@ -576,7 +577,7 @@ class PostgresScanJobRepository:
             row = connection.execute(
                 """
                 select *
-                  from library.load_claimed_full_scan_intent_v2(
+                  from library.load_claimed_full_scan_intent_v3(
                     %(job_id)s, %(worker_id)s, %(lease_token)s
                   )
                 """,
@@ -605,6 +606,11 @@ class PostgresScanJobRepository:
                     "committed_inventory_revision",
                 )
                 if payload.get("committed_inventory_revision") is not None
+                else None
+            ),
+            watcher_repair_id=(
+                _positive_id(payload.get("watcher_repair_id"), "watcher_repair_id")
+                if payload.get("watcher_repair_id") is not None
                 else None
             ),
         )

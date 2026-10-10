@@ -774,6 +774,66 @@ begin
 end;
 $$;
 
+create or replace function library.create_full_scan_intent_v3(
+  p_library_id bigint,
+  p_initiating_account_id bigint,
+  p_capability_key varchar,
+  p_request_origin_ref varchar,
+  p_deployment_mode varchar,
+  p_client_surface varchar,
+  p_mode varchar,
+  p_force boolean,
+  p_root_ids bigint[],
+  p_accepted_at timestamptz
+)
+returns table (intent_id bigint, job_id bigint, created boolean)
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  select *
+  from library.create_full_scan_intent_v2(
+    p_library_id, p_initiating_account_id, p_capability_key,
+    p_request_origin_ref, p_deployment_mode, p_client_surface,
+    p_mode, p_force, p_root_ids, p_accepted_at
+  );
+$$;
+
+create or replace function library.load_claimed_full_scan_intent_v3(
+  p_job_id bigint,
+  p_worker_id varchar,
+  p_lease_token varchar
+)
+returns table (
+  intent_id bigint,
+  library_id bigint,
+  initiating_account_id bigint,
+  mode varchar,
+  force boolean,
+  logical_root_ids text[],
+  inventory_mutation_revision bigint,
+  committed_inventory_revision bigint,
+  watcher_repair_id bigint
+)
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  select claimed.intent_id,
+         claimed.library_id,
+         claimed.initiating_account_id,
+         claimed.mode,
+         claimed.force,
+         claimed.logical_root_ids,
+         claimed.inventory_mutation_revision,
+         claimed.committed_inventory_revision,
+         intent.watcher_repair_id
+  from library.load_claimed_full_scan_intent_v2(
+    p_job_id, p_worker_id, p_lease_token
+  ) as claimed
+  join library.full_scan_intents as intent on intent.id = claimed.intent_id;
+$$;
+
 create or replace function library.load_local_watcher_incidents()
 returns table (
   root_id text,
@@ -786,7 +846,7 @@ security definer
 set search_path = pg_catalog
 as $$
   select root.metadata ->> 'root_id', incident.reason_code::text,
-         incident.last_seen_at, incident.warning_token::text
+         incident.last_seen_at, incident.incident_id::text
   from app.bootstrap_owners as owner
   join library.libraries as local_library
     on local_library.owner_account_id = owner.account_id
@@ -816,7 +876,7 @@ security definer
 set search_path = pg_catalog
 as $$
   select root.metadata ->> 'root_id', incident.reason_code::text,
-         incident.last_seen_at, incident.warning_token::text
+         incident.last_seen_at, incident.incident_id::text
   from app.bootstrap_owners as owner
   join library.libraries as local_library
     on local_library.owner_account_id = owner.account_id
@@ -868,7 +928,7 @@ begin
   join library.watcher_incidents as incident
     on incident.library_id = local_library.id
    and incident.resolved_at is null
-   and incident.warning_token = any(p_warning_tokens)
+   and incident.incident_id = any(p_warning_tokens)
   join library.library_memberships as membership
     on membership.library_id = incident.library_id
    and membership.account_id = p_account_id
@@ -879,6 +939,192 @@ begin
   get diagnostics acknowledged_count = row_count;
   return acknowledged_count;
 end;
+$$;
+
+create or replace function library.load_watcher_status(
+  p_library_id bigint
+)
+returns table (
+  logical_root_id text,
+  state text,
+  detected_at timestamptz,
+  incident_id uuid,
+  warning_token uuid,
+  occurrence_count bigint,
+  acknowledged boolean
+)
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  select root.metadata ->> 'root_id',
+         incident.reason_code::text,
+         incident.first_seen_at,
+         incident.incident_id,
+         incident.warning_token,
+         incident.occurrence_count,
+         exists (
+           select 1
+           from library.watcher_incident_acknowledgements as acknowledgement
+           where acknowledgement.incident_id = incident.incident_id
+             and acknowledgement.library_id = incident.library_id
+         )
+  from library.watcher_incidents as incident
+  join library.library_roots as root
+    on root.library_id = incident.library_id
+   and root.id = incident.root_id
+  where incident.library_id = p_library_id
+    and incident.resolved_at is null
+  order by root.id;
+$$;
+
+create or replace function library.load_watcher_incident_acknowledgements(
+  p_library_id bigint,
+  p_account_id bigint
+)
+returns table (warning_token uuid)
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  select incident.warning_token
+  from library.watcher_incidents as incident
+  join library.watcher_incident_acknowledgements as acknowledgement
+    on acknowledgement.incident_id = incident.incident_id
+   and acknowledgement.library_id = incident.library_id
+   and acknowledgement.account_id = p_account_id
+  join library.library_memberships as membership
+    on membership.library_id = incident.library_id
+   and membership.account_id = p_account_id
+  where incident.library_id = p_library_id
+    and incident.resolved_at is null
+  order by incident.warning_token;
+$$;
+
+create or replace function library.acknowledge_watcher_incident(
+  p_library_id bigint,
+  p_account_id bigint,
+  p_warning_token uuid,
+  p_now timestamptz
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  acknowledged_count bigint;
+begin
+  if p_library_id is null or p_account_id is null
+     or p_warning_token is null or p_now is null then
+    return false;
+  end if;
+
+  insert into library.watcher_incident_acknowledgements (
+    incident_id, library_id, account_id, acknowledged_at
+  )
+  select incident.incident_id, incident.library_id, p_account_id, p_now
+  from library.watcher_incidents as incident
+  join library.library_memberships as membership
+    on membership.library_id = incident.library_id
+   and membership.account_id = p_account_id
+  where incident.library_id = p_library_id
+    and incident.warning_token = p_warning_token
+    and incident.resolved_at is null
+  on conflict (incident_id, account_id) do update
+    set acknowledged_at = excluded.acknowledged_at;
+
+  get diagnostics acknowledged_count = row_count;
+  return acknowledged_count = 1;
+end;
+$$;
+
+create or replace function library.load_watcher_metrics(
+  p_library_id bigint,
+  p_now timestamptz
+)
+returns table (
+  ready bigint,
+  running bigint,
+  coalesced bigint,
+  dirty bigint,
+  barrier_waiting bigint,
+  lag_1_9 bigint,
+  lag_10_99 bigint,
+  lag_100_plus bigint,
+  coalesced_events bigint,
+  catch_ups bigint,
+  oldest_ready_seconds double precision,
+  oldest_repair_seconds double precision
+)
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  with lane_metrics as (
+    select count(*) filter (
+             where lane.successor_generation_id is not null
+           )::bigint as ready,
+           count(*) filter (
+             where lane.running_generation_id is not null
+           )::bigint as running,
+           count(*) filter (
+             where lane.disposition_code = 'coalesced'
+           )::bigint as coalesced,
+           count(*) filter (
+             where lane.dirty_generation > lane.repaired_dirty_generation
+           )::bigint as dirty,
+           count(*) filter (
+             where lane.disposition_code = 'barrier_waiting'
+           )::bigint as barrier_waiting,
+           count(*) filter (
+             where lane.accepted_sequence - lane.applied_sequence between 1 and 9
+           )::bigint as lag_1_9,
+           count(*) filter (
+             where lane.accepted_sequence - lane.applied_sequence between 10 and 99
+           )::bigint as lag_10_99,
+           count(*) filter (
+             where lane.accepted_sequence - lane.applied_sequence >= 100
+           )::bigint as lag_100_plus,
+           coalesce(pg_catalog.sum(lane.coalesced_event_count), 0)::bigint
+             as coalesced_events,
+           coalesce(pg_catalog.sum(lane.catch_up_count), 0)::bigint
+             as catch_ups,
+           coalesce(
+             pg_catalog.max(greatest(
+               extract(epoch from (p_now - lane.next_eligible_at)),
+               0
+             )) filter (where lane.successor_generation_id is not null),
+             0
+           )::double precision as oldest_ready_seconds
+    from library.watcher_lanes as lane
+    where lane.library_id = p_library_id
+  ), repair_metrics as (
+    select coalesce(
+             pg_catalog.max(greatest(
+               extract(epoch from (p_now - repair.started_at)),
+               0
+             )),
+             0
+           )::double precision as oldest_repair_seconds
+    from library.watcher_repairs as repair
+    where repair.library_id = p_library_id
+      and repair.state in ('scanning', 'catch_up')
+  )
+  select lane_metrics.ready,
+         lane_metrics.running,
+         lane_metrics.coalesced,
+         lane_metrics.dirty,
+         lane_metrics.barrier_waiting,
+         lane_metrics.lag_1_9,
+         lane_metrics.lag_10_99,
+         lane_metrics.lag_100_plus,
+         lane_metrics.coalesced_events,
+         lane_metrics.catch_ups,
+         lane_metrics.oldest_ready_seconds,
+         repair_metrics.oldest_repair_seconds
+  from lane_metrics
+  cross join repair_metrics;
 $$;
 
 insert into library.watcher_lanes (library_id, root_id)
@@ -1051,14 +1297,20 @@ begin
     ) values (
       p_library_id, v_root.id, 'watcher_recovery', p_reason_code, 1,
       v_sequence, v_dirty_generation, p_observed_at, p_observed_at
-    ) on conflict (library_id, root_id, incident_family)
-      where resolved_at is null
-      do update set
-        reason_code = excluded.reason_code,
-        occurrence_count = library.watcher_incidents.occurrence_count + 1,
-        accepted_sequence = excluded.accepted_sequence,
-        dirty_generation = excluded.dirty_generation,
-        last_seen_at = excluded.last_seen_at
+  ) on conflict (library_id, root_id, incident_family)
+    where resolved_at is null
+  do update set
+    reason_code = excluded.reason_code,
+    occurrence_count = library.watcher_incidents.occurrence_count + 1,
+    accepted_sequence = greatest(
+      library.watcher_incidents.accepted_sequence,
+      excluded.accepted_sequence
+    ),
+    dirty_generation = greatest(
+      library.watcher_incidents.dirty_generation,
+      excluded.dirty_generation
+    ),
+    last_seen_at = excluded.last_seen_at
     returning library.watcher_incidents.incident_id,
               library.watcher_incidents.warning_token
       into v_incident_id, v_warning_token;
@@ -2052,8 +2304,7 @@ as $$
 $$;
 
 create or replace function library.try_complete_watcher_repairs(
-  p_repair_ids bigint[],
-  p_now timestamptz
+  p_repair_ids bigint[], p_now timestamptz
 )
 returns bigint[]
 language plpgsql
@@ -2061,59 +2312,364 @@ security definer
 set search_path = pg_catalog
 as $$
 declare
-  v_completed bigint[];
+  v_completed bigint[] := '{}';
+  v_repair_id bigint;
+  v_repair_state varchar(16);
+  v_root record;
+  v_blocking record;
+  v_successor_id bigint;
+  v_accepted_sequence bigint;
+  v_dirty_generation bigint;
 begin
-  with completable as (
-    select repair.id
-    from library.watcher_repairs as repair
-    where repair.id = any(coalesce(p_repair_ids, array[]::bigint[]))
-      and repair.state = 'catch_up'
-      and not exists (
+  foreach v_repair_id in array p_repair_ids loop
+    select state into v_repair_state
+    from library.watcher_repairs
+    where id = v_repair_id;
+    if v_repair_state is null
+       or v_repair_state not in ('scanning', 'catch_up') then
+      continue;
+    end if;
+
+    perform 1
+    from library.watcher_lanes lane
+    where (lane.library_id, lane.root_id) in (
+      select repair_root.library_id, repair_root.root_id
+      from library.watcher_repair_roots repair_root
+      where repair_root.repair_id = v_repair_id
+      union
+      select peer.library_id, peer.root_id
+      from library.watcher_barrier_participants peer
+      where peer.barrier_id in (
+        select touched.barrier_id
+        from library.watcher_barrier_participants touched
+        join library.watcher_repair_roots repair_root
+          on repair_root.library_id = touched.library_id
+         and repair_root.root_id = touched.root_id
+        where repair_root.repair_id = v_repair_id
+      )
+    )
+    order by lane.library_id, lane.root_id
+    for update of lane;
+
+    update library.watcher_barriers barrier
+    set completed_at = p_now
+    where barrier.completed_at is null
+      and exists (
         select 1
-        from library.watcher_repair_roots as repair_root
-        join library.watcher_lanes as lane
-          on lane.library_id = repair_root.library_id
-         and lane.root_id = repair_root.root_id
-        where repair_root.repair_id = repair.id
-          and (lane.applied_sequence < lane.accepted_sequence
-               or lane.applied_sequence < repair_root.captured_accepted_sequence
-               or lane.repaired_dirty_generation < lane.dirty_generation
-               or lane.repaired_dirty_generation
-                   < repair_root.captured_dirty_generation)
+        from library.watcher_barrier_participants participant
+        join library.watcher_repair_roots repair_root
+          on repair_root.root_id = participant.root_id
+         and repair_root.library_id = participant.library_id
+        where participant.barrier_id = barrier.id
+          and repair_root.repair_id = v_repair_id
       )
       and not exists (
         select 1
-        from library.watcher_repair_roots as repair_root
-        join library.watcher_barrier_participants as touched
+        from library.watcher_barrier_participants participant
+        join library.watcher_lanes lane
+          on lane.library_id = participant.library_id
+         and lane.root_id = participant.root_id
+        where participant.barrier_id = barrier.id
+          and lane.applied_sequence < participant.accepted_sequence
+      );
+
+    if not exists (
+      select 1
+      from library.watcher_repair_roots repair_root
+      join library.watcher_lanes lane
+        on lane.library_id = repair_root.library_id
+       and lane.root_id = repair_root.root_id
+      where repair_root.repair_id = v_repair_id
+        and (
+          lane.accepted_sequence <> lane.applied_sequence
+          or lane.dirty_generation <> lane.repaired_dirty_generation
+          or lane.accepted_sequence > repair_root.captured_accepted_sequence
+          or lane.dirty_generation > repair_root.captured_dirty_generation
+          or lane.applied_sequence < repair_root.captured_accepted_sequence
+          or lane.repaired_dirty_generation < repair_root.captured_dirty_generation
+          or exists (
+            select 1
+            from library.watcher_barrier_participants barrier_participant
+            join library.watcher_barriers barrier
+              on barrier.id = barrier_participant.barrier_id
+            where barrier_participant.root_id = repair_root.root_id
+              and barrier_participant.accepted_sequence
+                    <= repair_root.captured_accepted_sequence
+              and barrier.completed_at is null
+          )
+        )
+    ) then
+      update library.watcher_repairs
+      set state = 'complete', completed_at = p_now
+      where id = v_repair_id and state in ('scanning', 'catch_up');
+
+      update library.watcher_incidents incident
+      set resolved_at = p_now
+      from library.watcher_repair_roots repair_root
+      where repair_root.repair_id = v_repair_id
+        and incident.incident_id = repair_root.incident_id
+        and incident.resolved_at is null;
+
+      delete from library.watcher_generation_repairs
+      where repair_id = v_repair_id;
+      v_completed := array_append(v_completed, v_repair_id);
+    else
+      for v_blocking in
+        select distinct peer_lane.library_id,
+               peer_lane.root_id,
+               peer_lane.applied_sequence,
+               peer_lane.running_generation_id,
+               peer_lane.successor_generation_id
+        from library.watcher_repair_roots repair_root
+        join library.watcher_barrier_participants touched
           on touched.library_id = repair_root.library_id
          and touched.root_id = repair_root.root_id
-        join library.watcher_barriers as barrier
-          on barrier.id = touched.barrier_id
-        where repair_root.repair_id = repair.id
-          and barrier.completed_at is null
-      )
-    order by repair.id
-    for update of repair
-  ), completed as (
-    update library.watcher_repairs as repair
-    set state = 'complete', completed_at = p_now
-    where repair.id in (select id from completable)
-    returning repair.id
-  )
-  select coalesce(pg_catalog.array_agg(id order by id), array[]::bigint[])
-  into v_completed
-  from completed;
+        join library.watcher_barriers barrier
+          on barrier.id = touched.barrier_id and barrier.completed_at is null
+        join library.watcher_barrier_participants peer
+          on peer.barrier_id = touched.barrier_id
+        join library.watcher_lanes peer_lane
+          on peer_lane.library_id = peer.library_id
+         and peer_lane.root_id = peer.root_id
+        where repair_root.repair_id = v_repair_id
+          and peer_lane.applied_sequence < peer.accepted_sequence
+      loop
+        v_successor_id := null;
+        v_accepted_sequence := null;
+        v_dirty_generation := null;
+        if v_blocking.running_generation_id is null
+           and v_blocking.successor_generation_id is null then
+          update library.watcher_lanes as lane
+          set accepted_sequence = lane.accepted_sequence + 1,
+              dirty_generation = lane.dirty_generation + 1,
+              catch_up_count = lane.catch_up_count + 1,
+              disposition_code = 'dirty',
+              next_eligible_at = p_now,
+              updated_at = p_now
+          where lane.library_id = v_blocking.library_id
+            and lane.root_id = v_blocking.root_id
+            and lane.running_generation_id is null
+            and lane.successor_generation_id is null
+          returning lane.accepted_sequence, lane.dirty_generation
+            into v_accepted_sequence, v_dirty_generation;
+          if not found then
+            raise exception 'watcher repair barrier extension raced'
+              using errcode = '40001';
+          end if;
 
-  update library.watcher_incidents as incident
-  set resolved_at = coalesce(incident.resolved_at, p_now),
-      last_seen_at = greatest(incident.last_seen_at, p_now)
-  where incident.resolved_at is null
-    and exists (
-      select 1
-      from library.watcher_repair_roots as repair_root
-      where repair_root.repair_id = any(v_completed)
-        and repair_root.incident_id = incident.incident_id
-    );
+          insert into library.targeted_reconciliation_intents (
+            library_id, primary_root_id, producer_request_key, request_digest,
+            deployment_mode, client_surface, state, accepted_at, updated_at,
+            watcher_generation_kind, accepted_sequence_lower,
+            accepted_sequence_upper, dirty_generation
+          ) values (
+            v_blocking.library_id, v_blocking.root_id,
+            'watcher-repair-extension:' || v_repair_id::text || ':'
+              || v_blocking.root_id::text || ':' || v_accepted_sequence::text,
+            pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+              'watcher-repair-extension:' || v_repair_id::text || ':'
+                || v_blocking.root_id::text || ':' || v_accepted_sequence::text,
+              'UTF8'
+            )), 'hex'),
+            'self_hosted_private_web', 'library_watcher', 'accepted', p_now, p_now,
+            'root_catch_up', v_blocking.applied_sequence + 1,
+            v_accepted_sequence, v_dirty_generation
+          ) returning id into v_successor_id;
+
+          update library.watcher_lanes as lane
+          set successor_generation_id = v_successor_id
+          where lane.library_id = v_blocking.library_id
+            and lane.root_id = v_blocking.root_id
+            and lane.running_generation_id is null
+            and lane.successor_generation_id is null;
+          if not found then
+            raise exception 'watcher repair barrier successor raced'
+              using errcode = '40001';
+          end if;
+
+          insert into library.watcher_generation_participants (
+            generation_id, library_id, root_id, accepted_sequence_lower,
+            accepted_sequence_upper, dirty_generation, created_at, updated_at
+          ) values (
+            v_successor_id, v_blocking.library_id, v_blocking.root_id,
+            v_blocking.applied_sequence + 1, v_accepted_sequence,
+            v_dirty_generation, p_now, p_now
+          );
+          v_blocking.successor_generation_id := v_successor_id;
+        end if;
+
+        insert into library.watcher_generation_repairs (
+          generation_id, repair_id, library_id, created_at
+        )
+        select generation_id, v_repair_id, v_blocking.library_id, p_now
+        from unnest(array[
+          v_blocking.running_generation_id,
+          v_blocking.successor_generation_id
+        ]) as pending(generation_id)
+        where generation_id is not null
+        on conflict on constraint watcher_generation_repairs_pkey do nothing;
+      end loop;
+
+      for v_root in
+        select repair_root.library_id, repair_root.root_id,
+               lane.accepted_sequence, lane.applied_sequence,
+               lane.dirty_generation, lane.running_generation_id,
+               lane.successor_generation_id
+        from library.watcher_repair_roots repair_root
+        join library.watcher_lanes lane
+          on lane.library_id = repair_root.library_id
+         and lane.root_id = repair_root.root_id
+        where repair_root.repair_id = v_repair_id
+          and (
+            lane.accepted_sequence <> lane.applied_sequence
+            or lane.dirty_generation <> lane.repaired_dirty_generation
+            or lane.accepted_sequence > repair_root.captured_accepted_sequence
+            or lane.dirty_generation > repair_root.captured_dirty_generation
+          )
+      order by repair_root.library_id, repair_root.root_id
+      loop
+        v_accepted_sequence := null;
+        v_dirty_generation := null;
+        v_successor_id := null;
+        if v_root.running_generation_id is null
+           and v_root.successor_generation_id is null then
+          update library.watcher_lanes as lane
+          set accepted_sequence = lane.accepted_sequence + 1,
+              dirty_generation = lane.dirty_generation + 1,
+              catch_up_count = lane.catch_up_count + 1,
+              disposition_code = 'dirty',
+              next_eligible_at = p_now,
+              updated_at = p_now
+          where lane.library_id = v_root.library_id
+            and lane.root_id = v_root.root_id
+            and lane.running_generation_id is null
+            and lane.successor_generation_id is null
+          returning lane.accepted_sequence, lane.dirty_generation
+            into v_accepted_sequence, v_dirty_generation;
+          if not found then
+            raise exception 'watcher repair extension raced' using errcode = '40001';
+          end if;
+
+          insert into library.targeted_reconciliation_intents (
+            library_id, primary_root_id, producer_request_key, request_digest,
+            deployment_mode, client_surface, state, accepted_at, updated_at,
+            watcher_generation_kind, accepted_sequence_lower,
+            accepted_sequence_upper, dirty_generation
+          ) values (
+            v_root.library_id, v_root.root_id,
+            'watcher-repair-extension:' || v_repair_id::text || ':'
+              || v_root.root_id::text || ':' || v_accepted_sequence::text,
+            pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+              'watcher-repair-extension:' || v_repair_id::text || ':'
+                || v_root.root_id::text || ':' || v_accepted_sequence::text,
+              'UTF8'
+            )), 'hex'),
+            'self_hosted_private_web', 'library_watcher', 'accepted', p_now, p_now,
+            'root_catch_up', v_root.applied_sequence + 1,
+            v_accepted_sequence, v_dirty_generation
+          ) returning id into v_successor_id;
+
+          update library.watcher_lanes
+          set successor_generation_id = v_successor_id,
+              disposition_code = 'dirty', updated_at = p_now
+          where library_id = v_root.library_id
+            and root_id = v_root.root_id
+            and running_generation_id is null
+            and successor_generation_id is null;
+          if not found then
+            raise exception 'watcher repair successor raced' using errcode = '40001';
+          end if;
+        elsif v_root.successor_generation_id is not null then
+          update library.targeted_reconciliation_intents
+          set watcher_generation_kind = 'root_catch_up',
+              accepted_sequence_lower = least(
+                accepted_sequence_lower, v_root.applied_sequence + 1
+              ),
+              accepted_sequence_upper = greatest(
+                accepted_sequence_upper, v_root.accepted_sequence
+              ),
+              dirty_generation = greatest(
+                dirty_generation, v_root.dirty_generation
+              )
+          where id = v_root.successor_generation_id
+            and watcher_job_linked_at is null
+            and state = 'accepted'
+          returning id into v_successor_id;
+          if found then
+            delete from library.targeted_reconciliation_intent_paths
+            where intent_id = v_successor_id;
+            delete from library.targeted_reconciliation_intent_moves
+            where intent_id = v_successor_id;
+          end if;
+        end if;
+
+        if v_successor_id is not null then
+          insert into library.watcher_generation_participants (
+            generation_id, library_id, root_id, accepted_sequence_lower,
+            accepted_sequence_upper, dirty_generation, created_at, updated_at
+          ) values (
+            v_successor_id, v_root.library_id, v_root.root_id,
+            v_root.applied_sequence + 1,
+            coalesce(v_accepted_sequence, v_root.accepted_sequence),
+            coalesce(v_dirty_generation, v_root.dirty_generation), p_now, p_now
+          )
+          on conflict on constraint watcher_generation_participants_pkey do update
+          set accepted_sequence_lower = least(
+                library.watcher_generation_participants.accepted_sequence_lower,
+                excluded.accepted_sequence_lower
+              ),
+              accepted_sequence_upper = greatest(
+                library.watcher_generation_participants.accepted_sequence_upper,
+                excluded.accepted_sequence_upper
+              ),
+              dirty_generation = greatest(
+                library.watcher_generation_participants.dirty_generation,
+                excluded.dirty_generation
+              ),
+              updated_at = p_now;
+        end if;
+
+        insert into library.watcher_generation_repairs (
+          generation_id, repair_id, library_id, created_at
+        )
+        select generation_id, v_repair_id, v_root.library_id, p_now
+        from unnest(array[
+          v_root.running_generation_id,
+          v_root.successor_generation_id,
+          v_successor_id
+        ]) as pending(generation_id)
+        where generation_id is not null
+        on conflict on constraint watcher_generation_repairs_pkey do nothing;
+
+        if not exists (
+          select 1
+          from library.watcher_generation_repairs as link
+          where link.repair_id = v_repair_id
+            and link.generation_id = any(array[
+              v_root.running_generation_id,
+              v_root.successor_generation_id,
+              v_successor_id
+            ])
+        ) then
+          raise exception 'watcher repair extension has no completion trigger'
+            using errcode = '23514';
+        end if;
+
+        update library.watcher_repair_roots as repair_root
+        set captured_accepted_sequence = lane.accepted_sequence,
+            captured_dirty_generation = lane.dirty_generation
+        from library.watcher_lanes as lane
+        where repair_root.repair_id = v_repair_id
+          and repair_root.root_id = v_root.root_id
+          and lane.library_id = repair_root.library_id
+          and lane.root_id = repair_root.root_id;
+      end loop;
+
+      update library.watcher_repairs
+      set state = 'catch_up', completed_at = null
+      where id = v_repair_id;
+    end if;
+  end loop;
 
   update library.libraries as local_library
   set metadata = pg_catalog.jsonb_set(
@@ -2131,6 +2687,7 @@ begin
             on root.library_id = repair_root.library_id
            and root.id = repair_root.root_id
           where repair_root.repair_id = any(v_completed)
+            and repair_root.library_id = local_library.id
         ), array[]::text[]),
         true
       ),
@@ -2144,7 +2701,6 @@ begin
   return v_completed;
 end;
 $$;
-
 create or replace function library.complete_watcher_generation(
   p_generation_id bigint,
   p_job_id bigint,
@@ -2162,19 +2718,44 @@ declare
   v_count integer;
   v_expected integer;
   v_library_id bigint;
+  v_library_count integer;
   v_repair_ids bigint[];
 begin
-  select intent.library_id into v_library_id
-  from library.targeted_reconciliation_intents as intent
-  where intent.id = p_generation_id and intent.job_id = p_job_id;
+  perform 1
+  from ops.jobs as job
+  join library.targeted_reconciliation_intents as intent
+    on intent.id = p_generation_id
+   and intent.job_id = job.id
+  where job.id = p_job_id
+    and job.kind = 'targeted_reconciliation'
+    and job.state = 'running'
+    and job.attempt_count = p_attempt
+    and job.lease_owner = p_worker_id
+    and job.lease_token = p_lease_token
+    and job.lease_expires_at > pg_catalog.clock_timestamp()
+  for update of job;
   if not found then return false; end if;
 
+  select pg_catalog.min(participant.library_id),
+         pg_catalog.count(*),
+         pg_catalog.count(distinct participant.library_id)
+  into v_library_id, v_expected, v_library_count
+  from library.watcher_generation_participants as participant
+  where participant.generation_id = p_generation_id;
+  if v_expected < 1 or v_library_count <> 1 then
+    raise exception 'watcher generation library scope invalid'
+      using errcode = '23514';
+  end if;
+
+  -- Lock every active repair that could acquire a link to this generation.
+  -- Every link creator follows the same repair-before-lane order.
   perform 1
   from library.watcher_repairs as repair
   where repair.library_id = v_library_id
     and repair.state in ('scanning', 'catch_up')
   order by repair.id
   for update;
+
   select coalesce(pg_catalog.array_agg(link.repair_id order by link.repair_id),
                   array[]::bigint[])
   into v_repair_ids
@@ -2194,24 +2775,10 @@ begin
       on peer.barrier_id = owned_barrier.barrier_id
     where owned_barrier.generation_id = p_generation_id
   ) as locked
-    on locked.library_id = lane.library_id and locked.root_id = lane.root_id
+    on locked.library_id = lane.library_id
+   and locked.root_id = lane.root_id
   order by lane.library_id, lane.root_id
   for update of lane;
-  select pg_catalog.count(*) into v_expected
-  from library.watcher_generation_participants generation_participant
-  where generation_participant.generation_id = p_generation_id;
-
-  perform 1 from ops.jobs as job
-  where job.id = p_job_id
-    and job.kind = 'targeted_reconciliation'
-    and job.state = 'running'
-    and job.attempt_count = p_attempt
-    and job.lease_owner = p_worker_id
-    and job.lease_token = p_lease_token
-    and job.lease_expires_at > pg_catalog.clock_timestamp()
-  for update of job;
-  if not found then return false; end if;
-
   update library.watcher_lanes as lane
       set applied_sequence = greatest(
         lane.applied_sequence, participant.accepted_sequence_upper
@@ -2232,7 +2799,8 @@ begin
     and lane.running_job_id = p_job_id;
   get diagnostics v_count = row_count;
   if v_expected < 1 or v_count <> v_expected then
-    return false;
+    raise exception 'stale watcher completion fence'
+      using errcode = '40001';
   end if;
   update library.targeted_reconciliation_intents
   set watcher_completed_at = coalesce(watcher_completed_at, p_now),
@@ -2522,8 +3090,14 @@ begin
       do update set
         reason_code = excluded.reason_code,
         occurrence_count = library.watcher_incidents.occurrence_count + 1,
-        accepted_sequence = excluded.accepted_sequence,
-        dirty_generation = excluded.dirty_generation,
+      accepted_sequence = greatest(
+        library.watcher_incidents.accepted_sequence,
+        excluded.accepted_sequence
+      ),
+      dirty_generation = greatest(
+        library.watcher_incidents.dirty_generation,
+        excluded.dirty_generation
+      ),
         last_seen_at = excluded.last_seen_at;
   end loop;
   update library.watcher_barrier_participants as barrier_link
@@ -2653,12 +3227,10 @@ as $$
 declare
   v_completed boolean := false;
   v_library_id bigint;
-  v_root record;
-  v_successor_id bigint;
+  v_repair_state varchar(16);
+  v_repair_inventory_revision bigint;
   v_successor_ids bigint[];
   v_covered_successor_ids bigint[];
-  v_accepted_sequence bigint;
-  v_dirty_generation bigint;
 begin
   if p_inventory_revision is null or p_inventory_revision < 0 then
     raise exception 'watcher repair inventory revision is invalid'
@@ -2691,13 +3263,20 @@ begin
   for update of intent;
   if not found then return false; end if;
 
-  perform 1
+  select repair.state, repair.inventory_revision
+  into v_repair_state, v_repair_inventory_revision
   from library.watcher_repairs as repair
   where repair.id = p_repair_id
     and repair.library_id = v_library_id
   order by repair.id
   for update of repair;
   if not found then return false; end if;
+  if v_repair_state = 'complete' then
+    return coalesce(v_repair_inventory_revision = p_inventory_revision, false);
+  end if;
+  if v_repair_state not in ('scanning', 'catch_up') then
+    return false;
+  end if;
 
   with locked_lanes as materialized (
     select lane.successor_generation_id
@@ -2847,119 +3426,6 @@ begin
     and successor.watcher_job_linked_at is null
     and successor.state = 'accepted';
 
-  for v_root in
-    select repair_root.library_id, repair_root.root_id,
-           lane.accepted_sequence, lane.applied_sequence,
-           lane.dirty_generation
-    from library.watcher_repair_roots as repair_root
-    join library.watcher_lanes as lane
-      on lane.library_id = repair_root.library_id
-     and lane.root_id = repair_root.root_id
-    where repair_root.repair_id = p_repair_id
-      and (
-        lane.accepted_sequence > repair_root.captured_accepted_sequence
-        or lane.dirty_generation > repair_root.captured_dirty_generation
-      )
-      and lane.running_generation_id is null
-      and lane.successor_generation_id is null
-    order by repair_root.library_id, repair_root.root_id
-  loop
-    update library.watcher_lanes as lane
-    set accepted_sequence = lane.accepted_sequence + 1,
-        dirty_generation = lane.dirty_generation + 1,
-        catch_up_count = lane.catch_up_count + 1,
-        disposition_code = 'dirty',
-        next_eligible_at = p_now,
-        updated_at = p_now
-    where lane.library_id = v_root.library_id
-      and lane.root_id = v_root.root_id
-      and lane.running_generation_id is null
-      and lane.successor_generation_id is null
-    returning lane.accepted_sequence, lane.dirty_generation
-      into v_accepted_sequence, v_dirty_generation;
-    if not found then
-      raise exception 'watcher repair extension raced'
-        using errcode = '40001';
-    end if;
-
-    insert into library.targeted_reconciliation_intents (
-      library_id, primary_root_id, producer_request_key, request_digest,
-      deployment_mode, client_surface, state, accepted_at, updated_at,
-      watcher_generation_kind, accepted_sequence_lower,
-      accepted_sequence_upper, dirty_generation
-    ) values (
-      v_root.library_id, v_root.root_id,
-      'watcher-repair-extension:' || p_repair_id::text || ':'
-        || v_root.root_id::text || ':' || v_accepted_sequence::text,
-      pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
-        'watcher-repair-extension:' || p_repair_id::text || ':'
-          || v_root.root_id::text || ':' || v_accepted_sequence::text,
-        'UTF8'
-      )), 'hex'),
-      'self_hosted_private_web', 'library_watcher', 'accepted', p_now, p_now,
-      'root_catch_up', v_root.applied_sequence + 1,
-      v_accepted_sequence, v_dirty_generation
-    ) returning id into v_successor_id;
-
-    update library.watcher_lanes
-    set successor_generation_id = v_successor_id
-    where library_id = v_root.library_id and root_id = v_root.root_id;
-    insert into library.watcher_generation_participants (
-      generation_id, library_id, root_id, accepted_sequence_lower,
-      accepted_sequence_upper, dirty_generation, created_at, updated_at
-    ) values (
-      v_successor_id, v_root.library_id, v_root.root_id,
-      v_root.applied_sequence + 1, v_accepted_sequence,
-      v_dirty_generation, p_now, p_now
-    );
-    insert into library.watcher_generation_repairs (
-      generation_id, repair_id, library_id, created_at
-    ) values (v_successor_id, p_repair_id, v_root.library_id, p_now);
-  end loop;
-
-  insert into library.watcher_generation_repairs (
-    generation_id, repair_id, library_id, created_at
-  )
-  select distinct pending.generation_id, p_repair_id,
-         repair_scope.library_id, p_now
-  from (
-    select repair_root.library_id, repair_root.root_id
-    from library.watcher_repair_roots as repair_root
-    where repair_root.repair_id = p_repair_id
-    union
-    select peer.library_id, peer.root_id
-    from library.watcher_repair_roots as repair_root
-    join library.watcher_barrier_participants as touched
-      on touched.library_id = repair_root.library_id
-     and touched.root_id = repair_root.root_id
-    join library.watcher_barriers as barrier
-      on barrier.id = touched.barrier_id
-     and barrier.completed_at is null
-    join library.watcher_barrier_participants as peer
-      on peer.barrier_id = touched.barrier_id
-    where repair_root.repair_id = p_repair_id
-  ) as repair_scope
-  join library.watcher_lanes as lane
-    on lane.library_id = repair_scope.library_id
-   and lane.root_id = repair_scope.root_id
-  cross join lateral pg_catalog.unnest(array[
-    lane.running_generation_id, lane.successor_generation_id
-  ]) as pending(generation_id)
-  where pending.generation_id is not null
-  on conflict on constraint watcher_generation_repairs_pkey do nothing;
-
-  update library.watcher_repair_roots as repair_root
-  set captured_accepted_sequence = lane.accepted_sequence,
-      captured_dirty_generation = lane.dirty_generation
-  from library.watcher_lanes as lane
-  where repair_root.repair_id = p_repair_id
-    and lane.library_id = repair_root.library_id
-    and lane.root_id = repair_root.root_id
-    and (
-      lane.accepted_sequence > repair_root.captured_accepted_sequence
-      or lane.dirty_generation > repair_root.captured_dirty_generation
-    );
-
   select p_repair_id = any(
     library.try_complete_watcher_repairs(array[p_repair_id], p_now)
   ) into v_completed;
@@ -2983,7 +3449,7 @@ set search_path = pg_catalog
 as $$
   select library.complete_watcher_repair_internal(
     p_repair_id, p_job_id, p_attempt, p_worker_id, p_lease_token,
-    p_inventory_revision, p_now, false
+    p_inventory_revision, p_now, true
   );
 $$;
 
@@ -3191,8 +3657,14 @@ begin
       do update set
         reason_code = excluded.reason_code,
         occurrence_count = library.watcher_incidents.occurrence_count + 1,
-        accepted_sequence = excluded.accepted_sequence,
-        dirty_generation = excluded.dirty_generation,
+      accepted_sequence = greatest(
+        library.watcher_incidents.accepted_sequence,
+        excluded.accepted_sequence
+      ),
+      dirty_generation = greatest(
+        library.watcher_incidents.dirty_generation,
+        excluded.dirty_generation
+      ),
         last_seen_at = excluded.last_seen_at;
 
       v_inactive_changed := true;
@@ -3432,8 +3904,14 @@ begin
         where resolved_at is null do update set
           reason_code = excluded.reason_code,
           occurrence_count = library.watcher_incidents.occurrence_count + 1,
-          accepted_sequence = excluded.accepted_sequence,
-          dirty_generation = excluded.dirty_generation,
+      accepted_sequence = greatest(
+        library.watcher_incidents.accepted_sequence,
+        excluded.accepted_sequence
+      ),
+      dirty_generation = greatest(
+        library.watcher_incidents.dirty_generation,
+        excluded.dirty_generation
+      ),
           last_seen_at = excluded.last_seen_at;
     end loop;
     update library.watcher_barrier_participants as barrier_link
@@ -3514,8 +3992,14 @@ begin
     where resolved_at is null do update set
       reason_code = excluded.reason_code,
       occurrence_count = library.watcher_incidents.occurrence_count + 1,
-      accepted_sequence = excluded.accepted_sequence,
-      dirty_generation = excluded.dirty_generation,
+      accepted_sequence = greatest(
+        library.watcher_incidents.accepted_sequence,
+        excluded.accepted_sequence
+      ),
+      dirty_generation = greatest(
+        library.watcher_incidents.dirty_generation,
+        excluded.dirty_generation
+      ),
       last_seen_at = excluded.last_seen_at;
   return query
   select coalesce(pg_catalog.array_agg(distinct generation_id order by generation_id)
@@ -3624,6 +4108,9 @@ begin
            'library.publish_claimed_targeted_reconciliation_inventory_0106(bigint,bigint,integer,character varying,character varying,jsonb,jsonb,timestamp with time zone)'::regprocedure
          )
     into function_definition;
+  function_definition := pg_catalog.replace(function_definition, E'\r\n', E'\n');
+  original_scope := pg_catalog.replace(original_scope, E'\r\n', E'\n');
+  root_aware_scope := pg_catalog.replace(root_aware_scope, E'\r\n', E'\n');
   if pg_catalog.strpos(function_definition, root_aware_scope) > 0 then
     return;
   end if;
@@ -3737,14 +4224,15 @@ begin
   );
   if coalesce(v_publication.publication_won, false)
      and v_repair_id is not null then
-    perform library.complete_watcher_repair(
+    perform library.complete_watcher_repair_internal(
       v_repair_id,
       p_job_id,
       p_attempt,
       p_worker_id,
       p_lease_token,
       v_publication.inventory_mutation_revision,
-      p_now
+      p_now,
+      false
     );
     perform 1
     from library.watcher_repairs as repair
@@ -3792,7 +4280,6 @@ declare
   v_stored_revision bigint;
   v_stored_keys text[];
   v_retry_authorized boolean;
-  v_repair_ids bigint[];
   v_library_id bigint;
 begin
   select intent.library_id, intent.watcher_generation_kind is not null
@@ -3875,12 +4362,6 @@ begin
         using errcode = '40001';
     end if;
     if coalesce(v_is_watcher, false) then
-      select coalesce(pg_catalog.array_agg(repair.repair_id order by repair.repair_id),
-                      array[]::bigint[])
-      into v_repair_ids
-      from library.watcher_generation_repairs as repair
-      where repair.generation_id = p_intent_id;
-      perform library.try_complete_watcher_repairs(v_repair_ids, p_now);
       perform 1
       from library.targeted_reconciliation_intents as completed
       join library.watcher_generation_participants as participant
@@ -3925,12 +4406,14 @@ set search_path = pg_catalog
 as $$
 declare
   required_functions constant text[] := array[
+    'library.load_claimed_full_scan_intent_v3(bigint,character varying,character varying)',
     'library.reconcile_due_watcher_generations(timestamp with time zone,integer)',
     'library.dispatch_ready_watcher_generations(timestamp with time zone,integer)',
     'library.load_claimed_watcher_generation(bigint,integer,character varying,character varying,timestamp with time zone)',
     'library.load_claimed_watcher_private_scope(bigint,bigint,integer,character varying,character varying,timestamp with time zone)',
     'library.fail_claimed_watcher_generation(bigint,bigint,integer,character varying,character varying,character varying,timestamp with time zone)',
-    'library.complete_watcher_repair(bigint,bigint,integer,character varying,character varying,bigint,timestamp with time zone)'
+    'library.complete_watcher_repair(bigint,bigint,integer,character varying,character varying,bigint,timestamp with time zone)',
+    'library.load_watcher_metrics(bigint,timestamp with time zone)'
   ];
   required record;
 begin
@@ -4030,9 +4513,22 @@ revoke all on function library.create_full_scan_intent_v2(
   bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
   bigint[], timestamptz
 ) from public;
+revoke all on function library.create_full_scan_intent_v3(
+  bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
+  bigint[], timestamptz
+) from public;
+revoke all on function library.load_claimed_full_scan_intent_v3(
+  bigint, varchar, varchar
+) from public;
 revoke all on function library.load_local_watcher_incidents() from public;
 revoke all on function library.load_local_watcher_incident_acknowledgements(bigint) from public;
 revoke all on function library.acknowledge_local_watcher_incidents(bigint, uuid[]) from public;
+revoke all on function library.load_watcher_status(bigint) from public;
+revoke all on function library.load_watcher_incident_acknowledgements(bigint, bigint) from public;
+revoke all on function library.acknowledge_watcher_incident(
+  bigint, bigint, uuid, timestamptz
+) from public;
+revoke all on function library.load_watcher_metrics(bigint, timestamptz) from public;
 revoke all on function library.mark_watcher_roots_dirty(bigint, text[], varchar, timestamptz) from public;
 revoke all on function library.accept_watcher_event(bigint, bigint, jsonb, timestamptz) from public;
 revoke all on function library.load_claimed_targeted_reconciliation_intent_v2(bigint, varchar, varchar) from public;
@@ -4087,11 +4583,27 @@ begin
       bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
       bigint[], timestamptz
     ) to album_haven_app;
+    grant execute on function library.create_full_scan_intent_v3(
+      bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
+      bigint[], timestamptz
+    ) to album_haven_app;
+    revoke execute on function library.load_claimed_full_scan_intent_v3(
+      bigint, varchar, varchar
+    ) from album_haven_app;
     grant execute on function library.load_local_watcher_incidents()
       to album_haven_app;
     grant execute on function library.load_local_watcher_incident_acknowledgements(bigint)
       to album_haven_app;
     grant execute on function library.acknowledge_local_watcher_incidents(bigint, uuid[])
+      to album_haven_app;
+    grant execute on function library.load_watcher_status(bigint)
+      to album_haven_app;
+    grant execute on function library.load_watcher_incident_acknowledgements(bigint, bigint)
+      to album_haven_app;
+    grant execute on function library.acknowledge_watcher_incident(
+      bigint, bigint, uuid, timestamptz
+    ) to album_haven_app;
+    grant execute on function library.load_watcher_metrics(bigint, timestamptz)
       to album_haven_app;
     grant execute on function library.mark_watcher_roots_dirty(
       bigint, text[], varchar, timestamptz
@@ -4152,12 +4664,28 @@ begin
       bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
       bigint[], timestamptz
     ) from album_haven_worker;
+    revoke execute on function library.create_full_scan_intent_v3(
+      bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
+      bigint[], timestamptz
+    ) from album_haven_worker;
+    grant execute on function library.load_claimed_full_scan_intent_v3(
+      bigint, varchar, varchar
+    ) to album_haven_worker;
     revoke execute on function library.load_local_watcher_incidents()
       from album_haven_worker;
     revoke execute on function library.load_local_watcher_incident_acknowledgements(bigint)
       from album_haven_worker;
     revoke execute on function library.acknowledge_local_watcher_incidents(bigint, uuid[])
       from album_haven_worker;
+    revoke execute on function library.load_watcher_status(bigint)
+      from album_haven_worker;
+    revoke execute on function library.load_watcher_incident_acknowledgements(bigint, bigint)
+      from album_haven_worker;
+    revoke execute on function library.acknowledge_watcher_incident(
+      bigint, bigint, uuid, timestamptz
+    ) from album_haven_worker;
+    grant execute on function library.load_watcher_metrics(bigint, timestamptz)
+      to album_haven_worker;
     revoke execute on function library.mark_watcher_roots_dirty(
       bigint, text[], varchar, timestamptz
     ) from album_haven_worker;
@@ -4241,11 +4769,27 @@ begin
       bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
       bigint[], timestamptz
     ) from album_haven_readonly;
+    revoke execute on function library.create_full_scan_intent_v3(
+      bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
+      bigint[], timestamptz
+    ) from album_haven_readonly;
+    revoke execute on function library.load_claimed_full_scan_intent_v3(
+      bigint, varchar, varchar
+    ) from album_haven_readonly;
     revoke execute on function library.load_local_watcher_incidents()
       from album_haven_readonly;
     revoke execute on function library.load_local_watcher_incident_acknowledgements(bigint)
       from album_haven_readonly;
     revoke execute on function library.acknowledge_local_watcher_incidents(bigint, uuid[])
+      from album_haven_readonly;
+    grant execute on function library.load_watcher_status(bigint)
+      to album_haven_readonly;
+    revoke execute on function library.load_watcher_incident_acknowledgements(bigint, bigint)
+      from album_haven_readonly;
+    revoke execute on function library.acknowledge_watcher_incident(
+      bigint, bigint, uuid, timestamptz
+    ) from album_haven_readonly;
+    revoke execute on function library.load_watcher_metrics(bigint, timestamptz)
       from album_haven_readonly;
     revoke execute on function library.mark_watcher_roots_dirty(
       bigint, text[], varchar, timestamptz

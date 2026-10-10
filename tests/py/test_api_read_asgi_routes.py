@@ -301,6 +301,58 @@ def test_asgi_status_adds_one_sanitized_nested_projection_for_authorized_operato
     assert "subject_ref" not in repr(payload["job_status"])
     assert "parameters" not in repr(payload["job_status"])
     assert "account_id" not in repr(payload["job_status"])
+
+
+def test_asgi_operator_status_includes_only_bounded_path_free_watcher_metrics():
+    asgi_app = _make_asgi_app()
+    secret = r"D:\Private Music\Secret Library\credential.txt"
+    metrics = SimpleNamespace(
+        ready=2,
+        running=1,
+        coalesced=3,
+        dirty=1,
+        barrier_waiting=1,
+        lag_1_9=4,
+        lag_10_99=2,
+        lag_100_plus=1,
+        coalesced_events=19,
+        catch_ups=5,
+        oldest_ready_seconds=12.5,
+        oldest_repair_seconds=31.25,
+        root_id=secret,
+        path=secret,
+        exception=secret,
+        warning_token=secret,
+    )
+    calls = []
+    asgi_app.state.current_actor_resolver = _ActorResolver(
+        _status_actor(bootstrap=True)
+    )
+    asgi_app.state.watcher_recovery_repository = SimpleNamespace(
+        load_metrics=lambda **kwargs: calls.append(kwargs) or metrics
+    )
+    asgi_app.state.media_host_library_id = 7
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["watcher_metrics"] == {
+        "ready": 2,
+        "running": 1,
+        "coalesced": 3,
+        "dirty": 1,
+        "barrier_waiting": 1,
+        "lag_1_9": 4,
+        "lag_10_99": 2,
+        "lag_100_plus": 1,
+        "coalesced_events": 19,
+        "catch_ups": 5,
+        "oldest_ready_seconds": 12.5,
+        "oldest_repair_seconds": 31.25,
+    }
+    assert calls == [{"library_id": 7}]
+    assert secret not in body.decode("utf-8")
     assert "library_id" not in repr(payload["job_status"])
 
 

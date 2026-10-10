@@ -773,10 +773,11 @@ def test_claimed_full_scan_loader_returns_exact_immutable_root_snapshot():
                     "library_id": 19,
                     "initiating_account_id": 7,
                     "mode": "manual_full_rescan",
-                        "force": True,
-                        "logical_root_ids": ["root-a", "root-b"],
-                        "inventory_mutation_revision": 0,
-                        "committed_inventory_revision": None,
+                    "force": True,
+                    "logical_root_ids": ["root-a", "root-b"],
+                    "inventory_mutation_revision": 0,
+                    "committed_inventory_revision": None,
+                    "watcher_repair_id": 613,
                 }
             )
         ]
@@ -795,6 +796,7 @@ def test_claimed_full_scan_loader_returns_exact_immutable_root_snapshot():
     assert intent.mode == "manual_full_rescan"
     assert intent.force is True
     assert intent.root_ids == ("root-a", "root-b")
+    assert intent.watcher_repair_id == 613
     [(statement, values)] = connection.executed
     assert "load_claimed_full_scan_intent" in _normalized(statement)
     assert values == {

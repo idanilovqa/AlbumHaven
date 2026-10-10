@@ -1628,68 +1628,6 @@ def test_live_worker_has_no_direct_inventory_table_privileges(
     assert allowed is False
 
 
-@pytest.mark.parametrize("mode", ["manual_full_rescan", "background"])
-@pytest.mark.parametrize("publication_allowed", [True, False])
-def test_live_manual_scan_recovers_only_observed_health_older_than_attempt(
-    live_scan_database, mode, publication_allowed,
-):
-    setup_url, runtime_url, worker_url = live_scan_database
-    suffix = f"health-{mode}-{publication_allowed}"
-    account_id, library_id = _seed_scope(setup_url, suffix)
-    arguments = _full_scan_arguments(account_id, library_id, suffix)
-    arguments.update(mode=mode, scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1))
-    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
-    claim = PostgresJobRepository(
-        database_url=worker_url, connect_to_database=isolatedPostgres._connect,
-    ).claim(worker_id="health-recovery-worker", now=datetime.now(timezone.utc), lease_seconds=300)
-    assert claim is not None and claim.job_id == accepted.job_id
-    scans = _scan_repository(worker_url)
-    intent = scans.load_claimed_full_scan(
-        job_id=claim.job_id, worker_id=claim.worker_id, lease_token=claim.lease_token,
-    )
-    cutoff = datetime.now(timezone.utc)
-    health = {
-        "root-a": {"state": "overflow", "detected_at": (cutoff - timedelta(seconds=1)).isoformat()},
-        "root-b": {"state": "overflow", "detected_at": (cutoff + timedelta(seconds=1)).isoformat()},
-        "unobserved": {"state": "overflow", "detected_at": (cutoff - timedelta(seconds=1)).isoformat()},
-    }
-    with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute(
-            "update library.libraries set metadata = metadata || %s::jsonb where id = %s",
-            (json.dumps({"library_watch_health": health}), library_id),
-        )
-        if not publication_allowed:
-            connection.execute(
-                "update ops.jobs set cancel_requested_at = now(), "
-                "cancel_requested_by_account_id = %s, cancel_reason_code = 'requested' "
-                "where id = %s", (account_id, claim.job_id),
-            )
-    result = scans.publish_claimed_full_scan(
-        claim=claim, intent_id=intent.intent_id,
-        expected_inventory_mutation_revision=intent.inventory_mutation_revision,
-        inventory={
-            "artists": [], "albums": [], "featured_artists": [], "tracks": [], "track_files": [],
-            "scan_started_at": cutoff.isoformat(),
-        },
-        observed_root_ids=intent.root_ids, now=datetime.now(timezone.utc),
-    )
-    assert result["publication_won"] is publication_allowed
-    with isolatedPostgres._connect(setup_url) as connection:
-        metadata = connection.execute(
-            "select metadata from library.libraries where id = %s", (library_id,),
-        ).fetchone()["metadata"]
-    _settle_post_scan_cover_follow_ups(setup_url, library_id)
-    if mode == "manual_full_rescan" and publication_allowed:
-        assert metadata["library_watch_health"] == {key: value for key, value in health.items() if key != "root-a"}
-        marker = metadata["manual_scan_recovery"]
-        assert marker["inventory_mutation_revision"] == result["inventory_mutation_revision"]
-        assert datetime.fromisoformat(marker["scan_started_at"]) == cutoff
-        assert set(marker["observed_root_ids"]) == set(intent.root_ids)
-    else:
-        assert metadata["library_watch_health"] == health
-        assert "manual_scan_recovery" not in metadata
-
-
 def test_live_full_scan_retires_files_written_by_production_serializer(live_scan_database):
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 

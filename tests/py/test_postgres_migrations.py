@@ -116,6 +116,22 @@ def _watcher_function_sql(name: str) -> str:
     return sql.split(marker, 1)[1].split(" $$;", 1)[0]
 
 
+def test_0107_normalizes_crlf_before_splicing_targeted_authorization_source():
+    sql = _watcher_recovery_sql()
+    splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1].split(
+        "execute function_definition;",
+        1,
+    )[0]
+    crlf_normalizer = (
+        "pg_catalog.replace(function_definition, e'\\r\\n', e'\\n')"
+    )
+
+    assert crlf_normalizer in splice
+    assert splice.index(crlf_normalizer) < splice.index(
+        "pg_catalog.strpos(function_definition, root_aware_scope)"
+    )
+
+
 def test_0107_declares_lane_invariants_and_partial_indexes():
     sql = _watcher_recovery_sql()
 
@@ -302,6 +318,7 @@ def test_0107_serializes_running_full_scan_repair_admission_with_publication():
 
 def test_0107_rebases_reused_root_catch_up_after_full_scan_publication():
     completer = _watcher_function_sql("library.complete_watcher_repair_internal")
+    repair_completion = _watcher_function_sql("library.try_complete_watcher_repairs")
 
     successor_lock = completer.index(
         "from library.targeted_reconciliation_intents as successor"
@@ -313,8 +330,8 @@ def test_0107_rebases_reused_root_catch_up_after_full_scan_publication():
         "update library.targeted_reconciliation_intents as successor",
         participant_update,
     )
-    repair_link = completer.index(
-        "insert into library.watcher_generation_repairs",
+    repair_completion_call = completer.index(
+        "library.try_complete_watcher_repairs(array[p_repair_id], p_now)",
         intent_update,
     )
 
@@ -323,16 +340,23 @@ def test_0107_rebases_reused_root_catch_up_after_full_scan_publication():
     assert "accepted_sequence_lower = lane.applied_sequence + 1" in completer
     assert "accepted_sequence_upper = lane.accepted_sequence" in completer
     assert "dirty_generation = lane.dirty_generation" in completer
-    assert participant_update < intent_update < repair_link
+    assert participant_update < intent_update < repair_completion_call
+    assert "delete from library.watcher_generation_repairs" in repair_completion
 
 
 def test_0107_exposes_unresolved_incidents_only_through_app_health_boundary():
     sql = _watcher_recovery_sql()
-    loader = _watcher_function_sql("library.load_local_watcher_incidents")
+    legacy_loader = _watcher_function_sql("library.load_local_watcher_incidents")
+    durable_loader = _watcher_function_sql("library.load_watcher_status")
 
-    assert "incident.resolved_at is null" in loader
-    assert "incident.warning_token" in loader
-    assert "root.metadata ->> 'root_id'" in loader
+    assert "incident.resolved_at is null" in legacy_loader
+    assert "incident.incident_id::text" in legacy_loader
+    assert "incident.warning_token" not in legacy_loader
+    assert "root.metadata ->> 'root_id'" in legacy_loader
+    assert "incident_id uuid, warning_token uuid" in durable_loader
+    assert "incident.incident_id" in durable_loader
+    assert "incident.warning_token" in durable_loader
+    assert "incident.resolved_at is null" in durable_loader
     assert (
         "grant execute on function library.load_local_watcher_incidents() "
         "to album_haven_app"
@@ -674,20 +698,26 @@ def test_0107_publication_keeps_retirement_and_watcher_completion_atomic_and_ide
     publication = _watcher_function_sql(
         "library.publish_claimed_targeted_reconciliation"
     )
+    completion = _watcher_function_sql("library.complete_watcher_generation")
 
     for marker in (
         "publication_attempt",
         "committed_inventory_revision",
         "retire_claimed_targeted_reconciliation_vacated_albums",
-        "watcher_completed_at",
-        "watcher_generation_repairs",
-        "try_complete_watcher_repairs",
         "complete_watcher_generation",
     ):
         assert marker in publication
-    completion = _watcher_function_sql("library.complete_watcher_generation")
+    assert "watcher_generation_repairs" in completion
+    assert "try_complete_watcher_repairs" in completion
+    assert "watcher_completed_at" in completion
     assert "running_generation_id = null" in completion
     assert "running_job_id = null" in completion
+    completion_call = publication.index("library.complete_watcher_generation")
+    completion_verification = publication.index(
+        "completed.watcher_completed_at is not null",
+        completion_call,
+    )
+    assert completion_call < completion_verification
     retry_position = publication.index("publication_attempt")
     retirement_position = publication.index(
         "retire_claimed_targeted_reconciliation_vacated_albums"

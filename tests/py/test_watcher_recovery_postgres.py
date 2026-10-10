@@ -219,6 +219,29 @@ def test_dispatch_repository_calls_only_worker_security_definer_function():
     ]
 
 
+def test_complete_repair_uses_claim_fenced_security_definer_function():
+    repository, connection = _repository([[{"repair_completed": True}]])
+    claim = SimpleNamespace(
+        job_id=901,
+        attempt=3,
+        worker_id="worker-full",
+        lease_token="lease-full",
+    )
+
+    assert repository.complete_repair(
+        claim=claim,
+        repair_id=613,
+        inventory_revision=41,
+        now=NOW,
+    ) is True
+    assert connection.executed == [
+        (
+            "select library.complete_watcher_repair(%s, %s, %s, %s, %s, %s, %s) as repair_completed",
+            (613, 901, 3, "worker-full", "lease-full", 41, NOW),
+        )
+    ]
+
+
 def test_mark_dirty_maps_one_participant_and_stable_incident_identity():
     repository, connection = _repository(
         [
@@ -253,6 +276,62 @@ def test_mark_dirty_maps_one_participant_and_stable_incident_identity():
             (7, ["root-a"], "overflow", NOW),
         )
     ]
+
+
+def test_load_status_maps_stable_incident_identity_and_acknowledgement():
+    repository, connection = _repository(
+        [[{
+            "logical_root_id": "root-a",
+            "state": "root_unavailable",
+            "detected_at": NOW,
+            "incident_id": "11111111-1111-1111-1111-111111111111",
+            "warning_token": "22222222-2222-2222-2222-222222222222",
+            "occurrence_count": 2,
+            "acknowledged": True,
+        }]]
+    )
+
+    [problem] = repository.load_status(library_id=7)
+
+    assert problem.root_id == "root-a"
+    assert problem.state == "root_unavailable"
+    assert problem.detected_at == NOW.isoformat()
+    assert problem.incident_id == "11111111-1111-1111-1111-111111111111"
+    assert problem.warning_token == "22222222-2222-2222-2222-222222222222"
+    assert problem.occurrence_count == 2
+    assert problem.acknowledged is True
+    assert connection.executed == [
+        ("select * from library.load_watcher_status(%s)", (7,))
+    ]
+
+
+def test_load_metrics_maps_only_bounded_path_free_dimensions():
+    values = {
+        "ready": 2,
+        "running": 1,
+        "coalesced": 3,
+        "dirty": 1,
+        "barrier_waiting": 1,
+        "lag_1_9": 4,
+        "lag_10_99": 2,
+        "lag_100_plus": 1,
+        "coalesced_events": 19,
+        "catch_ups": 5,
+        "oldest_ready_seconds": 12.5,
+        "oldest_repair_seconds": 31.25,
+    }
+    repository, connection = _repository([[values]])
+
+    metrics = repository.load_metrics(library_id=7)
+
+    assert {
+        field: getattr(metrics, field)
+        for field in values
+    } == values
+    assert set(metrics.__dataclass_fields__) == set(values)
+    [(statement, parameters)] = connection.executed
+    assert "library.load_watcher_metrics" in statement
+    assert parameters[0] == 7
 
 
 @pytest.mark.parametrize(

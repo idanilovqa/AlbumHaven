@@ -10,7 +10,11 @@ function load() {
   return context;
 }
 
-function renderScanWarning(problem, scanPageVisible = true, dismissed = true) {
+function renderScanWarning(problem, {
+  scanPageVisible = true,
+  dismissed = true,
+  repairRequired = false,
+} = {}) {
   const context = load();
   const elements = new Map(['library-scan-warning']
     .map(id => [id, { innerHTML: '', hidden: true, dataset: {} }]));
@@ -22,15 +26,19 @@ function renderScanWarning(problem, scanPageVisible = true, dismissed = true) {
   vm.runInContext(fs.readFileSync(path.join(__dirname,
     '../../../music_app/static/js/runtime/alert-components.js'), 'utf8'), context);
   context.renderLibraryWarning({ watcher_health: {
-    state: 'warning', warning_token: 'owned-warning', dismissed, problems: [problem],
+    state: 'warning', warning_token: 'owned-warning', dismissed,
+    repair_required: repairRequired, problems: [problem],
   } });
   const notice = elements.get('library-scan-warning');
-  assert.equal(notice.hidden, !scanPageVisible || !dismissed);
+  assert.equal(notice.hidden, !scanPageVisible);
   return notice.innerHTML;
 }
 
 test('status refresh keeps the Library notice hidden outside the dedicated scan page', () => {
-  renderScanWarning({ allowed_actions: { 'library.refresh': true } }, false);
+  renderScanWarning(
+    { allowed_actions: { 'library.refresh': true } },
+    { scanPageVisible: false },
+  );
 });
 
 test('watcher health renders a path-free Library notice with the authorized full scan action', () => {
@@ -47,15 +55,28 @@ test('watcher health renders a path-free Library notice with the authorized full
   assert.doesNotMatch(html, /Private Music|[A-Z]:\\|root_1234567890abcdef/);
 });
 
-test('watcher health keeps the Library notice but omits the action for a read-only reviewer', () => {
+test('repair-required watcher health reuses the full-rescan action as Repair library', () => {
+  const html = renderScanWarning({
+    state: 'overflow',
+    allowed_actions: { 'library.refresh': true },
+  }, { repairRequired: true });
+  assert.match(html, /data-status-action="full-rescan"/);
+  assert.match(html, />Repair library</);
+  assert.doesNotMatch(html, />Full Rescan</);
+});
+
+test('repair-required watcher health omits the action for a read-only reviewer', () => {
   for (const allowed_actions of [{}, { 'library.refresh': false }, { 'library.refresh': 'true' }]) {
     const html = renderScanWarning({
       state: 'root_unavailable', root_key: 'root_fedcba0987654321',
       message: 'Private Music C:\\Private Music', allowed_actions,
-    });
+    }, { repairRequired: true });
     assert.match(html, /role="alert"/);
     assert.match(html, /A watched library folder became unavailable\./);
-    assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321|Private Music|[A-Z]:\\/);
+    assert.doesNotMatch(
+      html,
+      /data-status-action|Repair library|Full Rescan|root_fedcba0987654321|Private Music|[A-Z]:\\/,
+    );
   }
 });
 test('Library warning requires acknowledgement of the current warning token', () => {
@@ -66,9 +87,16 @@ test('Library warning requires acknowledgement of the current warning token', ()
   assert.equal(context.libraryWarningPresentation({ ...health, dismissed: true }, '').dismissed, true);
   assert.equal(context.libraryWarningPresentation({ ...health, warning_token: 'second' }, 'first').dismissed, false);
   assert.equal(context.libraryWarningPresentation({ state: 'healthy' }, 'first').warning, false);
-  assert.equal(renderScanWarning({ allowed_actions: { 'library.refresh': true } }, true, false), '');
 });
 
+test('Library Status keeps an unresolved incident visible before acknowledgement', () => {
+  const html = renderScanWarning({
+    state: 'overflow',
+    allowed_actions: { 'library.refresh': true },
+  }, { dismissed: false, repairRequired: true });
+  assert.match(html, /role="alert"/);
+  assert.match(html, />Repair library</);
+});
 
 test('Library Health visibility changes once per transition and stays quiet on repeated status renders', () => {
   const context = load();

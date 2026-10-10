@@ -291,6 +291,7 @@ def _build_worker(
             scan_executor=DurableFullScanExecutor(
                 config=scan_config,
                 scan_repository=scan_repository,
+                watcher_recovery=watcher_recovery,
             ),
             log_event=full_scan_log_event,
         ),

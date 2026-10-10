@@ -324,7 +324,6 @@ def refresh_library_state(
     queue_problematic_albums_prewarm: Callable[[], None] | None = None,
     queue_utility_rules_prewarm: Callable[[], None] | None = None,
     queue_mbid_assertion_follow_up: Callable[..., object] | None = None,
-    recover_library_watch_health: Callable[..., int] | None = None,
     expected_inventory_mutation_revision: int | None = None,
     before_commit: Callable[[object], object] | None = None,
 ) -> None:
@@ -660,27 +659,6 @@ def refresh_library_state(
                 library_state.pop("scan_committed_generation", None)
 
     if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
-        if (
-            requested_scan_mode == "manual_full_rescan"
-            and recover_library_watch_health is not None
-        ):
-            observed_root_ids = publication_state.get(
-                "observed_library_root_ids"
-            )
-            try:
-                recover_library_watch_health(
-                    scan_mode=requested_scan_mode,
-                    scan_started_at=scan_started_at,
-                    observed_root_ids=(
-                        observed_root_ids
-                        if isinstance(observed_root_ids, (set, list, tuple))
-                        else ()
-                    ),
-                )
-            except Exception:
-                logger.exception(
-                    "Unable to clear recovered library watcher health."
-                )
         finalize_post_scan_actions(
             library_state,
             config=cfg,

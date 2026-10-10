@@ -167,50 +167,6 @@ def _stop_library_watch_runtime(
                     targeted_executor.shutdown(wait=False, cancel_futures=True)
 
 
-def _recover_library_watch_after_manual_scan(
-    *,
-    health_service,
-    targeted_reconciler,
-    watch_service,
-    root_definitions,
-    scan_mode,
-    scan_started_at,
-    observed_root_ids,
-) -> int:
-    clear_error = None
-    cleared = 0
-    try:
-        cleared = health_service.clear_after_scan(
-            scan_mode=scan_mode,
-            scan_started_at=scan_started_at,
-            observed_root_ids=observed_root_ids,
-        )
-    except Exception as exc:
-        clear_error = exc
-    normalized_roots = tuple(dict(root) for root in root_definitions)
-    if targeted_reconciler is not None:
-        targeted_reconciler.replace_roots(normalized_roots)
-    try:
-        watch_service.replace_roots(normalized_roots)
-    except Exception:
-        from music_app.services.library_event_coordinator import CoordinatorProblem
-
-        for root in normalized_roots:
-            try:
-                health_service.record_problem(
-                    CoordinatorProblem("reconciliation_failed", str(root.get("id") or ""))
-                )
-            except Exception:
-                # record_problem retains pending health before persistence;
-                # continue protecting every root and preserve the replacement error.
-                logging.getLogger("music_app").exception(
-                    "Unable to persist library watcher recovery problem."
-                )
-        raise
-    if clear_error is not None:
-        raise clear_error
-    return cleared
-
 def _build_runtime_config() -> dict[str, object]:
     from config import APP_NAME, APP_VERSION, Config
 
@@ -490,11 +446,40 @@ def create_asgi_app():
             if targeted_database_url
             else None
         )
+        _app.state.watcher_recovery_repository = watcher_recovery
+
+        def configure_durable_health(library_id: int) -> None:
+            from music_app.services.library_watch_health import (
+                LibraryWatchHealthService,
+                PostgresLibraryWatchHealthStore,
+            )
+
+            if watcher_recovery is None:
+                return
+            if runtime.library_watch_health_service.uses_durable_repository(
+                watcher_recovery,
+                library_id,
+            ):
+                return
+            durable_health_service = LibraryWatchHealthService(watcher_recovery)
+            if durable_health_service is not runtime.library_watch_health_service:
+                durable_health_service.configure_mixed_version_read(
+                    legacy_store=PostgresLibraryWatchHealthStore(runtime.config),
+                    library_id=library_id,
+                )
+                runtime.library_watch_health_service = durable_health_service
+                _app.state.library_watch_health_service = durable_health_service
+
+        if watcher_library_id is not None:
+            configure_durable_health(watcher_library_id)
 
         def watcher_library() -> int | None:
             nonlocal watcher_library_id
-            if watcher_library_id is None and targeted_database_url:
+            if host_scope is None and targeted_database_url:
                 watcher_library_id = scan_jobs.resolve_local_library_id()
+                if watcher_library_id is not None:
+                    _app.state.media_host_library_id = watcher_library_id
+                    configure_durable_health(watcher_library_id)
             return watcher_library_id
 
         def observation_time(value) -> datetime:
@@ -507,7 +492,7 @@ def create_asgi_app():
         def accept_library_watch_event(event) -> None:
             library_id = watcher_library()
             if library_id is None or watcher_recovery is None:
-                return
+                raise RuntimeError("durable watcher admission is unavailable")
             watcher_recovery.accept_event(
                 library_id=library_id,
                 event=event,
@@ -515,20 +500,14 @@ def create_asgi_app():
             )
 
         def persist_library_watch_problem(problem) -> None:
-            try:
-                runtime.library_watch_health_service.record_problem(problem)
-            except Exception:
-                runtime.logger.exception(
-                    "Unable to persist library watcher health problem."
-                )
             library_id = watcher_library()
-            if library_id is not None and watcher_recovery is not None:
-                watcher_recovery.mark_dirty(
-                    library_id=library_id,
-                    logical_root_id=problem.root_id,
-                    reason_code=problem.code,
-                    observed_at=datetime.now(timezone.utc),
-                )
+            if library_id is None or watcher_recovery is None:
+                raise RuntimeError("durable watcher admission is unavailable")
+            watcher_recovery.record_problem(
+                library_id=library_id,
+                problem=problem,
+                observed_at=datetime.now(timezone.utc),
+            )
 
         try:
             runtime.library_event_coordinator = LibraryEventCoordinator(

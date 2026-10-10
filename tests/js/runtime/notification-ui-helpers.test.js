@@ -73,7 +73,7 @@ function createContext(storage = new Map()) {
       return { ok: true, status: 200, json: async () => ({ dismissed_token: JSON.parse(options.body).token }) };
     },
     buildOnPageAlertHtml: config => JSON.stringify(config),
-    window: { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, ButtonComponent: { renderButton: config => `<button>${config.label}</button>` } },
+    window: { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, ButtonComponent: { renderButton: config => ButtonComponent.renderButton(config) } },
     document: {
       createElement() {
         const toast = {
@@ -259,10 +259,12 @@ test('watcher warning uses one shared global alert, survives partial status, and
 test('dismissal persists the displayed token and leaves recovery notice only on Library', async () => {
   const { context, toasts, requests, scanNotice, loader } = createContext();
   const warning = watcherWarning();
+  warning.watcher_health.repair_required = true;
   context.state.status = warning;
   context.syncLibraryWatcherWarning(warning);
   context.syncScanLibraryWatcherHealth(warning, true);
-  assert.equal(scanNotice.hidden, true, 'the floating alert owns an unacknowledged warning');
+  assert.equal(toasts.length, 1);
+  assert.equal(scanNotice.hidden, false, 'Library Status keeps the unresolved incident visible');
   assert.equal(await context.dismissLibraryWatcherWarning(warningButton(toasts[0])), true);
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/account/library-warning/dismiss');
@@ -275,7 +277,8 @@ test('dismissal persists the displayed token and leaves recovery notice only on 
   loader.scanPageVisible = true;
   context.syncScanLibraryWatcherHealth(warning, true);
   assert.equal(scanNotice.hidden, false);
-  assert.match(scanNotice.innerHTML, /Full Rescan/);
+  assert.match(scanNotice.innerHTML, /data-status-action="full-rescan"/);
+  assert.match(scanNotice.innerHTML, />Repair library</);
   const reloaded = createContext();
   reloaded.context.syncLibraryWatcherWarning(watcherWarning(firstWarningToken, true));
   assert.equal(reloaded.toasts.length, 0, 'the server acknowledgement survives reload');

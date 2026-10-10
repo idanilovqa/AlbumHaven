@@ -83,13 +83,16 @@ const HomeFriendsRuntime = (() => {
       const query = entry?.query;
       if (!query || !['recent', 'friends'].includes(query.section) || !['albums', 'artists', 'tracks', 'listens'].includes(query.kind)
         || !['week', 'month', 'six', 'year', 'all'].includes(query.period)
+        || query.homeSection != null && query.homeSection !== 'queue'
+        || query.homeSection === 'queue' && (query.section !== 'recent' || query.kind !== 'tracks' || query.period !== 'week')
         || (query.section === 'friends' ? !reference(query.account_ref) : query.account_ref !== null)) continue;
-      const normalizedQuery = Object.freeze({section: query.section, account_ref: query.account_ref, kind: query.kind, period: query.period});
+      const normalizedQuery = Object.freeze({section: query.section, account_ref: query.account_ref, kind: query.kind, period: query.period,
+        ...(query.homeSection === 'queue' ? {homeSection: 'queue'} : {})});
       const key = JSON.stringify(normalizedQuery);
       if (seen.has(key)) continue;
       seen.add(key);
       const selected = entry.selected;
-      const normalizedSelection = reference(selected?.rowId) && ['album', 'artist'].includes(selected.targetKind)
+      const normalizedSelection = query.homeSection !== 'queue' && reference(selected?.rowId) && ['album', 'artist'].includes(selected.targetKind)
         && reference(selected.targetRef) && (selected.snapshotRef == null || reference(selected.snapshotRef))
         ? Object.freeze({rowId: selected.rowId, targetKind: selected.targetKind, targetRef: selected.targetRef,
           snapshotRef: selected.snapshotRef ?? null}) : null;
@@ -98,9 +101,9 @@ const HomeFriendsRuntime = (() => {
         && tracks.rowIds.length > 0 && tracks.rowIds.length <= 5000 && tracks.rowIds.every(reference)
         && new Set(tracks.rowIds).size === tracks.rowIds.length
         && (tracks.snapshotRef == null || reference(tracks.snapshotRef))
-        ? Object.freeze({rowIds: Object.freeze([...tracks.rowIds]), snapshotRef: tracks.snapshotRef ?? null}) : null;
+        ? Object.freeze({rowIds: Object.freeze([...tracks.rowIds]), snapshotRef: query.homeSection === 'queue' ? null : tracks.snapshotRef ?? null}) : null;
       selectionPresentation.push(Object.freeze({query: normalizedQuery, selected: normalizedTracks ? null : normalizedSelection, tracks: normalizedTracks,
-        childAlbumRef: normalizedSelection?.targetKind === 'artist' || normalizedTracks ? reference(entry.childAlbumRef) : null,
+        childAlbumRef: query.homeSection !== 'queue' && (normalizedSelection?.targetKind === 'artist' || normalizedTracks) ? reference(entry.childAlbumRef) : null,
         pane: choice(entry.pane, ['recent', 'artist', 'album'], 'recent'),
         expanded: choice(entry.expanded, ['recent', 'friends', 'artist', 'album'], null),
         scroll: Object.freeze({source: position(entry.scroll?.source), artist: position(entry.scroll?.artist), album: position(entry.scroll?.album)})}));

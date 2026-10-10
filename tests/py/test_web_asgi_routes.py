@@ -194,6 +194,10 @@ def test_asgi_root_empty_shell_hydration_requests_bounded_gallery_page(app, monk
     assert hydration["required"] is True
     params = parse_qs(urlsplit(hydration["endpoint"]).query)
     assert params["gallery_page_size"] == ["50"]
+    assert params["omit_sidebar"] == ["1"]
+    sidebar_params = parse_qs(urlsplit(hydration["followupEndpoint"]).query)
+    assert sidebar_params["payload_tier"] == ["sidebar"]
+    assert "gallery_page_size" not in sidebar_params
 
 
 def test_asgi_web_routes_register_natively(asgi_app):

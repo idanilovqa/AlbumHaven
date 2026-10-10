@@ -484,6 +484,50 @@ def _build_startup_hydration_contract(
                 else "embedded_sidebar_is_startup_complete"
             ),
         }
+    if (
+        normalized_surface == "albums"
+        and preview_mode == "empty_shell"
+        and not query_raw
+        and not selected_artist
+        and not related_filter_artists
+        and not primary_filter_active
+    ):
+        return {
+            "required": hydration_required,
+            "trigger": "after_runtime_boot" if hydration_required else "none",
+            "endpoint": _build_startup_hydration_endpoint(
+                query_raw,
+                selected_artist,
+                related_filter_artists,
+                primary_filter_active,
+                selected_artist_family_display_mode,
+                gallery_scope,
+                gallery_display_mode,
+                gallery_scale_percent,
+                visible_library_categories,
+                active_surface=normalized_surface,
+                omit_sidebar=True,
+                all_artists_active=all_artists_active,
+            ),
+            "followupEndpoint": _build_startup_hydration_endpoint(
+                query_raw,
+                selected_artist,
+                related_filter_artists,
+                primary_filter_active,
+                selected_artist_family_display_mode,
+                gallery_scope,
+                gallery_display_mode,
+                gallery_scale_percent,
+                visible_library_categories,
+                active_surface=normalized_surface,
+                payload_tier="sidebar",
+                all_artists_active=all_artists_active,
+            ),
+            "embeddedViewPatch": None,
+            "tier": "full",
+            "reason": "empty_shell_prioritizes_gallery_before_sidebar",
+        }
+
     if preview_mode == "empty_shell":
         reason = "empty_shell_requires_view_fetch"
     elif initial_view_partial:

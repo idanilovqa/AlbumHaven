@@ -4,6 +4,44 @@ import { GlobalPlayer } from '../poms/globalPlayer.js';
 import { UtilityAppearanceTab } from '../poms/utilityAppearanceTab.js';
 import { UtilityIntegrationsTab } from '../poms/utilityIntegrationsTab.js';
 
+test('album Back returns to the exact mobile gallery position', async ({ page, app }) => {
+  await app.search('Northlight');
+  await app.scrollRegion('gallery', 700);
+
+  const before = await app.galleryScroll.evaluate(scroll => {
+    const viewport = scroll.getBoundingClientRect();
+    const cards = [...scroll.querySelectorAll('.album-card')];
+    const card = cards.find(candidate => candidate.getBoundingClientRect().bottom > viewport.top + 8);
+    const trigger = card?.querySelector('[data-open-tracklist="1"][data-album-key]');
+    if (!card || !trigger) throw new Error('No visible album card found after scrolling.');
+    return {
+      albumKey: trigger.getAttribute('data-album-key'),
+      offsetTop: card.getBoundingClientRect().top - viewport.top,
+      scrollTop: scroll.scrollTop,
+    };
+  });
+
+  await app.galleryScroll.evaluate((scroll, albumKey) => {
+    const trigger = [...scroll.querySelectorAll('[data-open-tracklist="1"][data-album-key]')]
+      .find(candidate => candidate.getAttribute('data-album-key') === albumKey);
+    trigger?.closest('.album-card')?.querySelector('.album-meta-row')?.click();
+  }, before.albumKey);
+  await expect(app.albumPage).toBeVisible();
+  await app.backButton.click();
+  await expect(app.albumPage).not.toBeVisible();
+
+  await expect.poll(async () => app.galleryScroll.evaluate((scroll, expected) => {
+    const viewport = scroll.getBoundingClientRect();
+    const trigger = [...scroll.querySelectorAll('[data-open-tracklist="1"][data-album-key]')]
+      .find(candidate => candidate.getAttribute('data-album-key') === expected.albumKey);
+    const card = trigger?.closest('.album-card');
+    if (!card) return Number.POSITIVE_INFINITY;
+    const offsetDelta = Math.abs((card.getBoundingClientRect().top - viewport.top) - expected.offsetTop);
+    const scrollDelta = Math.abs(scroll.scrollTop - expected.scrollTop);
+    return Math.max(offsetDelta, scrollDelta);
+  }, before)).toBeLessThanOrEqual(1);
+});
+
 test('row-body opens the sixteen-track album; scrolling shows a bar thumbnail; search leaves details', async ({ page, app, snapshot }) => {
   await app.search('Sixteen Horizons');
   await app.openAlbumBody('Sixteen Horizons');

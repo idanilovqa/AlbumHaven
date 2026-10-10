@@ -68,6 +68,15 @@ function resolveInitialHydrationEndpoint(startupHydration, options = {}) {
           serverUrl.searchParams.delete(param);
         }
       });
+      if (serverUrl.pathname === resolvedUrl.pathname
+        && serverUrl.searchParams.get('surface') === resolvedUrl.searchParams.get('surface')) {
+        // Hydration may choose a payload tier, but cannot change the native
+        // collection identity that the initial shell already resolved.
+        ['playlist_id', 'top_ref'].forEach((param) => {
+          if (resolvedUrl.searchParams.has(param)) serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
+          else serverUrl.searchParams.delete(param);
+        });
+      }
       return `${serverUrl.pathname}${serverUrl.search}`;
     }
   }

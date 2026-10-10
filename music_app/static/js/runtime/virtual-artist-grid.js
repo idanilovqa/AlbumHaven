@@ -742,9 +742,20 @@ class VirtualArtistGrid {
     }
     this._absoluteScrollRestore = null;
     this.invalidateScrollStabilization();
-    this.scrollEl.scrollTop = Math.max(0, Number(section.top || 0));
+    this._resetScrollAfterMeasure = false;
+    const scrollRect = this.scrollEl.getBoundingClientRect();
+    const containerRect = this.containerEl.getBoundingClientRect();
+    const containerTop = Number(this.scrollEl.scrollTop || 0) + containerRect.top - scrollRect.top;
+    this.scrollEl.scrollTop = Math.max(0, containerTop + Number(section.top || 0));
     this.lastKey = '';
     this.render(true);
+    const renderedHeader = Array.from(this.containerEl.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
+      String(candidate.getAttribute('data-scroll-artist') || '') === normalizedArtist
+    ));
+    if (renderedHeader instanceof HTMLElement) {
+      const renderedDelta = renderedHeader.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top;
+      if (Math.abs(renderedDelta) > 0.5) this.scrollEl.scrollTop += renderedDelta;
+    }
     return true;
   }
 
@@ -1206,7 +1217,10 @@ class VirtualArtistGrid {
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
     if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
-      && typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+      && typeof loadNextRootGalleryPage === 'function') {
+      if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
+      void loadNextRootGalleryPage();
+    }
     if (!isOwnedStabilizationScroll && ownsPendingAbsoluteRestore) {
       this.scrollEl.scrollLeft = this._absoluteScrollRestore.scrollLeft;
       this.scrollEl.scrollTop = this._absoluteScrollRestore.scrollTop;

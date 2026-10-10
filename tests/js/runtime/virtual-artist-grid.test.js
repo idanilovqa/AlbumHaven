@@ -4479,7 +4479,7 @@ test('startup preview cards survive layout events until an authoritative virtual
 
 
 test('scrollToArtist jumps to the modeled artist without applying an artist filter', () => {
-  const { context, scrollEl } = createRuntimeContext();
+  const { context, scrollEl, containerEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   virtualGrid.setGroups([
     { artist: 'Alpha', albums: [{ key: 'alpha::one', name: 'One', tracks: [] }] },
@@ -4488,11 +4488,21 @@ test('scrollToArtist jumps to the modeled artist without applying an artist filt
   const target = virtualGrid.sections.find((section) => section.group?.artist === 'Beta');
   const selectedArtistBefore = context.state.view.selected_artist;
   virtualGrid._scrollRestoreRaf = 73;
+  virtualGrid._resetScrollAfterMeasure = true;
+  containerEl.getBoundingClientRect = () => ({ top: -scrollEl.scrollTop });
+  const renderedHeader = new context.HTMLElement();
+  renderedHeader.getAttribute = (name) => name === 'data-scroll-artist' ? 'Beta' : '';
+  renderedHeader.getBoundingClientRect = () => ({ top: target.top - 24.25 - scrollEl.scrollTop });
+  const originalQuerySelectorAll = containerEl.querySelectorAll.bind(containerEl);
+  containerEl.querySelectorAll = (selector) => (
+    selector === '[data-scroll-artist]' ? [renderedHeader] : originalQuerySelectorAll(selector)
+  );
 
   assert.equal(virtualGrid.scrollToArtist('Beta'), true);
-  assert.equal(scrollEl.scrollTop, target.top);
+  assert.equal(scrollEl.scrollTop, target.top - 24.25);
   assert.equal(context.state.view.selected_artist, selectedArtistBefore);
   assert.equal(virtualGrid._scrollRestoreRaf, null);
+  assert.equal(virtualGrid._resetScrollAfterMeasure, false);
   assert.equal(context.canceledBrowserAnimationFrames.includes(73), true);
 });
 

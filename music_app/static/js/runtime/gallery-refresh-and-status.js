@@ -140,6 +140,76 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+async function loadPreviousRootGalleryPage() {
+  const view = state.view;
+  const page = view?.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
+    || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
+    || !scroll || scroll.clientHeight <= 0 || scroll.scrollTop > scroll.clientHeight * 2) return false;
+
+  const request = {
+    controller: new AbortController(),
+    cursor: page.previous_cursor,
+    revision: page.revision,
+    viewRevision: Number(state.ui.viewStateRevision || 0),
+    url: buildRootGalleryPageUrl(view),
+  };
+  rootGalleryPageRequest = request;
+  const ownsResponse = () => (
+    rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && Number(state.ui.viewStateRevision || 0) === request.viewRevision
+    && buildRootGalleryPageUrl(state.view) === request.url
+    && state.view.gallery_page?.previous_cursor === request.cursor
+    && state.view.gallery_page?.revision === request.revision
+  );
+
+  try {
+    const url = new URL(request.url, window.location.href);
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_cursor', request.cursor);
+    url.searchParams.set('gallery_page_direction', 'previous');
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' },
+      signal: request.controller.signal,
+    });
+    if (response.status === 409 || !ownsResponse()) return false;
+    const data = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse() || !Array.isArray(data.artist_groups)
+      || data.gallery_page?.revision !== request.revision
+      || (data.gallery_page?.has_previous && !data.gallery_page.previous_cursor)
+      || data.gallery_page?.previous_cursor === request.cursor) return false;
+
+    const currentPage = state.view.gallery_page;
+    applyViewPayload({
+      ...state.view,
+      artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
+      gallery_page: {
+        ...currentPage,
+        previous_cursor: data.gallery_page.previous_cursor || null,
+        has_previous: Boolean(data.gallery_page.has_previous),
+      },
+      initial_view_partial: false,
+    }, {
+      trackSidebarReveal: false,
+      preserveSidebarState: true,
+      preserveGalleryBrowseLocationState: true,
+      rootGalleryContinuation: true,
+    });
+    renderArtistGroups({ preserveScroll: true, preserveMountedGalleryChildren: true });
+    return true;
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
+  }
+}
+
 const STARTUP_FOLLOWUP_RETRY_DELAY_MS = 100;
 const STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS = 350;
 const STARTUP_FOLLOWUP_MAX_AGE_MS = 1000;

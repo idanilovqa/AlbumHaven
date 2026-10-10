@@ -949,10 +949,34 @@ test('scrollRootGalleryToArtist waits for the replacement grid before accepting 
   await context.scrollRootGalleryToArtist('Anthony');
 
   assert.deepEqual(scrolledArtists, [], 'the old selected-artist grid must not own the jump');
-  assert.equal(frames.length, 1);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    assert.equal(frames.length, 1);
+    frames.shift()();
+  }
+  assert.deepEqual(scrolledArtists, []);
   context.virtualGrid._renderGeneration = 5;
   frames.shift()();
   assert.deepEqual(scrolledArtists, ['Anthony']);
+});
+
+test('scrollRootGalleryToArtist abandons delayed alignment after the anchored page loses ownership', async () => {
+  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const frames = [];
+  context.state.view.gallery_page = {
+    anchor_artist: 'Anthony',
+    anchor_group_artist: 'Anthony',
+  };
+  context.virtualGrid.scrollToArtist = () => false;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+
+  await context.scrollRootGalleryToArtist('Anthony');
+  assert.equal(frames.length, 1);
+  context.state.view.gallery_page = { anchor_artist: 'Another artist' };
+  frames.shift()();
+  assert.equal(frames.length, 0);
 });
 
 test('artist tree context action closes the menu before scrolling the root gallery', () => {

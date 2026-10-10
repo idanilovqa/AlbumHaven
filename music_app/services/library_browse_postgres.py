@@ -3472,6 +3472,8 @@ def _root_gallery_page_bounds(
     anchor_offset: int | None = None,
 ) -> tuple[int, int]:
     size = _root_gallery_page_size(params)
+    if str(params.get("gallery_page_direction") or "") not in {"", "previous"}:
+        raise ValueError("Invalid gallery page direction.")
     offset = 0
     cursor = params.get("gallery_cursor")
     if cursor:
@@ -3499,8 +3501,46 @@ def _root_gallery_page_bounds(
 def _root_gallery_page_metadata(revision: str, count: int, size: int, offset: int, length: int) -> dict[str, object]:
     end = offset + length
     has_more = end < count
-    next_cursor = base64.urlsafe_b64encode(json.dumps([1, revision, end]).encode()).decode().rstrip("=") if has_more else None
+    next_cursor = _root_gallery_cursor(revision, end) if has_more else None
     return {"next_cursor": next_cursor, "has_more": has_more, "revision": revision, "page_size": size}
+
+
+def _root_gallery_cursor(revision: str, offset: int) -> str:
+    return base64.urlsafe_b64encode(json.dumps([1, revision, offset]).encode()).decode().rstrip("=")
+
+
+def _root_gallery_group_page_interval(
+    ordered: list[dict[str, object]],
+    nominal_offset: int,
+    size: int,
+    *,
+    required_offset: int | None = None,
+) -> tuple[int, int]:
+    count = len(ordered)
+    if not count:
+        return 0, 0
+    offset = min(max(0, nominal_offset), count - 1)
+    artist_id = ordered[offset].get("artist_id")
+    while offset > 0 and ordered[offset - 1].get("artist_id") == artist_id:
+        offset -= 1
+    required_end = (required_offset + 1) if required_offset is not None else 0
+    end = min(count, max(offset + size, required_end))
+    if end:
+        artist_id = ordered[end - 1].get("artist_id")
+        while end < count and ordered[end].get("artist_id") == artist_id:
+            end += 1
+    return offset, end
+
+
+def _root_gallery_previous_cursor(
+    ordered: list[dict[str, object]], revision: str, size: int, offset: int,
+) -> str | None:
+    if offset <= 0:
+        return None
+    previous_offset, _ = _root_gallery_group_page_interval(
+        ordered, max(0, offset - size), size,
+    )
+    return _root_gallery_cursor(revision, previous_offset) if previous_offset < offset else None
 
 
 def _root_gallery_anchor_metadata(page, anchor_artist: str, anchor_offset: int | None):
@@ -3532,15 +3572,31 @@ def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: M
     ), None) if anchor_artist and not params.get("gallery_cursor") else None
     if anchor_artist and not params.get("gallery_cursor") and anchor_offset is None:
         raise ValueError("Gallery artist anchor is unavailable.")
-    size, offset = _root_gallery_page_bounds(
+    size, nominal_offset = _root_gallery_page_bounds(
         params,
         snapshot["revision"],
         len(ordered),
         anchor_offset=anchor_offset,
     )
-    page = ordered[offset:offset + size]
+    group_bounded = bool(anchor_artist or params.get("gallery_page_direction") == "previous")
+    if group_bounded:
+        offset, end = _root_gallery_group_page_interval(
+            ordered,
+            nominal_offset,
+            size,
+            required_offset=anchor_offset,
+        )
+    else:
+        offset = nominal_offset
+        end = min(len(ordered), offset + size)
+    page = ordered[offset:end]
     metadata = _root_gallery_page_metadata(
         snapshot["revision"], len(ordered), size, offset, len(page))
+    if group_bounded:
+        previous_cursor = _root_gallery_previous_cursor(
+            ordered, snapshot["revision"], size, offset,
+        )
+        metadata.update({"previous_cursor": previous_cursor, "has_previous": previous_cursor is not None})
     metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset))
     return page, snapshot["sidebar"], snapshot["album_count"], metadata
 

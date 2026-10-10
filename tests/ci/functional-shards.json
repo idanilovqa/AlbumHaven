@@ -374,6 +374,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+              "case": "FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
               "case": "FTC-GALLERY-032 hydrates version tracks and preserves table playback, selection and fixed modal identity",
               "area": "album-details"

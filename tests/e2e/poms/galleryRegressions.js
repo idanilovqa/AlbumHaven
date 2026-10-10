@@ -16,7 +16,10 @@ export class GalleryRegressions {
     this.infoSummary=page.locator('[data-artist-info-overlay] [data-artist-info-summary]');
     this.cards=page.locator('.album-card');
     this.loader=page.locator('#library-loader');
-    this.sidebarArtists=page.locator('#sidebar-list [data-sidebar-artist]');
+    this.galleryScroll=page.locator('#albums-scroll');
+    this.sidebarArtistSelector='#sidebar-list [data-sidebar-artist]';
+    this.sidebarArtists=page.locator(this.sidebarArtistSelector);
+    this.scrollToArtistAction=page.locator('[data-artist-tree-action="scroll-to-artist"]');
     this.view=page.locator('[data-gallery-view-cluster]');
     this.noInfo=page.getByRole('button',{name:'No info',exact:true});
     this.cardsView=page.getByRole('button',{name:'Cards',exact:true});
@@ -129,6 +132,28 @@ export class GalleryRegressions {
       return { ...evidence, pendingRequests: readPendingRequests() };
     } finally {
       this.page.off('request', onRequest);
+      await observation.dispose();
+    }
+  }
+  async observeLoaderVisibility() {
+    // parity-check: allow-read-only-measurement-evaluate -- observe loader visibility without changing product state
+    return this.page.evaluateHandle(() => {
+      const loader = document.getElementById('library-loader');
+      const evidence = { seen: false };
+      const record = () => {
+        if (loader && !loader.hidden && getComputedStyle(loader).display !== 'none') evidence.seen = true;
+      };
+      const observer = new MutationObserver(record);
+      observer.observe(loader, { attributes: true, attributeFilter: ['hidden', 'class', 'style'] });
+      record();
+      return { finish() { observer.disconnect(); record(); return evidence.seen; } };
+    });
+  }
+  async finishLoaderVisibility(observation) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- collect and stop owned loader visibility observer
+      return await observation.evaluate(value => value.finish());
+    } finally {
       await observation.dispose();
     }
   }

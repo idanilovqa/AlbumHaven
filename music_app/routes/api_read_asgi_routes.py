@@ -576,7 +576,7 @@ def view_data(request: Request) -> JSONResponse:
             return JSONResponse({"ok": False, "error": "Gallery paging requires the library root."}, status_code=400)
         # Existing route selection still validates the remaining browse parameters.
         allowed = {"surface", "payload_tier", "gallery_scope", "gallery_display", "gallery_display_mode",
-                   "gallery_scale_percent", "gallery_anchor_artist", "category", "omit_sidebar",
+                   "gallery_scale_percent", "gallery_anchor_artist", "gallery_page_direction", "category", "omit_sidebar",
                    "all_artists", "q", "artist"}
         if set(params) - allowed:
             return JSONResponse({"ok": False, "error": "Invalid gallery paging parameters."}, status_code=400)

@@ -466,7 +466,6 @@ function scrollRootGalleryToArtist(artist) {
   const targetArtist = String(artist || '').trim();
   if (!targetArtist) return Promise.resolve(false);
   if (virtualGrid?.scrollToArtist?.(targetArtist)) return Promise.resolve(true);
-  const priorGridGeneration = Number(virtualGrid?._renderGeneration || 0);
   const nextView = {
     ...state.view,
     surface_request: 'albums',
@@ -481,18 +480,19 @@ function scrollRootGalleryToArtist(artist) {
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
     if (result === false) return false;
     const galleryPage = state.view?.gallery_page;
+    const anchoredGalleryPage = galleryPage;
     const renderedArtist = String(
       galleryPage?.anchor_artist === targetArtist
         ? galleryPage?.anchor_group_artist || targetArtist
         : targetArtist,
     ).trim();
     const scrollWhenRendered = (attemptsRemaining) => {
-      const hasNewGrid = Number(virtualGrid?._renderGeneration || 0) > priorGridGeneration;
-      if (hasNewGrid && virtualGrid?.scrollToArtist?.(renderedArtist)) return;
+      if (state.view?.gallery_page !== anchoredGalleryPage) return;
+      if (virtualGrid?.scrollToArtist?.(renderedArtist)) return;
       if (attemptsRemaining <= 0) return;
       scheduleBrowserAnimationFrame(() => scrollWhenRendered(attemptsRemaining - 1));
     };
-    scrollWhenRendered(8);
+    scrollWhenRendered(180);
     return true;
   });
 }

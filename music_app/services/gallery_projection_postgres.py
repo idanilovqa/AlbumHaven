@@ -88,7 +88,8 @@ def _latest_compatible_header(connection, context, view_state):
 
 def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
     from music_app.services.library_browse_postgres import (
-        _root_gallery_anchor_metadata, _root_gallery_page_bounds, _root_gallery_page_metadata,
+        _root_gallery_anchor_metadata, _root_gallery_cursor, _root_gallery_page_bounds,
+        _root_gallery_page_metadata,
     )
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
@@ -118,23 +119,67 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
             anchor_offset = int(anchor_row["ordinal"])
         else:
             raise ValueError("Gallery artist anchor is unavailable.")
-    size, offset = _root_gallery_page_bounds(
+    size, nominal_offset = _root_gallery_page_bounds(
         params,
         header["revision"],
         count,
         anchor_offset=anchor_offset,
     )
+    scope_key = gallery_projection_scope_key(view_state)
+
+    def artist_bounds(ordinal):
+        if not count:
+            return 0, 0
+        boundary = _first(connection.execute("""
+            with target as (
+                select payload->>'artist_id' as artist_id
+                from library.gallery_projection_occurrences
+                where library_id = %(library_id)s and scope_key = %(scope_key)s
+                  and ordinal = %(ordinal)s
+            )
+            select min(occurrence.ordinal) as first_ordinal,
+                   max(occurrence.ordinal) + 1 as end_ordinal
+            from library.gallery_projection_occurrences occurrence
+            cross join target
+            where occurrence.library_id = %(library_id)s and occurrence.scope_key = %(scope_key)s
+              and occurrence.payload->>'artist_id' = target.artist_id
+        """, {
+            "library_id": context["library_id"],
+            "scope_key": scope_key,
+            "ordinal": min(max(0, int(ordinal)), count - 1),
+        }))
+        if not boundary or boundary.get("first_ordinal") is None or boundary.get("end_ordinal") is None:
+            raise ValueError("Gallery artist boundary is unavailable.")
+        return int(boundary["first_ordinal"]), int(boundary["end_ordinal"])
+
+    group_bounded = bool(anchor_artist or params.get("gallery_page_direction") == "previous")
+    if count and group_bounded:
+        offset, _ = artist_bounds(nominal_offset)
+        required_end = max(offset + size, (anchor_offset + 1) if anchor_offset is not None else 0)
+        _, end = artist_bounds(min(count - 1, required_end - 1))
+    elif count:
+        offset = nominal_offset
+        end = min(count, offset + size)
+    else:
+        offset = end = 0
     rows = connection.execute("""
         select payload from library.gallery_projection_occurrences
         where library_id = %(library_id)s and scope_key = %(scope_key)s
           and ordinal >= %(offset)s and ordinal < %(end)s
         order by ordinal
     """, {"library_id": context["library_id"], "scope_key": gallery_projection_scope_key(view_state),
-          "offset": offset, "end": offset + size}).fetchall()
+            "offset": offset, "end": end}).fetchall()
     page = [dict(row["payload"]) for row in rows]
-    if len(page) != min(size, count - offset):
+    if len(page) != end - offset:
         return None
     metadata = _root_gallery_page_metadata(header["revision"], count, size, offset, len(page))
+    if group_bounded:
+        previous_cursor = None
+        if offset > 0:
+            previous_offset, _ = artist_bounds(max(0, offset - size))
+            if previous_offset < offset:
+                previous_cursor = _root_gallery_cursor(header["revision"], previous_offset)
+        metadata.update({"previous_cursor": previous_cursor, "has_previous": previous_cursor is not None})
     metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset))
     if stale:
         metadata.update({

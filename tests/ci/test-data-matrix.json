@@ -38,6 +38,28 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+    "case": "FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "mounted-artist-jump-without-reload",
+      "exact-artist-top-alignment",
+      "bidirectional-anchor-pagination",
+      "complete-artist-discographies"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/startupProgress.spec.js",

@@ -277,3 +277,197 @@ test('FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and adv
     requests,
   });
 });
+
+async function openArtistTreeContextMenu(ui, artist) {
+  const rows = ui.sidebarArtists;
+  // parity-check: allow-read-only-measurement-evaluate -- find the owned Artist Tree locator index
+  const rowIndex = await rows.evaluateAll((items, targetArtist) => (
+    items.findIndex(candidate => candidate.getAttribute('data-sidebar-artist') === targetArtist)
+  ), artist);
+  expect(rowIndex, `Expected Artist Tree row for ${artist}`).toBeGreaterThanOrEqual(0);
+  const row = rows.nth(rowIndex);
+  await row.scrollIntoViewIfNeeded();
+  await row.click({ button: 'right' });
+  await expect(ui.scrollToArtistAction).toBeVisible();
+}
+
+test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal',
+  { tag: '@area:gallery-search' },
+  async ({ page, galleryActions, testArtifacts }) => {
+    const ui = new GalleryRegressions(page);
+    const requests = [];
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (url.pathname === '/view-data') requests.push(url.search);
+    });
+
+    await page.goto('/login');
+    await page.getByLabel('Username').fill(PERFORMANCE_AUTH_USERNAME);
+    await page.getByLabel('Password', { exact: true }).fill(PERFORMANCE_AUTH_PASSWORD);
+    const navigation = page.waitForResponse(response => (
+      response.request().isNavigationRequest() && new URL(response.url()).pathname === '/' && response.ok()
+    ));
+    await page.getByRole('button', { name: /sign in/i }).click();
+    await navigation;
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.waitForInitialRefreshCompleted();
+
+    // parity-check: allow-read-only-measurement-evaluate -- choose a mounted artist below the gallery top
+    const localTarget = await page.evaluate(({ scrollSelector, sidebarSelector, headingSelector }) => {
+      const scroll = document.querySelector(scrollSelector);
+      const sidebarArtists = new Set(
+        [...document.querySelectorAll(sidebarSelector)]
+          .map(item => item.getAttribute('data-sidebar-artist')),
+      );
+      return [...document.querySelectorAll(headingSelector)]
+        .map(header => ({
+          artist: header.getAttribute('data-scroll-artist'),
+          top: header.getBoundingClientRect().top,
+        }))
+        .filter(item => sidebarArtists.has(item.artist))
+        .sort((left, right) => right.top - left.top)
+        .find(item => item.top > scroll.getBoundingClientRect().top + 24)?.artist || '';
+    }, {
+      scrollSelector: '#albums-scroll',
+      sidebarSelector: ui.sidebarArtistSelector,
+      headingSelector: ui.artistHeadingSelector,
+    });
+    expect(localTarget, 'Fixture needs a mounted artist below the gallery top').not.toBe('');
+
+    const localUrl = page.url();
+    const loaderObservation = await ui.observeLoaderVisibility();
+    const requestCountBeforeLocalJump = requests.length;
+    await openArtistTreeContextMenu(ui, localTarget);
+    await ui.scrollToArtistAction.click();
+
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- measure exact mounted artist alignment
+      return page.evaluate(({ artist, scrollSelector, headingSelector }) => {
+      const scroll = document.querySelector(scrollSelector);
+      const header = [...document.querySelectorAll(headingSelector)]
+        .find(item => item.getAttribute('data-scroll-artist') === artist);
+      return header ? Math.abs(header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) : 9999;
+      }, { artist: localTarget, scrollSelector: '#albums-scroll', headingSelector: ui.artistHeadingSelector });
+    }).toBeLessThanOrEqual(1);
+    expect(page.url()).toBe(localUrl);
+    expect(requests.slice(requestCountBeforeLocalJump).some(query => (
+      new URLSearchParams(query).has('gallery_anchor_artist')
+    ))).toBe(false);
+    expect(await ui.finishLoaderVisibility(loaderObservation)).toBe(false);
+
+    // parity-check: allow-read-only-measurement-evaluate -- read native gallery position before wheel input
+    const localScrollBeforeWheel = await ui.galleryScroll.evaluate(element => element.scrollTop);
+    const scrollBox = await ui.galleryScroll.boundingBox();
+    await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2);
+    await page.mouse.wheel(0, -Math.max(320, Math.floor(scrollBox.height * 0.8)));
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- confirm native wheel movement
+      return ui.galleryScroll.evaluate(element => element.scrollTop);
+    })
+      .toBeLessThan(localScrollBeforeWheel);
+
+    // parity-check: allow-read-only-measurement-evaluate -- choose a sidebar artist outside the loaded model
+    const remoteTarget = await page.evaluate(sidebarSelector => {
+      const loaded = new Set((state.view.artist_groups || []).map(group => String(group.artist || '')));
+      const rendered = [...document.querySelectorAll(sidebarSelector)]
+        .map(item => String(item.getAttribute('data-sidebar-artist') || ''));
+      return rendered.reverse().find(artist => artist && !loaded.has(artist)) || '';
+    }, ui.sidebarArtistSelector);
+    expect(remoteTarget, 'Fixture needs a rendered Artist Tree row outside the loaded gallery page').not.toBe('');
+    const anchorResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && url.searchParams.get('gallery_anchor_artist') === remoteTarget
+        && response.ok();
+    });
+    await openArtistTreeContextMenu(ui, remoteTarget);
+    await ui.scrollToArtistAction.click();
+    await anchorResponse;
+
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- measure exact remote artist alignment
+      return page.evaluate(({ artist, scrollSelector, headingSelector }) => {
+      const scroll = document.querySelector(scrollSelector);
+      const header = [...document.querySelectorAll(headingSelector)]
+        .find(item => item.getAttribute('data-scroll-artist') === artist);
+      return header ? Math.abs(header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) : 9999;
+      }, { artist: remoteTarget, scrollSelector: '#albums-scroll', headingSelector: ui.artistHeadingSelector });
+    }).toBeLessThanOrEqual(1);
+
+    // parity-check: allow-read-only-measurement-evaluate -- compare anchored group sizes with sidebar totals
+    const leading = await page.evaluate(artist => {
+      const groups = state.view.artist_groups || [];
+      const targetIndex = groups.findIndex(group => String(group.artist || '') === artist);
+      const group = targetIndex > 0 ? groups[targetIndex - 1] : null;
+      const sidebar = group
+        ? (state.view.artists_sidebar || []).find(item => String(item.artist || '') === String(group.artist || ''))
+        : null;
+      return {
+        artist: String(group?.artist || ''),
+        loadedAlbums: group?.albums?.length || 0,
+        authoritativeAlbums: Number(sidebar?.count || 0),
+        hasPrevious: Boolean(state.view.gallery_page?.has_previous),
+      };
+    }, remoteTarget);
+    expect(leading.artist, 'Anchored page must include an artist above the target').not.toBe('');
+    expect(leading.loadedAlbums).toBe(leading.authoritativeAlbums);
+    expect(leading.hasPrevious, 'Fixture target must leave earlier pages for upward traversal').toBe(true);
+
+    const previousResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && url.searchParams.get('gallery_page_direction') === 'previous'
+        && response.ok();
+    }, { timeout: 20_000 });
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const box = await ui.galleryScroll.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(0, -Math.max(500, Math.floor(box.height * 1.5)));
+      await page.waitForTimeout(40);
+      // parity-check: allow-read-only-measurement-evaluate -- stop after reaching production's previous-page buffer
+      const reachedTopBuffer = await ui.galleryScroll.evaluate(element => (
+        element.scrollTop <= element.clientHeight * 2
+      ));
+      if (reachedTopBuffer) break;
+    }
+    await previousResponse;
+
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- wait for complete prepended leading artist data
+      return page.evaluate(() => {
+      const groups = state.view.artist_groups || [];
+      const first = groups[0];
+      const sidebar = (state.view.artists_sidebar || [])
+        .find(item => String(item.artist || '') === String(first?.artist || ''));
+      return {
+        artist: String(first?.artist || ''),
+        loadedAlbums: first?.albums?.length || 0,
+        authoritativeAlbums: Number(sidebar?.count || 0),
+      };
+      });
+    }).toEqual(expect.objectContaining({
+      loadedAlbums: expect.any(Number),
+      authoritativeAlbums: expect.any(Number),
+    }));
+    // parity-check: allow-read-only-measurement-evaluate -- capture final leading artist completeness evidence
+    const firstLoaded = await page.evaluate(() => {
+      const first = (state.view.artist_groups || [])[0];
+      const sidebar = (state.view.artists_sidebar || [])
+        .find(item => String(item.artist || '') === String(first?.artist || ''));
+      return {
+        artist: String(first?.artist || ''),
+        loadedAlbums: first?.albums?.length || 0,
+        authoritativeAlbums: Number(sidebar?.count || 0),
+      };
+    });
+    expect(firstLoaded.artist).not.toBe('');
+    expect(firstLoaded.loadedAlbums).toBe(firstLoaded.authoritativeAlbums);
+
+    testArtifacts.queueJsonAttachment('artist-tree-scroll-jump.json', {
+      localTarget,
+      remoteTarget,
+      leading,
+      firstLoaded,
+      requests,
+    });
+  });

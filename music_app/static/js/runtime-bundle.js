@@ -14901,6 +14901,76 @@ async function loadNextRootGalleryPage() {
   }
 }
 
+async function loadPreviousRootGalleryPage() {
+  const view = state.view;
+  const page = view?.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
+    || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
+    || !scroll || scroll.clientHeight <= 0 || scroll.scrollTop > scroll.clientHeight * 2) return false;
+
+  const request = {
+    controller: new AbortController(),
+    cursor: page.previous_cursor,
+    revision: page.revision,
+    viewRevision: Number(state.ui.viewStateRevision || 0),
+    url: buildRootGalleryPageUrl(view),
+  };
+  rootGalleryPageRequest = request;
+  const ownsResponse = () => (
+    rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && Number(state.ui.viewStateRevision || 0) === request.viewRevision
+    && buildRootGalleryPageUrl(state.view) === request.url
+    && state.view.gallery_page?.previous_cursor === request.cursor
+    && state.view.gallery_page?.revision === request.revision
+  );
+
+  try {
+    const url = new URL(request.url, window.location.href);
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_cursor', request.cursor);
+    url.searchParams.set('gallery_page_direction', 'previous');
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' },
+      signal: request.controller.signal,
+    });
+    if (response.status === 409 || !ownsResponse()) return false;
+    const data = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse() || !Array.isArray(data.artist_groups)
+      || data.gallery_page?.revision !== request.revision
+      || (data.gallery_page?.has_previous && !data.gallery_page.previous_cursor)
+      || data.gallery_page?.previous_cursor === request.cursor) return false;
+
+    const currentPage = state.view.gallery_page;
+    applyViewPayload({
+      ...state.view,
+      artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
+      gallery_page: {
+        ...currentPage,
+        previous_cursor: data.gallery_page.previous_cursor || null,
+        has_previous: Boolean(data.gallery_page.has_previous),
+      },
+      initial_view_partial: false,
+    }, {
+      trackSidebarReveal: false,
+      preserveSidebarState: true,
+      preserveGalleryBrowseLocationState: true,
+      rootGalleryContinuation: true,
+    });
+    renderArtistGroups({ preserveScroll: true, preserveMountedGalleryChildren: true });
+    return true;
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
+  }
+}
+
 const STARTUP_FOLLOWUP_RETRY_DELAY_MS = 100;
 const STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS = 350;
 const STARTUP_FOLLOWUP_MAX_AGE_MS = 1000;
@@ -35261,9 +35331,20 @@ class VirtualArtistGrid {
     }
     this._absoluteScrollRestore = null;
     this.invalidateScrollStabilization();
-    this.scrollEl.scrollTop = Math.max(0, Number(section.top || 0));
+    this._resetScrollAfterMeasure = false;
+    const scrollRect = this.scrollEl.getBoundingClientRect();
+    const containerRect = this.containerEl.getBoundingClientRect();
+    const containerTop = Number(this.scrollEl.scrollTop || 0) + containerRect.top - scrollRect.top;
+    this.scrollEl.scrollTop = Math.max(0, containerTop + Number(section.top || 0));
     this.lastKey = '';
     this.render(true);
+    const renderedHeader = Array.from(this.containerEl.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
+      String(candidate.getAttribute('data-scroll-artist') || '') === normalizedArtist
+    ));
+    if (renderedHeader instanceof HTMLElement) {
+      const renderedDelta = renderedHeader.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top;
+      if (Math.abs(renderedDelta) > 0.5) this.scrollEl.scrollTop += renderedDelta;
+    }
     return true;
   }
 
@@ -35725,7 +35806,10 @@ class VirtualArtistGrid {
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
     if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
-      && typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+      && typeof loadNextRootGalleryPage === 'function') {
+      if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
+      void loadNextRootGalleryPage();
+    }
     if (!isOwnedStabilizationScroll && ownsPendingAbsoluteRestore) {
       this.scrollEl.scrollLeft = this._absoluteScrollRestore.scrollLeft;
       this.scrollEl.scrollTop = this._absoluteScrollRestore.scrollTop;
@@ -40696,7 +40780,6 @@ function scrollRootGalleryToArtist(artist) {
   const targetArtist = String(artist || '').trim();
   if (!targetArtist) return Promise.resolve(false);
   if (virtualGrid?.scrollToArtist?.(targetArtist)) return Promise.resolve(true);
-  const priorGridGeneration = Number(virtualGrid?._renderGeneration || 0);
   const nextView = {
     ...state.view,
     surface_request: 'albums',
@@ -40711,18 +40794,19 @@ function scrollRootGalleryToArtist(artist) {
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
     if (result === false) return false;
     const galleryPage = state.view?.gallery_page;
+    const anchoredGalleryPage = galleryPage;
     const renderedArtist = String(
       galleryPage?.anchor_artist === targetArtist
         ? galleryPage?.anchor_group_artist || targetArtist
         : targetArtist,
     ).trim();
     const scrollWhenRendered = (attemptsRemaining) => {
-      const hasNewGrid = Number(virtualGrid?._renderGeneration || 0) > priorGridGeneration;
-      if (hasNewGrid && virtualGrid?.scrollToArtist?.(renderedArtist)) return;
+      if (state.view?.gallery_page !== anchoredGalleryPage) return;
+      if (virtualGrid?.scrollToArtist?.(renderedArtist)) return;
       if (attemptsRemaining <= 0) return;
       scheduleBrowserAnimationFrame(() => scrollWhenRendered(attemptsRemaining - 1));
     };
-    scrollWhenRendered(8);
+    scrollWhenRendered(180);
     return true;
   });
 }

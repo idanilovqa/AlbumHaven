@@ -42,7 +42,9 @@ def test_gallery_snapshot_artist_anchor_opens_page_with_leading_context():
         {"gallery_page_size": "3", "gallery_anchor_artist": "Beta"},
     )
 
-    assert [item["artist_name"] for item in page] == ["Alpha", "Beta", "Beta"]
+    assert [item["artist_name"] for item in page] == [
+        "Alpha", "Alpha", "Alpha", "Alpha", "Beta", "Beta", "Beta",
+    ]
     assert metadata["anchor_artist"] == "Beta"
     assert metadata["anchor_offset"] == 4
     assert metadata["anchor_group_artist"] == "Beta"

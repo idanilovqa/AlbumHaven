@@ -136,3 +136,59 @@ test('continuation uses the loaded source scope rather than retained browser sco
   assert.match(f.pending[0].url, /gallery_scope=all&category=hoard/);
   f.pending[0].resolve(page([])); await result;
 });
+
+test('anchored gallery prepends earlier complete groups near the top without replacing forward continuation', async () => {
+  const f = fixture();
+  f.state.view.gallery_page = {
+    next_cursor: 'forward-page',
+    has_more: true,
+    previous_cursor: 'earlier-page',
+    has_previous: true,
+    revision: 'r1',
+    page_size: 50,
+  };
+  f.scroll.scrollTop = 500;
+
+  const loading = f.context.loadPreviousRootGalleryPage();
+  assert.equal(f.pending.length, 1);
+  const requestUrl = new URL(f.pending[0].url, 'https://localhost');
+  assert.equal(requestUrl.searchParams.get('gallery_cursor'), 'earlier-page');
+  assert.equal(requestUrl.searchParams.get('gallery_page_direction'), 'previous');
+  assert.equal(requestUrl.searchParams.get('omit_sidebar'), '1');
+
+  f.pending[0].resolve({
+    artist_groups: [{ artist: 'Earlier', albums: [{ key: 'earlier-1' }, { key: 'earlier-2' }] }],
+    gallery_page: {
+      previous_cursor: null,
+      has_previous: false,
+      next_cursor: 'existing-page',
+      has_more: true,
+      revision: 'r1',
+      page_size: 50,
+    },
+  });
+
+  assert.equal(await loading, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(f.state.view.artist_groups.map(group => group.artist))),
+    ['Earlier', 'A'],
+  );
+  assert.equal(f.state.view.gallery_page.next_cursor, 'forward-page');
+  assert.equal(f.state.view.gallery_page.has_more, true);
+  assert.equal(f.state.view.gallery_page.has_previous, false);
+  assert.equal(f.renders[0].preserveScroll, true);
+  assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
+});
+
+test('anchored gallery does not request earlier pages until the user scrolls near the top', async () => {
+  const f = fixture();
+  f.state.view.gallery_page = {
+    ...f.state.view.gallery_page,
+    previous_cursor: 'earlier-page',
+    has_previous: true,
+  };
+  f.scroll.scrollTop = 1500;
+
+  assert.equal(await f.context.loadPreviousRootGalleryPage(), false);
+  assert.equal(f.pending.length, 0);
+});

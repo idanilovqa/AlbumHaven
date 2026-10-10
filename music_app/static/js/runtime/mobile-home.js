@@ -14,5 +14,6 @@ function syncMobileHome() {
   document.getElementById('shell-main-surface')?.classList.toggle('has-mobile-home', show);
   if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
   if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
+  if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
   if (!show && typeof showMobileGalleryPinchHint === 'function') showMobileGalleryPinchHint();
 }

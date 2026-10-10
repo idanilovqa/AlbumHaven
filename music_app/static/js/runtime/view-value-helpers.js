@@ -1,5 +1,11 @@
 function isEffectivelyEmptyView(view) {
   const v = view || {};
+  const surface = String(v.surface?.active || v.surface_request || '').trim().toLowerCase();
+  const contentKind = v.shell_layout?.slots?.main_content?.content_kind;
+  // Collections own their loading/empty state outside the album gallery. A
+  // complete collection shell must not start gallery hydration or scan UI.
+  if ((surface === 'playlists' && ['playlist_index', 'playlist_detail'].includes(contentKind))
+    || (surface === 'album_tops' && contentKind === 'album_tops')) return false;
   const sidebarCount = Array.isArray(v.artists_sidebar) ? v.artists_sidebar.length : 0;
   const groupCollections = [
     v.primary_artist_groups,
@@ -98,6 +104,7 @@ function shouldRunImmediateStartupHydration(view, bootstrap = {}) {
   const startupHydration = bootstrap?.startupHydration || {};
   const hydrationNeeded = Boolean(
     bootstrap?.partialView
+    || view?.initial_view_partial
     || isEffectivelyEmptyView(view)
     || startupHydration.required
   );

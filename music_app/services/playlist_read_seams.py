@@ -10,8 +10,8 @@ from music_app.services.view_search import normalize_search_text
 
 
 _field = field_from_source
-_IMPLEMENTED_VIEW_SURFACES = ("home", "albums", "playlists")
-_RESERVED_VIEW_SURFACES = ("album_tops",)
+_IMPLEMENTED_VIEW_SURFACES = ("home", "albums", "playlists", "album_tops")
+_RESERVED_VIEW_SURFACES = ()
 _DEFAULT_VIEW_SURFACE = "home"
 _DEFAULT_BROWSE_VIEW_SURFACE = "albums"
 _DEFAULT_PLAYLIST_ALLOWED_ACTIONS = {

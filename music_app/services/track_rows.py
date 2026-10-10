@@ -256,7 +256,8 @@ def build_track_row_payload(
     )
     playback_state = track_playback_state_from_source(track)
     if callable(scrobble_count_resolver):
-        scrobble_count = max(0, safe_int(scrobble_count_resolver(track)) or 0)
+        resolved_count = scrobble_count_resolver(track)
+        scrobble_count = None if resolved_count is None else max(0, safe_int(resolved_count) or 0)
     else:
         scrobble_count = track_scrobble_count_from_source(track)
     resolved_viewer_opinion_preferences = resolve_viewer_opinion_preferences(viewer_opinion_preferences)

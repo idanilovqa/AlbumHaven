@@ -895,7 +895,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       ?? base?.surface_request
       ?? '',
   ).trim().toLowerCase();
-  const isPlaylistSurface = resolvedSurface === 'playlists';
+  const isCollectionSurface = resolvedSurface === 'playlists' || resolvedSurface === 'album_tops';
   const playbackContext = normalizeRuntimePlaybackContext(source.playback_context, base.playback_context);
   const hasSelectedArtistFamilyDisplayMode = Object.prototype.hasOwnProperty.call(source, 'selected_artist_family_display_mode')
     || Object.prototype.hasOwnProperty.call(base, 'selected_artist_family_display_mode')
@@ -924,28 +924,28 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...base,
     ...source,
     artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.artist_groups,
-      isPlaylistSurface ? [] : base.artist_groups,
+      isCollectionSurface ? [] : source.artist_groups,
+      isCollectionSurface ? [] : base.artist_groups,
     ),
     primary_artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.primary_artist_groups),
-      isPlaylistSurface ? [] : base.primary_artist_groups,
+      isCollectionSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.primary_artist_groups),
+      isCollectionSurface ? [] : base.primary_artist_groups,
     ),
     family_artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.family_artist_groups),
-      isPlaylistSurface ? [] : base.family_artist_groups,
+      isCollectionSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.family_artist_groups),
+      isCollectionSurface ? [] : base.family_artist_groups,
     ),
     artists_sidebar: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.artists_sidebar,
-      isPlaylistSurface ? [] : base.artists_sidebar,
+      isCollectionSurface ? [] : source.artists_sidebar,
+      isCollectionSurface ? [] : base.artists_sidebar,
     ),
     related_artists: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.related_artists,
-      isPlaylistSurface ? [] : base.related_artists,
+      isCollectionSurface ? [] : source.related_artists,
+      isCollectionSurface ? [] : base.related_artists,
     ),
     related_filter_artists: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.related_filter_artists,
-      isPlaylistSurface ? [] : base.related_filter_artists,
+      isCollectionSurface ? [] : source.related_filter_artists,
+      isCollectionSurface ? [] : base.related_filter_artists,
     ).map((artist) => String(artist || '')),
     search_filters: normalizeRuntimeSearchFilters(source.search_filters, base.search_filters),
     search_filter_contract: normalizeRuntimeSearchFilterContract(source.search_filter_contract, base.search_filter_contract),
@@ -966,8 +966,8 @@ function normalizeViewPayload(payload, fallbackView = null) {
     manual_version_links: cloneRuntimeObject(source.manual_version_links, base.manual_version_links),
     query: normalizeRuntimeString(source.query, base.query),
     selected_artist: normalizeRuntimeString(
-      isPlaylistSurface ? '' : source.selected_artist,
-      isPlaylistSurface ? '' : base.selected_artist,
+      isCollectionSurface ? '' : source.selected_artist,
+      isCollectionSurface ? '' : base.selected_artist,
     ),
     gallery_scope: normalizeRuntimeString(source.gallery_scope, base.gallery_scope),
     gallery_display_mode: normalizeRuntimeGalleryDisplayMode(source.gallery_display_mode, base.gallery_display_mode),
@@ -978,16 +978,16 @@ function normalizeViewPayload(payload, fallbackView = null) {
     album_count: normalizeRuntimeNumber(source.album_count, base.album_count),
     artist_count: normalizeRuntimeNumber(source.artist_count, base.artist_count),
     all_artists_active: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.all_artists_active,
-      isPlaylistSurface ? false : base.all_artists_active,
+      isCollectionSurface ? false : source.all_artists_active,
+      isCollectionSurface ? false : base.all_artists_active,
     ),
     show_all_artists_sidebar_link: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.show_all_artists_sidebar_link,
-      isPlaylistSurface ? false : base.show_all_artists_sidebar_link,
+      isCollectionSurface ? false : source.show_all_artists_sidebar_link,
+      isCollectionSurface ? false : base.show_all_artists_sidebar_link,
     ),
     primary_filter_active: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.primary_filter_active,
-      isPlaylistSurface ? false : base.primary_filter_active,
+      isCollectionSurface ? false : source.primary_filter_active,
+      isCollectionSurface ? false : base.primary_filter_active,
     ),
     initial_view_partial: normalizeRuntimeBoolean(
       source.initial_view_partial,
@@ -997,12 +997,12 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
   // A replacement search/artist payload must not inherit a root page cursor.
-  if (isPlaylistSurface || normalizedView.query || normalizedView.selected_artist
+  if (isCollectionSurface || normalizedView.query || normalizedView.selected_artist
     || (Array.isArray(source.artist_groups) && !Object.prototype.hasOwnProperty.call(source, 'gallery_page'))) {
     delete normalizedView.gallery_page;
     delete normalizedView.gallery_page_scope;
   }
-  if (isPlaylistSurface) {
+  if (isCollectionSurface) {
     delete normalizedView.artist_family_filters;
     delete normalizedView.artist_page;
     delete normalizedView.playback_context;
@@ -1013,6 +1013,16 @@ function normalizeViewPayload(payload, fallbackView = null) {
     if (!isRuntimePlainObject(source.playlist_index)) {
       delete normalizedView.playlist_index;
     }
+  }
+  if (resolvedSurface !== 'album_tops') delete normalizedView.top_ref;
+  if (resolvedSurface === 'album_tops') {
+    normalizedView.top_ref = typeof source.top_ref === 'string' ? source.top_ref : null;
+    delete normalizedView.playlist_detail;
+    delete normalizedView.playlist_index;
+    delete normalizedView.playlist_sidebar;
+    delete normalizedView.playlist_creation_source;
+    delete normalizedView.playlist_actions;
+    delete normalizedView.search_context;
   }
   return normalizedView;
 }
@@ -1428,6 +1438,11 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  if (typeof selectLibrarySidebarMode === 'function' && previousView.surface?.active !== nextView.surface?.active
+    && ['playlists', 'album_tops'].includes(nextView.surface?.active)) selectLibrarySidebarMode(nextView.surface.active);
+  if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
+  if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
+  if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;

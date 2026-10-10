@@ -3611,10 +3611,9 @@ def _upsert_track_preference_sql() -> str:
           %s,
           %s::jsonb
         from bootstrap_context
-        on conflict (account_id, track_key) do update
+        on conflict (account_id, library_id, track_key) do update
           set rating = excluded.rating,
               love_tier = excluded.love_tier,
-              library_id = excluded.library_id,
               updated_at = now(),
               metadata = app.track_preferences.metadata || excluded.metadata
         returning 1;

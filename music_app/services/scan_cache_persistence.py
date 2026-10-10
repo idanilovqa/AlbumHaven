@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.album_metadata_sources import reconcile_album_metadata_sources
 from music_app.services.artist_family_postgres import (
     replace_artist_family_projection_in_transaction,
 )
@@ -27,7 +28,7 @@ from music_app.services.library import (
 )
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
 from music_app.services.library_roots import build_root_provenance_payload, summarize_root_provenance_payloads
-from music_app.services.metadata import normalize_exception_value
+from music_app.services.metadata import label_origin, normalize_exception_value
 from music_app.services.non_album_view_payloads import infer_blank_album_membership
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.relation_projection_postgres import (
@@ -284,7 +285,7 @@ class PostgresScanCacheAdapter:
 
         with self._connect_to_database() as connection, ExitStack() as publication_stack:
             connection.execute(_inventory_publication_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
+            _ensure_bootstrap_context(connection, for_write=True)
             if any(target["paths"] or target["subtrees"] for target in stale_by_root.values()):
                 from music_app.services.library_watch_health import guard_destructive_library_publication
 
@@ -465,6 +466,7 @@ class PostgresScanCacheAdapter:
                     "source": _SOURCE,
                 },
             )
+            reconcile_album_metadata_sources(connection, album_keys=affected_album_keys, paths=file_cache)
             revision_row = _first_row(
                 connection.execute(_increment_inventory_mutation_revision_sql())
             )
@@ -599,7 +601,7 @@ class PostgresScanCacheAdapter:
         )
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
+            _ensure_bootstrap_context(connection, for_write=True)
             expected_cover_state_guard = normalized_expected_origin is not None
             if not reject_if_user_controlled and not expected_cover_state_guard:
                 connection.execute(_increment_cover_mutation_revision_sql())
@@ -726,7 +728,7 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
+            _ensure_bootstrap_context(connection, for_write=True)
             result = _row_mapping(_first_row(connection.execute(
                 _persist_blank_album_tag_edit_sql(),
                 {
@@ -757,6 +759,7 @@ class PostgresScanCacheAdapter:
                 or inventory_mutation_revision < 1
             ):
                 raise RuntimeError("Targeted blank Album persistence did not update the selected inventory.")
+            reconcile_album_metadata_sources(connection, paths=normalized_paths)
             committed_relation_state = (
                 _commit_structural_relation_projection(connection, self._config)
                 if rebuild_relation_projection
@@ -830,7 +833,7 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
+            _ensure_bootstrap_context(connection, for_write=True)
             for row in artist_rows:
                 connection.execute(_upsert_local_artist_sql(), row)
             _execute_semantic_local_album_key_adoptions(connection, album_rows)
@@ -876,6 +879,7 @@ class PostgresScanCacheAdapter:
                 connection,
                 target_album_ids=(destination_album_id,),
             )
+            reconcile_album_metadata_sources(connection, paths=normalized_paths)
             committed_relation_state = (
                 _commit_structural_relation_projection(connection, self._config)
                 if rebuild_relation_projection
@@ -953,7 +957,7 @@ class PostgresScanCacheAdapter:
             ]
             with self._connect_to_database() as connection:
                 connection.execute(_inventory_publication_advisory_lock_sql())
-                _ensure_bootstrap_context(connection)
+                _ensure_bootstrap_context(connection, for_write=True)
                 result = _row_mapping(
                     _first_row(
                         connection.execute(
@@ -985,6 +989,7 @@ class PostgresScanCacheAdapter:
                     raise RuntimeError(
                         "Targeted inventory tag persistence did not update every selected file."
                     )
+                reconcile_album_metadata_sources(connection, paths=normalized_paths)
                 if before_commit is not None:
                     before_commit(connection)
                 if commit_guard is not None:
@@ -1079,7 +1084,7 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
+            _ensure_bootstrap_context(connection, for_write=True)
             active_separate_release_keys = _load_separate_release_keys(connection)
             destination_album = _structural_destination_album_projection(
                 self._build_albums,
@@ -1221,6 +1226,7 @@ class PostgresScanCacheAdapter:
                     normalized_changed_fields == frozenset({"album"})
                 ),
             )
+            reconcile_album_metadata_sources(connection, paths=normalized_paths)
             committed_relation_state = (
                 _commit_structural_relation_projection(connection, self._config)
                 if rebuild_relation_projection
@@ -1501,7 +1507,7 @@ class PostgresScanCacheAdapter:
             ]
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
-            _ensure_bootstrap_context(connection)
+            _ensure_bootstrap_context(connection, for_write=True)
             if _load_cover_mutation_revision(connection) != prepared_cover_mutation_revision:
                 raise ScanCachePublicationSuperseded(
                     "Cover selection changed while the scan snapshot was being prepared."
@@ -1592,6 +1598,7 @@ class PostgresScanCacheAdapter:
                     ),
                 },
             )
+            reconcile_album_metadata_sources(connection)
             relation_source_rows = list(
                 connection.execute(load_relation_source_rows_sql()).fetchall()
             )
@@ -1747,8 +1754,10 @@ def _first_row(cursor: object) -> object | None:
     return rows[0] if rows else None
 
 
-def _ensure_bootstrap_context(connection: Any) -> None:
-    cursor = connection.execute(_bootstrap_context_ready_sql())
+def _ensure_bootstrap_context(connection: Any, *, for_write: bool = False) -> None:
+    # Source triggers acquire the dependency clock. Lock library authority first
+    # because these writers also update library metadata later in this transaction.
+    cursor = connection.execute(_bootstrap_context_ready_sql(for_write=for_write))
     if _first_row(cursor) is None:
         raise RuntimeError("Postgres scan_cache requires the bootstrap local owner/library context.")
 
@@ -2075,6 +2084,11 @@ def _structural_file_entry_delta(
             continue
         if key in updated_entry:
             delta[str(key)] = _jsonb_compatible(updated_entry[key])
+    for field in ("title", "album", "album_artist", "artist"):
+        delta[f"{field}_origin"] = label_origin(updated_entry.get(field), updated_entry.get(f"{field}_origin"))
+    if not _text_or_none(updated_entry.get("title")):
+        delta["title"] = Path(str(updated_entry["path"])).stem
+        delta["title_origin"] = "filename_fallback"
     return delta
 
 
@@ -2492,12 +2506,18 @@ def _inventory_rows_from_albums(
                 )
             if not include_track_inventory:
                 continue
+            track_title = _text_or_none(getattr(track, "title", None)) or Path(track_key).stem
             track_rows.append(
                 {
                     "album_key": album_key,
                     "artist_key": track_artist_key,
                     "track_key": track_key,
-                    "title": _text_or_none(getattr(track, "title", None)) or Path(track_key).stem,
+                    "title": track_title,
+                    "title_origin": (label_origin(file_entry.get("title"), file_entry.get("title_origin"))
+                                     if _text_or_none(file_entry.get("title")) == track_title
+                                     else "filename_fallback" if not _text_or_none(getattr(track, "title", None)) else "unknown"),
+                    "artist_origin": (label_origin(file_entry.get("artist"), file_entry.get("artist_origin"))
+                                      if _text_or_none(file_entry.get("artist")) == track_artist_name else "unknown"),
                     "disc_number": safe_int(getattr(track, "disc_number", None)),
                     "track_number": safe_int(getattr(track, "track_number", None)),
                     "duration_seconds": safe_int(getattr(track, "duration_seconds", None)),
@@ -2572,6 +2592,9 @@ def _inventory_rows_from_albums(
                 "artist_key": track_artist_key,
                 "track_key": track_key,
                 "title": _text_or_none(file_entry.get("title")) or Path(track_key).stem,
+                "title_origin": (label_origin(file_entry.get("title"), file_entry.get("title_origin"))
+                                 if _text_or_none(file_entry.get("title")) else "filename_fallback"),
+                "artist_origin": label_origin(file_entry.get("artist"), file_entry.get("artist_origin")),
                 "disc_number": safe_int(file_entry.get("disc_number")),
                 "track_number": safe_int(file_entry.get("track_number")),
                 "duration_seconds": safe_int(file_entry.get("duration_seconds")),
@@ -3918,6 +3941,17 @@ def _persist_targeted_inventory_tag_edit_sql() -> str:
                 then selected_track_files.file_entry ->> 'title'
                 else library.local_tracks.title
               end,
+              title_origin = case
+                when selected_track_files.file_entry ? 'title_origin'
+                then selected_track_files.file_entry ->> 'title_origin'
+                when selected_track_files.file_entry ? 'title' then 'unknown'
+                else library.local_tracks.title_origin
+              end,
+              artist_origin = case
+                when selected_track_files.file_entry ? 'artist_origin'
+                then selected_track_files.file_entry ->> 'artist_origin'
+                else library.local_tracks.artist_origin
+              end,
               track_number = case
                 when selected_track_files.file_entry ? 'track_number'
                 then nullif(selected_track_files.file_entry ->> 'track_number', '')::integer
@@ -5065,7 +5099,8 @@ def _persist_local_cover_selection_sql(
     )
 
 
-def _bootstrap_context_ready_sql() -> str:
+def _bootstrap_context_ready_sql(*, for_write: bool = False) -> str:
+    lock_clause = "for update of libraries" if for_write else ""
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -5076,10 +5111,11 @@ def _bootstrap_context_ready_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
+          __LIBRARY_WRITE_LOCK__
         )
         select 1 as bootstrap_context_ready
         from bootstrap_context;
-    """
+    """.replace("__LIBRARY_WRITE_LOCK__", lock_clause)
 
 
 def _load_separate_release_keys(connection: Any) -> set[str]:
@@ -5475,6 +5511,8 @@ def _upsert_local_track_sql() -> str:
             artist_key text,
             track_key text,
             title text,
+            title_origin text,
+            artist_origin text,
             disc_number integer,
             track_number integer,
             duration_seconds integer,
@@ -5482,7 +5520,7 @@ def _upsert_local_track_sql() -> str:
           )
         )
         insert into library.local_tracks (
-          library_id, album_id, artist_id, track_key, title, disc_number, track_number, duration_seconds, metadata
+          library_id, album_id, artist_id, track_key, title, title_origin, artist_origin, disc_number, track_number, duration_seconds, metadata
         )
         select
           bootstrap_context.library_id,
@@ -5490,6 +5528,8 @@ def _upsert_local_track_sql() -> str:
           library.local_artists.id,
           input_rows.track_key,
           input_rows.title,
+          input_rows.title_origin,
+          input_rows.artist_origin,
           input_rows.disc_number,
           input_rows.track_number,
           input_rows.duration_seconds,
@@ -5506,6 +5546,8 @@ def _upsert_local_track_sql() -> str:
           set album_id = excluded.album_id,
               artist_id = excluded.artist_id,
               title = excluded.title,
+              title_origin = excluded.title_origin,
+              artist_origin = excluded.artist_origin,
               disc_number = excluded.disc_number,
               track_number = excluded.track_number,
               duration_seconds = excluded.duration_seconds,
@@ -5515,6 +5557,8 @@ def _upsert_local_track_sql() -> str:
             library.local_tracks.album_id,
             library.local_tracks.artist_id,
             library.local_tracks.title,
+            library.local_tracks.title_origin,
+            library.local_tracks.artist_origin,
             library.local_tracks.disc_number,
             library.local_tracks.track_number,
             library.local_tracks.duration_seconds,
@@ -5523,6 +5567,8 @@ def _upsert_local_track_sql() -> str:
             excluded.album_id,
             excluded.artist_id,
             excluded.title,
+            excluded.title_origin,
+            excluded.artist_origin,
             excluded.disc_number,
             excluded.track_number,
             excluded.duration_seconds,

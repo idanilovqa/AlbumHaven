@@ -1,4 +1,5 @@
 {% from 'components/on-page-alert.html' import on_page_alert %}
+{% from 'partials/button.html' import action_button %}
   <div class="confirm-modal" id="repair-confirm-modal" hidden>
     <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="repair-confirm-title" aria-describedby="repair-confirm-text">
       <h3 class="confirm-modal-title" id="repair-confirm-title">Repair local files</h3>
@@ -72,7 +73,10 @@
   </div>
   <div class="confirm-modal" id="app-form-modal" hidden>
     <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="app-form-title" aria-describedby="app-form-error">
-      <h3 class="confirm-modal-title" id="app-form-title"></h3>
+      <div class="confirm-modal-header">
+        <h3 class="confirm-modal-title" id="app-form-title"></h3>
+        {{ action_button('Close dialog', id='app-form-close', icon='close', hidden=true) }}
+      </div>
       <div id="app-form-content"></div>
       <p id="app-form-error" role="alert"></p>
       <div class="confirm-modal-actions">

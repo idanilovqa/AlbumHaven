@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from music_app.services.json_files import load_json_file
-from music_app.services.metadata import normalize_exception_value
+from music_app.services.metadata import label_origin, normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
 
 _CACHE_WRITE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cache")
@@ -53,6 +53,8 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
     serialized = {
         "path": str(entry["path"]), "mtime": entry["mtime"], "size": entry["size"],
         "album": entry["album"], "album_artist": entry["album_artist"], "title": entry["title"],
+        **{f"{field}_origin": label_origin(entry.get(field), entry.get(f"{field}_origin"))
+           for field in ("title", "album", "album_artist", "artist")},
         "genre": entry.get("genre"),
         "track_number": entry["track_number"], "disc_number": entry["disc_number"], "disc_number_raw": entry.get("disc_number_raw"), "artist": entry["artist"],
         "duration_seconds": entry["duration_seconds"], "cover_path": entry.get("cover_path"),
@@ -95,6 +97,13 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         "library_root_id": entry.get("library_root_id"), "library_root_category": entry.get("library_root_category"),
         "exception_type": entry.get("exception_type"),
     }
+    deserialized.update({
+        f"{field}_origin": label_origin(entry.get(field), entry.get(f"{field}_origin"))
+        for field in ("title", "album", "album_artist", "artist")
+    })
+    if not str(entry.get("title") or "").strip():
+        deserialized["title"] = Path(str(entry["path"])).stem
+        deserialized["title_origin"] = "filename_fallback"
     if "release_date" in entry:
         deserialized["release_date"] = entry.get("release_date")
     if "metadata_schema_version" in entry:

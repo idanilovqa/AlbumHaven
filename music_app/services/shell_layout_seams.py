@@ -47,14 +47,20 @@ def build_shell_layout_payload(
     navigation_content_kind = (
         "playlist_sidebar"
         if normalized_surface == "playlists"
+        else "album_tops_sidebar"
+        if normalized_surface == "album_tops"
         else "artists_sidebar"
     )
     main_content_kind = "gallery"
     if normalized_surface == "playlists":
         main_content_kind = "playlist_detail" if has_playlist_detail else "playlist_index"
+    elif normalized_surface == "album_tops":
+        main_content_kind = "album_tops"
     active_contextual_pane = (
         "playlists"
         if normalized_surface == "playlists"
+        else "album_tops"
+        if normalized_surface == "album_tops"
         else "artist_gallery"
         if has_selected_artist
         else "local_tree"
@@ -92,7 +98,7 @@ def build_shell_layout_payload(
             },
             "contextual_pane": {
                 "content_kind": "contextual_navigation",
-                "is_visible": has_selected_artist and normalized_surface != "playlists",
+                "is_visible": has_selected_artist and normalized_surface not in {"playlists", "album_tops"},
                 "active_pane": active_contextual_pane,
                 "supported_panes": list(_SUPPORTED_CONTEXTUAL_PANES),
                 "splitter": _build_splitter_payload(

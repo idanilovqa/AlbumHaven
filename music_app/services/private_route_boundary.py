@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import hmac
+import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -16,16 +17,34 @@ from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy import ResourceScope
 from music_app.services.auth_session_csrf import issue_session_csrf, matches_session_csrf
+from music_app.services.auth_config import build_public_sharing_config, validate_public_base_url
 
 
 _PUBLIC_AUTH_PATHS = frozenset(
     {"/login", "/forgot-password", "/reset-password", "/accept-invitation"}
 )
 _READ_METHODS = frozenset({"GET", "HEAD"})
+_PUBLIC_SHARE_REF = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_PUBLIC_SHARE_PATH = re.compile(
+    rf"/public/album-tops/{_PUBLIC_SHARE_REF}(?:/items/{_PUBLIC_SHARE_REF})?", re.ASCII
+)
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
+    ("GET", "/home/activity/now-playing"): "library.browse.read",
+    ("POST", "/playback/session/presence-source"): "library.media.read",
+    ("POST", "/playback/session/presence"): "library.browse.read",
+    ("GET", "/friends"): "library.social.read",
+    ("GET", "/friends/discover"): "library.social.read",
+    ("GET", "/friends/notifications"): "library.social.read",
+    ("POST", "/friends/notifications/{notification_id}/read"): "library.social.manage",
+    ("GET", "/friends/{account_ref}"): "library.social.read",
+    ("POST", "/friends/requests"): "library.social.manage",
+    ("POST", "/friends/{account_ref}/{action}"): "library.social.manage",
+    ("GET", "/friends/{account_ref}/taste"): "library.social.taste.read",
+    ("GET", "/admin/friends-policy"): "accounts.read",
+    ("PUT", "/admin/friends-policy"): "accounts.capabilities.manage",
     ("WEBSOCKET", "/playback/pcm"): "library.media.read",
     ("POST", "/logout"): "auth.session.logout",
     ("POST", "/admin/accounts"): "accounts.create",
@@ -40,6 +59,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/accounts/{account_id}/invitation/send"): "accounts.invitation.send",
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
+    ("GET", "/account/playlist-preferences"): "account.self.playlist_preferences.read",
+    ("PUT", "/account/playlist-preferences"): "account.self.playlist_preferences.write",
+    ("GET", "/account/playlist-preferences/operations/{request_key}"): "account.self.playlist_preferences.read",
     ("GET", "/account/appearance"): "account.self.appearance.read",
     ("GET", "/account/layout-preferences"): "account.self.appearance.read",
     ("PUT", "/account/layout-preferences"): "account.self.appearance.write",
@@ -55,6 +77,13 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
+    ("GET", "/home/activity"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/native-queue"): "library.browse.read",
+    ("GET", "/library/album-artwork/{album_ref}"): "library.artwork.read",
+    ("POST", "/home/activity/native-target"): "library.browse.read",
+    ("GET", "/playlists/{playlist_ref}/items/{item_ref}/native-target"): "library.browse.read",
+    ("GET", "/friends/{account_ref}/activity"): "library.social.history.read",
+    ("GET", "/friends/{account_ref}/comparison"): "library.social.history.read",
     ("GET", "/home/recent-albums"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",
     ("GET", "/utilities/problematic-files"): "library.problems.read",
@@ -147,6 +176,35 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/news-center/preferences"): "library.discovery.preferences.manage",
     ("POST", "/discovery-lookups"): "library.discovery.lookup",
     ("POST", "/virtual-artists"): "library.virtual_discography.create",
+    ("GET", "/playlists/{playlist_ref}/sharing"): "library.browse.read",
+    ("GET", "/album-tops/{top_ref}"): "library.browse.read",
+    ("GET", "/album-tops/edit-requests"): "library.browse.read",
+    ("GET", "/album-tops/{top_ref}/sharing"): "library.browse.read",
+    ("GET", "/album-tops/{top_ref}/access-grants"): "library.album_tops.access.manage",
+    ("GET", "/album-tops/{top_ref}/access-candidates"): "library.album_tops.access.manage",
+    ("GET", "/album-tops"): "library.browse.read",
+    ("POST", "/album-tops"): "library.album_tops.create",
+    ("POST", "/album-tops/{top_ref}/{action}"): "library.browse.read",
+    ("POST", "/album-top-catalog/inventory"): "library.album_tops.create",
+    ("GET", "/playlists/edit-requests"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/edit-requests"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/edit-requests/{request_ref}/decision"): "library.playlists.access.manage",
+    ("POST", "/playlists/{playlist_ref}/copy"): "library.playlists.create",
+    ("GET", "/playlists/destinations"): "library.browse.read",
+    ("GET", "/playlists/creation-source/current"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/queue"): "library.browse.read",
+    ("POST", "/playlists/creation-source/selection"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/match-candidates"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/accept-match"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/activity"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/activity-missing/eligibility"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/activity-missing"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/activity-missing"): "library.playlists.create",
+    ("GET", "/playlists/{playlist_ref}/missing-source"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/complete"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/entries"): "library.playlists.create",
+    ("GET", "/playlists/operations/{request_key}"): "library.browse.read",
+    ("POST", "/playlists/{playlist_ref}/items/remove"): "library.playlists.items.manage",
     ("POST", "/playlists"): "library.playlists.create",
     ("POST", "/playlists/derived-popular-tracks"): "library.playlists.create",
     ("PATCH", "/playlists/{playlist_ref}"): "library.playlists.manage",
@@ -157,6 +215,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/playlists/{playlist_ref}/items/reorder"): "library.playlists.items.manage",
     ("PUT", "/playlists/{playlist_ref}/cover"): "library.playlists.cover.manage",
     ("DELETE", "/playlists/{playlist_ref}/cover"): "library.playlists.cover.manage",
+    ("GET", "/playlists/{playlist_ref}/access-grants"): "library.playlists.access.manage",
+    ("GET", "/playlists/{playlist_ref}/access-candidates"): "library.playlists.access.manage",
+    ("PATCH", "/playlists/{playlist_ref}/visibility"): "library.playlists.access.manage",
     ("POST", "/playlists/{playlist_ref}/access-grants"): "library.playlists.access.manage",
     ("PATCH", "/playlists/{playlist_ref}/access-grants/{grant_ref}"): "library.playlists.access.manage",
     ("DELETE", "/playlists/{playlist_ref}/access-grants/{grant_ref}"): "library.playlists.access.manage",
@@ -177,7 +238,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
     @app.middleware("http")
     async def require_private_authentication(request: Request, call_next):
         _redact_lifecycle_link_query(request)
-        if _is_public(request.method, request.url.path):
+        if _is_public(request.method, request.url.path) or _is_public_share_request(request):
             return await call_next(request)
         route_path = _matched_route_path(app, request)
         action = private_action_for_route(request.method, route_path) or "app.access"
@@ -185,7 +246,10 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 and str(request.query_params.get("loop_id") or "").strip()):
             # The route resolves this resource through the actor's owned loops.
             action = "library.loops.media.read"
+        private_top_view = route_path == "/view-data" and str(request.query_params.get("surface") or "").strip().casefold() == "album_tops"
         preference_headers = (
+            {"Cache-Control": "private, no-store"}
+            if private_top_view or route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/")) else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -236,6 +300,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 headers=preference_headers,
             )
         response = await call_next(request)
+        if private_top_view or route_path in {"/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/")):
+            response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)
         return response
@@ -306,6 +372,32 @@ def _is_public(method: str, path: str) -> bool:
     if path == "/static" or path.startswith("/static/"):
         return normalized_method in _READ_METHODS
     return False
+
+
+def _is_public_share_request(request: Request) -> bool:
+    """Reserve only exact metadata reads on the explicitly enabled origin."""
+
+    config = getattr(request.app.state, "config", None)
+    if (not isinstance(config, Mapping)
+            or config.get("ALBUM_HAVEN_PUBLIC_SHARING_ENABLED") is not True
+            or request.method.upper() not in _READ_METHODS):
+        return False
+    path = request.url.path
+    if not _PUBLIC_SHARE_PATH.fullmatch(path):
+        return False
+    raw_path = request.scope.get("raw_path")
+    if raw_path is not None and raw_path != path.encode("ascii"):
+        return False
+    origin = config.get("ALBUM_HAVEN_PUBLIC_SHARING_ORIGIN")
+    try:
+        validated = build_public_sharing_config({
+            "ALBUM_HAVEN_PUBLIC_SHARING_ENABLED": "true",
+            "ALBUM_HAVEN_PUBLIC_BASE_URL": origin,
+        })
+        request_origin = validate_public_base_url(f"{request.url.scheme}://{request.url.netloc}")
+    except ValueError:
+        return False
+    return origin == validated["origin"] == request_origin
 
 
 def private_action_for_route(method: str, route_path: str) -> str | None:

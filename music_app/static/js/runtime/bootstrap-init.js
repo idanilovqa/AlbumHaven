@@ -68,6 +68,15 @@ function resolveInitialHydrationEndpoint(startupHydration, options = {}) {
           serverUrl.searchParams.delete(param);
         }
       });
+      if (serverUrl.pathname === resolvedUrl.pathname
+        && serverUrl.searchParams.get('surface') === resolvedUrl.searchParams.get('surface')) {
+        // Hydration may choose a payload tier, but cannot change the native
+        // collection identity that the initial shell already resolved.
+        ['playlist_id', 'top_ref'].forEach((param) => {
+          if (resolvedUrl.searchParams.has(param)) serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
+          else serverUrl.searchParams.delete(param);
+        });
+      }
       return `${serverUrl.pathname}${serverUrl.search}`;
     }
   }
@@ -349,27 +358,22 @@ window.addEventListener('scroll', () => {
 
 
 document.addEventListener('contextmenu', (event) => {
+  const heading = event.target.closest('#track-modal-title');
+  if (heading) {
+    const album = getCurrentTrackModalAlbum();
+    if (!album || !isTrackModalSourceActionCurrent() || !canPlayTrackModalSelection(heading)) return;
+    event.preventDefault();
+    showAlbumCardContextMenu(event.clientX, event.clientY, album, heading, () =>
+      getCurrentTrackModalAlbum() === album && isTrackModalSourceActionCurrent() && canPlayTrackModalSelection(heading));
+    return;
+  }
   const albumCard = event.target.closest('.album-card');
   if (!albumCard) return;
   event.preventDefault();
   const trigger = albumCard.querySelector('[data-album-key]');
   const album = trigger ? getIndexedAlbum(trigger.getAttribute('data-album-key') || '') : null;
-  showAlbumCardContextMenu(event.clientX, event.clientY, album);
+  showAlbumCardContextMenu(event.clientX, event.clientY, album, trigger || albumCard);
 }, true);
-
-document.addEventListener('click', (event) => {
-  const insideAlbumMenu = event.target.closest('#album-card-context-menu');
-  const insideAlbumCard = event.target.closest('.album-card');
-  if (!insideAlbumMenu && !insideAlbumCard) {
-    hideAlbumCardContextMenu();
-  }
-});
-
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') {
-    hideAlbumCardContextMenu();
-  }
-});
 
 window.addEventListener('blur', () => {
   hideAlbumCardContextMenu();

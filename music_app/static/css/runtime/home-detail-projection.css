@@ -1,0 +1,38 @@
+/* Composition only: native header, artbox, table, alert and button owners keep
+   their surfaces, focus, disabled states, typography and theme tokens. */
+.home-detail { display: flex; flex-direction: column; gap: 12px; min-width: 0; container-type: inline-size; }
+.home-detail__overview { display: grid; grid-template-columns: minmax(0, 110px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.home-detail__artwork { min-width: 0; aspect-ratio: 1; }
+.home-detail__artwork > .album-artbox { width: 100%; height: 100%; }
+.home-detail__identity { min-width: 0; overflow-wrap: anywhere; }
+.home-detail__facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 0; }
+.home-detail__facts dd { margin: 0; overflow-wrap: anywhere; }
+.home-detail__information, .home-detail__collection { min-width: 0; overflow-wrap: anywhere; }
+.home-detail__information h4, .home-detail__collection h4 { margin: 0 0 8px; }
+.home-detail__summary { white-space: pre-line; overflow-wrap: anywhere; margin: 0; }
+.home-detail__release { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.home-detail__release > .album-artbox { width: 36px; height: 36px; flex: 0 0 36px; }
+@container (max-width: 300px) {
+  .home-detail__overview { grid-template-columns: minmax(0, 1fr); }
+  .home-detail__artwork { width: 110px; max-width: 100%; }
+}
+.home-detail__artwork > div, .home-detail__artwork .utility-artbox-trigger { width: 100%; height: 100%; }
+.home-detail__artwork .album-artbox { width: 100%; height: 100%; }
+.home-detail__listened-albums { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); gap: 12px; }
+.home-artists { display: grid; gap: 6px; min-width: 0; }
+.home-artists__item { min-width: 0; }
+.home-artists .navigation-tree-artwork { width: 36px; height: 36px; }
+.home-artists .album-artbox { width: 100%; height: 100%; border-radius: 50%; overflow: hidden; }
+.home-artists--circles { grid-template-columns: repeat(auto-fill, minmax(min(120px, 100%), 1fr)); gap: 12px; }
+.home-artists--circles .navigation-tree-item { display: flex; flex-direction: column; align-items: center; text-align: center; height: 100%; }
+.home-artists--circles .navigation-tree-artwork { width: 90px; height: 90px; max-width: 100%; }
+.home-detail__selection, .home-detail__native-host { min-width: 0; }
+/* The one native dialog is retained here without its modal overlay. */
+.home-detail__native-host > .track-modal-dialog { width: 100%; max-width: none; max-height: none; margin: 0; box-shadow: none; border: 0; background: transparent; }
+.home-detail__native-host .track-modal-header { padding: 0 0 12px; }
+.home-detail__native-host .track-modal-body { max-height: none; padding: 0; }
+.home-detail__native-host [data-close-track-modal] { display: none; }
+.home-detail__native-host .track-modal-list { min-width: 0; }
+@container (max-width: 500px) {
+  .home-detail__native-host .track-modal-body { grid-template-columns: minmax(0, 1fr); }
+}

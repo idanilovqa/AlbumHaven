@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from music_app.services.listen_history_postgres import (
     PostgresListenHistoryAdapter,
@@ -12,6 +12,9 @@ from music_app.services.listen_history import (
     load_listen_history,
 )
 from music_app.services.utils import safe_int
+
+
+_UNSCOPED = object()
 
 
 def normalize_track_ref(value: object) -> str:
@@ -29,7 +32,16 @@ def track_scrobble_count_from_source(source: object) -> int:
 def build_scrobbled_play_count_lookup(
     config: dict[str, object],
     track_refs: Iterable[object],
+    *,
+    account_id: object = _UNSCOPED,
+    library_id: object = _UNSCOPED,
+    expected_track_ids: Mapping[str, object] | None = None,
+    require_active_paths: bool = False,
 ) -> dict[str, int]:
+    scoped = (account_id is not _UNSCOPED or library_id is not _UNSCOPED
+              or expected_track_ids is not None or require_active_paths)
+    if scoped and any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+        raise ValueError("Exact scrobble count account and library scope is required")
     normalized_track_refs = sorted({
         normalize_track_ref(track_ref)
         for track_ref in track_refs
@@ -37,6 +49,14 @@ def build_scrobbled_play_count_lookup(
     })
     if not normalized_track_refs:
         return {}
+
+    if scoped:
+        if not is_listen_history_postgres_available(config):
+            return {}
+        return PostgresListenHistoryAdapter(config).load_scrobbled_play_count_lookup(
+            normalized_track_refs, account_id=account_id, library_id=library_id,
+            expected_track_ids=expected_track_ids, require_active_paths=require_active_paths,
+        )
 
     if is_listen_history_postgres_available(config):
         return PostgresListenHistoryAdapter(config).load_scrobbled_play_count_lookup(

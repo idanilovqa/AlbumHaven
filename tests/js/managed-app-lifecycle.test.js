@@ -185,6 +185,7 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
   const nonce = 'cover-authority-restart-nonce';
   const requestPath = path.join(controlDirectory, 'restart-request.json');
   const ackPath = path.join(controlDirectory, 'restart-ack.json');
+  let currentTime = 0;
   let sleepCalls = 0;
 
   try {
@@ -192,9 +193,11 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
     const lifecycle = createManagedAppLifecycle({
       environment: createValidEnvironment(root, controlDirectory),
       createNonce: () => nonce,
+      now: () => currentTime,
       pollIntervalMs: 1,
       timeoutMs: 100,
-      async sleep() {
+      async sleep(milliseconds) {
+        currentTime += milliseconds;
         sleepCalls += 1;
         assert.deepEqual(JSON.parse(fs.readFileSync(requestPath, 'utf8')), { nonce });
         assert.equal(

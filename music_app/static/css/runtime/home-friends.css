@@ -1,0 +1,99 @@
+/* Home/Friends composes the native component families; their colors, disabled
+   states, focus rings, table density, and player remain owned by those families. */
+.shell-main-surface.has-mobile-home > [data-gallery-bar-instance="gallery"] { display: none !important; }
+.shell-main-surface.has-mobile-home > :is(#albums-scroll, .discovery-center-page) { display: none; }
+.shell-main-surface.has-mobile-home > #mobile-home { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+#home-friends-root { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.home-friends { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; color: var(--text); }
+.home-friends__page-header { flex: 0 0 auto; }
+.home-friends__page-header h1 { margin: 0; font-size: 1.35rem; overflow-wrap: anywhere; }
+.home-friends__page-header p { margin: 4px 0 0; }
+.home-friends__pane-navigation { display: none; }
+.home-friends__dashboard { flex: 1 1 auto; min-height: 0; }
+.home-friends__widget { display: flex; flex-direction: column; }
+.home-friends__widget[data-dashboard-widget-state="suppressed"] { display: none; }
+.home-friends__widget-header { flex: 0 0 auto; min-height: 40px; }
+.home-friends__widget-header h2 { margin: 0; font-size: 1.05rem; }
+.home-friends__widget-body { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.home-friends__native-recent { flex: 1 1 auto; min-width: 0; min-height: 0; }
+.home-friends__native-recent > .home-recent__header { display: none; }
+.home-friends__recent-body { overflow: hidden; }
+.gallery-bar.home-friends__recent-header { flex-direction: column; align-items: stretch; gap: 0; min-height: 0; margin-bottom: 8px; }
+.home-friends__recent-header .home-friends__section-controls { padding-block: 0; }
+.home-friends__catalog-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; min-height: 40px; }
+.home-friends__catalog-controls .in-page-tabs { align-items: center; min-height: 40px; gap: 16px; }
+.home-friends__scroll { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
+.home-friends__button { display: inline-flex; align-items: center; }
+.home-friends__control-row { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,auto); align-items: center; gap: 5px 12px; flex: 0 0 auto; min-width: 0; padding-block: 6px 12px; container: home-controls / inline-size; }
+.home-friends__tabs { grid-column: 1; grid-row: 1; min-width: 0; }
+.home-friends .home-friends__control-row .in-page-tabs { min-height: 40px; align-items: center; gap: 10px; }
+.home-friends__control-row .in-page-tabs > [role="tab"] { position: relative; display: flex; align-items: center; justify-content: center; min-height: 40px; padding-block: 8px; border-bottom-width: 0; line-height: 1.2; }
+.home-friends__control-row .in-page-tabs > [role="tab"]::after { content: ''; position: absolute; inset-inline: 0; bottom: 0; height: 2px; background: transparent; pointer-events: none; }
+.home-friends__control-row .in-page-tabs > [aria-selected="true"]::after { background: var(--appearance-selected-accent, currentColor); }
+.home-friends__listens { grid-column: 2; grid-row: 1; white-space: nowrap; font-size: .8rem; font-weight: 700; color: var(--text); text-shadow: 0 0 8px color-mix(in srgb, var(--appearance-selected-accent, currentColor) 35%, transparent); }
+.home-friends__period { grid-column: 3; grid-row: 1; min-width: 0; }
+.home-friends__period .ui-choice__control { max-width: 120px; width: 100%; }
+.home-friends__range { grid-column: 1 / -1; grid-row: 2; text-align: right; overflow-wrap: anywhere; color: var(--muted); font-size: .75rem; }
+.home-friends__people { display: flex; flex-direction: column; gap: 6px; }
+.home-friends__people > .home-friends__button { display: flex; }
+.home-friends__person { width: 100%; text-align: left; justify-content: flex-start; overflow-wrap: anywhere; }
+.home-friends__person.is-selected { background: var(--selection-body-background, var(--app-active)); }
+.home-friends__person .navigation-tree-artwork { width: 42px; height: 42px; flex: 0 0 42px; border-radius: 50%; }
+.home-friends__request, .home-friends__friend-actions, .home-friends__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-block: 6px; }
+.home-friends__request > span:first-child { flex: 1 1 auto; overflow-wrap: anywhere; }
+.home-friends__request-form, .home-friends__profile-editor { display: flex; flex-direction: column; gap: 10px; padding-block: 12px; }
+.home-friends__request-form label, .home-friends__profile-editor label { display: flex; flex-direction: column; gap: 5px; }
+.home-friends__profile-editor { flex: 0 0 auto; max-height: min(60vh, 480px); overflow: auto; }
+.home-friends__muted { color: var(--muted); }
+.home-friends__status { padding: 10px 0; }
+.home-friends__table { min-width: 0; }
+.home-friends__table .compact-data-table { width: 100%; }
+@media (min-width: 901px) {
+  .home-friends__recent-header .home-friends__section-controls { row-gap: 1px; }
+  .home-friends .home-friends__recent-header .in-page-tabs,
+  .home-friends__recent-header .home-friends__catalog-controls,
+  .home-friends__recent-header .in-page-tabs > [role="tab"] { min-height: 34px; }
+  .home-friends__recent-header .in-page-tabs > [role="tab"] { padding-block: 5px; }
+}
+@container home-controls (max-width: 359px) {
+  .home-friends__control-row:not(.home-friends__section-controls) > .home-friends__tabs { grid-column: 1 / -1; }
+  .home-friends__control-row:not(.home-friends__section-controls) > .home-friends__listens { grid-column: 2; grid-row: 2; }
+  .home-friends__control-row:not(.home-friends__section-controls) > .home-friends__period { grid-column: 3; grid-row: 2; }
+  .home-friends__control-row:not(.home-friends__section-controls) > .home-friends__range { grid-row: 3; }
+}
+@media (max-width: 900px) {
+  .home-friends__dashboard[data-dashboard] { display: flex; gap: 0; }
+  .home-friends__widget { flex: 1 1 auto; }
+  .home-friends[data-home-section="recent"] [data-home-widget="friends"],
+  .home-friends[data-home-section="friends"] [data-home-widget="recent"] { display: none; }
+  .home-friends[data-home-section="recent"] [data-home-widget="recent"],
+  .home-friends[data-home-section="friends"] [data-home-widget="friends"] { display: flex; }
+  /* Native pane navigation owns narrow Home; retain desktop expansion without
+     exposing its Back in either the widget header or the shared page header. */
+  .home-friends .ui-button[data-dashboard-action] { display: none; }
+  .home-friends__control-row { grid-template-columns: minmax(0,1fr) auto minmax(0,auto); column-gap: 8px; }
+  .home-friends__control-row .in-page-tabs > [role="tab"] { font-size: .72rem; }
+  .home-friends__catalog-controls .in-page-tabs > [role="tab"] { font-size: .8rem; }
+  .home-friends__listens { font-size: .72rem; }
+  .home-friends__period .ui-choice__control { max-width: 130px; }
+  .home-friends__period .ui-choice__trigger.ui-button { font-size: .72rem; }
+  .home-friends__view-control { flex: 0 0 40px; }
+}
+
+.home-friends__album-summary { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; }
+.home-friends__album-summary dd { margin: 0; }
+@media (max-width: 900px) {
+  /* Each retained native body uses the shell's player-cleared height. Native
+     section tabs select one pane; desktop Dashboard expansion remains saved. */
+  .home-friends__pane-navigation { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; align-items: center; flex: 0 0 auto; }
+  .home-friends__pane-navigation > .home-friends__tabs { grid-column: 2; grid-row: 1; }
+  .home-friends__pane-navigation .in-page-tabs { width: 100%; gap: 8px; min-height: 40px; }
+  .home-friends__pane-navigation .in-page-tabs > [role="tab"] { min-width: 0; flex: 1 1 auto; font-size: .75rem; white-space: normal; }
+  .home-friends__dashboard[data-dashboard] { flex-direction: column; }
+  .home-friends .home-friends__dashboard > [data-home-widget] { display: none; flex: 1 1 auto; }
+  .home-friends[data-home-pane="recent"][data-home-section="recent"] .home-friends__dashboard > [data-home-widget="recent"],
+  .home-friends[data-home-pane="recent"][data-home-section="friends"] .home-friends__dashboard > [data-home-widget="friends"],
+  .home-friends[data-home-pane="artist"] .home-friends__dashboard > [data-home-widget="artist"],
+  .home-friends[data-home-pane="album"] .home-friends__dashboard > [data-home-widget="album"] { display: flex; }
+}
+.home-friends__widget[hidden] { display: none !important; }

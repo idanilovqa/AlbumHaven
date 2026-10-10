@@ -243,6 +243,13 @@ def _configure_asgi_app(app, runtime) -> None:
     from fastapi.templating import Jinja2Templates
 
     from music_app.routes.api_read_asgi_routes import router as api_read_asgi_router
+    from music_app.routes.owned_playlists_asgi import router as owned_playlists_asgi_router
+    from music_app.routes.owned_album_tops_asgi import router as owned_album_tops_asgi_router
+    from music_app.routes.playlist_complete_sources_asgi import router as playlist_complete_sources_router
+    from music_app.routes.home_activity_asgi_routes import router as home_activity_asgi_router
+    from music_app.routes.private_album_artwork_asgi import router as private_album_artwork_router
+    from music_app.routes.activity_native_targets_asgi import router as activity_native_targets_router
+    from music_app.routes.playlist_native_targets_asgi import router as playlist_native_targets_router
     from music_app.routes.auth_asgi import router as auth_asgi_router
     from music_app.routes.admin_asgi import router as admin_asgi_router
     from music_app.routes.account_asgi import router as account_asgi_router
@@ -357,6 +364,9 @@ def _configure_asgi_app(app, runtime) -> None:
 
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.include_router(auth_asgi_router)
+    from music_app.routes.friends_asgi import router as friends_asgi_router
+
+    app.include_router(friends_asgi_router)
     app.include_router(account_asgi_router)
     app.include_router(appearance_asgi_router)
     app.include_router(client_layout_asgi_router)
@@ -364,6 +374,13 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(admin_asgi_router)
     app.include_router(web_asgi_router)
     app.include_router(api_read_asgi_router)
+    app.include_router(owned_playlists_asgi_router)
+    app.include_router(owned_album_tops_asgi_router)
+    app.include_router(playlist_complete_sources_router)
+    app.include_router(home_activity_asgi_router)
+    app.include_router(private_album_artwork_router)
+    app.include_router(activity_native_targets_router)
+    app.include_router(playlist_native_targets_router)
     app.include_router(api_wave_a_asgi_router)
     app.include_router(api_wave_b_asgi_router)
     app.include_router(api_wave_c_asgi_router)

@@ -27,6 +27,13 @@ transition: background 150ms ease, border-color 150ms ease, color 150ms ease, ou
 }
 .ui-button[hidden] { display: none !important; }
 .ui-button__content { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+:root .ui-button[aria-pressed="true"]:not(.action-button):not(:disabled):not([aria-disabled="true"]) {
+color: var(--appearance-selected-accent, var(--accent));
+font-weight: 700;
+}
+:root .ui-button[aria-pressed="true"]:not(.action-button):not(:disabled):not([aria-disabled="true"]):not(:hover):not(:active) {
+background: var(--selection-body-background, var(--app-active));
+}
 .ui-button--medium { min-height: 34px; }
 .ui-button--small { min-height: 26px; }
 .ui-button--primary {
@@ -121,7 +128,30 @@ fill: none;
 stroke: none;
 fill: currentColor;
 }
+.action-button__icon:is(.ui-icon--album-top, .ui-icon--create-top) {
+width: 22px;
+height: 22px;
+}
+/* Approved Love artwork keeps one heart anchor; the Obsessed flame extends above it. */
+.ui-icon.ui-icon--love {
+width: 18px;
+height: 18px;
+overflow: visible;
+fill: none;
+stroke: currentColor;
+stroke-width: 1.6;
+stroke-linecap: round;
+stroke-linejoin: round;
+}
+.ui-love-heart--off { stroke: var(--muted, var(--appearance-muted)); }
+.ui-love-heart--loved { fill: #f15d75; stroke: #f15d75; }
+.ui-love-heart--obsessed { fill: #ef405b; stroke: #98213c; stroke-width: 1.2; }
+.ui-love-flame { fill: #fb8c24; stroke: #a9470a; stroke-width: .7; }
+.ui-love-flame-core { fill: #ffdc69; stroke: none; }
 .action-button--round { border-radius: 50%; }
+.action-button--toggle[aria-pressed="true"]:not(:disabled):not([aria-disabled="true"]):not(.action-button--destructive) {
+color: var(--appearance-selected-accent, var(--accent));
+}
 .action-button:hover:not(:disabled):not([aria-disabled='true']) {
 border-color: var(--appearance-item-action-hover-border, var(--appearance-line, #526173));
 background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50));

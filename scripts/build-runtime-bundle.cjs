@@ -93,6 +93,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/playtable-source.js',
   'js/runtime/home-friends-bridge.js',
   'js/runtime/playlists-react-bridge.js',
+  'js/runtime/album-tops-react-bridge.js',
   'js/runtime/bootstrap-event-handlers.js',
   'js/runtime/bootstrap-init.js',
 ];

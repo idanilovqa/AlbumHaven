@@ -1477,7 +1477,12 @@ class VirtualArtistGrid {
   activateGalleryCoverImages(rootEl = this.containerEl) {
     if (typeof syncGalleryCardMetadataMotion === 'function') syncGalleryCardMetadataMotion(rootEl);
     if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
-    rootEl.querySelectorAll('img[data-gallery-cover-src]').forEach((image) => {
+    const images = Array.from(rootEl.querySelectorAll('img[data-gallery-cover-src]'));
+    images.sort((left, right) => (
+      Number(right.getAttribute('data-gallery-cover-priority') === 'visible')
+      - Number(left.getAttribute('data-gallery-cover-priority') === 'visible')
+    ));
+    images.forEach((image) => {
       if (!(image instanceof HTMLImageElement)) return;
       const productionUrl = String(image.getAttribute('data-gallery-cover-src') || '').trim();
       if (!productionUrl || image.getAttribute('data-gallery-cover-loading') === '1') return;

@@ -324,7 +324,10 @@ def _configure_asgi_app(app, runtime) -> None:
 
     @app.middleware("http")
     async def require_runtime_javascript_revalidation(request, call_next):
-        if not request.url.path.startswith("/static/"):
+        if (
+            not request.url.path.startswith("/static/")
+            and request.url.path != "/status"
+        ):
             cover_preview_backfill = getattr(
                 app.state,
                 "cover_preview_backfill",

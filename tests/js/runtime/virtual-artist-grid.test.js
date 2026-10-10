@@ -4506,6 +4506,41 @@ test('scrollToArtist jumps to the modeled artist without applying an artist filt
   assert.equal(context.canceledBrowserAnimationFrames.includes(73), true);
 });
 
+test('gallery cover activation schedules visible images before overscan images', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const image = (id, priority) => {
+    const element = new context.HTMLImageElement();
+    element.id = id;
+    element.setAttribute('data-gallery-cover-src', `/cover?path=${id}`);
+    element.setAttribute('data-gallery-cover-priority', priority);
+    return element;
+  };
+  const images = [
+    image('near-above', 'near'),
+    image('visible-first', 'visible'),
+    image('near-below', 'near'),
+    image('visible-second', 'visible'),
+  ];
+
+  virtualGrid.activateGalleryCoverImages({
+    querySelectorAll(selector) {
+      assert.equal(selector, 'img[data-gallery-cover-src]');
+      return images;
+    },
+  });
+
+  assert.deepEqual(
+    context.galleryCoverSchedulerEnqueues.map(({ productionUrl }) => productionUrl),
+    [
+      '/cover?path=visible-first',
+      '/cover?path=visible-second',
+      '/cover?path=near-above',
+      '/cover?path=near-below',
+    ],
+  );
+});
+
 test('artist blocks place owned albums before a counted Featured On subsection', () => {
     const { context } = createRuntimeContext();
     const virtualGrid = vm.runInContext('virtualGrid', context);

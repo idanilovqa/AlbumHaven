@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hashlib
 import hmac
+import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -16,12 +17,17 @@ from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy import ResourceScope
 from music_app.services.auth_session_csrf import issue_session_csrf, matches_session_csrf
+from music_app.services.auth_config import build_public_sharing_config, validate_public_base_url
 
 
 _PUBLIC_AUTH_PATHS = frozenset(
     {"/login", "/forgot-password", "/reset-password", "/accept-invitation"}
 )
 _READ_METHODS = frozenset({"GET", "HEAD"})
+_PUBLIC_SHARE_REF = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_PUBLIC_SHARE_PATH = re.compile(
+    rf"/public/album-tops/{_PUBLIC_SHARE_REF}(?:/items/{_PUBLIC_SHARE_REF})?", re.ASCII
+)
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
@@ -232,7 +238,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
     @app.middleware("http")
     async def require_private_authentication(request: Request, call_next):
         _redact_lifecycle_link_query(request)
-        if _is_public(request.method, request.url.path):
+        if _is_public(request.method, request.url.path) or _is_public_share_request(request):
             return await call_next(request)
         route_path = _matched_route_path(app, request)
         action = private_action_for_route(request.method, route_path) or "app.access"
@@ -366,6 +372,32 @@ def _is_public(method: str, path: str) -> bool:
     if path == "/static" or path.startswith("/static/"):
         return normalized_method in _READ_METHODS
     return False
+
+
+def _is_public_share_request(request: Request) -> bool:
+    """Reserve only exact metadata reads on the explicitly enabled origin."""
+
+    config = getattr(request.app.state, "config", None)
+    if (not isinstance(config, Mapping)
+            or config.get("ALBUM_HAVEN_PUBLIC_SHARING_ENABLED") is not True
+            or request.method.upper() not in _READ_METHODS):
+        return False
+    path = request.url.path
+    if not _PUBLIC_SHARE_PATH.fullmatch(path):
+        return False
+    raw_path = request.scope.get("raw_path")
+    if raw_path is not None and raw_path != path.encode("ascii"):
+        return False
+    origin = config.get("ALBUM_HAVEN_PUBLIC_SHARING_ORIGIN")
+    try:
+        validated = build_public_sharing_config({
+            "ALBUM_HAVEN_PUBLIC_SHARING_ENABLED": "true",
+            "ALBUM_HAVEN_PUBLIC_BASE_URL": origin,
+        })
+        request_origin = validate_public_base_url(f"{request.url.scheme}://{request.url.netloc}")
+    except ValueError:
+        return False
+    return origin == validated["origin"] == request_origin
 
 
 def private_action_for_route(method: str, route_path: str) -> str | None:

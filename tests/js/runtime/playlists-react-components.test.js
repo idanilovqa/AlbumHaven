@@ -114,7 +114,8 @@ test('sharing uses native choices and explicit editors, with public links unavai
   assert.equal(host.querySelector('button[aria-label="Playlist visibility: Private"]').getAttribute('aria-haspopup'), 'menu');
   assert.equal([...host.querySelectorAll('button')].find(button => button.textContent === 'Remove editor').disabled, true);
   const fields = SharingFields({runtime, value: {visibility: 'private', can_manage: true, people: []}});
-  const choice = React.Children.toArray(fields.props.children).find(node => node.type?.name === 'NativeChoice');
+  const visibility = React.Children.toArray(fields.props.children).find(node => node.type?.name === 'SharingVisibility');
+  const choice = React.Children.toArray(visibility.type(visibility.props).props.children).find(node => node.type?.name === 'NativeChoice');
   assert.deepEqual(choice.props.options, [['private', 'Private'], ['server_shared', 'Shared with this server'], ['link', 'Public link unavailable', true]]);
 });
 test('missing/error write states never report a saved draft', () => {

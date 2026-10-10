@@ -1,11 +1,13 @@
 // All network replies are bound to the authenticated native context and caller scope.
+import {isProgressRevision, isManualProgress} from './progress.mjs';
+
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const revision = value => typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value);
 const fail = (message, status = 409) => Object.assign(new Error(message), {status});
 const abort = () => Object.assign(new Error('Album Top request was superseded.'), {name: 'AbortError'});
 const actionNames = new Set(['library.browse.read', 'library.album_tops.create', 'library.album_tops.manage',
   'library.album_tops.items.manage', 'can_create', 'can_read', 'can_edit', 'can_rename', 'can_add', 'can_remove',
-  'can_reorder', 'can_delete', 'can_share', 'can_view_sharing', 'can_request_edit', 'can_copy']);
+  'can_reorder', 'can_delete', 'can_share', 'can_view_sharing', 'can_request_edit', 'can_copy', 'can_manage_own_progress']);
 const actions = value => Object.fromEntries(Object.entries(value && typeof value === 'object' && !Array.isArray(value) ? value : {})
   .filter(([key, allowed]) => typeof allowed === 'boolean' && actionNames.has(key)));
 function top(value) {
@@ -114,12 +116,34 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
         return {item_ref: row.ref, album_ref: row.catalog_ref, title: row.title, artist: row.artist_display,
           year: Number.isInteger(row.release_year) ? row.release_year : null, original_position: row.original_position, position: row.curator_position};
       });
+      if (Object.hasOwn(data, 'top_viewer_overlay')) {
+        const overlay = data.top_viewer_overlay, progress = overlay?.item_progress;
+        if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay)
+          || !Object.hasOwn(overlay, 'item_progress') || !progress || typeof progress !== 'object' || Array.isArray(progress)
+          || Object.keys(progress).length !== result.items.length
+          || new Set(result.items.map(item => item.album_ref)).size !== result.items.length) throw fail('Invalid Album Top progress.');
+        result.top_viewer_overlay = {item_progress: Object.fromEntries(result.items.map(item => {
+          const row = Object.hasOwn(progress, item.album_ref) ? progress[item.album_ref] : null;
+          if (!isManualProgress(row)) throw fail('Invalid Album Top progress.');
+          return [item.album_ref, {progress_revision: row.progress_revision, manual_completed_at: row.manual_completed_at}];
+        }))};
+      }
       return result;
     },
     async execute(action, command, options) {
       const {top_ref, ...body} = command;
-      if (!uuid(body.request_key) || !['create', 'save', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
+      if (!uuid(body.request_key) || !['create', 'save', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
+      if (action === 'set_manual_completion' && (!uuid(body.album_ref) || !isProgressRevision(body.progress_revision)
+        || typeof body.completed !== 'boolean' || Object.keys(body).length !== 4)) throw fail('Invalid Album Top progress command.');
       const data = await request(action === 'create' ? '/album-tops' : '/album-tops/' + top_ref + '/' + action, options, body);
+      if (action === 'set_manual_completion') {
+        if (data.top_ref !== top_ref || data.album_ref !== body.album_ref || data.action !== action
+          || data.request_key !== body.request_key || !isManualProgress(data) || typeof data.changed !== 'boolean'
+          || Object.hasOwn(data, 'revision') || (data.manual_completed_at !== null) !== body.completed
+          || BigInt(data.progress_revision) !== BigInt(body.progress_revision) + (data.changed ? 1n : 0n)) throw fail('Album Top progress was not acknowledged.', 502);
+        return {top_ref, album_ref: data.album_ref, action, request_key: data.request_key,
+          progress_revision: data.progress_revision, manual_completed_at: data.manual_completed_at, changed: data.changed};
+      }
       if (!uuid(data.top_ref) || !revision(data.revision) || data.action !== action || data.request_key !== body.request_key || !['create', 'copy'].includes(action) && data.top_ref !== top_ref
         || action === 'copy' && (data.source_top_ref !== top_ref || data.source_revision !== body.revision || data.top_ref === top_ref)) throw fail('Album Top write was not acknowledged.', 502);
       return {top_ref: data.top_ref, revision: data.revision, action, request_key: data.request_key,

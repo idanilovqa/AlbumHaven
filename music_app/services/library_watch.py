@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 import logging
 from pathlib import Path
 import sys
-from threading import Event, Lock
+from threading import Event, Lock, Timer
 from typing import Protocol
 
 
@@ -27,7 +28,7 @@ class LibraryEvent:
     root_id: str
     path: Path
     destination: Path | None = None
-    observed_at: float = 0.0
+    observed_at: datetime | float = 0.0
     destination_root_id: str | None = None
     is_directory: bool = False
 
@@ -73,7 +74,7 @@ def normalize_library_event(
     *,
     roots: Iterable[Mapping[str, object]],
     destination: Path | str | None = None,
-    observed_at: float = 0.0,
+    observed_at: datetime | float = 0.0,
     is_directory: bool = False,
 ) -> LibraryEvent | None:
     if isinstance(kind, LibraryEventKind):
@@ -108,12 +109,18 @@ def normalize_library_event(
         destination_root = None
     if source_root is None:
         return None
+    if isinstance(observed_at, datetime):
+        if observed_at.tzinfo is None:
+            raise ValueError("watcher observation time must be timezone-aware")
+        normalized_observed_at: datetime | float = observed_at.astimezone(timezone.utc)
+    else:
+        normalized_observed_at = float(observed_at or 0.0)
     return LibraryEvent(
         normalized_kind,
         source_root[0],
         source_path,
         destination_path,
-        float(observed_at or 0.0),
+        normalized_observed_at,
         destination_root[0] if destination_root is not None else None,
         bool(is_directory),
     )
@@ -133,7 +140,7 @@ def publish_watchdog_event(
     *,
     roots: Iterable[Mapping[str, object]],
     publish: Callable[[LibraryEvent], None],
-    clock: Callable[[], float],
+    clock: Callable[[], datetime | float],
 ) -> None:
     kind = watchdog_event_kind(getattr(event, "event_type", ""))
     if kind is None:
@@ -213,7 +220,9 @@ class WatchdogLibraryEventSource:
         roots: Iterable[Mapping[str, object]],
         *,
         observer_factory: Callable[[], object] | None = None,
-        clock: Callable[[], float] | None = None,
+        clock: Callable[[], datetime | float] | None = None,
+        retry_timer_factory: Callable[[float, Callable[[], None]], object] = Timer,
+        retry_interval_seconds: float = 5.0,
     ) -> None:
         self._roots = tuple(dict(root) for root in roots)
         self._observer_factory = observer_factory
@@ -221,6 +230,16 @@ class WatchdogLibraryEventSource:
         self._observer: object | None = None
         self._emitters: tuple[object, ...] = ()
         self._stopping = Event()
+        self._retry_timer_factory = retry_timer_factory
+        self._retry_interval_seconds = max(0.0, float(retry_interval_seconds))
+        self._retry_lock = Lock()
+        self._retry_timer: object | None = None
+        self._retry_generation = 0
+        self._missing_roots: dict[str, Path] = {}
+        self._handler: object | None = None
+        self._publish: Callable[[LibraryEvent], None] | None = None
+        self._active_clock: Callable[[], datetime | float] | None = None
+        self._instrumented_emitters: set[int] = set()
 
     @property
     def is_alive(self) -> bool:
@@ -233,6 +252,10 @@ class WatchdogLibraryEventSource:
     def _instrument_emitter(self, emitter, *, publish, clock) -> None:
         """Bridge failures before Watchdog discards their native evidence."""
         import os
+
+        if id(emitter) in self._instrumented_emitters:
+            return
+        self._instrumented_emitters.add(id(emitter))
 
         watch_path = Path(emitter.watch.path).resolve(strict=False)
         watched_roots = tuple(
@@ -292,14 +315,15 @@ class WatchdogLibraryEventSource:
                 "Run Full Rescan after library changes."
             )
             return
-        from time import monotonic
         from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer
 
         observer = self._observer_factory() if self._observer_factory else Observer()
-        clock = self._clock or monotonic
+        clock = self._clock or (lambda: datetime.now(timezone.utc))
         roots = self._roots
-        self._stopping.clear()
+        with self._retry_lock:
+            self._retry_generation += 1
+            self._stopping.clear()
         stopping = self._stopping
         resolved_roots = ()
 
@@ -327,11 +351,15 @@ class WatchdogLibraryEventSource:
                             continue
 
         handler = Handler()
+        self._handler = handler
+        self._publish = publish
+        self._active_clock = clock
         self._observer = observer
         try:
             resolved_roots = _resolved_roots(roots)
             for root_id, root_path in resolved_roots:
                 if not root_path.is_dir():
+                    self._missing_roots[root_id] = root_path
                     publish(
                         LibraryEvent(
                             LibraryEventKind.ROOT_UNAVAILABLE,
@@ -346,6 +374,8 @@ class WatchdogLibraryEventSource:
             for emitter in self._emitters:
                 self._instrument_emitter(emitter, publish=publish, clock=clock)
             observer.start()
+            with self._retry_lock:
+                self._schedule_missing_root_retry_locked()
         except Exception:
             # on_thread_start runs before run(), so its failures cannot reach
             # the producer's finally bridge. The whole aborted source is lost.
@@ -375,6 +405,13 @@ class WatchdogLibraryEventSource:
 
         deadline = monotonic() + max(0.0, timeout)
         self._stopping.set()
+        with self._retry_lock:
+            self._retry_generation += 1
+            retry_timer = self._retry_timer
+            self._retry_timer = None
+        cancel_retry = getattr(retry_timer, "cancel", None)
+        if callable(cancel_retry):
+            cancel_retry()
         if isinstance(observer, BaseObserver):
             # BaseObserver.stop() synchronously takes its dispatch lock and
             # joins every producer without a timeout. Signal the same public
@@ -401,11 +438,75 @@ class WatchdogLibraryEventSource:
             raise RuntimeError("Library event source did not stop before the deadline")
         self._observer = None
         self._emitters = ()
+        self._handler = None
+        self._publish = None
+        self._active_clock = None
+        self._missing_roots.clear()
+        self._instrumented_emitters.clear()
+
+    def _schedule_missing_root_retry_locked(self) -> None:
+        if (
+            self._stopping.is_set()
+            or self._retry_timer is not None
+            or not self._missing_roots
+        ):
+            return
+        generation = self._retry_generation
+        timer = self._retry_timer_factory(
+            self._retry_interval_seconds,
+            lambda: self._retry_missing_roots(generation),
+        )
+        timer.daemon = True
+        self._retry_timer = timer
+        timer.start()
+
+    def _retry_missing_roots(self, generation: int) -> None:
+        with self._retry_lock:
+            if generation != self._retry_generation:
+                return
+            self._retry_timer = None
+            observer = self._observer
+            handler = self._handler
+            publish = self._publish
+            clock = self._active_clock
+            if (
+                self._stopping.is_set()
+                or observer is None
+                or handler is None
+                or publish is None
+                or clock is None
+            ):
+                return
+            for root_id, root_path in tuple(self._missing_roots.items()):
+                if not root_path.is_dir():
+                    continue
+                try:
+                    observer.schedule(handler, str(root_path), recursive=True)
+                    for emitter in getattr(observer, "emitters", ()):
+                        self._instrument_emitter(emitter, publish=publish, clock=clock)
+                except Exception:
+                    try:
+                        publish(LibraryEvent(
+                            LibraryEventKind.ROOT_UNAVAILABLE,
+                            root_id,
+                            root_path,
+                            observed_at=clock(),
+                            is_directory=True,
+                        ))
+                    except Exception:
+                        # The coordinator retains failed durable health writes.
+                        # Keep native reattachment independent from storage recovery.
+                        pass
+                    continue
+                self._missing_roots.pop(root_id, None)
+            self._emitters = tuple(getattr(observer, "emitters", ()))
+            self._schedule_missing_root_retry_locked()
 
     def replace_roots(self, roots: Iterable[Mapping[str, object]]) -> None:
         if self._observer is not None:
             raise RuntimeError("Stop the library event source before replacing roots")
         self._roots = tuple(dict(root) for root in roots)
+        self._missing_roots.clear()
 
 
 class LibraryWatchService:

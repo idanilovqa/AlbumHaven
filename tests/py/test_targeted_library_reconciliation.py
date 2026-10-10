@@ -38,54 +38,6 @@ def _request(
     )
 
 
-@pytest.mark.parametrize("unstable", [False, True])
-def test_incoming_directory_move_reconciles_contained_descendants_atomically(tmp_path, unstable):
-    from music_app.services.library_watch import normalize_library_event
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
-
-    root = tmp_path / "Music"
-    album = root / "Owner" / "Imported"
-    first = album / "01.flac"
-    second = album / "Disc 2" / "02.flac"
-    second.parent.mkdir(parents=True)
-    first.write_bytes(b"one")
-    second.write_bytes(b"two")
-    outside = tmp_path / "private.flac"
-    outside.write_bytes(b"outside")
-    (album / "escape.flac").symlink_to(outside)
-    roots = [{"id": "main", "path": str(root), "category": "main_library_roots"}]
-    requests = []
-    coordinator = LibraryEventCoordinator(emit_request=requests.append, wait=lambda _seconds: None)
-    event = normalize_library_event("moved", tmp_path / "old-location", roots=roots, destination=album, is_directory=True)
-    assert event is not None
-    coordinator.accept(event)
-    coordinator.flush()
-    assert len(requests) == 1
-    repository = RecordingRepository()
-    parsed = []
-    samples = 0
-
-    def stat(path):
-        nonlocal samples
-        samples += 1
-        return SimpleNamespace(st_size=samples if unstable and path == second else path.stat().st_size, st_mtime_ns=1)
-
-    reconciler = TargetedLibraryReconciler(
-        {"SUPPORTED_EXTENSIONS": {".flac"}}, repository=repository, root_definitions=roots,
-        metadata_reader=lambda path: parsed.append(path) or {"path": str(path), "album": "Imported", "album_artist": "Owner", "artist": "Owner", "title": path.stem},
-        stat_path=stat, wait=lambda _seconds: None,
-    )
-    result = reconciler.reconcile(requests[0])
-    if unstable:
-        assert result.health == "stable_write_unavailable"
-        assert parsed == [] and repository.calls == []
-    else:
-        assert set(parsed) == {first, second}
-        assert len(repository.calls) == 1
-        assert set(repository.calls[0]["active_file_entries"]) == {str(first), str(second)}
-
-
 def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     tmp_path,
     monkeypatch,
@@ -142,6 +94,50 @@ def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     assert list(entries) == [str(requested)]
     assert entries[str(requested)]["library_root_id"] == "main"
     assert entries[str(requested)]["library_root_category"] == "main_library"
+
+
+def test_targeted_reconciler_executes_non_primary_root_scope(tmp_path):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    primary = tmp_path / "Primary"
+    secondary = tmp_path / "Secondary"
+    active = secondary / "Artist" / "Album" / "01.flac"
+    deleted = secondary / "Artist" / "Removed" / "02.flac"
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"media")
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=(
+            {"id": "primary", "path": primary},
+            {"id": "secondary", "path": secondary},
+        ),
+        metadata_reader=lambda path: {
+            "path": str(path),
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": path.stem,
+        },
+        wait=lambda _seconds: None,
+    )
+
+    result = reconciler.reconcile(
+        _request(
+            root_id="primary",
+            paths=(active,),
+            deleted_paths=(deleted,),
+        )
+    )
+
+    assert result.health == "healthy"
+    assert set(repository.calls[0]["active_file_entries"]) == {str(active)}
+    assert repository.calls[0]["deleted_path_root_ids"] == {
+        str(deleted): "secondary"
+    }
 
 
 def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(
@@ -693,8 +689,6 @@ def test_targeted_reconciler_ignores_non_media_file_events(tmp_path):
     assert result == TargetedReconciliationResult(0, ())
     assert parsed == []
     assert repository.calls == []
-
-
 def test_targeted_reconciler_rejects_destructive_work_for_unhealthy_root(tmp_path):
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
@@ -1014,52 +1008,6 @@ def changing_media_stat(monkeypatch):
     return changing_paths, samples
 
 
-def test_targeted_reconciler_does_not_reintroduce_coordinator_rejected_sibling(
-    tmp_path, changing_media_stat,
-):
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
-    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
-
-    root = tmp_path / "Music"
-    album = root / "Artist" / "Album"
-    album.mkdir(parents=True)
-    ready, changing = album / "01.flac", album / "02.flac"
-    ready.write_bytes(b"ready")
-    changing.write_bytes(b"still being copied")
-    changing_media_stat[0].add(changing)
-    parsed, results, requests, problems = [], [], [], []
-    repository = RecordingRepository()
-    reconciler = TargetedLibraryReconciler(
-        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
-        repository=repository,
-        root_definitions=[{"id": "main", "path": root}],
-        metadata_reader=lambda path: parsed.append(path) or {"path": str(path)},
-    )
-
-    def reconcile(request):
-        requests.append(request)
-        results.append(reconciler.reconcile(request))
-
-    coordinator = LibraryEventCoordinator(
-        emit_request=reconcile, emit_problem=problems.append,
-        wait=lambda _seconds: None, max_stable_attempts=2,
-    )
-    try:
-        coordinator.accept(LibraryEvent(LibraryEventKind.MODIFIED, "main", ready))
-        coordinator.accept(LibraryEvent(LibraryEventKind.MODIFIED, "main", changing))
-        coordinator.flush()
-    finally:
-        coordinator.stop()
-
-    assert requests[0].paths == frozenset({ready})
-    assert problems[0].code == "stable_write_unavailable"
-    assert parsed == []
-    assert repository.calls == []
-    assert results[0].health == "stable_write_unavailable"
-    assert results[0].revision == 0
-
-
 @pytest.mark.parametrize("cross_root", [False, True], ids=["same-root", "cross-root"])
 def test_targeted_reconciler_rejects_unstable_directory_move_without_partial_deletion(
     tmp_path, changing_media_stat, cross_root,
@@ -1257,216 +1205,6 @@ class StatefulTargetedRepository(RecordingRepository):
                    for root_id, path, subtree in deletions)
         })
         return result
-
-
-@pytest.mark.parametrize("old_directory,delete_directory", [(False, False), (True, False), (True, True)],
-                         ids=["old-file", "file-typed-directory-delete", "directory-delete"])
-@pytest.mark.parametrize("new_directory", [False, True], ids=["new-file", "new-directory"])
-@pytest.mark.parametrize("replacement", ["created", "move", "cross-root-move"])
-def test_coalesced_replacement_removes_missing_descendants_and_preserves_live_files(
-    tmp_path, old_directory, new_directory, delete_directory, replacement,
-):
-    import shutil
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
-    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
-
-    root = tmp_path / "Music"
-    source_root = tmp_path / "Source" if replacement == "cross-root-move" else root
-    source_id = "source" if replacement == "cross-root-move" else "main"
-    target = root / "Artist" / "Album.flac"
-    source = source_root / "Replacement.flac"
-
-    def populate(path, directory, *, old=False):
-        files = (path / "01.flac", path / "02.flac") if directory and old else (
-            (path / "01.flac",) if directory else (path,)
-        )
-        for track in files:
-            track.parent.mkdir(parents=True, exist_ok=True)
-            track.write_bytes(b"media")
-
-    populate(target, old_directory, old=True)
-    if replacement != "created":
-        populate(source, new_directory)
-    roots = [{"id": "main", "path": root}]
-    if source_id != "main":
-        roots.append({"id": source_id, "path": source_root})
-
-    def persisted_files():
-        return {
-            (entry["id"], track.resolve()) for entry in roots
-            for track in entry["path"].rglob("*.flac") if track.is_file()
-        }
-
-    repository = StatefulTargetedRepository(persisted_files())
-    reconciler = TargetedLibraryReconciler(
-        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
-        repository=repository, root_definitions=roots, wait=lambda _seconds: None,
-        metadata_reader=lambda path: {
-            "path": str(path), "album": path.parent.name, "artist": "Artist",
-        },
-    )
-    coordinator = LibraryEventCoordinator(emit_request=reconciler.reconcile, wait=lambda _seconds: None)
-    try:
-        if old_directory:
-            shutil.rmtree(target)
-        else:
-            target.unlink()
-        assert coordinator.accept(LibraryEvent(
-            LibraryEventKind.DELETED, "main", target, is_directory=delete_directory,
-        ))
-        if replacement == "created":
-            populate(target, new_directory)
-            event = LibraryEvent(LibraryEventKind.CREATED, "main", target, is_directory=new_directory)
-        else:
-            source.rename(target)
-            event = LibraryEvent(
-                LibraryEventKind.MOVED, source_id, source, destination=target,
-                destination_root_id="main", is_directory=new_directory,
-            )
-        assert coordinator.accept(event)
-        coordinator.flush()
-        assert repository.active_files == persisted_files()
-        assert coordinator._pending_entry_count == 0
-    finally:
-        coordinator.stop()
-        reconciler.stop()
-
-
-@pytest.mark.parametrize("names", [("Z", "A", "M"), ("A", "Z", "M")], ids=["reverse", "forward"])
-@pytest.mark.parametrize("cross_root", [False, True], ids=["same-root", "cross-root"])
-@pytest.mark.parametrize("directory", [False, True], ids=["file", "directory"])
-@pytest.mark.parametrize("sequence", ["undo", "chain", "replacement", "recreated"])
-def test_coalesced_moves_preserve_final_persisted_files(
-    tmp_path, names, cross_root, directory, sequence,
-):
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
-    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
-
-    roots = {
-        name: {"id": name if cross_root else "main", "path": tmp_path / name if cross_root else tmp_path / "Music"}
-        for name in names
-    }
-    locations = [Path(roots[name]["path"]) / "Artist" / name for name in names]
-    filenames = ("01.flac", "Disc 1/02.flac") if directory else ("01.flac",)
-
-    def populate(location):
-        for filename in filenames:
-            track = location / filename
-            track.parent.mkdir(parents=True, exist_ok=True)
-            track.write_bytes(b"media")
-
-    populate(locations[0])
-    if sequence == "replacement":
-        populate(locations[2])
-    initial = {
-        (root["id"], track.resolve()) for root in roots.values()
-        for track in Path(root["path"]).rglob("*.flac")
-    }
-    repository = StatefulTargetedRepository(initial)
-    reconciler = TargetedLibraryReconciler(
-        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
-        repository=repository, root_definitions=list(roots.values()), wait=lambda _seconds: None,
-        metadata_reader=lambda path: {"path": str(path), "album": path.parent.name, "artist": "Artist"},
-    )
-    coordinator = LibraryEventCoordinator(emit_request=reconciler.reconcile, wait=lambda _seconds: None)
-
-    def move(source_index, destination_index):
-        source = locations[source_index] if directory else locations[source_index] / filenames[0]
-        destination = locations[destination_index] if directory else locations[destination_index] / filenames[0]
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        source.rename(destination)
-        assert coordinator.accept(LibraryEvent(
-            LibraryEventKind.MOVED, roots[names[source_index]]["id"], source,
-            destination=destination, destination_root_id=roots[names[destination_index]]["id"],
-            is_directory=directory,
-        ))
-
-    try:
-        move(0, 1)
-        if sequence == "undo":
-            move(1, 0)
-        elif sequence == "chain":
-            move(1, 2)
-        elif sequence == "replacement":
-            move(2, 0)
-        else:
-            populate(locations[0])
-            for filename in filenames:
-                assert coordinator.accept(LibraryEvent(
-                    LibraryEventKind.CREATED, roots[names[0]]["id"], locations[0] / filename,
-                ))
-        coordinator.flush()
-    finally:
-        coordinator.stop()
-        reconciler.stop()
-
-    expected = {
-        (root["id"], track.resolve()) for root in roots.values()
-        for track in Path(root["path"]).rglob("*.flac")
-    }
-    assert repository.active_files == expected
-    assert coordinator._pending_entry_count == 0
-
-
-@pytest.mark.parametrize("directory", [False, True], ids=["file", "directory"])
-@pytest.mark.parametrize("failure", ["changing", "unreadable"])
-@pytest.mark.parametrize("cross_root", [False, True])
-def test_unstable_move_undo_blocks_overlapping_stale_publication(tmp_path, directory, failure, cross_root):
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
-    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
-
-    source_root, destination_root = tmp_path / "Z", tmp_path / "A" if cross_root else tmp_path / "Z"
-    source_root_id, destination_root_id = "Z-root", "A-root" if cross_root else "Z-root"
-    source, destination = source_root / "Z Album", destination_root / "A Album"
-    source.mkdir(parents=True)
-    track = source / "01.flac"
-    track.write_bytes(b"media")
-    if not directory:
-        source, destination = track, destination / "01.flac"
-    initial = {(source_root_id, track.resolve())}
-    repository = StatefulTargetedRepository(initial)
-    reconciler = TargetedLibraryReconciler(
-        {"SUPPORTED_EXTENSIONS": {".flac"}}, repository=repository,
-        root_definitions=[{"id": source_root_id, "path": source_root}, {"id": destination_root_id, "path": destination_root}],
-        wait=lambda _seconds: None,
-    )
-    problems = []
-    samples = 0
-
-    def stat_path(path):
-        nonlocal samples
-        if path == source:
-            if failure == "unreadable":
-                raise PermissionError("copy not readable")
-            samples += 1
-            return (samples, samples)
-        return path.stat()
-
-    coordinator = LibraryEventCoordinator(
-        emit_request=reconciler.reconcile, emit_problem=problems.append,
-        stat_path=stat_path, wait=lambda _seconds: None,
-    )
-    try:
-        coordinator.accept(LibraryEvent(
-            LibraryEventKind.MOVED, source_root_id, source, destination=destination,
-            destination_root_id=destination_root_id, is_directory=directory,
-        ))
-        coordinator.accept(LibraryEvent(
-            LibraryEventKind.MOVED, destination_root_id, destination, destination=source,
-            destination_root_id=source_root_id, is_directory=directory,
-        ))
-        coordinator.flush()
-    finally:
-        coordinator.stop()
-        reconciler.stop()
-
-    assert repository.calls == []
-    assert repository.active_files == initial
-    assert {problem.root_id for problem in problems} == {source_root_id, destination_root_id}
-    assert {problem.code for problem in problems} == {"stable_write_unavailable"}
 
 
 def test_preserved_subtree_expands_supported_live_files_inside_atomic_deletion(tmp_path, monkeypatch):

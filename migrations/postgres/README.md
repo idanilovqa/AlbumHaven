@@ -133,6 +133,7 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0104_grant_worker_auth_mail.sql
 0105_validate_durable_worker_startup.sql
 0106_retire_vacated_structural_album.sql
+0107_create_durable_watcher_recovery.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -236,6 +237,15 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0105_validate_durable_worker_startup.sql` adds the closed startup contract used before a worker advertises readiness. It requires the exact registered handler set, every handler-owned function and execute grant, generic-ledger table and update-column grants, and transition-sequence usage. It returns only a boolean and exposes no schema, role, path, credential, or job detail.
 
 `0106_retire_vacated_structural_album.sql` adds narrow application and worker boundaries for retiring zero-track album rows after structural and durable targeted reconciliation. It validates and locks same-library identities, preserves real track tombstones and cover-save checkpoint references, moves durable key/ID dependents with conflict-safe semantics, and sweeps only exact artist/title/year/edition siblings. The family-wide `separate_releases` marker does not protect an otherwise empty duplicate row; track ownership and active cover checkpoints remain row-specific guards. The targeted worker entry point additionally requires the current job attempt, lease, intent, and committed publication before using server-recorded affected album keys. Roles receive only function execution rather than destructive table privileges.
+
+`0107_create_durable_watcher_recovery.sql` expands targeted reconciliation with
+root-relative watcher scope, one durable running/successor lane per active root,
+cross-root barriers, stable incidents, acknowledgements, and repair watermarks.
+Apply it transactionally after `0106`; verify the worker startup preflight and
+runtime-role deny matrix before application cutover. Roll application admission
+back before invoking the migrator-only rollback routine. Rollback preserves any
+unapplied lane as a `rollback_pending_work` incident; do not drop retained lane,
+incident, or legacy-import evidence until an operator has reconciled it.
 
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 

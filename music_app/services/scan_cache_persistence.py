@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -127,6 +127,8 @@ class ScanCacheAdapter(Protocol):
         active_file_entries: dict[str, dict[str, object]],
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
+        deleted_path_root_ids: Mapping[str, str] | None = None,
+        deleted_subtree_root_ids: Mapping[str, str] | None = None,
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
     ) -> dict[str, object]:
@@ -199,6 +201,8 @@ class DurableTargetedReconciliationPreparationAdapter:
         active_file_entries: dict[str, dict[str, object]],
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
+        deleted_path_root_ids: Mapping[str, str] | None = None,
+        deleted_subtree_root_ids: Mapping[str, str] | None = None,
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: object,
         preparation_scope: object,
@@ -244,14 +248,23 @@ class DurableTargetedReconciliationPreparationAdapter:
             "track_files": _jsonb_compatible(files),
         }
 
-        stale_by_root: dict[str, dict[str, set[str]]] = {
-            normalized_root_id: {
-                "paths": {str(path) for path in deleted_paths if str(path)},
-                "subtrees": {
-                    str(path) for path in deleted_subtrees if str(path)
-                },
-            }
-        }
+        stale_by_root: dict[str, dict[str, set[str]]] = {}
+        for kind, values, roots in (
+            ("paths", deleted_paths, deleted_path_root_ids or {}),
+            ("subtrees", deleted_subtrees, deleted_subtree_root_ids or {}),
+        ):
+            for path in values:
+                normalized_path = str(path).strip()
+                if not normalized_path:
+                    continue
+                stale_root_id = str(
+                    roots.get(normalized_path, normalized_root_id)
+                ).strip()
+                if not stale_root_id:
+                    raise ValueError("Targeted stale scope requires a root id.")
+                stale_by_root.setdefault(
+                    stale_root_id, {"paths": set(), "subtrees": set()}
+                )[kind].add(normalized_path)
         for move in moves:
             source_root_id = str(
                 move.get("source_root_id") or normalized_root_id
@@ -374,6 +387,8 @@ class PostgresScanCacheAdapter:
         active_file_entries: dict[str, dict[str, object]],
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
+        deleted_path_root_ids: Mapping[str, str] | None = None,
+        deleted_subtree_root_ids: Mapping[str, str] | None = None,
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
     ) -> dict[str, object]:
@@ -385,14 +400,23 @@ class PostgresScanCacheAdapter:
             for path, entry in active_file_entries.items()
             if str(path).strip() and isinstance(entry, dict)
         }
-        stale_by_root: dict[str, dict[str, set[str]]] = {
-            normalized_root_id: {
-                "paths": {str(path) for path in deleted_paths if str(path)},
-                "subtrees": {
-                    str(path) for path in deleted_subtrees if str(path)
-                },
-            }
-        }
+        stale_by_root: dict[str, dict[str, set[str]]] = {}
+        for kind, values, roots in (
+            ("paths", deleted_paths, deleted_path_root_ids or {}),
+            ("subtrees", deleted_subtrees, deleted_subtree_root_ids or {}),
+        ):
+            for path in values:
+                normalized_path = str(path).strip()
+                if not normalized_path:
+                    continue
+                stale_root_id = str(
+                    roots.get(normalized_path, normalized_root_id)
+                ).strip()
+                if not stale_root_id:
+                    raise ValueError("Targeted stale scope requires a root id.")
+                stale_by_root.setdefault(
+                    stale_root_id, {"paths": set(), "subtrees": set()}
+                )[kind].add(normalized_path)
         active_paths_by_root: dict[str, set[str]] = {}
         for path, entry in file_cache.items():
             active_root_id = str(

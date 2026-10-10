@@ -64,6 +64,7 @@ class ClaimedTargetedReconciliationIntent:
     library_id: int
     request: TargetedReconciliationRequest
     exception_overrides: Mapping[str, str]
+    watcher_generation_kind: str | None = None
 
     @property
     def root_id(self) -> str:
@@ -1100,6 +1101,15 @@ class PostgresScanJobRepository:
             library_id=_positive_id(payload.get("library_id"), "library_id"),
             request=request,
             exception_overrides=MappingProxyType(overrides),
+            watcher_generation_kind=(
+                _bounded_text(
+                    payload.get("watcher_generation_kind"),
+                    "watcher_generation_kind",
+                    maximum=32,
+                )
+                if payload.get("watcher_generation_kind") is not None
+                else None
+            ),
         )
 
     def load_claimed_targeted_reconciliation_scope(
@@ -1245,6 +1255,8 @@ class PostgresScanJobRepository:
         stale_scopes: Iterable[Mapping[str, object]],
         now: datetime,
     ) -> dict[str, object]:
+        import psycopg
+
         parameters = {
             "intent_id": _positive_id(intent_id, "intent_id"),
             "job_id": _positive_id(claim.job_id, "job_id"),
@@ -1261,43 +1273,39 @@ class PostgresScanJobRepository:
             ),
             "now": now,
         }
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                select *
-                  from library.publish_claimed_targeted_reconciliation(
-                    %(intent_id)s, %(job_id)s, %(attempt)s,
-                    %(worker_id)s, %(lease_token)s,
-                    %(inventory)s::jsonb, %(stale_scopes)s::jsonb, %(now)s
-                  )
-                """,
-                parameters,
-            ).fetchone()
-            payload = _row_mapping(row)
-            if payload.get("publication_won") is True:
-                connection.execute(
+
+        def execute_publication() -> Any:
+            with self._connect() as connection:
+                return connection.execute(
                     """
-                    select library.retire_claimed_targeted_reconciliation_vacated_albums(
-                      %(intent_id)s, %(job_id)s, %(attempt)s,
-                      %(worker_id)s, %(lease_token)s, %(now)s
-                    ) as retired_count
+                    select *
+                      from library.publish_claimed_targeted_reconciliation(
+                        %(intent_id)s, %(job_id)s, %(attempt)s,
+                        %(worker_id)s, %(lease_token)s,
+                        %(inventory)s::jsonb, %(stale_scopes)s::jsonb, %(now)s
+                      )
                     """,
-                    {
-                        "intent_id": parameters["intent_id"],
-                        "job_id": parameters["job_id"],
-                        "attempt": parameters["attempt"],
-                        "worker_id": parameters["worker_id"],
-                        "lease_token": parameters["lease_token"],
-                        "now": parameters["now"],
-                    },
+                    parameters,
                 ).fetchone()
+
+        try:
+            row = execute_publication()
+        except (psycopg.InterfaceError, psycopg.OperationalError):
+            row = execute_publication()
+        payload = _row_mapping(row)
         return {
             "publication_won": payload.get("publication_won") is True,
             "inventory_mutation_revision": int(
                 payload.get("inventory_mutation_revision") or 0
             ),
-            "affected_album_keys": tuple(
+            "affected_album_keys": list(
                 str(key) for key in payload.get("affected_album_keys") or ()
+            ),
+            "cover_publication_stale": bool(
+                payload.get("cover_publication_stale")
+            ),
+            "cover_mutation_revision": int(
+                payload.get("cover_mutation_revision") or 0
             ),
         }
 

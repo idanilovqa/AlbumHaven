@@ -386,6 +386,9 @@ def create_asgi_app():
         LibraryEventCoordinator,
     )
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from music_app.services.watcher_recovery_postgres import (
+        PostgresWatcherRecoveryRepository,
+    )
     from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.postgres_connections import prewarm_connection_pool
@@ -425,7 +428,6 @@ def create_asgi_app():
             warmup = _app.state.library_warmup_thread
             if warmup is not None:
                 warmup.request_stop()
-            runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
                 (
@@ -483,29 +485,34 @@ def create_asgi_app():
         watcher_library_id = (
             host_scope.library_id if targeted_database_url and host_scope is not None else None
         )
+        watcher_recovery = (
+            PostgresWatcherRecoveryRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
+        )
 
-        def create_targeted_reconciliation(request) -> None:
+        def watcher_library() -> int | None:
             nonlocal watcher_library_id
             if watcher_library_id is None and targeted_database_url:
                 watcher_library_id = scan_jobs.resolve_local_library_id()
-            if watcher_library_id is None:
-                return
-            scan_jobs.enqueue_targeted_reconciliation(
-                library_id=watcher_library_id,
-                request=request,
-                producer_request_key=request.producer_request_key,
-                deployment_mode="self_hosted_private_web",
-                client_surface="library_watcher",
-                scheduled_at=datetime.now(timezone.utc),
-            )
+            return watcher_library_id
 
-        def persist_library_watch_health(event) -> None:
-            try:
-                runtime.library_watch_health_service.record_event(event)
-            except Exception:
-                runtime.logger.exception(
-                    "Unable to persist library watcher health event."
-                )
+        def observation_time(value) -> datetime:
+            if not isinstance(value, datetime):
+                return datetime.now(timezone.utc)
+            if value.tzinfo is None:
+                raise ValueError("watcher observation time must be timezone-aware")
+            return value.astimezone(timezone.utc)
+
+        def accept_library_watch_event(event) -> None:
+            library_id = watcher_library()
+            if library_id is None or watcher_recovery is None:
+                return
+            watcher_recovery.accept_event(
+                library_id=library_id,
+                event=event,
+                accepted_at=observation_time(event.observed_at),
+            )
 
         def persist_library_watch_problem(problem) -> None:
             try:
@@ -514,13 +521,19 @@ def create_asgi_app():
                 runtime.logger.exception(
                     "Unable to persist library watcher health problem."
                 )
+            library_id = watcher_library()
+            if library_id is not None and watcher_recovery is not None:
+                watcher_recovery.mark_dirty(
+                    library_id=library_id,
+                    logical_root_id=problem.root_id,
+                    reason_code=problem.code,
+                    observed_at=datetime.now(timezone.utc),
+                )
 
         try:
             runtime.library_event_coordinator = LibraryEventCoordinator(
-                emit_request=create_targeted_reconciliation,
-                emit_health_event=persist_library_watch_health,
-                emit_problem=persist_library_watch_problem,
-                auto_schedule=True,
+                accept_library_watch_event,
+                record_problem=persist_library_watch_problem,
             )
             runtime.library_watch_service = LibraryWatchService(
                 WatchdogLibraryEventSource(targeted_roots),
@@ -546,31 +559,12 @@ def create_asgi_app():
                 runtime.library_watch_service.replace_roots(root_definitions)
             except Exception:
                 for root in root_definitions:
-                    persist_library_watch_problem(CoordinatorProblem("reconciliation_failed", str(root.get("id") or "")))
+                    persist_library_watch_problem(CoordinatorProblem("root_unavailable", str(root.get("id") or "")))
                 raise
 
         runtime.replace_library_watch_roots = replace_live_library_roots
         _app.state.replace_library_watch_roots = replace_live_library_roots
 
-        def recover_library_watch_after_manual_scan(
-            *,
-            scan_mode,
-            scan_started_at,
-            observed_root_ids,
-        ) -> int:
-            return _recover_library_watch_after_manual_scan(
-                health_service=runtime.library_watch_health_service,
-                targeted_reconciler=None,
-                watch_service=runtime.library_watch_service,
-                root_definitions=get_library_roots(runtime.config),
-                scan_mode=scan_mode,
-                scan_started_at=scan_started_at,
-                observed_root_ids=observed_root_ids,
-            )
-
-        runtime.config["_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"] = (
-            recover_library_watch_after_manual_scan
-        )
         try:
             runtime.library_watch_service.start()
         except BaseException:

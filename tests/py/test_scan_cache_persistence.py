@@ -3297,6 +3297,42 @@ def test_durable_targeted_preparer_publishes_only_claim_scoped_prepared_payload(
     assert result["inventory_mutation_revision"] == 17
 
 
+def test_durable_targeted_preparer_preserves_multi_root_stale_scope():
+    from types import SimpleNamespace
+
+    from music_app.services.scan_cache_persistence import (
+        DurableTargetedReconciliationPreparationAdapter,
+    )
+
+    published = {}
+
+    class PublicationGuard:
+        def publish_prepared(self, *, inventory, stale_scopes):
+            published["stale_scopes"] = stale_scopes
+            return {"publication_won": True}
+
+    DurableTargetedReconciliationPreparationAdapter(
+        build_albums=lambda _file_cache, _separate: []
+    ).persist_targeted_inventory_mutation(
+        root_id="root-a",
+        active_file_entries={},
+        deleted_paths=("D:/Music/Removed/01.flac",),
+        deleted_path_root_ids={"D:/Music/Removed/01.flac": "root-b"},
+        preparation_scope=SimpleNamespace(
+            separate_release_keys=(), existing_memberships=()
+        ),
+        publication_guard=PublicationGuard(),
+    )
+
+    assert published["stale_scopes"] == [
+        {
+            "root_id": "root-b",
+            "paths": ["D:/Music/Removed/01.flac"],
+            "subtrees": [],
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("generated_key", "generated_artist", "existing_key", "existing_artist"),
     (

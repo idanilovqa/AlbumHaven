@@ -1,10 +1,15 @@
 """Account acknowledgements of watcher warnings; never clears watcher health."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import re
 
-from music_app.services.library_watch_health import _BOOTSTRAP_LIBRARY_SQL, _connect
+from music_app.services.library_watch_health import (
+    LibraryWatchHealthProblem,
+    _connect,
+)
 
 
 def warning_token(health: dict) -> str:
@@ -12,13 +17,39 @@ def warning_token(health: dict) -> str:
         return ""
     events = []
     for problem in health.get("problems", []):
-        identity = (str(problem.get("root_key", "")), str(problem.get("state", "")),
-                    str(problem.get("detected_at", "")))
         event_id = str(problem.get("event_id") or "")
+        if event_id:
+            events.append((event_id,))
+            continue
         # Retain the exact legacy hash until that warning is replaced.
-        events.append((*identity, event_id) if event_id else identity)
+        events.append((
+            str(problem.get("root_key", "")),
+            str(problem.get("state", "")),
+            str(problem.get("detected_at", "")),
+        ))
+    if not events:
+        return ""
     events.sort()
     return sha256(json.dumps(events, separators=(",", ":")).encode()).hexdigest()
+
+
+def _timestamp_text(value: object) -> str:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value)
+        normalized = re.sub(
+            r"(\.\d{1,5})(?=(?:Z|[+-]\d\d:\d\d)?$)",
+            lambda match: match.group(1).ljust(7, "0"),
+            text,
+        )
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return text
+    if parsed.tzinfo is None:
+        return parsed.isoformat()
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 class PostgresLibraryWarningDismissals:
@@ -28,19 +59,42 @@ class PostgresLibraryWarningDismissals:
 
     def load(self, account_id):
         with self.connect(self.url) as conn:
-            row = conn.execute(_BOOTSTRAP_LIBRARY_SQL + """
-                select library.libraries.metadata #>> array['watcher_warning_dismissals', %s] as token
-                from library.libraries join bootstrap_library on bootstrap_library.id = library.libraries.id
-            """, (str(account_id),)).fetchone()
-        return str((row or {}).get("token") or "")
+            rows = conn.execute(
+                """
+                select root_id, state, detected_at, event_id
+                from library.load_local_watcher_incident_acknowledgements(%s)
+                """,
+                (account_id,),
+            ).fetchall()
+        problems = [
+            LibraryWatchHealthProblem(
+                root_id=str(row["root_id"]),
+                state=str(row["state"]),
+                detected_at=_timestamp_text(row["detected_at"]),
+                event_id=str(row["event_id"]),
+            ).as_public_dict()
+            for row in rows
+        ]
+        return warning_token({"state": "warning", "problems": problems})
 
-    def save(self, account_id, token):
+    def save(self, account_id, token, health):
+        if warning_token(health) != token:
+            raise ValueError("warning token does not match watcher health")
+        incident_tokens = list(
+            dict.fromkeys(
+                str(problem.get("event_id") or "").strip()
+                for problem in health.get("problems", [])
+                if str(problem.get("event_id") or "").strip()
+            )
+        )
+        if not incident_tokens:
+            raise RuntimeError("watcher acknowledgement changed")
         with self.connect(self.url) as conn:
-            conn.execute(_BOOTSTRAP_LIBRARY_SQL + """
-                update library.libraries set metadata = jsonb_set(
-                    coalesce(metadata, '{}'::jsonb), '{watcher_warning_dismissals}',
-                    coalesce(metadata -> 'watcher_warning_dismissals', '{}'::jsonb)
-                        || jsonb_build_object(%s::text, %s::text), true)
-                from bootstrap_library where library.libraries.id = bootstrap_library.id
-            """, (str(account_id), token))
+            row = conn.execute(
+                "select library.acknowledge_local_watcher_incidents(%s, %s::uuid[]) "
+                "as acknowledged_count",
+                (account_id, incident_tokens),
+            ).fetchone()
+            if int((row or {}).get("acknowledged_count") or 0) != len(incident_tokens):
+                raise RuntimeError("watcher acknowledgement changed")
             conn.commit()

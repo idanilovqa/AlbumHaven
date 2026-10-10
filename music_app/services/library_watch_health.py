@@ -29,6 +29,7 @@ _HEALTH_EVENT_KINDS = {
 }
 _HEALTH_PROBLEM_STATES = {
     "overflow",
+    "root_unavailable",
     "reconciliation_failed",
     "stable_write_unavailable",
 }
@@ -79,14 +80,28 @@ where library.libraries.id = bootstrap_library.id
   );
 """
 
-_LOAD_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """
+_LOAD_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """,
+durable_health as (
+  select coalesce(
+           jsonb_object_agg(
+             incident.root_id,
+             jsonb_build_object(
+               'state', incident.state,
+               'detected_at', incident.detected_at,
+               'event_id', incident.event_id
+             )
+           ),
+           '{}'::jsonb
+         ) as payload
+  from library.load_local_watcher_incidents() as incident
+)
 /* watch_health_load */
 select coalesce(
-         library.libraries.metadata -> 'library_watch_health',
-         '{}'::jsonb
-       ) as library_watch_health
+         library.libraries.metadata -> 'library_watch_health', '{}'::jsonb
+       ) || durable_health.payload as library_watch_health
 from library.libraries
-join bootstrap_library on bootstrap_library.id = library.libraries.id;
+join bootstrap_library on bootstrap_library.id = library.libraries.id
+cross join durable_health;
 """
 
 

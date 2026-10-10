@@ -1428,7 +1428,9 @@ def test_live_claimed_publication_commits_inventory_revision_exactly_once(
     assert second == {
         "publication_won": False,
         "inventory_mutation_revision": 1,
-        "affected_album_keys": ("artist::album",),
+        "affected_album_keys": ["artist::album"],
+        "cover_publication_stale": False,
+        "cover_mutation_revision": 0,
     }
     with isolatedPostgres._connect(setup_url) as connection:
         intent = connection.execute(

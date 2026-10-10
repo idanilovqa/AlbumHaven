@@ -720,13 +720,12 @@ def test_full_scan_resource_validator_initializes_claim_before_loading_scope():
     ]
 
 
-def _full_handler(repository, scanner, *, logged=None, watcher=None):
+def _full_handler(repository, scanner, *, logged=None):
     from music_app.jobs.scan_handlers import build_full_scan_handler
 
     return build_full_scan_handler(
         scan_repository=repository,
         scan_executor=scanner,
-        watcher_coordinator=watcher,
         clock=lambda: NOW,
         log_event=(lambda message: logged.append(message)) if logged is not None else None,
     )
@@ -930,26 +929,155 @@ def test_full_scan_generic_identity_is_path_free_while_private_checkpoint_keeps_
     assert private_path not in claim.idempotency_key
 
 
-def test_retried_full_scan_suspends_watcher_overlap_and_resumes_after_completion():
-    class Watcher:
+def test_targeted_handler_failure_marks_every_watcher_participant_dirty():
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+
+    claimed_generation = SimpleNamespace(
+        generation_id=501,
+        intent_id=84,
+        library_id=19,
+        participants=(
+            SimpleNamespace(logical_root_id="root-a"),
+            SimpleNamespace(logical_root_id="root-b"),
+        ),
+        generation_kind="exact",
+        barrier_ids=(701,),
+    )
+
+    class Recovery:
         def __init__(self):
-            self.events = []
+            self.failures = []
 
-        def suspend_targeted_reconciliation(self):
-            self.events.append("suspend")
+        def claim_generation(self, **_kwargs):
+            return claimed_generation
 
-        def resume_targeted_reconciliation(self):
-            self.events.append("resume")
+        def fail_generation(self, **kwargs):
+            self.failures.append(kwargs)
+            return True
 
-    watcher = Watcher()
-    repository = _FullScanRepository()
+    class FailingReconciler(_Reconciler):
+        def reconcile(self, *_args, **_kwargs):
+            raise OSError("C:/private/music/credential=secret")
 
-    outcome = _full_handler(
-        repository,
-        _FullScanner(),
-        watcher=watcher,
-    )(_full_claim(), _FullContext())
+    recovery = Recovery()
+    repository = _ScanRepository()
+    repository.intent.watcher_generation_kind = "exact"
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=repository,
+        reconciler=FailingReconciler(),
+        watcher_recovery=recovery,
+        invalidate_projections=lambda _result: None,
+        clock=lambda: NOW,
+    )
 
-    assert _full_claim().attempt == 3
-    assert watcher.events == ["suspend", "resume"]
-    assert outcome.next_state is JobState.SUCCEEDED
+    result = handler(_claim(), _Context())
+
+    assert result == JobTransitionResult(
+        JobState.FAILED,
+        "targeted_reconciliation_failed",
+    )
+    assert recovery.failures == [
+        {
+            "claim": _claim(),
+            "generation": claimed_generation,
+            "reason_code": "reconciliation_failed",
+            "now": NOW,
+        }
+    ]
+    assert "private" not in result.reason_code
+    assert "secret" not in result.reason_code
+
+
+def test_root_catch_up_reconciles_every_participant_root():
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+
+    repository = _ScanRepository(
+        roots=(
+            {
+                "id": "root-a",
+                "path": Path("C:/Music/A"),
+                "category": "main_library_roots",
+                "library_id": 19,
+                "is_active": True,
+            },
+            {
+                "id": "root-b",
+                "path": Path("D:/Music/B"),
+                "category": "main_library_roots",
+                "library_id": 19,
+                "is_active": True,
+            },
+        )
+    )
+    repository.intent.watcher_generation_kind = "root_catch_up"
+    repository.intent.request = TargetedReconciliationRequest(root_id="root-a")
+    generation = SimpleNamespace(
+        generation_id=84,
+        intent_id=84,
+        library_id=19,
+        participants=(
+            SimpleNamespace(logical_root_id="root-a"),
+            SimpleNamespace(logical_root_id="root-b"),
+        ),
+        generation_kind="root_catch_up",
+        barrier_ids=(),
+    )
+    recovery = SimpleNamespace(claim_generation=lambda **_kwargs: generation)
+    reconciler = _Reconciler()
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=repository,
+        reconciler=reconciler,
+        watcher_recovery=recovery,
+        clock=lambda: NOW,
+    )
+
+    assert handler(_claim(), _Context()).next_state is JobState.SUCCEEDED
+    assert reconciler.requests[0][0].preserved_subtrees == frozenset(
+        {Path("C:/Music/A"), Path("D:/Music/B")}
+    )
+
+
+def test_stale_watcher_generation_cancels_before_private_scope_load():
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+
+    repository = _ScanRepository()
+    repository.intent.watcher_generation_kind = "exact"
+    recovery = SimpleNamespace(claim_generation=lambda **_kwargs: None)
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=repository,
+        reconciler=_Reconciler(),
+        watcher_recovery=recovery,
+        invalidate_projections=lambda _result: None,
+        clock=lambda: NOW,
+    )
+
+    assert handler(_claim(), _Context()) == JobTransitionResult(
+        JobState.CANCELED,
+        "watcher_generation_stale",
+    )
+    assert len(repository.loads) == 1
+    assert repository.scope_loads == []
+
+
+def test_legacy_library_watcher_job_skips_generation_claim():
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+
+    repository = _ScanRepository()
+
+    def reject_generation_claim(**_kwargs):
+        raise AssertionError("legacy watcher job must not use durable generation claim")
+
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=repository,
+        reconciler=_Reconciler(),
+        watcher_recovery=SimpleNamespace(claim_generation=reject_generation_claim),
+        invalidate_projections=lambda _result: None,
+        clock=lambda: NOW,
+    )
+
+    assert handler(_claim(), _Context()) == JobTransitionResult(
+        JobState.SUCCEEDED,
+        "targeted_reconciliation_completed",
+    )
+    assert len(repository.loads) == 1
+    assert len(repository.scope_loads) == 1

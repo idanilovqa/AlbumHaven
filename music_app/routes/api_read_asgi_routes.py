@@ -406,7 +406,12 @@ async def dismiss_library_warning(request: Request) -> JSONResponse:
     if token != warning_token(health):
         return JSONResponse({"error": "warning_changed"}, status_code=409, headers=headers)
     try:
-        await run_in_threadpool(_warning_dismissals(request).save, request.state.current_actor.account_id, token)
+        await run_in_threadpool(
+            _warning_dismissals(request).save,
+            request.state.current_actor.account_id,
+            token,
+            health,
+        )
     except Exception:
         return JSONResponse({"error": "dismissal_unavailable"}, status_code=503, headers=headers)
     return JSONResponse({"dismissed_token": token}, headers=headers)

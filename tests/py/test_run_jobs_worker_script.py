@@ -178,3 +178,13 @@ def test_worker_bootstrap_registers_all_auth_mail_handlers_and_validators():
     assert "JobKind.AUTH_WELCOME_DELIVERY" in source
     assert "JobKind.AUTH_INVITATION_DELIVERY" in source
     assert "JobKind.AUTH_PASSWORD_RESET_DELIVERY" in source
+
+
+def test_worker_bootstrap_composes_durable_watcher_due_reconciliation():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "PostgresWatcherRecoveryRepository" in source
+    assert "watcher_recovery.reconcile_due" in source
+    assert "combine_due_reconcilers" in source

@@ -96,7 +96,614 @@ DURABLE_WORKER_PREFLIGHT_MIGRATION = (
 VACATED_STRUCTURAL_ALBUM_MIGRATION = (
     MIGRATIONS_DIR / "0106_retire_vacated_structural_album.sql"
 )
+WATCHER_RECOVERY_MIGRATION = (
+    MIGRATIONS_DIR / "0107_create_durable_watcher_recovery.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
+
+
+def _watcher_recovery_sql() -> str:
+    assert WATCHER_RECOVERY_MIGRATION.is_file(), (
+        "missing additive watcher recovery migration 0107"
+    )
+    return _normalized_sql(WATCHER_RECOVERY_MIGRATION.read_text(encoding="utf-8"))
+
+
+def _watcher_function_sql(name: str) -> str:
+    sql = _watcher_recovery_sql()
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing watcher function {name}"
+    return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def test_0107_declares_lane_invariants_and_partial_indexes():
+    sql = _watcher_recovery_sql()
+
+    assert "primary key (library_id, root_id)" in sql
+    assert "applied_sequence <= accepted_sequence" in sql
+    assert "repaired_dirty_generation <= dirty_generation" in sql
+    assert "where successor_generation_id is not null" in sql
+    assert "where resolved_at is null" in sql
+    assert "watcher_incidents_identity_immutable" in sql
+    assert "revoke all on table library.watcher_lanes from public" in sql
+    assert "targeted_reconciliation_watcher_ready_idx" in sql
+    assert "watcher_generation_kind, accepted_at, id" in sql
+
+
+def test_0107_migrates_watcher_scope_without_dropping_legacy_columns():
+    sql = _watcher_recovery_sql()
+
+    assert "add column if not exists root_id bigint" in sql
+    assert "add column if not exists relative_path text" in sql
+    assert "watcher_scope_root_keyed" in sql
+    assert "drop column path" not in sql
+    assert "drop column accepted_primary_root_path" not in sql
+
+
+def test_0107_recreates_mixed_version_targeted_scope_loader():
+    sql = _watcher_recovery_sql()
+    loader = _watcher_function_sql(
+        "library.load_claimed_targeted_reconciliation_intent_v2"
+    )
+
+    assert "scope.root_id" in loader
+    assert "scope.relative_path" in loader
+    assert "load_claimed_targeted_reconciliation_intent_legacy_0107" in loader
+    assert "move.source_root_id" in loader
+    assert "move.destination_root_id" in loader
+    assert "move.source_relative_path" in loader
+    assert "move.destination_relative_path" in loader
+    assert "root.metadata ->> 'root_id'" in loader
+    assert "drop column path" not in sql
+
+
+def test_0107_drops_and_recreates_exact_reserved_publication_identities():
+    sql = _watcher_recovery_sql()
+    full_arguments = (
+        "bigint, bigint, integer, varchar, varchar, bigint, jsonb, text[], "
+        "timestamptz"
+    )
+    targeted_arguments = (
+        "bigint, bigint, integer, varchar, varchar, jsonb, jsonb, timestamptz"
+    )
+
+    assert f"drop function library.publish_claimed_full_scan({full_arguments})" in sql
+    assert (
+        "drop function library.publish_claimed_targeted_reconciliation("
+        f"{targeted_arguments})"
+    ) in sql
+    assert sql.count("create or replace function library.publish_claimed_full_scan(") == 1
+    assert (
+        sql.count(
+            "create or replace function "
+            "library.publish_claimed_targeted_reconciliation("
+        )
+        == 1
+    )
+
+    full = _watcher_function_sql("library.publish_claimed_full_scan")
+    targeted = _watcher_function_sql(
+        "library.publish_claimed_targeted_reconciliation"
+    )
+    for parameter in (
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_expected_inventory_revision bigint",
+        "p_inventory jsonb",
+        "p_observed_root_ids text[]",
+        "p_now timestamptz",
+    ):
+        assert parameter in full
+    assert (
+        "returns table ( publication_won boolean, "
+        "inventory_mutation_revision bigint, cover_publication_stale boolean, "
+        "cover_mutation_revision bigint )"
+    ) in full
+    for parameter in (
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_inventory jsonb",
+        "p_stale_scopes jsonb",
+        "p_now timestamptz",
+    ):
+        assert parameter in targeted
+    assert (
+        "returns table ( publication_won boolean, "
+        "inventory_mutation_revision bigint, affected_album_keys text[], "
+        "cover_publication_stale boolean, cover_mutation_revision bigint )"
+    ) in targeted
+
+
+def test_0107_recreates_publication_shapes_and_worker_preflight():
+    sql = _watcher_recovery_sql()
+
+    assert "rename to publish_claimed_full_scan_inventory_0106" in sql
+    assert "rename to publish_claimed_targeted_reconciliation_inventory_0106" in sql
+    assert "from album_haven_worker" in sql
+    assert "create or replace function ops.validate_durable_worker_startup" in sql
+    assert "dispatch_ready_watcher_generations" in sql
+    assert "reconcile_due_watcher_generations" in sql
+
+
+def test_0107_links_manual_full_scans_to_captured_watcher_repairs():
+    sql = _watcher_recovery_sql()
+    creator = _watcher_function_sql("library.create_full_scan_intent_v2")
+    completer = _watcher_function_sql("library.try_complete_watcher_repairs")
+
+    assert "rename to create_full_scan_intent_baseline_0107" in sql
+    assert "library.create_full_scan_intent_baseline_0107(" in creator
+    assert "p_mode = 'manual_full_rescan'" in creator
+    assert "insert into library.watcher_repairs" in creator
+    assert "insert into library.watcher_repair_roots" in creator
+    assert "set watcher_repair_id = v_repair_id" in creator
+    assert "pg_advisory_xact_lock" in creator
+    assert "insert into library.full_scan_intent_roots" in creator
+    assert "on conflict on constraint full_scan_intent_roots_pkey" in creator
+    assert "v_job_state in ('queued', 'retry_wait')" in creator
+    assert "when v_job_state = 'running'" in creator
+    assert "lane.applied_sequence" in creator
+    assert "lane.repaired_dirty_generation" in creator
+    assert "from ops.jobs as job" in creator
+    assert "job.id = accepted.job_id" in creator
+    assert "job.state" in creator
+    assert "select intent.watcher_repair_id" in creator
+    assert "into v_repair_id" in creator
+    assert "watcher_repair_id is null" in creator
+    assert "for update" in creator
+    assert "library_watch_health" in completer
+    assert "watcher_repair_roots" in completer
+
+
+def test_0107_serializes_running_full_scan_repair_admission_with_publication():
+    creator = _watcher_function_sql("library.create_full_scan_intent_v2")
+    publisher = _watcher_function_sql("library.publish_claimed_full_scan")
+    completer = _watcher_function_sql("library.complete_watcher_repair_internal")
+
+    assert "intent.committed_inventory_revision" in creator
+    assert "library.complete_watcher_repair_internal(" in creator
+    assert "published full scan cannot accept watcher repair" not in creator
+    assert (
+        "revoke all on function library.complete_watcher_repair_internal(" in
+        _watcher_recovery_sql()
+    )
+    job_lock = publisher.index("from ops.jobs as job")
+    job_locked = publisher.index("for update of job")
+    intent_lock = publisher.index("from library.full_scan_intents as intent")
+    intent_locked = publisher.index("for update of intent")
+    repair_lock = publisher.index("from library.watcher_repairs as repair")
+    inventory_publication = publisher.index(
+        "library.publish_claimed_full_scan_inventory_0106("
+    )
+    assert (
+        job_lock
+        < job_locked
+        < intent_lock
+        < intent_locked
+        < repair_lock
+        < inventory_publication
+    )
+    assert (
+        completer.index("from ops.jobs as job")
+        < completer.index("for update of job")
+        < completer.index("from library.full_scan_intents as intent")
+        < completer.index("for update of intent")
+        < completer.index("from library.watcher_repairs as repair")
+        < completer.index("for update of repair")
+        < completer.index("from library.watcher_lanes as lane")
+        < completer.index("for update of lane")
+    )
+
+
+def test_0107_rebases_reused_root_catch_up_after_full_scan_publication():
+    completer = _watcher_function_sql("library.complete_watcher_repair_internal")
+
+    successor_lock = completer.index(
+        "from library.targeted_reconciliation_intents as successor"
+    )
+    participant_update = completer.index(
+        "update library.watcher_generation_participants as participant"
+    )
+    intent_update = completer.index(
+        "update library.targeted_reconciliation_intents as successor",
+        participant_update,
+    )
+    repair_link = completer.index(
+        "insert into library.watcher_generation_repairs",
+        intent_update,
+    )
+
+    assert completer.index("for update of lane") < successor_lock
+    assert "for update of successor" in completer[successor_lock:participant_update]
+    assert "accepted_sequence_lower = lane.applied_sequence + 1" in completer
+    assert "accepted_sequence_upper = lane.accepted_sequence" in completer
+    assert "dirty_generation = lane.dirty_generation" in completer
+    assert participant_update < intent_update < repair_link
+
+
+def test_0107_exposes_unresolved_incidents_only_through_app_health_boundary():
+    sql = _watcher_recovery_sql()
+    loader = _watcher_function_sql("library.load_local_watcher_incidents")
+
+    assert "incident.resolved_at is null" in loader
+    assert "incident.warning_token" in loader
+    assert "root.metadata ->> 'root_id'" in loader
+    assert (
+        "grant execute on function library.load_local_watcher_incidents() "
+        "to album_haven_app"
+    ) in sql
+    assert (
+        "revoke execute on function library.load_local_watcher_incidents() "
+        "from album_haven_worker"
+    ) in sql
+
+
+def test_0107_exposes_incident_acknowledgements_only_through_app_boundaries():
+    sql = _watcher_recovery_sql()
+    loader = _watcher_function_sql(
+        "library.load_local_watcher_incident_acknowledgements"
+    )
+    saver = _watcher_function_sql("library.acknowledge_local_watcher_incidents")
+
+    assert "watcher_incident_acknowledgements" in loader
+    assert "acknowledgement.account_id = p_account_id" in loader
+    assert "incident.resolved_at is null" in loader
+    assert "insert into library.watcher_incident_acknowledgements" in saver
+    assert "incident.resolved_at is null" in saver
+    for function_name in (
+        "load_local_watcher_incident_acknowledgements",
+        "acknowledge_local_watcher_incidents",
+    ):
+        assert f"grant execute on function library.{function_name}(" in sql
+        assert f"revoke all on function library.{function_name}(" in sql
+        assert f"library.{function_name}(" in sql
+        assert "from album_haven_worker" in sql
+        assert "from album_haven_readonly" in sql
+
+
+def test_0107_worker_preflight_requires_every_watcher_boundary_and_grant():
+    sql = _watcher_recovery_sql()
+    preflight = _watcher_function_sql("ops.validate_durable_worker_startup")
+    required = (
+        "library.reconcile_due_watcher_generations(timestamp with time zone,integer)",
+        "library.dispatch_ready_watcher_generations(timestamp with time zone,integer)",
+        "library.load_claimed_watcher_generation(bigint,integer,character varying,character varying,timestamp with time zone)",
+        "library.fail_claimed_watcher_generation(bigint,bigint,integer,character varying,character varying,character varying,timestamp with time zone)",
+        "library.complete_watcher_repair(bigint,bigint,integer,character varying,character varying,bigint,timestamp with time zone)",
+    )
+    for signature in required:
+        assert signature in preflight
+    assert "has_function_privilege" in preflight
+    assert "session_user" in preflight
+    for function_name in (
+        "reconcile_due_watcher_generations",
+        "dispatch_ready_watcher_generations",
+        "load_claimed_watcher_generation",
+        "fail_claimed_watcher_generation",
+        "complete_watcher_repair",
+    ):
+        assert f"grant execute on function library.{function_name}(" in sql
+
+
+def test_0107_indexes_every_foreign_key():
+    sql = _watcher_recovery_sql()
+
+    for index in (
+        "watcher_lanes_root_id_idx",
+        "watcher_lanes_running_generation_idx",
+        "watcher_lanes_successor_generation_idx",
+        "watcher_lanes_running_job_idx",
+        "watcher_generation_participants_library_root_idx",
+        "watcher_generation_participants_root_id_idx",
+        "watcher_barriers_library_id_idx",
+        "watcher_barrier_participants_generation_id_idx",
+        "watcher_barrier_participants_library_root_idx",
+        "watcher_barrier_participants_root_id_idx",
+        "watcher_repair_roots_library_root_idx",
+        "watcher_repair_roots_root_id_idx",
+        "watcher_repair_roots_incident_id_idx",
+        "watcher_legacy_health_imports_root_id_idx",
+        "watcher_incidents_library_id_idx",
+        "watcher_incidents_root_id_idx",
+        "watcher_incident_acknowledgements_account_id_idx",
+        "watcher_generation_repairs_repair_idx",
+        "watcher_generation_repairs_library_id_idx",
+    ):
+        assert f"create index if not exists {index}" in sql
+
+
+def test_0107_keeps_repair_links_and_legacy_import_evidence_private():
+    sql = _watcher_recovery_sql()
+
+    assert "create table if not exists library.watcher_generation_repairs" in sql
+    assert "primary key (generation_id, repair_id)" in sql
+    assert "create table if not exists library.watcher_legacy_health_imports" in sql
+    assert "legacy_library_watch_health_v1" in sql
+    assert "legacy_health_imported" not in sql
+    for table in ("watcher_generation_repairs", "watcher_legacy_health_imports"):
+        assert f"revoke all on table library.{table} from public" in sql
+
+
+def test_0107_declares_every_watcher_relation_and_fk_policy():
+    sql = _watcher_recovery_sql()
+
+    tables = (
+        "watcher_lanes",
+        "watcher_generation_participants",
+        "watcher_barriers",
+        "watcher_barrier_participants",
+        "watcher_incidents",
+        "watcher_repairs",
+        "watcher_repair_roots",
+        "watcher_incident_acknowledgements",
+        "watcher_generation_repairs",
+        "watcher_legacy_health_imports",
+    )
+    for table in tables:
+        assert f"create table if not exists library.{table}" in sql
+        assert f"revoke all on table library.{table} from public" in sql
+    assert "references app.accounts(id) on delete cascade" in sql
+    assert (
+        "references library.watcher_incidents(incident_id, library_id) "
+        "on delete restrict"
+    ) in sql
+    assert "watcher_lanes_running_generation_fk" in sql
+    assert "watcher_lanes_successor_generation_fk" in sql
+    assert "primary key (barrier_id, root_id)" in sql
+    assert "add column if not exists barrier_id" not in sql
+
+
+def test_0107_uses_composite_tenant_fks_and_hardened_definers():
+    sql = _watcher_recovery_sql()
+
+    for target in (
+        "references library.library_roots(library_id, id)",
+        "references library.targeted_reconciliation_intents(id, library_id)",
+        "references library.watcher_barriers(id, library_id)",
+        "references library.watcher_repairs(id, library_id)",
+        "references library.watcher_incidents(incident_id, library_id)",
+    ):
+        assert target in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "set search_path = pg_catalog, library" not in sql
+
+
+def test_0107_composite_tenant_foreign_keys_cover_every_cross_tenant_link():
+    sql = _watcher_recovery_sql()
+
+    for parent_key in (
+        "unique (id, library_id)",
+        "unique (incident_id, library_id)",
+    ):
+        assert parent_key in sql
+    for child_link in (
+        "foreign key (library_id, root_id) references library.library_roots(library_id, id)",
+        "foreign key (generation_id, library_id) references library.targeted_reconciliation_intents(id, library_id)",
+        "foreign key (barrier_id, library_id) references library.watcher_barriers(id, library_id)",
+        "foreign key (repair_id, library_id) references library.watcher_repairs(id, library_id)",
+        "foreign key (incident_id, library_id) references library.watcher_incidents(incident_id, library_id)",
+    ):
+        assert child_link in sql
+
+
+def test_0107_revokes_broad_inherited_runtime_privileges_before_grants():
+    sql = _watcher_recovery_sql()
+
+    for role in ("album_haven_app", "album_haven_worker", "album_haven_readonly"):
+        assert f"revoke all on table library.watcher_lanes from {role}" in sql
+        assert f"revoke all on sequence library.watcher_barriers_id_seq from {role}" in sql
+
+
+def test_0107_reserves_cover_compatible_publication_overloads():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.publish_claimed_full_scan(" in sql
+    assert "function library.publish_claimed_targeted_reconciliation(" in sql
+    assert "publication_won boolean" in sql
+    assert "inventory_mutation_revision bigint" in sql
+    assert "cover_publication_stale boolean" in sql
+    assert "cover_mutation_revision bigint" in sql
+
+
+def test_0107_acceptance_uses_canonical_locking_and_bounded_dirty_conversion():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.accept_watcher_event(" in sql
+    assert "pg_advisory_xact_lock_shared" not in sql
+    assert "pg_advisory_xact_lock(" in sql
+    assert "order by lane.library_id, lane.root_id" in sql
+    assert "for update" in sql
+    assert "watcher_generation_kind = 'root_catch_up'" in sql
+    assert "4096" in sql
+    assert "262144" in sql
+    assert "delete from library.targeted_reconciliation_intent_paths" in sql
+    assert "delete from library.targeted_reconciliation_intent_moves" in sql
+
+
+def test_0107_uses_valid_postgres_expression_and_conflict_syntax():
+    sql = _watcher_recovery_sql()
+
+    assert "pg_catalog.least(" not in sql
+    assert "pg_catalog.greatest(" not in sql
+    assert "pg_catalog.substring(" not in sql
+    assert "pg_catalog.session_user" not in sql
+    assert "on conflict (generation_id, root_id)" not in sql
+    assert "on conflict (generation_id, repair_id)" not in sql
+    assert "where generation_id = intent.id" not in sql
+
+
+def test_0107_scope_budget_is_accumulated_per_participant_root():
+    acceptance = _watcher_function_sql("library.accept_watcher_event")
+
+    assert re.search(
+        r"count\(\*\)[^;]+(?:scope|path)\.root_id\s*=\s*[^;]+\.root_id",
+        acceptance,
+    )
+    assert re.search(
+        r"sum\([^;]*octet_length\([^;]+(?:scope|path)\.root_id\s*=\s*[^;]+\.root_id",
+        acceptance,
+    )
+    assert re.search(r"(?:>=|>)\s*4096", acceptance)
+    assert re.search(r"(?:>=|>)\s*262144", acceptance)
+    assert "watcher_generation_kind = 'root_catch_up'" in acceptance
+
+
+def test_0107_mark_dirty_is_one_app_only_security_definer_boundary():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.mark_watcher_roots_dirty(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "grant execute on function library.mark_watcher_roots_dirty(" in sql
+    assert "to album_haven_app" in sql
+    assert "from album_haven_worker" in sql
+    assert "from album_haven_readonly" in sql
+    for reason in ("overflow", "root_unavailable"):
+        assert f"'{reason}'" in sql
+
+
+def test_0107_dispatch_is_worker_only_atomic_and_rechecks_every_lane():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.dispatch_ready_watcher_generations(" in sql
+    assert "for update of candidate skip locked" in sql
+    assert "order by candidate.accepted_at, candidate.id" in sql
+    assert "perform library.link_scan_intent_job(" in sql
+    assert "watcher_job_linked_at" in sql
+    assert "lane promotion raced" in sql
+    assert "grant execute on function library.dispatch_ready_watcher_generations(" in sql
+    assert "to album_haven_worker" in sql
+    assert "from album_haven_app" in sql
+    assert "from album_haven_readonly" in sql
+
+
+def test_0107_dispatch_honors_lane_time_kind_barriers_and_job_context():
+    dispatch = _watcher_function_sql(
+        "library.dispatch_ready_watcher_generations"
+    )
+
+    assert "lane.next_eligible_at <= p_now" in dispatch
+    assert "candidate.watcher_generation_kind in ('exact', 'root_catch_up')" in dispatch
+    assert "candidate_barrier.generation_id = candidate.id" in dispatch
+    assert "peer_lane.applied_sequence < peer.accepted_sequence - 1" in dispatch
+    assert "pg_catalog.jsonb_build_object('intent_id', intent.id)" in dispatch
+    assert "'targeted_reconciliation_intent', intent.id::text" in dispatch
+    assert "intent.deployment_mode, intent.client_surface" in dispatch
+    assert "pg_catalog.max(participant.accepted_sequence_upper)" in dispatch
+    assert "'watcher-generation:' || intent.id::text" in dispatch
+
+
+def test_0107_claim_failure_completion_and_publication_use_generic_job_lease():
+    sql = _watcher_recovery_sql()
+
+    for function_name in (
+        "load_claimed_watcher_generation",
+        "fail_claimed_watcher_generation",
+        "complete_watcher_generation",
+    ):
+        assert f"function library.{function_name}(" in sql
+    assert "function library.heartbeat_watcher_generation(" not in sql
+    for predicate in (
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > pg_catalog.clock_timestamp()",
+    ):
+        assert predicate in sql
+    assert "job.lease_expires_at > p_now" not in sql
+    for reason in (
+        "root_unavailable",
+        "overflow",
+        "stable_write_unavailable",
+        "reconciliation_failed",
+        "cross_root_uncertain",
+    ):
+        assert f"'{reason}'" in sql
+
+
+def test_0107_cross_root_barriers_are_many_to_one_and_sequence_fenced():
+    sql = _watcher_recovery_sql()
+
+    assert "insert into library.watcher_barriers" in sql
+    assert "insert into library.watcher_barrier_participants" in sql
+    assert "accepted_sequence" in sql
+    assert "array_agg(distinct barrier.barrier_id order by barrier.barrier_id)" in sql
+    assert "lane.applied_sequence, participant.accepted_sequence_upper" in sql
+    assert "set generation_id = v_generation_id" in sql
+    assert "add column if not exists barrier_id" not in sql
+
+
+def test_0107_failure_rehomes_all_barriers_repairs_and_lanes_to_catch_up():
+    failure = _watcher_function_sql("library.fail_claimed_watcher_generation")
+
+    assert "watcher_generation_kind" in failure
+    assert "'root_catch_up'" in failure
+    assert "update library.watcher_barrier_participants" in failure
+    assert "set generation_id = v_successor_id" in failure
+    assert "insert into library.watcher_generation_repairs" in failure
+    assert "delete from library.watcher_generation_repairs" in failure
+    assert "running_generation_id = null" in failure
+    assert "running_job_id = null" in failure
+    assert "successor_generation_id = v_successor_id" in failure
+    assert "rollback_pending_work" not in failure
+
+
+def test_0107_terminal_cancellation_and_shutdown_recovery_release_running_lanes():
+    recovery = _watcher_function_sql(
+        "library.reconcile_due_watcher_generations"
+    )
+
+    for state in ("'canceled'", "'failed'", "'ambiguous'", "'succeeded'"):
+        assert state in recovery
+    assert "job.state in ('queued', 'retry_wait')" in recovery
+    assert "job.state = 'running'" in recovery
+    assert "job.lease_expires_at > pg_catalog.clock_timestamp()" in recovery
+    assert "update library.watcher_barrier_participants" in recovery
+    assert "insert into library.watcher_generation_repairs" in recovery
+    assert "delete from library.watcher_generation_repairs" in recovery
+    assert "running_generation_id = null" in recovery
+    assert "running_job_id = null" in recovery
+
+
+def test_0107_publication_keeps_retirement_and_watcher_completion_atomic_and_idempotent():
+    publication = _watcher_function_sql(
+        "library.publish_claimed_targeted_reconciliation"
+    )
+
+    for marker in (
+        "publication_attempt",
+        "committed_inventory_revision",
+        "retire_claimed_targeted_reconciliation_vacated_albums",
+        "watcher_completed_at",
+        "watcher_generation_repairs",
+        "try_complete_watcher_repairs",
+        "complete_watcher_generation",
+    ):
+        assert marker in publication
+    completion = _watcher_function_sql("library.complete_watcher_generation")
+    assert "running_generation_id = null" in completion
+    assert "running_job_id = null" in completion
+    retry_position = publication.index("publication_attempt")
+    retirement_position = publication.index(
+        "retire_claimed_targeted_reconciliation_vacated_albums"
+    )
+    assert "return query" in publication[retry_position:retirement_position]
+
+
+def test_0107_operator_rollback_is_the_only_rollback_pending_work_entry_point():
+    sql = _watcher_recovery_sql()
+    rollback = _watcher_function_sql("library.prepare_legacy_watcher_rollback")
+    failure = _watcher_function_sql("library.fail_claimed_watcher_generation")
+
+    assert "rollback_pending_work" in rollback
+    assert "rollback_pending_work" not in failure
+    assert "revoke all on function library.prepare_legacy_watcher_rollback(" in sql
+    assert "grant execute on function library.prepare_legacy_watcher_rollback(" not in sql
 
 
 def test_durable_scan_status_closes_inventory_relation_and_cover_handoff_gaps():
@@ -806,7 +1413,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-67:] == [
+    assert migration_names[-68:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -874,6 +1481,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0104_grant_worker_auth_mail.sql",
         "0105_validate_durable_worker_startup.sql",
         "0106_retire_vacated_structural_album.sql",
+        "0107_create_durable_watcher_recovery.sql",
     ]
 
 

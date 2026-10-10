@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import importlib
 import json
 from pathlib import Path
@@ -514,69 +515,6 @@ def test_successful_manual_full_scan_clears_only_observed_recovered_roots():
     assert clear_params["root_ids"] == ["main-root"]
 
 
-def test_exhausted_stable_write_persists_warning_and_blocks_destructive_work_until_full_scan(
-    tmp_path,
-):
-    from music_app.services.allowed_actions import AllowedActions
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
-    from music_app.services.view_payloads import project_library_watch_health
-
-    module = _health_module()
-    connection = _HealthConnection()
-    service = module.LibraryWatchHealthService(
-        module.PostgresLibraryWatchHealthStore(
-            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
-            connect=lambda _database_url: connection,
-        )
-    )
-    coordinator = LibraryEventCoordinator(
-        emit_request=lambda _request: None,
-        emit_problem=service.record_problem,
-        stat_path=lambda _path: (_ for _ in ()).throw(PermissionError("busy")),
-        wait=lambda _seconds: None,
-        max_stable_attempts=2,
-    )
-
-    coordinator.accept(
-        LibraryEvent(
-            LibraryEventKind.CREATED,
-            "main-root",
-            tmp_path / "Artist" / "Album" / "01.flac",
-        )
-    )
-    coordinator.flush()
-
-    [problem] = service.load_problems()
-    assert problem.root_id == "main-root"
-    assert problem.state == "stable_write_unavailable"
-    projected = project_library_watch_health(
-        [problem],
-        AllowedActions(("library.refresh",)),
-    )
-    assert projected["state"] == "warning"
-    assert projected["problems"][0]["message"] == (
-        "Some library changes may have been missed."
-    )
-    assert projected["problems"][0]["allowed_actions"] == {
-        "library.refresh": True
-    }
-    assert service.root_allows_destructive_reconciliation("main-root") is False
-
-    assert service.clear_after_scan(
-        scan_mode="background",
-        observed_root_ids={"main-root"},
-    ) == 0
-    assert service.root_allows_destructive_reconciliation("main-root") is False
-
-    assert service.clear_after_scan(
-        scan_mode="manual_full_rescan",
-        observed_root_ids={"main-root"},
-    ) == 1
-    assert service.load_problems() == []
-    assert service.root_allows_destructive_reconciliation("main-root") is True
-
-
 def test_reconciliation_failure_persists_path_free_warning_until_manual_full_scan():
     from music_app.services.allowed_actions import AllowedActions
     from music_app.services.library_event_coordinator import CoordinatorProblem
@@ -659,11 +597,16 @@ def test_reconciliation_admission_overflow_blocks_destructive_work_until_manual_
 def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monkeypatch):
     from music_app import create_asgi_app
     from music_app.services import (
-        library_event_coordinator, library_reconciliation, library_roots,
-        library_watch_health, log_history, runtime_shutdown, scan_jobs_postgres, state,
+        cover_preview_backfill, library_event_coordinator, library_reconciliation,
+        library_roots,
+        library_watch_health, log_history, postgres_connections, runtime_shutdown,
+        scan_jobs_postgres, state,
+        watcher_recovery_postgres,
     )
+    from music_app.services.library_watch import LibraryEvent, LibraryEventKind
 
-    callbacks, enqueued = {}, []
+    callbacks, watcher_calls = {}, []
+    fail_dirty = {"enabled": False}
     health = _health_module()
     connection = _HealthConnection()
     service = health.LibraryWatchHealthService(
@@ -680,16 +623,24 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
         def resolve_local_library_id(self):
             return 19
 
-        def enqueue_targeted_reconciliation(self, **values):
-            if values["request"].root_id == "failed-root":
-                raise RuntimeError("database temporarily unavailable")
-            enqueued.append(values)
+    class WatcherRepository:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://health-test"
 
-    class Coordinator:
-        def __init__(self, **values):
-            callbacks.update(values)
+        def accept_event(self, **values):
+            watcher_calls.append(("accept", values))
 
-        def accept(self, _event):
+        def mark_dirty(self, **values):
+            assert values["reason_code"] in {"root_unavailable", "overflow"}
+            watcher_calls.append(("dirty", values))
+            if fail_dirty["enabled"]:
+                raise RuntimeError("durable watcher admission unavailable")
+
+    class Backfill:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
             return True
 
         def stop(self):
@@ -697,7 +648,7 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
 
     class WatchService:
         def __init__(self, _source, _emit_event):
-            pass
+            callbacks["emit_event"] = _emit_event
 
         def start(self):
             return True
@@ -710,65 +661,130 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
                 raise OSError("watch attachment unavailable")
 
     monkeypatch.setattr(library_watch_health, "LibraryWatchHealthService", lambda _store: service)
+    monkeypatch.setattr(cover_preview_backfill, "CoverPreviewBackfill", Backfill)
     monkeypatch.setattr(scan_jobs_postgres, "PostgresScanJobRepository", Repository)
-    monkeypatch.setattr(library_event_coordinator, "LibraryEventCoordinator", Coordinator)
+    monkeypatch.setattr(
+        watcher_recovery_postgres,
+        "PostgresWatcherRecoveryRepository",
+        WatcherRepository,
+    )
     monkeypatch.setattr(library_reconciliation, "LibraryWatchService", WatchService)
     monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", lambda _roots: object())
     monkeypatch.setattr(library_roots, "get_library_roots", lambda _config: ())
     monkeypatch.setattr(log_history, "resolve_media_host_history_scope", lambda _config: None)
     monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
+    monkeypatch.setattr(
+        state,
+        "hydrate_runtime_scan_metadata_on_startup",
+        lambda _runtime: True,
+    )
+    monkeypatch.setattr(
+        state,
+        "recover_runtime_library_persistence_on_startup",
+        lambda _runtime: True,
+    )
     monkeypatch.setattr(state, "ensure_runtime_relation_projection_ready", lambda _runtime: None)
+    monkeypatch.setattr(
+        postgres_connections,
+        "prewarm_connection_pool",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: True)
 
     app = create_asgi_app()
     app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://health-test"
-    request = library_event_coordinator.TargetedReconciliationRequest(
-        root_id="main-root", producer_request_key="watch-batch-1",
-        moves=(library_event_coordinator.TargetedMove(
-            source=Path("C:/Source/01.flac"),
-            destination=Path("C:/Destination/01.flac"),
-            source_root_id="main-root", destination_root_id="destination-root",
-        ),),
+    observed_at = datetime.now(timezone.utc)
+    created = LibraryEvent(
+        LibraryEventKind.CREATED,
+        "main-root",
+        Path("C:/Source/01.flac"),
+        observed_at=observed_at,
     )
 
     async def exercise_callbacks():
         async with app.router.lifespan_context(app):
+            callbacks["emit_event"](created)
+            callbacks["emit_event"](
+                LibraryEvent(
+                    LibraryEventKind.OVERFLOW,
+                    "main-root",
+                    Path("C:/Source"),
+                    observed_at=observed_at,
+                    is_directory=True,
+                )
+            )
+            fail_dirty["enabled"] = True
+            with pytest.raises(
+                RuntimeError,
+                match="durable watcher admission unavailable",
+            ):
+                callbacks["emit_event"](
+                    LibraryEvent(
+                        LibraryEventKind.ROOT_UNAVAILABLE,
+                        "database-outage",
+                        Path("C:/Unavailable"),
+                        observed_at=observed_at,
+                        is_directory=True,
+                    )
+                )
+            fail_dirty["enabled"] = False
             with pytest.raises(OSError, match="attachment"):
                 app.state.replace_library_watch_roots([
                     {"id": "attach-failed", "path": "C:/Unattached"},
                 ])
-            for root_id in ("main-root", "destination-root"):
-                callbacks["emit_problem"](
-                    library_event_coordinator.CoordinatorProblem("stable_write_unavailable", root_id)
-                )
-            callbacks["emit_problem"](
-                library_event_coordinator.CoordinatorProblem("overflow", "overflow-root")
-            )
-            callbacks["emit_request"](request)
-            # Admission failures propagate to the coordinator, which retains the
-            # batch for retry; the app must not report successful acceptance.
-            with pytest.raises(RuntimeError, match="temporarily unavailable"):
-                callbacks["emit_request"](
-                    library_event_coordinator.TargetedReconciliationRequest(root_id="failed-root")
-                )
+            assert "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK" not in app.state.config
 
     asyncio.run(exercise_callbacks())
 
     assert {(problem.root_id, problem.state) for problem in service.load_problems()} == {
-        ("attach-failed", "reconciliation_failed"),
-        ("main-root", "stable_write_unavailable"),
-        ("destination-root", "stable_write_unavailable"),
-        ("overflow-root", "overflow"),
+        ("attach-failed", "root_unavailable"),
+        ("database-outage", "root_unavailable"),
+        ("main-root", "overflow"),
     }
     assert service.root_allows_destructive_reconciliation("main-root") is False
-    assert len(enqueued) == 1
-    accepted = enqueued[0]
-    assert accepted["request"] is request
-    assert accepted["library_id"] == 19
-    assert accepted["producer_request_key"] == "watch-batch-1"
-    assert accepted["deployment_mode"] == "self_hosted_private_web"
-    assert accepted["client_surface"] == "library_watcher"
-    assert accepted["scheduled_at"].utcoffset() is not None
+    assert watcher_calls[:1] == [
+        (
+            "accept",
+            {
+                "library_id": 19,
+                "event": created,
+                "accepted_at": observed_at,
+            },
+        ),
+    ]
+    assert [
+        (kind, {key: value for key, value in values.items() if key != "observed_at"})
+        for kind, values in watcher_calls[1:]
+    ] == [
+        (
+            "dirty",
+            {
+                "library_id": 19,
+                "logical_root_id": "main-root",
+                "reason_code": "overflow",
+            },
+        ),
+        (
+            "dirty",
+            {
+                "library_id": 19,
+                "logical_root_id": "database-outage",
+                "reason_code": "root_unavailable",
+            },
+        ),
+        (
+            "dirty",
+            {
+                "library_id": 19,
+                "logical_root_id": "attach-failed",
+                "reason_code": "root_unavailable",
+            },
+        ),
+    ]
+    assert all(
+        values["observed_at"].utcoffset() is not None
+        for _kind, values in watcher_calls[1:]
+    )
 
 
 def test_manual_recovery_does_not_clear_health_detected_after_scan_started():
@@ -813,6 +829,7 @@ def test_postgres_health_queries_use_library_metadata_without_path_columns():
 
     assert "library.libraries" in sql
     assert "library_watch_health" in sql
+    assert "library.load_local_watcher_incidents()" in sql
     assert "metadata" in sql
     assert "private_path" not in sql
     assert "local_track_files" not in sql

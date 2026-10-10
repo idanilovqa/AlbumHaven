@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 
 from music_app.services.library_event_coordinator import (
@@ -73,6 +74,23 @@ class _Connector:
     def __call__(self, database_url):
         self.urls.append(database_url)
         return self.connection
+
+
+class _ConnectionSequence:
+    def __init__(self, *connections):
+        self.connections = iter(connections)
+        self.calls = 0
+
+    def __call__(self, _database_url):
+        self.calls += 1
+        return next(self.connections)
+
+
+class _AmbiguousCommitConnection(_RecordingConnection):
+    def __exit__(self, exc_type, exc, traceback):
+        super().__exit__(exc_type, exc, traceback)
+        if exc_type is None:
+            raise psycopg.OperationalError("commit outcome unknown")
 
 
 class _JobRepository:
@@ -164,7 +182,7 @@ def _targeted_request():
     )
 
 
-def test_targeted_publication_converges_vacated_albums_under_the_same_lease():
+def test_targeted_publication_converges_inventory_retirement_and_watcher_once():
     connection = _RecordingConnection(
         results=(
             _Result(one={
@@ -172,7 +190,6 @@ def test_targeted_publication_converges_vacated_albums_under_the_same_lease():
                 "inventory_mutation_revision": 17,
                 "affected_album_keys": ["artist::album"],
             }),
-            _Result(one={"retired_count": 2}),
         )
     )
     repository, _, _ = _repository(connection)
@@ -192,17 +209,54 @@ def test_targeted_publication_converges_vacated_albums_under_the_same_lease():
     )
 
     assert result["publication_won"] is True
-    assert len(connection.executed) == 2
-    converge_sql, converge_params = connection.executed[1]
-    assert "retire_claimed_targeted_reconciliation_vacated_albums" in converge_sql
-    assert converge_params == {
-        "intent_id": 41,
-        "job_id": 91,
-        "attempt": 2,
-        "worker_id": "worker-a",
-        "lease_token": "lease-a",
-        "now": NOW,
+    assert len(connection.executed) == 1
+    assert "publish_claimed_targeted_reconciliation" in connection.executed[0][0]
+
+
+def test_targeted_publication_rereads_same_attempt_after_ambiguous_commit():
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
+    publication = {
+        "publication_won": True,
+        "inventory_mutation_revision": 17,
+        "affected_album_keys": ["artist::album"],
+        "cover_publication_stale": False,
+        "cover_mutation_revision": 0,
     }
+    committed = _AmbiguousCommitConnection(results=(_Result(one=publication),))
+    reread = _RecordingConnection(results=(_Result(one=publication),))
+    connector = _ConnectionSequence(committed, reread)
+    repository = PostgresScanJobRepository(
+        database_url="postgresql://app-role@localhost/album_haven",
+        connect_to_database=connector,
+        job_repository=_JobRepository(),
+    )
+    claim = SimpleNamespace(
+        job_id=91,
+        attempt=2,
+        worker_id="worker-a",
+        lease_token="lease-a",
+    )
+
+    result = repository.publish_claimed_targeted_reconciliation(
+        claim=claim,
+        intent_id=41,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        stale_scopes=(),
+        now=NOW,
+    )
+
+    assert result["publication_won"] is True
+    assert result["inventory_mutation_revision"] == 17
+    assert connector.calls == 2
+    assert len(committed.executed) == len(reread.executed) == 1
+    assert committed.executed == reread.executed
 
 
 def test_claimed_targeted_preparation_loads_only_through_lease_fenced_function():
@@ -599,10 +653,11 @@ def test_targeted_enqueue_rejects_invalid_inactive_or_cross_library_roots(root_r
     )
 
 
-def test_claimed_targeted_intent_reload_is_immutable_and_exact():
+def test_claimed_ordinary_targeted_legacy_row_reload_is_immutable_and_exact():
     loaded = {
         "intent_id": 84,
         "library_id": 19,
+        "watcher_generation_kind": None,
         "logical_root_id": "root-a",
         "active_paths": [
             str(Path("C:/Music/Alpha/01.flac")),
@@ -1135,3 +1190,52 @@ def test_post_scan_cover_scope_validation_uses_only_claim_and_revision_identity(
         "now": NOW,
     }
     assert "path" not in repr(values).casefold()
+
+
+def test_stale_watcher_targeted_publication_returns_without_convergence_side_effects():
+    connection = _RecordingConnection(
+        results=(
+            _Result(
+                one={
+                    "publication_won": False,
+                    "inventory_mutation_revision": 77,
+                    "affected_album_keys": [],
+                    "cover_publication_stale": False,
+                    "cover_mutation_revision": 12,
+                }
+            ),
+        )
+    )
+    repository, _connector, _jobs = _repository(connection)
+    claim = SimpleNamespace(
+        job_id=91,
+        attempt=1,
+        worker_id="stale-worker",
+        lease_token="stale-token",
+    )
+
+    result = repository.publish_claimed_targeted_reconciliation(
+        claim=claim,
+        intent_id=41,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        stale_scopes=[],
+        now=NOW,
+    )
+
+    assert result == {
+        "publication_won": False,
+        "inventory_mutation_revision": 77,
+        "affected_album_keys": [],
+        "cover_publication_stale": False,
+        "cover_mutation_revision": 12,
+    }
+    assert len(connection.executed) == 1
+    assert "publish_claimed_targeted_reconciliation" in _normalized(
+        connection.executed[0][0]
+    )

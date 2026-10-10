@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from music_app.services.jobs.authorization import AuthorizationDecision
@@ -289,7 +291,6 @@ def build_full_scan_handler(
     *,
     scan_repository: Any,
     scan_executor: Any,
-    watcher_coordinator: Any | None = None,
     clock: Callable[[], datetime] | None = None,
     log_event: Callable[[str], object] | None = None,
 ) -> Callable[[ClaimedJob, Any], JobTransitionResult]:
@@ -400,8 +401,6 @@ def build_full_scan_handler(
         def should_cancel() -> bool:
             return checkpoint_failed or stop_reason() is not None
 
-        if watcher_coordinator is not None:
-            watcher_coordinator.suspend_targeted_reconciliation()
         try:
             bind_claim = getattr(scan_executor, "bind_claim", None)
             if callable(bind_claim):
@@ -431,9 +430,6 @@ def build_full_scan_handler(
                     break
             log(f"Full scan execution failed ({diagnostic_code}).")
             return JobTransitionResult(JobState.FAILED, "full_scan_failed")
-        finally:
-            if watcher_coordinator is not None:
-                watcher_coordinator.resume_targeted_reconciliation()
 
         if getattr(result, "inventory_mutation_revision", None) is not None or getattr(
             result, "publication_won", False
@@ -455,6 +451,7 @@ def build_targeted_reconciliation_handler(
     *,
     scan_repository: Any,
     reconciler: Any,
+    watcher_recovery: Any | None = None,
     invalidate_projections: Callable[[Any], object] | None = None,
     clock: Callable[[], datetime] | None = None,
 ) -> Callable[[ClaimedJob, Any], JobTransitionResult]:
@@ -473,6 +470,37 @@ def build_targeted_reconciliation_handler(
                 worker_id=claim.worker_id,
                 lease_token=claim.lease_token,
             )
+        except Exception:
+            return _storage_unavailable_outcome(
+                claim,
+                "targeted_reconciliation_unavailable",
+                now=now(),
+            )
+        watcher_generation = None
+        if getattr(intent, "watcher_generation_kind", None) is not None:
+            if watcher_recovery is None:
+                return _storage_unavailable_outcome(
+                    claim,
+                    "watcher_generation_unavailable",
+                    now=now(),
+                )
+            try:
+                watcher_generation = watcher_recovery.claim_generation(
+                    claim=claim,
+                    now=now(),
+                )
+            except Exception:
+                return _storage_unavailable_outcome(
+                    claim,
+                    "watcher_generation_unavailable",
+                    now=now(),
+                )
+            if watcher_generation is None:
+                return JobTransitionResult(
+                    JobState.CANCELED,
+                    "watcher_generation_stale",
+                )
+        try:
             scope = scan_repository.load_claimed_targeted_reconciliation_scope(
                 intent_id=intent_id,
                 library_id=claim.library_id,
@@ -524,6 +552,33 @@ def build_targeted_reconciliation_handler(
             library_id=claim.library_id,
         ):
             return JobTransitionResult(JobState.CANCELED, "targeted_root_invalid")
+        if (
+            watcher_generation is not None
+            and watcher_generation.generation_kind == "root_catch_up"
+        ):
+            participant_root_ids = {
+                participant.logical_root_id
+                for participant in watcher_generation.participants
+            }
+            roots_by_id = {
+                str(root.get("id") or ""): root
+                for root in roots
+            }
+            if not participant_root_ids or not participant_root_ids.issubset(roots_by_id):
+                return JobTransitionResult(
+                    JobState.CANCELED, "targeted_root_invalid"
+                )
+            request = replace(
+                request,
+                paths=frozenset(),
+                deleted_paths=frozenset(),
+                deleted_subtrees=frozenset(),
+                preserved_subtrees=frozenset(
+                    Path(str(roots_by_id[root_id]["path"]))
+                    for root_id in participant_root_ids
+                ),
+                moves=(),
+            )
 
         class PublicationGuard:
             def _authorized(self) -> bool:
@@ -579,12 +634,26 @@ def build_targeted_reconciliation_handler(
                 preparation_scope=preparation_scope,
             )
         except Exception:
+            if watcher_generation is not None:
+                watcher_recovery.fail_generation(
+                    claim=claim,
+                    generation=watcher_generation,
+                    reason_code="reconciliation_failed",
+                    now=now(),
+                )
             return JobTransitionResult(JobState.FAILED, "targeted_reconciliation_failed")
         if context.cancel_requested or not context.lease_active:
             return JobTransitionResult(JobState.CANCELED, "targeted_reconciliation_canceled")
         if getattr(result, "health", "") == "already_published":
             return JobTransitionResult(JobState.SUCCEEDED, "targeted_reconciliation_completed")
         if getattr(result, "health", "") == "stable_write_unavailable":
+            if watcher_generation is not None:
+                watcher_recovery.fail_generation(
+                    claim=claim,
+                    generation=watcher_generation,
+                    reason_code="stable_write_unavailable",
+                    now=now(),
+                )
             return JobTransitionResult(JobState.FAILED, "targeted_stable_write_unavailable")
         if getattr(result, "health", "healthy") != "healthy":
             return JobTransitionResult(JobState.CANCELED, "targeted_root_invalid")

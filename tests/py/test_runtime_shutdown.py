@@ -455,7 +455,7 @@ def test_asgi_lifespan_cleans_started_resources_when_watcher_startup_fails(monke
             calls.append(f"executor-stop:{wait}:{cancel_futures}")
 
     class CoordinatorDouble:
-        def __init__(self, **_kwargs) -> None:
+        def __init__(self, *_args, **_kwargs) -> None:
             pass
 
         def accept(self, _event) -> None:
@@ -529,7 +529,7 @@ def test_asgi_lifespan_stops_partially_started_real_watch_service_before_other_s
             pass
 
     class CoordinatorDouble:
-        def __init__(self, **_kwargs) -> None:
+        def __init__(self, *_args, **_kwargs) -> None:
             pass
 
         def accept(self, _event) -> None:

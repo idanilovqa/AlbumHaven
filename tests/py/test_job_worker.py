@@ -140,6 +140,52 @@ def test_worker_reconciles_bounded_domain_due_work_before_claim_selection():
     assert repository.calls[1][0] == "claim"
 
 
+def test_worker_due_reconciler_composition_runs_watcher_and_existing_domains():
+    repository = Repository()
+    calls = []
+    stop = threading.Event()
+
+    def watcher(**values):
+        calls.append(("watcher", values))
+        return (31,)
+
+    def lastfm(**values):
+        calls.append(("lastfm", values))
+        return 2
+
+    def auth_mail(**values):
+        calls.append(("auth_mail", values))
+        return 3
+
+    def wait(_event, _seconds):
+        stop.set()
+        return True
+
+    worker = Worker(
+        repository=repository,
+        authorization_service=Authorization(),
+        handlers=JobHandlerRegistry(),
+        lease_seconds=30,
+        heartbeat_seconds=5,
+        poll_seconds=1,
+        max_idle_backoff_seconds=2,
+        drain_seconds=1,
+        due_reconciler=combine_due_reconcilers(watcher, lastfm, auth_mail),
+        wait=wait,
+        clock=lambda: NOW,
+    )
+
+    worker.run(stop)
+
+    assert calls == [
+        ("watcher", {"now": NOW, "limit": 100}),
+        ("lastfm", {"now": NOW, "limit": 100}),
+        ("auth_mail", {"now": NOW, "limit": 100}),
+    ]
+    assert repository.calls[0][0] == "reconcile_stale_leases"
+    assert repository.calls[1][0] == "claim"
+
+
 def test_due_reconciliation_failure_is_bounded_observable_and_does_not_block_generic_claims(
     caplog,
 ):

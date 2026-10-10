@@ -149,6 +149,9 @@ def _build_worker(
     from music_app.services.auth_mail_jobs_postgres import (
         PostgresAuthMailJobRepository,
     )
+    from music_app.services.watcher_recovery_postgres import (
+        PostgresWatcherRecoveryRepository,
+    )
     from music_app.services.lastfm import scrobble_track_with_session
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
@@ -184,6 +187,10 @@ def _build_worker(
         database_url=config.database_url,
         connect_to_database=connect_to_database,
         job_repository=repository,
+    )
+    watcher_recovery = PostgresWatcherRecoveryRepository(
+        database_url=config.database_url,
+        connect_to_database=connect_to_database,
     )
     if not callable(scan_repository.load_claimed_targeted_reconciliation_scope):
         raise RuntimeError("targeted reconciliation scope loader is unavailable")
@@ -293,6 +300,7 @@ def _build_worker(
         build_targeted_reconciliation_handler(
             scan_repository=scan_repository,
             reconciler=reconciler,
+            watcher_recovery=watcher_recovery,
         ),
     )
     handlers.register(
@@ -344,6 +352,7 @@ def _build_worker(
         closeables=(pool,),
         claim_kinds=handlers.registered_kinds,
         due_reconciler=combine_due_reconcilers(
+            watcher_recovery.reconcile_due,
             lastfm_retry_repository.reconcile_due_pending,
             auth_mail_repository.reconcile_due_pending,
         ),

@@ -622,6 +622,7 @@ def create_asgi_app():
                 emit_request=submit_targeted_reconciliation,
                 emit_health_event=persist_library_watch_health,
                 emit_problem=persist_library_watch_problem,
+                drain_at_capacity=True,
                 auto_schedule=True,
             )
             runtime.library_watch_service = LibraryWatchService(

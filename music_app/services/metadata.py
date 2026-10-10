@@ -27,6 +27,14 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album_haven_exception",
 ]
 FILE_METADATA_SCHEMA_VERSION = 2
+LABEL_ORIGINS = frozenset({"tag_metadata", "filename_fallback", "unknown"})
+
+
+def label_origin(value: object, origin: object) -> str:
+    """Keep producer evidence only when it describes a nonempty label."""
+    if not isinstance(value, str) or not value.strip() or not isinstance(origin, str):
+        return "unknown"
+    return origin if origin in LABEL_ORIGINS else "unknown"
 
 if EasyID3 is not None:
     EasyID3.RegisterTXXXKey("albumrating", "Album Rating")
@@ -549,9 +557,11 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
     track_artist = first_tag(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
-    album_artist = first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]) or track_artist or "Unknown Artist"
+    tagged_album_artist = first_tag(tags, ["albumartist", "album artist", "albumartistsort", "wm/albumartist", "tpe2", "tpe1", "artist"]) or track_artist
+    album_artist = tagged_album_artist or "Unknown Artist"
     track_artist = track_artist or album_artist
-    track_title = first_tag(tags, ["title", "tit2"]) or path.stem
+    tagged_title = first_tag(tags, ["title", "tit2"])
+    track_title = tagged_title or path.stem
     genre = first_tag(tags, ["genre", "tcon", "\xa9gen"])
     track_number = safe_int(first_tag(tags, ["tracknumber", "track number", "track", "trck"]))
     disc_number_raw = first_tag(tags, ["discnumber", "disc number", "tpos"]) or first_custom_tag(tags, ["discnumber", "disc number", "tpos"])
@@ -565,6 +575,10 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
     return {
         "path": str(path), "mtime": stat.st_mtime, "size": stat.st_size,
         "album": album_name, "album_artist": album_artist, "title": track_title,
+        "album_origin": "tag_metadata" if album_name else "unknown",
+        "album_artist_origin": "tag_metadata" if tagged_album_artist else "unknown",
+        "artist_origin": "tag_metadata" if tagged_album_artist else "unknown",
+        "title_origin": "tag_metadata" if tagged_title else "filename_fallback",
         "genre": genre,
         "track_number": track_number, "disc_number": disc_number, "disc_number_raw": disc_number_raw, "artist": track_artist,
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_rating": album_rating,

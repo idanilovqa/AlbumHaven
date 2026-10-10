@@ -35,13 +35,13 @@ test('PR classifier applies changed-path performance ownership before selecting 
 
 test('sensitive browse, sidebar, modal, status, and mobile changes select their focused targets', () => {
   const cases = [
-    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists']],
-    ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists']],
-    ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists']],
+    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
+    ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
+    ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/static/js/runtime/track-modal-lightbox-helpers.js', ['selected-artist', 'all-artists', 'gapless-playback']],
-    ['music_app/static/js/runtime/status-ui-helpers.js', ['idle-memory', 'selected-artist']],
+    ['music_app/static/js/runtime/status-ui-helpers.js', ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']],
     ['music_app/static/css/mobile-layout.css', ['selected-artist', 'all-artists']],
-    ['music_app/static/js/runtime/discovery-center-navigation.js', ['search-browse', 'all-artists', 'app-open-all-artists']],
+    ['music_app/static/js/runtime/discovery-center-navigation.js', ['search-browse', 'all-artists', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
   ];
   for (const [changedPath, expectedTargets] of cases) {
     assert.deepEqual(resolveRequiredPerformanceTargets(contract, [changedPath]), expectedTargets, changedPath);
@@ -53,7 +53,7 @@ test('multiple sensitive changes deduplicate required targets in reviewed contra
     'music_app/static/js/runtime/status-ui-helpers.js',
     'music_app/static/js/runtime/notification-ui-helpers.js',
     'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js',
-  ]), ['idle-memory', 'selected-artist']);
+  ]), ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']);
 });
 
 test('focused CI automatically includes required performance targets and shards', () => {
@@ -63,7 +63,7 @@ test('focused CI automatically includes required performance targets and shards'
     focusedPerformanceShards: ['scan-library'],
   }, ['music_app/static/js/runtime/virtual-artist-grid.js'], contract);
   assert.deepEqual(result.focusedPerformanceTargets, [
-    'scan-cached', 'all-artists', 'selected-artist', 'app-open-all-artists',
+    'scan-cached', 'all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation',
   ]);
   assert.deepEqual(result.focusedPerformanceShards, ['synthetic-large-library', 'scan-library']);
 });

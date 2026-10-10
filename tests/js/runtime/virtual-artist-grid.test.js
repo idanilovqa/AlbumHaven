@@ -4478,7 +4478,7 @@ test('startup preview cards survive layout events until an authoritative virtual
 });
 
 
-test('scrollToArtist jumps to the modeled artist without applying an artist filter', () => {
+test('scrollToArtist puts the first album row at the gallery top without applying artist filter', () => {
   const { context, scrollEl, containerEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   virtualGrid.setGroups([
@@ -4491,19 +4491,44 @@ test('scrollToArtist jumps to the modeled artist without applying an artist filt
   virtualGrid._resetScrollAfterMeasure = true;
   containerEl.getBoundingClientRect = () => ({ top: -scrollEl.scrollTop });
   const renderedHeader = new context.HTMLElement();
+  const renderedRows = new context.HTMLElement();
   renderedHeader.getAttribute = (name) => name === 'data-scroll-artist' ? 'Beta' : '';
-  renderedHeader.getBoundingClientRect = () => ({ top: target.top - 24.25 - scrollEl.scrollTop });
+  renderedHeader.parentElement = {
+    querySelector: selector => (selector === '.artist-rows' ? renderedRows : null),
+  };
+  renderedRows.getBoundingClientRect = () => ({
+    top: target.top + virtualGrid.sectionHeaderHeight - 24.25 - scrollEl.scrollTop,
+  });
   const originalQuerySelectorAll = containerEl.querySelectorAll.bind(containerEl);
   containerEl.querySelectorAll = (selector) => (
     selector === '[data-scroll-artist]' ? [renderedHeader] : originalQuerySelectorAll(selector)
   );
 
   assert.equal(virtualGrid.scrollToArtist('Beta'), true);
-  assert.equal(scrollEl.scrollTop, target.top - 24.25);
+  assert.equal(scrollEl.scrollTop, target.top + virtualGrid.sectionHeaderHeight - 24.25);
   assert.equal(context.state.view.selected_artist, selectedArtistBefore);
   assert.equal(virtualGrid._scrollRestoreRaf, null);
   assert.equal(virtualGrid._resetScrollAfterMeasure, false);
   assert.equal(context.canceledBrowserAnimationFrames.includes(73), true);
+});
+
+test('scrollToArtist uses the absolute modeled offset when a previous virtual spacer is active', () => {
+ const { context, scrollEl, containerEl } = createRuntimeContext();
+ const virtualGrid = vm.runInContext('virtualGrid', context);
+ virtualGrid.setGroups([
+ { artist: 'Alpha', albums: [{ key: 'alpha::one', name: 'One', tracks: [] }] },
+ { artist: 'Beta', albums: [{ key: 'beta::two', name: 'Two', tracks: [] }] },
+ ], [], null, {});
+ const target = virtualGrid.sections.find(section => section.group?.artist === 'Beta');
+  const previousVirtualSpacer = 2400;
+  scrollEl.scrollTop = previousVirtualSpacer + 300;
+  containerEl.getBoundingClientRect = () => ({
+    top: previousVirtualSpacer - scrollEl.scrollTop,
+  });
+ containerEl.querySelectorAll = () => [];
+
+ assert.equal(virtualGrid.scrollToArtist('Beta'), true);
+ assert.equal(scrollEl.scrollTop, target.top + virtualGrid.sectionHeaderHeight);
 });
 
 test('gallery cover activation schedules visible images before overscan images', () => {

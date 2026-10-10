@@ -108,6 +108,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'selected-artist',
     'search-browse',
     'root-album-browse',
+    'artist-tree-scroll-navigation',
     'app-open-all-artists',
     'problematic-files-focused',
     'rules-focused',
@@ -138,6 +139,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'selected-artist',
     'search-browse',
     'root-album-browse',
+    'artist-tree-scroll-navigation',
     'app-open-all-artists',
     'problematic-files-focused',
     'rules-focused',
@@ -326,6 +328,21 @@ const PERFORMANCE_TARGETS = {
     aliasNames: ['root-album-browse', 'root-albums', 'library-browse-root-albums'],
     reportId: 'rootAlbumBrowseFocusedLocal',
     casePattern: 'FTC-GALLERY-STARTUP-005S',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    },
+  },
+  'artist-tree-scroll-navigation': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local large-library Artist Tree jump alignment, reverse paging stability, complete groups, and early root continuation coverage.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js',
+    grep: 'FTC-GALLERY-NAV-032',
+    aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
+    casePattern: 'FTC-GALLERY-NAV-032',
+    measurementExpected: false,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
@@ -1311,6 +1328,9 @@ function resolveDisplaySuiteName(target) {
   }
   if (targetName === 'root-album-browse') {
     return 'Root Album Browse';
+  }
+  if (targetName === 'artist-tree-scroll-navigation') {
+    return 'Artist Tree Scroll Navigation';
   }
   if (targetName === 'app-open-all-artists') {
     return 'App Open All Artists';
@@ -2456,7 +2476,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group all|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, artist-tree-scroll-navigation, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
   console.log('Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

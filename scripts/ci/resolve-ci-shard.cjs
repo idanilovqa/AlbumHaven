@@ -26,7 +26,7 @@ const PERFORMANCE_SHARDS = Object.freeze({
     basePort: 4173,
     targets: [
       'idle-memory', 'all-artists', 'artist-family', 'search-all-artists', 'utility-rules',
-      'selected-artist', 'search-browse', 'root-album-browse', 'app-open-all-artists',
+    'selected-artist', 'search-browse', 'root-album-browse', 'artist-tree-scroll-navigation', 'app-open-all-artists',
       'rules-focused', 'paired-search-calibration',
     ],
   },
@@ -101,7 +101,7 @@ function outputEntries(kind, config) {
     ['base_port', config.basePort],
     ['targets', config.targets.join(',')],
   ];
-  for (let index = 0; index < 11; index += 1) {
+  for (let index = 0; index < 12; index += 1) {
     entries.push([`target${index + 1}`, config.targets[index] || 'none']);
   }
   return entries;

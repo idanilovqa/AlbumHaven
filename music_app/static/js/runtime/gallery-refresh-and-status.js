@@ -47,7 +47,7 @@ async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
   const scroll = document.getElementById('albums-scroll');
-  const prefetchViewportCount = 4;
+  const prefetchViewportCount = 8;
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
@@ -115,7 +115,13 @@ async function loadNextRootGalleryPage() {
         },
       } : {}),
       artist_groups: artistGroups,
-      gallery_page: data.gallery_page,
+      gallery_page: restarted
+        ? data.gallery_page
+        : {
+          ...data.gallery_page,
+          previous_cursor: state.view.gallery_page?.previous_cursor || null,
+          has_previous: Boolean(state.view.gallery_page?.has_previous),
+        },
       initial_view_partial: false,
     }, {
       trackSidebarReveal: false,

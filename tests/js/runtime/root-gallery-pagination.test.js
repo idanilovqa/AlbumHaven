@@ -23,6 +23,22 @@ test('root page appends split artist albums without duplicates and preserves aut
   assert.equal(f.state.view.artists_sidebar, sidebar); assert.equal(f.state.view.artist_count, 6045); assert.equal(f.state.view.album_count, 20000);
   assert.equal(f.renders[0].preserveScroll, true); assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
 });
+
+test('forward continuation preserves anchored backward-page ownership', async () => {
+  const f = fixture();
+  f.state.view.gallery_page = {
+    ...f.state.view.gallery_page,
+    previous_cursor: 'page-before-anchor',
+    has_previous: true,
+  };
+
+  const request = f.context.loadNextRootGalleryPage();
+  f.pending[0].resolve(page([{ artist: 'B', albums: [{ key: 'b1' }] }]));
+  assert.equal(await request, true);
+  assert.equal(f.state.view.gallery_page.previous_cursor, 'page-before-anchor');
+  assert.equal(f.state.view.gallery_page.has_previous, true);
+});
+
 test('root page loads only near end, with one in-flight owner', async () => {
   const f = fixture(); f.scroll.scrollHeight = 5000;
   assert.equal(await f.context.loadNextRootGalleryPage(), false); assert.equal(f.pending.length, 0);
@@ -30,11 +46,11 @@ test('root page loads only near end, with one in-flight owner', async () => {
   assert.equal(await f.context.loadNextRootGalleryPage(), false); assert.equal(f.pending.length, 1);
   f.pending[0].resolve(page([])); await first;
 });
-test('root page prefetches four viewports ahead on desktop and mobile with one in-flight owner', async () => {
+test('root page prefetches eight viewports ahead on desktop and mobile with one in-flight owner', async () => {
   const desktop = fixture();
   desktop.scroll.clientHeight = 632;
   desktop.scroll.scrollHeight = 8285;
-  desktop.scroll.scrollTop = 5125;
+  desktop.scroll.scrollTop = 2913;
   const desktopRequest = desktop.context.loadNextRootGalleryPage();
   assert.equal(desktop.pending.length, 1, 'desktop must prefetch before scrolling can reach the old extent');
   assert.equal(await desktop.context.loadNextRootGalleryPage(), false);
@@ -45,7 +61,7 @@ test('root page prefetches four viewports ahead on desktop and mobile with one i
   const mobile = fixture({ mobile: true });
   mobile.scroll.clientHeight = 632;
   mobile.scroll.scrollHeight = 8285;
-  mobile.scroll.scrollTop = 5125;
+  mobile.scroll.scrollTop = 2913;
   const first = mobile.context.loadNextRootGalleryPage();
   assert.equal(mobile.pending.length, 1, 'mobile must start before a fast flick can reach the old extent');
   assert.equal(await mobile.context.loadNextRootGalleryPage(), false);

@@ -43,6 +43,9 @@ operate, or contribute to the application.
   request parameters, mocked helper success, or state inspection may support
   diagnosis, but they do not replace assertions that the requested content is
   rendered, positioned, stable, complete, and usable exactly as specified.
+- Scroll and navigation regressions must also assert the requested target's
+  visible identity in page chrome, its exact unobscured content boundary, and
+  the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
 ## Subagents and token burning

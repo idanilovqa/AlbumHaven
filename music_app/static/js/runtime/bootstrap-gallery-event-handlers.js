@@ -518,14 +518,19 @@ function stabilizeRootGalleryArtistAlignment(artist) {
     const header = Array.from(document.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
       String(candidate.getAttribute('data-scroll-artist') || '') === targetArtist
     ));
-    const aligned = Boolean(scroll && header)
-      && Math.abs(header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1;
+    const rows = header?.parentElement?.querySelector?.('.artist-rows');
+    const chromeName = document.querySelector?.(
+      '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]',
+    );
+    const aligned = Boolean(scroll && rows)
+      && Math.abs(rows.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1
+      && String(chromeName?.textContent || '').trim() === targetArtist;
     if (aligned) stableFrames += 1;
     else {
       stableFrames = 0;
       virtualGrid?.scrollToArtist?.(targetArtist);
     }
-    if (stableFrames >= 6 || attempts >= 60) return;
+    if (stableFrames >= 45 || attempts >= 240) return;
     scheduleBrowserAnimationFrame(align);
   };
   scheduleBrowserAnimationFrame(align);
@@ -534,6 +539,8 @@ function stabilizeRootGalleryArtistAlignment(artist) {
 function scrollRootGalleryToArtist(artist) {
   const targetArtist = String(artist || '').trim();
   if (!targetArtist) return Promise.resolve(false);
+  cancelRootGalleryArtistAlignment();
+  const navigationGeneration = rootGalleryArtistAlignmentGeneration;
   if (virtualGrid?.scrollToArtist?.(targetArtist)) {
     stabilizeRootGalleryArtistAlignment(targetArtist);
     return Promise.resolve(true);
@@ -551,7 +558,7 @@ function scrollRootGalleryToArtist(artist) {
   const url = buildApiUrl(nextView, { galleryAnchorArtist: targetArtist });
   renderLibraryLoader(state.status);
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
-    if (result === false) return false;
+    if (result === false || rootGalleryArtistAlignmentGeneration !== navigationGeneration) return false;
     const galleryPage = state.view?.gallery_page;
     const anchoredGalleryPage = galleryPage;
     const renderedArtist = String(
@@ -560,6 +567,7 @@ function scrollRootGalleryToArtist(artist) {
         : targetArtist,
     ).trim();
     const scrollWhenRendered = (attemptsRemaining) => {
+      if (rootGalleryArtistAlignmentGeneration !== navigationGeneration) return;
       if (state.view?.gallery_page !== anchoredGalleryPage) return;
       if (virtualGrid?.scrollToArtist?.(renderedArtist)) {
         stabilizeRootGalleryArtistAlignment(renderedArtist);

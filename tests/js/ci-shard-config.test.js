@@ -28,7 +28,7 @@ test('performance shard resolver preserves the existing fixture and target mappi
     basePort: 4213,
     targets: ['playback-start', 'gapless-playback'],
   });
-  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 11);
+  assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 12);
   assert.throws(() => resolvePerformanceShard('unknown'), /Unknown performance shard/);
   assert.deepEqual(
     selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'exact').targets,
@@ -63,4 +63,5 @@ test('CLI writes scalar and ten-slot target outputs for GitHub Actions', () => {
   assert.match(output, /target2=problematic-files-focused/);
   assert.match(output, /target3=none/);
   assert.match(output, /target11=none/);
+  assert.match(output, /target12=none/);
 });

@@ -10,6 +10,7 @@ export class GalleryRegressions {
     this.search=page.getByRole('combobox',{name:'Search music'});
     this.options=page.locator('.recent-search-option');
     this.summary=page.locator('[data-gallery-context-summary]');
+    this.galleryContextName=page.locator('[data-gallery-bar-instance="gallery"] [data-gallery-context-name]');
     this.numberHeader=page.locator('#track-modal [role=columnheader][data-cdt-column=number]').first();
     this.yearCard=page.locator('.album-card[data-gallery-release-year]').first();
     this.year=this.yearCard.locator('.gallery-card__hover-year');
@@ -17,8 +18,10 @@ export class GalleryRegressions {
     this.cards=page.locator('.album-card');
     this.loader=page.locator('#library-loader');
     this.galleryScroll=page.locator('#albums-scroll');
+    this.sidebarList=page.locator('#sidebar-list');
     this.sidebarArtistSelector='#sidebar-list [data-sidebar-artist]';
     this.sidebarArtists=page.locator(this.sidebarArtistSelector);
+    this.artistTreeContextMenu=page.locator('#artist-tree-context-menu');
     this.scrollToArtistAction=page.locator('[data-artist-tree-action="scroll-to-artist"]');
     this.view=page.locator('[data-gallery-view-cluster]');
     this.noInfo=page.getByRole('button',{name:'No info',exact:true});
@@ -42,6 +45,133 @@ export class GalleryRegressions {
     this.library=page.getByRole('button',{name:'Library status',exact:true});
     this.openScan=page.locator('[data-status-action="go-to-scan-page"]:visible');
   }
+  async readArtistJumpPlacement(artist) {
+    // parity-check: allow-read-only-measurement-evaluate -- assert rendered artist content and chrome placement
+    return this.page.evaluate(({ targetArtist, headingSelector }) => {
+      const scroll = document.getElementById('albums-scroll');
+      const header = [...document.querySelectorAll(headingSelector)]
+        .find(item => item.getAttribute('data-scroll-artist') === targetArtist);
+      const section = header?.closest('.artist-section');
+      const rows = section?.querySelector('.artist-rows');
+      const firstCard = section?.querySelector('.album-card');
+      const chromeName = document.querySelector(
+        '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]',
+      );
+      if (!scroll || !header || !rows || !firstCard || !chromeName) {
+        return { rendered: false, chromeMatches: false, rowsAligned: false, firstCardUncut: false };
+      }
+      const scrollRect = scroll.getBoundingClientRect();
+      const rowsRect = rows.getBoundingClientRect();
+      const firstCardRect = firstCard.getBoundingClientRect();
+      return {
+        rendered: true,
+        chromeMatches: chromeName.textContent.trim() === targetArtist,
+        rowsAligned: Math.abs(rowsRect.top - scrollRect.top) <= 1,
+        firstCardUncut: firstCardRect.top >= scrollRect.top - 1,
+      };
+    }, { targetArtist: artist, headingSelector: this.artistHeadingSelector });
+  }
+
+  async openArtistTreeContextMenu(artist) {
+    const normalizedArtist = String(artist || '').trim();
+    const row = this.page.locator(
+      `${this.sidebarArtistSelector}[data-sidebar-artist=${JSON.stringify(normalizedArtist)}]`,
+    ).first();
+    if (!await row.count()) {
+      // parity-check: allow-read-only-measurement-evaluate -- locate the requested source index before native wheel input
+      const targetIndex = await this.sidebarList.evaluate((list, targetArtist) => (
+        Array.isArray(list.albumHavenSidebarArtistsSource)
+          ? list.albumHavenSidebarArtistsSource.findIndex(item => String(item?.artist || '') === targetArtist)
+          : -1
+      ), normalizedArtist);
+      if (targetIndex < 0) throw new Error(`Artist Tree does not contain ${normalizedArtist}`);
+      const box = await this.sidebarList.boundingBox();
+      if (!box) throw new Error('Artist Tree is not visible');
+      for (let attempt = 0; attempt < 5 && !await row.count(); attempt += 1) {
+        const firstIndex = Number(await this.sidebarArtists.first().getAttribute('data-sidebar-virtual-index')) || 0;
+        await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await this.page.mouse.wheel(0, (targetIndex - firstIndex) * 47);
+        await this.page.waitForTimeout(40);
+      }
+      await row.waitFor({ state: 'attached' });
+    }
+    await row.scrollIntoViewIfNeeded();
+    await row.click({ button: 'right' });
+  }
+  async readMountedArtistsNearCenter() {
+    // parity-check: allow-read-only-measurement-evaluate -- choose adjacent mounted groups for UI navigation
+    return this.page.evaluate(() => {
+      const groups = Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : [];
+      const center = Math.max(0, Math.floor(groups.length / 2) - 1);
+      return groups.slice(center, center + 3).map(group => String(group.artist || '')).filter(Boolean);
+    });
+  }
+
+  async captureVisibleCardAnchor() {
+    // parity-check: allow-read-only-measurement-evaluate -- retain a visible card across native scrolling
+    return this.page.evaluateHandle(() => {
+      const scroll = document.getElementById('albums-scroll');
+      const bounds = scroll.getBoundingClientRect();
+      const card = [...document.querySelectorAll('#artist-groups .album-card')]
+        .find(item => {
+          const rect = item.getBoundingClientRect();
+          return rect.top >= bounds.top && rect.top < bounds.bottom;
+        });
+      return { card, top: card?.getBoundingClientRect().top ?? null };
+    });
+  }
+
+  async readVisibleCardAnchorContinuity(anchor) {
+    // parity-check: allow-read-only-measurement-evaluate -- measure visual movement after native scrolling
+    return anchor.evaluate(saved => ({
+      connected: Boolean(saved.card?.isConnected),
+      delta: saved.card?.isConnected && saved.top !== null
+        ? saved.card.getBoundingClientRect().top - saved.top
+        : null,
+    }));
+  }
+
+  async readPrecedingRenderedGroupCompleteness() {
+    // parity-check: allow-read-only-measurement-evaluate -- compare rendered preceding groups to authoritative totals
+    return this.page.evaluate(() => {
+      const chromeArtist = document.querySelector(
+        '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]',
+      )?.textContent?.trim();
+      const groups = Array.isArray(state.view?.artist_groups) ? state.view.artist_groups : [];
+      const index = groups.findIndex(group => String(group.artist || '') === chromeArtist);
+      return groups.slice(Math.max(0, index - 2), index).map(group => {
+        const artist = String(group.artist || '');
+        const heading = [...document.querySelectorAll('[data-scroll-artist]')]
+          .find(item => item.getAttribute('data-scroll-artist') === artist);
+        const sidebar = (state.view.artists_sidebar || [])
+          .find(item => String(item.artist || '') === artist);
+        return {
+          artist,
+          renderedAlbums: heading?.closest('.artist-section')?.querySelectorAll('.album-card').length || 0,
+          loadedAlbums: Array.isArray(group.albums) ? group.albums.length : 0,
+          authoritativeAlbums: Number(sidebar?.count || 0),
+        };
+      });
+    });
+  }
+
+  async readRenderedArtistAlbumCount(artist) {
+    // parity-check: allow-read-only-measurement-evaluate -- count target cards after exact local materialization
+    return this.page.evaluate(targetArtist => {
+      const heading = [...document.querySelectorAll('[data-scroll-artist]')]
+        .find(item => item.getAttribute('data-scroll-artist') === targetArtist);
+      return heading?.closest('.artist-section')?.querySelectorAll('.album-card').length || 0;
+    }, artist);
+  }
+
+  async readContinuationGeometry() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure distance from current root-page boundary
+    return this.galleryScroll.evaluate(scroll => ({
+      remaining: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
+      viewport: scroll.clientHeight,
+    }));
+  }
+
   async captureVisibleGalleryAnchor() {
     // parity-check: allow-read-only-measurement-evaluate -- retain a visible card at the native continuation boundary, without changing DOM or app state
     return this.page.evaluateHandle(() => {

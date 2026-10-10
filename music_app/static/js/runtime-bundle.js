@@ -14814,7 +14814,7 @@ async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
   const scroll = document.getElementById('albums-scroll');
-  const prefetchViewportCount = 4;
+  const prefetchViewportCount = 8;
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
@@ -14882,7 +14882,13 @@ async function loadNextRootGalleryPage() {
         },
       } : {}),
       artist_groups: artistGroups,
-      gallery_page: data.gallery_page,
+      gallery_page: restarted
+        ? data.gallery_page
+        : {
+          ...data.gallery_page,
+          previous_cursor: state.view.gallery_page?.previous_cursor || null,
+          has_previous: Boolean(state.view.gallery_page?.has_previous),
+        },
       initial_view_partial: false,
     }, {
       trackSidebarReveal: false,
@@ -35365,17 +35371,20 @@ class VirtualArtistGrid {
     this._absoluteScrollRestore = null;
     this.invalidateScrollStabilization();
     this._resetScrollAfterMeasure = false;
-    const scrollRect = this.scrollEl.getBoundingClientRect();
-    const containerRect = this.containerEl.getBoundingClientRect();
-    const containerTop = Number(this.scrollEl.scrollTop || 0) + containerRect.top - scrollRect.top;
-    this.scrollEl.scrollTop = Math.max(0, containerTop + Number(section.top || 0));
+    this.scrollEl.scrollTop = Math.max(
+      0,
+      Number(section.top || 0) + Number(this.sectionHeaderHeight || 0),
+    );
     this.lastKey = '';
     this.render(true);
     const renderedHeader = Array.from(this.containerEl.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
       String(candidate.getAttribute('data-scroll-artist') || '') === normalizedArtist
     ));
-    if (renderedHeader instanceof HTMLElement) {
-      const renderedDelta = renderedHeader.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top;
+    const renderedRows = renderedHeader instanceof HTMLElement
+      ? renderedHeader.parentElement?.querySelector?.('.artist-rows')
+      : null;
+    if (renderedRows instanceof HTMLElement) {
+      const renderedDelta = renderedRows.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top;
       if (Math.abs(renderedDelta) > 0.5) this.scrollEl.scrollTop += renderedDelta;
     }
     return true;
@@ -40873,14 +40882,19 @@ function stabilizeRootGalleryArtistAlignment(artist) {
     const header = Array.from(document.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
       String(candidate.getAttribute('data-scroll-artist') || '') === targetArtist
     ));
-    const aligned = Boolean(scroll && header)
-      && Math.abs(header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1;
+    const rows = header?.parentElement?.querySelector?.('.artist-rows');
+    const chromeName = document.querySelector?.(
+      '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]',
+    );
+    const aligned = Boolean(scroll && rows)
+      && Math.abs(rows.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1
+      && String(chromeName?.textContent || '').trim() === targetArtist;
     if (aligned) stableFrames += 1;
     else {
       stableFrames = 0;
       virtualGrid?.scrollToArtist?.(targetArtist);
     }
-    if (stableFrames >= 6 || attempts >= 60) return;
+    if (stableFrames >= 45 || attempts >= 240) return;
     scheduleBrowserAnimationFrame(align);
   };
   scheduleBrowserAnimationFrame(align);
@@ -40889,6 +40903,8 @@ function stabilizeRootGalleryArtistAlignment(artist) {
 function scrollRootGalleryToArtist(artist) {
   const targetArtist = String(artist || '').trim();
   if (!targetArtist) return Promise.resolve(false);
+  cancelRootGalleryArtistAlignment();
+  const navigationGeneration = rootGalleryArtistAlignmentGeneration;
   if (virtualGrid?.scrollToArtist?.(targetArtist)) {
     stabilizeRootGalleryArtistAlignment(targetArtist);
     return Promise.resolve(true);
@@ -40906,7 +40922,7 @@ function scrollRootGalleryToArtist(artist) {
   const url = buildApiUrl(nextView, { galleryAnchorArtist: targetArtist });
   renderLibraryLoader(state.status);
   return Promise.resolve(fetchAndRender(url, true, { preserveScroll: false })).then((result) => {
-    if (result === false) return false;
+    if (result === false || rootGalleryArtistAlignmentGeneration !== navigationGeneration) return false;
     const galleryPage = state.view?.gallery_page;
     const anchoredGalleryPage = galleryPage;
     const renderedArtist = String(
@@ -40915,6 +40931,7 @@ function scrollRootGalleryToArtist(artist) {
         : targetArtist,
     ).trim();
     const scrollWhenRendered = (attemptsRemaining) => {
+      if (rootGalleryArtistAlignmentGeneration !== navigationGeneration) return;
       if (state.view?.gallery_page !== anchoredGalleryPage) return;
       if (virtualGrid?.scrollToArtist?.(renderedArtist)) {
         stabilizeRootGalleryArtistAlignment(renderedArtist);

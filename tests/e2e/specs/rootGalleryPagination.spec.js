@@ -340,15 +340,12 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
     await openArtistTreeContextMenu(ui, localTarget);
     await ui.scrollToArtistAction.click();
 
-    await expect.poll(() => {
-      // parity-check: allow-read-only-measurement-evaluate -- measure exact mounted artist alignment
-      return page.evaluate(({ artist, scrollSelector, headingSelector }) => {
-      const scroll = document.querySelector(scrollSelector);
-      const header = [...document.querySelectorAll(headingSelector)]
-        .find(item => item.getAttribute('data-scroll-artist') === artist);
-      return header ? Math.abs(header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) : 9999;
-      }, { artist: localTarget, scrollSelector: '#albums-scroll', headingSelector: ui.artistHeadingSelector });
-    }).toBeLessThanOrEqual(1);
+    await expect.poll(() => ui.readArtistJumpPlacement(localTarget)).toEqual({
+      rendered: true,
+      chromeMatches: true,
+      rowsAligned: true,
+      firstCardUncut: true,
+    });
     expect(page.url()).toBe(localUrl);
     expect(requests.slice(requestCountBeforeLocalJump).some(query => (
       new URLSearchParams(query).has('gallery_anchor_artist')
@@ -397,17 +394,18 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
     await openArtistTreeContextMenu(ui, remoteTarget);
     await ui.scrollToArtistAction.click();
     await anchorResponse;
-    await expect.poll(() => new URL(page.url()).searchParams.has('artist')).toBe(false);
+    await page.waitForFunction(
+      () => !new URL(window.location.href).searchParams.has('artist'),
+      null,
+      { timeout: 10_000 },
+    );
 
-    await expect.poll(() => {
-      // parity-check: allow-read-only-measurement-evaluate -- measure exact remote artist alignment
-      return page.evaluate(({ artist, scrollSelector, headingSelector }) => {
-      const scroll = document.querySelector(scrollSelector);
-      const header = [...document.querySelectorAll(headingSelector)]
-        .find(item => item.getAttribute('data-scroll-artist') === artist);
-      return header ? Math.abs(header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) : 9999;
-      }, { artist: remoteTarget, scrollSelector: '#albums-scroll', headingSelector: ui.artistHeadingSelector });
-    }).toBeLessThanOrEqual(1);
+    await expect.poll(() => ui.readArtistJumpPlacement(remoteTarget)).toEqual({
+      rendered: true,
+      chromeMatches: true,
+      rowsAligned: true,
+      firstCardUncut: true,
+    });
 
     // parity-check: allow-read-only-measurement-evaluate -- compare anchored group sizes with sidebar totals
     const leading = await page.evaluate(artist => {
@@ -430,6 +428,7 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
 
     let resolvePrependAnchor;
     let rejectPrependAnchor;
+    let prependRequested = false;
     const prependAnchorAtRequest = new Promise((resolve, reject) => {
       resolvePrependAnchor = resolve;
       rejectPrependAnchor = reject;
@@ -438,19 +437,22 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
       const url = new URL(request.url());
       if (url.pathname !== '/view-data'
         || url.searchParams.get('gallery_page_direction') !== 'previous') return;
+      prependRequested = true;
       // parity-check: allow-read-only-measurement-evaluate -- capture visible ownership before prepend applies
-      const anchor = await page.evaluate(({ scrollSelector, headingSelector }) => {
+      const anchor = await page.evaluate(({ scrollSelector, cardSelector }) => {
         const scroll = document.querySelector(scrollSelector);
         const scrollTop = scroll.getBoundingClientRect().top;
-        const visible = [...document.querySelectorAll(headingSelector)]
-          .map(header => ({
-            artist: header.getAttribute('data-scroll-artist'),
-            top: header.getBoundingClientRect().top - scrollTop,
+        const visible = [...document.querySelectorAll(cardSelector)]
+          .map(card => ({
+            cardKey: card.getAttribute('data-gallery-card-key'),
+            top: card.getBoundingClientRect().top - scrollTop,
+            bottom: card.getBoundingClientRect().bottom - scrollTop,
           }))
-          .filter(item => item.artist && item.top >= 0 && item.top < scroll.clientHeight)
+          .filter(item => item.cardKey && item.bottom > 0 && item.top < scroll.clientHeight)
           .sort((left, right) => left.top - right.top)[0];
-        return visible || null;
-      }, { scrollSelector: '#albums-scroll', headingSelector: ui.artistHeadingSelector });
+        if (!visible) return null;
+        return { cardKey: visible.cardKey, top: visible.top };
+      }, { scrollSelector: '#albums-scroll', cardSelector: '.album-card[data-gallery-card-key]' });
       resolvePrependAnchor(anchor);
     };
     page.on('request', capturePrependAnchor);
@@ -470,6 +472,7 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, -Math.max(500, Math.floor(box.height * 1.5)));
       await page.waitForTimeout(40);
+      if (prependRequested) break;
       // parity-check: allow-read-only-measurement-evaluate -- stop after reaching production's previous-page buffer
       const reachedTopBuffer = await ui.galleryScroll.evaluate(element => (
         element.scrollTop <= element.clientHeight * 2
@@ -481,21 +484,21 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
       clearTimeout(prependTimeout);
       page.off('request', capturePrependAnchor);
     }
-    expect(retainedAnchor?.artist, 'Previous-page request must retain a visible artist anchor').toBeTruthy();
+    expect(retainedAnchor?.cardKey, 'Previous-page request must retain a visible album anchor').toBeTruthy();
     await expect.poll(() => {
-      // parity-check: allow-read-only-measurement-evaluate -- prepend must not visibly jump the retained artist
-      return page.evaluate(({ artist, expectedTop, scrollSelector, headingSelector }) => {
+      // parity-check: allow-read-only-measurement-evaluate -- prepend must not visibly jump the retained album
+      return page.evaluate(({ cardKey, expectedTop, scrollSelector, cardSelector }) => {
         const scroll = document.querySelector(scrollSelector);
-        const header = [...document.querySelectorAll(headingSelector)]
-          .find(item => item.getAttribute('data-scroll-artist') === artist);
-        return header
-          ? Math.abs((header.getBoundingClientRect().top - scroll.getBoundingClientRect().top) - expectedTop)
+        const card = [...document.querySelectorAll(cardSelector)]
+          .find(item => item.getAttribute('data-gallery-card-key') === cardKey);
+        return card
+          ? Math.abs((card.getBoundingClientRect().top - scroll.getBoundingClientRect().top) - expectedTop)
           : 9999;
       }, {
-        artist: retainedAnchor.artist,
+        cardKey: retainedAnchor.cardKey,
         expectedTop: retainedAnchor.top,
         scrollSelector: '#albums-scroll',
-        headingSelector: ui.artistHeadingSelector,
+        cardSelector: '.album-card[data-gallery-card-key]',
       });
     }).toBeLessThanOrEqual(2);
 

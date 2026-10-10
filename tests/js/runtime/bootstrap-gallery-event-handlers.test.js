@@ -1064,6 +1064,151 @@ test('scrollRootGalleryToArtist keeps correcting the requested heading until it 
   assert.equal(headerTop, 0);
 });
 
+test('Artist Tree alignment does not accept a covered separator with stale gallery chrome', async () => {
+ const { context } = createContext();
+ const frames = [];
+ let scrollCalls = 0;
+ const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+ const firstRow = { getBoundingClientRect: () => ({ top: scrollCalls > 1 ? 0 : 54 }) };
+ const header = {
+ getAttribute: name => (name === 'data-scroll-artist' ? 'Baul Meets Saz' : null),
+ getBoundingClientRect: () => ({ top: 0 }),
+ parentElement: { querySelector: selector => (selector === '.artist-rows' ? firstRow : null) },
+ };
+ const chromeName = { textContent: 'Battleroar' };
+ const getElementById = context.document.getElementById.bind(context.document);
+ context.document.getElementById = id => (id === 'albums-scroll' ? scroll : getElementById(id));
+ context.document.querySelectorAll = selector => (selector === '[data-scroll-artist]' ? [header] : []);
+ context.document.querySelector = selector => (
+ selector === '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]'
+ ? chromeName
+ : null
+ );
+ context.scheduleBrowserAnimationFrame = callback => {
+ frames.push(callback);
+ return frames.length;
+ };
+ context.virtualGrid.scrollToArtist = () => {
+ scrollCalls += 1;
+ if (scrollCalls > 1) chromeName.textContent = 'Baul Meets Saz';
+ return true;
+ };
+
+ assert.equal(await context.scrollRootGalleryToArtist('Baul Meets Saz'), true);
+ while (frames.length) frames.shift()();
+
+ assert.ok(scrollCalls > 1);
+ assert.equal(chromeName.textContent, 'Baul Meets Saz');
+ assert.equal(firstRow.getBoundingClientRect().top, 0);
+});
+
+test('a second Artist Tree jump cancels the first artist alignment before its page loads', async () => {
+ const { context } = createContext({ useProductionBuildApiUrl: true });
+ const frames = [];
+ const scrolledArtists = [];
+ let finishFetch;
+ const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+ const rows = { getBoundingClientRect: () => ({ top: 80 }) };
+ const header = {
+ getAttribute: name => (name === 'data-scroll-artist' ? 'Battlelore' : null),
+ parentElement: { querySelector: selector => (selector === '.artist-rows' ? rows : null) },
+ };
+ const getElementById = context.document.getElementById.bind(context.document);
+ context.document.getElementById = id => (id === 'albums-scroll' ? scroll : getElementById(id));
+ context.document.querySelectorAll = selector => (selector === '[data-scroll-artist]' ? [header] : []);
+ context.document.querySelector = () => ({ textContent: 'Battlelore' });
+ context.scheduleBrowserAnimationFrame = callback => {
+ frames.push(callback);
+ return frames.length;
+ };
+ context.virtualGrid.scrollToArtist = artist => {
+ scrolledArtists.push(artist);
+ return artist === 'Battlelore';
+ };
+ context.fetchAndRender = () => new Promise(resolve => { finishFetch = resolve; });
+
+ assert.equal(await context.scrollRootGalleryToArtist('Battlelore'), true);
+ const secondJump = context.scrollRootGalleryToArtist('Quiet Sun');
+ scrolledArtists.length = 0;
+ frames.shift()();
+
+ assert.deepEqual(scrolledArtists, [], 'the first target must surrender ownership immediately');
+ finishFetch(false);
+  assert.equal(await secondJump, false);
+});
+
+test('a local Artist Tree jump cancels an older remote jump waiting for its section to render', async () => {
+  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const frames = [];
+  const scrolledArtists = [];
+  let remoteLoaded = false;
+  context.scheduleBrowserAnimationFrame = callback => {
+    frames.push(callback);
+    return frames.length;
+  };
+  context.virtualGrid.scrollToArtist = artist => {
+    scrolledArtists.push(artist);
+    return artist === 'Quiet Sun' || (artist === 'Battlelore' && remoteLoaded);
+  };
+  context.fetchAndRender = async () => {
+    remoteLoaded = true;
+    return true;
+  };
+
+  assert.equal(await context.scrollRootGalleryToArtist('Battlelore'), true);
+  assert.equal(frames.length, 1, 'the remote jump must be waiting for the virtual section');
+  assert.equal(await context.scrollRootGalleryToArtist('Quiet Sun'), true);
+  scrolledArtists.length = 0;
+  frames.shift()();
+
+  assert.deepEqual(scrolledArtists, [], 'the stale remote render loop must surrender ownership');
+});
+
+test('Artist Tree alignment keeps ownership through delayed virtual-grid measurement drift', async () => {
+ const { context } = createContext();
+ const frames = [];
+ let frameReads = 0;
+ let rowsTop = 0;
+ let scrollCalls = 0;
+ const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+ const rows = {
+ getBoundingClientRect: () => {
+ frameReads += 1;
+ if (frameReads === 10) rowsTop = 80;
+ return { top: rowsTop };
+ },
+ };
+ const header = {
+ getAttribute: name => (name === 'data-scroll-artist' ? 'Battleroar' : null),
+ parentElement: { querySelector: selector => (selector === '.artist-rows' ? rows : null) },
+ };
+ const chromeName = { textContent: 'Battleroar' };
+ const getElementById = context.document.getElementById.bind(context.document);
+ context.document.getElementById = id => (id === 'albums-scroll' ? scroll : getElementById(id));
+ context.document.querySelectorAll = selector => (selector === '[data-scroll-artist]' ? [header] : []);
+ context.document.querySelector = selector => (
+ selector === '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]'
+ ? chromeName
+ : null
+ );
+ context.scheduleBrowserAnimationFrame = callback => {
+ frames.push(callback);
+ return frames.length;
+ };
+ context.virtualGrid.scrollToArtist = () => {
+ scrollCalls += 1;
+ rowsTop = 0;
+ return true;
+ };
+
+ assert.equal(await context.scrollRootGalleryToArtist('Battleroar'), true);
+ while (frames.length) frames.shift()();
+
+ assert.ok(frameReads > 10, 'alignment must remain active after the first six stable frames');
+ assert.ok(scrollCalls > 1, 'delayed measurement drift must be corrected');
+ assert.equal(rowsTop, 0);
+});
+
 test('user wheel input cancels pending Artist Tree alignment', async () => {
   const { context } = createContext();
   const frames = [];

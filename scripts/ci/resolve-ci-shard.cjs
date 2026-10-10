@@ -26,7 +26,7 @@ const PERFORMANCE_SHARDS = Object.freeze({
     basePort: 4173,
     targets: [
       'idle-memory', 'all-artists', 'artist-family', 'search-all-artists', 'utility-rules',
-    'selected-artist', 'search-browse', 'root-album-browse', 'artist-tree-scroll-navigation', 'app-open-all-artists',
+      'selected-artist', 'search-browse', 'root-album-browse', 'artist-tree-scroll-navigation', 'app-open-all-artists',
       'rules-focused', 'paired-search-calibration',
     ],
   },

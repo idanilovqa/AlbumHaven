@@ -73,7 +73,7 @@ function showArtistTreeContextMenu(x, y, artist) {
   menu.style.top = `${y}px`;
   menu.dataset.artist = String(artist || '');
   menu.hidden = false;
-  if (typeof activateTriggerSurface === 'function') {
+  if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
 }

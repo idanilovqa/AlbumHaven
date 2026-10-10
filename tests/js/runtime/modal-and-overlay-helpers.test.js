@@ -1273,6 +1273,18 @@ test('artist tree context menu retains its artist and exposes the scroll action'
   assert.equal(menu.hidden, false);
 });
 
+test('artist tree context menu preserves an open mobile artists drawer', () => {
+  const { context } = loadHelper();
+  context.state.ui.artistsDrawerOpen = true;
+
+  context.showArtistTreeContextMenu(18, 36, 'Agalloch');
+
+  const menu = context.document.getElementById('artist-tree-context-menu');
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.artist, 'Agalloch');
+  assert.deepEqual(context.__activatedSurfaces, []);
+});
+
 test('album context menu disables Edit Tags when the album lacks permission', () => {
   const { context } = loadHelper();
   context.showAlbumCardContextMenu(12, 24, {

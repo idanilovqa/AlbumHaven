@@ -401,22 +401,25 @@ for (const replaceQueuedWarning of [false, true]) test(`different warning acknow
   }
 });
 
-test('Go to Library opens Scan Library without changing warning acknowledgement', async () => {
+test('Go to Library awaits persisted acknowledgement before opening Scan Library', async () => {
   const { context, toasts } = createContext();
   const actions = [];
   context.buildOnPageAlertHtml = () => '<section>Warning</section>';
   context.closeUtilityModal = () => actions.push('close');
   context.openScanPage = () => actions.push('scan');
-  let calls = 0;
-  context.fetch = () => { calls += 1; throw new Error('dismissal should not run'); };
+  let complete;
+  context.fetch = () => new Promise(resolve => { complete = resolve; });
   const warning = watcherWarning();
   context.syncLibraryWatcherWarning(warning);
   const button = warningButton(toasts[0]);
   const clicked = toasts[0].click({ target: { closest: selector => selector === '[data-watcher-library]' ? button : null } });
-  assert.equal(calls, 0);
+  assert.deepEqual(actions, []);
+  complete({ ok: true, status: 200, json: async () => ({ dismissed_token: firstWarningToken }) });
   await clicked;
   assert.deepEqual(actions, ['close', 'scan']);
-  assert.equal(toasts.length, 1);
+  assert.equal(toasts.length, 0);
+  context.syncLibraryWatcherWarning(warning);
+  assert.equal(toasts.length, 0, 'polling must not reopen the dismissed alert');
 });
 
 test('toast placement is opt-in for the cover lookup start notification', () => {

@@ -277,13 +277,11 @@ function syncLibraryWatcherWarning(data = {}) {
     const openLibrary = event.target.closest('[data-watcher-library]');
     const button = dismiss || openLibrary;
     if (!button || button.disabled) return;
-    if (openLibrary) {
+    if (await dismissLibraryWatcherWarning(button) && openLibrary) {
       closeUtilityModal();
       openScanPage();
       syncScanLibraryWatcherHealth();
-      return;
     }
-    await dismissLibraryWatcherWarning(button);
   });
   layer.appendChild(libraryWatcherWarning);
   registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });

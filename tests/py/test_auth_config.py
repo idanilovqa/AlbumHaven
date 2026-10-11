@@ -84,6 +84,30 @@ def _mail_env(**overrides: str) -> dict[str, str]:
     return env
 
 
+def test_password_hash_config_is_independent_of_unrelated_auth_environment(contracts):
+    auth_config, _ = contracts
+    hashing_env = {
+        "ALBUM_HAVEN_ARGON2_MEMORY_COST": "131072",
+        "ALBUM_HAVEN_ARGON2_TIME_COST": "4",
+        "ALBUM_HAVEN_ARGON2_PARALLELISM": "2",
+        "ALBUM_HAVEN_ARGON2_SALT_LEN": "24",
+        "ALBUM_HAVEN_ARGON2_HASH_LEN": "48",
+        "ALBUM_HAVEN_ARGON2_POLICY_VERSION": "2",
+        "ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS": "12",
+        "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS": "128",
+        "ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES": "512",
+    }
+
+    hashing_config = auth_config.build_password_hash_config(hashing_env)
+    full_config = auth_config.build_auth_config(_auth_env(**hashing_env))
+
+    assert hashing_config == {
+        "argon2": full_config["argon2"],
+        "argon2_policy_version": full_config["argon2_policy_version"],
+        "password": full_config["password"],
+    }
+
+
 @pytest.mark.parametrize("host", ["music.example.test", "[::1]"])
 def test_default_https_port_matches_browser_serialized_origin(contracts, host):
     auth_config, _ = contracts

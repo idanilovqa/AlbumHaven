@@ -3163,7 +3163,7 @@ test('non-album rescan startup seeds provider-scenario cover misses before launc
   ]);
 });
 
-test('functional-core app startup completes shared gallery, cover, and utility warmup before Playwright', async () => {
+test('initial functional-core app startup waits for shared warmup and background idle before Playwright', async () => {
   const child = createFakeChildProcess(5455);
   const startupEvents = [];
   const requestHeaders = { Cookie: '__Host-album_haven_session=test-session' };
@@ -3576,7 +3576,7 @@ test('managed isolated restart controller keeps control files under the runner-o
   }
 });
 
-test('managed isolated restart request stops the old child and acknowledges only a ready replacement', async () => {
+test('managed isolated replacement skips background idle and acknowledges after health, auth, and warmup', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-request-'));
   const oldChild = createFakeChildProcess(5662);
   const newChild = createFakeChildProcess(5663);
@@ -3586,9 +3586,9 @@ test('managed isolated restart request stops the old child and acknowledges only
     PLAYWRIGHT_PROVIDER_PORT: '4322',
   };
   const events = [];
-  let markReplacementReady;
-  const replacementReady = new Promise((resolve) => {
-    markReplacementReady = resolve;
+  let completeHealthAuthAndWarmup;
+  const healthAuthAndWarmupComplete = new Promise((resolve) => {
+    completeHealthAuthAndWarmup = resolve;
   });
 
   try {
@@ -3604,9 +3604,10 @@ test('managed isolated restart request stops the old child and acknowledges only
         events.push(['start', options.port, options.providerPort]);
         assert.equal(activeEnv.ALBUM_HAVEN_E2E_REUSE_STATE, '1');
         assert.equal(activeEnv.ALBUM_HAVEN_E2E_PRESERVE_ON_SHUTDOWN, '1');
+        assert.equal(options.waitForBackgroundIdle, false);
         options.onSpawnFn(newChild);
-        await replacementReady;
-        events.push(['ready', newChild.pid]);
+        await healthAuthAndWarmupComplete;
+        events.push(['health-auth-warmup', newChild.pid]);
         return newChild;
       },
       autoStart: false,
@@ -3630,12 +3631,12 @@ test('managed isolated restart request stops the old child and acknowledges only
       'an app that has spawned but is not status-ready must not be acknowledged',
     );
 
-    markReplacementReady();
+    completeHealthAuthAndWarmup();
     await restartPromise;
     assert.deepEqual(events, [
       ['stop', 5662, 4320, 4322],
       ['start', 4320, 4322],
-      ['ready', 5663],
+      ['health-auth-warmup', 5663],
     ]);
     assert.deepEqual(
       JSON.parse(fs.readFileSync(path.join(controller.controlDirectory, 'restart-ack.json'), 'utf8')),
@@ -3685,6 +3686,137 @@ test('managed watcher cleanup rejects a request-supplied path before stopping or
     assert.equal(controller.getCurrentChild().pid, 5564);
   } finally { await controller?.close(); fs.rmSync(ownedRoot, { recursive: true, force: true }); }
 });
+
+test('managed watcher recovery cleanup derives the exact manifest path from runner temp ownership', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-recovery-derived-'));
+  const calls = [];
+  try {
+    fs.mkdirSync(path.join(ownedRoot, 'app-data'));
+    const environment = { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot };
+    await _private.cleanupManagedWatcherFixture(environment, {
+      recovery: true,
+      runCommandFn(command, args, options) {
+        calls.push({ command, args, options });
+        return { status: 0, signal: null };
+      },
+    });
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].args, [
+      '-m',
+      'tests.e2e.support.watcherFixture',
+      '--recovery-manifest',
+      path.join(fs.realpathSync(ownedRoot), 'app-data', 'watcher-recovery-fixture.json'),
+    ]);
+    assert.equal(calls[0].options.env, environment);
+    assert.ok(calls[0].options.timeout > 0);
+  } finally {
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
+test('managed watcher recovery cleanup rejects a browser-supplied manifest before stopping the app', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-recovery-request-'));
+  let controller;
+  try {
+    controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot },
+      ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5565),
+      ports: [4320, 4322],
+      autoStart: false,
+      async stopManagedIsolatedAppFn() { assert.fail('invalid request must not stop the app'); },
+      async cleanupWatchedInventoryFn() { assert.fail('browser path must not reach cleanup'); },
+      async startManagedIsolatedAppFn() { assert.fail('invalid request must not restart the app'); },
+    });
+    fs.writeFileSync(
+      path.join(controller.controlDirectory, 'restart-request.json'),
+      JSON.stringify({
+        nonce: 'untrusted-recovery-path',
+        operation: 'watcher-recovery-cleanup',
+        recoveryManifest: path.join(ownedRoot, 'attacker-selected.json'),
+      }),
+    );
+
+    await assert.rejects(controller.processPendingRequest(), /fixed runner-owned operation/);
+    assert.equal(controller.getCurrentChild().pid, 5565);
+  } finally {
+    await controller?.close();
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
+for (const cleanupFails of [false, true]) {
+  test(`managed watcher recovery cleanup follows acknowledged stop with cleanup and restart (failure=${cleanupFails})`, async () => {
+    const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-recovery-controller-'));
+    const events = [];
+    const cleanupError = new Error('watcher recovery cleanup failed');
+    let controller;
+    try {
+      controller = _private.createManagedIsolatedAppRestartController({
+        childEnv: { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot },
+        ownedIsolatedTempRoot: ownedRoot,
+        initialChild: createFakeChildProcess(5566),
+        ports: [4320, 4322],
+        autoStart: false,
+        async stopManagedIsolatedAppFn() { events.push('stop'); },
+        async cleanupWatchedInventoryFn(environment, options) {
+          events.push('watcher-recovery-cleanup');
+          assert.equal(environment.ALBUM_HAVEN_E2E_TEMP_ROOT, ownedRoot);
+          assert.deepEqual(options, { recovery: true });
+          if (cleanupFails) throw cleanupError;
+        },
+        async startManagedIsolatedAppFn(_environment, options) {
+          events.push('restart');
+          const replacement = createFakeChildProcess(5567);
+          options.onSpawnFn(replacement);
+          return replacement;
+        },
+      });
+
+      const requestPath = path.join(controller.controlDirectory, 'restart-request.json');
+      const ackPath = path.join(controller.controlDirectory, 'restart-ack.json');
+      fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'stop-before-recovery', action: 'stop' }));
+      await controller.processPendingRequest();
+      assert.deepEqual(JSON.parse(fs.readFileSync(ackPath, 'utf8')), {
+        nonce: 'stop-before-recovery', status: 'stopped',
+      });
+
+      fs.writeFileSync(requestPath, JSON.stringify({
+        nonce: 'watcher-recovery-cleanup-2', operation: 'watcher-recovery-cleanup',
+      }));
+      const outcome = await controller.processPendingRequest().catch((error) => error);
+
+      assert.deepEqual(
+        events,
+        cleanupFails
+          ? ['stop', 'watcher-recovery-cleanup']
+          : ['stop', 'watcher-recovery-cleanup', 'restart'],
+      );
+      assert.deepEqual(JSON.parse(fs.readFileSync(ackPath, 'utf8')), cleanupFails ? {
+        nonce: 'watcher-recovery-cleanup-2',
+        status: 'failed',
+        phase: 'fixture-cleanup',
+        error: 'watcher recovery cleanup failed',
+      } : {
+        nonce: 'watcher-recovery-cleanup-2', status: 'ready',
+      });
+      if (cleanupFails) {
+        assert.equal(outcome, cleanupError);
+        assert.equal(outcome.exitCode, 2);
+        assert.equal(outcome.lifecycle.exitReason, 'fake-database-cleanup-error');
+        assert.equal(controller.getFailure(), cleanupError);
+        assert.equal(controller.getCurrentChild(), null);
+      } else {
+        assert.equal(outcome, true);
+        assert.equal(controller.getCurrentChild().pid, 5567);
+      }
+    } finally {
+      await controller?.close();
+      fs.rmSync(ownedRoot, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const cleanupFails of [false, true]) {
   test(`managed watcher cleanup runs between stopped writers and replacement hydration (failure=${cleanupFails})`, async () => {
@@ -3992,6 +4124,11 @@ test('managed isolated child lifecycle latches an unexpected replacement close w
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-child-lifecycle-replacement-'));
   const initialChild = createFakeChildProcess(5670, { autoCloseOnExit: false });
   const replacementChild = createFakeChildProcess(5671, { autoCloseOnExit: false });
+  replacementChild.albumHavenCreationIdentity = [
+    ownedRoot,
+    'postgresql://owner:sentinel-password@localhost/private',
+    'powershell.exe -Command sentinel-command',
+  ].join(' | ');
 
   try {
     const controller = _private.createManagedIsolatedAppRestartController({
@@ -4018,30 +4155,312 @@ test('managed isolated child lifecycle latches an unexpected replacement close w
     const failure = controller.getFailure();
     assert.equal(failure?.code, 'MANAGED_ISOLATED_APP_UNEXPECTED_EXIT');
     const exitDetails = failure?.lifecycle?.managedIsolatedAppExit;
-    assert.deepEqual({
-      generation: exitDetails?.generation,
-      pid: exitDetails?.pid,
-      creationIdentity: exitDetails?.creationIdentity,
-      event: exitDetails?.event,
-      exitCode: exitDetails?.exitCode,
-      signal: exitDetails?.signal,
-      phase: exitDetails?.phase,
-    }, {
+    const timestamp = exitDetails?.timestamp;
+    assert.deepEqual(exitDetails, {
+      operation: 'restart',
+      ackStatus: 'ready',
       generation: 2,
       pid: 5671,
-      creationIdentity: null,
       event: 'close',
       exitCode: null,
       signal: 'SIGTERM',
       phase: 'playwright-run',
+      timestamp,
     });
-    assert.equal(typeof exitDetails?.timestamp, 'string');
-    assert.notEqual(exitDetails.timestamp.trim(), '');
-    assert.equal(Number.isNaN(Date.parse(exitDetails.timestamp)), false);
+    assert.equal(typeof timestamp, 'string');
+    assert.notEqual(timestamp.trim(), '');
+    assert.equal(Number.isNaN(Date.parse(timestamp)), false);
+    assert.doesNotMatch(
+      JSON.stringify(exitDetails),
+      /sentinel-password|sentinel-command|album-haven-child-lifecycle-replacement/i,
+    );
     await controller.close();
   } finally {
     fs.rmSync(ownedRoot, { recursive: true, force: true });
   }
+});
+
+test('managed isolated replacement-exit evidence tracks pending and failed watcher recovery acknowledgment', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-child-lifecycle-ack-'));
+  const initialChild = createFakeChildProcess(5675, { autoCloseOnExit: false });
+  const replacementChild = createFakeChildProcess(5676, { autoCloseOnExit: false });
+  let controller;
+  let retainedEvidence;
+  let pendingEvidence;
+
+  try {
+    controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: {},
+      ownedIsolatedTempRoot: ownedRoot,
+      initialChild,
+      ports: [4320, 4322],
+      async stopManagedIsolatedAppFn() {},
+      async cleanupWatchedInventoryFn() {},
+      async startManagedIsolatedAppFn(_env, options) {
+        options.onSpawnFn(replacementChild);
+        replacementChild.emit('close', 19, 'SIGABRT');
+        retainedEvidence = controller.getFailure()?.lifecycle?.managedIsolatedAppExit;
+        pendingEvidence = { ...retainedEvidence };
+        throw new Error('replacement startup failed');
+      },
+      autoStart: false,
+    });
+    fs.writeFileSync(
+      path.join(controller.controlDirectory, 'restart-request.json'),
+      JSON.stringify({
+        nonce: 'watcher-recovery-replacement-exit',
+        operation: 'watcher-recovery-cleanup',
+      }),
+      'utf8',
+    );
+
+    await assert.rejects(
+      controller.processPendingRequest(),
+      { code: 'MANAGED_ISOLATED_APP_UNEXPECTED_EXIT' },
+    );
+
+    const timestamp = pendingEvidence?.timestamp;
+    assert.deepEqual(pendingEvidence, {
+      operation: 'watcher-recovery-cleanup',
+      ackStatus: 'pending',
+      generation: 2,
+      pid: 5676,
+      event: 'close',
+      exitCode: 19,
+      signal: 'SIGABRT',
+      phase: 'start-replacement',
+      timestamp,
+    });
+    assert.equal(Number.isNaN(Date.parse(timestamp)), false);
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(controller.ackPath, 'utf8')),
+      {
+        nonce: 'watcher-recovery-replacement-exit',
+        status: 'failed',
+        phase: 'start-replacement',
+        error: 'Managed isolated app generation 2 PID 5676 unexpectedly exited.',
+      },
+    );
+    const failedEvidence = controller.getFailure()?.lifecycle?.managedIsolatedAppExit;
+    assert.strictEqual(failedEvidence, retainedEvidence);
+    assert.deepEqual(failedEvidence, {
+      ...pendingEvidence,
+      ackStatus: 'failed',
+    });
+  } finally {
+    await controller?.close();
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
+test('managed isolated replacement-exit evidence survives owned temp cleanup and reaches the final decision', async () => {
+  const ownedRoot = _private.createOwnedIsolatedE2ETempRoot({
+    readProcessCreationIdentityFn: () => TEST_PROCESS_CREATION_IDENTITY,
+  });
+  const initialChild = createFakeChildProcess(5673, { autoCloseOnExit: false });
+  const replacementChild = createFakeChildProcess(5674, { autoCloseOnExit: false });
+  replacementChild.albumHavenCreationIdentity = [
+    ownedRoot,
+    'postgresql://owner:sentinel-password@localhost/private?token=sentinel-token',
+    'powershell.exe -Command sentinel-command',
+  ].join(' | ');
+  replacementChild.spawnargs = ['python.exe', path.join(ownedRoot, 'private-app.py')];
+  replacementChild.env = { PRIVATE_TOKEN: 'sentinel-secret' };
+  let controller;
+  let failure;
+
+  try {
+    try {
+      await _private.runManagedPlaywrightAttempt({
+        passthroughArgv: ['test'],
+        childEnv: { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot },
+        runTimeoutMs: 1000,
+        managesScanApp: false,
+        managesIsolatedApp: true,
+        servesRealApp: false,
+        supportAppPort: 4320,
+        realAppPort: 5001,
+        isolatedAppPort: 4320,
+        isolatedProviderPort: 4322,
+        managedPorts: [4320, 4322],
+        ownedIsolatedTempRoot: ownedRoot,
+        isHeadless: true,
+        browserName: 'chromium',
+        async startManagedIsolatedAppFn(_environment, options) {
+          const child = controller ? replacementChild : initialChild;
+          options.onSpawnFn?.(child);
+          return child;
+        },
+        createManagedIsolatedAppRestartControllerFn(options) {
+          controller = _private.createManagedIsolatedAppRestartController({
+            ...options,
+            autoStart: false,
+          });
+          return controller;
+        },
+        async runPlaywrightProcessFn(_argv, _environment, _timeout, { signal }) {
+          fs.writeFileSync(
+            path.join(controller.controlDirectory, 'restart-request.json'),
+            JSON.stringify({ nonce: 'retained-replacement-exit', operation: 'restart' }),
+            'utf8',
+          );
+          await controller.processPendingRequest();
+          assert.deepEqual(
+            JSON.parse(fs.readFileSync(controller.ackPath, 'utf8')),
+            { nonce: 'retained-replacement-exit', status: 'ready' },
+          );
+          replacementChild.emit('close', 23, 'SIGTERM');
+          return new Promise((resolve) => signal.addEventListener(
+            'abort',
+            () => resolve({ exitCode: 1, lifecycle: {} }),
+            { once: true },
+          ));
+        },
+        async stopManagedIsolatedAppFn() {},
+        cleanupIsolatedLibraryDatabaseFn() {},
+        cleanupIsolatedE2ETempRootsFn(baseTempRoot, roots) {
+          return _private.cleanupIsolatedE2ETempRoots(baseTempRoot, roots);
+        },
+        reportManagedPortOwnersFn() { return []; },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.equal(failure?.code, 'MANAGED_ISOLATED_APP_UNEXPECTED_EXIT');
+    assert.equal(fs.existsSync(ownedRoot), false, 'owned temp cleanup must still complete');
+    const timestamp = failure?.lifecycle?.managedIsolatedAppExit?.timestamp;
+    assert.deepEqual(failure?.lifecycle?.managedIsolatedAppExit, {
+      operation: 'restart',
+      ackStatus: 'ready',
+      generation: 2,
+      pid: 5674,
+      phase: 'playwright-run',
+      event: 'close',
+      exitCode: 23,
+      signal: 'SIGTERM',
+      timestamp,
+    });
+    assert.equal(Number.isNaN(Date.parse(timestamp)), false);
+
+    const writes = [];
+    const exitCode = _private.finalizeMainResult(
+      { exitCode: 1, lifecycle: failure.lifecycle },
+      {
+        processObject: { exitCode: null },
+        stderr: { write(text) { writes.push(text); } },
+      },
+    );
+    assert.equal(exitCode, 1);
+    assert.equal(writes.length, 1);
+    const diagnostic = JSON.parse(writes[0].slice(writes[0].indexOf('{')));
+    assert.equal(diagnostic.exitReason, 'managed-isolated-app-unexpected-exit');
+    assert.deepEqual(diagnostic.managedIsolatedAppExit, {
+      operation: 'restart',
+      ackStatus: 'ready',
+      generation: 2,
+      pid: 5674,
+      phase: 'playwright-run',
+      event: 'close',
+      exitCode: 23,
+      signal: 'SIGTERM',
+      timestamp,
+    });
+    assert.doesNotMatch(
+      writes[0],
+      /sentinel-password|sentinel-token|sentinel-command|sentinel-secret|private-app\.py|album-haven-playwright-/i,
+    );
+  } finally {
+    await controller?.close();
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
+test('final decision emits only the closed managed isolated app exit schema', () => {
+  const timestamp = '2026-10-10T12:34:56.789Z';
+  const sentinel = [
+    'C:\\Users\\PrivateOwner\\Music\\secret.flac',
+    'postgresql://owner:sentinel-password@localhost/private?token=sentinel-token',
+    'powershell.exe -Command sentinel-command',
+  ].join(' | ');
+  const writes = [];
+
+  const exitCode = _private.finalizeMainResult({
+    exitCode: 1,
+    lifecycle: {
+      exitReason: 'managed-isolated-app-unexpected-exit',
+      managedIsolatedAppExit: {
+        operation: 'restart',
+        ackStatus: 'ready',
+        generation: 2,
+        pid: 5674,
+        phase: 'playwright-run',
+        event: 'close',
+        exitCode: 23,
+        signal: 'SIGTERM',
+        timestamp,
+        creationIdentity: sentinel,
+        path: sentinel,
+        command: sentinel,
+        environment: { PRIVATE_TOKEN: sentinel },
+        error: { name: 'Error', message: sentinel },
+      },
+    },
+  }, {
+    processObject: { exitCode: null },
+    stderr: { write(text) { writes.push(text); } },
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(writes.length, 1);
+  const diagnostic = JSON.parse(writes[0].slice(writes[0].indexOf('{')));
+  assert.equal(diagnostic.exitReason, 'managed-isolated-app-unexpected-exit');
+  assert.deepEqual(diagnostic.managedIsolatedAppExit, {
+    operation: 'restart',
+    ackStatus: 'ready',
+    generation: 2,
+    pid: 5674,
+    phase: 'playwright-run',
+    event: 'close',
+    exitCode: 23,
+    signal: 'SIGTERM',
+    timestamp,
+  });
+  assert.doesNotMatch(
+    writes[0],
+    /PrivateOwner|secret\.flac|sentinel-password|sentinel-token|sentinel-command|PRIVATE_TOKEN/,
+  );
+});
+
+test('final decision preserves closed pending and failed acknowledgment statuses', () => {
+  const statuses = ['pending', 'failed', 'private-status'];
+  const actual = statuses.map((ackStatus) => {
+    const writes = [];
+    _private.finalizeMainResult({
+      exitCode: 1,
+      lifecycle: {
+        exitReason: 'managed-isolated-app-unexpected-exit',
+        managedIsolatedAppExit: {
+          operation: 'watcher-recovery-cleanup',
+          ackStatus,
+          generation: 2,
+          pid: 5676,
+          phase: 'start-replacement',
+          event: 'close',
+          exitCode: 19,
+          signal: 'SIGABRT',
+          timestamp: '2026-10-10T12:34:56.789Z',
+        },
+      },
+    }, {
+      processObject: { exitCode: null },
+      stderr: { write(text) { writes.push(text); } },
+    });
+    const diagnostic = JSON.parse(writes[0].slice(writes[0].indexOf('{')));
+    return diagnostic.managedIsolatedAppExit.ackStatus;
+  });
+
+  assert.deepEqual(actual, ['pending', 'failed', 'unknown']);
 });
 
 test('managed isolated child lifecycle ignores the final cleanup stop', async () => {

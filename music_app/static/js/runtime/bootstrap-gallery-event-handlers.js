@@ -261,6 +261,8 @@ function handleGalleryBootstrapClick(event) {
     ) {
       return;
     }
+    if (window.AlbumHavenCapabilities
+      && !window.AlbumHavenCapabilities.allows('library.refresh')) return;
     triggerLibraryRefresh();
     return;
   }

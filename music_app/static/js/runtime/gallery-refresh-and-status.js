@@ -1434,6 +1434,7 @@ function openScanPage() {
   }
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
+  scheduleStatusPoll(0);
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = '';
@@ -1758,6 +1759,7 @@ async function pollStatus() {
   try {
     if (
       !knownBusy
+      && !state.ui.scanPageReturnContext
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {

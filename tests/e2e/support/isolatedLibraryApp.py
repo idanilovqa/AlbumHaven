@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager
 from html import escape
 import hashlib
 import json
@@ -16,6 +17,8 @@ import tempfile
 import threading
 import time
 import unicodedata
+import uuid
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
@@ -522,10 +525,12 @@ if str(ROOT) not in sys.path:
 
 from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION  # noqa: E402
 from tests.e2e.support.isolatedPostgres import (  # noqa: E402
+    _connect,
     IsolatedDatabaseOwnershipLock,
     configure_performance_auth_environment,
     prepare_isolated_database,
     provision_performance_auth_owner,
+    provision_watcher_recovery_viewer,
     reset_application_tables,
     resolve_isolated_database_urls,
 )
@@ -2859,6 +2864,226 @@ def build_preloaded_synthetic_provider_cover_specs(
     return specs
 
 
+@dataclass(frozen=True, slots=True)
+class WatcherRecoveryRoots:
+    failure_root_id: str
+    failure_root_path: Path
+    failure_root_staging_path: Path
+    healthy_root_id: str
+    healthy_root_path: Path
+
+    def __post_init__(self) -> None:
+        if not self.failure_root_id.strip() or not self.healthy_root_id.strip():
+            raise ValueError("Watcher recovery root ids cannot be empty.")
+        if self.failure_root_id == self.healthy_root_id:
+            raise ValueError("Watcher recovery root ids must be distinct.")
+        paths = tuple(
+            Path(path).resolve(strict=False)
+            for path in (
+                self.failure_root_path,
+                self.failure_root_staging_path,
+                self.healthy_root_path,
+            )
+        )
+        if any(
+            left == right
+            or left.is_relative_to(right)
+            or right.is_relative_to(left)
+            for index, left in enumerate(paths)
+            for right in paths[index + 1 :]
+        ):
+            raise ValueError(
+                "Watcher recovery root and staging paths must be distinct and non-overlapping."
+            )
+        object.__setattr__(self, "failure_root_path", paths[0])
+        object.__setattr__(self, "failure_root_staging_path", paths[1])
+        object.__setattr__(self, "healthy_root_path", paths[2])
+
+
+def _watcher_recovery_inventory_entry(
+    path: Path,
+    *,
+    root_id: str,
+    artist: str,
+    album: str,
+) -> dict[str, object]:
+    stat = path.stat()
+    return {
+        "path": str(path.resolve(strict=True)),
+        "mtime": stat.st_mtime,
+        "size": stat.st_size,
+        "album": album,
+        "album_artist": artist,
+        "artist": artist,
+        "title": "Initial State",
+        "track_number": 1,
+        "disc_number": 1,
+        "disc_number_raw": "1",
+        "duration_seconds": 1,
+        "duration_display": _format_duration(1),
+        "year": 2026,
+        "release_date": "2026-01-01",
+        "genre": "Fixture",
+        "edition": None,
+        "album_rating": None,
+        "library_root_id": root_id,
+        "library_root_category": "new_arrivals",
+        "exception_type": None,
+        "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        "comment": "Watcher recovery acceptance fixture",
+    }
+
+
+def _tag_watcher_recovery_track(
+    path: Path,
+    *,
+    artist: str,
+    album: str,
+) -> None:
+    from mutagen.id3 import ID3, ID3NoHeaderError, TALB, TDRC, TIT2, TPE1, TPE2, TRCK
+
+    try:
+        tags = ID3(path)
+    except ID3NoHeaderError:
+        tags = ID3()
+    for frame in ("TALB", "TDRC", "TIT2", "TPE1", "TPE2", "TRCK"):
+        tags.delall(frame)
+    tags.add(TALB(encoding=3, text=[album]))
+    tags.add(TDRC(encoding=3, text=["2026"]))
+    tags.add(TIT2(encoding=3, text=["Initial State"]))
+    tags.add(TPE1(encoding=3, text=[artist]))
+    tags.add(TPE2(encoding=3, text=[artist]))
+    tags.add(TRCK(encoding=3, text=["1"]))
+    tags.save(path)
+
+
+def persist_watcher_recovery_roots(
+    setup_database_url: str,
+    *,
+    media_root: Path,
+) -> WatcherRecoveryRoots:
+    """Persist two isolated roots and their initial inventory before ASGI startup."""
+    from music_app.services.persistence_selection import PERSISTENCE_BACKEND_POSTGRES
+    from music_app.services.library_roots import (
+        load_library_root_settings,
+        save_library_root_settings,
+    )
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    resolved_media_root = Path(media_root).resolve(strict=True)
+    configured_temp_root = str(os.environ.get("ALBUM_HAVEN_E2E_TEMP_ROOT") or "").strip()
+    runner_root = (
+        Path(configured_temp_root).resolve(strict=True)
+        if configured_temp_root
+        else resolved_media_root.parent
+    )
+    nonce = uuid.uuid4().hex
+    owned_root = runner_root / "cases" / f"watcher-recovery-{nonce}"
+    failure_root = owned_root / "failure-root"
+    failure_staging = owned_root / "failure-root-staging"
+    healthy_root = owned_root / "healthy-root"
+    roots = WatcherRecoveryRoots(
+        failure_root_id=f"watcher-recovery-failure-{nonce}",
+        failure_root_path=failure_root,
+        failure_root_staging_path=failure_staging,
+        healthy_root_id=f"watcher-recovery-healthy-{nonce}",
+        healthy_root_path=healthy_root,
+    )
+    failure_root.mkdir(parents=True)
+    healthy_root.mkdir(parents=True)
+
+    source = next(
+        (
+            candidate
+            for candidate in sorted(resolved_media_root.rglob("*.mp3"))
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if source is None:
+        raise RuntimeError("Watcher recovery fixture requires one source MP3.")
+    recovery_specs = (
+        (failure_root, roots.failure_root_id, "Watcher Recovery Failure"),
+        (healthy_root, roots.healthy_root_id, "Watcher Recovery Healthy"),
+    )
+    recovery_inventory: dict[str, dict[str, object]] = {}
+    for root_path, root_id, artist in recovery_specs:
+        track = root_path / artist / "Initial State" / "01 - Initial State.mp3"
+        track.parent.mkdir(parents=True)
+        shutil.copy2(source, track)
+        _tag_watcher_recovery_track(track, artist=artist, album="Initial State")
+        recovery_inventory[str(track.resolve(strict=True))] = _watcher_recovery_inventory_entry(
+            track,
+            root_id=root_id,
+            artist=artist,
+            album="Initial State",
+        )
+
+    cache_path = runner_root / "app-data" / "inert-library-cache.json"
+    settings_path = runner_root / "app-data" / "inert-library-roots.json"
+    config: dict[str, object] = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": setup_database_url,
+        "MUSIC_DIR": resolved_media_root,
+        "CACHE_PATH": cache_path,
+        "LIBRARY_ROOTS_PATH": settings_path,
+        "PERSISTENCE_BACKENDS": {
+            seam_id: PERSISTENCE_BACKEND_POSTGRES for seam_id in _REQUIRED_POSTGRES_SEAMS
+        },
+    }
+    adapter = PostgresScanCacheAdapter(config)
+    load_snapshot = getattr(adapter, "load_snapshot", None)
+    if callable(load_snapshot):
+        settings = load_library_root_settings(config)
+        existing_identity = hashlib.sha256(
+            json.dumps(settings, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        existing_snapshot = load_snapshot(cache_path, existing_identity)
+        file_cache = dict(existing_snapshot[0])
+    else:
+        settings = {
+            "version": 1,
+            "main_library_roots": [
+                {
+                    "id": "isolated-e2e-root",
+                    "path": str(resolved_media_root),
+                    "layout_mode": "artist",
+                }
+            ],
+            "hoarding_library_roots": [],
+            "new_arrivals_roots": [],
+            "move_policy": {},
+        }
+        file_cache = {}
+
+    settings = json.loads(json.dumps(settings))
+    recovery_ids = {roots.failure_root_id, roots.healthy_root_id}
+    settings["new_arrivals_roots"] = [
+        entry
+        for entry in list(settings.get("new_arrivals_roots") or [])
+        if str(entry.get("id") or "") not in recovery_ids
+    ] + [
+        {
+            "id": roots.failure_root_id,
+            "path": str(roots.failure_root_path),
+            "layout_mode": "artist",
+        },
+        {
+            "id": roots.healthy_root_id,
+            "path": str(roots.healthy_root_path),
+            "layout_mode": "artist",
+        },
+    ]
+    saved_settings = save_library_root_settings(config, settings)
+    if isinstance(saved_settings, dict):
+        settings = saved_settings
+    file_cache.update(recovery_inventory)
+    root_identity = hashlib.sha256(
+        json.dumps(settings, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    adapter.save_snapshot(cache_path, file_cache, root_identity, time.time())
+    return roots
+
+
 def persist_fixture_inventory(
     setup_database_url: str,
     library_root: Path,
@@ -5143,6 +5368,8 @@ def build_isolated_jobs_worker(runtime_database_url: str) -> ManagedDurableJobsW
     worker_environment = dict(os.environ)
     worker_environment["ALBUM_HAVEN_WORKER_POLL_SECONDS"] = "1"
     worker_environment["ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"] = "1"
+    worker_environment["ALBUM_HAVEN_WORKER_LEASE_SECONDS"] = "15"
+    worker_environment["ALBUM_HAVEN_WORKER_HEARTBEAT_SECONDS"] = "5"
     worker = _build_worker(
         build_worker_config(worker_environment),
         mail_config=build_mail_config(worker_environment),
@@ -5184,6 +5411,128 @@ def cleanup_isolated_database(*, lock_only: bool = False) -> None:
             reset_application_tables(setup_database_url)
     finally:
         database_lock.release()
+
+
+_LIFESPAN_FAILURE_PREFIX = "ISOLATED_APP_LIFESPAN_FAILURE "
+_LIFESPAN_EXCEPTION_TYPES = {
+    FileNotFoundError: ("file_not_found", "FileNotFoundError"),
+    PermissionError: ("permission", "PermissionError"),
+    RuntimeError: ("runtime", "RuntimeError"),
+    TimeoutError: ("timeout", "TimeoutError"),
+    ValueError: ("value", "ValueError"),
+}
+
+
+def _safe_lifespan_error_attribute(error: BaseException, name: str) -> object:
+    try:
+        return getattr(error, name, None)
+    except BaseException:
+        return None
+
+
+def _safe_lifespan_error_number(error: BaseException, name: str) -> int | None:
+    value = _safe_lifespan_error_attribute(error, name)
+    if type(value) is int and -(2**31) <= value < 2**31:
+        return value
+    return None
+
+
+def _safe_lifespan_sqlstate(error: BaseException) -> str | None:
+    value = _safe_lifespan_error_attribute(error, "sqlstate")
+    if (
+        type(value) is str
+        and len(value) == 5
+        and all(
+            character.isascii() and (character.isdigit() or character.isupper())
+            for character in value
+        )
+    ):
+        return value
+    return None
+
+
+def _safe_lifespan_exception(error: BaseException, relation: str) -> dict[str, object]:
+    sqlstate = _safe_lifespan_sqlstate(error)
+    category, type_name = _LIFESPAN_EXCEPTION_TYPES.get(
+        type(error),
+        ("postgres", "UnknownError") if sqlstate is not None else ("unknown", "UnknownError"),
+    )
+    return {
+        "relation": relation,
+        "category": category,
+        "type": type_name,
+        "errno": _safe_lifespan_error_number(error, "errno"),
+        "winerror": _safe_lifespan_error_number(error, "winerror"),
+        "sqlstate": sqlstate,
+    }
+
+
+def _safe_lifespan_exception_chain(
+    error: BaseException,
+) -> tuple[list[dict[str, object]], bool]:
+    exceptions: list[dict[str, object]] = []
+    seen: set[int] = set()
+    current = error
+    relation = "raised"
+
+    while len(exceptions) < 4:
+        seen.add(id(current))
+        exceptions.append(_safe_lifespan_exception(current, relation))
+
+        cause = _safe_lifespan_error_attribute(current, "__cause__")
+        suppress_context = (
+            _safe_lifespan_error_attribute(current, "__suppress_context__") is True
+        )
+        context = _safe_lifespan_error_attribute(current, "__context__")
+        if isinstance(cause, BaseException):
+            next_error, next_relation = cause, "cause"
+        elif not suppress_context and isinstance(context, BaseException):
+            next_error, next_relation = context, "context"
+        else:
+            return exceptions, False
+
+        if id(next_error) in seen or len(exceptions) == 4:
+            return exceptions, True
+        current, relation = next_error, next_relation
+
+    return exceptions, False
+
+
+def _write_safe_lifespan_diagnostic(error: BaseException, phase: str) -> None:
+    exceptions, chain_truncated = _safe_lifespan_exception_chain(error)
+    payload = {
+        "schemaVersion": 1,
+        "event": "isolated_app_lifespan_failure",
+        "phase": phase,
+        "exceptions": exceptions,
+        "chainTruncated": chain_truncated,
+    }
+    try:
+        sys.stderr.write(
+            _LIFESPAN_FAILURE_PREFIX
+            + json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+            + "\n"
+        )
+        sys.stderr.flush()
+    except BaseException:
+        pass
+
+
+def _install_safe_lifespan_diagnostics(app: Any) -> None:
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan_with_diagnostics(lifespan_app):
+        phase = "startup"
+        try:
+            async with original_lifespan(lifespan_app):
+                phase = "shutdown"
+                yield
+        except BaseException as error:
+            _write_safe_lifespan_diagnostic(error, phase)
+            raise
+
+    app.router.lifespan_context = lifespan_with_diagnostics
 
 
 def main() -> None:
@@ -5301,6 +5650,51 @@ def main() -> None:
 
         configure_performance_auth_environment(args.port)
         provision_performance_auth_owner(runtime_database_url, seed_expanded_artist_tree=True)
+        watcher_recovery_manifest_path = (
+            temp_root / "app-data" / "watcher-recovery-fixture.json"
+        )
+        if not reuse_state:
+            watcher_recovery_roots = persist_watcher_recovery_roots(
+                setup_database_url,
+                media_root=library_root,
+            )
+            with _connect(setup_database_url) as connection:
+                library = connection.execute(
+                    """
+                    select id
+                    from library.libraries
+                    where library_kind = 'local'
+                    order by id
+                    limit 1
+                    """
+                ).fetchone()
+            if library is None:
+                raise RuntimeError("Watcher recovery fixture requires a local library.")
+            viewer_username, viewer_password = provision_watcher_recovery_viewer(
+                runtime_database_url,
+                library_id=int(library["id"]),
+            )
+            watcher_recovery_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            watcher_recovery_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "failure_root_id": watcher_recovery_roots.failure_root_id,
+                        "failure_root_path": str(watcher_recovery_roots.failure_root_path),
+                        "failure_root_staging_path": str(
+                            watcher_recovery_roots.failure_root_staging_path
+                        ),
+                        "healthy_root_id": watcher_recovery_roots.healthy_root_id,
+                        "healthy_root_path": str(watcher_recovery_roots.healthy_root_path),
+                        "viewer_username": viewer_username,
+                        "viewer_password": viewer_password,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        elif not watcher_recovery_manifest_path.is_file():
+            raise RuntimeError("Watcher recovery fixture manifest missing during restart.")
 
         if args.prepare_only:
             print(
@@ -5325,6 +5719,7 @@ def main() -> None:
             _runtime_config(), temp_root, fixture_media_root=fixture_media_root
         )
         app = create_asgi_app()
+        _install_safe_lifespan_diagnostics(app)
         assert_production_runtime_configuration(
             app.state.config, temp_root, fixture_media_root=fixture_media_root
         )

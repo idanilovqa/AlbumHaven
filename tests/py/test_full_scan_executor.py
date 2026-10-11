@@ -45,15 +45,15 @@ def test_full_scan_only_publishes_roots_successfully_observed(monkeypatch, obser
 
 
 @pytest.mark.parametrize(
-    ("mode", "repair_id", "expected_repairs"),
+    ("mode", "repair_id"),
     (
-        ("manual_full_rescan", 613, 1),
-        ("background", 613, 0),
-        ("manual_full_rescan", None, 0),
+        ("manual_full_rescan", 613),
+        ("background", 613),
+        ("manual_full_rescan", None),
     ),
 )
-def test_full_scan_completes_only_linked_manual_watcher_repair_after_publication(
-    monkeypatch, mode, repair_id, expected_repairs
+def test_full_scan_publication_owns_linked_watcher_repair_completion_atomically(
+    monkeypatch, mode, repair_id
 ):
     calls = []
 
@@ -79,7 +79,9 @@ def test_full_scan_completes_only_linked_manual_watcher_repair_after_publication
     class Recovery:
         def complete_repair(self, **values):
             calls.append(("repair", values))
-            return True
+            raise RuntimeError(
+                "watcher repository must not run after publication commits"
+            )
 
     monkeypatch.setattr(
         full_scan_executor.state_service,
@@ -115,16 +117,7 @@ def test_full_scan_completes_only_linked_manual_watcher_repair_after_publication
     )
 
     assert result.inventory_mutation_revision == 41
-    assert [kind for kind, _values in calls] == ["publish"] + (
-        ["repair"] if expected_repairs else []
-    )
-    if expected_repairs:
-        assert calls[1][1] == {
-            "claim": claim,
-            "repair_id": 613,
-            "inventory_revision": 41,
-            "now": calls[1][1]["now"],
-        }
+    assert [kind for kind, _values in calls] == ["publish"]
 
 
 def test_full_scan_progress_is_bounded_and_phase_changes_are_immediate(monkeypatch):

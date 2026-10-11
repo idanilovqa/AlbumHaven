@@ -101,6 +101,21 @@ test('Library Status renders every operational incident without private path dat
   });
 
   assert.equal((html.match(/data-operational-item/g) || []).length, 2);
+  const alertContentStart = html.indexOf('class="on-page-alert__content"');
+  const operationalListStart = html.search(/<(?:ul|ol)\b[^>]*>/);
+  const operationalItemIndexes = [...html.matchAll(/data-operational-item/g)]
+    .map((match) => match.index);
+  const firstOperationalItem = operationalItemIndexes[0];
+  const actionsStart = html.indexOf('class="on-page-alert__actions"');
+  assert.ok(alertContentStart >= 0, 'Operational incidents must stay inside alert content.');
+  assert.ok(
+    operationalListStart > alertContentStart && operationalListStart < firstOperationalItem,
+    'Operational incidents must render in a semantic list inside alert content.',
+  );
+  assert.ok(
+    actionsStart === -1 || operationalItemIndexes.every((index) => index < actionsStart),
+    'Operational incidents must never render inside the alert actions boundary.',
+  );
   assert.doesNotMatch(
     html,
     /Private Music|[A-Z]:\\|\/srv\/private|root_1234567890abcdef|root_fedcba0987654321/,

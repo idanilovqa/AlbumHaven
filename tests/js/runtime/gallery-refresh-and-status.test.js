@@ -3295,6 +3295,107 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
   await flushMicrotasks();
 });
 
+test('opening Library Status supersedes an idle poll blocked on foreground cover work', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const scheduled = [];
+  let releaseForegroundIdle;
+  const foregroundIdle = new Promise((resolve) => { releaseForegroundIdle = resolve; });
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+  };
+  context.galleryCoverLoadScheduler = {
+    isForegroundIdle() { return false; },
+    whenForegroundIdle() { return foregroundIdle; },
+  };
+  context.virtualGrid = {
+    suspendSelectedArtistCoverLoadsForUserAction() { return 41; },
+  };
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduled.push({ callback, delayMs });
+    return scheduled.length;
+  };
+
+  const stalePoll = context.pollStatus();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 0);
+
+  context.openScanPage();
+
+  assert.equal(context.state.ui.scanPageCoverLoadSuspensionToken, 41);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].delayMs, 0);
+
+  const visibleStatusPoll = scheduled[0].callback();
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/status');
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    scan_phase: 'library-status-visible',
+  });
+  await visibleStatusPoll;
+  const scheduledAfterVisibleResponse = scheduled.length;
+
+  releaseForegroundIdle();
+  await stalePoll;
+
+  assert.equal(calls.updateStatusIndicator.length, 1);
+  assert.equal(context.state.status.scan_phase, 'library-status-visible');
+  assert.equal(scheduled.length, scheduledAfterVisibleResponse);
+});
+
+test('Library Status pollStatus bypasses foreground cover deferral for acknowledged repair warnings', async () => {
+  const { context, pendingRequests } = createContext();
+  let foregroundIdleWaits = 0;
+  context.scheduleBrowserTimeout = () => {};
+  context.state.status = {};
+  context.state.ui.scanPageReturnContext = { view: {} };
+  context.galleryCoverLoadScheduler = {
+    isForegroundIdle() { return false; },
+    whenForegroundIdle() {
+      foregroundIdleWaits += 1;
+      return new Promise(() => {});
+    },
+  };
+
+  const statusPromise = context.pollStatus();
+  await flushMicrotasks();
+
+  assert.equal(foregroundIdleWaits, 0, 'Library Status must not wait for hidden gallery cover work');
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/status');
+
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    allowed_actions: {},
+    watcher_health: {
+      state: 'warning',
+      repair_required: true,
+      dismissed: true,
+      problems: [{
+        root_key: 'root_1234567890abcdef',
+        state: 'root_unavailable',
+        detected_at: '2026-10-10T12:00:00Z',
+        incident_id: '11111111-1111-1111-1111-111111111111',
+        message: 'Some library changes may have been missed.',
+        acknowledged: true,
+        allowed_actions: {},
+      }],
+    },
+  });
+  await statusPromise;
+
+  assert.equal(context.state.status.watcher_health.repair_required, true);
+  assert.equal(context.state.status.watcher_health.dismissed, true);
+  assert.equal(context.state.status.watcher_health.problems[0].acknowledged, true);
+  assert.deepEqual(context.state.status.watcher_health.problems[0].allowed_actions, {});
+});
+
 test('busy pollStatus is never delayed by foreground cover activity', async () => {
   const { context, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

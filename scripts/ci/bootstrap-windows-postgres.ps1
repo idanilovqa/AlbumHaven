@@ -61,6 +61,23 @@ function Get-Names {
     return [pscustomobject]@{ Database = $database; Roles = $roles }
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $digest = $sha256.ComputeHash($stream)
+            return [System.BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant()
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-MigrationContract {
     $migrationRoot = Join-Path $RepositoryRoot 'migrations\postgres'
     $paths = @(Get-ChildItem -LiteralPath $migrationRoot -Filter '*.sql' -File | Sort-Object Name)
@@ -78,7 +95,7 @@ function Get-MigrationContract {
         }
         [ordered]@{
             name = $_.Name
-            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            sha256 = Get-FileSha256 -Path $_.FullName
             transactional = -not $isNontransactional
             arguments = $arguments
             requiredValidIndexes = $requiredValidIndexes
@@ -206,6 +223,55 @@ function Get-MigrationIndexState(
         throw "The 0083 index-definition verifier returned an invalid state: $state"
     }
     return $state
+}
+
+function Get-PgTrgmGinOperatorClass(
+    [string]$Psql,
+    [string]$Role,
+    [string]$Database
+) {
+    $sql = @"
+select pg_catalog.format('%I.%I', operator_namespace.nspname, operator_class.opcname)
+from pg_catalog.pg_extension as extension
+join pg_catalog.pg_namespace as extension_namespace
+  on extension_namespace.oid = extension.extnamespace
+join pg_catalog.pg_depend as operator_dependency
+  on operator_dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+ and operator_dependency.refobjid = extension.oid
+ and operator_dependency.deptype = 'e'
+join pg_catalog.pg_opclass as operator_class
+  on operator_dependency.classid = 'pg_catalog.pg_opclass'::regclass
+ and operator_dependency.objid = operator_class.oid
+join pg_catalog.pg_namespace as operator_namespace
+  on operator_namespace.oid = operator_class.opcnamespace
+ and operator_namespace.oid = extension_namespace.oid
+join pg_catalog.pg_am as access_method
+  on access_method.oid = operator_class.opcmethod
+where extension.extname = 'pg_trgm'
+  and operator_class.opcname = 'gin_trgm_ops'
+  and access_method.amname = 'gin';
+"@
+    $operatorClass = (& $Psql -X -w -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $Role -d $Database -tAc $sql 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Could not discover the pg_trgm GIN operator class.' }
+    if ($operatorClass -cnotmatch '^(?:[a-z_][a-z0-9_$]*|"(?:[^"]|"")*")\.gin_trgm_ops$') {
+        throw 'The extension-owned pg_trgm GIN operator class is missing or invalid.'
+    }
+    return $operatorClass
+}
+
+function Get-SchemaAware0083Sql(
+    [string]$Psql,
+    [string]$Role,
+    [string]$Database,
+    [string]$MigrationPath
+) {
+    $migrationSql = [IO.File]::ReadAllText($MigrationPath)
+    $releasedOperatorClass = 'library.gin_trgm_ops'
+    if (($migrationSql.Split(@($releasedOperatorClass), [StringSplitOptions]::None).Count - 1) -ne 1) {
+        throw 'Migration 0083 has an unexpected operator-class contract.'
+    }
+    $operatorClass = Get-PgTrgmGinOperatorClass $Psql $Role $Database
+    return $migrationSql.Replace($releasedOperatorClass, $operatorClass)
 }
 
 function Remove-InvalidMigrationIndexes(
@@ -357,7 +423,12 @@ commit;
                 if ($migration.requiredValidIndexes.Count -gt 0) {
                     Remove-InvalidMigrationIndexes $psql $names.Roles.migrator $names.Database $migration.requiredValidIndexes $migration.indexDefinitionVerifier
                 }
-                Invoke-Checked $psql $migrationArguments
+                if ($migration.name -ceq '0083_add_album_raw_artist_search_index.sql') {
+                    $migrationSql = Get-SchemaAware0083Sql $psql $names.Roles.migrator $names.Database $path
+                    Invoke-PsqlText $psql $names.Roles.migrator $names.Database $migrationSql
+                } else {
+                    Invoke-Checked $psql $migrationArguments
+                }
                 foreach ($indexName in $migration.requiredValidIndexes) {
                     $indexState = Get-MigrationIndexState $psql $names.Roles.migrator $names.Database $migration.indexDefinitionVerifier
                     if ($indexState -cne 'ready') {

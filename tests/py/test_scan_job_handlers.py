@@ -870,19 +870,215 @@ def test_full_scan_handler_rejects_removed_or_cross_library_roots(scope, reason)
     assert scanner.calls == []
 
 
-def test_full_scan_handler_maps_scanner_failure_to_bounded_generic_outcome():
-    secret_path = "C:/Users/private/Music/Artist/Album/01.flac"
-    repository = _FullScanRepository()
-    scanner = _FullScanner(error=OSError(secret_path))
-    logged = []
+class _FullScanDatabaseFailure(RuntimeError):
+    def __init__(
+        self,
+        *,
+        sqlstate: str | None,
+        primary: str = "private database failure",
+        constraint_name: str | None = None,
+        private_detail: str = (
+            "C:/Users/private/Music/Artist/Album/01.flac token=secret"
+        ),
+    ) -> None:
+        super().__init__(private_detail)
+        self.sqlstate = sqlstate
+        self.diag = SimpleNamespace(
+            message_primary=primary,
+            message_detail=private_detail,
+            message_hint=private_detail,
+            context=private_detail,
+            constraint_name=constraint_name,
+        )
 
-    outcome = _full_handler(repository, scanner, logged=logged)(
-        _full_claim(), _FullContext()
+
+@pytest.mark.parametrize(
+    ("error", "reason_code", "expected_state"),
+    (
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="P0001",
+                primary="full scan publication input is invalid",
+            ),
+            "full_scan_publication_input_invalid",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="P0001",
+                primary="full scan publication file scope is invalid",
+            ),
+            "full_scan_publication_file_scope_invalid",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="P0001",
+                primary="full scan publication hierarchy invalid",
+            ),
+            "full_scan_publication_hierarchy_invalid",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="P0001",
+                primary="full scan recovery cutoff is invalid",
+            ),
+            "full_scan_publication_recovery_cutoff_invalid",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="P0001",
+                primary="full scan publication fence lost",
+            ),
+            "full_scan_revision_conflict",
+            JobState.RETRY_WAIT,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="40001"),
+            "full_scan_revision_conflict",
+            JobState.RETRY_WAIT,
+        ),
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="23505",
+                constraint_name="local_albums_semantic_identity_key",
+            ),
+            "full_scan_semantic_album_conflict",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="23505",
+                constraint_name="private_unexpected_constraint",
+            ),
+            "full_scan_publication_integrity_failed",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="23502"),
+            "full_scan_publication_integrity_failed",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="23503"),
+            "full_scan_publication_integrity_failed",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="23514"),
+            "full_scan_publication_integrity_failed",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="22023"),
+            "full_scan_publication_integrity_failed",
+            JobState.FAILED,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="08006"),
+            "full_scan_storage_unavailable",
+            JobState.RETRY_WAIT,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="53100"),
+            "full_scan_storage_unavailable",
+            JobState.RETRY_WAIT,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="57P01"),
+            "full_scan_storage_unavailable",
+            JobState.RETRY_WAIT,
+        ),
+        (
+            _FullScanDatabaseFailure(sqlstate="40P01"),
+            "full_scan_storage_unavailable",
+            JobState.RETRY_WAIT,
+        ),
+        (
+            OSError("C:/Users/private/Music/Artist/Album/01.flac token=secret"),
+            "full_scan_failed",
+            JobState.FAILED,
+        ),
+    ),
+)
+def test_full_scan_handler_classifies_failures_into_closed_safe_outcomes(
+    error, reason_code, expected_state
+):
+    private_values = (
+        "C:/Users/private/Music/Artist/Album/01.flac",
+        "token=secret",
+        "private_unexpected_constraint",
+    )
+    logged = []
+    outcome = _full_handler(
+        _FullScanRepository(),
+        _FullScanner(error=error),
+        logged=logged,
+    )(
+        replace(_full_claim(), attempt=1, max_attempts=2),
+        _FullContext(),
     )
 
-    assert outcome == JobTransitionResult(JobState.FAILED, "full_scan_failed")
-    assert secret_path not in repr(outcome)
-    assert secret_path not in repr(logged)
+    assert outcome.next_state is expected_state
+    assert outcome.reason_code == reason_code
+    assert (outcome.scheduled_at == NOW + timedelta(seconds=5)) is (
+        expected_state is JobState.RETRY_WAIT
+    )
+    assert logged == [f"Full scan execution failed ({reason_code})."]
+    for private_value in private_values:
+        assert private_value not in repr(outcome)
+        assert private_value not in repr(logged)
+
+
+def test_full_scan_handler_retries_unclassified_operational_error_for_watcher_repair():
+    import psycopg
+
+    repository = _FullScanRepository()
+    repository.intent.watcher_repair_id = 613
+    scanner = _FullScanner(error=psycopg.OperationalError("connection failed"))
+
+    outcome = _full_handler(repository, scanner)(
+        replace(_full_claim(), attempt=1, max_attempts=2),
+        _FullContext(),
+    )
+
+    assert scanner.calls[0][0].watcher_repair_id == 613
+    assert outcome == JobTransitionResult(
+        JobState.RETRY_WAIT,
+        "full_scan_storage_unavailable",
+        scheduled_at=NOW + timedelta(seconds=5),
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "reason_code"),
+    (
+        (
+            _FullScanDatabaseFailure(
+                sqlstate="P0001",
+                primary="full scan publication fence lost",
+            ),
+            "full_scan_revision_conflict",
+        ),
+        (_FullScanDatabaseFailure(sqlstate="40001"), "full_scan_revision_conflict"),
+        (_FullScanDatabaseFailure(sqlstate="08006"), "full_scan_storage_unavailable"),
+        (_FullScanDatabaseFailure(sqlstate="53100"), "full_scan_storage_unavailable"),
+        (_FullScanDatabaseFailure(sqlstate="57P01"), "full_scan_storage_unavailable"),
+        (_FullScanDatabaseFailure(sqlstate="40P01"), "full_scan_storage_unavailable"),
+    ),
+)
+def test_full_scan_handler_bounds_retryable_database_failures(error, reason_code):
+    outcome = _full_handler(
+        _FullScanRepository(),
+        _FullScanner(error=error),
+    )(
+        replace(_full_claim(), attempt=2, max_attempts=2),
+        _FullContext(),
+    )
+
+    assert outcome == JobTransitionResult(JobState.FAILED, reason_code)
 
 
 def test_full_scan_checkpoint_rejection_fails_closed_as_lease_loss():
@@ -894,13 +1090,145 @@ def test_full_scan_checkpoint_rejection_fails_closed_as_lease_loss():
     assert outcome == JobTransitionResult(JobState.CANCELED, "full_scan_lease_lost")
 
 
-def test_full_scan_inventory_revision_conflict_never_reports_success():
+@pytest.mark.parametrize(
+    ("attempt", "expected_state"),
+    ((1, JobState.RETRY_WAIT), (2, JobState.FAILED)),
+)
+def test_full_scan_inventory_revision_conflict_retries_until_attempt_limit(
+    attempt, expected_state
+):
     repository = _FullScanRepository(revision=40)
     scanner = _FullScanner(error=RuntimeError("inventory revision conflict"))
+    claim = replace(_full_claim(), attempt=attempt, max_attempts=2)
 
-    outcome = _full_handler(repository, scanner)(_full_claim(), _FullContext())
+    outcome = _full_handler(repository, scanner)(claim, _FullContext())
 
-    assert outcome == JobTransitionResult(JobState.FAILED, "full_scan_revision_conflict")
+    assert outcome.next_state is expected_state
+    assert outcome.reason_code == "full_scan_revision_conflict"
+    assert (outcome.scheduled_at == NOW + timedelta(seconds=5)) is (
+        expected_state is JobState.RETRY_WAIT
+    )
+
+
+def test_full_scan_retry_reloads_roots_before_atomic_publication(monkeypatch):
+    from music_app.jobs import full_scan_executor
+
+    class Repository:
+        def __init__(self):
+            self.revision = 40
+            self.root_ids = ("root-a",)
+            self.enumerated_root_ids = []
+            self.publications = []
+
+        def load_claimed_full_scan(self, **_kwargs):
+            return SimpleNamespace(
+                intent_id=85,
+                library_id=19,
+                initiating_account_id=7,
+                mode="manual_full_rescan",
+                force=True,
+                root_ids=self.root_ids,
+                inventory_mutation_revision=self.revision,
+                committed_inventory_revision=None,
+                watcher_repair_id=613,
+            )
+
+        def load_claimed_full_scan_scope(self, **_kwargs):
+            return SimpleNamespace(
+                roots=tuple(
+                    {
+                        "id": root_id,
+                        "path": Path(f"C:/Music/{root_id}"),
+                        "library_id": 19,
+                        "is_active": True,
+                    }
+                    for root_id in self.root_ids
+                ),
+                inventory_mutation_revision=self.revision,
+                scope_complete=True,
+                separate_release_keys=(),
+                exception_overrides={},
+            )
+
+        def checkpoint_claimed_full_scan(self, **_kwargs):
+            return True
+
+        def publish_claimed_full_scan(self, **values):
+            self.publications.append(values)
+            if (
+                values["expected_inventory_mutation_revision"] != self.revision
+                or set(values["observed_root_ids"]) != set(self.root_ids)
+            ):
+                return {"publication_won": False}
+            return {
+                "publication_won": True,
+                "inventory_mutation_revision": self.revision + 1,
+            }
+
+        def activate_second_root(self):
+            self.root_ids = ("root-a", "root-b")
+            self.revision = 41
+
+    class Adapter:
+        def __init__(self, _config):
+            pass
+
+        def prepare_full_scan_inventory(self, _cache, **_kwargs):
+            return {"artists": [], "albums": [], "tracks": [], "track_files": []}
+
+    class WatcherRecovery:
+        def complete_repair(self, **_values):
+            raise AssertionError(
+                "publication must complete the watcher repair atomically"
+            )
+
+    repository = Repository()
+    watcher_recovery = WatcherRecovery()
+
+    def scan_music_incremental(**values):
+        root_ids = tuple(str(root["id"]) for root in values["root_definitions"])
+        repository.enumerated_root_ids.append(root_ids)
+        values["publication_state"]["observed_library_root_ids"] = set(root_ids)
+        if len(repository.enumerated_root_ids) == 1:
+            repository.activate_second_root()
+        return {}, 1.0
+
+    monkeypatch.setattr(
+        full_scan_executor.state_service,
+        "scan_music_incremental",
+        scan_music_incremental,
+    )
+    monkeypatch.setattr(full_scan_executor, "PostgresScanCacheAdapter", Adapter)
+    executor = full_scan_executor.DurableFullScanExecutor(
+        config={},
+        scan_repository=repository,
+        watcher_recovery=watcher_recovery,
+    )
+    handler = _full_handler(repository, executor)
+
+    first = handler(
+        replace(_full_claim(), attempt=1, max_attempts=2),
+        _FullContext(),
+    )
+    second = handler(
+        replace(_full_claim(), attempt=2, max_attempts=2),
+        _FullContext(),
+    )
+
+    assert first == JobTransitionResult(
+        JobState.RETRY_WAIT,
+        "full_scan_revision_conflict",
+        NOW + timedelta(seconds=5),
+    )
+    assert second == JobTransitionResult(JobState.SUCCEEDED, "full_scan_completed")
+    assert repository.enumerated_root_ids == [
+        ("root-a",),
+        ("root-a", "root-b"),
+    ]
+    assert [
+        publication["expected_inventory_mutation_revision"]
+        for publication in repository.publications
+    ] == [40, 41]
 
 
 def test_full_scan_authority_revocation_before_start_never_invokes_scanner():
@@ -988,21 +1316,26 @@ def test_targeted_handler_failure_marks_every_watcher_participant_dirty():
     assert "secret" not in result.reason_code
 
 
-def test_root_catch_up_reconciles_every_participant_root():
+def test_root_catch_up_reconciles_every_available_participant_root(tmp_path):
     from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
 
+    root_a = tmp_path / "root-a"
+    root_b = tmp_path / "root-b"
+    root_a.mkdir()
+    root_b.mkdir()
     repository = _ScanRepository(
+        healthy=False,
         roots=(
             {
                 "id": "root-a",
-                "path": Path("C:/Music/A"),
+                "path": root_a,
                 "category": "main_library_roots",
                 "library_id": 19,
                 "is_active": True,
             },
             {
                 "id": "root-b",
-                "path": Path("D:/Music/B"),
+                "path": root_b,
                 "category": "main_library_roots",
                 "library_id": 19,
                 "is_active": True,
@@ -1033,8 +1366,203 @@ def test_root_catch_up_reconciles_every_participant_root():
 
     assert handler(_claim(), _Context()).next_state is JobState.SUCCEEDED
     assert reconciler.requests[0][0].preserved_subtrees == frozenset(
-        {Path("C:/Music/A"), Path("D:/Music/B")}
+        {root_a, root_b}
     )
+
+
+def test_empty_root_catch_up_publishes_full_root_stale_scope(tmp_path):
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+    from music_app.services.scan_cache_persistence import (
+        DurableTargetedReconciliationPreparationAdapter,
+    )
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "root-a"
+    root.mkdir()
+
+    class Repository(_ScanRepository):
+        def __init__(self):
+            super().__init__(
+                healthy=False,
+                roots=(
+                    {
+                        "id": "root-a",
+                        "path": root,
+                        "category": "main_library_roots",
+                        "library_id": 19,
+                        "is_active": True,
+                    },
+                ),
+            )
+            self.publications = []
+
+        def publish_claimed_targeted_reconciliation(self, **kwargs):
+            self.publications.append(kwargs)
+            return {
+                "publication_won": True,
+                "inventory_mutation_revision": 31,
+                "affected_album_keys": [],
+            }
+
+    repository = Repository()
+    repository.intent.watcher_generation_kind = "root_catch_up"
+    repository.intent.request = TargetedReconciliationRequest(root_id="root-a")
+    generation = SimpleNamespace(
+        generation_id=84,
+        intent_id=84,
+        library_id=19,
+        participants=(SimpleNamespace(logical_root_id="root-a"),),
+        generation_kind="root_catch_up",
+        barrier_ids=(),
+    )
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=DurableTargetedReconciliationPreparationAdapter(
+            build_albums=lambda _cache, _separate_release_keys: [],
+        ),
+        root_definitions=repository.roots,
+    )
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=repository,
+        reconciler=reconciler,
+        watcher_recovery=SimpleNamespace(
+            claim_generation=lambda **_kwargs: generation,
+        ),
+        clock=lambda: NOW,
+    )
+
+    assert handler(_claim(), _Context()) == JobTransitionResult(
+        JobState.SUCCEEDED,
+        "targeted_reconciliation_completed",
+    )
+    assert len(repository.publications) == 1
+    assert all(not rows for rows in repository.publications[0]["inventory"].values())
+    assert repository.publications[0]["stale_scopes"] == [
+        {"root_id": "root-a", "paths": [], "subtrees": [str(root)]},
+    ]
+
+
+def test_root_catch_up_fails_generation_when_a_participant_root_is_unavailable(
+    tmp_path,
+):
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+
+    root_a = tmp_path / "root-a"
+    root_a.mkdir()
+    repository = _ScanRepository(
+        healthy=False,
+        roots=(
+            {
+                "id": "root-a",
+                "path": root_a,
+                "category": "main_library_roots",
+                "library_id": 19,
+                "is_active": True,
+            },
+            {
+                "id": "root-b",
+                "path": tmp_path / "missing-root-b",
+                "category": "main_library_roots",
+                "library_id": 19,
+                "is_active": True,
+            },
+        ),
+    )
+    repository.intent.watcher_generation_kind = "root_catch_up"
+    repository.intent.request = TargetedReconciliationRequest(root_id="root-a")
+    generation = SimpleNamespace(
+        generation_id=84,
+        intent_id=84,
+        library_id=19,
+        participants=(
+            SimpleNamespace(logical_root_id="root-a"),
+            SimpleNamespace(logical_root_id="root-b"),
+        ),
+        generation_kind="root_catch_up",
+        barrier_ids=(),
+    )
+
+    class Recovery:
+        def __init__(self):
+            self.failures = []
+
+        def claim_generation(self, **_kwargs):
+            return generation
+
+        def fail_generation(self, **kwargs):
+            self.failures.append(kwargs)
+            return True
+
+    recovery = Recovery()
+    reconciler = _Reconciler()
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=repository,
+        reconciler=reconciler,
+        watcher_recovery=recovery,
+        clock=lambda: NOW,
+    )
+
+    result = handler(_claim(), _Context())
+
+    assert result.next_state is JobState.FAILED
+    assert recovery.failures == [
+        {
+            "claim": _claim(),
+            "generation": generation,
+            "reason_code": "root_unavailable",
+            "now": NOW,
+        }
+    ]
+    assert reconciler.requests == []
+
+
+def test_exact_watcher_generation_remains_canceled_when_scope_is_unhealthy(
+    tmp_path,
+):
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+
+    root_a = tmp_path / "root-a"
+    root_a.mkdir()
+    repository = _ScanRepository(
+        healthy=False,
+        roots=(
+            {
+                "id": "root-a",
+                "path": root_a,
+                "category": "main_library_roots",
+                "library_id": 19,
+                "is_active": True,
+            },
+        ),
+    )
+    repository.intent.watcher_generation_kind = "exact"
+    generation = SimpleNamespace(
+        generation_id=84,
+        intent_id=84,
+        library_id=19,
+        participants=(SimpleNamespace(logical_root_id="root-a"),),
+        generation_kind="exact",
+        barrier_ids=(),
+    )
+    reconciler = _Reconciler()
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=repository,
+        reconciler=reconciler,
+        watcher_recovery=SimpleNamespace(
+            claim_generation=lambda **_kwargs: generation
+        ),
+        clock=lambda: NOW,
+    )
+
+    result = handler(_claim(), _Context())
+
+    assert result == JobTransitionResult(
+        JobState.CANCELED,
+        "targeted_root_unhealthy",
+    )
+    assert reconciler.requests == []
 
 
 def test_stale_watcher_generation_cancels_before_private_scope_load():

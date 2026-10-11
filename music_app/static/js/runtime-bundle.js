@@ -3251,9 +3251,9 @@ function renderLibraryWarning(data = {}, options = {}) {
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
   const actionLabel = health.repair_required ? 'Repair library' : 'Full Rescan';
-  const operationalItemsHtml = problems
-    .map(() => '<span data-operational-item>Library recovery is required.</span>')
-    .join('');
+  const operationalItemsHtml = problems.length
+    ? `<ul>${problems.map(() => '<li data-operational-item>Library recovery is required.</li>').join('')}</ul>`
+    : '';
   const actionHtml = canRefresh
     ? ButtonComponent.renderButton({label:actionLabel,attributes:{'data-status-action':'full-rescan'}})
     : '';
@@ -3261,7 +3261,7 @@ function renderLibraryWarning(data = {}, options = {}) {
     ? `A watched library folder became unavailable. Reconnect it${canRefresh ? `, then run ${actionLabel}` : ''}.`
     : `Some library changes may have been missed.${canRefresh ? ` Run ${actionLabel} to reconcile them.` : ''}`;
   const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
-    actionsHtml: `${operationalItemsHtml}${actionHtml}`});
+    detailsHtml: operationalItemsHtml, actionsHtml: actionHtml});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
 }
 
@@ -3870,10 +3870,11 @@ function buildOnPageAlertHtml(config = {}) {
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
+  const detailsHtml = String(config.detailsHtml || '');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
-  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${detailsHtml}${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
 }
 
 if (typeof window !== 'undefined') {
@@ -15352,6 +15353,7 @@ function openScanPage() {
   }
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
+  scheduleStatusPoll(0);
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = '';
@@ -15676,6 +15678,7 @@ async function pollStatus() {
   try {
     if (
       !knownBusy
+      && !state.ui.scanPageReturnContext
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {
@@ -39181,6 +39184,8 @@ function handleGalleryBootstrapClick(event) {
     ) {
       return;
     }
+    if (window.AlbumHavenCapabilities
+      && !window.AlbumHavenCapabilities.allows('library.refresh')) return;
     triggerLibraryRefresh();
     return;
   }

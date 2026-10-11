@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import ast
+from contextlib import asynccontextmanager
+import errno
 import hashlib
 import http.client
 import io
 import json
+import logging
 import math
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -1470,10 +1473,15 @@ def test_isolated_jobs_worker_is_built_only_with_dedicated_worker_database(monke
     assert isolatedLibraryApp.build_isolated_jobs_worker("runtime-url") is None
 
 
-def test_isolated_jobs_worker_uses_one_second_polling_without_idle_backoff(monkeypatch):
+def test_isolated_jobs_worker_uses_deterministic_e2e_timing_without_changing_defaults(
+    monkeypatch,
+):
     import config
     import scripts.run_jobs_worker as run_jobs_worker
 
+    production_defaults = config.build_worker_config({
+        "ALBUM_HAVEN_WORKER_DATABASE_URL": "postgresql://worker",
+    })
     captured_environment = {}
     fake_worker = object()
     monkeypatch.setenv("ALBUM_HAVEN_WORKER_DATABASE_URL", "worker-url")
@@ -1499,6 +1507,10 @@ def test_isolated_jobs_worker_uses_one_second_polling_without_idle_backoff(monke
     assert managed._worker is fake_worker
     assert captured_environment["ALBUM_HAVEN_WORKER_POLL_SECONDS"] == "1"
     assert captured_environment["ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"] == "1"
+    assert captured_environment["ALBUM_HAVEN_WORKER_LEASE_SECONDS"] == "15"
+    assert captured_environment["ALBUM_HAVEN_WORKER_HEARTBEAT_SECONDS"] == "5"
+    assert production_defaults.lease_seconds == 300
+    assert production_defaults.heartbeat_seconds == 30
 
 
 @pytest.mark.parametrize("failure_point", ["prepare", "none", "worker_stop"])
@@ -1548,6 +1560,48 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             events.append("worker.stop")
             if failure_point == "worker_stop":
                 raise RuntimeError("worker shutdown unproven")
+
+    watcher_recovery_roots = isolatedLibraryApp.WatcherRecoveryRoots(
+        failure_root_id="watcher-recovery-failure-test",
+        failure_root_path=temp_root / "watcher-recovery-failure",
+        failure_root_staging_path=temp_root / "watcher-recovery-failure-staging",
+        healthy_root_id="watcher-recovery-healthy-test",
+        healthy_root_path=temp_root / "watcher-recovery-healthy",
+    )
+
+    class RecordingLibraryLookup:
+        def __enter__(self):
+            events.append("watcher-database.connect")
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query):
+            assert "from library.libraries" in query
+            events.append("watcher-library.lookup")
+            return SimpleNamespace(fetchone=lambda: {"id": 42})
+
+    def persist_watcher_recovery_roots(database_url, *, media_root):
+        assert database_url == "setup"
+        assert media_root == temp_root / "media"
+        events.append("watcher-roots.persist")
+        return watcher_recovery_roots
+
+    def provision_watcher_recovery_viewer(database_url, *, library_id):
+        assert database_url == "runtime"
+        assert library_id == 42
+        events.append("watcher-viewer.provision")
+        return "watcher-viewer", "watcher-password"
+
+    @asynccontextmanager
+    async def production_lifespan(_app):
+        yield
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(config={}),
+        router=SimpleNamespace(lifespan_context=production_lifespan),
+    )
 
     def prepare(_setup_url, _runtime_url):
         events.append("database.prepare")
@@ -1613,6 +1667,25 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
         "seed_fixture_lastfm_timezone",
         lambda: events.append("lastfm.timezone.seed"),
     )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "persist_watcher_recovery_roots",
+        persist_watcher_recovery_roots,
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "_connect",
+        lambda database_url: (
+            RecordingLibraryLookup()
+            if database_url == "setup"
+            else pytest.fail(f"unexpected watcher database URL: {database_url}")
+        ),
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "provision_watcher_recovery_viewer",
+        provision_watcher_recovery_viewer,
+    )
     monkeypatch.setattr(isolatedLibraryApp, "ProviderFixtureService", RecordingProvider)
     monkeypatch.setattr(isolatedLibraryApp, "_runtime_config", lambda: {})
     monkeypatch.setattr(
@@ -1623,7 +1696,7 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     monkeypatch.setattr(
         music_app,
         "create_asgi_app",
-        lambda: SimpleNamespace(state=SimpleNamespace(config={})),
+        lambda: app,
     )
     monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: events.append("server.run"))
     monkeypatch.setattr(
@@ -1661,6 +1734,10 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "provider-candidates.persist",
             "rating-track.materialize",
             "lastfm.timezone.seed",
+            "watcher-roots.persist",
+            "watcher-database.connect",
+            "watcher-library.lookup",
+            "watcher-viewer.provision",
             "provider.create",
             "provider.start",
             "worker.start",
@@ -1681,6 +1758,10 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "provider-candidates.persist",
             "rating-track.materialize",
             "lastfm.timezone.seed",
+            "watcher-roots.persist",
+            "watcher-database.connect",
+            "watcher-library.lookup",
+            "watcher-viewer.provision",
             "provider.create",
             "provider.start",
             "worker.start",
@@ -1689,6 +1770,25 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
             "provider.stop",
         ]
         assert temp_root.exists()
+
+    watcher_recovery_manifest_path = (
+        temp_root / "app-data" / "watcher-recovery-fixture.json"
+    )
+    if failure_point == "prepare":
+        assert not watcher_recovery_manifest_path.exists()
+    else:
+        assert json.loads(watcher_recovery_manifest_path.read_text(encoding="utf-8")) == {
+            "failure_root_id": watcher_recovery_roots.failure_root_id,
+            "failure_root_path": str(watcher_recovery_roots.failure_root_path),
+            "failure_root_staging_path": str(
+                watcher_recovery_roots.failure_root_staging_path
+            ),
+            "healthy_root_id": watcher_recovery_roots.healthy_root_id,
+            "healthy_root_path": str(watcher_recovery_roots.healthy_root_path),
+            "viewer_password": "watcher-password",
+            "viewer_username": "watcher-viewer",
+        }
+        assert app.router.lifespan_context is not production_lifespan
 
 
 @pytest.mark.parametrize("reuse_state", [False, True])
@@ -1717,6 +1817,26 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     )
     provider_storage_policy_path = staged_root / "provider-storage-policy-cover.jpg"
     provider_storage_policy_path.write_bytes(b"provider-storage-policy-cover")
+    watcher_recovery_manifest_path = (
+        temp_root / "app-data" / "watcher-recovery-fixture.json"
+    )
+    retained_watcher_manifest = {
+        "failure_root_id": "watcher-recovery-failure-retained",
+        "failure_root_path": str(temp_root / "watcher-recovery-failure-retained"),
+        "failure_root_staging_path": str(
+            temp_root / "watcher-recovery-failure-staging-retained"
+        ),
+        "healthy_root_id": "watcher-recovery-healthy-retained",
+        "healthy_root_path": str(temp_root / "watcher-recovery-healthy-retained"),
+        "viewer_username": "retained-watcher-viewer",
+        "viewer_password": "retained-watcher-password",
+    }
+    if reuse_state:
+        watcher_recovery_manifest_path.parent.mkdir(parents=True)
+        watcher_recovery_manifest_path.write_text(
+            json.dumps(retained_watcher_manifest),
+            encoding="utf-8",
+        )
     staged_cover_specs = [
         {
             "cover_id": "fixture-cover",
@@ -1776,6 +1896,48 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
 
         def stop(self):
             events.append("provider.stop")
+
+    watcher_recovery_roots = isolatedLibraryApp.WatcherRecoveryRoots(
+        failure_root_id="watcher-recovery-failure-new",
+        failure_root_path=temp_root / "watcher-recovery-failure-new",
+        failure_root_staging_path=temp_root / "watcher-recovery-failure-staging-new",
+        healthy_root_id="watcher-recovery-healthy-new",
+        healthy_root_path=temp_root / "watcher-recovery-healthy-new",
+    )
+
+    class RecordingLibraryLookup:
+        def __enter__(self):
+            events.append("watcher-database.connect")
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query):
+            assert "from library.libraries" in query
+            events.append("watcher-library.lookup")
+            return SimpleNamespace(fetchone=lambda: {"id": 84})
+
+    def persist_watcher_recovery_roots(database_url, *, media_root):
+        assert database_url == "setup"
+        assert media_root == temp_root / "media"
+        events.append("watcher-roots.persist")
+        return watcher_recovery_roots
+
+    def provision_watcher_recovery_viewer(database_url, *, library_id):
+        assert database_url == "runtime"
+        assert library_id == 84
+        events.append("watcher-viewer.provision")
+        return "new-watcher-viewer", "new-watcher-password"
+
+    @asynccontextmanager
+    async def production_lifespan(_app):
+        yield
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(config={}),
+        router=SimpleNamespace(lifespan_context=production_lifespan),
+    )
 
     monkeypatch.setattr(sys, "argv", ["isolatedLibraryApp.py", "--provider-port", "4321"])
     monkeypatch.setenv("ALBUM_HAVEN_E2E_TEMP_ROOT", str(temp_root))
@@ -1856,6 +2018,25 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         "seed_fixture_lastfm_timezone",
         lambda: events.append("lastfm.timezone.seed"),
     )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "persist_watcher_recovery_roots",
+        persist_watcher_recovery_roots,
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "_connect",
+        lambda database_url: (
+            RecordingLibraryLookup()
+            if database_url == "setup"
+            else pytest.fail(f"unexpected watcher database URL: {database_url}")
+        ),
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "provision_watcher_recovery_viewer",
+        provision_watcher_recovery_viewer,
+    )
     monkeypatch.setattr(isolatedLibraryApp, "ProviderFixtureService", RecordingProvider)
     monkeypatch.setattr(isolatedLibraryApp, "_runtime_config", lambda: {})
     monkeypatch.setattr(
@@ -1866,7 +2047,7 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     monkeypatch.setattr(
         music_app,
         "create_asgi_app",
-        lambda: SimpleNamespace(state=SimpleNamespace(config={})),
+        lambda: app,
     )
     monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: events.append("server.run"))
     monkeypatch.setattr(
@@ -1889,6 +2070,7 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     )
 
     isolatedLibraryApp.main()
+    assert app.router.lifespan_context is not production_lifespan
 
     if reuse_state:
         restored_user_cover_path = Path(
@@ -1920,6 +2102,9 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "provider.stop",
             "lock.release",
         ]
+        assert json.loads(watcher_recovery_manifest_path.read_text(encoding="utf-8")) == (
+            retained_watcher_manifest
+        )
     else:
         assert events == [
             "covers.stage",
@@ -1931,6 +2116,10 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "provider-candidates.persist",
             "rating-track.materialize",
             "lastfm.timezone.seed",
+            "watcher-roots.persist",
+            "watcher-database.connect",
+            "watcher-library.lookup",
+            "watcher-viewer.provision",
             "provider.create",
             "provider.start",
             "worker.start",
@@ -1939,6 +2128,17 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
             "provider.stop",
             "lock.release",
         ]
+        assert json.loads(watcher_recovery_manifest_path.read_text(encoding="utf-8")) == {
+            "failure_root_id": watcher_recovery_roots.failure_root_id,
+            "failure_root_path": str(watcher_recovery_roots.failure_root_path),
+            "failure_root_staging_path": str(
+                watcher_recovery_roots.failure_root_staging_path
+            ),
+            "healthy_root_id": watcher_recovery_roots.healthy_root_id,
+            "healthy_root_path": str(watcher_recovery_roots.healthy_root_path),
+            "viewer_password": "new-watcher-password",
+            "viewer_username": "new-watcher-viewer",
+        }
 
 
 def test_real_cover_pool_reuses_staged_metadata_without_copying_sources(
@@ -5456,3 +5656,419 @@ def test_provider_port_resolves_from_base_url_or_port_environment():
         None,
         {"PLAYWRIGHT_PROVIDER_PORT": "4321"},
     ) == 4321
+
+
+def test_watcher_recovery_root_result_is_frozen_and_names_both_owned_roots(tmp_path):
+    result_type = isolatedLibraryApp.WatcherRecoveryRoots
+    fields = tuple(result_type.__dataclass_fields__)
+
+    assert fields == (
+        "failure_root_id",
+        "failure_root_path",
+        "failure_root_staging_path",
+        "healthy_root_id",
+        "healthy_root_path",
+    )
+    assert result_type.__dataclass_params__.frozen is True
+    assert "__slots__" in result_type.__dict__
+
+    result = result_type(
+        failure_root_id="watcher-recovery-failure-contract",
+        failure_root_path=tmp_path / "cases" / "watcher-recovery-contract" / "failure-root",
+        failure_root_staging_path=tmp_path / "cases" / "watcher-recovery-contract" / "failure-root-staging",
+        healthy_root_id="watcher-recovery-healthy-contract",
+        healthy_root_path=tmp_path / "cases" / "watcher-recovery-contract" / "healthy-root",
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        result.failure_root_id = "changed"
+
+    with pytest.raises(ValueError, match="distinct"):
+        result_type(
+            failure_root_id="collapsed-root",
+            failure_root_path=tmp_path / "failure-root",
+            failure_root_staging_path=tmp_path / "failure-root-staging",
+            healthy_root_id="collapsed-root",
+            healthy_root_path=tmp_path / "healthy-root",
+        )
+    with pytest.raises(ValueError, match="(?:distinct|overlap)"):
+        result_type(
+            failure_root_id="failure-root",
+            failure_root_path=tmp_path / "same-root",
+            failure_root_staging_path=tmp_path / "failure-root-staging",
+            healthy_root_id="healthy-root",
+            healthy_root_path=tmp_path / "same-root",
+        )
+    with pytest.raises(ValueError, match="(?:distinct|overlap)"):
+        result_type(
+            failure_root_id="failure-root",
+            failure_root_path=tmp_path / "failure-root",
+            failure_root_staging_path=tmp_path / "failure-root" / "staging",
+            healthy_root_id="healthy-root",
+            healthy_root_path=tmp_path / "healthy-root",
+        )
+
+
+def test_watcher_recovery_roots_use_normal_settings_and_inventory_persistence(
+    tmp_path,
+    monkeypatch,
+):
+    from music_app.services import library_roots, scan_cache_persistence
+
+    media_root = tmp_path / "media"
+    media_root.mkdir()
+    (media_root / "source.mp3").write_bytes(b"playable fixture source")
+    settings_calls = []
+    snapshot_calls = []
+
+    monkeypatch.setattr(
+        library_roots,
+        "save_library_root_settings",
+        lambda config, settings: settings_calls.append((config, settings)),
+    )
+
+    class RecordingScanCacheAdapter:
+        def __init__(self, config, *args, **kwargs):
+            self.config = config
+
+        def save_snapshot(self, *args, **kwargs):
+            snapshot_calls.append((self.config, args, kwargs))
+
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "PostgresScanCacheAdapter",
+        RecordingScanCacheAdapter,
+    )
+
+    roots = isolatedLibraryApp.persist_watcher_recovery_roots(
+        "postgresql://album_haven_migrator@localhost/album_haven_fake_e2e",
+        media_root=media_root,
+    )
+
+    assert roots.failure_root_id != roots.healthy_root_id
+    owned_paths = (
+        roots.failure_root_path.resolve(strict=False),
+        roots.failure_root_staging_path.resolve(strict=False),
+        roots.healthy_root_path.resolve(strict=False),
+    )
+    recovery_boundary = (media_root.parent / "cases").resolve(strict=False)
+    main_media_root = media_root.resolve(strict=False)
+    assert all(path.is_relative_to(recovery_boundary) for path in owned_paths)
+    assert all(
+        path.relative_to(recovery_boundary).parts[0].startswith("watcher-recovery-")
+        for path in owned_paths
+    )
+    assert all(not path.is_relative_to(main_media_root) for path in owned_paths)
+    assert len(set(owned_paths)) == len(owned_paths)
+    assert all(
+        not candidate.is_relative_to(other)
+        for index, candidate in enumerate(owned_paths)
+        for other_index, other in enumerate(owned_paths)
+        if index != other_index
+    )
+    assert len(settings_calls) == 1
+    settings = settings_calls[0][1]
+    recovery_ids = {roots.failure_root_id, roots.healthy_root_id}
+    active_roots = [
+        root for category in (
+            "main_library_roots",
+            "hoarding_library_roots",
+            "new_arrivals_roots",
+        )
+        for root in settings[category]
+        if root["id"] in recovery_ids
+    ]
+    assert {root["id"]: Path(root["path"]) for root in active_roots} == {
+        roots.failure_root_id: roots.failure_root_path,
+        roots.healthy_root_id: roots.healthy_root_path,
+    }
+    assert len(snapshot_calls) == 1
+    snapshot_entries = {
+        path: entry for path, entry in snapshot_calls[0][1][1].items()
+        if entry["library_root_id"] in recovery_ids
+    }
+    assert snapshot_entries
+    assert {entry["library_root_id"] for entry in snapshot_entries.values()} == {
+        roots.failure_root_id,
+        roots.healthy_root_id,
+    }
+    assert all(
+        Path(entry["path"]).is_relative_to((
+            roots.failure_root_path
+            if entry["library_root_id"] == roots.failure_root_id
+            else roots.healthy_root_path
+        ))
+        for entry in snapshot_entries.values()
+    )
+
+
+def test_watcher_recovery_fixture_is_private_and_prepared_before_asgi_start():
+    source = LAUNCHER_PATH.read_text(encoding="utf-8")
+    main_node = next(
+        node for node in ast.parse(source).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main"
+    )
+    main_source = ast.get_source_segment(source, main_node)
+
+    assert main_source is not None
+    for required in (
+        "persist_watcher_recovery_roots(",
+        "provision_watcher_recovery_viewer(",
+        "watcher-recovery-fixture.json",
+        "create_asgi_app()",
+    ):
+        assert required in main_source
+    preparation = main_source.index("persist_watcher_recovery_roots(")
+    viewer = main_source.index("provision_watcher_recovery_viewer(")
+    manifest = main_source.index("watcher-recovery-fixture.json")
+    app_creation = main_source.index("create_asgi_app()")
+    assert preparation < app_creation
+    assert viewer < app_creation
+    assert manifest < app_creation
+    assert "app.state.watcher_recovery" not in main_source
+    assert "config[\"WATCHER_RECOVERY" not in main_source
+
+
+_ISOLATED_LIFESPAN_FAILURE_PREFIX = "ISOLATED_APP_LIFESPAN_FAILURE "
+_ISOLATED_LIFESPAN_FAILURE_KEYS = {
+    "schemaVersion",
+    "event",
+    "phase",
+    "exceptions",
+    "chainTruncated",
+}
+_ISOLATED_LIFESPAN_EXCEPTION_KEYS = {
+    "relation",
+    "category",
+    "type",
+    "errno",
+    "winerror",
+    "sqlstate",
+}
+
+
+def _read_isolated_lifespan_failure(captured_stderr: str) -> dict[str, object]:
+    lines = [
+        line
+        for line in captured_stderr.splitlines()
+        if line.startswith(_ISOLATED_LIFESPAN_FAILURE_PREFIX)
+    ]
+    assert len(lines) == 1
+    payload = json.loads(lines[0][len(_ISOLATED_LIFESPAN_FAILURE_PREFIX) :])
+    assert set(payload) == _ISOLATED_LIFESPAN_FAILURE_KEYS
+    assert payload["schemaVersion"] == 1
+    assert payload["event"] == "isolated_app_lifespan_failure"
+    return payload
+
+
+def test_safe_lifespan_diagnostics_reports_startup_chain_and_rethrows_identically(capsys):
+    cause = ValueError("private startup value C:\\owner\\music")
+    failure = RuntimeError("private startup failure C:\\owner\\app-data")
+
+    @asynccontextmanager
+    async def failing_lifespan(_app):
+        raise failure from cause
+        yield
+
+    app = SimpleNamespace(router=SimpleNamespace(lifespan_context=failing_lifespan))
+    isolatedLibraryApp._install_safe_lifespan_diagnostics(app)
+
+    async def enter_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(enter_lifespan())
+
+    assert caught.value is failure
+    payload = _read_isolated_lifespan_failure(capsys.readouterr().err)
+    assert payload["phase"] == "startup"
+    assert payload["chainTruncated"] is False
+    assert payload["exceptions"] == [
+        {
+            "relation": "raised",
+            "category": "runtime",
+            "type": "RuntimeError",
+            "errno": None,
+            "winerror": None,
+            "sqlstate": None,
+        },
+        {
+            "relation": "cause",
+            "category": "value",
+            "type": "ValueError",
+            "errno": None,
+            "winerror": None,
+            "sqlstate": None,
+        },
+    ]
+
+
+def test_safe_lifespan_diagnostics_reports_shutdown_and_rethrows_identically(capsys):
+    failure = TimeoutError("private shutdown timeout C:\\owner\\music")
+
+    @asynccontextmanager
+    async def failing_lifespan(_app):
+        yield
+        raise failure
+
+    app = SimpleNamespace(router=SimpleNamespace(lifespan_context=failing_lifespan))
+    isolatedLibraryApp._install_safe_lifespan_diagnostics(app)
+
+    async def exit_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    with pytest.raises(TimeoutError) as caught:
+        asyncio.run(exit_lifespan())
+
+    assert caught.value is failure
+    payload = _read_isolated_lifespan_failure(capsys.readouterr().err)
+    assert payload["phase"] == "shutdown"
+    assert payload["chainTruncated"] is False
+    assert payload["exceptions"] == [
+        {
+            "relation": "raised",
+            "category": "timeout",
+            "type": "TimeoutError",
+            "errno": None,
+            "winerror": None,
+            "sqlstate": None,
+        }
+    ]
+
+
+def test_safe_lifespan_diagnostic_graph_is_bounded_cycle_safe_and_redacted(capsys):
+    secret_path = "C:\\owner\\private-library\\secret.mp3"
+    root = RuntimeError(f"root secret {secret_path}")
+    permission = PermissionError(errno.EACCES, f"permission secret {secret_path}", secret_path)
+    postgres = type("Fixture Postgres Error", (Exception,), {})(f"sql secret {secret_path}")
+    postgres.sqlstate = "23505"
+    postgres.errno = 2**80
+    postgres.winerror = -(2**80)
+    postgres.private_path = secret_path
+    value = ValueError(f"value secret {secret_path}")
+    value.sqlstate = "secret"
+    extra = OSError(errno.EIO, f"extra secret {secret_path}", secret_path)
+    root.__cause__ = permission
+    permission.__context__ = postgres
+    postgres.__cause__ = value
+    value.__context__ = extra
+    extra.__cause__ = root
+
+    @asynccontextmanager
+    async def failing_lifespan(_app):
+        raise root
+        yield
+
+    app = SimpleNamespace(router=SimpleNamespace(lifespan_context=failing_lifespan))
+    isolatedLibraryApp._install_safe_lifespan_diagnostics(app)
+
+    async def enter_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(enter_lifespan())
+
+    assert caught.value is root
+    captured = capsys.readouterr().err
+    payload = _read_isolated_lifespan_failure(captured)
+    assert payload["chainTruncated"] is True
+    assert len(payload["exceptions"]) == 4
+    assert [entry["relation"] for entry in payload["exceptions"]] == [
+        "raised",
+        "cause",
+        "context",
+        "cause",
+    ]
+    assert [entry["category"] for entry in payload["exceptions"]] == [
+        "runtime",
+        "permission",
+        "postgres",
+        "value",
+    ]
+    assert all(set(entry) == _ISOLATED_LIFESPAN_EXCEPTION_KEYS for entry in payload["exceptions"])
+    assert payload["exceptions"][1]["errno"] == errno.EACCES
+    assert payload["exceptions"][2]["type"] == "UnknownError"
+    assert payload["exceptions"][2]["errno"] is None
+    assert payload["exceptions"][2]["winerror"] is None
+    assert payload["exceptions"][2]["sqlstate"] == "23505"
+    assert payload["exceptions"][3]["sqlstate"] is None
+    assert secret_path not in captured
+    assert "secret" not in captured
+
+
+def test_safe_lifespan_diagnostic_graph_stops_at_exception_cycle(capsys):
+    root = RuntimeError("private root")
+    cause = ValueError("private cause")
+    root.__cause__ = cause
+    cause.__context__ = root
+
+    @asynccontextmanager
+    async def failing_lifespan(_app):
+        raise root
+        yield
+
+    app = SimpleNamespace(router=SimpleNamespace(lifespan_context=failing_lifespan))
+    isolatedLibraryApp._install_safe_lifespan_diagnostics(app)
+
+    async def enter_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(enter_lifespan())
+
+    assert caught.value is root
+    payload = _read_isolated_lifespan_failure(capsys.readouterr().err)
+    assert payload["chainTruncated"] is True
+    assert [entry["relation"] for entry in payload["exceptions"]] == ["raised", "cause"]
+
+
+def test_safe_lifespan_diagnostic_survives_durable_worker_log_record_factory(capsys):
+    from music_app.jobs.safe_logging import install_durable_worker_logging_boundary
+
+    failure = FileNotFoundError(errno.ENOENT, "private file", "C:\\owner\\secret.mp3")
+
+    @asynccontextmanager
+    async def failing_lifespan(_app):
+        raise failure
+        yield
+
+    app = SimpleNamespace(router=SimpleNamespace(lifespan_context=failing_lifespan))
+    previous_factory = logging.getLogRecordFactory()
+    try:
+        install_durable_worker_logging_boundary()
+        isolatedLibraryApp._install_safe_lifespan_diagnostics(app)
+
+        async def enter_lifespan():
+            async with app.router.lifespan_context(app):
+                pass
+
+        with pytest.raises(FileNotFoundError) as caught:
+            asyncio.run(enter_lifespan())
+    finally:
+        logging.setLogRecordFactory(previous_factory)
+
+    assert caught.value is failure
+    payload = _read_isolated_lifespan_failure(capsys.readouterr().err)
+    assert payload["phase"] == "startup"
+    assert payload["exceptions"][0]["category"] == "file_not_found"
+
+
+def test_main_installs_safe_lifespan_diagnostics_before_worker_and_server_start():
+    source = LAUNCHER_PATH.read_text(encoding="utf-8")
+    main_node = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main"
+    )
+    main_source = ast.get_source_segment(source, main_node)
+
+    assert main_source is not None
+    app_creation = main_source.index("app = create_asgi_app()")
+    diagnostic_install = main_source.index("_install_safe_lifespan_diagnostics(app)")
+    worker_construction = main_source.index("build_isolated_jobs_worker(")
+    worker_start = main_source.index("jobs_worker.start()")
+    server_start = main_source.index("uvicorn.run(")
+    assert app_creation < diagnostic_install < worker_construction < worker_start < server_start

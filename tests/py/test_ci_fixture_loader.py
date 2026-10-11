@@ -1691,6 +1691,90 @@ def test_loader_replace_existing_resets_normal_product_tables_inside_load_transa
     ]
 
 
+def test_loader_replace_existing_reseeds_enabled_watcher_runtime_state_before_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    loader = _load_fixture_loader_module()
+    fixture_root = tmp_path / "fixture"
+    fixture_root.mkdir()
+    (fixture_root / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
+    (fixture_root / "media").mkdir()
+    _write_seed(
+        fixture_root / "database" / "functional-core.ndjson.zst",
+        [{"table": "local_artists", "record": {"artistKey": "artist-1", "name": "Artist"}}],
+    )
+    timeline: list[tuple[str, object]] = []
+
+    class OrderedTransaction(_RecordingTransaction):
+        def __enter__(self) -> "OrderedTransaction":
+            timeline.append(("transaction", "begin"))
+            super().__enter__()
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            super().__exit__(exc_type, exc, traceback)
+            timeline.append(("transaction", "rollback" if exc_type else "commit"))
+
+    class OrderedConnection(_RecordingConnection):
+        def execute(self, statement: str, parameters: object = None) -> _RecordingCursor:
+            timeline.append(("execute", (statement, parameters)))
+            return super().execute(statement, parameters)
+
+        def transaction(self) -> OrderedTransaction:
+            return OrderedTransaction(self)
+
+    connection = OrderedConnection()
+    monkeypatch.setattr(loader, "validate_connected_identity", lambda *_args: None)
+    monkeypatch.setattr(
+        loader,
+        "reset_application_tables",
+        lambda _connection: timeline.append(("operation", "reset")),
+    )
+    monkeypatch.setattr(loader, "product_projection_statements", lambda _profile: ("stage", "context"))
+    monkeypatch.setattr(loader, "copy_seed_to_staging", lambda *_args: {"local_artists": 1})
+    monkeypatch.setattr(loader, "validate_staged_references", lambda *_args: None)
+    monkeypatch.setattr(loader, "validate_staged_profile_counts", lambda *_args: None)
+    monkeypatch.setattr(loader, "validate_staged_named_relationships", lambda *_args: None)
+    monkeypatch.setattr(loader, "validate_staged_problematic_files_scenario", lambda *_args: None)
+    monkeypatch.setattr(loader, "_database_source_counts", lambda *_args: ({}, {}))
+    monkeypatch.setattr(loader, "_validate_staged_named_identities", lambda *_args: None)
+    monkeypatch.setattr(loader, "_validate_projected_counts", lambda *_args: None)
+    monkeypatch.setattr(loader, "_validate_projected_named_identities", lambda *_args: None)
+    monkeypatch.setattr(loader, "validate_projected_ignored_repairs", lambda *_args: None)
+    monkeypatch.setattr(loader, "validate_projected_scan_discovery_absence", lambda *_args: None)
+    monkeypatch.setattr(loader, "validate_projected_problematic_files_scenario", lambda *_args: None)
+
+    loader.load_fixture_profile(
+        fixture_root=fixture_root,
+        profile="functional-core",
+        database_url="postgresql://album_haven_migrator_123@localhost/album_haven_ci_123",
+        replace_existing=True,
+        connect=lambda _url: connection,
+    )
+
+    watcher_writes = [
+        (index, statement, parameters)
+        for index, (event, payload) in enumerate(timeline)
+        if event == "execute"
+        for statement, parameters in [payload]
+        if "library.watcher_runtime_state" in str(statement).casefold()
+    ]
+    assert len(watcher_writes) == 1
+    watcher_index, watcher_statement, watcher_parameters = watcher_writes[0]
+    normalized = " ".join(str(watcher_statement).casefold().split())
+    assert "insert into library.watcher_runtime_state" in normalized
+    assert "singleton" in normalized
+    assert "acceptance_enabled" in normalized
+    assert "disabled_at" in normalized
+    assert (
+        "values (true, true, null)" in normalized
+        or watcher_parameters == (True, True, None)
+    )
+    assert timeline.index(("operation", "reset")) < watcher_index
+    assert watcher_index < timeline.index(("transaction", "commit"))
+
+
 def test_loader_reset_targets_only_application_tables_and_preserves_migration_authority() -> None:
     loader = _load_fixture_loader_module()
 
@@ -1913,6 +1997,41 @@ def test_bootstrap_cleans_only_named_invalid_concurrent_indexes_before_rethrow()
     rethrow = migration_loop.index("throw", cleanup_call)
     ledger = migration_loop.index("$ledgersql", rethrow)
     assert invoke < catch < cleanup_call < rethrow < ledger
+
+
+def test_bootstrap_resolves_extension_owned_0083_opclass_before_execution() -> None:
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+    discovery_helper = source[
+        source.index("function get-pgtrgmginoperatorclass") : source.index(
+            "function get-schemaaware0083sql"
+        )
+    ]
+    schema_aware_helper = source[
+        source.index("function get-schemaaware0083sql") : source.index(
+            "function remove-invalidmigrationindexes"
+        )
+    ]
+    migration_loop = source[
+        source.index("foreach ($migration in $contract.migrations)") : source.index(
+            "# functional jobs use direct privileges"
+        )
+    ]
+
+    assert "pg_catalog.pg_extension" in discovery_helper
+    assert "pg_catalog.pg_depend" in discovery_helper
+    assert "extname = 'pg_trgm'" in discovery_helper
+    assert "deptype = 'e'" in discovery_helper
+    assert "operator_class.opcname = 'gin_trgm_ops'" in discovery_helper
+    assert "format('%i.%i'" in discovery_helper
+    assert "get-pgtrgmginoperatorclass" in schema_aware_helper
+    assert "library.gin_trgm_ops" in schema_aware_helper
+    assert "$migrationsql.replace($releasedoperatorclass, $operatorclass)" in schema_aware_helper
+    assert migration_loop.index("get-schemaaware0083sql") < migration_loop.index(
+        "get-migrationindexstate"
+    )
+    assert migration_loop.index("get-migrationindexstate") < migration_loop.index(
+        "$ledgersql"
+    )
 
 
 def test_bootstrap_cleans_invalid_concurrent_index_before_single_retry() -> None:

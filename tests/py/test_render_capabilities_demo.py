@@ -110,10 +110,12 @@ class MigrationConnection:
         index_state="ready",
         fail_first_concurrent=False,
         preserve_mismatch_after_create=False,
+        pg_trgm_schema="library",
     ):
         self.index_state = index_state
         self.fail_first_concurrent = fail_first_concurrent
         self.preserve_mismatch_after_create = preserve_mismatch_after_create
+        self.pg_trgm_schema = pg_trgm_schema
         self.transaction_depth = 0
         self.events = []
         self.ledger = []
@@ -139,8 +141,27 @@ class MigrationConnection:
             assert self.transaction_depth == 1
             self.events.append("ordinary")
             return Result([])
+        if (
+            "pg_catalog.pg_extension" in query
+            and "pg_catalog.pg_depend" in query
+            and "gin_trgm_ops" in query
+        ):
+            assert "deptype = 'e'" in query
+            self.events.append("discover-opclass")
+            quoted_schema = (
+                self.pg_trgm_schema
+                if self.pg_trgm_schema.isidentifier()
+                else f'"{self.pg_trgm_schema}"'
+            )
+            return Result([(f"{quoted_schema}.gin_trgm_ops",)])
         if "create index concurrently" in query:
             assert self.transaction_depth == 0
+            quoted_schema = (
+                self.pg_trgm_schema
+                if self.pg_trgm_schema.isidentifier()
+                else f'"{self.pg_trgm_schema}"'
+            )
+            assert f"{quoted_schema}.gin_trgm_ops".casefold() in query
             self.events.append("concurrent")
             if self.fail_first_concurrent:
                 self.fail_first_concurrent = False
@@ -222,6 +243,26 @@ def test_capabilities_demo_runs_only_0083_outside_transaction_and_ledgers_after_
     )
 
 
+def test_capabilities_demo_uses_extension_owned_quoted_0083_opclass_before_ledger(
+    tmp_path,
+    monkeypatch,
+):
+    _write_migration_runner_fixture(tmp_path)
+    connection = MigrationConnection(
+        index_state="missing",
+        pg_trgm_schema="extensions-safe",
+    )
+    monkeypatch.setattr(demo, "ROOT", tmp_path)
+
+    demo.migrate(connection)
+
+    discovery = connection.events.index("discover-opclass")
+    concurrent = connection.events.index("concurrent")
+    validation = connection.events.index("validate:ready", concurrent)
+    ledger = connection.events.index("ledger:0083_add_album_raw_artist_search_index.sql")
+    assert discovery < concurrent < validation < ledger
+
+
 def test_capabilities_demo_refuses_to_ledger_invalid_0083_index(tmp_path, monkeypatch):
     _write_migration_runner_fixture(tmp_path)
     connection = MigrationConnection(
@@ -280,9 +321,10 @@ def test_capabilities_demo_rebuilds_same_name_wrong_0083_index_before_ledger(
 
     assert wrong_dimension
     prevalidation = connection.events.index("validate:mismatched")
-    assert connection.events[prevalidation : prevalidation + 4] == [
+    assert connection.events[prevalidation : prevalidation + 5] == [
         "validate:mismatched",
         "drop-mismatched",
+        "discover-opclass",
         "concurrent",
         "validate:ready",
     ]

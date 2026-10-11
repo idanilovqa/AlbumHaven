@@ -225,5 +225,8 @@ export function createManagedAppLifecycle(options = {}) {
     cleanupWatcherFixture() {
       return scheduleRestart('watcher-cleanup');
     },
+    cleanupWatcherRecoveryFixture() {
+      return scheduleRestart('watcher-recovery-cleanup');
+    },
   };
 }

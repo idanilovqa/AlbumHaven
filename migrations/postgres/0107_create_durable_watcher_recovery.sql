@@ -800,6 +800,38 @@ as $$
   );
 $$;
 
+create or replace function library.full_scan_job_claim_ready(
+  p_job_id bigint
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog
+as $$
+  select not exists (
+    select 1
+    from ops.jobs as job
+    join library.full_scan_intents as intent
+      on intent.job_id = job.id
+     and intent.state in ('accepted', 'retry_wait')
+    join library.watcher_repairs as repair
+      on repair.id = intent.watcher_repair_id
+     and repair.library_id = intent.library_id
+     and repair.state = 'scanning'
+    join library.watcher_lanes as lane
+      on lane.library_id = intent.library_id
+    where job.id = p_job_id
+      and job.kind = 'full_scan'
+      and job.subject_kind = 'full_scan_intent'
+      and job.subject_ref = intent.id::text
+      and job.library_id = intent.library_id
+      and job.state in ('queued', 'retry_wait')
+      and (lane.running_generation_id is not null
+           or lane.running_job_id is not null)
+  );
+$$;
+
 create or replace function library.load_claimed_full_scan_intent_v3(
   p_job_id bigint,
   p_worker_id varchar,
@@ -816,23 +848,170 @@ returns table (
   committed_inventory_revision bigint,
   watcher_repair_id bigint
 )
-language sql
+language plpgsql
 security definer
 set search_path = pg_catalog
 as $$
-  select claimed.intent_id,
-         claimed.library_id,
-         claimed.initiating_account_id,
-         claimed.mode,
-         claimed.force,
-         claimed.logical_root_ids,
-         claimed.inventory_mutation_revision,
-         claimed.committed_inventory_revision,
+declare
+  v_intent_id bigint;
+  v_library_id bigint;
+  v_attempt integer;
+  v_repair_id bigint;
+  v_repair_scanning boolean;
+  v_captured_revision bigint;
+begin
+  select job.library_id
+  into v_library_id
+  from ops.jobs as job
+  where job.id = p_job_id
+    and job.kind = 'full_scan';
+  if v_library_id is null then
+    return;
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      'album-haven:watcher:' || v_library_id::text, 0
+    )
+  );
+
+  select intent.id, intent.library_id, job.attempt_count,
          intent.watcher_repair_id
-  from library.load_claimed_full_scan_intent_v2(
-    p_job_id, p_worker_id, p_lease_token
-  ) as claimed
-  join library.full_scan_intents as intent on intent.id = claimed.intent_id;
+  into v_intent_id, v_library_id, v_attempt, v_repair_id
+  from ops.jobs as job
+  join library.full_scan_intents as intent on intent.job_id = job.id
+  where job.id = p_job_id
+    and job.kind = 'full_scan'
+    and job.subject_kind = 'full_scan_intent'
+    and job.subject_ref = intent.id::text
+    and job.library_id = intent.library_id
+    and job.state = 'running'
+    and intent.state = 'running'
+    and job.lease_owner = p_worker_id
+    and job.lease_token = p_lease_token
+    and job.lease_expires_at > pg_catalog.clock_timestamp()
+  for update of job, intent;
+  if v_intent_id is null then
+    return;
+  end if;
+
+  if v_repair_id is not null then
+    perform 1
+    from library.watcher_repairs as repair
+    where repair.library_id = v_library_id
+      and repair.state in ('scanning', 'catch_up')
+    order by repair.id
+    for update;
+
+    select repair.state = 'scanning'
+    into v_repair_scanning
+    from library.watcher_repairs as repair
+    where repair.id = v_repair_id
+      and repair.library_id = v_library_id;
+
+    if coalesce(v_repair_scanning, false) then
+      perform 1
+      from library.watcher_lanes as lane
+      join library.full_scan_intent_roots as intent_root
+        on intent_root.intent_id = v_intent_id
+       and intent_root.root_id = lane.root_id
+      where lane.library_id = v_library_id
+      order by lane.library_id, lane.root_id
+      for update of lane;
+
+      perform 1
+      from ops.jobs as job
+      join library.full_scan_intents as intent on intent.job_id = job.id
+      join library.watcher_repairs as repair
+        on repair.id = intent.watcher_repair_id
+       and repair.library_id = intent.library_id
+       and repair.state = 'scanning'
+      where job.id = p_job_id
+        and intent.id = v_intent_id
+        and job.kind = 'full_scan'
+        and job.subject_kind = 'full_scan_intent'
+        and job.subject_ref = intent.id::text
+        and job.library_id = intent.library_id
+        and job.state = 'running'
+        and intent.state = 'running'
+        and job.attempt_count = v_attempt
+        and job.lease_owner = p_worker_id
+        and job.lease_token = p_lease_token
+        and job.lease_expires_at > pg_catalog.clock_timestamp();
+      if not found then
+        return;
+      end if;
+
+      if exists (
+        select 1
+        from library.full_scan_intent_roots as intent_root
+        join library.watcher_lanes as lane
+          on lane.library_id = v_library_id
+         and lane.root_id = intent_root.root_id
+        where intent_root.intent_id = v_intent_id
+          and (lane.running_generation_id is not null
+               or lane.running_job_id is not null)
+      ) then
+        return;
+      end if;
+    end if;
+  end if;
+
+  select coalesce(nullif(
+           library_record.metadata ->> 'inventory_mutation_revision', ''
+         )::bigint, 0)
+  into v_captured_revision
+  from library.libraries as library_record
+  where library_record.id = v_library_id;
+
+  update library.full_scan_intents as intent
+  set execution_attempt = v_attempt,
+      captured_inventory_revision = v_captured_revision,
+      progress_current = case
+        when intent.execution_attempt is distinct from v_attempt
+        then 0 else intent.progress_current end,
+      progress_total = case
+        when intent.execution_attempt is distinct from v_attempt
+        then 0 else intent.progress_total end,
+      progress_phase = case
+        when intent.execution_attempt is distinct from v_attempt
+        then 'preparing' else intent.progress_phase end,
+      current_path = case
+        when intent.execution_attempt is distinct from v_attempt
+        then null else intent.current_path end,
+      updated_at = greatest(intent.updated_at, pg_catalog.now())
+  where intent.id = v_intent_id
+    and intent.committed_inventory_revision is null
+    and (
+      intent.execution_attempt is distinct from v_attempt
+      or intent.captured_inventory_revision is null
+    );
+
+  return query
+  select intent.id,
+         intent.library_id,
+         intent.initiating_account_id,
+         intent.mode,
+         intent.force,
+         pg_catalog.array_agg(
+           root_record.metadata ->> 'root_id' order by intent_root.ordinal
+         ),
+         intent.captured_inventory_revision,
+         intent.committed_inventory_revision,
+         intent.watcher_repair_id
+  from library.full_scan_intents as intent
+  join library.full_scan_intent_roots as intent_root
+    on intent_root.intent_id = intent.id
+  join library.library_roots as root_record
+    on root_record.id = intent_root.root_id
+  where intent.id = v_intent_id
+    and (
+      intent.execution_attempt = v_attempt
+      or intent.committed_inventory_revision is not null
+    )
+    and intent.captured_inventory_revision is not null
+  group by intent.id;
+end;
 $$;
 
 create or replace function library.load_local_watcher_incidents()
@@ -2091,6 +2270,21 @@ begin
       )
       and not exists (
         select 1
+        from library.full_scan_intents as full_scan
+        join library.watcher_repairs as repair
+          on repair.id = full_scan.watcher_repair_id
+         and repair.state = 'scanning'
+        join ops.jobs as full_scan_job
+          on full_scan_job.id = full_scan.job_id
+         and full_scan_job.kind = 'full_scan'
+         and full_scan_job.state in ('queued', 'running', 'retry_wait')
+           and (full_scan_job.state <> 'running'
+             or full_scan_job.lease_expires_at > p_now)
+        where full_scan.library_id = candidate.library_id
+          and full_scan.state in ('accepted', 'running', 'retry_wait')
+      )
+      and not exists (
+        select 1
         from library.watcher_barrier_participants as candidate_barrier
         join library.watcher_barrier_participants as peer
           on peer.barrier_id = candidate_barrier.barrier_id
@@ -2181,6 +2375,21 @@ begin
           and incident.resolved_at is null
          where participant.generation_id = intent.id
        ))
+       or exists (
+         select 1
+        from library.full_scan_intents as full_scan
+         join library.watcher_repairs as repair
+           on repair.id = full_scan.watcher_repair_id
+          and repair.state = 'scanning'
+         join ops.jobs as full_scan_job
+           on full_scan_job.id = full_scan.job_id
+          and full_scan_job.kind = 'full_scan'
+          and full_scan_job.state in ('queued', 'running', 'retry_wait')
+          and (full_scan_job.state <> 'running'
+             or full_scan_job.lease_expires_at > p_now)
+         where full_scan.library_id = intent.library_id
+           and full_scan.state in ('accepted', 'running', 'retry_wait')
+       )
        or exists (
          select 1
          from library.watcher_barrier_participants as candidate_barrier
@@ -3089,7 +3298,12 @@ begin
     ) on conflict (library_id, root_id, incident_family)
       where resolved_at is null
       do update set
-        reason_code = excluded.reason_code,
+        reason_code = case
+          when excluded.reason_code = 'reconciliation_failed'
+            and library.watcher_incidents.reason_code = 'root_unavailable'
+          then library.watcher_incidents.reason_code
+          else excluded.reason_code
+        end,
         occurrence_count = library.watcher_incidents.occurrence_count + 1,
       accepted_sequence = greatest(
         library.watcher_incidents.accepted_sequence,
@@ -3383,6 +3597,27 @@ begin
   set inventory_revision = p_inventory_revision,
       state = 'catch_up', completed_at = null
   where id = p_repair_id;
+
+  update library.watcher_lanes as lane
+  set accepted_sequence = lane.applied_sequence + 1,
+      updated_at = p_now
+  from library.watcher_generation_participants as participant
+  where participant.generation_id = any(v_successor_ids)
+    and lane.library_id = participant.library_id
+    and lane.root_id = participant.root_id
+    and lane.successor_generation_id = participant.generation_id
+    and lane.running_generation_id is null
+    and lane.running_job_id is null
+    and lane.accepted_sequence = lane.applied_sequence
+    and lane.dirty_generation > lane.repaired_dirty_generation
+    and exists (
+      select 1
+      from library.targeted_reconciliation_intents as successor
+      where successor.id = participant.generation_id
+        and successor.watcher_generation_kind = 'root_catch_up'
+        and successor.watcher_job_linked_at is null
+        and successor.state = 'accepted'
+    );
 
   update library.watcher_generation_participants as participant
   set accepted_sequence_lower = lane.applied_sequence + 1,
@@ -3903,7 +4138,12 @@ begin
         participant.dirty_generation, p_now, p_now
       ) on conflict (library_id, root_id, incident_family)
         where resolved_at is null do update set
-          reason_code = excluded.reason_code,
+          reason_code = case
+            when excluded.reason_code = 'reconciliation_failed'
+              and library.watcher_incidents.reason_code = 'root_unavailable'
+            then library.watcher_incidents.reason_code
+            else excluded.reason_code
+          end,
           occurrence_count = library.watcher_incidents.occurrence_count + 1,
       accepted_sequence = greatest(
         library.watcher_incidents.accepted_sequence,
@@ -4103,6 +4343,18 @@ declare
          and root.is_active is true
        where authorized.intent_id = p_intent_id
          and authorized.path_kind in ('deleted', 'deleted_subtree')
+      union all
+      select root.metadata ->> 'root_id', 'subtree', root.root_path
+        from library.targeted_reconciliation_intents as intent
+        join library.watcher_generation_participants as participant
+          on participant.generation_id = intent.id
+         and participant.library_id = intent.library_id
+        join library.library_roots as root
+          on root.library_id = participant.library_id
+         and root.id = participant.root_id
+         and root.is_active is true
+       where intent.id = p_intent_id
+         and intent.watcher_generation_kind = 'root_catch_up'
     ), submitted_stale as ($fragment$;
 begin
   select pg_catalog.pg_get_functiondef(
@@ -4407,6 +4659,7 @@ set search_path = pg_catalog
 as $$
 declare
   required_functions constant text[] := array[
+    'library.full_scan_job_claim_ready(bigint)',
     'library.load_claimed_full_scan_intent_v3(bigint,character varying,character varying)',
     'library.reconcile_due_watcher_generations(timestamp with time zone,integer)',
     'library.dispatch_ready_watcher_generations(timestamp with time zone,integer)',
@@ -4518,6 +4771,7 @@ revoke all on function library.create_full_scan_intent_v3(
   bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
   bigint[], timestamptz
 ) from public;
+revoke all on function library.full_scan_job_claim_ready(bigint) from public;
 revoke all on function library.load_claimed_full_scan_intent_v3(
   bigint, varchar, varchar
 ) from public;
@@ -4588,6 +4842,8 @@ begin
       bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
       bigint[], timestamptz
     ) to album_haven_app;
+    revoke execute on function library.full_scan_job_claim_ready(bigint)
+      from album_haven_app;
     revoke execute on function library.load_claimed_full_scan_intent_v3(
       bigint, varchar, varchar
     ) from album_haven_app;
@@ -4669,6 +4925,8 @@ begin
       bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
       bigint[], timestamptz
     ) from album_haven_worker;
+    grant execute on function library.full_scan_job_claim_ready(bigint)
+      to album_haven_worker;
     grant execute on function library.load_claimed_full_scan_intent_v3(
       bigint, varchar, varchar
     ) to album_haven_worker;
@@ -4774,6 +5032,8 @@ begin
       bigint, bigint, varchar, varchar, varchar, varchar, varchar, boolean,
       bigint[], timestamptz
     ) from album_haven_readonly;
+    revoke execute on function library.full_scan_job_claim_ready(bigint)
+      from album_haven_readonly;
     revoke execute on function library.load_claimed_full_scan_intent_v3(
       bigint, varchar, varchar
     ) from album_haven_readonly;

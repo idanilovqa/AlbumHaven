@@ -132,6 +132,7 @@ const SAFE_LIFECYCLE_EXIT_REASONS = new Set([
   'fake-database-cleanup-error',
   'managed-scan-cleanup-error',
   'managed-isolated-app-cleanup-error',
+  'managed-isolated-app-unexpected-exit',
   'owned-process-cleanup-error',
   'owned-temp-cleanup-error',
   'unknown',
@@ -181,6 +182,33 @@ function safeLifecycleStage(stage, extraFields = []) {
   return safeStage;
 }
 
+const SAFE_MANAGED_ISOLATED_APP_OPERATIONS = new Set([
+  'restart',
+  'watcher-cleanup',
+  'watcher-recovery-cleanup',
+]);
+const SAFE_MANAGED_ISOLATED_APP_ACK_STATUSES = new Set(['pending', 'failed', 'ready']);
+const SAFE_MANAGED_ISOLATED_APP_EVENTS = new Set(['exit', 'close']);
+const SAFE_MANAGED_ISOLATED_APP_PHASES = new Set(['playwright-run', 'start-replacement']);
+
+function safeManagedIsolatedAppExit(exit) {
+  if (!exit || typeof exit !== 'object') return null;
+  const timestamp = String(exit.timestamp || '');
+  return {
+    operation: safeClosedValue(exit.operation, SAFE_MANAGED_ISOLATED_APP_OPERATIONS),
+    ackStatus: safeClosedValue(exit.ackStatus, SAFE_MANAGED_ISOLATED_APP_ACK_STATUSES),
+    generation: safeNonnegativeInteger(exit.generation),
+    pid: safeNonnegativeInteger(exit.pid),
+    phase: safeClosedValue(exit.phase, SAFE_MANAGED_ISOLATED_APP_PHASES),
+    event: safeClosedValue(exit.event, SAFE_MANAGED_ISOLATED_APP_EVENTS),
+    exitCode: Number.isInteger(exit.exitCode) ? exit.exitCode : null,
+    signal: /^[A-Z][A-Z0-9]{0,31}$/.test(String(exit.signal || ''))
+      ? String(exit.signal)
+      : null,
+    timestamp: Number.isNaN(Date.parse(timestamp)) ? null : timestamp,
+  };
+}
+
 function buildAuthoritativePassFinalDecisionDiagnostic(result) {
   const exitCode = typeof result?.exitCode === 'number' && Number.isInteger(result.exitCode)
     ? result.exitCode
@@ -212,6 +240,9 @@ function buildAuthoritativePassFinalDecisionDiagnostic(result) {
       listOnly: lifecycle.listOnly === true,
     },
     exitReason: safeClosedValue(lifecycle.exitReason, SAFE_LIFECYCLE_EXIT_REASONS),
+    ...(lifecycle.managedIsolatedAppExit ? {
+      managedIsolatedAppExit: safeManagedIsolatedAppExit(lifecycle.managedIsolatedAppExit),
+    } : {}),
   };
 }
 
@@ -1376,10 +1407,12 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
         options.waitForFunctionalFixtureBackgroundIdleFn
         || waitForFunctionalFixtureBackgroundIdle
       );
-      await waitForFunctionalFixtureBackgroundIdleFn(child, port, {
-        fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
-        requestHeaders,
-      });
+      if (options.waitForBackgroundIdle !== false) {
+        await waitForFunctionalFixtureBackgroundIdleFn(child, port, {
+          fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+          requestHeaders,
+        });
+      }
     }
     return child;
   } catch (error) {
@@ -1447,11 +1480,28 @@ function writeJsonAtomically(targetPath, value) {
 }
 
 async function cleanupManagedWatcherFixture(childEnv, options = {}) {
-  const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
-  const mediaRoot = resolveWritableFixtureMediaRoot(childEnv);
-  const ownedRoot = path.join(mediaRoot, 'cases', 'watcher-reconciliation');
+  let cleanupArguments;
+  if (options.recovery === true) {
+    const configuredTempRoot = String(childEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
+    if (
+      !configuredTempRoot
+      || !fs.existsSync(configuredTempRoot)
+      || !fs.statSync(configuredTempRoot).isDirectory()
+    ) {
+      throw new Error('Runner-owned watcher recovery cleanup requires its temp root.');
+    }
+    const tempRoot = fs.realpathSync(configuredTempRoot);
+    cleanupArguments = [
+      '--recovery-manifest',
+      path.join(tempRoot, 'app-data', 'watcher-recovery-fixture.json'),
+    ];
+  } else {
+    const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
+    const mediaRoot = resolveWritableFixtureMediaRoot(childEnv);
+    cleanupArguments = ['--owned-root', path.join(mediaRoot, 'cases', 'watcher-reconciliation')];
+  }
   const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
-    '-m', 'tests.e2e.support.watcherFixture', '--owned-root', ownedRoot,
+    '-m', 'tests.e2e.support.watcherFixture', ...cleanupArguments,
   ], { cwd: repoRoot, env: childEnv, timeout: ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS });
   if (result.error || result.signal || result.status !== 0) {
     throw new Error('Runner-owned watcher inventory cleanup failed; evidence retained.');
@@ -1527,6 +1577,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
       child,
       generation: ++childGeneration,
       intentionalStop: false,
+      operation: null,
+      ackStatus: null,
       phase: String(phase || 'playwright-run'),
       terminated: false,
     };
@@ -1536,15 +1588,19 @@ function createManagedIsolatedAppRestartController(options = {}) {
       record.terminated = true;
       if (record.intentionalStop || record !== currentChildRecord || failure) return;
       const termination = {
+        operation: record.operation,
+        ackStatus: record.ackStatus,
         generation: record.generation,
         pid: Number.isInteger(Number(child.pid)) ? Number(child.pid) : null,
-        creationIdentity: String(child.albumHavenCreationIdentity || '') || null,
         event,
         exitCode: Number.isInteger(exitCode) ? exitCode : null,
         signal: signal ? String(signal) : null,
         phase: record.phase,
         timestamp: new Date().toISOString(),
       };
+      // Preserve the pre-existing initial-child shape without retaining its
+      // process creation identity. Replacement evidence uses the closed schema.
+      if (!record.operation) termination.creationIdentity = null;
       const error = new Error(
         `Managed isolated app generation ${record.generation} PID ${String(termination.pid)} unexpectedly exited.`,
       );
@@ -1588,8 +1644,13 @@ function createManagedIsolatedAppRestartController(options = {}) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
     const operation = request.operation ?? request.action ?? 'restart';
-    if (!['restart', 'stop', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
-    if (operation === 'watcher-cleanup' && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))) {
+    if (![
+      'restart', 'stop', 'report-failure', 'watcher-cleanup', 'watcher-recovery-cleanup',
+    ].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    if (
+      ['watcher-cleanup', 'watcher-recovery-cleanup'].includes(operation)
+      && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))
+    ) {
       throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
     }
     return { nonce, operation };
@@ -1626,10 +1687,12 @@ function createManagedIsolatedAppRestartController(options = {}) {
           if (currentChild === childToStop) updateCurrentChild(null);
         }
 
-        if (request.operation === 'watcher-cleanup') {
+        if (['watcher-cleanup', 'watcher-recovery-cleanup'].includes(request.operation)) {
           phase = 'fixture-cleanup';
           try {
-            await cleanupWatchedInventoryFn(childEnv);
+            await cleanupWatchedInventoryFn(childEnv, {
+              recovery: request.operation === 'watcher-recovery-cleanup',
+            });
           } catch (error) {
             error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
             error.lifecycle = { exitReason: 'fake-database-cleanup-error',
@@ -1648,18 +1711,29 @@ function createManagedIsolatedAppRestartController(options = {}) {
           [MANAGED_ISOLATED_PRESERVE_ON_SHUTDOWN_ENV]: '1',
           [MANAGED_ISOLATED_REUSE_STATE_ENV]: '1',
         };
+        const observeReplacementChild = (child) => {
+          updateCurrentChild(child, 'start-replacement');
+          if (currentChildRecord) {
+            currentChildRecord.operation = request.operation;
+            currentChildRecord.ackStatus = 'pending';
+          }
+        };
         const replacementChild = await startManagedIsolatedAppFn(replacementEnv, {
           port: resolvedAppPort,
           providerPort: resolvedProviderPort,
           seedAllFunctionalCoverMisses,
+          waitForBackgroundIdle: false,
           onSpawnFn(child) {
-            updateCurrentChild(child, 'start-replacement');
+            observeReplacementChild(child);
           },
         });
-        if (currentChild !== replacementChild) updateCurrentChild(replacementChild, 'start-replacement');
-        else if (currentChildRecord) currentChildRecord.phase = 'playwright-run';
+        if (currentChild !== replacementChild) observeReplacementChild(replacementChild);
         phase = 'publish-ready';
         writeJsonAtomically(ackPath, { nonce: request.nonce, status: 'ready' });
+        if (currentChildRecord) {
+          currentChildRecord.ackStatus = 'ready';
+          currentChildRecord.phase = 'playwright-run';
+        }
         return true;
       } catch (error) {
         const recordedFailure = recordFailure(error);
@@ -1674,6 +1748,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
             phase,
             error: safeMessage || 'managed app restart failed',
           });
+          const exitEvidence = recordedFailure.lifecycle?.managedIsolatedAppExit;
+          if (exitEvidence?.ackStatus === 'pending') exitEvidence.ackStatus = 'failed';
         } else {
           fs.rmSync(ackPath, { force: true });
         }

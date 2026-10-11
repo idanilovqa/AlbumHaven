@@ -294,6 +294,10 @@ def test_claim_uses_one_nonblocking_atomic_statement_and_returns_typed_job():
     assert "scheduled_at <=" in sql
     assert "cancel_requested_at is null" in sql
     assert "attempt_count < max_attempts" in sql
+    assert (
+        "jobs.kind <> 'full_scan' or library.full_scan_job_claim_ready(jobs.id)"
+        in sql
+    )
     assert "order by priority desc, scheduled_at, id" in sql
     assert "attempt_count =" in sql and "+ 1" in sql
     assert "lease_owner" in sql and "lease_token" in sql

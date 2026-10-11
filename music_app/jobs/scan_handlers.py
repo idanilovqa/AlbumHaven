@@ -8,11 +8,64 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import psycopg
+
 from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import ClaimedJob, JobKind, JobState, JobTransitionResult
 
 
 _STORAGE_RETRY_DELAY = timedelta(seconds=5)
+
+_FULL_SCAN_PRIMARY_OUTCOMES = {
+    "full scan publication input is invalid": "full_scan_publication_input_invalid",
+    "full scan publication file scope is invalid": (
+        "full_scan_publication_file_scope_invalid"
+    ),
+    "full scan publication hierarchy invalid": (
+        "full_scan_publication_hierarchy_invalid"
+    ),
+    "full scan publication hierarchy is invalid": (
+        "full_scan_publication_hierarchy_invalid"
+    ),
+    "full scan recovery cutoff is invalid": (
+        "full_scan_publication_recovery_cutoff_invalid"
+    ),
+    "full scan publication fence lost": "full_scan_revision_conflict",
+    "inventory revision conflict": "full_scan_revision_conflict",
+}
+_FULL_SCAN_INTEGRITY_SQLSTATES = {"22023", "23502", "23503", "23505", "23514"}
+_FULL_SCAN_STORAGE_SQLSTATES = {"08006", "40P01", "53100", "57P01"}
+
+
+def _classify_full_scan_failure(error: Exception) -> str:
+    """Map publication failures to path-free, finite durable outcomes."""
+
+    sqlstate = getattr(error, "sqlstate", None)
+    diagnostic = getattr(error, "diag", None)
+    primary = getattr(diagnostic, "message_primary", None)
+    if primary is None and type(error) is RuntimeError:
+        primary = str(error)
+    if sqlstate == "P0001" or primary == "inventory revision conflict":
+        outcome = _FULL_SCAN_PRIMARY_OUTCOMES.get(primary)
+        if outcome is not None:
+            return outcome
+    if sqlstate == "40001":
+        return "full_scan_revision_conflict"
+    if sqlstate in _FULL_SCAN_STORAGE_SQLSTATES:
+        return "full_scan_storage_unavailable"
+    if sqlstate in _FULL_SCAN_INTEGRITY_SQLSTATES:
+        if (
+            sqlstate == "23505"
+            and getattr(diagnostic, "constraint_name", None)
+            == "local_albums_semantic_identity_key"
+        ):
+            return "full_scan_semantic_album_conflict"
+        return "full_scan_publication_integrity_failed"
+    if isinstance(sqlstate, str) and sqlstate.startswith("08"):
+        return "full_scan_storage_unavailable"
+    if sqlstate is None and isinstance(error, psycopg.OperationalError):
+        return "full_scan_storage_unavailable"
+    return "full_scan_failed"
 
 
 def _storage_unavailable_outcome(
@@ -416,20 +469,14 @@ def build_full_scan_handler(
                 expected_revision=intent.inventory_mutation_revision,
             )
         except Exception as exc:
-            if "revision conflict" in str(exc).lower():
-                return JobTransitionResult(JobState.FAILED, "full_scan_revision_conflict")
-            diagnostic_code = "unclassified"
-            normalized_error = str(exc).casefold()
-            for marker, code in (
-                ("full scan publication input is invalid", "publication_input_invalid"),
-                ("full scan publication file scope is invalid", "publication_file_scope_invalid"),
-                ("full scan publication hierarchy is invalid", "publication_hierarchy_invalid"),
-            ):
-                if marker in normalized_error:
-                    diagnostic_code = code
-                    break
-            log(f"Full scan execution failed ({diagnostic_code}).")
-            return JobTransitionResult(JobState.FAILED, "full_scan_failed")
+            reason_code = _classify_full_scan_failure(exc)
+            log(f"Full scan execution failed ({reason_code}).")
+            if reason_code in {
+                "full_scan_revision_conflict",
+                "full_scan_storage_unavailable",
+            }:
+                return _storage_unavailable_outcome(claim, reason_code, now=now())
+            return JobTransitionResult(JobState.FAILED, reason_code)
 
         if getattr(result, "inventory_mutation_revision", None) is not None or getattr(
             result, "publication_won", False
@@ -536,8 +583,6 @@ def build_targeted_reconciliation_handler(
             )
         ):
             return JobTransitionResult(JobState.CANCELED, "targeted_scope_invalid")
-        if getattr(scope, "root_healthy", None) is not True:
-            return JobTransitionResult(JobState.CANCELED, "targeted_root_unhealthy")
         if getattr(scope, "scope_complete", None) is not True:
             return JobTransitionResult(JobState.CANCELED, "targeted_root_invalid")
 
@@ -552,10 +597,11 @@ def build_targeted_reconciliation_handler(
             library_id=claim.library_id,
         ):
             return JobTransitionResult(JobState.CANCELED, "targeted_root_invalid")
-        if (
+        is_root_catch_up = (
             watcher_generation is not None
             and watcher_generation.generation_kind == "root_catch_up"
-        ):
+        )
+        if is_root_catch_up:
             participant_root_ids = {
                 participant.logical_root_id
                 for participant in watcher_generation.participants
@@ -568,17 +614,28 @@ def build_targeted_reconciliation_handler(
                 return JobTransitionResult(
                     JobState.CANCELED, "targeted_root_invalid"
                 )
+            participant_paths = tuple(
+                Path(str(roots_by_id[root_id]["path"]))
+                for root_id in participant_root_ids
+            )
+            if not all(path.is_dir() for path in participant_paths):
+                watcher_recovery.fail_generation(
+                    claim=claim,
+                    generation=watcher_generation,
+                    reason_code="root_unavailable",
+                    now=now(),
+                )
+                return JobTransitionResult(JobState.FAILED, "targeted_root_unavailable")
             request = replace(
                 request,
                 paths=frozenset(),
                 deleted_paths=frozenset(),
-                deleted_subtrees=frozenset(),
-                preserved_subtrees=frozenset(
-                    Path(str(roots_by_id[root_id]["path"]))
-                    for root_id in participant_root_ids
-                ),
+                deleted_subtrees=frozenset(participant_paths),
+                preserved_subtrees=frozenset(participant_paths),
                 moves=(),
             )
+        elif getattr(scope, "root_healthy", None) is not True:
+            return JobTransitionResult(JobState.CANCELED, "targeted_root_unhealthy")
 
         class PublicationGuard:
             def _authorized(self) -> bool:

@@ -562,6 +562,34 @@ test('busy scan indicator click stays inert while status polling catches up', ()
   assert.deepEqual(calls.triggerLibraryRefresh, []);
 });
 
+test('read-only status indicator retains status ownership without starting a refresh on left click', () => {
+  const { context, calls } = createContext({ status: {} });
+  context.window.AlbumHavenCapabilities = {
+    allows(action) {
+      assert.equal(action, 'library.refresh');
+      return false;
+    },
+  };
+  let prevented = false;
+
+  context.handleGalleryBootstrapClick({
+    target: {
+      closest(selector) {
+        return selector === '#scan-indicator'
+          ? { classList: { contains: () => false } }
+          : null;
+      },
+    },
+    preventDefault() {
+      prevented = true;
+    },
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(calls.hideStatusContextMenu, 1);
+  assert.deepEqual(calls.triggerLibraryRefresh, []);
+});
+
 function createHomeEvent() {
   const button = {};
   let prevented = false;

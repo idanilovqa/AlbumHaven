@@ -52,6 +52,8 @@ import {
 } from '../poms/index.js';
 import { installContextRequestInterceptionGuard } from './requestInterceptionGuard.js';
 import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
+import { createWatcherRecoveryFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
+import { createWatcherRecoveryViewerActions } from './watcherRecoveryAccounts.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
 import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastfmProviderHelpers.js';
@@ -376,6 +378,39 @@ export const test = base.extend({
     await use(createManagedAppLifecycle());
   }, { scope: 'worker' }],
 
+  watcherRecoveryCoordinator: async ({ managedAppLifecycle }, use) => {
+    let recovery = null;
+    const viewerContexts = new Set();
+    const coordinator = {
+      async getRecovery() {
+        if (!recovery) {
+          recovery = await createWatcherRecoveryFixture({ managedAppLifecycle });
+        }
+        return recovery;
+      },
+      registerViewerContext(context) {
+        viewerContexts.add(context);
+        return () => viewerContexts.delete(context);
+      },
+    };
+    try {
+      await use(coordinator);
+    } finally {
+      const cleanupFailures = [];
+      for (const context of viewerContexts) {
+        try { await context.close(); } catch (error) { cleanupFailures.push(error); }
+      }
+      viewerContexts.clear();
+      if (recovery) {
+        try { await recovery.cleanup(); } catch (error) { cleanupFailures.push(error); }
+      }
+      if (cleanupFailures.length === 1) throw cleanupFailures[0];
+      if (cleanupFailures.length > 1) {
+        throw new AggregateError(cleanupFailures, 'Watcher recovery fixture cleanup failed.');
+      }
+    }
+  },
+
   freshBrowserSession: async ({
     browser,
     testArtifacts,
@@ -386,13 +421,13 @@ export const test = base.extend({
     const sessions = [];
     try {
       await use({
-        async create({ userAgent } = {}) {
+        async create({ userAgent, authenticated = authenticateFreshBrowserSession } = {}) {
           const configuredBaseUrl = String(testInfo.project.use?.baseURL || '');
           const context = await browser.newContext({
             baseURL: configuredBaseUrl,
             ...(userAgent ? { userAgent } : {}),
             viewport: testInfo.project.use?.viewport || { width: 1440, height: 960 },
-            storageState: authenticateFreshBrowserSession ? storageState : withArtistTreePreference(
+            storageState: authenticated ? storageState : withArtistTreePreference(
               { cookies: [], origins: [] }, configuredBaseUrl, initialArtistTreeFolded,
             ),
           });
@@ -614,8 +649,29 @@ export const test = base.extend({
     await use(new LibrarySettingsActions(new LibrarySettings(page, testInfo)));
   },
 
-  libraryFilesystemWatcherActions: async ({ page }, use, testInfo) => {
-    await use(new LibraryFilesystemWatcherActions(new LibraryWatchStatus(page, testInfo)));
+  libraryFilesystemWatcherActions: async ({
+    appBarActions,
+    page,
+    scanPageActions,
+    watcherRecoveryCoordinator,
+  }, use, testInfo) => {
+    await use(new LibraryFilesystemWatcherActions(
+      new LibraryWatchStatus(page, testInfo),
+      {
+        appBarActions,
+        getWatcherRecovery: () => watcherRecoveryCoordinator.getRecovery(),
+        scanPage: scanPageActions.scanPage,
+        scanPageActions,
+      },
+    ));
+  },
+
+  watcherRecoveryViewerActions: async ({ freshBrowserSession, watcherRecoveryCoordinator }, use, testInfo) => {
+    await use(createWatcherRecoveryViewerActions({
+      freshBrowserSession,
+      registerContext: (context) => watcherRecoveryCoordinator.registerViewerContext(context),
+      testInfo,
+    }));
   },
 
   navigationPanelActions: async ({ page }, use, testInfo) => {

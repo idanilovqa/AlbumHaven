@@ -6810,3 +6810,79 @@ def test_live_tag_edit_lease_excludes_recovery_across_connections(watcher_repair
             assert claimed is None
     finally:
         lease.release()
+
+
+def test_watcher_recovery_viewer_is_normal_single_library_member_without_repair_authority(
+    monkeypatch,
+):
+    provision_viewer = isolatedPostgres.provision_watcher_recovery_viewer
+    for key in (
+        "ALBUM_HAVEN_BOOTSTRAP_USERNAME",
+        "ALBUM_HAVEN_BOOTSTRAP_EMAIL",
+        "ALBUM_HAVEN_PUBLIC_BASE_URL",
+        "ALBUM_HAVEN_AUTH_HMAC_SECRET",
+        "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALBUM_HAVEN_ARGON2_POLICY_VERSION", "2")
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            library_id = int(connection.execute(
+                "select id from library.libraries where library_kind = 'local'",
+            ).fetchone()["id"])
+
+        username, password = provision_viewer(
+            runtime_url,
+            library_id=library_id,
+        )
+
+        assert username
+        assert password
+        with isolatedPostgres._connect(setup_url) as connection:
+            account = connection.execute(
+                """
+                select account.id, account.account_kind, account.username_normalized,
+                       membership.library_id, membership.membership_role,
+                       array_remove(array_agg(capability.capability_key), null) as capability_keys,
+                       (select count(*) from app.account_credentials credential
+                        where credential.account_id = account.id) as credential_count,
+                       (select credential.encoded_hash from app.account_credentials credential
+                        where credential.account_id = account.id limit 1) as encoded_hash,
+                       (select credential.hash_policy_version from app.account_credentials credential
+                        where credential.account_id = account.id limit 1) as hash_policy_version
+                from app.accounts account
+                join library.library_memberships membership
+                  on membership.account_id = account.id
+                left join app.capabilities capability
+                  on capability.account_id = account.id
+                 and capability.revoked_at is null
+                 and capability.scope_kind = 'library'
+                 and capability.scope_id = membership.library_id
+                where account.username_normalized = %s
+                group by account.id, account.account_kind, account.username_normalized,
+                         membership.library_id, membership.membership_role
+                """,
+                (username.casefold(),),
+            ).fetchall()
+
+        assert len(account) == 1
+        viewer = account[0]
+        assert viewer["account_kind"] == "managed_user"
+        assert int(viewer["library_id"]) == library_id
+        assert viewer["membership_role"] == "member"
+        assert int(viewer["credential_count"]) == 1
+        assert int(viewer["hash_policy_version"]) == 2
+        assert PasswordHasher().verify(viewer["encoded_hash"], password)
+        capability_keys = set(viewer["capability_keys"])
+        assert capability_keys == {"capability.view", "library.refresh.read"}
+        assert "library.refresh" not in capability_keys
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)

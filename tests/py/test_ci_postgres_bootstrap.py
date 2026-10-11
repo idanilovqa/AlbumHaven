@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -98,6 +100,28 @@ def test_bootstrap_contract_exports_passwordless_worker_url(bootstrap_contract):
     assert exports["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"] == exports[
         "ALBUM_HAVEN_WORKER_DATABASE_URL"
     ]
+
+
+def test_bootstrap_hashes_migrations_without_powershell_module_commands(
+    bootstrap_contract,
+):
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    source_casefold = source.casefold()
+
+    assert "get-filehash" not in source_casefold
+    assert re.search(
+        r"(?im)^function\s+[a-z0-9_-]*sha256[a-z0-9_-]*\s*\{",
+        source,
+    )
+    assert "[System.Security.Cryptography.SHA256]::Create()" in source
+    assert "[System.IO.File]::OpenRead(" in source
+
+    migration = bootstrap_contract["migrations"][0]
+    digest = migration["sha256"]
+    migration_path = REPO_ROOT / "migrations" / "postgres" / migration["name"]
+
+    assert re.fullmatch(r"[0-9a-f]{64}", digest)
+    assert digest == hashlib.sha256(migration_path.read_bytes()).hexdigest()
 
 
 def test_python_ci_restores_worker_url_for_destructive_database():

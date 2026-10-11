@@ -237,6 +237,10 @@ class PostgresJobRepository:
                  and scheduled_at <= %(now)s
                  and cancel_requested_at is null
                  and attempt_count < max_attempts
+                 and (
+                   jobs.kind <> 'full_scan'
+                   or library.full_scan_job_claim_ready(jobs.id)
+                 )
                order by priority desc, scheduled_at, id
                for update skip locked
                limit 1

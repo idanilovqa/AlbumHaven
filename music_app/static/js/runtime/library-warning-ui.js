@@ -22,9 +22,9 @@ function renderLibraryWarning(data = {}, options = {}) {
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
   const actionLabel = health.repair_required ? 'Repair library' : 'Full Rescan';
-  const operationalItemsHtml = problems
-    .map(() => '<span data-operational-item>Library recovery is required.</span>')
-    .join('');
+  const operationalItemsHtml = problems.length
+    ? `<ul>${problems.map(() => '<li data-operational-item>Library recovery is required.</li>').join('')}</ul>`
+    : '';
   const actionHtml = canRefresh
     ? ButtonComponent.renderButton({label:actionLabel,attributes:{'data-status-action':'full-rescan'}})
     : '';
@@ -32,6 +32,6 @@ function renderLibraryWarning(data = {}, options = {}) {
     ? `A watched library folder became unavailable. Reconnect it${canRefresh ? `, then run ${actionLabel}` : ''}.`
     : `Some library changes may have been missed.${canRefresh ? ` Run ${actionLabel} to reconcile them.` : ''}`;
   const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
-    actionsHtml: `${operationalItemsHtml}${actionHtml}`});
+    detailsHtml: operationalItemsHtml, actionsHtml: actionHtml});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
 }

@@ -664,6 +664,13 @@
               "test": "tests/e2e/specs/tagEditorSelectionReorder.spec.js",
               "case": "FTC-TAGS-025 preserves selection and reorder semantics through cancel and apply",
               "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-LIBROOTS-019 repairs a stable watcher incident through its completion watermark",
+              "area": "album-details"
             }
           ]
         }

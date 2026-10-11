@@ -36,6 +36,7 @@ class _ConcurrentMigrationConnection:
         *,
         fail_concurrent_once: bool = False,
         index_contract: dict[str, object] | None = None,
+        pg_trgm_schema: str = "library",
     ) -> None:
         self._autocommit = False
         self.in_transaction = False
@@ -45,6 +46,7 @@ class _ConcurrentMigrationConnection:
         self.index_ready = False
         self.fail_concurrent_once = fail_concurrent_once
         self.index_contract = dict(index_contract) if index_contract is not None else None
+        self.pg_trgm_schema = pg_trgm_schema
         self.events: list[str] = []
 
     @property
@@ -102,9 +104,18 @@ class _ConcurrentMigrationConnection:
                 state = "missing"
                 event = "index-contract:missing"
             else:
+                quoted_schema = (
+                    self.pg_trgm_schema
+                    if self.pg_trgm_schema.isidentifier()
+                    else f'"{self.pg_trgm_schema}"'
+                )
+                expected_contract = {
+                    **_READY_0083_INDEX_CONTRACT,
+                    "opclass": f"{quoted_schema}.gin_trgm_ops",
+                }
                 mismatches = [
                     dimension
-                    for dimension, expected in _READY_0083_INDEX_CONTRACT.items()
+                    for dimension, expected in expected_contract.items()
                     if self.index_contract.get(dimension) != expected
                 ]
                 state = "mismatched" if mismatches else "ready"
@@ -119,7 +130,29 @@ class _ConcurrentMigrationConnection:
             if not self.index_exists:
                 return _Result()
             return _Result([{"indisvalid": self.index_ready, "indisready": self.index_ready}])
+        if (
+            "pg_catalog.pg_extension" in query
+            and "pg_catalog.pg_depend" in query
+            and "gin_trgm_ops" in query
+        ):
+            assert "deptype = 'e'" in query
+            self.events.append("discover-opclass")
+            quoted_schema = (
+                self.pg_trgm_schema
+                if self.pg_trgm_schema.isidentifier()
+                else f'"{self.pg_trgm_schema}"'
+            )
+            return _Result(
+                [{"qualified_operator_class": f"{quoted_schema}.gin_trgm_ops"}]
+            )
         if "create index concurrently" in query:
+            quoted_schema = (
+                self.pg_trgm_schema
+                if self.pg_trgm_schema.isidentifier()
+                else f'"{self.pg_trgm_schema}"'
+            )
+            if "gin_trgm_ops" in query:
+                assert f"{quoted_schema}.gin_trgm_ops".casefold() in query
             if not self.autocommit:
                 raise RuntimeError("CREATE INDEX CONCURRENTLY cannot run inside a transaction block")
             if self.fail_concurrent_once:
@@ -132,7 +165,10 @@ class _ConcurrentMigrationConnection:
                 return _Result()
             self.index_exists = True
             self.index_ready = True
-            self.index_contract = dict(_READY_0083_INDEX_CONTRACT)
+            self.index_contract = {
+                **_READY_0083_INDEX_CONTRACT,
+                "opclass": f"{quoted_schema}.gin_trgm_ops",
+            }
             self.events.append("concurrent-index")
             return _Result()
         if "drop index concurrently if exists" in query:
@@ -301,6 +337,43 @@ def test_isolated_migrator_rebuilds_same_name_wrong_0083_index_before_ledger(
         f"ledger:{migration_path.name}"
     )
     assert migration_path.name in connection.ledger
+
+
+def test_isolated_migrator_uses_extension_owned_quoted_0083_opclass_before_ledger(
+    tmp_path,
+    monkeypatch,
+):
+    migrations_root = tmp_path / "migrations" / "postgres"
+    migrations_root.mkdir(parents=True)
+    migration_path = migrations_root / "0083_add_album_raw_artist_search_index.sql"
+    migration_path.write_text(
+        "create index concurrently if not exists "
+        "local_albums_normalized_raw_artists_trgm_idx "
+        "on library.local_albums using gin "
+        "((lower(metadata::text)) library.gin_trgm_ops);",
+        encoding="utf-8",
+    )
+    verifier = (
+        tmp_path / "scripts" / "postgres" / "verify_0083_album_raw_artist_index.sql"
+    )
+    verifier.parent.mkdir(parents=True)
+    verifier.write_text(
+        "-- album_haven_0083_index_contract_v1\nselect 'ready';\n",
+        encoding="utf-8",
+    )
+    connection = _ConcurrentMigrationConnection(pg_trgm_schema="extensions-safe")
+    connection.ledger_exists = True
+    monkeypatch.setattr(isolated, "ROOT", tmp_path)
+    monkeypatch.setattr(isolated, "_connect", lambda _database_url: connection)
+
+    isolated.apply_migrations("postgresql://owned", [migration_path])
+
+    discovery = connection.events.index("discover-opclass")
+    concurrent = connection.events.index("concurrent-index")
+    validation = connection.events.index("index-contract:ready", concurrent)
+    ledger = connection.events.index(f"ledger:{migration_path.name}")
+    assert discovery < concurrent < validation < ledger
+    assert connection.index_contract["opclass"] == '"extensions-safe".gin_trgm_ops'
 
 
 def test_live_appearance_aggregate_upgrade_uses_staged_migration_runner() -> None:

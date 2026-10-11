@@ -181,6 +181,86 @@ def _created(scope, root_id: str, relative_path: str) -> LibraryEvent:
     )
 
 
+@pytest.mark.parametrize(
+    "mutate_runtime_state",
+    (
+        "update library.watcher_runtime_state "
+        "set acceptance_enabled = false, disabled_at = pg_catalog.now()",
+        "delete from library.watcher_runtime_state",
+    ),
+    ids=("disabled", "deleted"),
+)
+def test_prepare_isolated_database_restores_enabled_watcher_runtime_singleton(
+    live_watcher_database,
+    mutate_runtime_state,
+):
+    scope = live_watcher_database
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute(mutate_runtime_state)
+
+    isolatedPostgres.prepare_isolated_database(scope.setup_url, scope.app_url)
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        rows = connection.execute(
+            """
+            select acceptance_enabled, disabled_at
+            from library.watcher_runtime_state
+            order by singleton
+            """
+        ).fetchall()
+
+    assert rows == [{"acceptance_enabled": True, "disabled_at": None}]
+
+
+def test_prepare_isolated_database_allows_dirty_admission_for_registered_missing_root(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    logical_root_id = "missing-after-reset"
+    missing_root = scope.root_paths["root-a"] / logical_root_id
+    assert not missing_root.exists()
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        connection.execute("delete from library.watcher_runtime_state")
+
+    isolatedPostgres.prepare_isolated_database(scope.setup_url, scope.app_url)
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        library_id = int(
+            connection.execute(
+                """
+                select library.id
+                from library.libraries as library
+                join app.bootstrap_owners as owner
+                  on owner.account_id = library.owner_account_id
+                where owner.owner_key = 'local-bootstrap-owner'
+                  and library.name = 'Local Library'
+                  and library.library_kind = 'local'
+                """
+            ).fetchone()["id"]
+        )
+        connection.execute(
+            """
+            insert into library.library_roots (
+              library_id, root_path, root_kind, is_active, metadata
+            )
+            values (%s, %s, 'main', true, %s::jsonb)
+            """,
+            (library_id, str(missing_root), json.dumps({"root_id": logical_root_id})),
+        )
+
+    with isolatedPostgres._connect(scope.app_url) as connection:
+        admitted = connection.execute(
+            """
+            select logical_root_id
+            from library.mark_watcher_roots_dirty(%s, %s, 'root_unavailable', %s)
+            """,
+            (library_id, [logical_root_id], NOW),
+        ).fetchall()
+
+    assert admitted == [{"logical_root_id": logical_root_id}]
+
+
 def _moved(scope, source_root: str, destination_root: str, name: str) -> LibraryEvent:
     return LibraryEvent(
         LibraryEventKind.MOVED,
@@ -975,7 +1055,12 @@ def _seed_scanning_repair(scope, *, now: datetime, logical_root_id: str) -> int:
 
 
 def _enqueue_linked_full_scan(
-    scope, *, repair_id: int, now: datetime, request_ref: str
+    scope,
+    *,
+    repair_id: int,
+    now: datetime,
+    request_ref: str,
+    root_ids: tuple[str, ...] = ("root-a",),
 ):
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
 
@@ -990,7 +1075,7 @@ def _enqueue_linked_full_scan(
         request_origin_ref=request_ref,
         deployment_mode="self_hosted_private_web",
         client_surface="private_web",
-        root_ids=("root-a",),
+        root_ids=root_ids,
         mode="manual_full_rescan",
         force=True,
         scheduled_at=now - timedelta(seconds=1),
@@ -1055,12 +1140,14 @@ def _claim_linked_full_scan(
     now: datetime,
     request_ref: str,
     worker_id: str | None = None,
+    root_ids: tuple[str, ...] = ("root-a",),
 ):
     _, accepted = _enqueue_linked_full_scan(
         scope,
         repair_id=repair_id,
         now=now,
         request_ref=request_ref,
+        root_ids=root_ids,
     )
     worker_scans, claim, intent, scope_result = _claim_enqueued_full_scan(
         scope,
@@ -2781,6 +2868,7 @@ def _seed_claimed_linked_full_scan(
     now: datetime,
     request_origin_ref: str,
     worker_id: str,
+    root_ids: tuple[str, ...] = ("root-a",),
 ) -> SimpleNamespace:
     app_repository = _repository(scope.app_url)
     worker_repository = _repository(scope.worker_url)
@@ -2802,6 +2890,7 @@ def _seed_claimed_linked_full_scan(
             now=now,
             request_ref=request_origin_ref,
             worker_id=worker_id,
+            root_ids=root_ids,
         )
     )
     return SimpleNamespace(
@@ -2818,6 +2907,531 @@ def _seed_claimed_linked_full_scan(
         intent=intent,
         scope=claimed_scope,
     )
+
+
+def test_repair_full_scan_rebases_dirty_only_retained_successor(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=now,
+        request_origin_ref="watcher:dirty-only-successor",
+        worker_id="watcher-dirty-only-full-scan",
+        root_ids=("root-a", "root-b"),
+    )
+    repaired_root_id = scope.root_database_ids["root-a"]
+    healthy_root_id = scope.root_database_ids["root-b"]
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        successor_id = int(
+            connection.execute(
+                """
+                select successor_generation_id
+                from library.watcher_lanes
+                where library_id = %s and root_id = %s
+                """,
+                (scope.library_id, repaired_root_id),
+            ).fetchone()["successor_generation_id"]
+        )
+        connection.execute(
+            """
+            update library.watcher_repair_roots
+            set captured_accepted_sequence = 1,
+                captured_dirty_generation = 300
+            where repair_id = %s and root_id = %s
+            """,
+            (seeded.repair_id, repaired_root_id),
+        )
+        connection.execute(
+            """
+            update library.watcher_lanes
+            set accepted_sequence = 1,
+                applied_sequence = 0,
+                dirty_generation = 457,
+                repaired_dirty_generation = 0
+            where library_id = %s and root_id = %s
+            """,
+            (scope.library_id, repaired_root_id),
+        )
+        connection.execute(
+            """
+            update library.watcher_generation_participants
+            set accepted_sequence_lower = 1,
+                accepted_sequence_upper = 1,
+                dirty_generation = 457
+            where generation_id = %s and root_id = %s
+            """,
+            (successor_id, repaired_root_id),
+        )
+        connection.execute(
+            """
+            update library.targeted_reconciliation_intents
+            set accepted_sequence_lower = 1,
+                accepted_sequence_upper = 1,
+                dirty_generation = 457
+            where id = %s
+            """,
+            (successor_id,),
+        )
+        connection.execute(
+            """
+            insert into library.watcher_lanes (
+              library_id, root_id, accepted_sequence, applied_sequence,
+              dirty_generation, repaired_dirty_generation,
+              next_eligible_at, disposition_code
+            ) values (%s, %s, 4, 4, 0, 0, %s, 'idle')
+            """,
+            (scope.library_id, healthy_root_id, now),
+        )
+
+    publication = seeded.worker_scans.publish_claimed_full_scan(
+        claim=seeded.claim,
+        intent_id=seeded.full_scan.intent_id,
+        expected_inventory_mutation_revision=(
+            seeded.intent.inventory_mutation_revision
+        ),
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        observed_root_ids=[root["id"] for root in seeded.scope.roots],
+        now=now + timedelta(seconds=1),
+    )
+    assert publication["publication_won"] is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        catch_up = connection.execute(
+            """
+            select repair.state,
+                   repaired_lane.accepted_sequence,
+                   repaired_lane.applied_sequence,
+                   repaired_lane.dirty_generation,
+                   repaired_lane.repaired_dirty_generation,
+                   healthy_lane.accepted_sequence as healthy_accepted_sequence,
+                   healthy_lane.applied_sequence as healthy_applied_sequence,
+                   participant.accepted_sequence_lower,
+                   participant.accepted_sequence_upper,
+                   participant.dirty_generation as participant_dirty_generation
+            from library.watcher_repairs as repair
+            join library.watcher_lanes as repaired_lane
+              on repaired_lane.library_id = repair.library_id
+             and repaired_lane.root_id = %s
+            join library.watcher_lanes as healthy_lane
+              on healthy_lane.library_id = repair.library_id
+             and healthy_lane.root_id = %s
+            join library.watcher_generation_participants as participant
+              on participant.generation_id = repaired_lane.successor_generation_id
+             and participant.library_id = repaired_lane.library_id
+             and participant.root_id = repaired_lane.root_id
+            where repair.id = %s
+            """,
+            (repaired_root_id, healthy_root_id, seeded.repair_id),
+        ).fetchone()
+    assert catch_up == {
+        "state": "catch_up",
+        "accepted_sequence": 2,
+        "applied_sequence": 1,
+        "dirty_generation": 457,
+        "repaired_dirty_generation": 300,
+        "healthy_accepted_sequence": 4,
+        "healthy_applied_sequence": 4,
+        "accepted_sequence_lower": 2,
+        "accepted_sequence_upper": 2,
+        "participant_dirty_generation": 457,
+    }
+
+    _publish_watcher_generation(
+        scope,
+        successor_id,
+        now=now + timedelta(seconds=2),
+        worker_id="watcher-dirty-only-catch-up",
+    )
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        completed = connection.execute(
+            """
+            select repair.state, repair.completed_at,
+                   lane.accepted_sequence, lane.applied_sequence,
+                   lane.dirty_generation, lane.repaired_dirty_generation,
+                   incident.resolved_at
+            from library.watcher_repairs as repair
+            join library.watcher_repair_roots as repair_root
+              on repair_root.repair_id = repair.id
+            join library.watcher_lanes as lane
+              on lane.library_id = repair_root.library_id
+             and lane.root_id = repair_root.root_id
+            join library.watcher_incidents as incident
+              on incident.incident_id = repair_root.incident_id
+            where repair.id = %s and repair_root.root_id = %s
+            """,
+            (seeded.repair_id, repaired_root_id),
+        ).fetchone()
+    assert completed["state"] == "complete"
+    assert completed["completed_at"] is not None
+    assert completed["accepted_sequence"] == 2
+    assert completed["applied_sequence"] == 2
+    assert completed["dirty_generation"] == 457
+    assert completed["repaired_dirty_generation"] == 457
+    assert completed["resolved_at"] is not None
+
+
+def test_repair_full_scan_claim_waits_without_consuming_attempts_for_running_lane(
+    live_watcher_database,
+):
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    app_repository = _repository(scope.app_url)
+    worker_repository = _repository(scope.worker_url)
+    jobs = PostgresJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+
+    catch_up = app_repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-a",
+        reason_code="overflow",
+        observed_at=now,
+    )
+    assert worker_repository.dispatch_ready(now=now, limit=32) == (
+        catch_up.generation_id,
+    )
+    repair_id = _seed_scanning_repair(
+        scope,
+        now=now + timedelta(seconds=1),
+        logical_root_id="root-a",
+    )
+    _, full_scan = _enqueue_linked_full_scan(
+        scope,
+        repair_id=repair_id,
+        now=now + timedelta(seconds=1),
+        request_ref="watcher:capture-running-generation",
+        root_ids=("root-a", "root-b"),
+    )
+
+    for worker_id in (
+        "watcher-deferred-full-scan-1",
+        "watcher-deferred-full-scan-2",
+    ):
+        assert jobs.claim(
+            worker_id=worker_id,
+            now=now + timedelta(seconds=1),
+            lease_seconds=300,
+            kinds=(JobKind.FULL_SCAN,),
+        ) is None
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        deferred_job = connection.execute(
+            """
+            select job.state, job.attempt_count, job.lease_owner,
+                   count(transition.id) filter (
+                     where transition.reason_code = 'claimed'
+                   ) as claim_transition_count
+            from ops.jobs as job
+            left join ops.job_transitions as transition on transition.job_id = job.id
+            where job.id = %s
+            group by job.id
+            """,
+            (full_scan.job_id,),
+        ).fetchone()
+    assert deferred_job == {
+        "state": "queued",
+        "attempt_count": 0,
+        "lease_owner": None,
+        "claim_transition_count": 0,
+    }
+
+    catch_up_claim = jobs.claim(
+        worker_id="watcher-capture-running-generation",
+        now=now + timedelta(seconds=1),
+        lease_seconds=300,
+        kinds=(JobKind.TARGETED_RECONCILIATION,),
+    )
+    assert catch_up_claim is not None
+    generation = worker_repository.claim_generation(
+        claim=catch_up_claim,
+        now=now + timedelta(seconds=1),
+    )
+    assert generation is not None
+    assert generation.generation_id == catch_up.generation_id
+
+    scans = PostgresScanJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    publication = scans.publish_claimed_targeted_reconciliation(
+        claim=catch_up_claim,
+        intent_id=catch_up.generation_id,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        stale_scopes=(),
+        now=now + timedelta(seconds=2),
+    )
+    assert publication["publication_won"] is True
+    assert jobs.finish(
+        catch_up_claim,
+        JobTransitionResult(JobState.SUCCEEDED, "scan_completed"),
+        now=now + timedelta(seconds=2),
+    ) is True
+
+    full_scan_claim = jobs.claim(
+        worker_id="watcher-capture-full-scan",
+        now=now + timedelta(seconds=3),
+        lease_seconds=300,
+        kinds=(JobKind.FULL_SCAN,),
+    )
+    assert full_scan_claim is not None
+    assert full_scan_claim.job_id == full_scan.job_id
+    assert full_scan_claim.attempt == 1
+    captured = scans.load_claimed_full_scan(
+        job_id=full_scan_claim.job_id,
+        worker_id=full_scan_claim.worker_id,
+        lease_token=full_scan_claim.lease_token,
+    )
+    assert captured is not None
+    assert captured.intent_id == full_scan.intent_id
+    assert captured.inventory_mutation_revision == publication[
+        "inventory_mutation_revision"
+    ]
+
+
+def test_repair_full_scan_fences_nonoverlapping_root_until_global_publication(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=now,
+        request_origin_ref="watcher:library-global-dispatch-fence",
+        worker_id="watcher-library-global-full-scan",
+        root_ids=("root-a",),
+    )
+    accepted = seeded.app_repository.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-b", "during-root-a-full-scan.mp3"),
+        accepted_at=now + timedelta(seconds=1),
+    )
+
+    assert seeded.worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=1),
+        limit=32,
+    ) == ()
+
+    full_publication = _publish_linked_full_scan(
+        seeded.worker_scans,
+        seeded.full_scan,
+        seeded.claim,
+        seeded.intent,
+        seeded.scope,
+        now=now + timedelta(seconds=2),
+    )
+    assert seeded.jobs.finish(
+        seeded.claim,
+        JobTransitionResult(JobState.SUCCEEDED, "scan_completed"),
+        now=now + timedelta(seconds=2),
+    ) is True
+
+    targeted_publication = _publish_watcher_generation(
+        scope,
+        accepted.generation_id,
+        now=now + timedelta(seconds=3),
+        worker_id="watcher-library-global-root-b",
+    )
+    assert targeted_publication["inventory_mutation_revision"] > full_publication[
+        "inventory_mutation_revision"
+    ]
+
+
+def test_repair_full_scan_claim_waits_for_running_nonoverlapping_root(
+    live_watcher_database,
+):
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    app_repository = _repository(scope.app_url)
+    worker_repository = _repository(scope.worker_url)
+    jobs = PostgresJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+
+    initial = app_repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-a",
+        reason_code="overflow",
+        observed_at=now,
+    )
+    repair_id = _seed_scanning_repair(
+        scope,
+        now=now,
+        logical_root_id="root-a",
+    )
+    _publish_watcher_generation(
+        scope,
+        initial.generation_id,
+        now=now,
+        worker_id="watcher-library-global-root-a-setup",
+    )
+
+    root_b = app_repository.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-b", "already-running.mp3"),
+        accepted_at=now + timedelta(seconds=1),
+    )
+    assert worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=1),
+        limit=32,
+    ) == (root_b.generation_id,)
+    root_b_claim = jobs.claim(
+        worker_id="watcher-library-global-running-root-b",
+        now=now + timedelta(seconds=1),
+        lease_seconds=300,
+        kinds=(JobKind.TARGETED_RECONCILIATION,),
+    )
+    assert root_b_claim is not None
+    running = worker_repository.claim_generation(
+        claim=root_b_claim,
+        now=now + timedelta(seconds=1),
+    )
+    assert running is not None
+    assert running.generation_id == root_b.generation_id
+
+    _, full_scan = _enqueue_linked_full_scan(
+        scope,
+        repair_id=repair_id,
+        now=now + timedelta(seconds=2),
+        request_ref="watcher:library-global-claim-fence",
+        root_ids=("root-a",),
+    )
+    for worker_id in (
+        "watcher-library-global-deferred-full-scan-1",
+        "watcher-library-global-deferred-full-scan-2",
+    ):
+        assert jobs.claim(
+            worker_id=worker_id,
+            now=now + timedelta(seconds=2),
+            lease_seconds=300,
+            kinds=(JobKind.FULL_SCAN,),
+        ) is None
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        deferred_job = connection.execute(
+            """
+            select state, attempt_count, lease_owner
+            from ops.jobs
+            where id = %s
+            """,
+            (full_scan.job_id,),
+        ).fetchone()
+    assert deferred_job == {
+        "state": "queued",
+        "attempt_count": 0,
+        "lease_owner": None,
+    }
+
+    scans = PostgresScanJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    root_b_publication = scans.publish_claimed_targeted_reconciliation(
+        claim=root_b_claim,
+        intent_id=root_b.generation_id,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        stale_scopes=(),
+        now=now + timedelta(seconds=3),
+    )
+    assert root_b_publication["publication_won"] is True
+    assert jobs.finish(
+        root_b_claim,
+        JobTransitionResult(JobState.SUCCEEDED, "scan_completed"),
+        now=now + timedelta(seconds=3),
+    ) is True
+
+    full_scan_claim = jobs.claim(
+        worker_id="watcher-library-global-full-scan",
+        now=now + timedelta(seconds=4),
+        lease_seconds=300,
+        kinds=(JobKind.FULL_SCAN,),
+    )
+    assert full_scan_claim is not None
+    assert full_scan_claim.job_id == full_scan.job_id
+    assert full_scan_claim.attempt == 1
+    captured = scans.load_claimed_full_scan(
+        job_id=full_scan_claim.job_id,
+        worker_id=full_scan_claim.worker_id,
+        lease_token=full_scan_claim.lease_token,
+    )
+    assert captured.intent_id == full_scan.intent_id
+    assert captured.inventory_mutation_revision == root_b_publication[
+        "inventory_mutation_revision"
+    ]
+
+
+def test_retry_wait_repair_fences_overlapping_generation_dispatch(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=now,
+        request_origin_ref="watcher:retry-wait-dispatch-fence",
+        worker_id="watcher-retry-wait-full-scan",
+    )
+    accepted = seeded.app_repository.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-a", "during-retry-wait.mp3"),
+        accepted_at=now + timedelta(milliseconds=1),
+    )
+
+    assert seeded.jobs.finish(
+        seeded.claim,
+        JobTransitionResult(
+            JobState.RETRY_WAIT,
+            "full_scan_revision_conflict",
+            scheduled_at=now + timedelta(seconds=5),
+        ),
+        now=now,
+    ) is True
+    assert seeded.worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=1),
+        limit=32,
+    ) == ()
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        lane = connection.execute(
+            """
+            select running_generation_id, running_job_id,
+                   successor_generation_id
+            from library.watcher_lanes
+            where library_id = %s and root_id = %s
+            """,
+            (scope.library_id, scope.root_database_ids["root-a"]),
+        ).fetchone()
+    assert lane == {
+        "running_generation_id": None,
+        "running_job_id": None,
+        "successor_generation_id": accepted.generation_id,
+    }
 
 
 def _wait_for_blocked_backend(
@@ -2962,6 +3576,191 @@ def test_complete_repair_is_idempotent_after_atomic_full_scan_publication(
         now=NOW + timedelta(seconds=1),
     ) is True
     assert load_repair_completion() == completed
+
+
+def test_scanning_repair_fences_new_generation_until_full_scan_publication(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=now,
+        request_origin_ref="watcher:scanning-dispatch-fence",
+        worker_id="watcher-scanning-dispatch-fence-worker",
+    )
+
+    first = seeded.app_repository.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-a", "accepted-during-scan-1.mp3"),
+        accepted_at=now + timedelta(seconds=1),
+    )
+    second = seeded.app_repository.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-a", "accepted-during-scan-2.mp3"),
+        accepted_at=now + timedelta(seconds=2),
+    )
+    assert second.generation_id == first.generation_id
+    assert second.participants[0].accepted_sequence_upper == (
+        first.participants[0].accepted_sequence_upper + 1
+    )
+
+    assert seeded.worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=3),
+        limit=32,
+    ) == ()
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        during_scan = connection.execute(
+            """
+            select repair.state as repair_state,
+                   generation.watcher_job_linked_at,
+                   generation.watcher_completed_at,
+                   lane.accepted_sequence,
+                   lane.applied_sequence,
+                   participant.accepted_sequence_lower,
+                   participant.accepted_sequence_upper,
+                   exists (
+                     select 1
+                     from library.watcher_generation_repairs as repair_link
+                     where repair_link.generation_id = generation.id
+                   ) as repair_linked
+              from library.watcher_repairs as repair
+              join library.watcher_repair_roots as repair_root
+                on repair_root.repair_id = repair.id
+              join library.watcher_lanes as lane
+                on lane.library_id = repair_root.library_id
+               and lane.root_id = repair_root.root_id
+              join library.targeted_reconciliation_intents as generation
+                on generation.id = lane.successor_generation_id
+              join library.watcher_generation_participants as participant
+                on participant.generation_id = generation.id
+               and participant.library_id = lane.library_id
+               and participant.root_id = lane.root_id
+             where repair.id = %s
+               and generation.id = %s
+            """,
+            (seeded.repair_id, first.generation_id),
+        ).fetchone()
+    assert during_scan == {
+        "repair_state": "scanning",
+        "watcher_job_linked_at": None,
+        "watcher_completed_at": None,
+        "accepted_sequence": second.participants[0].accepted_sequence_upper,
+        "applied_sequence": 0,
+        "accepted_sequence_lower": 1,
+        "accepted_sequence_upper": second.participants[0].accepted_sequence_upper,
+        "repair_linked": False,
+    }
+
+    publication = seeded.worker_scans.publish_claimed_full_scan(
+        claim=seeded.claim,
+        intent_id=seeded.full_scan.intent_id,
+        expected_inventory_mutation_revision=seeded.intent.inventory_mutation_revision,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        observed_root_ids=[root["id"] for root in seeded.scope.roots],
+        now=now + timedelta(seconds=4),
+    )
+    assert publication["publication_won"] is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        catch_up = connection.execute(
+            """
+            select repair.state as repair_state,
+                   generation.watcher_generation_kind,
+                   generation.watcher_job_linked_at,
+                   generation.watcher_completed_at,
+                   lane.accepted_sequence,
+                   lane.applied_sequence,
+                   participant.accepted_sequence_lower,
+                   participant.accepted_sequence_upper,
+                   exists (
+                     select 1
+                     from library.watcher_generation_repairs as repair_link
+                     where repair_link.generation_id = generation.id
+                       and repair_link.repair_id = repair.id
+                   ) as repair_linked
+              from library.watcher_repairs as repair
+              join library.watcher_repair_roots as repair_root
+                on repair_root.repair_id = repair.id
+              join library.watcher_lanes as lane
+                on lane.library_id = repair_root.library_id
+               and lane.root_id = repair_root.root_id
+              join library.targeted_reconciliation_intents as generation
+                on generation.id = lane.successor_generation_id
+              join library.watcher_generation_participants as participant
+                on participant.generation_id = generation.id
+               and participant.library_id = lane.library_id
+               and participant.root_id = lane.root_id
+             where repair.id = %s
+               and generation.id = %s
+            """,
+            (seeded.repair_id, first.generation_id),
+        ).fetchone()
+    assert catch_up == {
+        "repair_state": "catch_up",
+        "watcher_generation_kind": "root_catch_up",
+        "watcher_job_linked_at": None,
+        "watcher_completed_at": None,
+        "accepted_sequence": second.participants[0].accepted_sequence_upper,
+        "applied_sequence": 1,
+        "accepted_sequence_lower": 2,
+        "accepted_sequence_upper": second.participants[0].accepted_sequence_upper,
+        "repair_linked": True,
+    }
+
+    assert seeded.jobs.finish(
+        seeded.claim,
+        JobTransitionResult(JobState.SUCCEEDED, "scan_completed"),
+        now=now + timedelta(seconds=5),
+    ) is True
+    _publish_watcher_generation(
+        scope,
+        first.generation_id,
+        now=now + timedelta(seconds=6),
+        worker_id="watcher-scanning-dispatch-catch-up",
+    )
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        completed = connection.execute(
+            """
+            select repair.state as repair_state,
+                   repair.completed_at,
+                   incident.resolved_at,
+                   lane.accepted_sequence,
+                   lane.applied_sequence,
+                   participant.accepted_sequence_upper,
+                   generation.watcher_completed_at
+              from library.watcher_repairs as repair
+              join library.watcher_repair_roots as repair_root
+                on repair_root.repair_id = repair.id
+              join library.watcher_incidents as incident
+                on incident.incident_id = repair_root.incident_id
+              join library.watcher_lanes as lane
+                on lane.library_id = repair_root.library_id
+               and lane.root_id = repair_root.root_id
+              join library.targeted_reconciliation_intents as generation
+                on generation.id = %s
+              join library.watcher_generation_participants as participant
+                on participant.generation_id = generation.id
+               and participant.library_id = lane.library_id
+               and participant.root_id = lane.root_id
+             where repair.id = %s
+            """,
+            (first.generation_id, seeded.repair_id),
+        ).fetchone()
+    assert completed["repair_state"] == "complete"
+    assert completed["completed_at"] is not None
+    assert completed["resolved_at"] is not None
+    assert completed["watcher_completed_at"] is not None
+    assert completed["accepted_sequence"] == second.participants[0].accepted_sequence_upper
+    assert completed["applied_sequence"] == completed["accepted_sequence"]
+    assert completed["accepted_sequence_upper"] == completed["accepted_sequence"]
 
 
 def test_full_scan_publication_routes_late_repair_through_root_catch_up(
@@ -3112,6 +3911,225 @@ def test_full_scan_publication_routes_late_repair_through_root_catch_up(
     assert completed["resolved_at"] is not None
     assert completed["watcher_repair_id"] == seeded.repair_id
     assert completed["original_repair_state"] == "complete"
+
+
+def test_root_catch_up_handler_publishes_empty_participant_root_for_late_repair(
+    live_watcher_database,
+):
+    from music_app.jobs.scan_handlers import build_targeted_reconciliation_handler
+    from music_app.services.scan_cache_persistence import (
+        DurableTargetedReconciliationPreparationAdapter,
+    )
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=now,
+        request_origin_ref="watcher:handler-late-repair-background",
+        worker_id="watcher-handler-late-repair-full-scan",
+    )
+    publication = seeded.worker_scans.publish_claimed_full_scan(
+        claim=seeded.claim,
+        intent_id=seeded.full_scan.intent_id,
+        expected_inventory_mutation_revision=seeded.intent.inventory_mutation_revision,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        observed_root_ids=[root["id"] for root in seeded.scope.roots],
+        now=now + timedelta(seconds=1),
+    )
+    assert publication["publication_won"] is True
+
+    seeded.app_repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-a",
+        reason_code="overflow",
+        observed_at=now + timedelta(seconds=2),
+    )
+    app_scans = PostgresScanJobRepository(
+        database_url=scope.app_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    repair_request = app_scans.enqueue_full_scan(
+        library_id=scope.library_id,
+        account_id=scope.account_id,
+        capability_key="library.refresh",
+        request_origin_ref="watcher:handler-late-repair",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        root_ids=("root-a",),
+        mode="manual_full_rescan",
+        force=True,
+        scheduled_at=now + timedelta(seconds=3),
+    )
+    assert repair_request.intent_id == seeded.full_scan.intent_id
+    assert repair_request.job_id == seeded.claim.job_id
+    assert repair_request.created is False
+    assert seeded.jobs.finish(
+        seeded.claim,
+        JobTransitionResult(JobState.SUCCEEDED, "scan_completed"),
+        now=now + timedelta(seconds=4),
+    ) is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        catch_up = connection.execute(
+            """
+            select repair.id as repair_id, lane.successor_generation_id
+            from library.full_scan_intents as intent
+            join library.watcher_repairs as original
+              on original.id = intent.watcher_repair_id
+            join library.watcher_repairs as repair
+              on repair.library_id = intent.library_id
+             and repair.id <> original.id
+             and repair.state = 'catch_up'
+            join library.watcher_repair_roots as repair_root
+              on repair_root.repair_id = repair.id
+            join library.watcher_lanes as lane
+              on lane.library_id = repair_root.library_id
+             and lane.root_id = repair_root.root_id
+            where intent.id = %s
+            """,
+            (seeded.full_scan.intent_id,),
+        ).fetchone()
+    assert catch_up["successor_generation_id"] is not None
+
+    recovery = _repository(scope.worker_url)
+    assert recovery.dispatch_ready(
+        now=now + timedelta(seconds=5),
+        limit=32,
+    ) == (catch_up["successor_generation_id"],)
+    jobs = PostgresJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="watcher-handler-late-repair-catch-up",
+        now=now + timedelta(seconds=5),
+        lease_seconds=300,
+        kinds=(JobKind.TARGETED_RECONCILIATION,),
+    )
+    assert claim is not None
+    assert claim.parameters["intent_id"] == catch_up["successor_generation_id"]
+
+    class RecordingScanRepository(PostgresScanJobRepository):
+        def __init__(self):
+            super().__init__(
+                database_url=scope.worker_url,
+                connect_to_database=isolatedPostgres._connect,
+            )
+            self.publication_errors = []
+
+        def publish_claimed_targeted_reconciliation(self, **kwargs):
+            try:
+                return super().publish_claimed_targeted_reconciliation(**kwargs)
+            except Exception as exc:
+                self.publication_errors.append(
+                    (getattr(exc, "sqlstate", None), str(exc))
+                )
+                raise
+
+    class RecordingRecovery:
+        def __init__(self):
+            self.failure_calls = []
+
+        def claim_generation(self, **kwargs):
+            return recovery.claim_generation(**kwargs)
+
+        def fail_generation(self, **kwargs):
+            self.failure_calls.append(kwargs)
+            return recovery.fail_generation(**kwargs)
+
+    class Context:
+        cancel_requested = False
+        lease_active = True
+
+        @staticmethod
+        def reauthorize():
+            return SimpleNamespace(allowed=True, reason_code="authorized")
+
+    scan_repository = RecordingScanRepository()
+    recording_recovery = RecordingRecovery()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=DurableTargetedReconciliationPreparationAdapter(
+            build_albums=lambda _cache, _separate_release_keys: [],
+        ),
+        root_definitions=(),
+    )
+    handler = build_targeted_reconciliation_handler(
+        scan_repository=scan_repository,
+        reconciler=reconciler,
+        watcher_recovery=recording_recovery,
+        clock=lambda: now + timedelta(seconds=6),
+    )
+
+    result = handler(claim, Context())
+
+    assert scan_repository.publication_errors == []
+    assert result == JobTransitionResult(
+        JobState.SUCCEEDED,
+        "targeted_reconciliation_completed",
+    )
+    assert recording_recovery.failure_calls == []
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        published = connection.execute(
+            """
+            select watcher_completed_at
+            from library.targeted_reconciliation_intents
+            where id = %s
+            """,
+            (catch_up["successor_generation_id"],),
+        ).fetchone()
+    assert published["watcher_completed_at"] is not None
+    assert jobs.finish(
+        claim,
+        result,
+        now=now + timedelta(seconds=7),
+    ) is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        completed = connection.execute(
+            """
+            select repair.state, repair.completed_at, incident.resolved_at,
+                   lane.accepted_sequence, lane.applied_sequence,
+                   lane.dirty_generation, lane.repaired_dirty_generation,
+                   lane.running_generation_id, lane.running_job_id,
+                   lane.successor_generation_id
+            from library.watcher_repairs as repair
+            join library.watcher_repair_roots as repair_root
+              on repair_root.repair_id = repair.id
+            join library.watcher_incidents as incident
+              on incident.incident_id = repair_root.incident_id
+            join library.watcher_lanes as lane
+              on lane.library_id = repair_root.library_id
+             and lane.root_id = repair_root.root_id
+            where repair.id = %s
+            """,
+            (catch_up["repair_id"],),
+        ).fetchone()
+    assert completed == {
+        "state": "complete",
+        "completed_at": completed["completed_at"],
+        "resolved_at": completed["resolved_at"],
+        "accepted_sequence": 2,
+        "applied_sequence": 2,
+        "dirty_generation": 2,
+        "repaired_dirty_generation": 2,
+        "running_generation_id": None,
+        "running_job_id": None,
+        "successor_generation_id": None,
+    }
+    assert completed["completed_at"] is not None
+    assert completed["resolved_at"] is not None
 
 
 def test_repair_admission_and_linked_publication_share_job_before_repair_lock(
@@ -3322,7 +4340,47 @@ def test_linked_full_scan_lease_expiry_rolls_back_inventory_and_repair(
     assert load_state() == before
 
 
-def test_linked_full_scan_and_targeted_publication_share_repair_before_inventory_lock(
+def test_linked_multiroot_full_scan_fences_dispatch_until_lease_expires(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=now,
+        request_origin_ref="watcher:multiroot-dispatch-fence",
+        worker_id="watcher-multiroot-dispatch-fence-worker",
+        root_ids=("root-a", "root-b"),
+    )
+    accepted = seeded.app_repository.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-b", "during-linked-full-scan.mp3"),
+        accepted_at=now + timedelta(seconds=1),
+    )
+
+    assert seeded.worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=1),
+        limit=32,
+    ) == ()
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        expired = connection.execute(
+            """
+            update ops.jobs
+            set lease_expires_at = %s
+            where id = %s
+            returning id
+            """,
+            (now + timedelta(seconds=2), seeded.claim.job_id),
+        ).fetchone()
+    assert expired == {"id": seeded.claim.job_id}
+    assert accepted.generation_id in seeded.worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=3),
+        limit=32,
+    )
+
+
+def test_linked_full_scan_locks_repair_before_inventory_then_replays_deferred_generation(
     live_watcher_database,
 ):
     scope = live_watcher_database
@@ -3334,42 +4392,24 @@ def test_linked_full_scan_and_targeted_publication_share_repair_before_inventory
         worker_id="watcher-full-publication-worker",
     )
 
-    accepted = seeded.app_repository.accept_event(
+    first = seeded.app_repository.accept_event(
         library_id=scope.library_id,
-        event=_created(scope, "root-a", "during-repair.mp3"),
+        event=_created(scope, "root-a", "during-repair-1.mp3"),
         accepted_at=now + timedelta(seconds=1),
     )
-    assert seeded.worker_repository.dispatch_ready(
-        now=now + timedelta(seconds=1),
-        limit=32,
-    ) == (accepted.generation_id,)
-    targeted_claim = seeded.jobs.claim(
-        worker_id="watcher-targeted-publication-worker",
-        now=now + timedelta(seconds=1),
-        lease_seconds=300,
-        kinds=(JobKind.TARGETED_RECONCILIATION,),
-    )
-    assert targeted_claim is not None
-    targeted_intent = seeded.worker_scans.load_claimed_targeted_reconciliation(
-        job_id=targeted_claim.job_id,
-        worker_id=targeted_claim.worker_id,
-        lease_token=targeted_claim.lease_token,
-    )
-    assert targeted_intent.watcher_generation_kind is not None
-    assert seeded.worker_repository.claim_generation(
-        claim=targeted_claim,
-        now=now + timedelta(seconds=1),
-    ) is not None
-    targeted_scope = seeded.worker_scans.load_claimed_targeted_reconciliation_scope(
-        intent_id=accepted.generation_id,
+    newest = seeded.app_repository.accept_event(
         library_id=scope.library_id,
-        job_id=targeted_claim.job_id,
-        attempt=targeted_claim.attempt,
-        worker_id=targeted_claim.worker_id,
-        lease_token=targeted_claim.lease_token,
-        now=now + timedelta(seconds=1),
+        event=_created(scope, "root-a", "during-repair-2.mp3"),
+        accepted_at=now + timedelta(seconds=2),
     )
-    assert targeted_scope.scope_complete is True
+    assert newest.generation_id == first.generation_id
+    assert newest.participants[0].accepted_sequence_upper == (
+        first.participants[0].accepted_sequence_upper + 1
+    )
+    assert seeded.worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=3),
+        limit=32,
+    ) == ()
 
     inventory = json.dumps(
         {
@@ -3383,7 +4423,7 @@ def test_linked_full_scan_and_targeted_publication_share_repair_before_inventory
     results = {}
     errors = []
     full_connected = Event()
-    targeted_connected = Event()
+    repair_lock_connected = Event()
 
     def publish_full_scan():
         try:
@@ -3415,36 +4455,24 @@ def test_linked_full_scan_and_targeted_publication_share_repair_before_inventory
         except BaseException as error:
             errors.append(("full", error))
 
-    def publish_targeted():
+    def lock_repair():
         try:
-            with isolatedPostgres._connect(scope.worker_url) as connection:
+            with isolatedPostgres._connect(scope.setup_url) as connection:
                 connection.execute("set local lock_timeout = '10s'")
                 connection.execute("set local statement_timeout = '20s'")
-                results["targeted_pid"] = connection.execute(
+                results["repair_lock_pid"] = connection.execute(
                     "select pg_backend_pid() as pid"
                 ).fetchone()["pid"]
-                targeted_connected.set()
-                results["targeted"] = connection.execute(
-                    """
-                    select * from library.publish_claimed_targeted_reconciliation(
-                      %s, %s, %s, %s, %s, %s::jsonb, '[]'::jsonb, %s
-                    )
-                    """,
-                    (
-                        accepted.generation_id,
-                        targeted_claim.job_id,
-                        targeted_claim.attempt,
-                        targeted_claim.worker_id,
-                        targeted_claim.lease_token,
-                        inventory,
-                        now + timedelta(seconds=2),
-                    ),
+                repair_lock_connected.set()
+                results["repair_lock"] = connection.execute(
+                    "select state from library.watcher_repairs where id = %s for update",
+                    (seeded.repair_id,),
                 ).fetchone()
         except BaseException as error:
-            errors.append(("targeted", error))
+            errors.append(("repair_lock", error))
 
     full_thread = Thread(target=publish_full_scan, daemon=True)
-    targeted_thread = Thread(target=publish_targeted, daemon=True)
+    repair_lock_thread = Thread(target=lock_repair, daemon=True)
     with isolatedPostgres._connect(scope.setup_url) as blocker:
         blocker_pid = blocker.execute(
             "select pg_backend_pid() as pid"
@@ -3464,62 +4492,130 @@ def test_linked_full_scan_and_targeted_publication_share_repair_before_inventory
                     blocking_pid=blocker_pid,
                 )
                 if full_blocked:
-                    targeted_thread.start()
-                    assert targeted_connected.wait(timeout=5), errors
-                    targeted_pid = int(results["targeted_pid"])
-                    targeted_blocked = _wait_for_blocked_backend(
+                    repair_lock_thread.start()
+                    assert repair_lock_connected.wait(timeout=5), errors
+                    repair_lock_pid = int(results["repair_lock_pid"])
+                    repair_lock_blocked = _wait_for_blocked_backend(
                         observer,
-                        query_pid=targeted_pid,
+                        query_pid=repair_lock_pid,
                         blocking_pid=full_pid,
                     )
         finally:
             blocker.commit()
 
     full_thread.join(timeout=25)
-    if targeted_thread.ident is not None:
-        targeted_thread.join(timeout=25)
+    if repair_lock_thread.ident is not None:
+        repair_lock_thread.join(timeout=25)
     assert full_blocked, (
         "full publication never reached the held inventory row: "
         f"results={results!r}, errors={errors!r}"
     )
-    assert targeted_blocked, (
-        "targeted publication was not serialized behind full publication: "
+    assert repair_lock_blocked, (
+        "repair row was not locked before full publication reached inventory: "
         f"results={results!r}, errors={errors!r}"
     )
     assert not full_thread.is_alive()
-    assert not targeted_thread.is_alive()
+    assert not repair_lock_thread.is_alive()
     assert errors == []
     assert results["full"]["publication_won"] is True
-    assert results["targeted"]["publication_won"] is True
-    assert (
-        results["full"]["inventory_mutation_revision"]
-        < results["targeted"]["inventory_mutation_revision"]
-    )
+    assert results["repair_lock"] == {"state": "catch_up"}
     with isolatedPostgres._connect(scope.setup_url) as connection:
-        final_state = connection.execute(
+        catch_up = connection.execute(
             """
-            select repair.state, repair.completed_at,
+            select repair.state, repair.inventory_revision,
+                   intent.watcher_generation_kind,
+                   intent.watcher_job_linked_at,
                    intent.watcher_completed_at,
                    lane.running_generation_id, lane.running_job_id,
-                   lane.accepted_sequence, lane.applied_sequence
+                   lane.successor_generation_id,
+                   lane.accepted_sequence, lane.applied_sequence,
+                   participant.accepted_sequence_lower,
+                   participant.accepted_sequence_upper,
+                   (select count(*) from ops.jobs as job
+                     where job.subject_kind = 'targeted_reconciliation_intent'
+                       and job.subject_ref = intent.id::text) as targeted_job_count
             from library.watcher_repairs repair
             join library.targeted_reconciliation_intents intent on intent.id = %s
             join library.watcher_lanes lane
               on lane.library_id = repair.library_id and lane.root_id = %s
+            join library.watcher_generation_participants participant
+              on participant.generation_id = intent.id
+             and participant.library_id = lane.library_id
+             and participant.root_id = lane.root_id
             where repair.id = %s
             """,
             (
-                accepted.generation_id,
+                newest.generation_id,
                 scope.root_database_ids["root-a"],
                 seeded.repair_id,
             ),
         ).fetchone()
-    assert final_state["state"] == "complete"
-    assert final_state["completed_at"] is not None
-    assert final_state["watcher_completed_at"] is not None
-    assert final_state["running_generation_id"] is None
-    assert final_state["running_job_id"] is None
-    assert final_state["applied_sequence"] == final_state["accepted_sequence"]
+    assert catch_up == {
+        "state": "catch_up",
+        "inventory_revision": results["full"]["inventory_mutation_revision"],
+        "watcher_generation_kind": "root_catch_up",
+        "watcher_job_linked_at": None,
+        "watcher_completed_at": None,
+        "running_generation_id": None,
+        "running_job_id": None,
+        "successor_generation_id": newest.generation_id,
+        "accepted_sequence": newest.participants[0].accepted_sequence_upper,
+        "applied_sequence": 1,
+        "accepted_sequence_lower": 2,
+        "accepted_sequence_upper": newest.participants[0].accepted_sequence_upper,
+        "targeted_job_count": 0,
+    }
+
+    assert seeded.jobs.finish(
+        seeded.claim,
+        JobTransitionResult(JobState.SUCCEEDED, "scan_completed"),
+        now=now + timedelta(seconds=4),
+    ) is True
+    targeted = _publish_watcher_generation(
+        scope,
+        newest.generation_id,
+        now=now + timedelta(seconds=5),
+        worker_id="watcher-publication-lock-order-catch-up",
+    )
+    assert (
+        targeted["inventory_mutation_revision"]
+        > results["full"]["inventory_mutation_revision"]
+    )
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        completed = connection.execute(
+            """
+            select repair.state, repair.completed_at, incident.resolved_at,
+                   intent.watcher_completed_at,
+                   lane.accepted_sequence, lane.applied_sequence,
+                   participant.accepted_sequence_upper
+            from library.watcher_repairs repair
+            join library.watcher_repair_roots repair_root
+              on repair_root.repair_id = repair.id
+            join library.watcher_incidents incident
+              on incident.incident_id = repair_root.incident_id
+            join library.targeted_reconciliation_intents intent on intent.id = %s
+            join library.watcher_lanes lane
+              on lane.library_id = repair.library_id and lane.root_id = %s
+            join library.watcher_generation_participants participant
+              on participant.generation_id = intent.id
+             and participant.library_id = lane.library_id
+             and participant.root_id = lane.root_id
+            where repair.id = %s
+            """,
+            (
+                newest.generation_id,
+                scope.root_database_ids["root-a"],
+                seeded.repair_id,
+            ),
+        ).fetchone()
+    assert completed["state"] == "complete"
+    assert completed["completed_at"] is not None
+    assert completed["resolved_at"] is not None
+    assert completed["watcher_completed_at"] is not None
+    assert completed["accepted_sequence"] == newest.participants[0].accepted_sequence_upper
+    assert completed["applied_sequence"] == completed["accepted_sequence"]
+    assert completed["accepted_sequence_upper"] == completed["accepted_sequence"]
 
 
 def test_targeted_publication_and_failure_share_lane_before_intent_lock_order(
@@ -3657,6 +4753,130 @@ def test_targeted_publication_and_failure_share_lane_before_intent_lock_order(
     assert len(errors) == 1
     assert isinstance(errors[0], psycopg.errors.SerializationFailure)
     assert not isinstance(errors[0], psycopg.errors.DeadlockDetected)
+
+
+def test_failed_root_catch_up_preserves_specific_incident_reason_and_identity(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    app_repository = _repository(scope.app_url)
+    worker_repository = _repository(scope.worker_url)
+    root_id = scope.root_database_ids["root-a"]
+
+    dirty = app_repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-a",
+        reason_code="root_unavailable",
+        observed_at=now,
+    )
+    assert worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=1),
+        limit=32,
+    ) == (dirty.generation_id,)
+
+    jobs = PostgresJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="worker-specific-incident",
+        now=now + timedelta(seconds=1),
+        lease_seconds=30,
+    )
+    assert claim is not None
+    generation = worker_repository.claim_generation(
+        claim=claim,
+        now=now + timedelta(seconds=1),
+    )
+    assert generation is not None
+    assert generation.generation_kind == "root_catch_up"
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        before = connection.execute(
+            """
+            select incident.incident_id,
+                   incident.warning_token,
+                   incident.reason_code,
+                   incident.occurrence_count,
+                   lane.accepted_sequence,
+                   lane.applied_sequence,
+                   lane.dirty_generation,
+                   lane.repaired_dirty_generation
+            from library.watcher_incidents as incident
+            join library.watcher_lanes as lane
+              on lane.library_id = incident.library_id
+             and lane.root_id = incident.root_id
+            where incident.library_id = %s
+              and incident.root_id = %s
+              and incident.resolved_at is null
+            """,
+            (scope.library_id, root_id),
+        ).fetchone()
+    assert before is not None
+    assert str(before["incident_id"]) == dirty.incident_id
+    assert str(before["warning_token"]) == dirty.warning_token
+    assert before["reason_code"] == "root_unavailable"
+    assert before["occurrence_count"] == 1
+
+    assert worker_repository.fail_generation(
+        claim=claim,
+        generation=generation,
+        reason_code="reconciliation_failed",
+        now=now + timedelta(seconds=2),
+    ) is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        after = connection.execute(
+            """
+            select incident.incident_id,
+                   incident.warning_token,
+                   incident.reason_code,
+                   incident.occurrence_count,
+                   lane.accepted_sequence,
+                   lane.applied_sequence,
+                   lane.dirty_generation,
+                   lane.repaired_dirty_generation,
+                   lane.running_generation_id,
+                   lane.running_job_id,
+                   lane.successor_generation_id,
+                   successor.watcher_generation_kind,
+                   participant.accepted_sequence_lower,
+                   participant.accepted_sequence_upper,
+                   participant.dirty_generation as participant_dirty_generation
+            from library.watcher_incidents as incident
+            join library.watcher_lanes as lane
+              on lane.library_id = incident.library_id
+             and lane.root_id = incident.root_id
+            join library.targeted_reconciliation_intents as successor
+              on successor.id = lane.successor_generation_id
+            join library.watcher_generation_participants as participant
+              on participant.generation_id = successor.id
+             and participant.library_id = lane.library_id
+             and participant.root_id = lane.root_id
+            where incident.library_id = %s
+              and incident.root_id = %s
+              and incident.resolved_at is null
+            """,
+            (scope.library_id, root_id),
+        ).fetchone()
+
+    assert after is not None
+    assert after["incident_id"] == before["incident_id"]
+    assert after["warning_token"] == before["warning_token"]
+    assert after["reason_code"] == "root_unavailable"
+    assert after["occurrence_count"] == before["occurrence_count"] + 1
+    assert after["accepted_sequence"] == before["accepted_sequence"]
+    assert after["applied_sequence"] == before["applied_sequence"]
+    assert after["dirty_generation"] == before["dirty_generation"] + 1
+    assert after["repaired_dirty_generation"] == before["repaired_dirty_generation"]
+    assert after["running_generation_id"] is None
+    assert after["running_job_id"] is None
+    assert after["successor_generation_id"] != generation.generation_id
+    assert after["watcher_generation_kind"] == "root_catch_up"
+    assert after["accepted_sequence_lower"] == after["accepted_sequence"]
+    assert after["accepted_sequence_upper"] == after["accepted_sequence"]
+    assert after["participant_dirty_generation"] == after["dirty_generation"]
 
 
 def test_failed_cross_root_generation_marks_every_participant_dirty(
@@ -3876,12 +5096,152 @@ def test_terminal_cancellation_releases_lane_through_due_reconciliation(
             """,
             (lane["successor_generation_id"],),
         ).fetchone()
+        incident = connection.execute(
+            """
+            select reason_code, occurrence_count
+            from library.watcher_incidents
+            where library_id = %s and root_id = %s
+              and resolved_at is null
+            """,
+            (scope.library_id, scope.root_database_ids["root-a"]),
+        ).fetchone()
 
     assert lane["running_generation_id"] is None
     assert lane["running_job_id"] is None
     assert lane["successor_generation_id"] is not None
     assert lane["disposition_code"] == "dirty"
     assert successor["watcher_generation_kind"] == "root_catch_up"
+    assert incident == {
+        "reason_code": "reconciliation_failed",
+        "occurrence_count": 1,
+    }
+
+
+def test_due_reconciliation_preserves_specific_incident_reason_and_identity(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    app_repository = _repository(scope.app_url)
+    worker_repository = _repository(scope.worker_url)
+    root_id = scope.root_database_ids["root-a"]
+
+    dirty = app_repository.mark_dirty(
+        library_id=scope.library_id,
+        logical_root_id="root-a",
+        reason_code="root_unavailable",
+        observed_at=now,
+    )
+    assert worker_repository.dispatch_ready(
+        now=now + timedelta(seconds=1),
+        limit=32,
+    ) == (dirty.generation_id,)
+
+    jobs = PostgresJobRepository(
+        database_url=scope.worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="worker-due-specific-incident",
+        now=now + timedelta(seconds=1),
+        lease_seconds=30,
+    )
+    assert claim is not None
+    generation = worker_repository.claim_generation(
+        claim=claim,
+        now=now + timedelta(seconds=1),
+    )
+    assert generation is not None
+    assert generation.generation_kind == "root_catch_up"
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        before = connection.execute(
+            """
+            select incident.incident_id,
+                   incident.warning_token,
+                   incident.reason_code,
+                   incident.occurrence_count,
+                   lane.accepted_sequence,
+                   lane.applied_sequence,
+                   lane.dirty_generation,
+                   lane.repaired_dirty_generation
+            from library.watcher_incidents as incident
+            join library.watcher_lanes as lane
+              on lane.library_id = incident.library_id
+             and lane.root_id = incident.root_id
+            where incident.library_id = %s
+              and incident.root_id = %s
+              and incident.resolved_at is null
+            """,
+            (scope.library_id, root_id),
+        ).fetchone()
+    assert before is not None
+    assert str(before["incident_id"]) == dirty.incident_id
+    assert str(before["warning_token"]) == dirty.warning_token
+    assert before["reason_code"] == "root_unavailable"
+    assert before["occurrence_count"] == 1
+
+    assert jobs.finish(
+        claim,
+        JobTransitionResult(JobState.CANCELED, "worker_shutdown"),
+        now=now + timedelta(seconds=2),
+    ) is True
+    assert worker_repository.reconcile_due(
+        now=now + timedelta(seconds=2),
+        limit=32,
+    ) == (generation.generation_id,)
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        after = connection.execute(
+            """
+            select incident.incident_id,
+                   incident.warning_token,
+                   incident.reason_code,
+                   incident.occurrence_count,
+                   lane.accepted_sequence,
+                   lane.applied_sequence,
+                   lane.dirty_generation,
+                   lane.repaired_dirty_generation,
+                   lane.running_generation_id,
+                   lane.running_job_id,
+                   lane.successor_generation_id,
+                   successor.watcher_generation_kind,
+                   participant.accepted_sequence_lower,
+                   participant.accepted_sequence_upper,
+                   participant.dirty_generation as participant_dirty_generation
+            from library.watcher_incidents as incident
+            join library.watcher_lanes as lane
+              on lane.library_id = incident.library_id
+             and lane.root_id = incident.root_id
+            join library.targeted_reconciliation_intents as successor
+              on successor.id = lane.successor_generation_id
+            join library.watcher_generation_participants as participant
+              on participant.generation_id = successor.id
+             and participant.library_id = lane.library_id
+             and participant.root_id = lane.root_id
+            where incident.library_id = %s
+              and incident.root_id = %s
+              and incident.resolved_at is null
+            """,
+            (scope.library_id, root_id),
+        ).fetchone()
+
+    assert after is not None
+    assert after["incident_id"] == before["incident_id"]
+    assert after["warning_token"] == before["warning_token"]
+    assert after["reason_code"] == "root_unavailable"
+    assert after["occurrence_count"] == before["occurrence_count"] + 1
+    assert after["accepted_sequence"] == before["accepted_sequence"]
+    assert after["applied_sequence"] == before["applied_sequence"]
+    assert after["dirty_generation"] == before["dirty_generation"] + 1
+    assert after["repaired_dirty_generation"] == before["repaired_dirty_generation"]
+    assert after["running_generation_id"] is None
+    assert after["running_job_id"] is None
+    assert after["successor_generation_id"] != generation.generation_id
+    assert after["watcher_generation_kind"] == "root_catch_up"
+    assert after["accepted_sequence_lower"] == after["accepted_sequence"]
+    assert after["accepted_sequence_upper"] == after["accepted_sequence"]
+    assert after["participant_dirty_generation"] == after["dirty_generation"]
 
 
 def test_inactive_successor_is_retained_as_dirty_catch_up_until_reactivation(

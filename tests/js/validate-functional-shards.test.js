@@ -19,7 +19,7 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 49],
   ['cover-providers', 20],
-  ['metadata-mutations', 14],
+  ['metadata-mutations', 15],
   ['playback-utilities', 40],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 123-case assignment', () => {
+test('functional shard contract pins the approved four-way 124-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 123-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 123);
+  assert.equal(total, 124);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -450,8 +450,8 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
     const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-  const invocationCount = 13;
-  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 14);
+  const invocationCount = 14;
+  assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 15);
     assert.equal(checkpointCalls.length, invocationCount + 2);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
@@ -578,7 +578,7 @@ test('functional fixtures restore one genuine worker login into every production
   );
   assert.match(
     source,
-    /freshBrowserSession:[\s\S]*storageState: authenticateFreshBrowserSession \? storageState : withArtistTreePreference\(\s*\{ cookies: \[\], origins: \[\] \}, configuredBaseUrl, initialArtistTreeFolded/,
+    /freshBrowserSession:[\s\S]*async create\(\{ userAgent, authenticated = authenticateFreshBrowserSession \} = \{\}\)[\s\S]*storageState: authenticated \? storageState : withArtistTreePreference\(\s*\{ cookies: \[\], origins: \[\] \}, configuredBaseUrl, initialArtistTreeFolded/,
   );
   assert.match(
     source,
@@ -641,7 +641,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
     assert.ok(globalMutations.length <= 1);
     for (const ownedCase of cases) waveByCase.set(ownedCase.case, wave.wave);
   }
-  assert.equal(waveByCase.size, 14);
+  assert.equal(waveByCase.size, 15);
   for (const caseName of [
     'FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards',
     'FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split',
@@ -909,6 +909,35 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
   );
 });
 
+validatorTest('watcher cases retain their approved playback and metadata shard ownership', () => {
+  const contract = readJson(shardContractPath);
+  const watcherCases = contract.shards.flatMap((shard) => (
+    shard.invocations.flatMap((invocation) => invocation.cases.map((ownedCase) => ({
+      shard: shard.name,
+      invocation,
+      ownedCase,
+    })))
+  )).filter(({ ownedCase }) => (
+    ownedCase.test === 'tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js'
+  ));
+
+  assert.deepEqual(watcherCases.map(({ shard, ownedCase }) => [shard, ownedCase.case]), [
+    [
+      'metadata-mutations',
+      'FTC-LIBROOTS-019 repairs a stable watcher incident through its completion watermark',
+    ],
+    [
+      'playback-utilities',
+      'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
+    ],
+  ]);
+  const { invocation, ownedCase } = watcherCases[0];
+  assert.equal(invocation.config, 'playwright.config.js');
+  assert.equal(invocation.project, 'functional');
+  assert.equal(invocation.workers, 1);
+  assert.equal(ownedCase.area, 'album-details');
+});
+
 validatorTest('all four shards use explicit effect-compatible wave budgets', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
@@ -916,7 +945,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const expected = new Map([
     ['gallery-search-visual', { cases: 49, waves: [1, 2] }],
     ['cover-providers', { cases: 20, waves: [1, 2] }],
-    ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
+    ['metadata-mutations', { cases: 15, waves: [1, 2, 3] }],
     ['playback-utilities', { cases: 40, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));

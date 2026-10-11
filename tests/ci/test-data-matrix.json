@@ -3066,6 +3066,37 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+    "case": "FTC-LIBROOTS-019 repairs a stable watcher incident through its completion watermark",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "setupGroup": "watcher-recovery",
+    "appProcessScope": "isolated",
+    "databaseScenarios": [
+      "watcher:durable-recovery"
+    ],
+    "filesystemScenarios": [
+      "media-copy:watcher-recovery"
+    ],
+    "expectedContracts": [
+      "watcher-root-isolation",
+      "stable-incident-and-warning-token",
+      "acknowledged-library-status-repair",
+      "repair-capability-split",
+      "repair-completion-watermark",
+      "post-resolution-warning-token"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:watcher-recovery",
+      "filesystemCopy": "media/cases/watcher-recovery"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
     "case": "FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover",
     "profile": "functional-core",

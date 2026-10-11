@@ -27,7 +27,6 @@ class DurableFullScanExecutor:
     ) -> None:
         self._config = {**dict(config), "DURABLE_WORKER_SAFE_LOGGING": True}
         self._scan_repository = scan_repository
-        self._watcher_recovery = watcher_recovery
         self._local = threading.local()
         self._logger = DurablePipelineLogger(
             logging.getLogger("music_app.jobs.full_scan"), domain="scan"
@@ -200,16 +199,6 @@ class DurableFullScanExecutor:
         )
         if result.get("publication_won") is not True:
             raise RuntimeError("inventory revision conflict")
-        repair_id = getattr(intent, "watcher_repair_id", None)
-        if str(intent.mode) == "manual_full_rescan" and repair_id is not None:
-            if self._watcher_recovery is None:
-                raise RuntimeError("watcher repair completion is unavailable")
-            self._watcher_recovery.complete_repair(
-                claim=claim,
-                repair_id=int(repair_id),
-                inventory_revision=int(result["inventory_mutation_revision"]),
-                now=datetime.now(timezone.utc),
-            )
         return SimpleNamespace(
             canceled=False,
             inventory_mutation_revision=result["inventory_mutation_revision"],

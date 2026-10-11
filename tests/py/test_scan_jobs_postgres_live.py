@@ -865,16 +865,16 @@ def test_live_job_trigger_checkpoint_and_bounded_orphan_repair_contracts(
 
 
 @pytest.mark.parametrize(
-    ("job_state", "intent_state"),
+    ("job_state", "intent_state", "outcome"),
     (
-        ("succeeded", "succeeded"),
-        ("failed", "failed"),
-        ("ambiguous", "failed"),
-        ("canceled", "canceled"),
+        ("succeeded", "succeeded", "full_scan_completed"),
+        ("failed", "failed", "full_scan_publication_integrity_failed"),
+        ("ambiguous", "failed", "full_scan_failed"),
+        ("canceled", "canceled", "full_scan_canceled"),
     ),
 )
 def test_live_job_trigger_maps_terminal_states_atomically(
-    live_scan_database, job_state, intent_state
+    live_scan_database, job_state, intent_state, outcome
 ):
     setup_url, runtime_url, worker_url = live_scan_database
     suffix = f"terminal-{job_state}"
@@ -892,7 +892,6 @@ def test_live_job_trigger_maps_terminal_states_atomically(
     )
     assert claimed is not None and claimed.job_id == accepted.job_id
 
-    outcome = f"scan_{job_state}"
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute(
             """

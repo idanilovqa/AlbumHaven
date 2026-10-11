@@ -132,6 +132,48 @@ def test_0107_normalizes_crlf_before_splicing_targeted_authorization_source():
     )
 
 
+def test_0107_authorizes_root_catch_up_stale_scope_from_active_participants():
+    sql = _watcher_recovery_sql()
+    root_aware_scope = sql.split(
+        "root_aware_scope text := $fragment$", 1
+    )[1].split("$fragment$;", 1)[0]
+
+    assert (
+        "select authorized_primary_root_id as root_id, "
+        "'path'::text as stale_kind, path from unnest(coalesce("
+        "authorized_deleted_paths, array[]::text[])) as item(path)"
+    ) in root_aware_scope
+    assert (
+        "select authorized_primary_root_id, 'subtree', path from unnest("
+        "coalesce(authorized_deleted_subtrees, array[]::text[])) as item(path)"
+    ) in root_aware_scope
+    assert (
+        "select move ->> 'source_root_ref', case when coalesce((move ->> "
+        "'is_directory')::boolean, false) then 'subtree' else 'path' end, "
+        "move ->> 'source_path' from jsonb_array_elements("
+        "coalesce(authorized_moves, '[]'::jsonb)) as item(move)"
+    ) in root_aware_scope
+    assert (
+        "select root.metadata ->> 'root_id', 'subtree', root.root_path"
+        in root_aware_scope
+    )
+    assert (
+        "join library.watcher_generation_participants as participant on "
+        "participant.generation_id = intent.id and participant.library_id = "
+        "intent.library_id"
+    ) in root_aware_scope
+    assert (
+        "join library.library_roots as root on "
+        "root.library_id = participant.library_id and "
+        "root.id = participant.root_id and root.is_active is true"
+    ) in root_aware_scope
+    assert "intent.id = p_intent_id" in root_aware_scope
+    assert (
+        "intent.watcher_generation_kind = 'root_catch_up'"
+        in root_aware_scope
+    )
+
+
 def test_0107_declares_lane_invariants_and_partial_indexes():
     sql = _watcher_recovery_sql()
 
@@ -1803,7 +1845,12 @@ def test_album_raw_artist_search_index_verifier_checks_the_complete_definition()
     assert "index_state.indnkeyatts = 1" in sql
     assert "index_state.indkey::text = '0'" in sql
     assert "index_state.indpred is null" in sql
-    assert "index_state.operator_schema = 'library'" in sql
+    assert "pg_catalog.pg_extension" in sql
+    assert "pg_catalog.pg_depend" in sql
+    assert "extension.extname = 'pg_trgm'" in sql
+    assert "operator_dependency.deptype = 'e'" in sql
+    assert "operator_dependency.objid = operator_class.oid" in sql
+    assert "index_state.operator_schema = 'library'" not in sql
     assert "index_state.operator_class_name = 'gin_trgm_ops'" in sql
     assert "lower(btrim(coalesce(metadata->>''artists'','''')))" in sql
     assert "then 'ready'" in sql

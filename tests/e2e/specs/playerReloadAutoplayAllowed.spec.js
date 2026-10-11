@@ -1,5 +1,6 @@
 import { expect, test } from '../support/baseFixtures.js';
 import {
+  PLAYBACK_START_TIMING_BUDGET,
   assertSustainedPlaybackContract,
   measureSustainedPlaybackWindow,
 } from '../helpers/index.js';
@@ -8,6 +9,7 @@ const CASE_ID = 'FTC-PLAYER-015';
 const PLAYING_ALBUM = 'Length And Repetition';
 const PLAYING_TRACK_ARTIST = 'Playback Start Signals';
 const SUSTAINED_PLAYBACK_SECONDS = 12;
+const LONG_SUSTAINED_PLAYBACK_SECONDS = 60;
 
 test(`${CASE_ID} allowed Chrome policy automatically continues playback after reload`, { tag: '@area:playback' }, async ({
   galleryActions,
@@ -89,9 +91,21 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
     const restoredTiming = await globalPlayerActions.waitForFullTrackTiming();
     expect(Math.abs(restoredTiming.currentTime - pausedOffset)).toBeLessThan(1);
 
+    const explicitPlayMark = await playbackEvidence.playbackMark();
+    const explicitPlayStartedAtMs = await page.evaluate(() => performance.now());
     await globalPlayerActions.resumeIfPaused();
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({
+      after: explicitPlayMark,
+      path: playedTrack.path,
+    });
+    const explicitPlayStartupMs = evidence.observedAtMs - explicitPlayStartedAtMs;
+    expect(
+      explicitPlayStartupMs,
+      `Explicit Play took ${Math.round(explicitPlayStartupMs)} ms to render audible PCM.`,
+    ).toBeLessThanOrEqual(PLAYBACK_START_TIMING_BUDGET.hardCeiling);
     const sustained = await measureSustainedPlaybackWindow(page, playbackEvidence, {
-      seconds: SUSTAINED_PLAYBACK_SECONDS,
+      seconds: LONG_SUSTAINED_PLAYBACK_SECONDS,
+      timeout: (LONG_SUSTAINED_PLAYBACK_SECONDS * 1_000) + 10_000,
     });
     assertSustainedPlaybackContract(expect, sustained);
   });

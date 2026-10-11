@@ -5584,6 +5584,10 @@ function renderSidebar() {
     )
   );
   const scrollContainer = resolveSidebarScrollContainer(el);
+  if (!el.albumHavenSidebarVirtualWindow && !effectiveAllArtistsActive) {
+    // Keep the initial selection pending when startup has only a sidebar subset.
+    state.ui.pendingSidebarRevealArtist = String(effectiveView.selected_artist || '').trim();
+  }
   const virtualWindow = resolveSidebarVirtualWindow(sidebarArtists, {
     scrollTop: el.albumHavenSidebarVirtualScrollTop ?? scrollContainer?.scrollTop ?? 0,
     viewportHeight: scrollContainer?.clientHeight ?? 0,

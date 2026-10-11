@@ -1695,6 +1695,12 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
   const currentFamilyGroups = Array.isArray(state.view?.family_artist_groups)
     ? state.view.family_artist_groups
     : [];
+  // Primary groups include guest appearances. Their shared "featured" marker
+  // cannot prove membership when that artist becomes a family member.
+  if (currentPrimaryGroups.some((group) => (
+    !matchesArtist(group)
+    && (group.albums || []).some((album) => album.artist_relationship === 'featured')
+  ))) return null;
   const currentSelectedArtist = String(state.view?.selected_artist || '').trim();
   const currentRelatedArtists = Array.isArray(state.view?.related_artists)
     ? state.view.related_artists

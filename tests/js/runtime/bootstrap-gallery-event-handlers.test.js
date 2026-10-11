@@ -2315,6 +2315,44 @@ for (const authoritativeCount of [1, undefined]) {
   });
 }
 
+for (const query of ['', 'Control Signal Partner']) {
+  test(`sidebar selection does not demote ambiguous guest appearances into family membership (${query || 'no query'})`, () => {
+    const { context, calls } = createContext();
+    const lead = 'Control Signal Lead';
+    const partner = 'Control Signal Partner';
+    const primaryGroups = [{
+      artist: partner,
+      albums: [
+        { key: 'partner-solo', artist_relationship: 'owned' },
+        { key: 'lead-solo', artist_relationship: 'featured' },
+      ],
+    }];
+    context.state.view = {
+      ...context.state.view,
+      query,
+      payload_tier: 'full',
+      initial_view_partial: false,
+      selected_artist: partner,
+      all_artists_active: false,
+      related_artists: [lead],
+      related_filter_artists: [],
+      primary_filter_active: false,
+      artists_sidebar: [{ artist: lead, count: 1 }, { artist: partner, count: 2 }],
+      primary_artist_groups: primaryGroups,
+      family_artist_groups: [{ artist: lead, albums: [{ key: 'lead-solo', artist_relationship: 'owned' }] }],
+    };
+
+    context.handleSidebarArtistSelectionClick(createSidebarArtistEvent(lead).event);
+
+    assert.equal(calls.fetchAndRender.length, 1);
+    assert.equal(calls.buildApiUrl.at(-1).selected_artist, lead);
+    assert.equal(calls.buildApiUrl.at(-1).query, query);
+    assert.equal(context.state.view.primary_artist_groups, primaryGroups,
+      'Keep the old gallery until authoritative family membership arrives');
+    assert.equal(calls.renderView.length, 0);
+  });
+}
+
 test('no-query sidebar family selection reuses the complete mounted family without fetch or reconcile', () => {
   const { context, calls } = createContext();
   const sidebarArtists = [

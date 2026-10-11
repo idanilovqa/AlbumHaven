@@ -3544,6 +3544,9 @@ def _prepare_root_gallery_snapshot(
         # matching _canonicalize_artist_rows for non-expanded source rows.
         row.update(artist_name=artist, artist_id=identity, artist_sort_name=artist.casefold())
         candidates.append(row)
+    candidates = _suppress_split_release_composite_owner_rows(
+        candidates, alias_to_canonical=aliases,
+    )
     for album in missing_albums:
         artist = _canonical_artist_name(album.get("album_artist") or "Unknown Artist", aliases, normalized_alias_to_canonical=normalized_aliases)
         key = str(album.get("key") or album.get("album_ref") or "")

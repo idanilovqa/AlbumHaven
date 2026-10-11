@@ -27,6 +27,42 @@ def test_gallery_snapshot_excludes_blank_album_identity():
     assert snapshot["album_count"] == 0
 
 
+def test_gallery_snapshot_matches_full_root_split_and_shared_owner_membership():
+    rows = []
+    for album_id, key, owner, credit_kind, members in [
+        (1, "split", "Alpha / Beta", "featured_track_artist", ["Alpha alias", "Beta"]),
+        (2, "shared", "Gamma / Delta", "featured_member", ["Gamma", "Delta"]),
+        (3, "named", "25/17", "featured_track_artist", ["25", "17"]),
+    ]:
+        for artist, kind in [(owner, "owner"), *[(member, credit_kind) for member in members]]:
+            rows.append(dict(membership(artist, key), album_id=album_id, featured_kind=kind))
+    aliases = {"Alpha alias": "Alpha"}
+    groups = browse._root_album_browse_artist_groups(
+        browse._canonicalize_artist_rows(rows, aliases)
+    )
+    expected = [(group["artist"], album["key"]) for group in groups for album in group["albums"]]
+    assert ("Alpha / Beta", "split") not in expected
+    assert ("Gamma / Delta", "shared") in expected
+    assert ("25/17", "named") in expected
+
+    snapshot = browse._prepare_root_gallery_snapshot(rows, [], aliases, {})
+
+    assert [(row["artist_name"], row["album_key"]) for row in snapshot["ordered"]] == expected
+    assert snapshot["sidebar"] == browse._artists_sidebar_from_groups(groups)
+    assert snapshot["album_count"] == 3
+    assert snapshot["occurrence_count"] == len(expected)
+    page, sidebar, count, metadata = browse._select_root_gallery_snapshot_page(
+        snapshot, {"gallery_page_size": "2"}
+    )
+    assert [(row["artist_name"], row["album_key"]) for row in page] == expected[:2]
+    assert sidebar == snapshot["sidebar"]
+    assert count == 3
+    continuation = browse._select_root_gallery_snapshot_page(
+        snapshot, {"gallery_page_size": "2", "gallery_cursor": metadata["next_cursor"]}
+    )
+    assert [(row["artist_name"], row["album_key"]) for row in continuation[0]] == expected[2:4]
+
+
 def test_gallery_snapshot_artist_anchor_opens_page_with_leading_context():
     rows = [
         membership("Alpha", f"alpha-{index}") for index in range(4)
@@ -155,7 +191,7 @@ def test_projection_scope_canonicalizes_category_order_and_namespaces_builder(mo
     assert scope_key == projection.gallery_projection_scope_key(changed)
     assert scope_key == projection.gallery_projection_scope_key(reordered_categories)
     assert scope_key == projection.gallery_projection_scope_key(repeated_categories)
-    monkeypatch.setattr(projection, "BUILDER_VERSION", "root-gallery-v4")
+    monkeypatch.setattr(projection, "BUILDER_VERSION", f"{projection.BUILDER_VERSION}-changed")
     assert scope_key != projection.gallery_projection_scope_key(first)
 
 
@@ -355,7 +391,7 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
             if "source_generation = %(generation)s" in sql:
                 return Cursor([])
             if "order by source_generation desc" in sql:
-                assert params["builder_version"] == "root-gallery-v3"
+                assert params["builder_version"] == "root-gallery-v4"
                 return Cursor([header])
             if "gallery_projection_occurrences" in sql:
                 return Cursor([{"payload": membership("Artist", "album-1")}])

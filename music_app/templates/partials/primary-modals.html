@@ -47,7 +47,7 @@
           <h3 class="tag-editor-title" id="tag-editor-title">Edit tags</h3>
           <div class="tag-editor-subtitle" id="tag-editor-subtitle">Select a track and edit tag values.</div>
         </div>
-        <button class="icon-button tag-editor-close" type="button" data-close-tag-editor="1" aria-label="Close tag editor">x</button>
+        {% call action_button('Close tag editor', class_name='tag-editor-close', attributes={'data-close-tag-editor': '1'}) %}<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>{% endcall %}
       </div>
       <div class="tag-editor-body">
         <aside class="tag-editor-track-pane">

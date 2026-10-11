@@ -5,7 +5,7 @@ export class GalleryRegressions {
     this.familyToggle=page.locator('[data-gallery-bar-action="artist-family"]');
     this.familyPanel=page.locator('#artist-family-panel');
     this.nealSidebar=page.locator('[data-sidebar-artist="Neal Morse"]');
-    this.rootSidebar=page.locator('[data-sidebar-all-artists="1"]');
+    this.rootSidebar=page.locator('#sidebar-list [data-sidebar-all-artists="1"]');
     this.rootArtistCount=this.rootSidebar.locator('.navigation-tree-count');
     this.search=page.getByRole('combobox',{name:'Search music'});
     this.options=page.locator('.recent-search-option');

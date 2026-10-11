@@ -189,7 +189,7 @@ export class GalleryRegressions {
     // parity-check: allow-read-only-measurement-evaluate -- capture native scroll before continuation can merge
     return this.page.evaluateHandle(() => new Promise(resolve => {
       const scroll = document.getElementById('albums-scroll');
-      scroll.addEventListener('scroll', () => {
+      scroll.addEventListener('scroll', () => requestAnimationFrame(() => {
         const bounds = scroll.getBoundingClientRect();
         const element = [...document.querySelectorAll('#artist-groups .album-card')].find(card => {
           const rect = card.getBoundingClientRect();
@@ -201,7 +201,7 @@ export class GalleryRegressions {
           scrollTop: scroll.scrollTop,
           loadedCount: state.view.artist_groups.reduce((count, group) => count + group.albums.length, 0),
         });
-      }, { once: true });
+      }), { once: true });
     }));
   }
 

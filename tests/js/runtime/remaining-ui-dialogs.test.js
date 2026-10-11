@@ -19,6 +19,20 @@ test('remaining UI confirmations stay compact and Appearance offers explicit saf
   assert.match(bridge, /danger:\s*true/);
 });
 
+test('Edit Tags header uses the shared modal close action', () => {
+  const markup = read('music_app/templates/partials/primary-modals.html');
+  const modalStart = markup.indexOf('<div class="tag-editor-modal"');
+  const modal = markup.slice(modalStart, markup.indexOf('<div class="track-modal"', modalStart));
+  const close = modal.match(/{% call action_button\('Close tag editor'[^]*?{% endcall %}/)?.[0] || '';
+
+  assert.match(close, /class_name='tag-editor-close'/);
+  assert.match(close, /attributes=\{'data-close-tag-editor': '1'\}/);
+  assert.match(close, /<svg class="ui-icon action-button__icon" viewBox="0 0 20 20" aria-hidden="true">/);
+  assert.match(close, /<path d="m5 5 10 10M15 5 5 15"/);
+  assert.doesNotMatch(modal, /<button class="icon-button tag-editor-close"/);
+  assert.doesNotMatch(modal, />x<\/button>/);
+});
+
 test('alerts wrap adjacent actions and lightbox closure restores focus without closing its parent', () => {
   const alertCss = read('music_app/static/css/runtime/alert-components.css');
   const lightbox = read('music_app/static/js/runtime/track-modal-lightbox-helpers.js');

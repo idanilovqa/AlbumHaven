@@ -11559,6 +11559,8 @@ def test_problematic_candidate_page_sql_orders_and_limits_ids_before_row_hydrati
     ).lower()
 
     assert "count(*) over () as total_candidate_count" not in page_sql
+    assert "active_problem_rows as materialized" in page_sql
+    assert "spotify_quota_albums as materialized" in page_sql
     assert page_sql.count('collate "c"') == 4
     assert "join library.local_albums" in page_sql
     assert "left join library.local_artists" in page_sql

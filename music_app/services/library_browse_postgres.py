@@ -10035,6 +10035,8 @@ def _problematic_files_sql(
               where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
               limit 1
             ),
+            {spotify_quota_cte}
+            {physical_file_ctes}
             {candidate_ctes_sql}
             select candidate_album_ids.album_id
             from candidate_album_ids

@@ -107,3 +107,17 @@ test('normal albums do not receive a duplicate warning or unknown source markup'
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /data-library-sources="main"/);
 });
+
+test('New Arrivals uses a simple open-mailbox glyph', () => {
+  const context = vm.createContext({
+    escapeHtml: (value) => String(value),
+    galleryMainPlural: (count, noun) => `${count} ${noun}`,
+  });
+  vm.runInContext(fs.readFileSync(path.join(runtime, 'gallery-main-components.js'), 'utf8'), context);
+
+  const glyph = context.buildLibrarySourceGlyphHtml('new_arrivals');
+
+  assert.match(glyph, /<svg\b[^>]*viewBox="0 0 48 48"/);
+  assert.equal((glyph.match(/<path\b/g) || []).length, 1);
+  assert.doesNotMatch(glyph, /<circle\b|fill="currentColor"/);
+});

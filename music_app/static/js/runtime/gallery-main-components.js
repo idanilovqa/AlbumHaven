@@ -21,7 +21,7 @@ const LIBRARY_SOURCE_MARKERS = Object.freeze({
   }),
   new_arrivals: Object.freeze({
     label: 'New Arrivals',
-    drawing: '<path d="M17 14a9 9 0 0 1 8-4h11a9 9 0 0 1 9 9v15H27V19a9 9 0 0 0-9-9M27 34h-9M30 34v12m3-12v12M34 15V2h7v4h-7"/><circle cx="16" cy="26" r="11"/><circle cx="16" cy="26" r="3"/><path d="M17 18a8 8 0 0 1 7 7M17 21a5 5 0 0 1 4 4M8 33l-6 5q8 3 16-1"/><path d="m8 5 1.2 3.8L13 10l-3.8 1.2L8 15l-1.2-3.8L3 10l3.8-1.2Z" fill="currentColor" stroke="none"/>',
+    drawing: '<path d="M7 34V19a9 9 0 0 1 9-9h20a9 9 0 0 1 9 9v15H7Zm20 0V19a9 9 0 0 0-9-9M31 34v12m4-12v12M7 34 2 43h15l10-9"/>',
   }),
 });
 

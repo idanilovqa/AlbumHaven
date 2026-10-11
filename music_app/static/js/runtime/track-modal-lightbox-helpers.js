@@ -719,9 +719,12 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= duplicateSources.length) {
     return album;
   }
+  const source = duplicateSources[sourceIndex];
+  const folderPath = String(source?.folder_path || '').trim();
   return {
     ...album,
-    tracks: Array.isArray(duplicateSources[sourceIndex]?.tracks) ? duplicateSources[sourceIndex].tracks : [],
+    tracks: Array.isArray(source?.tracks) ? source.tracks : [],
+    open_directory_paths: folderPath ? [folderPath] : [],
   };
 }
 

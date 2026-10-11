@@ -688,6 +688,10 @@ function closeNonAlbumModal() {
   }
 }
 
+const OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS = 750;
+let openAlbumLocationRequestInFlight = false;
+let openAlbumLocationLastSuccessAt = null;
+
 async function openAlbumInExplorer(album) {
   if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
     && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
@@ -695,6 +699,11 @@ async function openAlbumInExplorer(album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;
   }
+  if (openAlbumLocationRequestInFlight || (
+    openAlbumLocationLastSuccessAt !== null
+    && Date.now() - openAlbumLocationLastSuccessAt < OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS
+  )) return;
+  openAlbumLocationRequestInFlight = true;
   try {
     const response = await fetch('/open-album-location', {
       method: 'POST',
@@ -705,9 +714,12 @@ async function openAlbumInExplorer(album) {
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || 'Failed to open album location');
     }
+    openAlbumLocationLastSuccessAt = Date.now();
   } catch (error) {
     console.error(`${ALBUM_MENU_LOG_PREFIX} Open in File Explorer failed:`, error);
     showToast(error.message || 'Failed to open album location.', 'error', 3200);
+  } finally {
+    openAlbumLocationRequestInFlight = false;
   }
 }
 

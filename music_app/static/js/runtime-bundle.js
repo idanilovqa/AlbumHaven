@@ -11631,6 +11631,10 @@ function closeNonAlbumModal() {
   }
 }
 
+const OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS = 750;
+let openAlbumLocationRequestInFlight = false;
+let openAlbumLocationLastSuccessAt = null;
+
 async function openAlbumInExplorer(album) {
   if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
     && !window.AlbumHavenCapabilities.allows('library.files.open_location')) return;
@@ -11638,6 +11642,11 @@ async function openAlbumInExplorer(album) {
     showToast('No album payload found for File Explorer action.', 'error', 3200);
     return;
   }
+  if (openAlbumLocationRequestInFlight || (
+    openAlbumLocationLastSuccessAt !== null
+    && Date.now() - openAlbumLocationLastSuccessAt < OPEN_ALBUM_LOCATION_SUCCESS_COOLDOWN_MS
+  )) return;
+  openAlbumLocationRequestInFlight = true;
   try {
     const response = await fetch('/open-album-location', {
       method: 'POST',
@@ -11648,9 +11657,12 @@ async function openAlbumInExplorer(album) {
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error || 'Failed to open album location');
     }
+    openAlbumLocationLastSuccessAt = Date.now();
   } catch (error) {
     console.error(`${ALBUM_MENU_LOG_PREFIX} Open in File Explorer failed:`, error);
     showToast(error.message || 'Failed to open album location.', 'error', 3200);
+  } finally {
+    openAlbumLocationRequestInFlight = false;
   }
 }
 
@@ -13030,9 +13042,12 @@ function resolveTrackModalDuplicateSourceAlbum(button) {
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= duplicateSources.length) {
     return album;
   }
+  const source = duplicateSources[sourceIndex];
+  const folderPath = String(source?.folder_path || '').trim();
   return {
     ...album,
-    tracks: Array.isArray(duplicateSources[sourceIndex]?.tracks) ? duplicateSources[sourceIndex].tracks : [],
+    tracks: Array.isArray(source?.tracks) ? source.tracks : [],
+    open_directory_paths: folderPath ? [folderPath] : [],
   };
 }
 
@@ -31917,7 +31932,7 @@ function renderTrackModalRelease(album) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
-        severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
+        severity: 'warning', title: 'Duplicate album files', message: 'Album has a duplicate in the library',
         actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
           label: `Folder ${index + 1}`,
           variant: index === duplicateSourceIndex ? 'primary' : 'secondary',

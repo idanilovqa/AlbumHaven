@@ -1358,6 +1358,7 @@ test('backdrop tap retains its pointer origin through delayed touch click, but i
 for (const allowed of [false, true, undefined]) {
   test(`duplicate Folder actions use the shared location capability for delegated and direct entry (${allowed === undefined ? 'legacy' : allowed ? 'allowed' : 'denied'})`, async () => {
     const requests = [], captures = [];
+    let now = 1800000;
     const album = { key: 'duplicate-album', tracks: [{ path: 'owned-duplicate.flac' }] };
     const folder = {};
     const document = {
@@ -1368,7 +1369,7 @@ for (const allowed of [false, true, undefined]) {
         denied_selectors: allowed ? [] : ['[data-open-track-modal-duplicate-folder]'],
       }) } : null,
     };
-    const context = vm.createContext({ window: { document }, document, console,
+    const context = vm.createContext({ window: { document }, document, console, Date: { now: () => now },
       fetch: async (url, options) => { requests.push({ url, album: JSON.parse(options.body).album });
         return { ok: true, json: async () => ({ ok: true }) }; },
       showToast: () => assert.fail('location capability denial must not report a server error'),
@@ -1387,6 +1388,7 @@ for (const allowed of [false, true, undefined]) {
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(stopped, allowed === false);
     assert.equal(requests.length, allowed === false ? 0 : 1);
+    now += 750;
     await context.openAlbumInExplorer(album);
     assert.equal(requests.length, allowed === false ? 0 : 2);
     for (const request of requests) {
@@ -1395,6 +1397,69 @@ for (const allowed of [false, true, undefined]) {
     }
   });
 }
+
+test('Explorer dispatch ignores overlapping and rapid successful repeats without queueing them', async () => {
+  const requests = [];
+  let now = 1800000;
+  let resolveFirstRequest;
+  const firstResponse = new Promise((resolve) => { resolveFirstRequest = resolve; });
+  const context = vm.createContext({
+    window: {},
+    Date: { now: () => now },
+    console,
+    ALBUM_MENU_LOG_PREFIX: '[test]',
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      if (requests.length === 1) return firstResponse;
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+    showToast: () => assert.fail('successful Explorer dispatch must not show an error'),
+  });
+  vm.runInContext(helperSource, context);
+  const album = { key: 'duplicate-album', open_directory_paths: ['C:\\Music\\Album'] };
+
+  const first = context.openAlbumInExplorer(album);
+  const repeated = context.openAlbumInExplorer(album);
+  const repeatedAgain = context.openAlbumInExplorer(album);
+
+  assert.equal(requests.length, 1);
+  resolveFirstRequest({ ok: true, json: async () => ({ ok: true }) });
+  await Promise.all([first, repeated, repeatedAgain]);
+
+  now += 749;
+  await context.openAlbumInExplorer(album);
+  assert.equal(requests.length, 1);
+
+  now += 1;
+  await context.openAlbumInExplorer(album);
+  assert.equal(requests.length, 2);
+});
+
+test('Explorer dispatch allows an immediate retry after failure', async () => {
+  const requests = [];
+  const toasts = [];
+  const context = vm.createContext({
+    window: {},
+    Date: { now: () => 1800000 },
+    console,
+    ALBUM_MENU_LOG_PREFIX: '[test]',
+    fetch: async () => {
+      requests.push(true);
+      return requests.length === 1
+        ? { ok: false, json: async () => ({ ok: false, error: 'Explorer unavailable' }) }
+        : { ok: true, json: async () => ({ ok: true }) };
+    },
+    showToast: (message, type) => toasts.push({ message, type }),
+  });
+  vm.runInContext(helperSource, context);
+  const album = { key: 'duplicate-album', open_directory_paths: ['C:\\Music\\Album'] };
+
+  await context.openAlbumInExplorer(album);
+  await context.openAlbumInExplorer(album);
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(toasts, [{ message: 'Explorer unavailable', type: 'error' }]);
+});
 
 
 test('paged root loose tracks remain visible outside the loaded artist window', () => {

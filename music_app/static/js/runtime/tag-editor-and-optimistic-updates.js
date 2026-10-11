@@ -2056,7 +2056,7 @@ function renderTrackModalRelease(album) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
       els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
-        severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
+        severity: 'warning', title: 'Duplicate album files', message: 'Album has a duplicate in the library',
         actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
           label: `Folder ${index + 1}`,
           variant: index === duplicateSourceIndex ? 'primary' : 'secondary',

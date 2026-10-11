@@ -2562,8 +2562,14 @@ async function run() {
       name: 'Album Alpha',
       tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
       duplicate_sources: [
-        { tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }] },
-        { tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac' }] },
+        {
+          folder_path: 'C:\\Music\\Album Alpha',
+          tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
+        },
+        {
+          folder_path: 'D:\\Mirror\\Album Alpha',
+          tracks: [{ path: 'D:\\Mirror\\Album Alpha\\01 Track.flac' }],
+        },
       ],
     };
     const { context } = loadHelper({
@@ -2583,6 +2589,10 @@ async function run() {
     assert.deepEqual(
       resolvedAlbum.tracks.map((track) => track.path),
       ['D:\\Mirror\\Album Alpha\\01 Track.flac'],
+    );
+    assert.deepEqual(
+      Array.from(resolvedAlbum.open_directory_paths),
+      ['D:\\Mirror\\Album Alpha'],
     );
   }
 }

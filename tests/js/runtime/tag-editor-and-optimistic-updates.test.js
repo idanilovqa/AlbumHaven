@@ -4163,6 +4163,8 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="1"/);
   assert.match(duplicateWarning.innerHTML, /data-on-page-alert="warning"/);
   assert.match(duplicateWarning.innerHTML, /ui-button__content/);
+  assert.match(duplicateWarning.innerHTML, /Album has a duplicate in the library/);
+  assert.doesNotMatch(duplicateWarning.innerHTML, /Album has a duplicate in the library:/);
   assert.doesNotMatch(duplicateWarning.innerHTML, /data-duplicate-folder-album=/);
   assert.match(baseElements.list.innerHTML, /Total Length: 40:00/);
   context.state.modalDuplicateSourceIndices.alpha = 1;

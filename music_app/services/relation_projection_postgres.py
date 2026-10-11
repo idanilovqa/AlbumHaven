@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from threading import Lock
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -231,7 +234,50 @@ def build_ready_relation_projection_metadata(
     return metadata
 
 
+_RELATION_REPAIRS_LOCK = Lock()
+_RELATION_REPAIRS: dict[str, Future] = {}
+
+
 def ensure_relation_projection_ready(
+    config: Mapping[str, object],
+    *,
+    logger: object | None = None,
+    connect: Callable[[str], Any] | None = None,
+    cancel_requested: object | None = None,
+) -> dict[str, object]:
+    database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+    if not database_url:
+        raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for relation projection readiness.")
+    _raise_if_projection_cancelled(cancel_requested)
+    with _RELATION_REPAIRS_LOCK:
+        future = _RELATION_REPAIRS.get(database_url)
+        owns_repair = future is None
+        if owns_repair:
+            future = Future()
+            _RELATION_REPAIRS[database_url] = future
+    if not owns_repair:
+        while True:
+            _raise_if_projection_cancelled(cancel_requested)
+            try:
+                return future.result(timeout=0.1)
+            except FutureTimeoutError:
+                if future.done():
+                    raise
+    try:
+        result = _ensure_relation_projection_ready(
+            config, logger=logger, connect=connect, cancel_requested=cancel_requested,
+        )
+        future.set_result(result)
+        return result
+    except BaseException as error:
+        future.set_exception(error)
+        raise
+    finally:
+        with _RELATION_REPAIRS_LOCK:
+            _RELATION_REPAIRS.pop(database_url, None)
+
+
+def _ensure_relation_projection_ready(
     config: Mapping[str, object],
     *,
     logger: object | None = None,

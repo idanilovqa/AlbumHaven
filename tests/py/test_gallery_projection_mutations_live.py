@@ -35,6 +35,7 @@ def gallery_inventory(watcher_repair_inventory):
     result = gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     assert result["built"] > 0
     fixture.first = first
+    fixture.second = second
     fixture.view_state = browse._root_sidebar_view_state({})
     with isolatedPostgres._connect(fixture.runtime_url) as connection:
         fixture.context = gallery.gallery_projection_context(connection)
@@ -319,3 +320,64 @@ def test_publisher_rejects_private_payload_and_preserves_ready_snapshot(gallery_
                     rows=[{"album_key": "proof", field: "private-proof"}])
         connection.rollback()
         assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) == old
+
+
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inventory, monkeypatch, fail_first):
+    fixture = gallery_inventory
+    added = fixture.entry("New Artist/Third/three.flac", artist="New Artist", album="Third")
+    fixture.seed(fixture.first, fixture.second, added)
+    repository = browse.PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    )
+    assert repository._load_relation_alias_maps().get("projection_stale_reason")
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is None
+
+    from music_app.services import relation_projection_postgres as relations
+    from time import monotonic, sleep
+
+    ensure_relations = relations.ensure_relation_projection_ready
+    attempts = []
+
+    def repair(*args, **kwargs):
+        attempts.append(True)
+        if fail_first and len(attempts) == 1:
+            raise RuntimeError("temporary relation repair failure")
+        return ensure_relations(*args, **kwargs)
+
+    monkeypatch.setattr(relations, "ensure_relation_projection_ready", repair)
+    refreshes = []
+    schedule_refresh = gallery.schedule_gallery_projection_refresh
+
+    def record_refresh(*args, **kwargs):
+        future = schedule_refresh(*args, **kwargs)
+        refreshes.append(future)
+        return future
+
+    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh", record_refresh)
+    repository.build_root_startup_preview_payload()
+    assert len(refreshes) == 1, "Stale root browse did not schedule recovery"
+    assert refreshes[0] is not None
+    if fail_first:
+        with pytest.raises(RuntimeError, match="temporary relation repair failure"):
+            refreshes[0].result(timeout=10)
+        with isolatedPostgres._connect(fixture.runtime_url) as connection:
+            assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is None
+        assert repository._load_relation_alias_maps().get("projection_stale_reason")
+        deadline = monotonic() + 5
+        identity = (fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"], "refresh")
+        while True:
+            with gallery._PENDING_LOCK:
+                pending = identity in gallery._PENDING
+            if not pending or monotonic() >= deadline:
+                break
+            sleep(0.01)
+        assert not pending, "Failed refresh did not release its single-flight slot"
+        repository.build_root_startup_preview_payload()
+        assert len(refreshes) == 2
+    assert refreshes[-1].result(timeout=10)["built"] > 0
+    assert len(attempts) == (2 if fail_first else 1)
+    assert not repository._load_relation_alias_maps().get("projection_stale_reason")
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is not None

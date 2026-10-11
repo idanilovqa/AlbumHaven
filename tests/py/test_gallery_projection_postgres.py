@@ -558,3 +558,98 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
         assert len(hydrated) == 1 and len(hydrated[0]) == size
     assert load_options == [{"context": {"library_id": 1}, "allow_stale": True}]
     assert calls[-2:] == [("rollback", None), ("close", None)]
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_relation_repair_preflight_runs_only_when_stale_and_before_gallery_snapshot(monkeypatch, stale):
+    from contextlib import contextmanager
+    from music_app.services import gallery_projection_postgres as gallery
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import relation_projection_postgres as relations
+
+    events = []
+
+    class Connection:
+        def execute(self, sql):
+            return None
+
+    class Repository:
+        def __init__(self, config, *, connect):
+            pass
+
+        def _load_relation_alias_maps(self):
+            events.append("readiness")
+            return {"projection_stale_reason": "projection_not_ready" if stale else ""}
+
+        @contextmanager
+        def _connect_to_database(self):
+            events.append("gallery_snapshot")
+            yield Connection()
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"}
+    connect = object()
+    cancelled = lambda: False
+
+    def repair(current_config, **kwargs):
+        assert current_config is config
+        assert kwargs == {"connect": connect, "cancel_requested": cancelled}
+        assert events == ["readiness"]
+        events.append("repair")
+
+    monkeypatch.setattr(browse, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(relations, "ensure_relation_projection_ready", repair)
+    monkeypatch.setattr(gallery, "gallery_projection_context", lambda connection: None)
+    assert gallery.ensure_gallery_projection_ready(
+        config, connect=connect, cancel_requested=cancelled,
+    ) == {"built": 0}
+    assert events == (["readiness", "repair", "gallery_snapshot"] if stale else ["readiness", "gallery_snapshot"])
+
+
+def test_failed_refresh_discards_prior_trailing_demand_and_next_request_retries(monkeypatch):
+    from concurrent.futures import Future
+    from music_app.services import cache
+    from music_app.services import gallery_projection_postgres as gallery
+
+    submitted = []
+
+    class Executor:
+        def submit(self, action):
+            future = Future()
+            submitted.append(future)
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://failed-refresh-fixture"}
+    first = gallery.schedule_gallery_projection_refresh(config)
+    assert gallery.schedule_gallery_projection_refresh(config) is None
+    first.set_exception(RuntimeError("temporary repair failure"))
+    assert len(submitted) == 1
+    retry = gallery.schedule_gallery_projection_refresh(config)
+    assert retry is submitted[1]
+    retry.set_result({"built": 1})
+    assert (config["ALBUM_HAVEN_APP_DATABASE_URL"], "refresh") not in gallery._PENDING
+
+
+def test_failed_snapshot_still_publishes_its_latest_queued_generation(monkeypatch):
+    from concurrent.futures import Future
+    from music_app.services import cache
+    from music_app.services import gallery_projection_postgres as gallery
+
+    submitted = []
+
+    class Executor:
+        def submit(self, action):
+            future = Future()
+            submitted.append((action, future))
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://failed-snapshot-fixture"}
+    old, middle, latest = object(), object(), object()
+    first = gallery._queue(config, "root-snapshot", old, trailing=True, generation=1)
+    assert gallery._queue(config, "root-snapshot", middle, trailing=True, generation=2) is None
+    assert gallery._queue(config, "root-snapshot", latest, trailing=True, generation=3) is None
+    first.set_exception(RuntimeError("temporary snapshot failure"))
+    assert [action for action, future in submitted] == [old, latest]
+    submitted[1][1].set_result(True)
+    assert (config["ALBUM_HAVEN_APP_DATABASE_URL"], "root-snapshot") not in gallery._PENDING

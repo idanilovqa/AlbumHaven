@@ -1352,3 +1352,49 @@ def test_relation_projection_shapes_sources_before_short_locked_publication(monk
         "scan_cache_save",
         "commit",
     ]
+
+
+@pytest.mark.parametrize("cancel_follower", [False, True])
+def test_concurrent_relation_readiness_callers_share_one_source_build(monkeypatch, cancel_follower):
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from threading import Event
+    from music_app.services import relation_projection_postgres as relations
+
+    entered, joined, release, cancelled = Event(), Event(), Event(), Event()
+    builds = []
+
+    class ObservedFuture(Future):
+        def result(self, timeout=None):
+            joined.set()
+            return super().result(timeout=timeout)
+
+    def build(config, **kwargs):
+        builds.append(True)
+        entered.set()
+        assert release.wait(5)
+        return {"status": "ready"}
+
+    monkeypatch.setattr(relations, "Future", ObservedFuture)
+    monkeypatch.setattr(relations, "_ensure_relation_projection_ready", build)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://single-flight-fixture"}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        owner = executor.submit(relations.ensure_relation_projection_ready, config)
+        try:
+            assert entered.wait(5)
+            follower = executor.submit(
+                relations.ensure_relation_projection_ready, dict(config), connect=lambda url: None,
+                cancel_requested=cancelled,
+            )
+            assert joined.wait(5)
+            assert builds == [True]
+            if cancel_follower:
+                cancelled.set()
+                with pytest.raises(InterruptedError, match="cancelled"):
+                    follower.result(timeout=1)
+                assert not owner.done()
+        finally:
+            release.set()
+        assert owner.result(timeout=5) == {"status": "ready"}
+        if not cancel_follower:
+            assert follower.result(timeout=5) == {"status": "ready"}
+    assert config["ALBUM_HAVEN_APP_DATABASE_URL"] not in relations._RELATION_REPAIRS

@@ -234,6 +234,8 @@ def _queue(config, key, action, *, trailing=False, generation=None):
             completed.result()
         except Exception:
             _LOGGER.exception("Gallery projection publication failed; computed browse remains available")
+            if key == "refresh":
+                return
         if following is not None:
             _queue(config, key, following, trailing=trailing, generation=following_generation)
     future.add_done_callback(finished)
@@ -259,6 +261,10 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
     if config.get("SHARED_LIBRARY_BROWSE_ONLY"):
         return {"built": 0}
     repository = browse.PostgresLibraryBrowseRepository(config, connect=connect)
+    if repository._load_relation_alias_maps().get("projection_stale_reason"):
+        from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+        ensure_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
     pending = []
     with repository._connect_to_database() as connection:
         connection.execute("set transaction isolation level repeatable read, read only")

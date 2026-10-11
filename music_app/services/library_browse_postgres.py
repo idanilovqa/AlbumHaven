@@ -835,7 +835,11 @@ class PostgresLibraryBrowseRepository:
                 if callable(close):
                     close()
 
-        if prepared_snapshot is not None and projection_context and not relation_alias_maps.get("projection_stale_reason"):
+        if relation_alias_maps.get("projection_stale_reason"):
+            from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+
+            schedule_gallery_projection_refresh(self._config, connect=self._connect)
+        elif prepared_snapshot is not None and projection_context:
             queue_gallery_projection_snapshot(
                 self._config, projection_context, view_state, prepared_snapshot, connect=self._connect)
 

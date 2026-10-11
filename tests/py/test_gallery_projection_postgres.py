@@ -175,6 +175,8 @@ def test_projection_occurrences_exclude_mutable_missing_details_and_private_path
         ("Bella Ramsey", "Hilda: Season 2 (Original Series Soundtrack)", "Ryan Carlson"),
         ("Belle Stars", "Rain Man", "Various Artists"),
         ("Ben Del Maestro", "The Lord Of The Rings: The Return Of The King", "Various Artists"),
+        ("Beny More", "Dexter: Music From The Showtime Original Series", "Various Artists"),
+        ("Beny More", "Dexter: Season 5 (Music From The Showtime Original Series)", "Daniel Licht"),
     ],
 )
 def test_projection_occurrences_preserve_featured_track_artist_role(

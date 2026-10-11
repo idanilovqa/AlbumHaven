@@ -353,7 +353,9 @@ function buildSearchBrowseFocusedLocalSummaryCards(_checkpoints, metricsPayload)
   return [
     {
       label: 'Search UI Ready',
-      value: `${Math.round(Number(metricsPayload?.searchBrowseApiMs || 0))} ms`,
+      value: Number.isFinite(metricsPayload?.searchReadyMs)
+        ? `${Math.round(metricsPayload.searchReadyMs)} ms`
+        : 'Not recorded',
       note: 'Visible search into filtered gallery',
     },
     {

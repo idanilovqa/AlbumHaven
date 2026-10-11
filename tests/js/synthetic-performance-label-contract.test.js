@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 
@@ -12,6 +13,28 @@ function repositoryPath(...segments) {
 function readRepositoryFile(...segments) {
   return fs.readFileSync(repositoryPath(...segments), 'utf8');
 }
+
+test('search report displays the measured readiness timing and identifies missing evidence', () => {
+  const source = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const start = source.indexOf('function buildSearchBrowseFocusedLocalSummaryCards(');
+  const end = source.indexOf('function buildRootAlbumBrowseFocusedLocalSummaryCards(', start);
+  assert.ok(start >= 0 && end > start, 'Search summary builder must exist');
+  const buildSummary = vm.runInNewContext(
+    `${source.slice(start, end)}\nbuildSearchBrowseFocusedLocalSummaryCards`,
+  );
+
+  for (const [metrics, expected] of [
+    [{ searchReadyMs: 462 }, '462 ms'],
+    [{ searchReadyMs: 462.6 }, '463 ms'],
+    [{ searchReadyMs: 0 }, '0 ms'],
+    [{}, 'Not recorded'],
+    [{ searchReadyMs: null }, 'Not recorded'],
+    [{ searchReadyMs: NaN }, 'Not recorded'],
+  ]) {
+    const card = buildSummary([], metrics).find(item => item.label === 'Search UI Ready');
+    assert.equal(card?.value, expected);
+  }
+});
 
 test('synthetic performance helpers and benchmark tests use dataset-accurate filenames', () => {
   const expectedAbsent = [

@@ -48,6 +48,20 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Mandatory search regression gate
+
+- Immediately run `npm run test:search-regressions` after changing search
+  algorithms, search payloads, gallery or library rebuild behavior, cache
+  invalidation, watcher reconciliation that can invalidate projections,
+  artist-tree filtering or selection, pagination, or search-related rendering.
+- The command is the complete local search gate: PostgreSQL/API contracts,
+  JavaScript and component tests, the `gallery-search-visual` functional E2E
+  shard, and the measured `artist-family`, `search-all-artists`, and
+  `search-browse` performance targets. Do not replace it with a narrower test
+  selection. Keep the timed cold duplicate-projection cache-miss test in this
+  gate so an interactive search cannot synchronously rebuild the global
+  album/file inventory.
+
 ## Subagents and token burning
 
 All wait_agent tool calls MUST use at least 10 minutes timeout. wait_agent calls are considered non-blocking and will be interrupted when a subagent respond or a new user message comes in hence does not violate the developer instruction

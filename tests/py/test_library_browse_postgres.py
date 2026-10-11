@@ -11247,6 +11247,8 @@ def test_non_album_candidate_track_filter_is_applied_before_inventory_scans():
 
 
 def test_duplicate_source_attachment_defers_global_index_cache_miss(monkeypatch):
+    from time import perf_counter
+
     import music_app.services.library_browse_postgres as browse
 
     repository = browse.PostgresLibraryBrowseRepository(
@@ -11263,14 +11265,21 @@ def test_duplicate_source_attachment_defers_global_index_cache_miss(monkeypatch)
             raise AssertionError("interactive payload must not scan the global duplicate index")
 
     album = {"key": "one", "preview_only": True}
+    started_at = perf_counter()
     repository._attach_duplicate_sources(
         [album],
         connection=Connection(),
         defer_on_cache_miss=True,
     )
 
+    elapsed_ms = (perf_counter() - started_at) * 1000
+
     assert queued == ["duplicate-identities"]
     assert "has_duplicate_files" not in album
+    assert elapsed_ms < 250, (
+        "interactive duplicate projection cache misses must return within 250 ms; "
+        f"measured {elapsed_ms:.1f} ms"
+    )
 
 
 def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypatch):

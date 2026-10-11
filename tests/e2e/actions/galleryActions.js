@@ -1478,7 +1478,7 @@ export class GalleryActions {
   }
 
   async dismissAlbumContextMenu() {
-    await this.galleryPage.page.locator('#search-form input').click();
+    await this.galleryPage.page.getByRole('combobox', { name: 'Search music', exact: true }).click();
     await expect(this.galleryPage.albumCard.contextMenu).toBeHidden();
   }
 

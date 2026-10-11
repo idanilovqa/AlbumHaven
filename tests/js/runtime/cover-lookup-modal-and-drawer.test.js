@@ -725,7 +725,7 @@ function createDrawerHarness(overrides = {}) {
       ok: true,
       json: async () => ({
         ok: true,
-        tasks: [{ id: 'task-1', status: 'failed' }],
+        tasks: [{ id: 'task-1', status: 'completed', result_kind: 'cover-updated' }],
       }),
     }),
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks.map((task) => ({ ...task, notification_action_taken: true })),
@@ -748,7 +748,9 @@ function createDrawerHarness(overrides = {}) {
   await context.loadCoverLookupTasks({ toast: false });
 
   assert.equal(context.state.coverLookup.tasks[0].notification_action_taken, true);
-  assert.match(bodyElement.innerHTML, /Lookup failed/);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-open-cover-lookup-task="task-1"/);
+  assert.equal(badgeElement.hidden, true);
+  assert.equal(clearElement.disabled, true);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -1432,9 +1434,10 @@ function createDrawerHarness(overrides = {}) {
     tracks: [{ path: 'C:/music/Saved/01.flac' }],
   };
   const fetchCalls = [];
+  const toastCalls = [];
   const context = loadHelper({
     deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
-    showToast: () => {},
+    showToast: (...args) => toastCalls.push(args),
   });
   context.state.coverLookup.modal = {
     album,
@@ -1466,6 +1469,7 @@ function createDrawerHarness(overrides = {}) {
     candidate_id: 'saved-candidate',
     snapshot_generation: 'saved-generation',
   });
+  assert.deepEqual(toastCalls, []);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -3160,3 +3164,23 @@ for (const [label, values] of [
     assert.equal(context.state.coverLookup.modal.album.cover_revision, values.albumRevision);
   });
 }
+
+require('node:test')('publishing album artwork advances the cover mutation revision', () => {
+  const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
+  const updated = { ...original, cover_path: '/album/cover.jpg' };
+  const context = loadHelper({
+    state: {
+      ui: {},
+      coverLookup: { modal: { album: original, pastedImages: [], localCovers: [], otherArt: [] } },
+    },
+    getAlbumTrackPaths: (album) => (album?.tracks || []).map((track) => track.path),
+    getUpdatedAlbumForTrackPaths: (albums) => albums[0],
+    patchVisibleAlbumsByTrackPath() {},
+    refreshRenderedAlbumCoverOnly() {},
+    updateTrackModalIfStillShowingAlbum() {},
+  });
+
+  context.refreshCoverLookupAlbumArtwork(original, [updated]);
+
+  assert.equal(context.state.ui.albumCoverMutationRevision, 1);
+});

@@ -15,6 +15,12 @@ from config import Config
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_availability import provider_availability
 from music_app.services.cover_provider_candidates import CoverCandidate, normalize_remote_image_url
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    automatic_cover_budget_active,
+    remaining_automatic_cover_seconds,
+)
 from music_app.services import music_identity_matching
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,6 +47,18 @@ SelectCandidate = Callable[..., CoverCandidate | None]
 DedupeCandidates = Callable[[list[CoverCandidate]], list[CoverCandidate]]
 
 
+class SpotifyCooldown(AutomaticCoverSearchFailed):
+    def __init__(self, retry_at: float, *, quota_response: bool = False):
+        super().__init__("Spotify cooldown is active")
+        self.retry_at = retry_at
+        self.quota_response = quota_response
+
+
+def spotify_cooldown_until() -> float:
+    with _SPOTIFY_REQUEST_PACING_LOCK:
+        return float(_SPOTIFY_REQUEST_PACING.get("rate_limited_until") or 0.0)
+
+
 def reset_spotify_rate_limit_state() -> None:
     _SPOTIFY_RATE_LIMIT_LOCAL.hit_429 = False
 
@@ -57,9 +75,14 @@ def spotify_wait_for_request_slot() -> None:
     wait_seconds = 0.0
     with _SPOTIFY_REQUEST_PACING_LOCK:
         now = time.time()
+        retry_at = float(_SPOTIFY_REQUEST_PACING.get("rate_limited_until") or 0.0)
+        if automatic_cover_budget_active() and retry_at > now:
+            raise SpotifyCooldown(retry_at)
         next_allowed_at = float(_SPOTIFY_REQUEST_PACING.get("next_allowed_at") or 0.0)
         if next_allowed_at > now:
             wait_seconds = next_allowed_at - now
+        if wait_seconds >= remaining_automatic_cover_seconds(float("inf")):
+            raise AutomaticCoverDeadlineExceeded()
         scheduled_at = max(now, next_allowed_at) + _SPOTIFY_MIN_REQUEST_INTERVAL_SECONDS
         _SPOTIFY_REQUEST_PACING["next_allowed_at"] = scheduled_at
     if wait_seconds > 0:
@@ -173,6 +196,12 @@ def spotify_request_json(
         method=method.upper(),
     )
     spotify_wait_for_request_slot()
+    retry_at = spotify_cooldown_until()
+    if automatic_cover_budget_active() and retry_at > time.time():
+        mark_spotify_rate_limited()
+        _emit(log_event, "Spotify request deferred during cooldown", context=context, retry_at=retry_at)
+        raise SpotifyCooldown(retry_at)
+    request_timeout = remaining_automatic_cover_seconds(20.0)
     _emit(
         log_event,
         "Spotify request issuing HTTP request",
@@ -188,10 +217,16 @@ def spotify_request_json(
             url=url,
             method=method.upper(),
         )
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:
             payload = response.read()
     except Exception as exc:
+        reason = getattr(exc, "reason", exc)
+        if automatic_cover_budget_active() and (
+            isinstance(reason, TimeoutError) or "timed out" in str(reason).lower()
+        ):
+            raise AutomaticCoverDeadlineExceeded() from exc
         error_body = ""
+        cooldown_until = 0.0
         if isinstance(exc, urllib.error.HTTPError):
             if int(getattr(exc, "code", 0) or 0) == 429:
                 mark_spotify_rate_limited()
@@ -201,6 +236,7 @@ def spotify_request_json(
                 except Exception:
                     retry_after_seconds = 0.0
                 spotify_apply_retry_after(retry_after_seconds or 5.0)
+                cooldown_until = spotify_cooldown_until()
             try:
                 error_body = exc.read().decode("utf-8", errors="replace")
             except Exception:
@@ -217,7 +253,14 @@ def spotify_request_json(
             error_type=type(exc).__name__,
             error=str(exc),
             error_body=error_body[:500],
+            status=getattr(exc, "code", None),
+            **({"retry_at": cooldown_until, "retry_after_seconds": max(0.0, cooldown_until - time.time())}
+               if cooldown_until else {}),
         )
+        if automatic_cover_budget_active():
+            if cooldown_until:
+                raise SpotifyCooldown(cooldown_until, quota_response=True) from exc
+            raise AutomaticCoverSearchFailed() from exc
         return None
     _emit(
         log_event,
@@ -228,7 +271,12 @@ def spotify_request_json(
         payload_bytes=len(payload or b""),
     )
     try:
-        return json.loads(payload.decode("utf-8"))
+        decoded = json.loads(payload.decode("utf-8"))
+        if automatic_cover_budget_active() and (not isinstance(decoded, dict) or decoded.get("error")):
+            raise AutomaticCoverSearchFailed()
+        return decoded
+    except AutomaticCoverSearchFailed:
+        raise
     except Exception as exc:
         verbose = getattr(active_logger, "verbose", None)
         if callable(verbose):
@@ -242,6 +290,8 @@ def spotify_request_json(
             error_type=type(exc).__name__,
             error=str(exc),
         )
+        if automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed() from exc
         return None
 
 
@@ -290,6 +340,8 @@ def spotify_access_token(
             has_payload=bool(payload),
             payload_keys=sorted((payload or {}).keys()) if isinstance(payload, dict) else [],
         )
+        if automatic_cover_budget_active():
+            raise AutomaticCoverSearchFailed()
         return None
     _emit(log_event, "Spotify token acquired", expires_in_seconds=expires_in)
     with _SPOTIFY_TOKEN_CACHE_LOCK:
@@ -407,6 +459,12 @@ def spotify_collect_album_matches(
         "limit": 10,
         "market": config.SPOTIFY_MARKET,
     })
+    if automatic_cover_budget_active() and data is not None and (
+        not isinstance(data, dict)
+        or not isinstance(data.get("albums"), dict)
+        or not isinstance(data["albums"].get("items"), list)
+    ):
+        raise AutomaticCoverSearchFailed()
     items = (((data or {}).get("albums") or {}).get("items") or [])
     matches, raw_results = spotify_album_matches_from_items(
         items if isinstance(items, list) else [],
@@ -532,6 +590,8 @@ def search_spotify(
     year: int | None,
     user_agent: str,
     *,
+    automatic: bool = False,
+    max_queries: int | None = None,
     config=Config,
     api_enabled: Callable[[], bool],
     global_rate_limit_active: Callable[[], bool],
@@ -560,7 +620,10 @@ def search_spotify(
             artist=artist,
             album=album,
             year=year,
+            retry_at=spotify_cooldown_until(),
         )
+        if automatic:
+            raise SpotifyCooldown(spotify_cooldown_until())
         return None
     reset_rate_limit_state()
     started_at = time.perf_counter()
@@ -570,6 +633,8 @@ def search_spotify(
             _emit(log_event, "Spotify search timed out", artist=artist, album=album, year=year, elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2))
             break
         if rate_limited():
+            if automatic:
+                raise AutomaticCoverSearchFailed()
             break
         queries: list[tuple[str, bool, str]] = []
         query_suffix = "translit" if (query_artist, query_album) != (artist, album) else "native"
@@ -577,27 +642,35 @@ def search_spotify(
         if query_year:
             queries.append((f'album:"{query_album_text}" artist:"{query_artist}" year:{query_year}', True, f"artist+album+year:{query_suffix}"))
         queries.append((f'album:"{query_album_text}" artist:"{query_artist}"', False, f"artist+album:{query_suffix}"))
-        for query_text, enforce_year, query_mode in queries:
+        for query_text, enforce_year, query_mode in (queries[:1] if automatic else queries):
             if search_timed_out(started_at):
                 _emit(log_event, "Spotify search timed out before query", artist=artist, album=album, year=year, query_mode=query_mode, elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2))
                 break
             if rate_limited():
+                if automatic:
+                    raise AutomaticCoverSearchFailed()
                 break
             normalized_query = " ".join(query_text.split()).strip()
             if not normalized_query or normalized_query in seen_queries:
                 continue
+            if max_queries is not None and len(seen_queries) >= max_queries:
+                return None
             seen_queries.add(normalized_query)
             matches, raw_results = collect_album_matches(normalized_query, artist=artist, album=album, edition=edition, year=year, enforce_year=enforce_year, query_mode=query_mode)
             if rate_limited():
                 _emit(log_event, "Spotify search stopped after rate limit", artist=artist, album=album, year=year, query=normalized_query, query_mode=query_mode)
+                if automatic:
+                    raise AutomaticCoverSearchFailed()
                 break
             if search_timed_out(started_at):
                 _emit(log_event, "Spotify search timed out after album search", artist=artist, album=album, year=year, query=normalized_query, query_mode=query_mode, elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2))
                 break
-            if not matches:
+            if not matches and not automatic:
                 matches, raw_results = collect_artist_album_matches(query_artist, artist=artist, album=album, edition=edition, year=year, enforce_year=enforce_year, query_mode=query_mode)
             if rate_limited():
                 _emit(log_event, "Spotify artist fallback stopped after rate limit", artist=artist, album=album, year=year, query_artist=query_artist, query_mode=query_mode)
+                if automatic:
+                    raise AutomaticCoverSearchFailed()
                 break
             if search_timed_out(started_at):
                 _emit(log_event, "Spotify search timed out after artist fallback", artist=artist, album=album, year=year, query_artist=query_artist, query_mode=query_mode, elapsed_ms=round((time.perf_counter() - started_at) * 1000, 2))
@@ -645,6 +718,8 @@ def search_spotify(
                 return best_candidate
             _emit(log_event, "Spotify search found no candidate", artist=artist, album=album, year=year, query=normalized_query, query_mode=query_mode, raw_result_count=len(raw_results))
         if rate_limited():
+            if automatic:
+                raise AutomaticCoverSearchFailed()
             break
     return None
 

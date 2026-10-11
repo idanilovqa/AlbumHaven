@@ -8,6 +8,7 @@ from collections.abc import Callable
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_candidates import CoverCandidate, dedupe_cover_candidates, normalize_remote_image_url
 from music_app.services import cover_provider_http
+from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed
 
 _LOGGER = logging.getLogger(__name__)
 _DEEZER_ARTWORK_SIZES = (2000, 1800, 1500, 1400, 1200, 1000)
@@ -107,6 +108,8 @@ def search_deezer_cover(
     year: int | None,
     user_agent: str,
     *,
+    automatic: bool = False,
+    max_queries: int | None = None,
     http_get_json: HttpGetJson | None = None,
     build_query_variants: QueryVariants,
     match_score: MatchScore,
@@ -116,26 +119,34 @@ def search_deezer_cover(
     getter = http_get_json or cover_provider_http._http_get_json
     seen_queries: set[str] = set()
     for query_artist, query_album, query_edition, query_year in build_query_variants(artist, album, edition, year):
-        for query_text, enforce_year, query_mode in _build_deezer_queries(
+        queries = _build_deezer_queries(
             query_artist,
             query_album,
             query_edition,
             query_year,
             native_artist=artist,
             native_album=album,
-        ):
+        )
+        for query_text, enforce_year, query_mode in (queries[:1] if automatic else queries):
             normalized_query = " ".join(query_text.split()).strip()
             if not normalized_query or normalized_query in seen_queries:
                 continue
+            if max_queries is not None and len(seen_queries) >= max_queries:
+                return None
             seen_queries.add(normalized_query)
             data = getter(_search_url(normalized_query, limit=10), user_agent, service="deezer", context=f"search:{normalized_query}")
+            if automatic and data is not None and (
+                not isinstance(data, dict) or not isinstance(data.get("data"), list)
+            ):
+                raise AutomaticCoverSearchFailed()
             if not data:
                 continue
             matches: list[tuple[float, str, dict]] = []
             for item in data.get("data") or []:
                 if not isinstance(item, dict):
                     continue
-                candidate_url = deezer_candidate_url(str(item.get("cover_xl") or item.get("cover_big") or item.get("cover") or ""))
+                artwork_url = str(item.get("cover_xl") or item.get("cover_big") or item.get("cover") or "").strip()
+                candidate_url = artwork_url if automatic else deezer_candidate_url(artwork_url)
                 score = match_score(
                     target_artist=artist,
                     target_album=album,

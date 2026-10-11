@@ -50,6 +50,7 @@ _ALLOWED_TAG_EDIT_FIELDS = {
     "edition",
     "album_rating",
     "exception_type",
+    "custom_collection_name",
 }
 
 
@@ -502,7 +503,7 @@ def _handle_edit_tags_request_after_reservation(
     updated_file_cache = dict(file_cache)
     repair_jobs: list[tuple[str, JsonDict, dict[str, str]]] = []
     skipped_files: list[str] = []
-    exception_updates: list[tuple[str, JsonDict, str]] = []
+    exception_updates: list[tuple[str, JsonDict, dict[str, str]]] = []
 
     for raw_path, raw_edits in updates.items():
         path = str(raw_path or "")
@@ -515,7 +516,7 @@ def _handle_edit_tags_request_after_reservation(
             continue
 
         repairs: dict[str, str] = {}
-        exception_value = None
+        app_owned_updates: dict[str, str] = {}
         for field, value in raw_edits.items():
             field_name = str(field or "")
             if field_name not in _ALLOWED_TAG_EDIT_FIELDS:
@@ -523,15 +524,42 @@ def _handle_edit_tags_request_after_reservation(
             text_value = normalize_exception_value(value) if field_name == "exception_type" else str(value or "").strip()
             current_value = str(entry.get(field_name) or "").strip()
             if text_value != current_value:
-                if field_name == "exception_type":
-                    exception_value = text_value
+                if field_name in {"exception_type", "custom_collection_name"}:
+                    app_owned_updates[field_name] = text_value
                 else:
                     repairs[field_name] = text_value
 
-        if exception_value is not None:
-            exception_updates.append((path, entry, exception_value))
+        if app_owned_updates:
+            effective_exception = normalize_exception_value(
+                app_owned_updates.get("exception_type", entry.get("exception_type"))
+            )
+            effective_collection_name = str(
+                app_owned_updates.get(
+                    "custom_collection_name",
+                    entry.get("custom_collection_name"),
+                )
+                or ""
+            ).strip()
+            if effective_exception == "Custom Collection" and not effective_collection_name:
+                return {"ok": False, "error": "Custom Collection name is required."}, 400
+            if (
+                "custom_collection_name" in raw_edits
+                or effective_exception == "Custom Collection"
+                or str(entry.get("custom_collection_name") or "").strip()
+            ):
+                app_owned_updates = {
+                    "exception_type": effective_exception,
+                    "custom_collection_name": (
+                        effective_collection_name
+                        if effective_exception == "Custom Collection"
+                        else ""
+                    ),
+                }
+            else:
+                app_owned_updates = {"exception_type": effective_exception}
+            exception_updates.append((path, entry, app_owned_updates))
 
-        if not repairs and exception_value is None:
+        if not repairs and not app_owned_updates:
             skipped_files.append(path)
             continue
         if repairs:
@@ -580,8 +608,8 @@ def _handle_edit_tags_request_after_reservation(
             return failure_payload, 500
 
     exception_values_by_path = {
-        path: exception_value
-        for path, _entry, exception_value in exception_updates
+        path: dict(override_payload)
+        for path, _entry, override_payload in exception_updates
     }
     repairs_by_path = {
         path: dict(repairs)
@@ -597,7 +625,7 @@ def _handle_edit_tags_request_after_reservation(
                 continue
             requested_values = dict(repairs_by_path.get(path, {}))
             if path in exception_values_by_path:
-                requested_values["exception_type"] = exception_values_by_path[path]
+                requested_values.update(exception_values_by_path[path])
             if not requested_values:
                 continue
             old_values = {
@@ -702,17 +730,22 @@ def _handle_edit_tags_request_after_reservation(
         # blank in the queued snapshot so runtime and Postgres agree.
         refreshed_entry["album"] = str(repairs.get("album") or "").strip()
         updated_file_cache[path] = refreshed_entry
+    persisted_exception_updates = {
+        path: (
+            override_payload
+            if "custom_collection_name" in override_payload
+            else override_payload.get("exception_type", "")
+        )
+        for path, _entry, override_payload in exception_updates
+    }
     try:
         normalized_exception_updates = (
-            dict(exception_values_by_path)
+            dict(persisted_exception_updates)
             if tag_edit_intent_id
             else (
             save_track_exception_overrides(
                 config,
-                {
-                    path: exception_value
-                    for path, _entry, exception_value in exception_updates
-                },
+                    persisted_exception_updates,
             )
             if exception_updates and save_track_exception_overrides is not None
             else {}
@@ -759,20 +792,46 @@ def _handle_edit_tags_request_after_reservation(
         )
         failure_payload["edit_outcome"] = "recovery_pending" if compensation_failures else "failed_rolled_back"
         return failure_payload, 500
-    for path, entry, exception_value in exception_updates:
-        normalized_value = (
-            normalized_exception_updates.get(path, normalize_exception_value(exception_value))
+    for path, entry, override_payload in exception_updates:
+        saved_override = (
+            normalized_exception_updates.get(
+                path,
+                normalize_exception_value(override_payload.get("exception_type")),
+            )
             if tag_edit_intent_id or save_track_exception_overrides is not None
-            else save_track_exception_override(config, path, exception_value)
+            else save_track_exception_override(
+                config,
+                path,
+                override_payload
+                if "custom_collection_name" in override_payload
+                else override_payload.get("exception_type", ""),
+            )
+        )
+        normalized_value = normalize_exception_value(
+            saved_override.get("exception_type")
+            if isinstance(saved_override, dict)
+            else saved_override
         )
         updated_file_cache[path] = update_cache_entry_after_repairs(
             Path(path),
             updated_file_cache.get(path, entry),
-            {"exception_type": normalized_value},
+            {
+                "exception_type": normalized_value,
+                **(
+                    {"custom_collection_name": override_payload.get("custom_collection_name") or ""}
+                    if "custom_collection_name" in override_payload
+                    else {}
+                ),
+            },
         )
         file_change = changed_file_map.setdefault(path, {"path": path, "fields": []})
         if "exception_type" not in file_change["fields"]:
             file_change["fields"].append("exception_type")
+        if (
+            "custom_collection_name" in override_payload
+            and "custom_collection_name" not in file_change["fields"]
+        ):
+            file_change["fields"].append("custom_collection_name")
     changed_files = list(changed_file_map.values())
 
     changed_paths = {str(item.get("path") or "") for item in changed_files if str(item.get("path") or "")}

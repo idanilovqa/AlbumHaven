@@ -26,6 +26,7 @@ from music_app.services.covers import (
     display_cover_variant_cache_root,
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
+    normalize_cover_variant_revision,
     normalize_cover_variant_size,
     resolve_cover_display_variant,
 )
@@ -334,6 +335,15 @@ def _build_startup_hydration_endpoint(
         params.append(("payload_tier", normalized_payload_tier))
     if omit_sidebar:
         params.append(("omit_sidebar", "1"))
+    if (
+        normalized_surface == "albums"
+        and normalized_payload_tier != "sidebar"
+        and not query_raw
+        and not selected_artist
+        and not related_filter_artists
+        and not primary_filter_active
+    ):
+        params.append(("gallery_page_size", "50"))
     if query_raw:
         params.append(("q", query_raw))
     if selected_artist:
@@ -474,6 +484,50 @@ def _build_startup_hydration_contract(
                 else "embedded_sidebar_is_startup_complete"
             ),
         }
+    if (
+        normalized_surface == "albums"
+        and preview_mode == "empty_shell"
+        and not query_raw
+        and not selected_artist
+        and not related_filter_artists
+        and not primary_filter_active
+    ):
+        return {
+            "required": hydration_required,
+            "trigger": "after_runtime_boot" if hydration_required else "none",
+            "endpoint": _build_startup_hydration_endpoint(
+                query_raw,
+                selected_artist,
+                related_filter_artists,
+                primary_filter_active,
+                selected_artist_family_display_mode,
+                gallery_scope,
+                gallery_display_mode,
+                gallery_scale_percent,
+                visible_library_categories,
+                active_surface=normalized_surface,
+                omit_sidebar=True,
+                all_artists_active=all_artists_active,
+            ),
+            "followupEndpoint": _build_startup_hydration_endpoint(
+                query_raw,
+                selected_artist,
+                related_filter_artists,
+                primary_filter_active,
+                selected_artist_family_display_mode,
+                gallery_scope,
+                gallery_display_mode,
+                gallery_scale_percent,
+                visible_library_categories,
+                active_surface=normalized_surface,
+                payload_tier="sidebar",
+                all_artists_active=all_artists_active,
+            ),
+            "embeddedViewPatch": None,
+            "tier": "full",
+            "reason": "empty_shell_prioritizes_gallery_before_sidebar",
+        }
+
     if preview_mode == "empty_shell":
         reason = "empty_shell_requires_view_fetch"
     elif initial_view_partial:
@@ -1167,26 +1221,63 @@ async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileRes
     return _conditional_file_response(request, resolved, no_cache=True)
 
 
-def _cover_response(request: Request, path: str, size: str | None) -> Response:
+def _cover_response(
+    request: Request,
+    path: str,
+    size: str | None,
+    revision: str = "",
+) -> Response:
     config = _app_config(request)
+    configured_roots = configured_library_root_paths_snapshot(config)
+    requested_size = normalize_cover_variant_size(size)
+    normalized_revision = normalize_cover_variant_revision(revision)
+
+    cache_root: Path | None = None
+    if requested_size > 0 and normalized_revision:
+        candidate = resolve_configured_media_path(
+            config,
+            path,
+            require_file=False,
+            require_exists=False,
+            configured_root_paths=configured_roots,
+        )
+        if candidate is None:
+            return _not_found()
+        cache_root = display_cover_variant_cache_root(
+            candidate,
+            data_dir=config.get("DATA_DIR"),
+        )
+        cached_variant = find_existing_cover_display_variant(
+            candidate,
+            cache_root=cache_root,
+            max_size=requested_size,
+            revision=normalized_revision,
+        )
+        if cached_variant is not None:
+            return _conditional_file_response(request, cached_variant, max_age=31536000)
+
     resolved = resolve_configured_media_path(
         config,
         path,
-        configured_root_paths=configured_library_root_paths_snapshot(config),
+        configured_root_paths=configured_roots,
     )
     if resolved is None:
         return _not_found()
-    requested_size = normalize_cover_variant_size(size)
     if requested_size > 0:
-        cache_root = display_cover_variant_cache_root(resolved)
+        if cache_root is None:
+            cache_root = display_cover_variant_cache_root(resolved)
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
+        )
+        revision_options = (
+            {"revision": normalized_revision} if normalized_revision else {}
         )
         try:
             cached_variant = find_existing_cover_display_variant(
                 resolved,
                 cache_root=cache_root,
                 max_size=requested_size,
+                **revision_options,
             )
             if cached_variant is not None:
                 resolved = cached_variant
@@ -1196,25 +1287,43 @@ def _cover_response(request: Request, path: str, size: str | None) -> Response:
                     cache_root=cache_root,
                     max_size=requested_size,
                     priority=request_priority,
+                    **revision_options,
                 )
         except Exception:
-            _app_logger(request).exception("cover: failed to prepare display variant for %s", resolved)
-    return _conditional_file_response(request, resolved, max_age=300)
+            _app_logger(request).exception(
+                "cover: failed to prepare display variant for %s", resolved
+            )
+    return _conditional_file_response(
+        request,
+        resolved,
+        max_age=31536000 if normalized_revision else 300,
+    )
 
 
 @router.get("/cover")
-async def cover(request: Request, path: str = "", size: str | None = None, loop_id: str = "") -> Response:
+async def cover(
+    request: Request,
+    path: str = "",
+    size: str | None = None,
+    loop_id: str = "",
+    v: str = "",
+) -> Response:
     if loop_id:
-        item = get_loop(_app_config(request),loop_id,**(await saved_loop_scope(request)))
-        if item is None or not item.get('cover_path'):
+        item = get_loop(
+            _app_config(request),
+            loop_id,
+            **(await saved_loop_scope(request)),
+        )
+        if item is None or not item.get("cover_path"):
             return _not_found()
-        path = str(item['cover_path'])
+        path = str(item["cover_path"])
     return await asyncio.get_running_loop().run_in_executor(
         _COVER_RESPONSE_EXECUTOR,
         _cover_response,
         request,
         path,
         size,
+        v,
     )
 
 

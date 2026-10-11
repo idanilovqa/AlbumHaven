@@ -1,2 +1,4 @@
 tests/fixtures/codex-action/action.yml text eol=lf
 tests/fixtures/codex-action/LICENSE text eol=lf
+migrations/postgres/0081_grant_move_policy_settings_delete.sql text eol=lf
+migrations/postgres/0082_library_source_indicators.sql text eol=lf

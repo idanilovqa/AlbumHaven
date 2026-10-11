@@ -14,6 +14,7 @@ const defaults = () => ({
   docked_compact_player_regular_style: false,
   compact_player_motion: 'normal', floating_player_edge: { source: 'player', color: null },
   album_details_layout: 'classic_bar', album_playing_row_animation: 'enabled',
+  library_source_indicators: { card_colors: false, hover_outline_colors: false, icons: true },
   alert_family: 'ember', loop_control_style: 'capsule',
   action_button_outlines: true, device_profiles: {},
 });

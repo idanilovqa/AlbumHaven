@@ -261,12 +261,26 @@ gap: 8px;
 align-items: start;
 }
 .artist-subsection-label {
-margin: 2px 0 -2px;
-color: #d6c8ab;
-font-size: 0.82rem;
-font-weight: 800;
-letter-spacing: 0.08em;
-text-transform: uppercase;
+  margin: 2px 0 -2px 28px;
+  color: #d6c8ab;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.artist-subsection-separator {
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.artist-subsection-count {
+    color: var(--muted);
+    white-space: nowrap;
 }
 .album-subtitle {
 color: var(--muted);

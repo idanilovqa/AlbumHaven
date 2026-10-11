@@ -200,6 +200,31 @@ function loadHelpers() {
   return context;
 }
 
+test('status normalization preserves completed results and explicit zero instead of queue position', () => {
+  const { normalizeStatusPayload } = loadHelpers();
+  const previous = { covers_processed: 100, covers_completed: 25, covers_total: 100 };
+  assert.equal(normalizeStatusPayload({ covers_processed: 90, covers_completed: '3' }, previous).covers_completed, 3);
+  assert.equal(normalizeStatusPayload({ covers_processed: 90, covers_completed: 0 }, previous).covers_completed, 0);
+});
+
+test('legacy status without completed results falls back to its queue position', () => {
+  const { normalizeStatusPayload } = loadHelpers();
+  const normalized = normalizeStatusPayload({ covers_processed: 7, covers_total: 10 },
+    { covers_processed: 100, covers_completed: 25, covers_total: 100 });
+  assert.equal(normalized.covers_completed, 7);
+});
+
+test('new cover run explicit zero discards previous completed count', () => {
+  const { normalizeStatusPayload } = loadHelpers();
+  const normalized = normalizeStatusPayload({ covers_in_progress: true,
+    covers_processed: 0, covers_completed: 0, covers_total: 20, covers_downloaded: 0 },
+  { covers_in_progress: false, covers_processed: 100, covers_completed: 100,
+    covers_total: 100, covers_downloaded: 80 });
+  assert.equal(normalized.covers_completed, 0);
+  assert.equal(normalized.covers_processed, 0);
+  assert.equal(normalized.covers_total, 20);
+});
+
 {
   const { normalizeViewPayload } = loadHelpers();
   const normalized = normalizeViewPayload(
@@ -354,6 +379,7 @@ function loadHelpers() {
   })));
   assert.deepEqual(normalized, {
     artist_groups: [{ artist: 'Broadcast' }],
+    gallery_page: null,
     primary_artist_groups: [],
     family_artist_groups: [],
     artists_sidebar: [],
@@ -587,6 +613,7 @@ function loadHelpers() {
     relations_source: 'local',
     covers_in_progress: false,
     covers_processed: 0,
+    covers_completed: 0,
     covers_total: 0,
     covers_downloaded: 0,
     covers_current_folder: '42',
@@ -644,6 +671,7 @@ function loadHelpers() {
   })));
   assert.deepEqual(normalized, {
     view: {
+      gallery_page: null,
       artist_groups: [],
       primary_artist_groups: [],
       family_artist_groups: [],

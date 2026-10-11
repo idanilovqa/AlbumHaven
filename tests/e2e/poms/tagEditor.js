@@ -19,6 +19,13 @@ export class TagEditor extends BasePage {
     this.trackList = this.overlay.locator('#tag-editor-track-list');
     this.trackButtons = this.overlay.locator('[data-tag-editor-track]');
     this.trackTitles = this.overlay.locator('[data-tag-editor-track] .tag-editor-track-title');
+    this.artwork = this.overlay.locator('#tag-editor-artwork');
+    this.artworkVisual = this.artwork.locator('img, .tag-editor-artwork-placeholder').first();
+    this.folderPath = this.overlay.locator('.tag-editor-folder-path');
+    this.folderLoadButton = this.overlay.getByRole('button', {
+      name: 'Load all files from this folder',
+      exact: true,
+    });
     this.reorderCueRows = this.trackList.locator(
       '[data-tag-editor-track].is-reorder-before, [data-tag-editor-track].is-reorder-dragged',
     );
@@ -33,7 +40,10 @@ export class TagEditor extends BasePage {
     this.yearInput = this.overlay.locator('input[data-tag-field="year"]');
     this.trackNumberInput = this.overlay.locator('input[data-tag-field="track_number"]');
     this.discNumberInput = this.overlay.locator('input[data-tag-field="disc_number"]');
-    this.exceptionSelect = this.overlay.locator('select[data-tag-field="exception_type"]');
+    this.exceptionSelect = this.overlay.locator('input[data-tag-field="exception_type"]');
+    this.customCollectionNameInput = this.overlay.locator(
+      'input[data-tag-field="custom_collection_name"]',
+    );
     this.autoNumberButton = this.overlay.getByRole('button', {
       name: 'Auto-number',
       exact: true,

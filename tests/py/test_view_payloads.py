@@ -283,6 +283,7 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "relations_source": "local",
         "covers_in_progress": True,
         "covers_processed": 1,
+        "covers_completed": 0,
         "covers_total": 4,
         "covers_downloaded": 1,
         "covers_current_folder": "C:/Music/Artist/Album",
@@ -314,7 +315,13 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "relations_phase": "Building",
         "relations_source": "local",
         "covers_in_progress": True,
+        "covers_elapsed_seconds": None,
+        "covers_estimated_remaining_seconds": None,
+        "covers_run_mode": "unknown",
+        "covers_outcome": "unknown",
+        "covers_phase": "preparing",
         "covers_processed": 1,
+        "covers_completed": 0,
         "covers_total": 4,
         "covers_downloaded": 1,
         "covers_current_folder": "C:/Music/Artist/Album",
@@ -332,6 +339,19 @@ def test_build_status_payload_reflects_current_state_counters(app):
             "duration_ms": 0.0,
         },
     }
+
+
+@pytest.mark.parametrize("completed", [0, 2])
+def test_build_status_payload_preserves_completed_results_separate_from_queue_position(completed):
+    payload = build_status_payload(library_state={
+        "covers_processed": 9,
+        "covers_completed": completed,
+        "covers_total": 10,
+    })
+
+    assert payload["covers_completed"] == completed
+    assert payload["covers_processed"] == 9
+    assert payload["covers_total"] == 10
 
 
 def test_build_status_payload_uses_provided_state_without_flask_context():

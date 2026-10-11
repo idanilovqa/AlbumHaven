@@ -25,6 +25,14 @@ def _cache_entry(path: Path) -> dict[str, object]:
     }
 
 
+def test_file_entry_round_trip_preserves_local_membership_rejection(tmp_path):
+    entry = _cache_entry(tmp_path / "orphan.flac")
+    entry["local_album_membership_problem"] = "Duplicate track outside album folder"
+    serialized = cache_module.serialize_file_entry(entry)
+    assert serialized["local_album_membership_problem"] == entry["local_album_membership_problem"]
+    assert cache_module.deserialize_file_entry(serialized)["local_album_membership_problem"] == entry["local_album_membership_problem"]
+
+
 def _write_migration_cache(
     cache_path: Path,
     *,
@@ -607,6 +615,36 @@ def test_queued_cache_update_accepts_already_committed_empty_exception_value():
     assert rebased[track_path]["exception_type"] == ""
 
 
+def test_queued_cache_update_accepts_already_committed_empty_collection_name():
+    track_path = "C:/Music/song.mp3"
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={
+            track_path: {
+                "path": track_path,
+                "exception_type": "Custom Collection",
+                "custom_collection_name": "Road trip",
+            }
+        },
+        changed_entries={
+            track_path: {
+                "path": track_path,
+                "exception_type": "",
+                "custom_collection_name": "",
+            }
+        },
+        latest_file_cache={
+            track_path: {
+                "path": track_path,
+                "exception_type": None,
+                "custom_collection_name": None,
+            }
+        },
+    )
+
+    assert rebased[track_path]["custom_collection_name"] == ""
+
+
 def test_queued_cache_update_accepts_already_committed_numeric_year_value():
     track_path = "C:/Music/song.mp3"
 
@@ -1066,6 +1104,19 @@ def test_scheduled_cache_delta_preserves_structural_inventory_changed_before_wor
     assert store["file_cache"][track_path]["album"] == "Renamed Album"
     assert store["file_cache"][track_path]["album_artist"] == "Artist"
     assert store["file_cache"][track_path]["play_count"] == 1
+
+
+def test_cache_delta_rebase_preserves_newer_inventory_removal():
+    path = "C:/Music/Artist/Album/song.mp3"
+    baseline_entry = {"path": path, "title": "Old title"}
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={path: baseline_entry},
+        changed_entries={path: {**baseline_entry, "title": "New title"}},
+        latest_file_cache={},
+    )
+
+    assert rebased == {}
 
 
 def test_runtime_cover_selection_uses_targeted_postgres_mutation_without_republishing_snapshot(

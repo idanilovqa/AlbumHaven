@@ -34,16 +34,35 @@ def set_track_exception_overrides(
     updates: dict[str, object],
 ) -> dict[str, str]:
     normalized_updates: dict[str, str] = {}
+    persisted_updates: dict[str, object] = {}
     for track_path, exception_value in updates.items():
         path_key = str(track_path or "").strip()
         if not path_key:
             continue
-        normalized_updates[path_key] = normalize_exception_value(exception_value)
+        if isinstance(exception_value, dict):
+            normalized_exception = normalize_exception_value(
+                exception_value.get("exception_type")
+            )
+            normalized_collection_name = str(
+                exception_value.get("custom_collection_name") or ""
+            ).strip()
+            persisted_updates[path_key] = {
+                "exception_type": normalized_exception,
+                "custom_collection_name": (
+                    normalized_collection_name
+                    if normalized_exception == "Custom Collection"
+                    else ""
+                ),
+            }
+            normalized_updates[path_key] = normalized_exception
+        else:
+            normalized_updates[path_key] = normalize_exception_value(exception_value)
+            persisted_updates[path_key] = normalized_updates[path_key]
     if not normalized_updates:
         return {}
 
     select_runtime_persistence_adapter("exception_overrides", config)
-    RuleStatePostgresAdapter(config).upsert_exception_overrides(normalized_updates)
+    RuleStatePostgresAdapter(config).upsert_exception_overrides(persisted_updates)
     from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
 
     invalidate_postgres_utility_projection_cache(

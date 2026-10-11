@@ -172,7 +172,11 @@ def test_request_runtime_shutdown_cancels_scan_and_cover_work(runtime_carrier, m
         "cancel_background_refresh_for_state",
         lambda library_state: calls.append(f"scan-cancel:{library_state is runtime_carrier.library_state}") or True,
     )
-    monkeypatch.setattr(cover_refresh_runtime, "cancel_cover_refresh", lambda get_state: calls.append("cover-cancel") or True)
+    def cancel_cover(get_state, *, cache_lock):
+        assert cache_lock is state_module._CACHE_LOCK
+        calls.append("cover-cancel")
+        return True
+    monkeypatch.setattr(cover_refresh_runtime, "cancel_cover_refresh", cancel_cover)
 
     library_state = runtime_carrier.library_state
     library_state["relations_in_progress"] = True
@@ -206,7 +210,7 @@ def test_request_runtime_shutdown_uses_app_state_without_entering_app_context(ru
     monkeypatch.setattr(
         cover_refresh_runtime,
         "cancel_cover_refresh",
-        lambda get_state: calls.append(f"cover-cancel:{get_state() is runtime_carrier.library_state}") or True,
+        lambda get_state, *, cache_lock: calls.append(f"cover-cancel:{get_state() is runtime_carrier.library_state}") or True,
     )
 
     library_state = runtime_carrier.library_state
@@ -251,7 +255,7 @@ def test_request_runtime_shutdown_swallows_cancellation_errors_and_marks_relatio
         calls.append("scan-cancel")
         raise RuntimeError("scan cancel failed")
 
-    def raise_cover_cancel(_get_state):
+    def raise_cover_cancel(_get_state, *, cache_lock):
         calls.append("cover-cancel")
         raise RuntimeError("cover cancel failed")
 

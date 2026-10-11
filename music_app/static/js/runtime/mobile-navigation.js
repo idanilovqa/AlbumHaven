@@ -114,6 +114,19 @@ function resolveMobileParentScrollPosition(descriptor, previous, snapshot = {}, 
   if (!position || !Number.isFinite(position.scrollTop) || !Number.isFinite(position.scrollLeft)) return null;
   return { scrollTop: Math.max(0, position.scrollTop), scrollLeft: Math.max(0, position.scrollLeft) };
 }
+
+function resolveMobileParentScrollAnchor(descriptor, previous, snapshot = {}, captured = null) {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey)
+    : null;
+  const anchor = previous?.parentScrollAnchor ?? restored?.parentScrollAnchor ?? captured;
+  if (!anchor || !Number.isFinite(anchor.scrollTop) || !Number.isFinite(anchor.scrollLeft)) return null;
+  return {
+    ...anchor,
+    scrollTop: Math.max(0, anchor.scrollTop),
+    scrollLeft: Math.max(0, anchor.scrollLeft),
+  };
+}
 function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl = '') {
   const restored = Array.isArray(snapshot.mobilePages)
     ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
@@ -135,8 +148,17 @@ function restoreMobileGalleryParent(descriptor) {
     // Restore before the request too: equivalent responses may retain the mounted
     // gallery. The virtual grid already owns stabilization and row materialization.
     if (typeof virtualGrid !== 'undefined' && virtualGrid?.restoreOwnedAbsoluteScrollPosition(position)) {
+      options.absoluteScrollPositionApplied = true;
       virtualGrid.render(true);
     }
+  }
+  if (
+    atParent
+    && descriptor?.parentScrollAnchor
+    && typeof virtualGrid !== 'undefined'
+    && typeof virtualGrid?.restoreScrollAnchor === 'function'
+  ) {
+    virtualGrid.restoreScrollAnchor(descriptor.parentScrollAnchor);
   }
   handleGalleryBootstrapPopState(options);
 }
@@ -149,6 +171,14 @@ function presentMobilePage(descriptor) {
   descriptor.parentPosition = resolveMobileParentPosition(descriptor, previous, window.history.state || {});
   descriptor.parentScrollPosition = resolveMobileParentScrollPosition(descriptor, previous, window.history.state || {},
     mobilePageState.pages.length ? null : document.getElementById('albums-scroll'));
+  descriptor.parentScrollAnchor = resolveMobileParentScrollAnchor(
+    descriptor,
+    previous,
+    window.history.state || {},
+    mobilePageState.pages.length || typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.(),
+  );
   descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
     mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
   const active = mobilePageState.pages.at(-1);
@@ -713,7 +743,8 @@ function syncMobileAlbumHeader() {
   // One Back button: beside the cover initially, in the pinned bar after handoff.
   const back = document.getElementById('mobile-back-button');
   const overview = document.querySelector('#track-modal .mobile-album-overview');
-  const backHost = presentation.bodyOwnsIdentity && overview ? overview : header;
+  const rail = overview?.querySelector(':scope > .mobile-album-overview__rail');
+  const backHost = presentation.bodyOwnsIdentity && overview ? rail || overview : header;
   if (back && back.parentElement !== backHost) backHost.prepend(back);
   header.inert = presentation.bodyOwnsIdentity;
   if (presentation.bodyOwnsIdentity) header.setAttribute('aria-hidden', 'true');

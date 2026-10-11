@@ -19,6 +19,7 @@ const DEFAULT_STATUS_STATE = Object.freeze({
   relations_source: 'local',
   covers_in_progress: false,
   covers_processed: 0,
+  covers_completed: 0,
   covers_total: 0,
   covers_downloaded: 0,
   covers_current_folder: '',
@@ -993,6 +994,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       source.initial_view_partial,
       initialViewPartialFallback,
     ),
+    gallery_page: isRuntimePlainObject(source.gallery_page) ? { ...source.gallery_page } : null,
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
@@ -1102,6 +1104,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
     relations_source: normalizeRuntimeString(source.relations_source, base.relations_source),
     covers_in_progress: normalizeRuntimeBoolean(source.covers_in_progress, base.covers_in_progress),
     covers_processed: normalizeRuntimeNumber(source.covers_processed, base.covers_processed),
+    covers_completed: normalizeRuntimeNumber(source.covers_completed, normalizeRuntimeNumber(source.covers_processed, base.covers_processed)),
     covers_total: normalizeRuntimeNumber(source.covers_total, base.covers_total),
     covers_downloaded: normalizeRuntimeNumber(source.covers_downloaded, base.covers_downloaded),
     covers_current_folder: normalizeRuntimeString(source.covers_current_folder, base.covers_current_folder),
@@ -1486,8 +1489,12 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
-  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
-  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+  const loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  const loopCreateCapabilityChanged = state.loopCreateAllowed !== loopCreateAllowed;
+  state.loopCreateAllowed = loopCreateAllowed;
+  if (loopCreateCapabilityChanged && typeof syncLoopCreateCapability === 'function') {
+    syncLoopCreateCapability();
+  }
   return nextStatus;
 }
 

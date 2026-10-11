@@ -47,10 +47,12 @@ async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
   const scroll = document.getElementById('albums-scroll');
+  const prefetchViewportCount = 8;
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2 * scroll.clientHeight) return false;
+    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+      > prefetchViewportCount * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
     viewRevision: readViewStateRevision(),
@@ -66,6 +68,10 @@ async function loadNextRootGalleryPage() {
     && buildRootGalleryPageUrl(state.view) === request.url
     && state.view.gallery_page.next_cursor === request.cursor
     && state.view.gallery_page.revision === request.revision;
+  const ownsRootBrowseIdentity = () => rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && isPagedRootGallery()
+    && buildRootGalleryPageUrl(state.view) === request.url;
   const url = new URL(request.url, window.location.href);
   url.searchParams.set('gallery_page_size', '50');
   url.searchParams.set('gallery_cursor', request.cursor);
@@ -77,7 +83,7 @@ async function loadNextRootGalleryPage() {
     let restarted = false;
     if (response.status === 409) {
       const conflict = await response.json();
-      if (!ownsResponse() || conflict?.restart_required !== true) return false;
+      if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
       // Catalog changes invalidate the cursor. Replace atomically with one fresh
       // bounded page; keep the old cards visible until that response arrives.
       url.searchParams.delete('gallery_cursor');
@@ -87,8 +93,9 @@ async function loadNextRootGalleryPage() {
       });
       restarted = true;
     }
-    const data = await readGalleryResponse(response, ownsResponse);
-    if (!ownsResponse()) return false;
+    const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
+    const data = await readGalleryResponse(response, ownsDataResponse);
+    if (!ownsDataResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
@@ -108,7 +115,13 @@ async function loadNextRootGalleryPage() {
         },
       } : {}),
       artist_groups: artistGroups,
-      gallery_page: data.gallery_page,
+      gallery_page: restarted
+        ? data.gallery_page
+        : {
+          ...data.gallery_page,
+          previous_cursor: state.view.gallery_page?.previous_cursor || null,
+          has_previous: Boolean(state.view.gallery_page?.has_previous),
+        },
       initial_view_partial: false,
     }, {
       trackSidebarReveal: false,
@@ -126,6 +139,76 @@ async function loadNextRootGalleryPage() {
   } catch (error) {
     if (ownsResponse() && error?.name !== 'AbortError') {
       showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
+    }
+    return false;
+  } finally {
+    if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
+  }
+}
+
+async function loadPreviousRootGalleryPage() {
+  const view = state.view;
+  const page = view?.gallery_page;
+  const scroll = document.getElementById('albums-scroll');
+  if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
+    || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
+    || !scroll || scroll.clientHeight <= 0 || scroll.scrollTop > scroll.clientHeight * 2) return false;
+
+  const request = {
+    controller: new AbortController(),
+    cursor: page.previous_cursor,
+    revision: page.revision,
+    viewRevision: Number(state.ui.viewStateRevision || 0),
+    url: buildRootGalleryPageUrl(view),
+  };
+  rootGalleryPageRequest = request;
+  const ownsResponse = () => (
+    rootGalleryPageRequest === request
+    && !request.controller.signal.aborted
+    && Number(state.ui.viewStateRevision || 0) === request.viewRevision
+    && buildRootGalleryPageUrl(state.view) === request.url
+    && state.view.gallery_page?.previous_cursor === request.cursor
+    && state.view.gallery_page?.revision === request.revision
+  );
+
+  try {
+    const url = new URL(request.url, window.location.href);
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_cursor', request.cursor);
+    url.searchParams.set('gallery_page_direction', 'previous');
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      headers: { Accept: 'application/json' },
+      signal: request.controller.signal,
+    });
+    if (response.status === 409 || !ownsResponse()) return false;
+    const data = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse() || !Array.isArray(data.artist_groups)
+      || data.gallery_page?.revision !== request.revision
+      || (data.gallery_page?.has_previous && !data.gallery_page.previous_cursor)
+      || data.gallery_page?.previous_cursor === request.cursor) return false;
+
+    const currentPage = state.view.gallery_page;
+    applyViewPayload({
+      ...state.view,
+      artist_groups: mergeRootGalleryPageGroups(data.artist_groups, state.view.artist_groups),
+      gallery_page: {
+        ...currentPage,
+        previous_cursor: data.gallery_page.previous_cursor || null,
+        has_previous: Boolean(data.gallery_page.has_previous),
+      },
+      initial_view_partial: false,
+    }, {
+      trackSidebarReveal: false,
+      preserveSidebarState: true,
+      preserveGalleryBrowseLocationState: true,
+      rootGalleryContinuation: true,
+    });
+    renderArtistGroups({ preserveScroll: true, preserveMountedGalleryChildren: true });
+    return true;
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
   } finally {
@@ -534,7 +617,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
       return false;
     }
     const originatingRevision = readViewStateRevision();
-    const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
+    const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
     });
@@ -605,6 +688,24 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  const renderOptions = { ...options };
+  const requestedScroll = options.absoluteScrollPosition;
+  const galleryScroll = document.getElementById('albums-scroll');
+  if (
+    options.preserveAbsoluteScroll === true
+    && options.absoluteScrollPositionApplied === true
+    && Number.isFinite(Number(requestedScroll?.scrollTop))
+    && Number.isFinite(Number(requestedScroll?.scrollLeft))
+    && galleryScroll
+    && (
+      Math.abs(Number(galleryScroll.scrollTop || 0) - Number(requestedScroll.scrollTop)) > 1
+      || Math.abs(Number(galleryScroll.scrollLeft || 0) - Number(requestedScroll.scrollLeft)) > 1
+    )
+  ) {
+    renderOptions.preserveAbsoluteScroll = false;
+    delete renderOptions.absoluteScrollPosition;
+    delete renderOptions.absoluteScrollPositionApplied;
+  }
   const preserveMountedSelectedViewNodes = Boolean(
     options.preserveMountedGalleryChildren === true
     && options.retainMountedSelectedViewState
@@ -649,7 +750,7 @@ function renderView(options = {}) {
     renderRelated();
   }
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
-    renderArtistGroups(options);
+    renderArtistGroups(renderOptions);
   } else if (typeof updateGalleryMainChrome === 'function') {
     // Retained cards do not imply that search or artist context is unchanged.
     updateGalleryMainChrome();
@@ -939,6 +1040,8 @@ async function fetchAndRender(url, push = true, options = {}) {
       String(state.ui.activeViewRequestUrl || '') === apiUrl
       && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
         === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      && Number(state.ui.activeViewRequestCoverMutationRevision || 0)
+        === Number(state.ui.albumCoverMutationRevision || 0)
     ) {
       const activeController = state.ui.activeViewRequestController;
       if (
@@ -988,9 +1091,13 @@ async function fetchAndRender(url, push = true, options = {}) {
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
+  const requestCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0);
+  const requestModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+  const requestModalCoverAuthority = requestModalAlbum ? { ...requestModalAlbum } : null;
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
+  state.ui.activeViewRequestCoverMutationRevision = requestCoverMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -1053,6 +1160,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
+    // Artwork published after this request started owns the album cover state.
+    if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
+      return false;
+    }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
       let shouldApplyResponse = false;
       try {
@@ -1063,6 +1174,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       if (!shouldApplyResponse) return false;
     }
     const startupHydrationTier = String(requestOptions.startupHydrationTier || 'full');
+    if (data.gallery_page && !requestOptions.startupRefresh) state.awaitingInitialDataRefresh = false;
     if (
       requestOptions.startupRefresh
       && startupHydrationTier !== 'sidebar'
@@ -1110,6 +1222,20 @@ async function fetchAndRender(url, push = true, options = {}) {
         preserveMountedGalleryChildren: true,
       }
       : requestOptions;
+    const responseModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    const requestKnownAlbum = !requestModalAlbum && responseModalAlbum
+      && typeof flattenVisibleAlbums === 'function'
+      ? flattenVisibleAlbums().find((album) => album.key === responseModalAlbum.key)
+      : null;
+    const responseModalCoverAuthority = requestModalCoverAuthority || requestKnownAlbum;
+    // Save replaces the known album object even when its selected bytes and
+    // legacy selection fields are unchanged. Check before applying this view.
+    const responseOwnsModalAlbum = Boolean(responseModalAlbum?.key && responseModalCoverAuthority
+      && (!requestModalAlbum || responseModalAlbum === requestModalAlbum)
+      && ['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
+        'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
+        (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
+      ));
     applyViewPayload(payloadToApply, responseApplyOptions);
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
@@ -1136,6 +1262,23 @@ async function fetchAndRender(url, push = true, options = {}) {
       ...responseApplyOptions,
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
+    if (responseOwnsModalAlbum && currentModalAlbum === responseModalAlbum
+        && typeof refreshOpenTrackModalVersionState === 'function'
+        && typeof flattenVisibleAlbums === 'function'
+        && typeof albumRequiresHydration === 'function') {
+      const canonicalAlbum = [data.primary_artist_groups, data.family_artist_groups, data.artist_groups]
+        .flatMap((groups) => (Array.isArray(groups) ? groups : []))
+        .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []))
+        .find((album) => (
+          album.key === currentModalAlbum.key && !albumRequiresHydration(album)
+          && (Object.prototype.hasOwnProperty.call(album, 'cover_path')
+            || Object.prototype.hasOwnProperty.call(album, 'remote_cover_url'))
+        ));
+      if (canonicalAlbum && !retainedMountedSelectedViewState) {
+        refreshOpenTrackModalVersionState(currentModalAlbum.key, canonicalAlbum);
+      }
+    }
     if (
       requestOptions.preserveGalleryOptionsMenu === true
       && state.gallery?.menuOpen
@@ -1166,10 +1309,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       && data?.ok !== false
       && (
         (requestOptions.startupRefresh
-          && (
-            startupHydrationTier !== 'sidebar'
-            || !String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
-          ))
+          && !String(requestOptions.startupHydrationFollowupEndpoint || '').trim())
         || isCanonicalFullViewPayload(data, requestOptions)
       )
     ) {
@@ -1177,13 +1317,19 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (
       requestOptions.startupRefresh
-      && startupHydrationTier === 'sidebar'
       && String(requestOptions.startupHydrationFollowupEndpoint || '').trim()
     ) {
+      const followupHydrationTier = startupHydrationTier === 'sidebar' ? 'full' : 'sidebar';
       queueStartupHydrationFollowup(
         requestOptions.startupHydrationFollowupEndpoint,
         {
-          startupHydrationTier: 'full',
+          startupHydrationTier: followupHydrationTier,
+          ...(followupHydrationTier === 'sidebar'
+            ? {
+              retainMountedSelectedViewState: { ...state.view },
+              skipPendingViewTransition: true,
+            }
+            : {}),
         },
       );
     }
@@ -1764,8 +1910,19 @@ async function pollStatus() {
     }
     const response = await fetch('/status');
     const data = await readGalleryResponse(response, ownsStatus);
+    if (startedDuringPendingStart && sequence === statusPollSequence
+        && readRevision === statusReadRevision && libraryStatusAction?.coverPreparation
+        && data.covers_in_progress && data.covers_phase === 'preparing'
+        && data.covers_run_mode === 'manual-bulk'
+        && data.scan_generation === knownStatus.scan_generation
+        && !data.scan_in_progress && !data.relations_in_progress) {
+      updateStatusIndicator({ ...state.status,
+        covers_elapsed_seconds: data.covers_elapsed_seconds,
+        status_connection_lost: false });
+      return;
+    }
     if (!ownsStatus()) return;
-    updateStatusIndicator(data);
+    updateStatusIndicator({ ...data, status_connection_lost: false });
     const normalizedStatus = state.status;
     const currentInventoryRevision = Number(
       normalizedStatus.inventory_mutation_revision || 0,
@@ -1921,7 +2078,10 @@ async function pollStatus() {
         await loadProblematicFiles(true);
         if (!ownsStatus()) return;
       }
-      showToast('Album covers updated.', 'success', 3200);
+      const coverOutcome = String(normalizedStatus.covers_outcome || '').trim().toLowerCase();
+      if (!['completed', 'cancelled', 'failed'].includes(coverOutcome)) {
+        showToast('Cover search was interrupted.', 'warning', 4800);
+      }
     }
     state.wasCoverPollingBusy = coverBusyNow;
     state.ui.pendingCoverCompletionViewRefreshPromise = null;
@@ -1955,7 +2115,16 @@ async function pollStatus() {
     }
     nextPollDelay = currentStatusPollDelay();
   } catch (error) {
-    if (ownsStatus()) nextPollDelay = 3000;
+    if (ownsStatus()) {
+      nextPollDelay = 3000;
+      state.status = { ...state.status, status_connection_lost: true };
+      if (typeof invalidateStatusIndicatorPresentation === 'function') {
+        invalidateStatusIndicatorPresentation();
+      }
+      if (typeof renderLibraryLoader === 'function') {
+        renderLibraryLoader(state.status);
+      }
+    }
   } finally {
     // A newer poll owns its continuation. Discarded work must not stop polling
     // or postpone an earlier action read that is already scheduled.

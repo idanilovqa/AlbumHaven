@@ -16,6 +16,50 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+    "case": "FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and advances beyond the first full-page boundary",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "early-mobile-native-page-prefetch",
+      "single-continuation-request-owner",
+      "no-stationary-first-page-boundary",
+      "mobile-mounted-card-continuation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+    "case": "FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "mounted-artist-jump-without-reload",
+      "exact-artist-top-alignment",
+      "bidirectional-anchor-pagination",
+      "complete-artist-discographies"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/startupProgress.spec.js",
@@ -97,7 +141,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003G failed scan publication retains the library and recovers after permissions return",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -433,7 +477,11 @@
       "media-copy:mixed-credits-split"
     ],
     "expectedContracts": [
-      "mixed-credit-preservation"
+      "mixed-credit-preservation",
+      "tag-editor-full-folder-path",
+      "tag-editor-icon-only-folder-expansion",
+      "tag-editor-folder-expansion-preserves-selection-and-pending-edit",
+      "album-card-context-menu-outside-dismissal-and-edit-tags"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:mixed-credit-split",
@@ -1090,7 +1138,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
+    "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2431,8 +2479,49 @@
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation › far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups",
+    "profile": "synthetic-large-library",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "large-library:artist-tree-scroll-navigation"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "exact-artist-content-alignment",
+      "consecutive-jump-race-cancellation",
+      "bidirectional-complete-gallery-pagination"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation › root continuation starts eight viewports early and never reaches a hard stop during its real request",
+    "profile": "synthetic-large-library",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "large-library:root-continuation-prefetch"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library"
+    ],
+    "expectedContracts": [
+      "early-root-continuation-prefetch",
+      "continuous-gallery-scroll"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005A synthetic-large responsiveness \u203a All Artists round-trip reports synthetic-data responsiveness and memory timings",
+    "case": "FTC-GALLERY-STARTUP-005A synthetic-large responsiveness › All Artists round-trip reports synthetic-data responsiveness and memory timings",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2452,7 +2541,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-005 direct-loads a filtered \u0410\u0440\u0438\u044f gallery with the complete Artist Family labels",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-005 direct-loads a filtered Ария gallery with the complete Artist Family labels",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2471,7 +2560,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-026 clears an \u0410\u0440\u0438\u044f search after filtering to \u0412\u0438\u0442\u0430\u043b\u0438\u0439 \u0414\u0443\u0431\u0438\u043d\u0438\u043d without remounting the gallery or reducing Artist Family",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-026 clears an Ария search after filtering to Виталий Дубинин without remounting the gallery or reducing Artist Family",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2491,7 +2580,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness \u203a FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data",
+    "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2511,7 +2600,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/appOpenAllArtists.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005T synthetic-large app-open All Artists UI \u203a App open renders All Artists UI and explicit full root browse uses library_browse",
+    "case": "FTC-GALLERY-STARTUP-005T synthetic-large app-open All Artists UI › App open renders All Artists UI and explicit full root browse uses library_browse",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2531,7 +2620,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
+    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse scrolling keeps each displayed artist heading unique before and after filtering",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2552,7 +2641,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
-    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness \u203a Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
+    "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data",
     "profile": "synthetic-large-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2573,7 +2662,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/rootAlbumBrowse.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005S synthetic-large root album browse UI \u203a Root album browse UI reports library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005S synthetic-large root album browse UI › Root album browse UI reports library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2592,7 +2681,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005R synthetic-large direct search browse \u203a Search UI reports direct library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005R synthetic-large direct search browse › Search UI reports direct library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2611,7 +2700,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse \u203a Selected artist UI reports library_browse telemetry and timing",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Selected artist UI reports library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2630,7 +2719,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
-    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse \u203a FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family",
+    "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2649,7 +2738,7 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilitiesResponsiveness.spec.js",
-    "case": "FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness \u203a FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view",
+    "case": "FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view",
     "profile": "utility-problematic-files",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2668,7 +2757,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/utilitiesResponsiveness.spec.js",
-    "case": "FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness \u203a FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information",
+    "case": "FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness › FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2687,7 +2776,7 @@
     "config": "playwright.utility-problematic-files.config.cjs",
     "project": "utility-problematic-files",
     "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
-    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI \u203a Problematic Files renders populated Postgres summary and automatic detail",
+    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail",
     "profile": "utility-problematic-files",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2707,7 +2796,7 @@
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/utilityRules.spec.js",
-    "case": "FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI \u203a Rules and sibling utility tabs report library_browse telemetry and timing",
+    "case": "FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI › Rules and sibling utility tabs report library_browse telemetry and timing",
     "profile": "synthetic-large-library",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -2835,7 +2924,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings",
+    "case": "isolated scan performance benchmarks › FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2860,7 +2949,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-015 unchanged isolated cached startup stays effectively idle",
+    "case": "isolated scan performance benchmarks › FTC-OPS-015 unchanged isolated cached startup stays effectively idle",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2883,7 +2972,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-016 isolated incremental scan surfaces one new album promptly",
+    "case": "isolated scan performance benchmarks › FTC-OPS-016 isolated incremental scan surfaces one new album promptly",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2906,7 +2995,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly",
+    "case": "isolated scan performance benchmarks › FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2929,7 +3018,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -2952,7 +3041,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003E dedicated Scan Page cancels regular and full scans",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "global-mutation",
@@ -2973,7 +3062,7 @@
     "config": "playwright.scan-performance.config.cjs",
     "project": "scan-performance",
     "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
-    "case": "isolated scan performance benchmarks \u203a FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
+    "case": "isolated scan performance benchmarks › FTC-OPS-003F acknowledges a naturally unavailable library root without hiding recovery status",
     "profile": "scan-library",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -3343,6 +3432,40 @@
       "selectable-copyable-task-text",
       "no-card-activation",
       "polling-preserves-pending-selection-anchor"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupTaskCard.spec.js",
+    "case": "cover lookup drawer keeps full cards in a bounded scrolling lane on mobile",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-notification-scroll",
+      "full-card-layout",
+      "mobile-player-clearance"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupTaskCard.spec.js",
+    "case": "cover lookup drawer keeps full cards in a bounded scrolling lane on desktop",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-notification-scroll",
+      "full-card-layout",
+      "desktop-drawer-clearance"
     ],
     "ownerApproval": "approved"
   },
@@ -7947,7 +8070,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration \u203a Devin submit to first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Devin submit to first expected album visible"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -7962,7 +8085,7 @@
       "FTC-GALLERY-STARTUP-005U"
     ],
     "ownerApproval": "approved",
-    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration \u203a Neal Morse submit to first expected album visible"
+    "case": "FTC-GALLERY-STARTUP-005U synthetic paired search calibration › Neal Morse submit to first expected album visible"
   },
   {
     "config": "playwright.component.config.js",
@@ -8014,6 +8137,318 @@
       "bounded-native-page-continuation",
       "retained-card-scroll-anchor",
       "gallery-sidebar-prefix-order"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "artwork hover reveals icons but only the individual action expands its label",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "source-icons-on-artwork-hover",
+      "individual-action-label-expansion"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "disabling source icons preserves the independently focusable duplicate warning",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "hidden-source-icons",
+      "independent-duplicate-warning-focus"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "mixed sources keep the neutral Main segment in the dark colored frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mixed-source-card-and-hover-frame",
+      "dark-theme-neutral-main-segment"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/librarySourceCard.spec.js",
+    "case": "mixed sources keep the neutral Main segment in the light colored frame",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mixed-source-card-and-hover-frame",
+      "light-theme-neutral-main-segment"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+    "case": "FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "late-non-album-mutations",
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media-copy:non-album-custom-collections"
+    ],
+    "expectedContracts": [
+      "library-scoped-custom-collection",
+      "library-wide-loose-tracks",
+      "gallery-exclusion",
+      "problematic-files-retention"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:non-album-custom-collections",
+      "filesystemCopy": "media/cases/non-album-custom-collections"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-025",
+      "filesystemCopy": "media/cases/ftc-covers-025"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-album-details-023",
+      "filesystemCopy": "media/cases/ftc-album-details-023"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-026",
+      "filesystemCopy": "media/cases/ftc-covers-026"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+    "case": "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "album-source-ownership",
+    "databaseScenarios": [
+      "album-membership:owned-generated-sources"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-album-source-artwork"
+    ],
+    "expectedContracts": [
+      "physical-album-membership",
+      "explicit-cover-authority"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-027",
+      "filesystemCopy": "media/cases/ftc-covers-027"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
+    "case": "FTC-ALBUM-DETAILS-024 desktop identifies cold album B before its details settle without restoring album A",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "album:mixed-credit-fixture",
+      "album:ordinary-numeric-disc-control"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "requested-album-loading-identity",
+      "stale-album-details-never-visible",
+      "desktop-album-details-transition"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
+    "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "album:mixed-credit-fixture",
+      "album:ordinary-numeric-disc-control"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-functional-core"
+    ],
+    "expectedContracts": [
+      "requested-album-loading-identity",
+      "stale-album-details-never-visible",
+      "mobile-album-details-transition"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.mobile-feedback.config.js",
+    "project": "",
+    "test": "tests/e2e/mobile-feedback/mobileFeedback.spec.js",
+    "case": "album Back returns to the exact mobile gallery position",
+    "profile": null,
+    "setupScope": "isolated",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-gallery-history-restoration"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "stacked_bar stacks source markers below Back without overlap",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileAlbumDetailsMarkers.spec.js",
+    "case": "editorial_canvas stacks source markers below Back without overlap",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-album-source-marker-placement"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/mobileGalleryHeaderTruncation.spec.js",
+    "case": "mobile gallery header truncates long artist names without truncating artist separators",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile-gallery-header-single-line-truncation"
     ],
     "ownerApproval": "approved"
   }

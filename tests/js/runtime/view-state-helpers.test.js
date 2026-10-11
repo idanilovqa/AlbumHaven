@@ -44,6 +44,23 @@ function loadHelpers(origin = 'http://localhost:5000') {
   return context;
 }
 
+test('rootFullPayload requests full root albums without changing other browse URLs', () => {
+  const { buildApiUrl } = loadHelpers();
+  const root = { surface: { active: 'albums' }, visible_library_categories: ['hoard'] };
+  const rootUrl = new URL(buildApiUrl(root, { rootFullPayload: true }), 'http://localhost');
+  assert.equal(rootUrl.searchParams.get('payload_tier'), 'full');
+  assert.deepEqual(rootUrl.searchParams.getAll('category'), ['hoard']);
+  assert.equal(new URL(buildApiUrl(root), 'http://localhost').searchParams.has('payload_tier'), false);
+  for (const view of [
+    { ...root, query: 'Sparse' },
+    { ...root, selected_artist: 'E2E Rarity Artist' },
+    { surface: { active: 'home' } },
+    { surface: { active: 'playlists' }, playlist_id: 'favorites' },
+  ]) {
+    assert.equal(buildApiUrl(view, { rootFullPayload: true }), buildApiUrl(view));
+  }
+});
+
 {
     const context = loadHelpers();
     const attributes = {};
@@ -766,15 +783,15 @@ function loadHelpers(origin = 'http://localhost:5000') {
     },
     {
       title: 'Scan timing',
-      detail: 'ETA 32s | elapsed 16s | 2 of 5 album folders',
+      detail: 'ETA 32s | elapsed 16s | 2 of 5 albums',
     },
     {
       title: 'Linking artist families',
       detail: '2 of 5 artists (cache)',
     },
     {
-      title: 'Updating cover art',
-      detail: '1 of 3 folders checked - Dots and Loops',
+      title: 'Fetching covers',
+      detail: '1 of 3 albums checked (33%) · ETA calculating… · Dots and Loops',
     },
   ]);
 }
@@ -869,7 +886,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     'Album folders: 2 / 5',
     'Current file: C:/Music/Stereolab/Track 01.flac',
     'Linking artist families: 2 / 5 (cache)',
-    'Updating cover art: 1 / 3 covers updated',
+    'Updating cover art: 1 / 3 cover searches completed',
     'Downloaded covers: 1',
     'Current album folder: C:/Music/Stereolab/Dots and Loops',
     'Total albums: 42',
@@ -1451,6 +1468,11 @@ function loadHelpers(origin = 'http://localhost:5000') {
   for (const scoped of [{ ...root, query: 'Neal Morse' }, { ...root, selected_artist: 'Neal Morse' }]) {
     assert.equal(new URL(buildApiUrl(scoped), 'https://localhost').searchParams.has('gallery_page_size'), false);
   }
+  assert.equal(
+    new URL(buildApiUrl(root, { galleryAnchorArtist: 'Björk' }), 'https://localhost')
+      .searchParams.get('gallery_anchor_artist'),
+    'Björk',
+  );
 }
 
 {
@@ -1483,4 +1505,16 @@ test('artist sidebar preserves server order through selection, search, and clear
     if (view.selected_artist) assert.match(html, /aria-current="true"/);
     assert.deepEqual(source.map(item => item.artist), sourceNames);
   }
+});
+test('scan stage elapsed detail uses independent stage and cover timers', () => {
+  const { scanStageElapsedDetail } = loadHelpers();
+
+  assert.equal(scanStageElapsedDetail({
+    scan_stage_elapsed_seconds: { discover: 7, metadata: 125 },
+  }, 'discover'), 'elapsed 7s');
+  assert.equal(scanStageElapsedDetail({
+    scan_stage_elapsed_seconds: { discover: 7, metadata: 125 },
+  }, 'metadata'), 'elapsed 2m 05s');
+  assert.equal(scanStageElapsedDetail({ covers_elapsed_seconds: 3661 }, 'covers'), 'elapsed 1h 01m');
+  assert.equal(scanStageElapsedDetail({}, 'relations'), '');
 });

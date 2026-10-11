@@ -360,6 +360,33 @@ test('mobile parent scroll position is captured once and survives reload and res
   assert.equal(context.resolveMobileParentScrollPosition(descriptor, null, {}, {scrollTop:NaN, scrollLeft:0}), null);
 });
 
+test('mobile album navigation retains the first captured semantic gallery anchor', () => {
+  const context = load('mobile-navigation.js');
+  const descriptor = { kind: 'album', albumKey: 'one' };
+  const captured = {
+    albumKey: 'visible-album',
+    sectionOccurrenceKey: 'artist:visible',
+    offsetTop: 16,
+    scrollTop: 640,
+    scrollLeft: 0,
+  };
+  const later = { ...captured, albumKey: 'different-album', scrollTop: 1280 };
+
+  assert.deepEqual(
+    { ...context.resolveMobileParentScrollAnchor(descriptor, null, {}, captured) },
+    captured,
+  );
+  assert.deepEqual(
+    { ...context.resolveMobileParentScrollAnchor(
+      descriptor,
+      { ...descriptor, parentScrollAnchor: captured },
+      {},
+      later,
+    ) },
+    captured,
+  );
+});
+
 test('mobile gallery return restores saved coordinates before refreshing through the existing request owner', () => {
   const calls = [];
   const position = {scrollTop:0, scrollLeft:0};
@@ -372,7 +399,67 @@ test('mobile gallery return restores saved coordinates before refreshing through
   assert.deepEqual(calls[1], ['render',true]);
   assert.equal(calls[2][1].preserveScroll,true);
   assert.equal(calls[2][1].preserveAbsoluteScroll,true);
+  assert.equal(calls[2][1].absoluteScrollPositionApplied,true);
   assert.equal(calls[2][1].absoluteScrollPosition,position);
+});
+
+test('mobile album return restores the captured gallery anchor before refreshing', () => {
+  const calls = [];
+  const position = { scrollTop: 720, scrollLeft: 0 };
+  const anchor = {
+    albumKey: 'album-at-viewport-top',
+    sectionOccurrenceKey: 'artist:example',
+    offsetTop: 12,
+    scrollTop: 720,
+    scrollLeft: 0,
+  };
+  const context = load('mobile-navigation.js', {
+    virtualGrid: {
+      restoreOwnedAbsoluteScrollPosition: value => {
+        calls.push(['position', value]);
+        return true;
+      },
+      render: force => calls.push(['render', force]),
+      restoreScrollAnchor: value => calls.push(['anchor', value]),
+    },
+    handleGalleryBootstrapPopState: options => calls.push(['request', options]),
+  });
+
+  context.restoreMobileGalleryParent({
+    parentScrollPosition: position,
+    parentScrollAnchor: anchor,
+  });
+
+  assert.deepEqual(calls.slice(0, 3), [
+    ['position', position],
+    ['render', true],
+    ['anchor', anchor],
+  ]);
+  assert.equal(calls[3][0], 'request');
+});
+
+test('mobile album return does not restore a stale anchor at another history position', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    window: { history: { state: { albumHavenNavigationPosition: 8 } } },
+    virtualGrid: {
+      restoreScrollAnchor: value => calls.push(['anchor', value]),
+    },
+    handleGalleryBootstrapPopState: options => calls.push(['request', options]),
+  });
+
+  context.restoreMobileGalleryParent({
+    parentPosition: 7,
+    parentScrollAnchor: {
+      albumKey: 'stale-album',
+      scrollTop: 720,
+      scrollLeft: 0,
+    },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'request');
+  assert.equal(calls[0][1].preserveScroll, true);
 });
 
 test('both history Back and direct Back restore the root page viewport, not a hidden gallery position', () => {
@@ -584,4 +671,12 @@ test('mobile action controls preserve a 40px touch target at phone width', () =>
       assert.ok(geometry.cardTrackWidth * columns + 12 * (columns - 1) <= availableWidth);
     }
   }
+});
+
+test('mobile gallery cards do not move when touch hover or focus changes during scroll', () => {
+  const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
+  assert.match(
+    css,
+    /\.album-card:is\(:hover, :focus-within\)\s*\{[^}]*transform:\s*none;/,
+  );
 });

@@ -45,6 +45,7 @@ def _row(
         ),
         "track_file_id": album_id * 100,
         "library_root_id": root_id,
+        "root_kind": "main_library",
         "root_path": root_path,
         "relative_path": relative_path,
         "private_path": private_path,
@@ -537,6 +538,78 @@ def test_missing_root_facts_keep_artists_but_never_create_families(root_id, root
     assert set(relation_views["artists"]) == {"Artist One", "Artist Two"}
     assert relation_views["family_to_artists"] == {}
     assert relation_views["folder_related"] == {}
+
+
+@pytest.mark.parametrize("root_kind", ["hoarding_library", "new_arrivals", "", None])
+def test_only_main_library_locations_contribute_folder_families(root_kind):
+    rows = _family_rows()
+    for row in rows:
+        row["root_kind"] = root_kind
+
+    relation_views = _build(rows)
+
+    assert set(relation_views["artists"]) == {"Artist One", "Artist Two"}
+    assert relation_views["family_to_artists"] == {}
+    assert relation_views["folder_related"] == {}
+    assert relation_views["sidebar_families"] == []
+
+
+@pytest.mark.parametrize("root_kind", ["hoarding_library", "new_arrivals"])
+def test_intake_siblings_do_not_merge_artist_aliases(root_kind):
+    rows = _family_rows()
+    for row, artist in zip(rows, ["Neal Morse", "Neal Morse Band"]):
+        row.update(
+            owner_artist_name=artist,
+            album_artist=artist,
+            member_artist_name=artist,
+            root_kind=root_kind,
+        )
+    relation_views = _build(rows)
+    assert relation_views["alias_to_canonical"]["Neal Morse"] == "Neal Morse"
+    assert relation_views["alias_to_canonical"]["Neal Morse Band"] == "Neal Morse Band"
+
+
+@pytest.mark.parametrize("root_kind", ["hoarding_library", "new_arrivals"])
+def test_intake_soundtrack_location_does_not_exclude_main_family(root_kind):
+    main_rows = _family_rows()
+    intake_copy = {
+        **main_rows[0],
+        "root_kind": root_kind,
+        "library_root_id": 22,
+        "root_path": r"D:\Intake",
+        "relative_path": r"OST\Artist One\Album One\01.flac",
+        "relation_evidence_kind": "soundtrack_root",
+    }
+
+    relation_views = _build(main_rows + [intake_copy])
+
+    assert relation_views["folder_related"] == {
+        "Artist One": {"Artist Two"},
+        "Artist Two": {"Artist One"},
+    }
+
+
+def test_main_family_survives_with_unrelated_artists_in_intake_locations():
+    rows = _family_rows()
+    intake_rows = _family_rows(root_id=22, root_path=r"D:\Intake")
+    intake_rows[1].update(
+        album_id=3,
+        owner_artist_name="Unrelated Artist",
+        album_artist="Unrelated Artist",
+        member_artist_name="Unrelated Artist",
+    )
+    for row in intake_rows:
+        row["root_kind"] = "hoarding_library"
+
+    relation_views = _build(rows + intake_rows)
+
+    assert relation_views["folder_related"] == {
+        "Artist One": {"Artist Two"},
+        "Artist Two": {"Artist One"},
+    }
+    assert set(relation_views["artists"]) == {
+        "Artist One", "Artist Two", "Unrelated Artist",
+    }
 
 
 @pytest.mark.parametrize(

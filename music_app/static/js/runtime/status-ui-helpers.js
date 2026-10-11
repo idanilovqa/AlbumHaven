@@ -1,3 +1,21 @@
+let lastStatusPresentationSignature = null;
+
+function stableStatusPresentationSignature(value) {
+  const normalize = (current) => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (!current || typeof current !== 'object') return current;
+    return Object.keys(current).sort().reduce((result, key) => {
+      result[key] = normalize(current[key]);
+      return result;
+    }, {});
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function invalidateStatusIndicatorPresentation() {
+  lastStatusPresentationSignature = null;
+}
+
 function buildStatusIndicatorTitleParts(data = {}) {
   const progressText = {
     value: '',
@@ -40,11 +58,14 @@ function buildStatusIndicatorTitleParts(data = {}) {
     }
     parts.push(`${data.relations_phase}: ${Number(data.relations_processed || 0)} / ${Number(data.relations_total || 0)} (${data.relations_source})`);
   }
-  if (data.covers_in_progress) {
+  if (data.covers_in_progress && data.covers_phase === 'preparing') {
+    parts.push('Preparing cover search');
+  } else if (data.covers_in_progress) {
     if (!progressText.value) {
-      progressText.value = `${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)}`;
+      progressText.value = `${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)}`;
     }
-    parts.push(`Updating cover art: ${Number(data.covers_processed || 0)} / ${Number(data.covers_total || 0)} covers updated`);
+    parts.push(`Updating cover art: ${Number(data.covers_completed ?? data.covers_processed ?? 0)} / ${Number(data.covers_total || 0)} cover searches completed`);
+    if (data.covers_spotify_quota_exceeded) parts.push('Spotify quota reached — skipped for this run');
     parts.push(`Downloaded covers: ${Number(data.covers_downloaded || 0)}`);
     if (data.covers_current_folder) {
       parts.push(`Current album folder: ${data.covers_current_folder}`);
@@ -263,6 +284,8 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
+  if (presentationSignature === lastStatusPresentationSignature) return;
   if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
   syncStatusContextMenu();
   const indicator = document.getElementById('scan-indicator');
@@ -286,4 +309,5 @@ function updateStatusIndicator(data) {
   }
 
   renderLibraryLoader(normalizedStatus);
+  lastStatusPresentationSignature = presentationSignature;
 }

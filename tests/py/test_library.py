@@ -64,6 +64,17 @@ def test_library_tests_do_not_depend_on_flask_runtime_helpers():
     assert not [term for term in forbidden_terms if term in source]
 
 
+def test_split_album_artist_members_requires_explicitly_spaced_slash():
+    from music_app.services.library import split_album_artist_members
+
+    assert split_album_artist_members("25/17") == []
+    assert split_album_artist_members("AC/DC") == []
+    assert split_album_artist_members("MONO / A.A. Williams") == [
+        "MONO",
+        "A.A. Williams",
+    ]
+
+
 def _entry(*, path: str, title: str, artist: str, album_artist: str, album: str, track_number: int) -> dict[str, object]:
     return {
         "path": path,
@@ -80,6 +91,89 @@ def _entry(*, path: str, title: str, artist: str, album_artist: str, album: str,
         "duration_seconds": 180,
         "cover_path": None,
     }
+
+
+def test_mixed_random_folder_duplicate_does_not_join_real_album_or_replace_its_cover(tmp_path):
+    proper_cover = str(tmp_path / "Artist" / "Real Album" / "cover.jpg")
+    random_cover = str(tmp_path / "Random songs" / "cover.jpg")
+    entries = {}
+    proper_paths = []
+    for disc in (1, 2):
+        for number in (1, 2):
+            track_path = str(tmp_path / "Artist" / "Real Album" / f"CD{disc}" / f"{number}.mp3")
+            proper_paths.append(track_path)
+            entries[track_path] = {
+                **_entry(path=track_path, title=f"Disc {disc} Song {number}", artist="Artist",
+                         album_artist="Artist", album="Real Album", track_number=number),
+                "disc_number": disc, "disc_number_raw": str(disc),
+                "cover_path": proper_cover, "local_cover_width": 1600, "local_cover_height": 1600,
+            }
+    loose_duplicate = str(tmp_path / "Random songs" / "copied-song.mp3")
+    entries[loose_duplicate] = {
+        **_entry(path=loose_duplicate, title="Disc 1 Song 1", artist="Artist", album_artist="Artist",
+                 album="Real Album", track_number=1),
+        "cover_path": random_cover, "local_cover_width": 200, "local_cover_height": 200,
+    }
+    unrelated = str(tmp_path / "Random songs" / "unrelated.mp3")
+    entries[unrelated] = _entry(path=unrelated, title="Other song", artist="Other Artist",
+                              album_artist="Other Artist", album="Other Album", track_number=9)
+    albums = build_albums_from_file_cache(entries)
+    album = next(album for album in albums if album.name == "Real Album")
+    assert {str(track.path) for track in album.tracks} == set(proper_paths)
+    assert str(album.cover_path) == proper_cover
+    assert {track.disc_number for track in album.tracks} == {1, 2}
+
+
+def test_partial_orphan_album_source_is_excluded_but_complete_copies_and_editions_remain(tmp_path):
+    entries = {}
+    expected_primary = set()
+    for folder, edition, numbers in (
+        ("Original", "", (1, 2, 3)), ("Complete copy", "", (1, 2, 3)),
+        ("Orphan", "", (1,)), ("Deluxe", "Deluxe", (1, 2, 3, 4)),
+    ):
+        for number in numbers:
+            path = str(tmp_path / "Artist" / folder / f"{number}.mp3")
+            entries[path] = {**_entry(path=path, title=f"Song {number}", artist="Artist",
+                album_artist="Artist", album="Real Album", track_number=number), "edition": edition}
+            if folder in {"Original", "Complete copy"}:
+                expected_primary.add(path)
+    singleton_path = str(tmp_path / "Solo" / "One Song" / "1.mp3")
+    entries[singleton_path] = _entry(path=singleton_path, title="Single song", artist="Solo",
+        album_artist="Solo", album="One Song", track_number=1)
+    albums = build_albums_from_file_cache(entries)
+    primary = next(album for album in albums if album.name == "Real Album" and not album.edition)
+    assert {str(track.path) for track in primary.tracks} == expected_primary
+    assert len(next(album for album in albums if album.edition == "Deluxe").tracks) == 4
+    assert len(next(album for album in albums if album.name == "One Song").tracks) == 1
+
+
+def test_album_payload_cache_changes_when_unchanged_cover_becomes_explicit():
+    from music_app.services.library import album_to_dict
+
+    album = Album(key="artist::album", name="Album", album_artist="Artist")
+    original = album_to_dict(album)
+    assert original["cover_selection_origin"] is None
+    album.cover_selection_origin = "user"
+    album.cover_selection_provenance = "explicit"
+    updated = album_to_dict(album)
+    assert updated["cover_selection_origin"] == "user"
+    assert updated["cover_selection_provenance"] == "explicit"
+
+
+def test_build_albums_reclassifies_stale_local_membership_marker(tmp_path):
+    entries = {}
+    for number in (1, 2):
+        path = str(tmp_path / "Artist" / "Correct Album" / f"{number}.mp3")
+        entries[path] = {
+            **_entry(path=path, title=f"Song {number}", artist="Artist", album_artist="Artist",
+                     album="Correct Album", track_number=number),
+            "local_album_membership_problem": "Mixed album metadata in one folder",
+        }
+
+    albums = build_albums_from_file_cache(entries)
+
+    assert len(albums) == 1
+    assert {str(track.path) for track in albums[0].tracks} == set(entries)
 
 
 def test_build_albums_from_file_cache_keeps_dominant_artist_for_one_off_guest_album():
@@ -1544,7 +1638,116 @@ def test_get_album_duplicate_sources_emits_sorted_folder_payloads(monkeypatch):
     assert serialized_titles == ["Alpha", "Beta", "Alpha", "Beta"]
 
 
-def test_get_album_duplicate_sources_rejects_mismatched_folder_track_groups(monkeypatch):
+@pytest.mark.parametrize("folder", ["Album", "Álbum/CD1", "Album/Disc 02"])
+def test_track_album_container_reuses_normalized_path_without_reparsing(folder, tmp_path, monkeypatch):
+    from music_app.services import library
+
+    path = tmp_path / folder / "曲.mp3"
+    expected = path.parent.parent if folder != "Album" else path.parent
+    parsed = []
+
+    class PathProbeMeta(type):
+        def __instancecheck__(cls, value):
+            return isinstance(value, Path)
+
+    class PathProbe(metaclass=PathProbeMeta):
+        def __new__(cls, value):
+            parsed.append(value)
+            return Path(value)
+
+    monkeypatch.setattr(library, "Path", PathProbe)
+    actual = library._track_album_container(path)
+    assert actual == str(expected)
+    assert parsed == []
+
+
+@pytest.mark.parametrize("raw", [
+    "", "  ", " Album/CD1/曲.mp3 ", "Album/../Other/Disc 02/track.mp3",
+    "./Album/track.mp3", "Album/disk-2/track.mp3", "Album/CD123/track.mp3",
+    "C:/Music/Álbum/CD1/曲.mp3", "C:\\Music\\Album\\..\\Other\\track.mp3",
+    "//server/share/Album/CD1/track.mp3", "/track.mp3",
+])
+@pytest.mark.parametrize("as_path", [False, True])
+def test_track_album_container_preserves_path_normalization_contract(raw, as_path):
+    import os
+    from music_app.services import library
+
+    value = Path(raw) if as_path else raw
+    normalized = str(value or "").strip()
+    expected = ""
+    if normalized:
+        parent = Path(os.path.normpath(normalized)).parent
+        if library._DISC_FOLDER_RE.search(parent.name) and parent.parent != parent:
+            parent = parent.parent
+        expected = str(parent).strip()
+    assert library._track_album_container(value) == expected
+    assert str(value) == (str(Path(raw)) if as_path else raw)
+
+
+def test_link_duplicate_album_sources_resolves_each_track_container_once(monkeypatch, tmp_path):
+    from music_app.services import library
+
+    tracks = [
+        Track(path=tmp_path / folder / filename, title=filename,
+              album_artist="Artist", album="Album", year=2001)
+        for folder, filename in (("Copy B", "02.mp3"), ("Copy B", "01.mp3"), ("Copy A", "01.mp3"))
+    ]
+    albums = [
+        Album(key="first", name="Album", album_artist="Artist", tracks=tracks[:2]),
+        Album(key="second", name="Album", album_artist="Artist", tracks=tracks[2:]),
+        Album(key="empty", name="Empty", album_artist="Artist"),
+    ]
+    resolved = []
+    original = library._track_album_container
+
+    def count_container(path):
+        resolved.append(path)
+        return original(path)
+
+    monkeypatch.setattr(library, "_track_album_container", count_container)
+    library._link_duplicate_album_sources(albums)
+
+    assert [source["folder_name"] for source in albums[0]._cached_duplicate_sources] == ["Copy A", "Copy B"]
+    assert albums[0]._cached_duplicate_sources == albums[1]._cached_duplicate_sources
+    assert albums[2]._cached_duplicate_sources == []
+    assert resolved == [track.path for track in tracks]
+
+
+def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_identity(tmp_path):
+    from music_app.services import library
+
+    shared_path = tmp_path / "Copy B" / "CD1" / "01.mp3"
+    old = Track(path=shared_path, title="Old", album_artist="Wrong artist", album="Album", year=2001,
+                library_root_id="old-root")
+    replacement = Track(path=shared_path, title="Replacement", album_artist="Artist", album="Album", year=2001,
+                        library_root_id="replacement-root")
+    companion = Track(path=tmp_path / "Copy A" / "01.mp3", title="Companion",
+                      album_artist="Artist", album="Album", year=2001, library_root_id="companion-root")
+    mixed = [
+        Track(path=tmp_path / "Mixed" / f"{index}.mp3", title=str(index),
+              album_artist=artist, album="Album", year=2001)
+        for index, artist in enumerate(("Artist", "Other artist"))
+    ]
+    albums = [
+        Album(key="multi-folder", name="Album", album_artist="Artist", tracks=[old, companion]),
+        Album(key="replacement", name="Album", album_artist="Artist", tracks=[replacement]),
+        Album(key="mixed", name="Album", album_artist="Artist", tracks=mixed),
+    ]
+
+    library._link_duplicate_album_sources(albums)
+
+    sources = albums[0]._cached_duplicate_sources
+    assert [source["folder_name"] for source in sources] == ["Copy A", "Copy B"]
+    assert [source["label"] for source in sources] == ["1", "2"]
+    assert [[track["title"] for track in source["tracks"]] for source in sources] == [["Companion"], ["Replacement"]]
+    assert albums[1]._cached_duplicate_sources == sources
+    assert albums[2]._cached_duplicate_sources == []
+    assert albums[0].tracks == [old, companion]
+    assert albums[0].root_provenance["root_ids"] == ["old-root", "companion-root", "replacement-root"]
+    assert albums[1].root_provenance["root_ids"] == ["replacement-root", "companion-root"]
+
+
+def test_get_album_duplicate_sources_accepts_mismatched_tracks_for_same_album_identity(monkeypatch):
     serialized_titles: list[str] = []
 
     def fake_track_to_dict(track):
@@ -1590,9 +1793,9 @@ def test_get_album_duplicate_sources_rejects_mismatched_folder_track_groups(monk
 
     payload = get_album_duplicate_sources(album)
 
-    assert payload == []
-    assert getattr(album, "_cached_duplicate_sources") == []
-    assert serialized_titles == []
+    assert len(payload) == 2
+    assert getattr(album, "_cached_duplicate_sources") == payload
+    assert serialized_titles == ["Alpha", "Gamma"]
 
 
 def test_build_album_base_payload_keeps_shared_album_fields():

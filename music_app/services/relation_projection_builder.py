@@ -328,9 +328,19 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
                 )
             ):
                 bucket["family_artists"].add(member_artist)
-        if _text(row, "relation_evidence_kind").casefold() == "soundtrack_root":
+        if (
+            _text(row, "root_kind") == "main_library"
+            and _text(row, "relation_evidence_kind").casefold() == "soundtrack_root"
+        ):
             bucket["family_excluded"] = True
-        location_parts = root_relative_parts(row)
+        # Intake folder neighbors are not evidence of artist relationships.
+        # Keep their artists above, but exclude their locations from both
+        # folder-assisted aliases and family edges.
+        location_parts = (
+            root_relative_parts(row)
+            if _text(row, "root_kind") == "main_library"
+            else None
+        )
         if location_parts is not None:
             root_id, relative_parts = location_parts
             bucket["locations"].add(

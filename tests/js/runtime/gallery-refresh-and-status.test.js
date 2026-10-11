@@ -586,6 +586,34 @@ test('fetchAndRender rejects JSON HTTP errors without applying their payload', a
   assert.equal(calls.applyViewPayload.length, 0);
 });
 
+test('fetchAndRender skips the loaded-album snapshot when no album modal is open', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [];
+  context.state.modalReleaseIndex = 0;
+  context.flattenVisibleAlbums = () => {
+    throw new Error('the loaded gallery must not be flattened');
+  };
+
+  const refresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
+});
+
+test('fetchAndRender uses the open-modal snapshot without flattening the loaded gallery', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [{ key: 'artist::album', cover_path: 'cover.jpg' }];
+  context.state.modalReleaseIndex = 0;
+  context.flattenVisibleAlbums = () => {
+    throw new Error('the loaded gallery must not be flattened');
+  };
+
+  const refresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
+});
+
 test('fetchAndRender rejects JSON application errors without applying their payload', async () => {
   const { context, calls, pendingRequests } = createContext();
   const request = context.fetchAndRender('/view-data?q=failed', false);
@@ -2196,6 +2224,63 @@ test('fetchAndRender schedules a full startup followup after sidebar-only hydrat
   ]);
 });
 
+test('fetchAndRender schedules sidebar hydration after gallery-first startup without replacing the gallery', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const scheduledTimeouts = [];
+  const applyOptions = [];
+  const applyViewPayload = context.applyViewPayload;
+  context.applyViewPayload = (payload, options) => {
+    applyOptions.push(options);
+    applyViewPayload(payload, options);
+  };
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduledTimeouts.push({ callback, delayMs });
+    return scheduledTimeouts.length;
+  };
+  context.isEffectivelyEmptyView = () => false;
+
+  const galleryPromise = context.fetchAndRender('/view-data?omit_sidebar=1', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+    startupHydrationFollowupEndpoint: '/view-data?payload_tier=sidebar',
+  });
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+    artist_count: 1,
+    album_count: 1,
+    gallery_page: { has_more: false },
+    payload_tier: 'gallery_page',
+  });
+  await galleryPromise;
+  await flushMicrotasks();
+
+  assert.equal(context.startupMetrics.completed, 0);
+  assert.equal(scheduledTimeouts.length, 1);
+  assert.equal(scheduledTimeouts[0].delayMs, 350);
+  scheduledTimeouts[0].callback();
+  await flushMicrotasks();
+
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Broadcast', count: 3 }],
+    artist_count: 6274,
+    payload_tier: 'sidebar',
+  });
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.deepEqual(context.state.view.artist_groups, [
+    { artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] },
+  ]);
+  assert.deepEqual(context.state.view.artists_sidebar, [{ artist: 'Broadcast', count: 3 }]);
+  assert.equal(calls.applyViewPayload.length, 2);
+  assert.strictEqual(calls.applyViewPayload[1].artist_groups, calls.applyViewPayload[0].artist_groups);
+  assert.equal(applyOptions[1].preserveMountedGalleryChildren, true);
+});
+
 test('fetchAndRender still schedules the full startup followup when sidebar hydration leaves a non-empty root view', async () => {
   const { context, calls, pendingRequests } = createContext();
   const scheduledTimeouts = [];
@@ -3236,6 +3321,7 @@ test('idle pollStatus waits for real foreground cover idle and retries immediate
   assert.equal(pendingRequests[0].url, '/status');
   pendingRequests[0].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3311,6 +3397,7 @@ test('pollStatus does not refresh the populated root browse when cover work fini
   assert.equal(pendingRequests.length, 1);
   pendingRequests[0].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3319,10 +3406,36 @@ test('pollStatus does not refresh the populated root browse when cover work fini
 
   assert.equal(pendingRequests.length, 1);
   assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
+  assert.deepEqual(calls.showToast, []);
+});
+
+test('pollStatus reports an interrupted cover run without claiming covers were updated', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    query: '',
+    selected_artist: '',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+  };
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.wasCoverPollingBusy = true;
+  context.state.wasPollingBusy = false;
+
+  const statusPromise = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    covers_in_progress: false,
+    covers_outcome: '',
+    scan_in_progress: false,
+    relations_in_progress: false,
+  });
+  await statusPromise;
+  await flushMicrotasks();
+
   assert.deepEqual(calls.showToast, [{
-    message: 'Album covers updated.',
-    level: 'success',
-    durationMs: 3200,
+    message: 'Cover search was interrupted.',
+    level: 'warning',
+    durationMs: 4800,
   }]);
 });
 
@@ -3347,6 +3460,7 @@ test('pollStatus defers cover reconciliation until an in-flight selected-artist 
   assert.equal(pendingRequests[1].url, '/status');
   pendingRequests[1].resolveWith({
     covers_in_progress: false,
+    covers_outcome: 'completed',
     scan_in_progress: false,
     relations_in_progress: false,
   });
@@ -3381,11 +3495,7 @@ test('pollStatus defers cover reconciliation until an in-flight selected-artist 
     '/status',
     '/view-data?artist=A.C.T',
   ]);
-  assert.deepEqual(calls.showToast, [{
-    message: 'Album covers updated.',
-    level: 'success',
-    durationMs: 3200,
-  }]);
+  assert.deepEqual(calls.showToast, []);
 });
 
 test('pollStatus refreshes the current loaded gallery when a background scan completes', async () => {
@@ -6132,10 +6242,12 @@ test('pollStatus preserves valid status when the server returns malformed JSON',
   const previousStatus = context.state.status;
   const previousView = context.state.view;
   await context.pollStatus();
-  assert.equal(context.state.status, previousStatus);
+  assert.equal(context.state.status.total_albums, previousStatus.total_albums);
+  assert.equal(context.state.status.allowed_actions, previousStatus.allowed_actions);
+  assert.equal(context.state.status.status_connection_lost, true);
   assert.equal(context.state.view, previousView);
   assert.equal(calls.updateStatusIndicator.length, 0);
-  assert.equal(calls.renderLibraryLoader.length, 0);
+  assert.equal(calls.renderLibraryLoader.length, 1);
 });
 
 for (const failure of [
@@ -6154,10 +6266,12 @@ test(`pollStatus preserves valid status and gallery on error ${failure.status}/$
   const pending = context.pollStatus();
   pendingRequests[0].resolveWith(failure);
   await pending;
-  assert.equal(context.state.status, previousStatus);
+    assert.equal(context.state.status.total_albums, previousStatus.total_albums);
+    assert.equal(context.state.status.allowed_actions, previousStatus.allowed_actions);
+    assert.equal(context.state.status.status_connection_lost, true);
   assert.equal(context.state.view, previousView);
   assert.equal(calls.updateStatusIndicator.length, 0);
-  assert.equal(calls.renderLibraryLoader.length, 0);
+    assert.equal(calls.renderLibraryLoader.length, 1);
   assert.deepEqual(navigations, failure.status === 401 ? ['/login'] : []);
 });
 }
@@ -6358,6 +6472,51 @@ test('restoring a cached root view schedules bounded viewport filling without a 
   calls.animationFrames.splice(0).forEach(frame => frame());
   assert.equal(pageChecks, 1);
   assert.equal(pendingRequests.length, 0);
+});
+
+test('late gallery refresh does not restore an obsolete mobile return position after user scroll', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 1480, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? galleryScroll : originalGetElementById(id)
+  );
+  const renders = [];
+  context.renderArtistGroups = (options) => renders.push(options);
+
+  runtimeRenderView({
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPositionApplied: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveScroll, true);
+  assert.equal(renders[0].preserveAbsoluteScroll, false);
+  assert.equal(renders[0].absoluteScrollPosition, undefined);
+  assert.equal(renders[0].absoluteScrollPositionApplied, undefined);
+});
+
+test('unmounted gallery may apply its requested mobile return position after data arrives', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 0, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? galleryScroll : originalGetElementById(id)
+  );
+  const renders = [];
+  context.renderArtistGroups = (options) => renders.push(options);
+
+  runtimeRenderView({
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveAbsoluteScroll, true);
+  assert.deepEqual(renders[0].absoluteScrollPosition, { scrollTop: 800, scrollLeft: 0 });
 });
 
 

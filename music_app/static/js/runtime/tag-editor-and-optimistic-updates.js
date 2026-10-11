@@ -1,3 +1,5 @@
+let tagEditorCleanupGeneration = 0;
+
 const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
@@ -254,6 +256,7 @@ function openTagEditor(album, options = {}) {
     showRepairAlert(tracksMode === 'all' ? 'No tracks to edit.' : 'No problematic tracks to edit.', 'error');
     return;
   }
+  tagEditorCleanupGeneration += 1;
   const values = {};
   tracks.forEach((track) => {
     const path = String(track.path || '');
@@ -277,6 +280,11 @@ function openTagEditor(album, options = {}) {
     autoNumberTrackNumberSnapshots: {},
   };
   state.tagEditor = tagEditor;
+  const folderLoadButton = document.getElementById?.('tag-editor-folder-load');
+  if (folderLoadButton) {
+    folderLoadButton.disabled = false;
+    folderLoadButton.removeAttribute?.('aria-busy');
+  }
   if (els.list) els.list.hidden = true;
   if (els.form) els.form.hidden = true;
   if (els.applyButton) els.applyButton.disabled = true;
@@ -345,12 +353,33 @@ function closeTagEditorFromBackdrop() {
   if (!Object.keys(changedUpdates).length) closeTagEditor();
 }
 
+function deferClosedTagEditorCleanup(elements, cleanupGeneration) {
+  const cleanup = () => {
+    if (!elements.overlay.hidden || cleanupGeneration !== tagEditorCleanupGeneration) return;
+    if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
+    elements.list?.replaceChildren?.();
+  };
+  const afterPaint = () => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(cleanup, { timeout: 100 });
+      return;
+    }
+    cleanup();
+  };
+  if (typeof requestAnimationFrame !== 'function') {
+    afterPaint();
+    return;
+  }
+  requestAnimationFrame(() => requestAnimationFrame(afterPaint));
+}
+
 function closeTagEditor() {
-  if (typeof clearTagEditorReorderCue === 'function') clearTagEditorReorderCue();
   const els = getTagEditorElements();
   if (!els.overlay) return;
   settleTagEditorSessionMutationClaim();
   els.overlay.hidden = true;
+  const cleanupGeneration = ++tagEditorCleanupGeneration;
+  deferClosedTagEditorCleanup(els, cleanupGeneration);
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const confirmOpen = !document.getElementById('tag-edit-confirm-modal')?.hidden;
@@ -362,6 +391,13 @@ function closeTagEditor() {
 function openTagEditConfirmModal() {
   const els = getTagEditConfirmElements();
   if (!els.overlay) return;
+  if (
+    typeof syncTagEditorCollectionFields === 'function'
+    && !syncTagEditorCollectionFields()
+  ) {
+    showRepairAlert('Custom Collection name is required.', 'error');
+    return;
+  }
   const album = state.tagEditor.album;
   const updates = buildChangedTagEditorUpdates(
     album,
@@ -719,6 +755,16 @@ function scheduleTagEditSaveTaskWatch(taskId, options) {
   });
 }
 
+function buildTagEditAlertCopy(album, editedTrackCount) {
+  const trackCount = Math.max(1, Number(editedTrackCount) || 0);
+  const trackLabel = trackCount === 1 ? 'track' : 'tracks';
+  const albumName = String(album?.name || '').trim() || 'this album';
+  return {
+    savingMessage: `Updating ${trackCount} ${trackLabel} in “${albumName}”.`,
+    completionMessage: `Saved changes to ${trackCount} ${trackLabel} in “${albumName}”.`,
+  };
+}
+
 async function confirmManualTagEdit() {
   const album = state.tagEditor.album;
   const updates = buildChangedTagEditorUpdates(album, state.tagEditor.tracks || [], state.tagEditor.values || {});
@@ -728,6 +774,7 @@ async function confirmManualTagEdit() {
     closeTagEditConfirmModal();
     return;
   }
+  const tagEditAlert = buildTagEditAlertCopy(album, editedPaths.length);
 
   const problematicMutationOriginKey = readProblematicMutationOriginKey();
   const inverseUpdates = buildInverseTagEditorUpdates(
@@ -792,7 +839,12 @@ async function confirmManualTagEdit() {
     tagEditMutationClaim,
   });
   renderView(renderOptions);
-  showRepairAlert('Writing tag changes...', 'success', null);
+  showRepairAlert(
+    tagEditAlert.savingMessage,
+    'info',
+    null,
+    { title: 'Saving tags', dismissible: false },
+  );
   let failedLogHistoryEntryId = '';
   try {
     const requestPayload = { confirmed: true, album, updates };
@@ -865,6 +917,7 @@ async function confirmManualTagEdit() {
       problematicMutationOriginKey,
       optimisticAlbums: optimisticUpdatedAlbums,
       pendingProblematicEntry,
+      tagEditAlert,
     };
     if (
       provisionalProblematicMutation
@@ -888,11 +941,14 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    showRepairAlert(
-      responseIsTerminal ? 'Tag changes saved.' : 'Tag changes queued. Finalizing library view...',
-      'success',
-      2000,
-    );
+    if (responseIsTerminal) {
+      showRepairAlert(
+        tagEditAlert.completionMessage,
+        'success',
+        2000,
+        { title: 'Tags updated', dismissible: false },
+      );
+    }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
       pendingProblematicEntry.settle();
@@ -1342,12 +1398,13 @@ async function ignoreAlbumVersion(albumKey) {
   }
 }
 
-function refreshOpenTrackModalVersionState(preferredAlbumKey = '') {
+function refreshOpenTrackModalVersionState(preferredAlbumKey = '', preferredAlbum = null) {
   const trackModal = document.getElementById('track-modal');
   if (!trackModal || trackModal.hidden) return;
   const currentKey = String(preferredAlbumKey || state.modalReleases[state.modalReleaseIndex]?.key || '');
   const visibleAlbums = flattenVisibleAlbums();
-  const currentAlbum = visibleAlbums.find((item) => String(item.key || '') === currentKey)
+  const currentAlbum = preferredAlbum
+    || visibleAlbums.find((item) => String(item.key || '') === currentKey)
     || state.modalReleases[state.modalReleaseIndex]
     || visibleAlbums[0]
     || null;
@@ -1356,6 +1413,18 @@ function refreshOpenTrackModalVersionState(preferredAlbumKey = '') {
   state.modalReleases = releaseSet.releases;
   state.modalReleaseIndex = Math.min(releaseSet.selectedIndex, Math.max(0, state.modalReleases.length - 1));
   renderTrackModalRelease(state.modalReleases[state.modalReleaseIndex]);
+}
+
+function scheduleVersionGalleryRefresh() {
+  scheduleBrowserAnimationFrame(() => {
+    scheduleBrowserTimeout(() => {
+      Promise.resolve()
+        .then(() => fetchAndRender(buildApiUrl(state.view), false))
+        .catch((error) => {
+          console.error('[AlbumHaven][Versions] Failed to refresh the gallery after saving.', error);
+        });
+    }, 0);
+  });
 }
 
 async function markAlbumVersion(albumKey, parentAlbumKey) {
@@ -1378,8 +1447,8 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
         : {},
     }, { trackSidebarReveal: false });
     refreshOpenTrackModalVersionState(childKey);
-    await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Album marked as a version.', 'success', 2600);
+    scheduleVersionGalleryRefresh();
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to mark album as a version.', error);
     showToast(error.message || 'Failed to mark album as a version.', 'error', 3200);
@@ -1406,8 +1475,8 @@ async function unmarkAlbumVersion(albumKey) {
         : {},
     }, { trackSidebarReveal: false });
     refreshOpenTrackModalVersionState(key);
-    await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Album is no longer manually marked as a version.', 'success', 2600);
+    scheduleVersionGalleryRefresh();
   } catch (error) {
     console.error('[AlbumHaven][Versions] Failed to unmark album version.', error);
     showToast(error.message || 'Failed to unmark album version.', 'error', 3200);
@@ -1503,6 +1572,9 @@ function renderVersionContextMenu() {
   menu.style.top = `${stateMenu.y}px`;
   menu.dataset.albumKey = stateMenu.albumKey;
   menu.hidden = false;
+  if (typeof activateTriggerSurface === 'function') {
+    activateTriggerSurface(menu, hideVersionContextMenu);
+  }
 }
 
 function showVersionContextMenu(albumKey, x, y) {
@@ -1523,7 +1595,10 @@ function hideVersionContextMenu() {
     visible: false,
   };
   const menu = document.getElementById('track-modal-version-context-menu');
-  if (menu) menu.hidden = true;
+  if (menu) {
+    menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  }
 }
 
 function buildTrackModalCoverVisualHtml({
@@ -1805,6 +1880,7 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
+  const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
   ).trim().toLowerCase();
@@ -1816,6 +1892,7 @@ function renderTrackModalRelease(album) {
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
       tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     els = getTrackModalElements();
@@ -1842,6 +1919,7 @@ function renderTrackModalRelease(album) {
       <div class="track-modal-cover-shell">
         ${renderAlbumArtbox({ state: 'missing', label: `${album.name || 'Album'} artwork unavailable` })}
       </div>
+      ${coverSourceMarkersHtml}
     `;
   } else if (albumHasDisplayCover(album)) {
     const coverSrc = buildAlbumDisplayCoverUrl(album);
@@ -1881,6 +1959,7 @@ function renderTrackModalRelease(album) {
       })}
       ${coverSourceBadge}
       </div>
+      ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
       ? els.cover.querySelector('.track-modal-cover-image-slot')
@@ -1945,6 +2024,7 @@ function renderTrackModalRelease(album) {
         overlayHtml: coverToolsHtml,
       })}
       </div>
+      ${coverSourceMarkersHtml}
     `;
   }
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);

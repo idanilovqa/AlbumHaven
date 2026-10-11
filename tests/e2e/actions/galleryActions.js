@@ -320,7 +320,6 @@ export class GalleryActions {
     const minimumCards = options.minimumCards === undefined
       ? 1
       : Math.max(1, Number(options.minimumCards) || 1);
-    await this.galleryPage.waitForVisible(this.galleryPage.albumCards.first(), { timeout: options.timeout || 60000 });
     await this.galleryPage.waitForPageCondition((selectors) => {
       const visibleCards = Array.from(document.querySelectorAll(selectors.albumCardSelector))
         .filter((card) => {
@@ -816,22 +815,35 @@ export class GalleryActions {
         });
         retryRequiresScrollReset = false;
       }
-      const generationBefore = await this.galleryPage.readViewGenerationState();
+
+      const generationBefore = await this.galleryPage.readViewGenerationState(artistName);
+
       if (!generationBefore.settled) {
         lastGeneration = { before: generationBefore, after: null };
         await new Promise((resolve) => setTimeout(resolve, 25));
         continue;
       }
       const renderedCards = new Map();
+      let sampledArtistTopology;
+      let invalidSample = false;
       for (const identity of expected) {
+        if (Date.now() >= deadline) break;
         await this.scrollToAlbumUnderHeading(artistName, identity.album, {
           waitAtBoundary: options.waitAtBoundary === true,
           year: identity.year,
+          timeout: Math.max(1, deadline - Date.now()),
         });
+        const sampleBefore = this.galleryPage.readViewGenerationState(artistName);
         const windowIdentities = await this.galleryPage.readRenderedAlbumIdentities(
           artistName,
           expectedAlbumNames,
         );
+        const sampleAfter = this.galleryPage.readViewGenerationState(artistName);
+        invalidSample ||= !sampleBefore.settled || !sampleAfter.settled
+          || sampleBefore.activityRevision !== sampleAfter.activityRevision
+          || sampleBefore.revision !== sampleAfter.revision
+          || (sampledArtistTopology !== undefined && sampledArtistTopology !== sampleAfter.artistTopology);
+        sampledArtistTopology = sampleAfter.artistTopology;
         for (const renderedIdentity of windowIdentities) {
           const topologyKey = `${renderedIdentity.album}\u0000${renderedIdentity.year}`;
           renderedCards.set(topologyKey, {
@@ -840,11 +852,15 @@ export class GalleryActions {
           });
         }
       }
-      const generationAfter = await this.galleryPage.readViewGenerationState();
+
+      const generationAfter = await this.galleryPage.readViewGenerationState(artistName);
+
       lastGeneration = { before: generationBefore, after: generationAfter };
       if (
         generationBefore.revision !== generationAfter.revision
         || !generationAfter.settled
+        || invalidSample
+        || Date.now() > deadline
       ) {
         retryRequiresScrollReset = true;
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -885,7 +901,7 @@ export class GalleryActions {
     ) {
       const deltaY = reachableTarget - scrollState.scrollTop;
       const direction = deltaY < 0 ? -1 : 1;
-      await this.scrollGalleryBy(deltaY);
+      await this.scrollGalleryBy(deltaY, { timeout: Math.max(1, deadline - Date.now()) });
       await this.galleryPage.waitForGalleryScrollMovement(
         scrollState.scrollTop,
         direction,
@@ -987,7 +1003,9 @@ export class GalleryActions {
   }
 
   async scrollToAlbumUnderHeading(artistName, albumName, options = {}) {
+
     const traversalDeadline = options.deadline ?? (options.timeout ? Date.now() + Number(options.timeout) : Infinity);
+
     const maxScrollActions = options.maxAttempts === undefined
       ? null
       : Math.max(1, Math.floor(Number(options.maxAttempts) || 1));
@@ -995,6 +1013,8 @@ export class GalleryActions {
     let lastViewportState = null;
     let scrollActions = 0;
     let waitedAtBoundary = false;
+    let reversedAtBoundary = false;
+    let initialScrollTop = null;
     const year = String(options.year || '').trim();
     const scrollAndWait = async (scrollState, scrollDirection) => {
       const deadline = Math.min(traversalDeadline, Date.now() + 5000);
@@ -1010,6 +1030,7 @@ export class GalleryActions {
       await wheel();
       await this.galleryPage.waitForGalleryScrollMovement(scrollState.scrollTop, scrollDirection, {
         deadline,
+        timeout: Math.max(1, deadline - Date.now()),
         previousMaxScrollTop: scrollState.maxScrollTop,
         onExtentExpanded: wheel,
       });
@@ -1032,8 +1053,10 @@ export class GalleryActions {
         && classification.reason === 'canonical match awaiting virtual attachment'
       ) {
         direction = -boundaryDirection;
+        reversedAtBoundary = true;
         return true;
       }
+
       await this.waitForAlbumVisibleUnderHeading(artistName, albumName, {
         ...options,
         deadline: Number.isFinite(traversalDeadline) ? traversalDeadline : undefined,
@@ -1041,7 +1064,10 @@ export class GalleryActions {
       return true;
     };
     while (true) {
-      if (Date.now() >= traversalDeadline) throw new Error('Gallery traversal exceeded its original deadline.');
+      if (Date.now() >= traversalDeadline) {
+        throw new Error(`Timed out scrolling to album "${albumName}" under "${artistName}".`);
+      }
+
       const section = this.galleryPage.sectionByArtistHeading(artistName);
       const target = year
         ? this.galleryPage.albumCard.cardByIdentity(artistName, albumName, year).first()
@@ -1064,7 +1090,9 @@ export class GalleryActions {
             break;
           }
           if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
+
           await scrollAndWait(scrollState, targetDirection);
+
           lastViewportState = await this.readAlbumGalleryViewportState(
             artistName,
             albumName,
@@ -1075,15 +1103,25 @@ export class GalleryActions {
         }
       }
       const scrollState = await this.readGalleryScrollState();
+      initialScrollTop ??= scrollState.scrollTop;
       const reachedBoundary = direction > 0
         ? scrollState.scrollTop >= scrollState.maxScrollTop - 2
         : scrollState.scrollTop <= 2;
       if (reachedBoundary) {
+
         if (await reconcileBoundary(direction, scrollState)) continue;
+        if (!reversedAtBoundary
+          && (direction < 0 || initialScrollTop > 2)
+          && scrollState.maxScrollTop > 2) {
+          direction = -direction;
+          reversedAtBoundary = true;
+          continue;
+        }
         break;
       }
       if (maxScrollActions !== null && scrollActions >= maxScrollActions) break;
       await scrollAndWait(scrollState, direction);
+
     }
     if (lastViewportState?.attached && !lastViewportState.intersects) {
       throw new Error(
@@ -1396,6 +1434,25 @@ export class GalleryActions {
       );
     }
     return { selected, album: payload.album };
+  }
+
+  async openAlbumContextMenu(albumName) {
+    const card = this.galleryPage.albumCard.cardByAlbumName(albumName).first();
+    await expect(card).toBeVisible();
+    await card.click({ button: 'right' });
+    await expect(this.galleryPage.albumCard.contextMenu).toBeVisible();
+  }
+
+  async dismissAlbumContextMenu() {
+    await this.galleryPage.page.locator('#search-form input').click();
+    await expect(this.galleryPage.albumCard.contextMenu).toBeHidden();
+  }
+
+  async openAlbumTagEditorFromContextMenu(albumName) {
+    await this.openAlbumContextMenu(albumName);
+    await expect(this.galleryPage.albumCard.contextEditTags).toBeEnabled();
+    await this.galleryPage.albumCard.contextEditTags.click();
+    await expect(this.galleryPage.albumCard.contextMenu).toBeHidden();
   }
 
   albumCoverByName(albumName) {
@@ -1720,14 +1777,27 @@ export class GalleryActions {
   }
 
   async readGalleryScrollState() {
+
     // parity-check: allow-read-only-measurement-evaluate -- read gallery geometry and the actual loaded-page boundary without changing application state
-    return this.galleryPage.galleryScroll.evaluate((galleryScroll) => ({
+    const metrics = await this.galleryPage.galleryScroll.evaluate((galleryScroll) => ({
+
       scrollTop: galleryScroll.scrollTop,
       clientHeight: galleryScroll.clientHeight,
       maxScrollTop: Math.max(0, galleryScroll.scrollHeight - galleryScroll.clientHeight),
       hasMore: Boolean(state.view?.gallery_page?.has_more),
       pageCursor: String(state.view?.gallery_page?.next_cursor || ''),
     }));
+    const observation = this.galleryPage.productionViewObserver.read();
+    if (observation.latestGalleryPageError) {
+      throw new Error(`Production view observation failed: ${observation.latestGalleryPageError}`);
+    }
+    return {
+      ...metrics,
+      pagination: {
+        page: observation.latestGalleryPage,
+        busy: observation.galleryBusy,
+      },
+    };
   }
 
   async readVirtualGridDiagnostics() {
@@ -1943,7 +2013,11 @@ export class GalleryActions {
         }
       }
       return {
-        settled: settled && snapshot.canonicalInventoryComplete,
+
+        settled: settled && (
+          snapshot.canonicalInventoryComplete ?? snapshot.canonicalScopeComplete
+        ) === true,
+
         canonicalMatch: snapshot.canonicalMatch,
         attachedMatch: snapshot.attachedMatch,
       };

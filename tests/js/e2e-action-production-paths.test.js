@@ -615,19 +615,25 @@ test('stable search clearing establishes user focus before observing network act
   );
 });
 
-test('Scan Page phase observation reads visible current phase cards, not static future labels', async () => {
+test('Scan Page phase observation reads current titles without nested subprogress or hidden future labels', async () => {
   const vm = require('node:vm');
   const { ScanPage } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/scanPage.js')).href);
   const { ScanPageActions } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/scanPageActions.js')).href);
   class Element {
     constructor(textContent = '') { this.textContent = textContent; this.hidden = false; }
     getBoundingClientRect() { return { width: this.hidden ? 0 : 100, height: this.hidden ? 0 : 30 }; }
+    querySelector(selector) { return selector === 'strong' ? this.title || null : null; }
   }
   const loader = new Element();
   const title = new Element('Scanning the library');
   const cancel = new Element();
   const browse = new Element();
-  const stages = ['Discover files', 'Read tags & metadata', 'Update cover art', 'Refresh artist relations'].map((label) => new Element(label));
+  const stageTitles = ['Discover files', 'Read tags & metadata', 'Update cover art', 'Refresh artist relations'];
+  const stages = stageTitles.map((label) => {
+    const stage = new Element(`${label}elapsed 1s · 180 of 1001 albums`);
+    stage.title = new Element(label);
+    return stage;
+  });
   let currentStage = stages[0];
   let inspect;
   let disconnected = false;
@@ -659,11 +665,13 @@ test('Scan Page phase observation reads visible current phase cards, not static 
   for (const stage of stages.slice(1)) { currentStage = stage; inspect(); }
   title.textContent = 'Your local library is ready.';
   currentStage = new Element('Hidden future phase');
+  currentStage.title = new Element('Hidden future phase');
   currentStage.hidden = true;
   inspect();
   const result = await observation.finish();
   assert.ok(disconnected);
-  for (const stage of stages) assert.ok(result.titles.includes(stage.textContent), `Missing active phase: ${stage.textContent}`);
+  for (const label of stageTitles) assert.ok(result.titles.includes(label), `Missing active phase: ${label}`);
+  assert.ok(result.titles.every((label) => !label.includes('180 of 1001 albums')));
   assert.ok(!result.titles.includes('Hidden future phase'));
   assert.ok(result.relationActionSamples.length > 0);
   const actions = new ScanPageActions(scanPage);
@@ -1533,9 +1541,7 @@ test('automatic cover scans isolate the coverless candidate without weakening la
   assert.doesNotMatch(coverlessScenario, /setProviderFixtureMode\('automatic-scan'\)/u);
 
   const improvementScenario = readScenario(improvementTitle);
-  const differentArtStep = improvementScenario.indexOf(
-    "stepLogger.step('Keep different automatic artwork suggestion-only and show its indicator'",
-  );
+  const differentArtStep = improvementScenario.indexOf('suggestion-only');
   assert.ok(differentArtStep >= 0, 'Expected the bounded different-art improvement step.');
   const differentArtScenario = improvementScenario.slice(differentArtStep);
   const improvementMode = differentArtScenario.indexOf(
@@ -1546,8 +1552,8 @@ test('automatic cover scans isolate the coverless candidate without weakening la
   );
   const improvementScan = differentArtScenario.indexOf('triggerIncrementalScanAndWait()');
   assert.ok(
-    coverRefreshIdleBoundary >= 0 && coverRefreshIdleBoundary < improvementMode,
-    'FTC-COVERS-019 must wait for its prior automatic cover refresh before changing provider mode.',
+    coverRefreshIdleBoundary > improvementScan,
+    'FTC-COVERS-019 must wait for its different-art cover refresh before reading the gallery.',
   );
   assert.ok(
     improvementMode >= 0 && improvementMode < improvementScan,
@@ -1662,7 +1668,7 @@ test('FTC-COVERS-019 captures the user-cover baseline before its first automatic
   assert.match(baseline, /expect\(baselineAlbum\.local_cover_height\)\.toBe\(640\)/u);
   assert.match(
     baseline,
-    /expect\(USER_COVER_LINKED_FIELDS\.every\(\(field\) => baselineAlbum\[field\] !== null\)\)\.toBe\(true\)/u,
+    /expect\(USER_COVER_LINKED_FIELDS\.every\(\(field\)\s*=>\s*baselineAlbum\[field\]\s*==\s*null\)\)\.toBe\(true\)/u,
   );
   assert.match(
     baseline,
@@ -2117,6 +2123,7 @@ test('gallery readiness uses hydration state instead of a fixed virtualized-card
   assert.match(readiness, /startupProgressSelector: this\.galleryPage\.startupProgressSelector/);
   assert.match(gallery, /visibleCards\.length >= selectors\.minimumCards/);
   assert.match(gallery, /bounds\.width > 0 && bounds\.height > 0/);
+  assert.doesNotMatch(readiness, /albumCards\.first\(\)/);
   assert.doesNotMatch(gallery, /minimumCards \?\? 10/);
 });
 
@@ -2134,17 +2141,11 @@ test('album identity topology uses action-owned scrolling and rendered card loca
   let modeledScrollTop = 9134;
   let generationReadCount = 0;
   let renderedWindowReadCount = 0;
-  const generationStates = [
-    { revision: 1, settled: true },
-    { revision: 2, settled: true },
-    { revision: 2, settled: true },
-    { revision: 2, settled: true },
-  ];
   const galleryPage = {
-    readViewGenerationState() {
-      const generation = generationStates[generationReadCount];
+    readViewGenerationState(artistName) {
+      assert.equal(artistName, 'E2E Rarity Artist');
       generationReadCount += 1;
-      return generation;
+      return { revision: renderedWindowReadCount < expected.length ? 1 : 2, settled: true };
     },
     async readRenderedAlbumIdentities(artistName, expectedAlbumNames) {
       assert.equal(artistName, 'E2E Rarity Artist');
@@ -2199,10 +2200,11 @@ test('album identity topology uses action-owned scrolling and rendered card loca
   );
   assert.deepEqual(topology.identities, expected);
   assert.equal(topology.scroll.scrollTop, 9134);
-  assert.equal(generationReadCount, 4);
+  assert.equal(generationReadCount, 4 + expected.length * 4);
   assert.equal(renderedWindowReadCount, expected.length * 2);
   assert.deepEqual(resets, [{ from: 10000, to: 9134 }]);
-  assert.deepEqual(scrolls, [expected, expected].flatMap((attempt) => (
+  for (const { options } of scrolls) assert.ok(options.timeout > 0 && options.timeout <= 30000);
+  assert.deepEqual(scrolls.map(({ options: { timeout, ...options }, ...scroll }) => ({ ...scroll, options })), [expected, expected].flatMap((attempt) => (
     attempt.map((identity) => ({
       artistName: 'E2E Rarity Artist',
       albumName: identity.album,
@@ -2223,11 +2225,11 @@ test('album identity topology uses action-owned scrolling and rendered card loca
   );
   assert.match(
     galleryActions,
-    /waitForAlbumIdentityTopology[\s\S]*retryRequiresScrollReset[\s\S]*restoreGalleryScrollPosition\(scroll\.scrollTop[\s\S]*readViewGenerationState\(\)[\s\S]*new Map\(\)[\s\S]*scrollToAlbumUnderHeading\(artistName, identity\.album,[\s\S]*year: identity\.year[\s\S]*readRenderedAlbumIdentities[\s\S]*generationBefore\.revision !== generationAfter\.revision/,
+    /waitForAlbumIdentityTopology[\s\S]*retryRequiresScrollReset[\s\S]*restoreGalleryScrollPosition\(scroll\.scrollTop[\s\S]*readViewGenerationState\(artistName\)[\s\S]*new Map\(\)[\s\S]*scrollToAlbumUnderHeading\(artistName, identity\.album,[\s\S]*year: identity\.year[\s\S]*readRenderedAlbumIdentities[\s\S]*generationBefore\.revision !== generationAfter\.revision/,
   );
   assert.match(
     galleryActions,
-    /restoreGalleryScrollPosition[\s\S]*maxScrollActions[\s\S]*Math\.min\(target, scrollState\.maxScrollTop\)[\s\S]*scrollActions < maxScrollActions[\s\S]*scrollGalleryBy\(deltaY\)[\s\S]*waitForGalleryScrollMovement/,
+    /restoreGalleryScrollPosition[\s\S]*maxScrollActions[\s\S]*Math\.min\(target, scrollState\.maxScrollTop\)[\s\S]*scrollActions < maxScrollActions[\s\S]*scrollGalleryBy\(deltaY, \{ timeout:[\s\S]*waitForGalleryScrollMovement/,
   );
   const clampedResetActions = new GalleryActions({
     async waitForGalleryScrollMovement() {},
@@ -2507,11 +2509,11 @@ test('terminal tag-save contracts keep one pending POST authoritative without st
 
   assert.match(
     actions,
-    /applyAndWaitForTerminalSavedResponse[\s\S]*?timeout = options\.timeout \|\| 35000[\s\S]*?Writing tag changes\.\.\.[\s\S]*?expect\(postSettled\)\.toBe\(false\)[\s\S]*?whilePostInFlight[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?Tag changes saved\.[\s\S]*?expect\(saveTaskPollCount\)\.toBe\(0\)/,
+    /applyAndWaitForTerminalSavedResponse[\s\S]*?timeout = options\.timeout \|\| 35000[\s\S]*?TAG_EDIT_RUNNING_MESSAGE[\s\S]*?expect\(postSettled\)\.toBe\(false\)[\s\S]*?whilePostInFlight[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?TAG_EDIT_SAVED_MESSAGE[\s\S]*?expect\(saveTaskPollCount\)\.toBe\(0\)/,
   );
   assert.match(
     actions,
-    /terminalAlertDismissalTimeout[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?Tag changes saved\.[\s\S]*?terminalAlertDismissalTimeout/,
+    /terminalAlertDismissalTimeout[\s\S]*?save_task_status\)\.toBe\('completed'\)[\s\S]*?TAG_EDIT_SAVED_MESSAGE[\s\S]*?terminalAlertDismissalTimeout/,
   );
   assert.doesNotMatch(actions, /applyAndWaitForProductionPollWindowExhaustion/);
   assert.match(
@@ -2531,7 +2533,7 @@ test('terminal tag-save contracts keep one pending POST authoritative without st
   const optimisticMethod = actions.slice(optimisticMethodStart);
   assert.ok(optimisticMethodStart >= 0);
   assert.match(optimisticMethod, /save_task_status\)\.toBe\('completed'\)/);
-  assert.match(optimisticMethod, /Tag changes saved\./);
+  assert.match(optimisticMethod, /TAG_EDIT_SAVED_MESSAGE/);
   assert.doesNotMatch(optimisticMethod, /saveTaskStatuses|\/utilities\/save-task\/|production poller/);
   assert.doesNotMatch(optimisticMethod, /Library view updated from saved files\./);
 });
@@ -2563,7 +2565,7 @@ test('FTC-TAGS-020 completion observation uses the authoritative edit POST witho
   assert.match(method, /save_task_status\)\.toBe\('completed'\)/);
   assert.match(
     method,
-    /const terminalSavedAlert = this\.tagEditor\.repairAlertMessage;[\s\S]*?waitForCompletion:\s*async\s*\([^)]*\)\s*=>\s*\{[\s\S]*?await expect\(terminalSavedAlert\)\.toHaveText\(\s*'Tag changes saved\.'[\s\S]*?return payload;/,
+    /const terminalSavedAlert = this\.tagEditor\.repairAlertMessage;[\s\S]*?waitForCompletion:\s*async\s*\([^)]*\)\s*=>\s*\{[\s\S]*?await expect\(terminalSavedAlert\)\.toHaveText\(\s*TAG_EDIT_SAVED_MESSAGE[\s\S]*?return payload;/,
     'completion must await the captured exact saved alert before returning the authoritative terminal POST payload',
   );
   assert.doesNotMatch(method, /saveTaskStatuses/);
@@ -3044,7 +3046,7 @@ test('terminal tag-edit failure waits for the failure notification before readin
   ).href;
   const { TagEditorActions } = await import(moduleUrl);
   const events = [];
-  let alertText = 'Writing tag changes...';
+  let alertText = 'Updating 1 track in “Fixture Album”.';
   const passingLocator = {
     _apiName: 'Locator',
     async _expect() {
@@ -3100,6 +3102,7 @@ test('tag-editor summary treats an absent transient repair alert as empty', asyn
     trackTitles: { allTextContents: async () => ['01 - Track.mp3'] },
     activeTrackButtons: { count: async () => 1 },
     exceptionSelect: { inputValue: async () => '' },
+    customCollectionNameInput: { inputValue: async () => '' },
     repairAlertMessage: { allTextContents: async () => [] },
   });
   assert.deepEqual(await actions.readSummary(), {
@@ -3107,6 +3110,7 @@ test('tag-editor summary treats an absent transient repair alert as empty', asyn
     trackFilenames: ['01 - Track.mp3'],
     activeTrackCount: 1,
     exceptionType: '',
+    customCollectionName: '',
     alertText: '',
   });
 });
@@ -4888,7 +4892,7 @@ test('search readiness waits for the committed URL query and completed view requ
   assert.match(searchPom, /!lastObservedState\.activeLoader/);
   assert.match(galleryPom, /!hasStableDomEvidence\(/);
   assert.match(galleryPom, /attachedMatch: finalAttachedMatch/);
-  assert.match(galleryPom, /payloadPresent: payload !== null/);
+  assert.match(galleryPom, /payloadPresent: payloadObserved/);
   assert.match(gallery, /waitForGalleryScrollAtStart/);
   assert.match(gallery, /galleryScroll\.scrollTop <= 2/);
 });

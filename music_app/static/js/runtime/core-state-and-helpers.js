@@ -439,6 +439,73 @@ function getPreferredUserTimeZone() {
   return getDetectedBrowserTimeZone();
 }
 
+function resolveSidebarScrollContainer(sidebarList) {
+  if (
+    sidebarList instanceof HTMLElement
+    && sidebarList.clientHeight > 0
+    && sidebarList.scrollHeight > sidebarList.clientHeight + 1
+  ) {
+    return sidebarList;
+  }
+  const sidebar = sidebarList?.closest?.('.sidebar');
+  return sidebar instanceof HTMLElement ? sidebar : null;
+}
+
+function ensureSidebarVirtualScrollListeners(sidebarList) {
+  if (!(sidebarList instanceof HTMLElement)) return;
+  const sidebar = sidebarList.closest?.('.sidebar');
+  for (const scrollContainer of [sidebarList, sidebar]) {
+    if (
+      !(scrollContainer instanceof HTMLElement)
+      || typeof scrollContainer.addEventListener !== 'function'
+      || scrollContainer.albumHavenSidebarVirtualScrollBound
+    ) continue;
+    scrollContainer.addEventListener('scroll', () => {
+      sidebarList.albumHavenSidebarVirtualScrollTop = scrollContainer.scrollTop;
+      const previousWindow = sidebarList.albumHavenSidebarVirtualWindow;
+      const nextWindow = resolveSidebarVirtualWindow(
+        sidebarList.albumHavenSidebarArtistsSource || [],
+        {
+          scrollTop: scrollContainer.scrollTop,
+          viewportHeight: scrollContainer.clientHeight,
+          previousWindow,
+        },
+      );
+      if (
+        previousWindow
+        && nextWindow.start === previousWindow.start
+        && nextWindow.end === previousWindow.end
+      ) return;
+      if (sidebarList.albumHavenSidebarVirtualRenderScheduled) return;
+      sidebarList.albumHavenSidebarVirtualRenderScheduled = true;
+      scheduleBrowserAnimationFrame(() => {
+        sidebarList.albumHavenSidebarVirtualRenderScheduled = false;
+        renderSidebar();
+      });
+    }, { passive: true });
+    scrollContainer.albumHavenSidebarVirtualScrollBound = true;
+  }
+}
+
+function captureSidebarFocus(sidebarList) {
+  const activeLink = document.activeElement?.closest?.('.artist-link');
+  if (!activeLink || !sidebarList?.contains?.(activeLink)) return null;
+  if (activeLink.getAttribute?.('data-sidebar-all-artists') === '1') {
+    return { allArtists: true, artist: '' };
+  }
+  const artist = String(activeLink.getAttribute?.('data-sidebar-artist') || '');
+  return artist ? { allArtists: false, artist } : null;
+}
+
+function restoreSidebarFocus(sidebarList, focusIdentity) {
+  if (!focusIdentity) return;
+  const link = focusIdentity.allArtists
+    ? sidebarList.querySelector?.('[data-sidebar-all-artists="1"]')
+    : Array.from(sidebarList.querySelectorAll?.('[data-sidebar-artist]') || [])
+      .find(item => item.getAttribute?.('data-sidebar-artist') === focusIdentity.artist);
+  link?.focus?.({ preventScroll: true });
+}
+
 
 function renderSidebar() {
   const el = document.getElementById('sidebar-list');
@@ -478,29 +545,43 @@ function renderSidebar() {
       || (!String(effectiveView.query || '').trim() && !String(effectiveView.selected_artist || '').trim())
     )
   );
+  const scrollContainer = resolveSidebarScrollContainer(el);
+  const virtualWindow = resolveSidebarVirtualWindow(sidebarArtists, {
+    scrollTop: el.albumHavenSidebarVirtualScrollTop ?? scrollContainer?.scrollTop ?? 0,
+    viewportHeight: scrollContainer?.clientHeight ?? 0,
+    selectedArtist: effectiveView.selected_artist,
+    previousWindow: el.albumHavenSidebarVirtualWindow,
+    forceSelected: Boolean(state.ui.pendingSidebarRevealArtist)
+      || !el.albumHavenSidebarVirtualWindow,
+  });
   const sidebarRenderOptions = {
     view: effectiveView,
     usingSidebarOverride: Boolean(sidebarOverride && sidebarOverride.length),
     showAllArtistsOverride: sidebarOverride ? sidebarShowAllArtistsOverride : null,
     selectedArtistOverride: effectiveView.selected_artist,
     allArtistsActiveOverride: effectiveAllArtistsActive,
+    virtualWindow,
   };
+  el.dataset.sidebarVirtualized = virtualWindow.virtualized ? 'true' : 'false';
   const structureSignature = buildSidebarStructureSignature(sidebarArtists, sidebarRenderOptions);
   if (el.dataset.sidebarStructureSignature === structureSignature) {
     applySidebarSelectionMarkup(el, sidebarRenderOptions);
   } else {
+    const focusIdentity = captureSidebarFocus(el);
     el.innerHTML = buildSidebarHtml(v, sidebarArtists, sidebarRenderOptions);
     el.dataset.sidebarStructureSignature = structureSignature;
+    restoreSidebarFocus(el, focusIdentity);
   }
   el.albumHavenSidebarArtistsSource = sidebarArtists;
+  el.albumHavenSidebarVirtualWindow = virtualWindow;
   el.albumHavenSidebarShowAllArtists = sidebarRenderOptions.showAllArtistsOverride !== null
     ? Boolean(sidebarRenderOptions.showAllArtistsOverride)
     : v.show_all_artists_sidebar_link !== false;
   el.albumHavenActiveSidebarLink = el.querySelector('.artist-link.active');
+  ensureSidebarVirtualScrollListeners(el);
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
-      const scrollContainer = el.closest('.sidebar');
       if (!(scrollContainer instanceof HTMLElement)) return;
       const activeRect = activeLink.getBoundingClientRect();
       // Folded trees have zero-size rows; keep the reveal for their visible layout.
@@ -553,6 +634,12 @@ function resolveLibraryScanPhaseStates(data = {}) {
   const states = Object.fromEntries(stages.map(stage => [stage, 'future']));
   const phase = String(data.scan_phase || '').trim().toLowerCase();
   const outcome = String(data.scan_outcome || '').trim().toLowerCase();
+  if (!data.scan_in_progress && !data.relations_in_progress
+      && String(data.covers_run_mode || '').startsWith('manual')
+      && (data.covers_in_progress || data.covers_phase === 'finished')) {
+    return { discover: 'inactive', metadata: 'inactive', relations: 'inactive',
+      covers: data.covers_in_progress ? 'current' : data.covers_outcome === 'completed' ? 'complete' : 'future' };
+  }
   let currentStage = '';
   if (data.relations_in_progress || (data.scan_in_progress && phase === 'finalizing')) currentStage = 'relations';
   else if (data.covers_in_progress) currentStage = 'covers';
@@ -568,7 +655,7 @@ function resolveLibraryScanPhaseStates(data = {}) {
   if (['cancelled', 'failed'].includes(outcome)) {
     if (Number(data.scan_total || 0) > 0 || Number(data.scan_processed || 0) > 0) states.discover = 'complete';
     if (Number(data.scan_total || 0) > 0 && Number(data.scan_processed || 0) >= Number(data.scan_total || 0)) states.metadata = 'complete';
-    if (Number(data.covers_total || 0) > 0 && Number(data.covers_processed || 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
+    if (Number(data.covers_total || 0) > 0 && Number(data.covers_completed ?? data.covers_processed ?? 0) >= Number(data.covers_total || 0)) states.covers = 'complete';
     if (Number(data.relations_total || 0) > 0 && Number(data.relations_processed || 0) >= Number(data.relations_total || 0)) states.relations = 'complete';
   }
   return states;
@@ -746,7 +833,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   title.textContent = ready
     ? 'Your local library is ready.'
     : (scanPageVisible && (Boolean(data.scan_in_progress) || relBusy || coverBusy)
-      ? 'Scanning the library'
+      ? (coverBusy && !data.scan_in_progress ? (data.covers_phase === 'preparing' ? 'Preparing cover search' : 'Fetching covers') : 'Scanning the library')
       : (lines[0]?.title || 'Loading library'));
   status.textContent = lines[0]?.detail || 'Preparing scan...';
   if (scanSummary) scanSummary.textContent = status.textContent;
@@ -757,6 +844,34 @@ function renderLibraryLoader(data = {}, options = {}) {
       item.classList.toggle('is-current', stateName === 'current');
       item.classList.toggle('is-complete', stateName === 'complete');
       item.classList.toggle('is-future', stateName === 'future');
+      item.classList.toggle('is-inactive', stateName === 'inactive');
+      const stage = String(item.getAttribute('data-scan-stage') || '');
+      let detail = '';
+      if ((data.covers_in_progress || data.covers_phase === 'finished') && !data.scan_in_progress && String(data.covers_run_mode || '').startsWith('manual') && ['discover', 'metadata', 'relations'].includes(stage) && !data.relations_in_progress) {
+        detail = 'Not needed for this cover-only run';
+        item.classList.remove('is-complete');
+      } else if (stage === 'covers' && (data.covers_in_progress || (!data.scan_in_progress && data.covers_phase === 'finished'))) {
+        detail = buildCoverProgressDetail(data);
+      } else if (stage === 'relations' && data.relations_in_progress) {
+        detail = `${Number(data.relations_processed || 0)} of ${Number(data.relations_total || 0)} artists`;
+      } else if (stage === 'discover' && data.scan_in_progress && stateName === 'current') {
+        detail = `${Number(data.scan_total || 0)} files found`;
+      } else if (stage === 'metadata' && data.scan_in_progress && stateName === 'current') {
+        detail = buildScanEstimateParts(data)
+          .filter(part => !part.startsWith('elapsed '))
+          .join(' · ');
+      }
+      const stageElapsed = scanStageElapsedDetail(data, stage);
+      if (stageElapsed && !detail.includes('elapsed ')) {
+        detail = [detail, stageElapsed].filter(Boolean).join(' · ');
+      }
+      let subprogress = item.querySelector?.('[data-stage-progress]');
+      if (!subprogress && detail && typeof document.createElement === 'function') {
+        subprogress = document.createElement('span');
+        subprogress.setAttribute('data-stage-progress', '');
+        item.appendChild(subprogress);
+      }
+      if (subprogress) subprogress.textContent = detail;
     });
   }
   progress.innerHTML = lines.slice(1).map((line) => `

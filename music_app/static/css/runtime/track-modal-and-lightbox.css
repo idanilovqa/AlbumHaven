@@ -60,10 +60,10 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 10px 16px 0;
+  padding: 4px 16px 0;
 }
 .track-modal-tabs[hidden] { display: none; }
-.track-modal-tabs > .in-page-tabs { width: 100%; overflow-x: auto; }
+.track-modal-tabs > .in-page-tabs { width: 100%; gap: 18px; overflow-x: auto; }
 .track-modal-tabs > .in-page-tabs > [role="tab"] { flex: 0 0 auto; }
 .track-modal-tab-wrap {
   position: relative;
@@ -164,6 +164,12 @@
 .track-modal-cover {
   width: 100%;
   overflow: visible;
+}
+.track-modal-cover:has(> .album-details-cover-source-markers) {
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .track-modal-cover-shell {
   display: grid;
@@ -266,6 +272,25 @@
 .track-modal-cover-tool {
   position: relative;
 }
+.track-modal-cover-tool[aria-busy="true"] .action-button__icon {
+  visibility: hidden;
+}
+.track-modal-cover-tool[aria-busy="true"]::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(96, 165, 250, 0.3);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: track-modal-cover-tool-spin 0.7s linear infinite;
+}
+@keyframes track-modal-cover-tool-spin {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
 .track-modal-cover-tool.is-lookup.has-unseen-automatic-improvement::after {
   content: '';
   position: absolute;
@@ -292,6 +317,20 @@
   border-radius: 10px;
   padding: 3px 8px 3px 4px;
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.track-modal-list li.track-modal-loading-row {
+  min-height: 120px;
+  margin-left: -20px;
+  justify-content: center;
+  color: var(--muted);
+  list-style: none;
+}
+
+.track-modal-loading-row .library-loader-spinner {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
 }
 
 .track-modal-list li.is-current {
@@ -644,6 +683,9 @@
     max-width: 100%;
     aspect-ratio: 1;
     justify-self: start;
+  }
+  .track-modal-cover:has(> .album-details-cover-source-markers) .track-modal-cover-shell {
+    height: min(calc(100% - 32px), 100cqw);
   }
 }
 .track-modal-main { min-height: 0; overflow: hidden; }

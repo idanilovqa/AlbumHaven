@@ -231,6 +231,14 @@ function loadHelper() {
     getAlbumIdentity(album) {
       return String(album?.key || '');
     },
+    __activatedSurfaces: [],
+    __clearedSurfaces: [],
+    activateTriggerSurface(surface, close) {
+      context.__activatedSurfaces.push({ surface, close });
+    },
+    clearTriggerAnchor(surface) {
+      context.__clearedSurfaces.push(surface);
+    },
     ButtonComponent: require(buttonComponentPath),
   };
 
@@ -270,6 +278,37 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
   context.state.view.non_album_tracks = [tracks[2]];
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
+});
+
+test('deferred non-album tracks hydrate without rerendering the gallery', async () => {
+  const { context } = loadHelper();
+  const requested = [];
+  context.state.view = {
+    selected_artist: 'Agalloch',
+    non_album_tracks: [],
+    non_album_tracks_deferred: true,
+  };
+  context.buildApiUrl = () => '/view-data?surface=albums&artist=Agalloch&omit_sidebar=1';
+  context.URL = URL;
+  context.fetch = async (url) => {
+    requested.push(url);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        selected_artist: 'Agalloch',
+        non_album_tracks: [{ path: '/music/agalloch/loose.flac', title: 'Loose' }],
+        non_album_tracks_deferred: false,
+      }),
+    };
+  };
+
+  await context.hydrateDeferredNonAlbumTracks();
+
+  assert.equal(requested.length, 1);
+  assert.equal(new URL(requested[0], 'http://localhost').searchParams.get('include_non_album'), '1');
+  assert.deepEqual(Array.from(context.state.view.non_album_tracks, track => track.title), ['Loose']);
+  assert.equal(context.state.view.non_album_tracks_deferred, false);
 });
 
 test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
@@ -349,6 +388,40 @@ test('non-album artist scope retains folder matches and canonical album artists'
   ];
   context.state.view = { selected_artist: 'Neal Morse', non_album_tracks: tracks };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
+});
+
+test('library-wide Loose Tracks bypasses selected artist while artist menu retains its scope', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { path: 'C:/Music/A/a.mp3', artist: 'A', exception_type: 'Custom Collection' },
+    { path: 'C:/Music/B/b.mp3', artist: 'B', exception_type: 'Random songs' },
+  ];
+ context.state.view = {
+   selected_artist: 'A',
+   non_album_tracks: [tracks[0]],
+   library_non_album_tracks: tracks,
+ };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
+});
+
+test('custom exceptions and named collections render collapsible subsections in the shared track table', () => {
+  const { context } = loadHelper();
+  const items = [
+    { path: 'C:/Music/Mix/a.mp3', display_path: 'Mix/a.mp3', title: 'Song A', exception_type: 'Custom Collection', custom_collection_name: 'Road trip', is_problematic: true },
+    { path: 'C:/Music/Other/b.mp3', display_path: 'Other/b.mp3', title: 'Song B', exception_type: 'Custom Collection', custom_collection_name: 'Quiet evening' },
+    { path: 'C:/Music/Random/c.mp3', display_path: 'Random/c.mp3', title: 'Song C', exception_type: 'Random songs' },
+  ];
+  const markup = context.buildNonAlbumTrackSectionsMarkup(items);
+  assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
+  for (const label of ['Custom Collection', 'Road trip', 'Quiet evening', 'Random songs']) {
+    assert.ok(markup.includes(label), `missing subsection ${label}`);
+  }
+  for (const track of items) assert.ok(markup.includes(track.path), `missing track ${track.path}`);
+  assert.match(markup, /aria-expanded="(?:true|false)"/);
+  assert.match(markup, /data-cdt-column="problem"/);
+  assert.match(markup, /aria-label="Open this track in Problematic Files"/);
+  assert.doesNotMatch(markup, /collection-pill|collection-panel/);
 });
 
 test('non-album artist scope expands only aliases of the displayed family', () => {
@@ -1198,6 +1271,7 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
   const { context } = loadHelper();
   context.showAlbumCardContextMenu(12, 24, {
     key: 'arrival-album',
+    allowed_actions: { 'library.files.edit_tags': true },
     move_availability: {
       available_actions: ['move_to_hoard', 'move_to_library'],
       actions: {
@@ -1207,11 +1281,53 @@ test('legacy Gallery options no longer owns source switches or New Arrivals navi
     },
   });
   const menu = context.document.getElementById('album-card-context-menu');
+  assert.match(menu.innerHTML, /data-album-card-action="edit-tags"/);
+  assert.match(menu.innerHTML, /Open in File Explorer[\s\S]*Edit Tags/);
   assert.match(menu.innerHTML, /data-album-card-action="move_to_hoard"/);
   assert.match(menu.innerHTML, /Move to Hoard/);
   assert.match(menu.innerHTML, /data-album-card-action="move_to_library"/);
   assert.match(menu.innerHTML, /Move to Main Library/);
+  assert.equal(context.__activatedSurfaces.length, 1);
+  assert.equal(context.__activatedSurfaces[0].surface, menu);
+  context.__activatedSurfaces[0].close();
+  assert.equal(menu.hidden, true);
+  assert.equal(context.__clearedSurfaces.at(-1), menu);
 }
+
+test('artist tree context menu retains its artist and exposes the scroll action', () => {
+  const { context } = loadHelper();
+  context.showArtistTreeContextMenu(18, 36, 'A Forest Of Stars');
+  const menu = context.document.getElementById('artist-tree-context-menu');
+  assert.equal(menu.dataset.artist, 'A Forest Of Stars');
+  assert.match(menu.innerHTML, /data-artist-tree-action="scroll-to-artist"/);
+  assert.match(menu.innerHTML, /Scroll to this artist/);
+  assert.equal(menu.hidden, false);
+});
+
+test('artist tree context menu preserves an open mobile artists drawer', () => {
+  const { context } = loadHelper();
+  context.state.ui.artistsDrawerOpen = true;
+
+  context.showArtistTreeContextMenu(18, 36, 'Agalloch');
+
+  const menu = context.document.getElementById('artist-tree-context-menu');
+  assert.equal(menu.hidden, false);
+  assert.equal(menu.dataset.artist, 'Agalloch');
+  assert.deepEqual(context.__activatedSurfaces, []);
+});
+
+test('album context menu disables Edit Tags when the album lacks permission', () => {
+  const { context } = loadHelper();
+  context.showAlbumCardContextMenu(12, 24, {
+    key: 'read-only-album',
+    allowed_actions: { 'library.files.edit_tags': false },
+  });
+  const menu = context.document.getElementById('album-card-context-menu');
+  assert.match(
+    menu.innerHTML,
+    /data-album-card-action="edit-tags"[^>]*disabled[^>]*aria-disabled="true"/,
+  );
+});
 
 
 test('album context menus are unavailable for narrow layouts and wide mobile clients', () => {

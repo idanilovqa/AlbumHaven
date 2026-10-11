@@ -21,6 +21,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     loopExpiryReconciles: 0,
     persistPlayerStateForUnload: [],
     resetPlayerUnloadPersistence: 0,
+    reconcileBrowserPlaybackOnForeground: 0,
     setLoopActive: [],
     stopStreamingPlayback: [],
   };
@@ -30,6 +31,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   const observedErrors = [];
   let idleWarmup;
   let initialLoaderState = null;
+  let initialStatus = null;
   const context = {
     window: {
       location: { href: 'http://localhost:5000/' },
@@ -93,7 +95,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
       markInitialRender() {},
     },
     renderView() {},
-    updateStatusIndicator() {},
+    updateStatusIndicator(data) { initialStatus = data; },
     renderLibraryLoader(data) {
       initialLoaderState = data;
     },
@@ -146,6 +148,10 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
       calls.prepareStreamingPlaybackEngine += 1;
       return Promise.reject(preparationFailure);
     },
+    reconcileBrowserPlaybackOnForeground() {
+      calls.reconcileBrowserPlaybackOnForeground += 1;
+      return Promise.resolve('continued');
+    },
     attachModalEvents() {},
     attachCoverLookupModalEvents() {},
     attachCoverLookupDeleteConfirmEvents() {},
@@ -168,6 +174,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(calls.initPlaybackOwnershipCoordinator, 1);
+
   assert.equal(calls.prepareStreamingPlaybackEngine, 0, 'audio engine must not block initial rendering');
   assert.equal(typeof idleWarmup, 'function');
   if (!unloadBeforeIdle) idleWarmup();
@@ -175,8 +182,10 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   assert.equal(calls.prepareStreamingPlaybackEngine, unloadBeforeIdle ? 0 : 1);
   assert.equal(observedErrors.length, unloadBeforeIdle ? 0 : 1);
   if (!unloadBeforeIdle) assert.equal(observedErrors[0].includes(preparationFailure), true);
+
   assert.equal(typeof calls.visibilitychange, 'function');
   calls.visibilitychange();
+  assert.equal(calls.reconcileBrowserPlaybackOnForeground, 1);
   assert.ok(windowListeners.focus);
   windowListeners.focus();
   documentListeners.pointerdown();

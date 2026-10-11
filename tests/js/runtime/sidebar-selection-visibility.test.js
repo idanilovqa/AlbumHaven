@@ -109,6 +109,13 @@ globalThis.__testState = state;
 globalThis.__testRenderSidebar = renderSidebar;
 globalThis.__testApplyViewPayload = applyViewPayload;`, context);
   context.resolveSidebarArtists = () => context.__testState.view.artists_sidebar;
+  context.resolveSidebarVirtualWindow = artists => ({
+    virtualized: false,
+    start: 0,
+    end: artists.length,
+    before: 0,
+    after: 0,
+  });
   context.buildSidebarStructureSignature = () => 'stable-sidebar';
   context.applySidebarSelectionMarkup = () => {};
   context.resolveViewSurface = () => 'albums';

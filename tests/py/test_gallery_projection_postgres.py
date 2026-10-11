@@ -14,6 +14,62 @@ def membership(artist, key, *, year=2000):
                     album_key=key, album_title=key, album_release_year=year)
 
 
+def test_gallery_snapshot_excludes_blank_album_identity():
+    snapshot = browse._prepare_root_gallery_snapshot(
+        [membership("#2", "various artists::")],
+        [],
+        {},
+        {},
+    )
+
+    assert snapshot["ordered"] == []
+    assert snapshot["sidebar"] == []
+    assert snapshot["album_count"] == 0
+
+
+def test_gallery_snapshot_artist_anchor_opens_page_with_leading_context():
+    rows = [
+        membership("Alpha", f"alpha-{index}") for index in range(4)
+    ] + [
+        membership("Beta", f"beta-{index}") for index in range(3)
+    ] + [
+        membership("Gamma", f"gamma-{index}") for index in range(2)
+    ]
+    snapshot = browse._prepare_root_gallery_snapshot(rows, [], {}, {})
+
+    page, _, _, metadata = browse._select_root_gallery_snapshot_page(
+        snapshot,
+        {"gallery_page_size": "3", "gallery_anchor_artist": "Beta"},
+    )
+
+    assert [item["artist_name"] for item in page] == [
+        "Alpha", "Alpha", "Alpha", "Alpha", "Beta", "Beta", "Beta",
+    ]
+    assert metadata["anchor_artist"] == "Beta"
+    assert metadata["anchor_offset"] == 4
+    assert metadata["anchor_group_artist"] == "Beta"
+    with pytest.raises(ValueError, match="artist anchor"):
+        browse._select_root_gallery_snapshot_page(
+            snapshot,
+            {"gallery_page_size": "3", "gallery_anchor_artist": "Missing"},
+        )
+
+
+def test_gallery_anchor_metadata_targets_the_rendered_alias_group():
+    alias = membership("Anthony Ventura", "alias")
+    alias["artist_id"] = "shared"
+    target = membership("Anthony", "target")
+    target["artist_id"] = "shared"
+
+    assert browse._root_gallery_anchor_metadata(
+        [alias, target], "Anthony", 797,
+    ) == {
+        "anchor_artist": "Anthony",
+        "anchor_offset": 797,
+        "anchor_group_artist": "Anthony Ventura",
+    }
+
+
 def test_gallery_extraction_preserves_073f75b_golden_order_and_cursor():
     # Literal results captured from the unchanged 073f75b selector, before extraction.
     rows = [membership("Alias", "shared"), membership("Canonical", "shared"),
@@ -38,8 +94,8 @@ def test_gallery_extraction_preserves_073f75b_golden_order_and_cursor():
     assert snapshot["occurrence_count"] == 8
     page = browse._select_root_gallery_snapshot_page(snapshot, {"gallery_page_size": "2"})
     assert page[3] == {
-        "next_cursor": "WzEsICI3Yzg5NTVjMzNlNzI3ZTJhODdiZTE1MmRlOTFkZWVmMDdkMDJiY2MzMGZhYzQxNWFmMzI3ZjFmMTlkMzAwYTg2IiwgMl0",
-        "has_more": True, "revision": "7c8955c33e727e2a87be152de91deef07d02bcc30fac415af327f1f19d300a86", "page_size": 2,
+        "next_cursor": "WzEsICJmYWQ4YWU0ZTQzNDNiNDFiY2E3ZTI2ZTQzOTBlNmVjNGE0Y2QwYzM1ODUzYzY1Y2NkOGU0ZjI1ODExNDhmNGVhIiwgMl0",
+        "has_more": True, "revision": "fad8ae4e4343b41bca7e26e4390e6ec4a4cd0c35853c65ccd8e4f2581148f4ea", "page_size": 2,
     }
     continuation = browse._select_root_gallery_snapshot_page(snapshot, {
         "gallery_page_size": "2", "gallery_cursor": page[3]["next_cursor"]})
@@ -89,13 +145,18 @@ def test_prepared_snapshot_keeps_legacy_cursor_hash_for_presentation_changes():
     assert second[0][0]["album_key"] == "1"
 
 
-def test_projection_scope_preserves_category_order_but_ignores_presentation():
-    from music_app.services.gallery_projection_postgres import gallery_projection_scope_key
+def test_projection_scope_canonicalizes_category_order_and_namespaces_builder(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection
     first = {"gallery_scope": "all", "visible_library_categories": ["hoard", "main_library"]}
     changed = {**first, "gallery_display_mode": "rows", "gallery_scale_percent": 75}
-    reversed_categories = {**first, "visible_library_categories": ["main_library", "hoard"]}
-    assert gallery_projection_scope_key(first) == gallery_projection_scope_key(changed)
-    assert gallery_projection_scope_key(first) != gallery_projection_scope_key(reversed_categories)
+    reordered_categories = {**first, "visible_library_categories": ["main_library", "hoard"]}
+    repeated_categories = {**first, "visible_library_categories": ["hoard", "main_library", "hoard"]}
+    scope_key = projection.gallery_projection_scope_key(first)
+    assert scope_key == projection.gallery_projection_scope_key(changed)
+    assert scope_key == projection.gallery_projection_scope_key(reordered_categories)
+    assert scope_key == projection.gallery_projection_scope_key(repeated_categories)
+    monkeypatch.setattr(projection, "BUILDER_VERSION", "root-gallery-v3")
+    assert scope_key != projection.gallery_projection_scope_key(first)
 
 
 def test_projection_occurrences_exclude_mutable_missing_details_and_private_paths():
@@ -219,6 +280,70 @@ def test_old_schema_context_uses_accurate_fallback():
     assert len(calls) == 1
 
 
+def test_active_scan_can_render_last_compatible_gallery_snapshot():
+    from music_app.services import gallery_projection_postgres as projection
+
+    header = {
+        "source_generation": 9,
+        "revision": "stale-preview",
+        "sidebar": [{"artist": "Artist", "artist_display": "Artist", "count": 1}],
+        "album_count": 1,
+        "occurrence_count": 1,
+    }
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if "source_generation = %(generation)s" in sql:
+                return Cursor([])
+            if "order by source_generation desc" in sql:
+                assert params["builder_version"] == "root-gallery-v2"
+                return Cursor([header])
+            if "gallery_projection_occurrences" in sql:
+                return Cursor([{"payload": membership("Artist", "album-1")}])
+            raise AssertionError(sql)
+
+    page, sidebar, album_count, metadata = projection.load_gallery_projection_page(
+        Connection(), {}, {"gallery_page_size": "8"},
+        context={"library_id": 1, "generation": 10}, allow_stale=True,
+    )
+
+    assert page == [membership("Artist", "album-1")]
+    assert sidebar == header["sidebar"]
+    assert album_count == 1
+    assert metadata["projection_stale"] is True
+    assert metadata["source_generation"] == 9
+
+
+def test_old_gallery_builder_snapshot_uses_computed_fallback():
+    from music_app.services import gallery_projection_postgres as projection
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if "gallery_projection_snapshots" in sql:
+                row = ({
+                    "revision": "old",
+                    "sidebar": [],
+                    "album_count": 1,
+                    "occurrence_count": 1,
+                } if params["builder_version"] == "root-gallery-v1" else None)
+                return SimpleNamespace(fetchone=lambda: row)
+            raise AssertionError("old projection occurrences must not be loaded")
+
+    assert projection.load_gallery_projection_page(
+        Connection(), {}, {}, context={"library_id": 1, "generation": 1},
+    ) is None
+
+
 @pytest.mark.parametrize("cancel_at", [None, "capture", "publication"])
 def test_gallery_preparation_cancellation_contract(monkeypatch, cancel_at):
     from threading import Event
@@ -290,6 +415,9 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
         for row in snapshot["ordered"]:
             row["missing_album_key"] = row["album_key"]
             row["album_id"] = None
+    else:
+        for row in snapshot["ordered"]:
+            row["album_key"] = f"legacy-{row['album_key']}"
     calls = []
     class Connection:
         def execute(self, sql, params=None):
@@ -311,8 +439,11 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
         {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"}, connect=lambda _: connection,
         album_ratings_service=_EmptyAlbumRatingsService())
     monkeypatch.setattr(projection, "gallery_projection_context", lambda connection: {"library_id": 1})
-    monkeypatch.setattr(projection, "load_gallery_projection_page", lambda connection, state, params, **kwargs:
-                        browse._select_root_gallery_snapshot_page(snapshot, params))
+    load_options = []
+    def load_projection(connection, state, params, **kwargs):
+        load_options.append(kwargs)
+        return browse._select_root_gallery_snapshot_page(snapshot, params)
+    monkeypatch.setattr(projection, "load_gallery_projection_page", load_projection)
     def forbidden(*args, **kwargs):
         pytest.fail("ready page recomputed whole membership or alias readiness")
     monkeypatch.setattr(repository, "_load_relation_alias_maps", forbidden)
@@ -328,7 +459,10 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
     monkeypatch.setattr(repository._inventory_repository, "load_support_state", lambda **kwargs:
                         {"ignored_version_keys": [], "manual_version_links": {}})
     monkeypatch.setattr(browse, "_queue_display_cover_variants_for_groups", lambda *args: None)
-    payload = repository.build_root_startup_preview_payload(query_params={"gallery_page_size": str(size)})
+    payload = repository.build_root_startup_preview_payload(
+        query_params={"gallery_page_size": str(size)},
+        library_state={"scan_in_progress": True},
+    )
     assert payload["album_count"] == 101
     assert sum(len(group["albums"]) for group in payload["artist_groups"]) == size
     hydrated = [params["gallery_album_ids"] for _, params in calls if params and "gallery_album_ids" in params]
@@ -337,4 +471,5 @@ def test_ready_page_bounds_hydration_and_bypasses_membership_work(monkeypatch, s
         assert len(missing_calls) == 1 and len(missing_calls[0]) == size
     else:
         assert len(hydrated) == 1 and len(hydrated[0]) == size
+    assert load_options == [{"context": {"library_id": 1}, "allow_stale": True}]
     assert calls[-2:] == [("rollback", None), ("close", None)]

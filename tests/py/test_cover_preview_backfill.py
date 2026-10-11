@@ -112,3 +112,35 @@ def test_backfill_stop_interrupts_foreground_pause_without_generation(tmp_path):
 
     assert generated == []
     assert worker.is_running is False
+
+
+def test_backfill_uses_configured_data_dir_and_cover_revision(tmp_path):
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    data_dir = tmp_path / "app-data"
+    connection = _Connection(
+        [{"cover_path": str(source), "cover_revision": "cover-sha256"}]
+    )
+    generated = []
+    worker = CoverPreviewBackfill(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
+            "DATA_DIR": str(data_dir),
+        },
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda source_path, **kwargs: generated.append(
+            (
+                Path(source_path),
+                Path(kwargs["cache_root"]),
+                kwargs.get("revision"),
+            )
+        ),
+        throttle_seconds=0,
+    )
+
+    assert worker.run_once() == 1
+    assert generated == [
+        (source, data_dir / "display-cover-cache", "cover-sha256")
+    ]
+    assert "metadata ->> 'cover_revision'" in connection.executed[0]

@@ -456,7 +456,9 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert [group["artist"] for group in payload["initial_view"]["artist_groups"]] == ["Broadcast"]
     assert [item["artist"] for item in payload["initial_view"]["artists_sidebar"]] == ["Broadcast", "Mono"]
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
-    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
+    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == (
+        "/view-data?surface=albums&omit_sidebar=1&gallery_page_size=50"
+    )
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
     assert re.search(rb'<[^>]+id="library-loader"[^>]*\bhidden(?:\s|>)', body)
     loader_tag = re.search(rb'<section\b[^>]*\bid="library-loader"[^>]*>', body)
@@ -825,7 +827,9 @@ def test_index_surface_albums_uses_postgres_root_sidebar_startup_patch(asgi_app,
     assert payload["bootstrap"]["startupPreview"]["mode"] == "fresh_preview"
     assert payload["bootstrap"]["startupHydration"]["tier"] == "sidebar"
     assert payload["bootstrap"]["startupHydration"]["endpoint"] == "/view-data?surface=albums&payload_tier=sidebar"
-    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == "/view-data?surface=albums&omit_sidebar=1"
+    assert payload["bootstrap"]["startupHydration"]["followupEndpoint"] == (
+        "/view-data?surface=albums&omit_sidebar=1&gallery_page_size=50"
+    )
     assert payload["bootstrap"]["startupHydration"]["embeddedViewPatch"] == {
         "artists_sidebar": [
             {"artist": "Broadcast", "artist_display": "Broadcast", "count": 1},
@@ -993,6 +997,38 @@ def test_build_initial_view_preview_preserves_explicit_partial_flag():
     )
 
     assert preview["initial_view_partial"] is True
+
+
+@pytest.mark.parametrize("public_safe", [False, True])
+@pytest.mark.parametrize("category", ["hoard", "new_arrivals", "main_library"])
+def test_build_initial_view_preview_preserves_library_source_summary(category, public_safe):
+    provenance = {
+        "primary_category": category,
+        "categories": [category],
+        "root_ids": ["source-root"],
+    }
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [{
+                "artist": "Source Artist",
+                "albums": [{
+                    "key": "source-album",
+                    "name": "Source Album",
+                    "root_provenance": provenance,
+                    "library_root_category": category,
+                    "tracks": [{"title": "Track"}],
+                }],
+            }],
+        },
+        public_safe=public_safe,
+    )
+
+    album = preview["artist_groups"][0]["albums"][0]
+    assert album.get("root_provenance") == provenance
+    assert album.get("library_root_category") == category
+    assert album["tracks"] == []
+    assert album["track_count_preview"] == 1
+    assert "open_directory_paths" not in album
 
 
 def test_build_initial_view_preview_preserves_compact_album_track_count():
@@ -1743,3 +1779,36 @@ def test_paged_startup_sidebar_markup_is_bounded_without_truncating_metadata():
     assert 'Artist 039' in markup and 'Artist 040' not in markup
     assert len(view["artists_sidebar"]) == 51
     assert '>51<' in markup
+
+
+def test_asgi_revisioned_cover_route_serves_local_variant_without_source_file(app, asgi_app):
+    from music_app.services.covers import (
+        build_cover_variant_base_path,
+        display_cover_variant_cache_root,
+    )
+
+    source_path = app.config["MUSIC_DIR"] / "Offline Artist" / "Offline Album" / "cover.jpg"
+    revision = "b" * 64
+    cache_root = display_cover_variant_cache_root(
+        source_path,
+        data_dir=app.config["DATA_DIR"],
+    )
+    cached_variant = build_cover_variant_base_path(
+        source_path,
+        cache_root=cache_root,
+        max_size=480,
+        revision=revision,
+    ).with_suffix(".jpg")
+    cached_variant.parent.mkdir(parents=True, exist_ok=True)
+    cached_variant.write_bytes(b"local-revision-preview")
+
+    status, headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        "/cover",
+        query={"path": str(source_path), "size": "480", "v": revision},
+    )
+
+    assert status == 200
+    assert "max-age=31536000" in headers.get("cache-control", "")
+    assert body == b"local-revision-preview"

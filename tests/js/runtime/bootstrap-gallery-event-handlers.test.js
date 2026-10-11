@@ -311,6 +311,7 @@ function createContext(options = {}) {
         ? options.fetchAndRenderResult(calls.fetchAndRender.length)
         : options.fetchAndRenderResult;
     },
+    stopLightboxDrag() {},
     scheduleBrowserTimeout(callback, delay) {
       const timer = {
         id: calls.scheduledSearchCommits.length + 1,
@@ -392,6 +393,90 @@ test('touch movement never starts speculative album-detail hydration', () => {
   });
 
   assert.deepEqual(calls.albumDetailPrewarms, []);
+});
+
+test('touch long press opens the artist tree context menu and consumes the synthetic click', () => {
+  const { context, calls } = createContext();
+  const opened = [];
+  const artistLink = {
+    getAttribute(name) {
+      return name === 'data-sidebar-artist' ? 'A Forest Of Stars' : null;
+    },
+  };
+  const target = {
+    closest(selector) {
+      return selector === '[data-sidebar-artist]' ? artistLink : null;
+    },
+  };
+  context.showArtistTreeContextMenu = (...args) => opened.push(args);
+
+  context.handleGalleryBootstrapPointerDown({
+    pointerType: 'touch',
+    isPrimary: true,
+    pointerId: 7,
+    clientX: 42,
+    clientY: 84,
+    target,
+  });
+
+  const longPressTimer = calls.scheduledSearchCommits.find(({ delay }) => delay === 500);
+  assert.ok(longPressTimer);
+  longPressTimer.callback();
+  assert.deepEqual(opened, [[42, 84, 'A Forest Of Stars']]);
+
+  let pointerUpPrevented = false;
+  context.handleGalleryBootstrapPointerUp({
+    pointerId: 7,
+    preventDefault() { pointerUpPrevented = true; },
+  });
+  assert.equal(pointerUpPrevented, true);
+
+  let clickPrevented = false;
+  let clickStopped = false;
+  assert.equal(context.consumeArtistTreeLongPressClick({
+    target,
+    preventDefault() { clickPrevented = true; },
+    stopPropagation() { clickStopped = true; },
+  }), true);
+  assert.equal(clickPrevented, true);
+  assert.equal(clickStopped, true);
+});
+
+test('scroll movement cancels an artist tree long press before the menu opens', () => {
+  const { context, calls } = createContext();
+  const opened = [];
+  const artistLink = {
+    getAttribute(name) {
+      return name === 'data-sidebar-artist' ? 'Broadcast' : null;
+    },
+  };
+  const target = {
+    closest(selector) {
+      return selector === '[data-sidebar-artist]' ? artistLink : null;
+    },
+  };
+  context.showArtistTreeContextMenu = (...args) => opened.push(args);
+
+  context.handleGalleryBootstrapPointerDown({
+    pointerType: 'touch',
+    isPrimary: true,
+    pointerId: 9,
+    clientX: 10,
+    clientY: 10,
+    target,
+  });
+  const longPressTimer = calls.scheduledSearchCommits.find(({ delay }) => delay === 500);
+  context.handleGalleryBootstrapPointerMove({
+    pointerType: 'touch',
+    pointerId: 9,
+    clientX: 10,
+    clientY: 30,
+    target,
+  });
+
+  assert.equal(longPressTimer.cleared, true);
+  longPressTimer.callback();
+  assert.deepEqual(opened, []);
 });
 
 test('handleGalleryBootstrapClick opens all loose tracks in the tag editor', () => {
@@ -518,8 +603,12 @@ function submitSearch(context, query) {
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
 }
 
-function createAllArtistsEvent() {
-  const button = {};
+function createAllArtistsEvent({ libraryHome = false } = {}) {
+  const button = {
+    getAttribute(name) {
+      return name === 'data-library-home' && libraryHome ? '1' : null;
+    },
+  };
   let prevented = false;
   const event = {
     target: {
@@ -875,6 +964,367 @@ test('handleGalleryBootstrapClick ignores the retired Home sidebar target', () =
   assert.equal(calls.renderSidebar, 0);
 });
 
+test('scrollRootGalleryToArtist requests an anchored root page and jumps after render', async () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  let scrolledArtist = '';
+  context.virtualGrid._renderGeneration = 1;
+  context.state.view.gallery_page = {
+    anchor_artist: 'A Forest Of Stars',
+    anchor_group_artist: 'A Forest of Stars',
+  };
+  context.virtualGrid.scrollToArtist = (artist) => {
+    if (context.virtualGrid._renderGeneration === 1) return false;
+    scrolledArtist = artist;
+    return true;
+  };
+  const fetchAndRender = context.fetchAndRender;
+  context.fetchAndRender = (...args) => {
+    const result = fetchAndRender(...args);
+    context.virtualGrid._renderGeneration = 2;
+    return result;
+  };
+
+  await context.scrollRootGalleryToArtist('A Forest Of Stars');
+
+  assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
+  assert.equal(calls.buildApiUrl.at(-1).query, '');
+  assert.equal(calls.buildApiUrlOptions.at(-1).galleryAnchorArtist, 'A Forest Of Stars');
+  assert.equal(
+    new URL(calls.fetchAndRender.at(-1).url, 'http://localhost')
+      .searchParams.get('gallery_anchor_artist'),
+    'A Forest Of Stars',
+  );
+  assert.equal(scrolledArtist, 'A Forest of Stars');
+});
+
+test('scrollRootGalleryToArtist cancels stale selected-artist reconciliation before loading the anchor', async () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  context.virtualGrid.scrollToArtist = () => false;
+  context.scheduleCachedSelectedArtistReconcile({
+    ...context.state.view,
+    selected_artist: 'Atlantis 1001',
+    all_artists_active: false,
+  });
+  const staleReconcile = calls.scheduledSearchCommits.at(-1);
+
+  await context.scrollRootGalleryToArtist('Bal-Sagoth');
+
+  assert.equal(staleReconcile.cleared, true);
+  staleReconcile.callback();
+  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
+  assert.equal(calls.buildApiUrlOptions.at(-1).galleryAnchorArtist, 'Bal-Sagoth');
+});
+
+test('scrollRootGalleryToArtist uses the mounted grid without loading another page', async () => {
+  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  const scrolledArtists = [];
+  context.virtualGrid.scrollToArtist = (artist) => {
+    scrolledArtists.push(artist);
+    return true;
+  };
+
+  assert.equal(await context.scrollRootGalleryToArtist('Anthony'), true);
+
+  assert.deepEqual(scrolledArtists, ['Anthony']);
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.deepEqual(calls.renderLibraryLoader, []);
+});
+
+test('scrollRootGalleryToArtist keeps correcting the requested heading until it is stably at the top', async () => {
+  const { context } = createContext();
+  const frames = [];
+  let headerTop = 96;
+  let scrollCalls = 0;
+  const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+  const header = {
+    getAttribute: (name) => (name === 'data-scroll-artist' ? 'Baul Meets Saz' : null),
+    getBoundingClientRect: () => ({ top: headerTop }),
+  };
+  const getElementById = context.document.getElementById.bind(context.document);
+  const querySelectorAll = context.document.querySelectorAll.bind(context.document);
+  context.document.getElementById = (id) => (id === 'albums-scroll' ? scroll : getElementById(id));
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-scroll-artist]' ? [header] : querySelectorAll(selector)
+  );
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+  context.virtualGrid.scrollToArtist = () => {
+    scrollCalls += 1;
+    if (scrollCalls > 1) headerTop = 0;
+    return true;
+  };
+
+  assert.equal(await context.scrollRootGalleryToArtist('Baul Meets Saz'), true);
+  while (frames.length) frames.shift()();
+
+  assert.ok(scrollCalls > 1, 'late layout drift must trigger another exact alignment');
+  assert.equal(headerTop, 0);
+});
+
+test('Artist Tree alignment does not accept a covered separator with stale gallery chrome', async () => {
+ const { context } = createContext();
+ const frames = [];
+ let scrollCalls = 0;
+ const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+ const firstRow = { getBoundingClientRect: () => ({ top: scrollCalls > 1 ? 0 : 54 }) };
+ const header = {
+ getAttribute: name => (name === 'data-scroll-artist' ? 'Baul Meets Saz' : null),
+ getBoundingClientRect: () => ({ top: 0 }),
+ parentElement: { querySelector: selector => (selector === '.artist-rows' ? firstRow : null) },
+ };
+ const chromeName = { textContent: 'Battleroar' };
+ const getElementById = context.document.getElementById.bind(context.document);
+ context.document.getElementById = id => (id === 'albums-scroll' ? scroll : getElementById(id));
+ context.document.querySelectorAll = selector => (selector === '[data-scroll-artist]' ? [header] : []);
+ context.document.querySelector = selector => (
+ selector === '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]'
+ ? chromeName
+ : null
+ );
+ context.scheduleBrowserAnimationFrame = callback => {
+ frames.push(callback);
+ return frames.length;
+ };
+ context.virtualGrid.scrollToArtist = () => {
+ scrollCalls += 1;
+ if (scrollCalls > 1) chromeName.textContent = 'Baul Meets Saz';
+ return true;
+ };
+
+ assert.equal(await context.scrollRootGalleryToArtist('Baul Meets Saz'), true);
+ while (frames.length) frames.shift()();
+
+ assert.ok(scrollCalls > 1);
+ assert.equal(chromeName.textContent, 'Baul Meets Saz');
+ assert.equal(firstRow.getBoundingClientRect().top, 0);
+});
+
+test('a second Artist Tree jump cancels the first artist alignment before its page loads', async () => {
+ const { context } = createContext({ useProductionBuildApiUrl: true });
+ const frames = [];
+ const scrolledArtists = [];
+ let finishFetch;
+ const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+ const rows = { getBoundingClientRect: () => ({ top: 80 }) };
+ const header = {
+ getAttribute: name => (name === 'data-scroll-artist' ? 'Battlelore' : null),
+ parentElement: { querySelector: selector => (selector === '.artist-rows' ? rows : null) },
+ };
+ const getElementById = context.document.getElementById.bind(context.document);
+ context.document.getElementById = id => (id === 'albums-scroll' ? scroll : getElementById(id));
+ context.document.querySelectorAll = selector => (selector === '[data-scroll-artist]' ? [header] : []);
+ context.document.querySelector = () => ({ textContent: 'Battlelore' });
+ context.scheduleBrowserAnimationFrame = callback => {
+ frames.push(callback);
+ return frames.length;
+ };
+ context.virtualGrid.scrollToArtist = artist => {
+ scrolledArtists.push(artist);
+ return artist === 'Battlelore';
+ };
+ context.fetchAndRender = () => new Promise(resolve => { finishFetch = resolve; });
+
+ assert.equal(await context.scrollRootGalleryToArtist('Battlelore'), true);
+ const secondJump = context.scrollRootGalleryToArtist('Quiet Sun');
+ scrolledArtists.length = 0;
+ frames.shift()();
+
+ assert.deepEqual(scrolledArtists, [], 'the first target must surrender ownership immediately');
+ finishFetch(false);
+  assert.equal(await secondJump, false);
+});
+
+test('a local Artist Tree jump cancels an older remote jump waiting for its section to render', async () => {
+  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const frames = [];
+  const scrolledArtists = [];
+  let remoteLoaded = false;
+  context.scheduleBrowserAnimationFrame = callback => {
+    frames.push(callback);
+    return frames.length;
+  };
+  context.virtualGrid.scrollToArtist = artist => {
+    scrolledArtists.push(artist);
+    return artist === 'Quiet Sun' || (artist === 'Battlelore' && remoteLoaded);
+  };
+  context.fetchAndRender = async () => {
+    remoteLoaded = true;
+    return true;
+  };
+
+  assert.equal(await context.scrollRootGalleryToArtist('Battlelore'), true);
+  assert.equal(frames.length, 1, 'the remote jump must be waiting for the virtual section');
+  assert.equal(await context.scrollRootGalleryToArtist('Quiet Sun'), true);
+  scrolledArtists.length = 0;
+  frames.shift()();
+
+  assert.deepEqual(scrolledArtists, [], 'the stale remote render loop must surrender ownership');
+});
+
+test('Artist Tree alignment keeps ownership through delayed virtual-grid measurement drift', async () => {
+ const { context } = createContext();
+ const frames = [];
+ let frameReads = 0;
+ let rowsTop = 0;
+ let scrollCalls = 0;
+ const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+ const rows = {
+ getBoundingClientRect: () => {
+ frameReads += 1;
+ if (frameReads === 10) rowsTop = 80;
+ return { top: rowsTop };
+ },
+ };
+ const header = {
+ getAttribute: name => (name === 'data-scroll-artist' ? 'Battleroar' : null),
+ parentElement: { querySelector: selector => (selector === '.artist-rows' ? rows : null) },
+ };
+ const chromeName = { textContent: 'Battleroar' };
+ const getElementById = context.document.getElementById.bind(context.document);
+ context.document.getElementById = id => (id === 'albums-scroll' ? scroll : getElementById(id));
+ context.document.querySelectorAll = selector => (selector === '[data-scroll-artist]' ? [header] : []);
+ context.document.querySelector = selector => (
+ selector === '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]'
+ ? chromeName
+ : null
+ );
+ context.scheduleBrowserAnimationFrame = callback => {
+ frames.push(callback);
+ return frames.length;
+ };
+ context.virtualGrid.scrollToArtist = () => {
+ scrollCalls += 1;
+ rowsTop = 0;
+ return true;
+ };
+
+ assert.equal(await context.scrollRootGalleryToArtist('Battleroar'), true);
+ while (frames.length) frames.shift()();
+
+ assert.ok(frameReads > 10, 'alignment must remain active after the first six stable frames');
+ assert.ok(scrollCalls > 1, 'delayed measurement drift must be corrected');
+ assert.equal(rowsTop, 0);
+});
+
+test('user wheel input cancels pending Artist Tree alignment', async () => {
+  const { context } = createContext();
+  const frames = [];
+  let scrollCalls = 0;
+  const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
+  const header = {
+    getAttribute: () => 'Alice in Chains',
+    getBoundingClientRect: () => ({ top: 80 }),
+  };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (id === 'albums-scroll' ? scroll : getElementById(id));
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-scroll-artist]' ? [header] : []
+  );
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+  context.virtualGrid.scrollToArtist = () => {
+    scrollCalls += 1;
+    return true;
+  };
+
+  await context.scrollRootGalleryToArtist('Alice in Chains');
+  context.handleGalleryBootstrapWheel({
+    target: { closest: (selector) => (selector === '#albums-scroll' ? scroll : null) },
+  });
+  while (frames.length) frames.shift()();
+
+  assert.equal(scrollCalls, 1);
+});
+
+test('scrollRootGalleryToArtist waits for the replacement grid before accepting the same artist', async () => {
+  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const frames = [];
+  const scrolledArtists = [];
+  context.virtualGrid._renderGeneration = 4;
+  context.state.view.gallery_page = {
+    anchor_artist: 'Anthony',
+    anchor_group_artist: 'Anthony',
+  };
+  context.virtualGrid.scrollToArtist = (artist) => {
+    if (context.virtualGrid._renderGeneration === 4) return false;
+    scrolledArtists.push(artist);
+    return true;
+  };
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+
+  await context.scrollRootGalleryToArtist('Anthony');
+
+  assert.deepEqual(scrolledArtists, [], 'the old selected-artist grid must not own the jump');
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    assert.equal(frames.length, 1);
+    frames.shift()();
+  }
+  assert.deepEqual(scrolledArtists, []);
+  context.virtualGrid._renderGeneration = 5;
+  frames.shift()();
+  assert.deepEqual(scrolledArtists, ['Anthony']);
+});
+
+test('scrollRootGalleryToArtist abandons delayed alignment after the anchored page loses ownership', async () => {
+  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const frames = [];
+  context.state.view.gallery_page = {
+    anchor_artist: 'Anthony',
+    anchor_group_artist: 'Anthony',
+  };
+  context.virtualGrid.scrollToArtist = () => false;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+
+  await context.scrollRootGalleryToArtist('Anthony');
+  assert.equal(frames.length, 1);
+  context.state.view.gallery_page = { anchor_artist: 'Another artist' };
+  frames.shift()();
+  assert.equal(frames.length, 0);
+});
+
+test('artist tree context action closes the menu before scrolling the root gallery', () => {
+  const { context, calls } = createContext();
+  const menu = { dataset: { artist: 'A Forest Of Stars' } };
+  const action = {
+    closest(selector) {
+      return selector === '#artist-tree-context-menu' ? menu : null;
+    },
+  };
+  let prevented = false;
+  let hidden = false;
+  let requestedArtist = '';
+  context.hideArtistTreeContextMenu = () => { hidden = true; };
+  context.scrollRootGalleryToArtist = (artist) => {
+    requestedArtist = artist;
+    return Promise.resolve(true);
+  };
+
+  context.handleGalleryBootstrapClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-artist-tree-action="scroll-to-artist"]' ? action : null;
+      },
+    },
+    preventDefault() { prevented = true; },
+  });
+
+  assert.equal(prevented, true);
+  assert.equal(hidden, true);
+  assert.equal(requestedArtist, 'A Forest Of Stars');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.closeArtistsDrawer)), [{ restoreFocus: false }]);
+});
+
 test('switching primary artist preserves the active search and requested-artist provenance', () => {
   const { context, calls } = createContext({
     searchInputValue: 'neal morse', useProductionBuildApiUrl: true,
@@ -904,6 +1354,79 @@ test('switching primary artist preserves the active search and requested-artist 
   assert.equal(requestUrl.searchParams.get('artist'), 'Resonance');
   assert.deepEqual(Array.from(context.state.gallery.mainState.familyArtists), []);
   assert.equal(context.state.gallery.mainState.view, 'covers');
+});
+
+test('library-home navigation clears active search state before opening All artists', () => {
+  const { context, calls } = createContext();
+  context.state.view.query = 'slow search';
+  context.state.view.search_context = { kind: 'text' };
+
+  const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
+  context.handleGalleryBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.equal(context.document.getElementById('search-input').value, '');
+  assert.equal(context.state.ui.searchDraftQuery, '');
+  assert.equal(calls.buildApiUrl.at(-1).query, '');
+  assert.equal(calls.buildApiUrl.at(-1).search_context, null);
+});
+
+test('library-home navigation already at the root responds by scrolling to the top without fetching', () => {
+  const { context, calls } = createContext({
+    currentUrl: 'http://localhost/?surface=albums&all_artists=1',
+  });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+  const albumsScroll = { scrollTop: 4800 };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? albumsScroll : getElementById(id)
+  );
+
+  const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
+  context.handleGalleryBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.equal(albumsScroll.scrollTop, 0);
+  assert.equal(calls.fetchAndRender.length, 0);
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 0);
+  assert.equal(calls.pushBrowserViewState.length, 1);
+});
+
+test('library-home navigation does not use the no-fetch shortcut while a view request is active', () => {
+  const { context, calls } = createContext({
+    currentUrl: 'http://localhost/?surface=albums&all_artists=1',
+  });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+  context.state.ui.activeViewRequestController = {};
+  const albumsScroll = { scrollTop: 4800 };
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = (id) => (
+    id === 'albums-scroll' ? albumsScroll : getElementById(id)
+  );
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.equal(albumsScroll.scrollTop, 4800);
+  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 1);
 });
 
 test('handleSidebarArtistSelectionClick closes the mobile drawer before loading a selected artist', () => {
@@ -1982,6 +2505,38 @@ test('handleGalleryBootstrapClick resolves duplicate-folder actions from the cur
   assert.deepEqual(calls.openAlbumInExplorer, [{ key: 'duplicate-source-album' }]);
 });
 
+test('album context Edit Tags closes the menu before opening the full-album editor', () => {
+  const { context } = createContext();
+  const album = {
+    key: 'context-album',
+    allowed_actions: { 'library.files.edit_tags': true },
+  };
+  const menu = { dataset: { albumKey: album.key } };
+  const action = {
+    getAttribute(name) {
+      return name === 'data-album-card-action' ? 'edit-tags' : '';
+    },
+  };
+  const order = [];
+  context.document.getElementById = (id) => (id === 'album-card-context-menu' ? menu : null);
+  context.getIndexedAlbum = (key) => (key === album.key ? album : null);
+  context.hideAlbumCardContextMenu = () => order.push('close');
+  context.openTagEditor = (editedAlbum, options) => order.push({ editedAlbum, options });
+
+  context.handleGalleryBootstrapClick({
+    target: {
+      closest(selector) {
+        return selector === '[data-album-card-action]' ? action : null;
+      },
+    },
+    preventDefault() {},
+  });
+
+  assert.equal(order[0], 'close');
+  assert.equal(order[1].editedAlbum, album);
+  assert.deepEqual({ ...order[1].options }, { tracksMode: 'all' });
+});
+
 test('search submit abandons Scan Page before dispatching an unfiltered query request', () => {
   const unresolvedRequest = new Promise(() => {});
   const { context, calls } = createContext({
@@ -2689,6 +3244,7 @@ test('selecting a different tree artist preserves search and resets filters whil
     albumTypes: ['studio', 'ep'],
     view: 'covers',
     familyArtists: [],
+    showFeaturedOn: true,
   });
 });
 

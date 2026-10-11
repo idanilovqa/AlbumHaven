@@ -39,11 +39,13 @@ export {
 } from './syntheticPerformanceBenchmark.js';
 export {
   collectJsonResponsesDuringAction,
+  collectResponseTrafficDuringAction,
   expectAtLeastOnePostgresLibraryBrowseTelemetryPayload,
   expectPostgresLibraryBrowseTelemetry,
   formatMegabytes,
   isRootAlbumsViewDataResponse,
   measureActionTime,
+  measureInteractionToPaint,
   sampleIdleMemory,
   sampleMemoryPoint,
   samplePeakMemory,

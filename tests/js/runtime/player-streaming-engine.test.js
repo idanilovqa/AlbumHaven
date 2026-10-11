@@ -286,6 +286,7 @@ function createEngineHarness(options = {}) {
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
     handleStreamingPlaybackEnded: options.handleStreamingPlaybackEnded,
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
+    updatePlayerUi: options.updatePlayerUi,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
   };
@@ -301,6 +302,7 @@ function createEngineHarness(options = {}) {
     start: startStreamingTrack,
     pause: pauseStreamingPlayback,
     resume: resumeStreamingPlayback,
+    reconcileInterruption: reconcileInterruptedStreamingPlayback,
     seek: seekStreamingPlayback,
     continuity: scheduleStreamingContinuity,
     setLoop: setStreamingLoop,
@@ -900,6 +902,80 @@ test('loads the AudioWorklet with the bootstrap runtime asset version', async ()
     harness.contexts[0].audioWorklet.modules,
     ['/static/js/audio-worklets/gapless-playback-processor.js?v=startup-runtime-digest'],
   );
+});
+
+test('interruption reconciliation resumes the same buffered stream', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const context = harness.contexts[0];
+  const generation = harness.engine.generation;
+  const streamId = harness.engine.roles.current.streamId;
+  const socket = harness.engine.socket;
+  const playMessagesBefore = harness.portMessages('play').length;
+
+  context.state = 'suspended';
+  assert.equal(await harness.api.reconcileInterruption(context), 'resumed');
+
+  assert.equal(context.state, 'running');
+  assert.equal(harness.engine.generation, generation);
+  assert.equal(harness.engine.roles.current.streamId, streamId);
+  assert.strictEqual(harness.engine.socket, socket);
+  assert.equal(harness.engine.snapshot.paused, false);
+  assert.equal(
+    harness.portMessages('play').length,
+    playMessagesBefore,
+    'resuming an externally suspended context must not restart the worklet timeline',
+  );
+});
+
+test('concurrent foreground signals share one interruption recovery attempt', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const context = harness.contexts[0];
+  let releaseResume;
+  context.state = 'suspended';
+  context.resumeCalls = 0;
+  context.resume = async function blockedResume() {
+    this.resumeCalls += 1;
+    await new Promise((resolve) => {
+      releaseResume = resolve;
+    });
+    this.state = 'running';
+  };
+
+  const first = harness.api.reconcileInterruption(context);
+  const second = harness.api.reconcileInterruption(context);
+  await harness.settle();
+
+  assert.equal(context.resumeCalls, 1);
+  releaseResume();
+  assert.deepEqual(await Promise.all([first, second]), ['resumed', 'resumed']);
+  assert.equal(harness.engine.snapshot.paused, false);
+});
+
+test('blocked interruption recovery becomes truthfully paused and remains user resumable', async () => {
+  const harness = createEngineHarness({ resumeLeavesSuspended: true });
+  await harness.api.start(makeTrack(), { allowSuspendedAutoplayFallback: true });
+  const context = harness.contexts[0];
+  context.state = 'running';
+  harness.engine.snapshot.paused = false;
+  harness.engine.mode = 'playing';
+
+  context.state = 'suspended';
+  const result = await harness.api.reconcileInterruption(context);
+
+  assert.equal(result, 'gesture-required');
+  assert.equal(harness.engine.snapshot.paused, true);
+  assert.equal(harness.engine.mode, 'paused');
+  assert.equal(harness.portMessages('pause').length, 1);
+
+  harness.contexts[0].state = 'suspended';
+  harness.contexts[0].resume = async function resumeAfterGesture() {
+    this.resumeCalls += 1;
+    this.state = 'running';
+  };
+  assert.equal(await harness.api.resume(), true);
+  assert.equal(harness.engine.snapshot.paused, false);
 });
 
 test('resumes the prepared context only through the explicit user-gesture API', async () => {
@@ -1659,7 +1735,7 @@ test('uses a boundary to promote the stable server stream and waits for its ack 
     sampleRate: 48_000,
     currentCapacityFrames: 12 * 48_000,
     continuityCapacityFrames: 5 * 48_000,
-    startupBufferFrames: 12_000,
+    startupBufferFrames: 2 * 48_000,
   });
   harness.nodes[0].port.dispatch({
     type: 'first-frame',
@@ -1732,7 +1808,7 @@ test('swapped physical rings keep promoted and replacement roles within their in
     sampleRate: 48_000,
     currentCapacityFrames: 12 * 48_000,
     continuityCapacityFrames: 5 * 48_000,
-    startupBufferFrames: 12_000,
+    startupBufferFrames: 2 * 48_000,
   });
   acceptMetadata(harness, current);
   harness.nodes[0].port.dispatch({
@@ -2732,29 +2808,14 @@ test('a near-end seek prepares its target without stopping the selected current 
   assert.equal(harness.portMessages('prepare-seek').at(-1).streamId, replacement.streamId);
 });
 
-test('retains inspectable socket and processor failures in engine diagnostics', async (t) => {
-  for (const failure of [
-    {
-      name: 'socket',
-      trigger: (harness) => harness.sockets[0].fail(new Error('transport gone')),
-      message: 'transport gone',
-    },
-    {
-      name: 'processor',
-      trigger: (harness) => harness.nodes[0].fail(new Error('render crashed')),
-      message: 'render crashed',
-    },
-  ]) {
-    await t.test(failure.name, async () => {
-      const harness = createEngineHarness();
-      await harness.api.start(makeTrack());
-      failure.trigger(harness);
-      const snapshot = harness.api.snapshot();
-      assert.equal(snapshot.mode, 'error');
-      assert.equal(snapshot.diagnostics.lastError.source, failure.name);
-      assert.match(snapshot.diagnostics.lastError.message, new RegExp(failure.message));
-    });
-  }
+test('retains inspectable processor failures in engine diagnostics', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  harness.nodes[0].fail(new Error('render crashed'));
+  const snapshot = harness.api.snapshot();
+  assert.equal(snapshot.mode, 'error');
+  assert.equal(snapshot.diagnostics.lastError.source, 'processor');
+  assert.match(snapshot.diagnostics.lastError.message, /render crashed/);
 });
 
 test('stop performs exact cleanup once and remains idempotent', async () => {
@@ -3275,6 +3336,37 @@ test('fragmented current PCM waits for the transport low-water mark before refil
     36_096,
     'the refill restores one full transport window before the decoder runs dry',
   );
+});
+
+test('one buffering episode requests one coarse refill and preserves play intent', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  harness.engine.diagnostics.bufferedFrames.current = 0;
+  harness.engine.diagnostics.inFlightFrames.current = 0;
+  const creditCount = harness.sent('credit').length;
+  const event = {
+    type: 'buffering-start',
+    generation: current.generation,
+    streamId: current.streamId,
+    role: 'current',
+    timelineFrame: 12_000,
+  };
+
+  harness.nodes[0].port.dispatch(event);
+  harness.nodes[0].port.dispatch(event);
+
+  assert.equal(harness.sent('credit').length, creditCount + 1);
+  assert.equal(harness.sent('credit').at(-1).frames, 48_000);
+  assert.equal(harness.engine.mode, 'buffering');
+  assert.equal(harness.engine.snapshot.paused, false);
+  assert.equal(harness.engine.diagnostics.buffering, true);
+
+  harness.nodes[0].port.dispatch({ ...event, type: 'buffering-end' });
+
+  assert.equal(harness.engine.mode, 'playing');
+  assert.equal(harness.engine.snapshot.paused, false);
+  assert.equal(harness.engine.diagnostics.buffering, false);
 });
 
 test('a new current generation starts its cached waveform probe before playback readiness', async () => {
@@ -4051,22 +4143,54 @@ test('paused metadata and consumption update accounting without credit until exp
   assert.ok(diagnostics.inFlightFrames.continuity <= 5 * 48_000);
 });
 
-test('unexpected socket close is inspectable while intentional stop remains stopped without an error', async () => {
-  const failed = createEngineHarness();
-  await failed.api.start(makeTrack());
+test('unexpected socket close reconnects once from the rendered position and leaves an explicit retry after a second loss', async () => {
+  let uiUpdates = 0;
+  const failed = createEngineHarness({ updatePlayerUi: () => { uiUpdates += 1; } });
+  const track = makeTrack();
+  await failed.api.start(track);
+  const first = failed.sent('open')[0];
+  failed.nodes[0].port.dispatch({
+    type: 'position',
+    generation: first.generation,
+    streamId: first.streamId,
+    timelineFrame: 3 * 48_000,
+  });
+  failed.sockets[0].fail(new Error('transport gone'));
+  const errorSnapshot = failed.api.snapshot();
+  assert.notEqual(errorSnapshot.mode, 'error');
+  assert.match(errorSnapshot.diagnostics.lastSocketError.message, /transport gone/);
+  assert.equal(failed.nodes[0].disconnectCalls, 0);
+  assert.equal(failed.contexts[0].closeCalls, 0);
   failed.sockets[0].unexpectedClose({ code: 1006, reason: 'network disappeared' });
+  await failed.settle();
+  await failed.settle();
+
+  assert.equal(failed.sockets.length, 2);
+  const recovered = failed.sockets[1].sent.find(({ type }) => type === 'open');
+  assert.equal(recovered.path, track.path);
+  assert.equal(recovered.startFrame, 3 * 48_000);
+  assert.equal(failed.api.snapshot().diagnostics.lastError, undefined);
+  assert.equal(failed.nodes[0].disconnectCalls, 1);
+  assert.equal(failed.contexts[0].closeCalls, 1);
+
+  failed.sockets[1].unexpectedClose({ code: 1006, reason: 'network disappeared again' });
+  await failed.settle();
   await failed.settle();
 
   const failedSnapshot = failed.api.snapshot();
+  assert.equal(failed.sockets.length, 2, 'automatic recovery is bounded to one attempt');
   assert.equal(failedSnapshot.mode, 'error');
+  assert.equal(failedSnapshot.paused, true);
   assert.equal(failedSnapshot.diagnostics.lastError.source, 'socket');
-  assert.match(failedSnapshot.diagnostics.lastError.message, /1006|network disappeared/);
-  assert.equal(failed.portMessages('stop').length, 1);
-  assert.equal(failed.nodes[0].disconnectCalls, 1);
-  assert.equal(failed.contexts[0].closeCalls, 1);
-  assert.equal(failed.engine.context, null);
-  assert.equal(failed.engine.node, null);
-  assert.equal(failed.engine.socket, null);
+  assert.match(failedSnapshot.diagnostics.lastError.message, /1006|network disappeared again/);
+  assert.ok(uiUpdates > 0, 'transport failure refreshes the visible player state');
+
+  assert.equal(await failed.api.resume(), true);
+  await failed.settle();
+  assert.equal(failed.sockets.length, 3, 'an explicit play retries after automatic recovery is exhausted');
+  const retried = failed.sockets[2].sent.find(({ type }) => type === 'open');
+  assert.equal(retried.path, track.path);
+  assert.equal(retried.startFrame, 3 * 48_000);
 
   const stopped = createEngineHarness();
   await stopped.api.start(makeTrack());

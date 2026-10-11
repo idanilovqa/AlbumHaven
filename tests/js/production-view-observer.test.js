@@ -30,11 +30,635 @@ class FakePage {
   }
 }
 
+test('observed progressive pages prove returned album presence without claiming full-view authority', async () => {
+  const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const first = request('http://127.0.0.1/view-data?surface=albums&category=main_library&payload_tier=sidebar');
+  page.emit('request', first);
+  page.emit('response', response(first, {
+    payload_tier: 'sidebar',
+    artist_groups: [{ artist: 'First Artist', albums: [{ key: 'first', name: 'First Album' }] }],
+    gallery_page: { offset: 0, next_offset: 6 },
+  }));
+  page.emit('requestfinished', first);
+  await flushPromises();
+  assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), {
+    artist: 'First Artist', album: 'First Album',
+  }).canonicalMatch, true);
+  assert.equal(observer.read().latestFullPayload, null, 'partial pages cannot authorize full counts or absence');
+
+  const next = request('http://127.0.0.1/view-data?surface=albums&category=main_library&payload_tier=sidebar&gallery_offset=6');
+  page.emit('request', next);
+  assert.equal(observer.read().galleryBusy, true);
+  assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), {
+    artist: 'Next Artist', album: 'Next Album',
+  }).canonicalMatch, false, 'a requested page is not observed authority');
+  page.emit('response', response(next, {
+    payload_tier: 'sidebar',
+    artist_groups: [{ artist: 'Next Artist', albums: [{ key: 'next', name: 'Next Album' }] }],
+    gallery_page: { offset: 6, next_offset: 12 },
+  }));
+  page.emit('requestfinished', next);
+  await flushPromises();
+  for (const [artist, album] of [['First Artist', 'First Album'], ['Next Artist', 'Next Album']]) {
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), { artist, album }).canonicalMatch, true);
+  }
+  assert.equal(observer.read().latestFullPayload, null);
+  assert.equal(observer.read().galleryBusy, false);
+});
+
+for (const transition of ['append', 'query', 'category', 'group', 'replacement', 'document', 'mutation']) {
+  test(`delayed append body preserves presence only across same-scope append: ${transition}`, async () => {
+    const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const base = 'http://127.0.0.1/view-data?surface=albums&category=main_library&payload_tier=sidebar';
+    const initial = request(base);
+    page.emit('request', initial);
+    page.emit('response', response(initial, {
+      payload_tier: 'sidebar', artist_groups: [], gallery_page: { offset: 0, next_offset: 6 },
+    }));
+    page.emit('requestfinished', initial);
+    await flushPromises();
+
+    const earlier = request(`${base}&gallery_offset=6`);
+    let resolveEarlier;
+    const earlierBody = new Promise((resolve) => { resolveEarlier = resolve; });
+    page.emit('request', earlier);
+    page.emit('response', response(earlier, null, { json: () => earlierBody }));
+    page.emit('requestfinished', earlier);
+    if (transition === 'document') page.emit('documentcommitted');
+    if (transition === 'mutation') {
+      const save = request('http://127.0.0.1/utilities/save-task/replace-gallery');
+      page.emit('request', save);
+      page.emit('response', response(save, { ok: true, status: 'completed', updated_albums: [] }));
+      page.emit('requestfinished', save);
+      await flushPromises();
+    }
+    const nextUrl = new URL(base);
+    nextUrl.searchParams.set('gallery_offset', transition === 'replacement' ? '0' : '12');
+    if (transition === 'query') nextUrl.searchParams.set('q', 'New Search');
+    if (transition === 'category') nextUrl.searchParams.set('category', 'hoard');
+    if (transition === 'group') nextUrl.searchParams.set('artist', 'Next Artist');
+    const next = request(nextUrl.href);
+    page.emit('request', next);
+    const latestPage = { offset: transition === 'replacement' ? 0 : 12, next_offset: 18 };
+    page.emit('response', response(next, {
+      payload_tier: 'sidebar',
+      artist_groups: [{ artist: 'Next Artist', albums: [{ key: 'next', name: 'Next Album' }] }],
+      gallery_page: latestPage,
+    }));
+    page.emit('requestfinished', next);
+    await flushPromises();
+
+    resolveEarlier({
+      payload_tier: 'sidebar',
+      artist_groups: [{ artist: 'Earlier Artist', albums: [{ key: 'earlier', name: 'Earlier Album' }] }],
+      gallery_page: { offset: 6, next_offset: 12 },
+    });
+    await flushPromises();
+    const observation = observer.read();
+    assert.equal(readCanonicalAlbumTargetEvidence(observation, {
+      artist: 'Earlier Artist', album: 'Earlier Album',
+    }).canonicalMatch, transition === 'append');
+    assert.equal(readCanonicalAlbumTargetEvidence(observation, {
+      artist: 'Next Artist', album: 'Next Album',
+    }).canonicalMatch, true);
+    assert.equal(Object.hasOwn(observation.galleryArtistTopologies, 'Earlier Artist'), transition === 'append');
+    assert.deepEqual(observation.latestGalleryPage, latestPage, 'older bodies cannot rewind continuation metadata');
+    assert.equal(observation.latestGalleryPageError, null);
+    assert.equal(observation.latestFullPayload, null, 'observed pages do not establish full-view authority');
+    assert.equal(observation.pendingPayloadReadCount, 0);
+    assert.equal(observation.galleryBusy, false);
+  });
+}
+
+for (const reset of ['document', 'category', 'replacement']) {
+  test(`progressive album presence cannot survive ${reset} authority replacement`, async () => {
+    const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const url = 'http://127.0.0.1/view-data?surface=albums&category=main_library&payload_tier=sidebar';
+    const first = request(url);
+    page.emit('request', first);
+    page.emit('response', response(first, {
+      payload_tier: 'sidebar',
+      artist_groups: [{ artist: 'Artist', albums: [{ key: 'old', name: 'Old Album' }] }],
+      gallery_page: { offset: 0, next_offset: 6 },
+    }));
+    page.emit('requestfinished', first);
+    await flushPromises();
+    const target = { artist: 'Artist', album: 'Old Album' };
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, true);
+    if (reset === 'document') page.emit('documentcommitted');
+    else page.emit('request', request(reset === 'category' ? url.replace('main_library', 'hoard') : url));
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, false);
+    page.emit('response', response(first, {
+      payload_tier: 'sidebar',
+      artist_groups: [{ artist: 'Artist', albums: [{ key: 'old', name: 'Old Album' }] }],
+      gallery_page: { offset: 0, next_offset: 6 },
+    }));
+    await flushPromises();
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, false,
+      'a late response from the replaced authority cannot resurrect the old album');
+  });
+}
+
+for (const invalidation of ['document', 'category', 'completed mutation', 'empty completed mutation']) {
+  test(`observed family identities support local restoration only until ${invalidation}`, async () => {
+    const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const search = request('http://127.0.0.1/view-data?surface=albums&q=Lead+Solo&category=main_library');
+    page.emit('request', search);
+    page.emit('response', response(search, {
+      payload_tier: 'full',
+      query: 'Lead Solo',
+      selected_artist: 'Lead',
+      visible_library_categories: ['main_library'],
+      family_artist_groups: [{ artist: 'Partner', albums: [{ key: 'partner-solo', name: 'Partner Solo' }] }],
+    }));
+    page.emit('requestfinished', search);
+    await flushPromises();
+    const target = { artist: 'Partner', album: 'Partner Solo' };
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, true);
+    const root = request('http://127.0.0.1/view-data?surface=albums&category=main_library&payload_tier=sidebar');
+    page.emit('request', root);
+    page.emit('response', response(root, {
+      payload_tier: 'sidebar', query: '', selected_artist: '',
+      visible_library_categories: ['main_library'],
+      artist_groups: [{ artist: 'Other', albums: [{ key: 'other', name: 'Other Album' }] }],
+      gallery_page: { offset: 0, next_offset: 6 },
+    }));
+    page.emit('requestfinished', root);
+    await flushPromises();
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, true,
+      'local family restoration must retain the exact previously observed server identity');
+    assert.equal(observer.read().latestFullPayload, null,
+      'retained family presence is not authority for full root counts or absence');
+    if (invalidation === 'document') page.emit('documentcommitted');
+    else if (invalidation === 'category') {
+      page.emit('request', request('http://127.0.0.1/view-data?surface=albums&category=hoard&payload_tier=sidebar'));
+    } else {
+      const save = request('http://127.0.0.1/utilities/save-task/family-mutation');
+      page.emit('request', save);
+      page.emit('response', response(save, {
+        ok: true, status: 'completed',
+        updated_albums: invalidation === 'empty completed mutation' ? []
+          : [{ key: 'partner-renamed', album_artist: 'Partner', name: 'Renamed Album' }],
+      }));
+      page.emit('requestfinished', save);
+      await flushPromises();
+    }
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, false,
+      'retained historical family data must not validate a changed scope or library');
+  });
+}
+
+test('a delayed page read cannot restore album authority after a completed mutation', async () => {
+  const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const pending = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar');
+  let resolvePayload;
+  const payloadRead = new Promise((resolve) => { resolvePayload = resolve; });
+  page.emit('request', pending);
+  page.emit('response', response(pending, null, { json: () => payloadRead }));
+  page.emit('requestfinished', pending);
+  const save = request('http://127.0.0.1/utilities/save-task/remove-last-album');
+  page.emit('request', save);
+  page.emit('response', response(save, { ok: true, status: 'completed', updated_albums: [] }));
+  page.emit('requestfinished', save);
+  await flushPromises();
+  resolvePayload({
+    payload_tier: 'sidebar',
+    artist_groups: [{ artist: 'Artist', albums: [{ key: 'removed', name: 'Removed Album' }] }],
+    gallery_page: { offset: 0, next_offset: 6 },
+  });
+  await flushPromises();
+  assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), {
+    artist: 'Artist', album: 'Removed Album',
+  }).canonicalMatch, false);
+  assert.equal(observer.read().latestFullPayload, null);
+});
+
+test('partial search pages cannot seed retained family authority across root navigation', async () => {
+  const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const partial = request('http://127.0.0.1/view-data?surface=albums&q=Lead&category=main_library&payload_tier=sidebar');
+  page.emit('request', partial);
+  page.emit('response', response(partial, {
+    payload_tier: 'sidebar', selected_artist: 'Lead',
+    visible_library_categories: ['main_library'],
+    family_artist_groups: [{ artist: 'Partner', albums: [{ key: 'partner', name: 'Partner Solo' }] }],
+    gallery_page: { offset: 0, next_offset: 6 },
+  }));
+  page.emit('requestfinished', partial);
+  await flushPromises();
+  page.emit('request', request('http://127.0.0.1/view-data?surface=albums&category=main_library&payload_tier=sidebar'));
+  assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), {
+    artist: 'Partner', album: 'Partner Solo',
+  }).canonicalMatch, false, 'only a complete observed family scope may seed retained family authority');
+});
+
+test('a newer complete search replaces older family album authority in the same categories', async () => {
+  const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const originalTarget = { artist: 'Partner', album: 'Partner Solo' };
+  const replacementTarget = { artist: 'Replacement', album: 'Replacement Solo' };
+  for (const [query, target] of [['Lead', originalTarget], ['Replacement', replacementTarget]]) {
+    const current = request(`http://127.0.0.1/view-data?surface=albums&q=${query}&category=main_library`);
+    page.emit('request', current);
+    page.emit('response', response(current, {
+      payload_tier: 'full', query, selected_artist: query,
+      visible_library_categories: ['main_library'],
+      family_artist_groups: [{
+        artist: target.artist,
+        albums: [{ key: `${target.artist}::solo`, name: target.album }],
+      }],
+    }));
+    page.emit('requestfinished', current);
+    await flushPromises();
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, true);
+  }
+  assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), originalTarget).canonicalMatch, false,
+    'historical family presence cannot override a newer accepted complete response');
+  assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), replacementTarget).canonicalMatch, true);
+});
+
+test('production view observer retains current gallery continuation without full-view authority', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const current = request('http://127.0.0.1/view-data?payload_tier=sidebar&gallery_offset=12');
+  page.emit('request', current);
+  page.emit('response', response(current, { payload_tier: 'sidebar', gallery_page: { offset: 12, next_offset: 18 } }));
+  page.emit('requestfinished', current);
+  await flushPromises();
+  assert.deepEqual(observer.read().latestGalleryPage, { offset: 12, next_offset: 18 });
+  assert.equal(observer.read().latestFullPayload, null);
+});
+
+test('production gallery continuation rejects stale filter and document responses', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const older = request('http://127.0.0.1/view-data?payload_tier=sidebar&gallery_offset=12');
+  const newer = request('http://127.0.0.1/view-data?q=Neal');
+  page.emit('request', older);
+  page.emit('request', newer);
+  page.emit('response', response(newer, { payload_tier: 'full' }));
+  page.emit('response', response(older, { payload_tier: 'sidebar', gallery_page: { offset: 12, next_offset: 18 } }));
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPage, null);
+  page.emit('documentcommitted');
+  page.emit('response', response(older, { gallery_page: { offset: 12, next_offset: 18 } }));
+  await flushPromises();
+  assert.equal(observer.read().latestGalleryPage, null);
+});
+
+test('unrelated surface and sidebar-only responses preserve gallery continuation', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const gallery = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar');
+  page.emit('request', gallery);
+  page.emit('response', response(gallery, { gallery_page: { offset: 12, next_offset: 18 } }));
+  page.emit('requestfinished', gallery);
+  await flushPromises();
+  const sidebar = request('http://127.0.0.1/view-data?surface=artists&payload_tier=sidebar');
+  page.emit('request', sidebar);
+  assert.equal(observer.read().galleryBusy, false);
+  page.emit('response', response(sidebar, { artists_sidebar: [] }));
+  page.emit('requestfinished', sidebar);
+  await flushPromises();
+  assert.deepEqual(observer.read().latestGalleryPage, { offset: 12, next_offset: 18 });
+});
+
+for (const replacement of ['sidebar', 'completed mutation']) {
+  test(`pending bootstrap family read cannot survive newer ${replacement}`, async () => {
+    const { events, observer, gallery, bootstrap, target } = await committedFamilyGallery();
+    const { readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+    events.emit('documentcommitted');
+    let resolveBootstrap;
+    let markReadStarted;
+    const readStarted = new Promise((resolve) => { markReadStarted = resolve; });
+    gallery.readProductionBootstrapPayload = () => {
+      markReadStarted();
+      return new Promise((resolve) => { resolveBootstrap = resolve; });
+    };
+    const pendingState = gallery.readAlbumTargetState(target);
+    await readStarted;
+    const current = request(replacement === 'sidebar'
+      ? 'http://localhost/view-data?surface=albums&category=main_library&payload_tier=sidebar'
+      : 'http://localhost/utilities/save-task/bootstrap-race');
+    events.emit('request', current);
+    events.emit('response', response(current, replacement === 'sidebar'
+      ? { payload_tier: 'sidebar', visible_library_categories: ['main_library'], artist_groups: [] }
+      : { ok: true, status: 'completed', updated_albums: [] }));
+    events.emit('requestfinished', current);
+    await flushPromises();
+    resolveBootstrap(bootstrap);
+    const staleState = await pendingState;
+    assert.equal(staleState.canonicalApplied, false,
+      'a bootstrap read crossed by a newer response cannot establish applied presence');
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, false,
+      'stale bootstrap family identities must not enter retained observer evidence');
+    assert.equal((await gallery.readAlbumTargetState(target)).canonicalMatch, false);
+    assert.equal(observer.read().canonicalScopeComplete, false);
+  });
+}
+
+for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
+  test(`gallery continuation surfaces ${failure} instead of exhaustion`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const current = request('http://127.0.0.1/view-data?surface=albums&payload_tier=sidebar&gallery_offset=18');
+    page.emit('request', current);
+    if (failure === 'requestfailed') page.emit('requestfailed', current);
+    else {
+      page.emit('response', response(current, null, failure === 'HTTP 500'
+        ? { ok: false, status: 500 }
+        : { json: async () => { throw new Error('invalid JSON'); } }));
+      page.emit('requestfinished', current);
+    }
+    await flushPromises();
+    assert.match(observer.read().latestGalleryPageError, failure === 'requestfailed' ? /Request failed/ : new RegExp(failure));
+    assert.equal(observer.read().galleryBusy, false);
+    page.emit('request', request('http://127.0.0.1/view-data?q=New'));
+    page.emit('response', response(current, null, { ok: false, status: 500 }));
+    page.emit('requestfailed', current);
+    await flushPromises();
+    assert.equal(observer.read().latestGalleryPageError, null, 'old failures must not poison the newer filter');
+    page.emit('documentcommitted');
+    page.emit('requestfailed', current);
+    assert.equal(observer.read().latestGalleryPageError, null, 'old failures must not poison the newer document');
+  });
+}
+
+test('topology authority separates append activity, replacement, and canonical saves', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  async function deliver(url, payload) {
+    const req = request(url);
+    page.emit('request', req);
+    page.emit('response', response(req, payload));
+    page.emit('requestfinished', req);
+    await flushPromises();
+  }
+  const group = { artist: 'Rarity Artist', albums: [{ name: 'Album', year: 2002 }] };
+  await deliver('http://localhost/view-data?surface=albums', { artist_groups: [group] });
+  const original = observer.read();
+  assert.equal(typeof original.topologyRevision, 'number');
+  await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar&gallery_offset=6', {
+    artist_groups: [{ artist: 'Other', albums: [] }], gallery_page: { offset: 6, next_offset: 12 },
+  });
+  assert.equal(observer.read().topologyRevision, original.topologyRevision);
+  assert.equal(observer.read().galleryArtistTopologies['Rarity Artist'], original.galleryArtistTopologies['Rarity Artist']);
+  assert.ok(observer.read().stateRevision > original.stateRevision);
+  await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar&gallery_offset=12', {
+    artist_groups: [{ ...group, albums: [...group.albums, { name: 'Album', year: 2014 }] }],
+  });
+  assert.notEqual(observer.read().galleryArtistTopologies['Rarity Artist'], original.galleryArtistTopologies['Rarity Artist']);
+  await deliver('http://localhost/utilities/save-task/save1', completedSaveTaskPayload({ key: 'new', name: 'New Album' }));
+  const saved = observer.read();
+  assert.ok(saved.topologyRevision > original.topologyRevision);
+  await deliver('http://localhost/utilities/save-task/save1', { ...completedSaveTaskPayload({ key: 'new', name: 'New Album' }), elapsed_ms: 100 });
+  assert.equal(observer.read().topologyRevision, saved.topologyRevision, 'Repeated completed polls are not new authority');
+  await deliver('http://localhost/view-data?surface=albums&payload_tier=sidebar', { artist_groups: [] });
+  assert.ok(observer.read().topologyRevision > saved.topologyRevision);
+  assert.equal(observer.read().latestFullPayload, null, 'A replacement cannot retain pre-save full authority');
+  assert.equal(observer.read().allowBootstrapFallback, false);
+  const replaced = observer.read().topologyRevision;
+  page.emit('documentcommitted');
+  assert.ok(observer.read().topologyRevision > replaced);
+});
+
+for (const offset of [0, 12]) {
+test(`sidebar scope change at offset ${offset} rejects delayed full responses and foreign-filter mutation authority`, async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const full = request('http://localhost/view-data?surface=albums&q=old');
+  page.emit('request', full);
+  const save = request('http://localhost/utilities/save-task/old');
+  page.emit('request', save);
+  page.emit('response', response(save, completedSaveTaskPayload({ key: 'old', name: 'Old' })));
+  page.emit('requestfinished', save);
+  await flushPromises();
+  page.emit('request', request(`http://localhost/view-data?surface=albums&payload_tier=sidebar&q=new&gallery_offset=${offset}`));
+  page.emit('response', response(full, { artist_groups: [{ artist: 'Old', albums: [] }] }));
+  page.emit('requestfinished', full);
+  await flushPromises();
+  assert.equal(observer.read().latestFullPayload, null);
+  assert.deepEqual(observer.read().completedCanonicalMutationPayloads, []);
+});
+}
+
 function request(url, method = 'GET') {
   return {
     method: () => method,
     url: () => url,
   };
+}
+
+for (const required of [false, true]) {
+  test(`committed bootstrap-only gallery preserves startup hydration required=${required}`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
+    const events = new FakePage();
+    const observer = new ProductionViewObserver(events, events);
+    assert.equal(observer.read().allowBootstrapFallback, false, 'uncommitted documents have no authority');
+    events.emit('documentcommitted');
+    const gallery = Object.create(GalleryPage.prototype);
+    gallery.productionViewObserver = observer;
+    gallery.readProductionBootstrapPayload = async () => ({
+      bootstrap: { startupHydration: { required, tier: 'full', trigger: required ? 'immediate' : 'none' } },
+      initial_view: {
+        payload_tier: 'full', query: '',
+        artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'Album' }] }],
+      },
+    });
+    gallery.page = { locator: () => ({ count: async () => 0 }), url: () => 'http://localhost/' };
+    gallery.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 1 }) };
+    gallery.libraryLoader = { isVisible: async () => false };
+    gallery.artistHeadings = { allTextContents: async () => ['Artist'] };
+
+    const state = await gallery.readAlbumTargetState({ artist: 'Artist', album: 'Album' });
+    assert.equal(state.canonicalMatch, true, 'current inline payload proves the exact album');
+    assert.equal(state.canonicalApplied, true);
+    assert.equal(state.busy, false);
+    assert.equal(state.startupHydrating, required, 'DOM settlement cannot override required hydration');
+    assert.equal(observer.read().latestFullPayload, null, 'bootstrap is not an observed AJAX response');
+    assert.equal(observer.read().canonicalScopeComplete, false, 'eligibility alone cannot prove absence');
+  });
+}
+
+async function committedFamilyGallery() {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
+  const events = new FakePage();
+  const observer = new ProductionViewObserver(events, events);
+  events.emit('documentcommitted');
+  const bootstrap = {
+    bootstrap: { startupHydration: { required: false, tier: 'full', trigger: 'none' } },
+    initial_view: {
+      payload_tier: 'full', query: 'Lead Solo', visible_library_categories: ['main_library'],
+      family_artist_groups: [{ artist: 'Partner', albums: [{ key: 'partner-solo', name: 'Partner Solo' }] }],
+    },
+  };
+  const gallery = Object.create(GalleryPage.prototype);
+  gallery.productionViewObserver = observer;
+  gallery.readProductionBootstrapPayload = async () => bootstrap;
+  gallery.page = {
+    locator: () => ({ count: async () => 0 }),
+    url: () => 'http://localhost/?category=main_library',
+  };
+  gallery.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 1 }) };
+  gallery.libraryLoader = { isVisible: async () => false };
+  gallery.artistHeadings = { allTextContents: async () => ['Partner'] };
+  const target = { artist: 'Partner', album: 'Partner Solo' };
+  assert.equal((await gallery.readAlbumTargetState(target)).canonicalMatch, true);
+  return { events, observer, gallery, bootstrap, target };
+}
+
+test('committed bootstrap family presence survives sidebar replacement without absence authority', async () => {
+  const { events, observer, gallery, target } = await committedFamilyGallery();
+  const sidebar = request('http://localhost/view-data?surface=albums&category=main_library&payload_tier=sidebar');
+  events.emit('request', sidebar);
+  events.emit('response', response(sidebar, {
+    payload_tier: 'sidebar', query: '', selected_artist: '',
+    visible_library_categories: ['main_library'],
+    artist_groups: [{ artist: 'Other', albums: [{ key: 'other', name: 'Other Album' }] }],
+    gallery_page: { offset: 0, next_offset: 6 },
+  }));
+  events.emit('requestfinished', sidebar);
+  await flushPromises();
+
+  const state = await gallery.readAlbumTargetState(target);
+  assert.equal(state.canonicalMatch, true, 'cached member must retain observed server identity');
+  assert.equal(state.canonicalApplied, true);
+  assert.equal(state.pendingViewTransition, false);
+  assert.equal(state.startupHydrating, false);
+  assert.equal(state.canonicalScopeComplete, false, 'cached family is never complete root evidence');
+  assert.equal(observer.read().latestFullPayload, null);
+  assert.equal((await gallery.readAlbumTargetState({ artist: 'Partner', album: 'Unknown Album' })).canonicalMatch, false);
+
+  const next = request('http://localhost/view-data?surface=albums&category=main_library&payload_tier=sidebar&gallery_offset=6');
+  events.emit('request', next);
+  events.emit('response', response(next, {
+    payload_tier: 'sidebar',
+    artist_groups: [{ artist: 'Next Artist', albums: [{ key: 'next', name: 'Next Album' }] }],
+    gallery_page: { offset: 6, next_offset: 12 },
+  }));
+  events.emit('requestfinished', next);
+  await flushPromises();
+  const { readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+  assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), { artist: 'Next Artist', album: 'Next Album' }).canonicalMatch, true);
+  assert.equal((await gallery.readAlbumTargetState(target)).canonicalMatch, true);
+  assert.equal(observer.read().canonicalScopeComplete, false);
+});
+
+for (const invalidation of ['category', 'document', 'completed mutation']) {
+  test(`committed bootstrap cached family presence is revoked by ${invalidation}`, async () => {
+    const { events, gallery, bootstrap, target } = await committedFamilyGallery();
+    if (invalidation === 'document') {
+      bootstrap.initial_view = { payload_tier: 'full', artist_groups: [] };
+      events.emit('documentcommitted');
+    } else {
+      const current = request(invalidation === 'category'
+        ? 'http://localhost/view-data?surface=albums&category=hoard&payload_tier=sidebar'
+        : 'http://localhost/utilities/save-task/family-mutation');
+      events.emit('request', current);
+      events.emit('response', response(current, invalidation === 'category'
+        ? { payload_tier: 'sidebar', visible_library_categories: ['hoard'], artist_groups: [] }
+        : { ok: true, status: 'completed', updated_albums: [] }));
+      events.emit('requestfinished', current);
+      await flushPromises();
+    }
+    assert.equal((await gallery.readAlbumTargetState(target)).canonicalMatch, false);
+  });
+}
+
+for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
+  test(`committed bootstrap cached family cannot mask sidebar ${failure}`, async () => {
+    const { events, gallery, target } = await committedFamilyGallery();
+    const current = request('http://localhost/view-data?surface=albums&category=main_library&payload_tier=sidebar');
+    events.emit('request', current);
+    if (failure === 'requestfailed') events.emit('requestfailed', current);
+    else {
+      events.emit('response', response(current, null, failure === 'HTTP 500'
+        ? { ok: false, status: 500 }
+        : { json: async () => { throw new Error('invalid JSON'); } }));
+      events.emit('requestfinished', current);
+    }
+    await flushPromises();
+    await assert.rejects(() => gallery.readAlbumTargetState(target),
+      failure === 'requestfailed' ? /Request failed/ : new RegExp(failure));
+  });
+}
+
+for (const endpoint of ['/view-data', '/view-data?payload_tier=sidebar', '/home-data', '/utilities/save-task/current']) {
+  test(`current document ${endpoint} invalidates bootstrap fallback at request start`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    page.emit('documentcommitted');
+    assert.equal(observer.read().allowBootstrapFallback, true);
+    const current = request(`http://localhost${endpoint}`);
+    page.emit('request', current);
+    assert.equal(observer.read().allowBootstrapFallback, false);
+    assert.equal(observer.read().activeRequestCount, 1);
+    page.emit('requestfinished', current);
+    assert.equal(observer.read().allowBootstrapFallback, false, 'request completion cannot revive inline state');
+  });
+}
+
+test('late outgoing payload reads cannot become current bootstrap document authority', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const outgoing = request('http://localhost/view-data?q=Outgoing');
+  let resolveBody;
+  page.emit('request', outgoing);
+  page.emit('response', response(outgoing, null, { json: () => new Promise((resolve) => { resolveBody = resolve; }) }));
+  page.emit('documentcommitted');
+  resolveBody({ payload_tier: 'full', query: 'Outgoing', artist_groups: [{ artist: 'Outgoing', albums: [] }] });
+  page.emit('requestfinished', outgoing);
+  await flushPromises();
+  assert.equal(observer.read().allowBootstrapFallback, true);
+  assert.equal(observer.read().latestFullPayload, null);
+  assert.deepEqual(observer.read().observedGalleryGroups, []);
+  assert.equal(observer.read().latestFullPayloadError, null);
+  assert.equal(observer.read().activeRequestCount, 0);
+  assert.equal(observer.read().pendingPayloadReadCount, 0);
+});
+
+for (const failure of ['HTTP 500', 'invalid JSON', 'requestfailed']) {
+  test(`current bootstrap document ${failure} cannot fall back to inline payload`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    page.emit('documentcommitted');
+    const current = request('http://localhost/view-data?q=Current');
+    page.emit('request', current);
+    if (failure === 'requestfailed') page.emit('requestfailed', current);
+    else {
+      page.emit('response', response(current, null, failure === 'HTTP 500'
+        ? { ok: false, status: 500 }
+        : { json: async () => { throw new Error('invalid JSON'); } }));
+      page.emit('requestfinished', current);
+    }
+    await flushPromises();
+    assert.equal(observer.read().allowBootstrapFallback, false);
+    assert.equal(observer.read().latestFullPayload, null);
+    assert.match(observer.read().latestFullPayloadError, failure === 'requestfailed' ? /Request failed/ : new RegExp(failure));
+  });
 }
 
 function documentRequest(url) {
@@ -638,6 +1262,38 @@ test('an older save response cannot replace a newer save response that completed
     artist: 'Rarity Artist',
   }).canonicalMatch, false);
 });
+
+for (const [kind, updatedAlbums] of [
+  ['empty', []],
+  ['malformed', [{ album_artist: 'Rarity Artist', name: 'Unidentified Destination' }]],
+]) {
+  test(`a ${kind} completed mutation invalidates older completed-save album authority`, async () => {
+    const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const original = request('http://127.0.0.1/utilities/save-task/original-destination');
+    page.emit('request', original);
+    page.emit('response', response(original, completedSaveTaskPayload({
+      key: 'rarity artist::original destination', name: 'Original Destination',
+    })));
+    page.emit('requestfinished', original);
+    await flushPromises();
+    const target = { artist: 'Rarity Artist', album: 'Original Destination' };
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, true);
+
+    const later = request(`http://127.0.0.1/utilities/save-task/${kind}-mutation`);
+    page.emit('request', later);
+    page.emit('response', response(later, {
+      ok: true, status: 'completed', updated_albums: updatedAlbums,
+    }));
+    page.emit('requestfinished', later);
+    await flushPromises();
+    assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, false,
+      'a completed write without usable destinations must not leave old mutation evidence authoritative');
+    assert.equal(observer.read().latestCompletedSaveTaskPayload, null);
+    assert.deepEqual(observer.read().completedCanonicalMutationPayloads, []);
+  });
+}
 
 test('pending, failed, malformed, and non-2xx save-task responses never become canonical evidence', async () => {
   const { ProductionViewObserver, readCanonicalAlbumTargetEvidence } = await import(observerUrl);

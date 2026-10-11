@@ -10,6 +10,39 @@ const activeErrorToasts = new Map();
 const floatingNotifications = new Map();
 let floatingNotificationCleanup = null;
 let floatingNotificationFrame = null;
+const NOTIFICATION_COLLISION_SURFACE_SELECTOR = '.app-bar, .global-player, [role="dialog"], [aria-modal="true"]';
+const NOTIFICATION_MODAL_CONTROL_SELECTOR = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
+
+function isNotificationModalSurface(node) {
+  const ariaModal = node?.getAttribute?.('aria-modal');
+  return node?.getAttribute?.('role') === 'dialog'
+    || (ariaModal != null && ariaModal !== 'false');
+}
+
+function notificationSurfaceIsHidden(node) {
+  return Boolean(node?.hidden || node?.closest?.('[hidden], [inert], [aria-hidden="true"]'));
+}
+
+function getNotificationCollisionNodes() {
+  const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
+  const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
+  const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
+  if (activeModal) fixed.push(...Array.from(activeModal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
+    .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
+  return fixed;
+}
+
+function getNotificationObservationTargets() {
+  const targets = new Set();
+  for (const surface of Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || [])) {
+    targets.add(surface);
+    if (isNotificationModalSurface(surface) && surface.parentElement
+        && surface.parentElement !== document.body && surface.parentElement !== document.documentElement) {
+      targets.add(surface.parentElement);
+    }
+  }
+  return targets;
+}
 
 function findClearNotificationPosition(size, preferred, viewport, obstacles, gap = 8) {
   const left = viewport.left + gap, top = viewport.top + gap;
@@ -62,23 +95,12 @@ function placeFloatingNotifications() {
   const viewport = { left: visual?.offsetLeft || 0, top: visual?.offsetTop || 0 };
   viewport.right = viewport.left + (visual?.width || window.innerWidth);
   viewport.bottom = viewport.top + (visual?.height || window.innerHeight);
-  const isNotification = node => [...floatingNotifications.keys()].some(root => root === node || root.contains(node));
-  const selector = 'button, a[href], input:not([type="hidden"]), select, textarea, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"]), [data-loop-range-surface], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"]';
-  const obstacles = [];
-  document.querySelectorAll(selector).forEach(node => {
-    if (isNotification(node) || node.matches(':disabled') || node.closest('[inert], [hidden], [aria-hidden="true"], [aria-disabled="true"]')) return;
-    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
-    // Transparent range inputs still receive pointer input over their waveform canvas.
-    if (style.visibility !== 'visible' || !rect.width || !rect.height) return;
+  const obstacles = getNotificationCollisionNodes().flatMap(node => {
+    const rect = node.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) return [];
     const left = Math.max(viewport.left, rect.left), right = Math.min(viewport.right, rect.right);
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
-    if (right <= left || bottom <= top) return;
-    const points = [[(left + right) / 2, (top + bottom) / 2], [left + 1, top + 1], [right - 1, top + 1], [left + 1, bottom - 1], [right - 1, bottom - 1]];
-    const visible = points.some(([x, y]) => {
-      const hit = document.elementsFromPoint(x, y).find(element => !isNotification(element));
-      return hit && (hit === node || node.contains(hit));
-    });
-    if (visible) obstacles.push({ left, right, top, bottom });
+    return right > left && bottom > top ? [{ left, right, top, bottom }] : [];
   });
   for (const [node, entry] of floatingNotifications) {
     if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
@@ -87,8 +109,8 @@ function placeFloatingNotifications() {
       node.style.setProperty('--notification-available-width', availableWidth);
     }
     let size = { width: node.offsetWidth, height: node.offsetHeight };
-    const centered = entry.origin === 'top-center';
-    const bottom = entry.origin === 'bottom-right';
+    const centered = entry.lane === 'top-center';
+    const bottom = entry.lane === 'bottom-right';
     const playerHeight = entry.abovePlayer ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-height')) || 0 : 0;
     const preferred = {
       left: centered ? viewport.left + (viewport.right - viewport.left - size.width) / 2 : viewport.right - size.width - 16,
@@ -128,17 +150,19 @@ function placeFloatingNotifications() {
 
 function registerFloatingNotification(node, options = {}) {
   // Keep notification delivery available when the host has no geometry APIs.
-  if (!node?.getBoundingClientRect || !document.elementsFromPoint) { options.onPlaced?.(); return; }
-  floatingNotifications.set(node, { origin: 'top-right', ...options });
+  if (!node?.getBoundingClientRect || !document.querySelectorAll) { options.onPlaced?.(); return; }
+  const lane = options.lane || 'top-right';
+  floatingNotifications.set(node, { ...options, lane });
   node.classList.add('floating-notification-positioned');
+  node.setAttribute('data-notification-lane', lane);
   node.setAttribute('data-notification-deferred', '');
   if (!floatingNotificationCleanup) {
-    const insideNotification = target => [...floatingNotifications.keys()].some(root => root === target || root.contains(target));
-    const mutation = new MutationObserver(records => {
-      if (records.some(record => !insideNotification(record.target))) scheduleFloatingNotificationPlacement();
-    });
-    mutation.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'disabled', 'aria-disabled', 'aria-hidden'] });
+    const mutation = new MutationObserver(scheduleFloatingNotificationPlacement);
     const resize = new ResizeObserver(scheduleFloatingNotificationPlacement);
+    for (const target of getNotificationObservationTargets()) {
+      mutation.observe(target, { attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'aria-modal'] });
+      resize.observe(target);
+    }
     floatingNotifications.forEach((_entry, root) => resize.observe(root));
     const targets = [[window, 'resize'], [document, 'scroll'], [document, 'load'], [document.fonts, 'loadingdone'], [window.visualViewport, 'resize'], [window.visualViewport, 'scroll'], [document, 'transitionend'], [document, 'animationend']].filter(([target]) => target);
     targets.forEach(([target, event]) => target.addEventListener(event, scheduleFloatingNotificationPlacement, true));
@@ -157,6 +181,7 @@ function unregisterFloatingNotification(node) {
   floatingNotificationCleanup?.resize.unobserve(node);
   floatingNotifications.delete(node);
   node?.classList?.remove('floating-notification-positioned');
+  node?.removeAttribute?.('data-notification-lane');
   node?.removeAttribute?.('data-notification-deferred');
   if (!floatingNotifications.size) { floatingNotificationCleanup?.dispose(); floatingNotificationCleanup = null; }
   else scheduleFloatingNotificationPlacement();
@@ -192,9 +217,10 @@ async function dismissLibraryWatcherWarning(button) {
       const response = await fetch('/account/library-warning/dismiss', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
       });
-      if (!response.ok) throw new Error(response.status === 409
-        ? 'The library warning changed. Please review the latest warning.'
-        : 'Unable to dismiss the warning. Please try again.');
+      if (!response.ok) {
+        if (response.status === 409) return false;
+        throw new Error('Unable to dismiss the warning. Please try again.');
+      }
       state.ui.dismissedLibraryWarningToken = token;
       if (libraryWatcherHealth?.warning_token === token) {
         libraryWatcherHealth = { ...libraryWatcherHealth, dismissed: true };
@@ -251,21 +277,33 @@ function syncLibraryWatcherWarning(data = {}) {
     const openLibrary = event.target.closest('[data-watcher-library]');
     const button = dismiss || openLibrary;
     if (!button || button.disabled) return;
-    if (await dismissLibraryWatcherWarning(button) && openLibrary) {
+    if (openLibrary) {
       closeUtilityModal();
       openScanPage();
       syncScanLibraryWatcherHealth();
+      return;
     }
+    await dismissLibraryWatcherWarning(button);
   });
   layer.appendChild(libraryWatcherWarning);
-  registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
+  registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
-function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '', compact = false) {
+function buildFloatingNotificationAlertHtml(
+  message,
+  variant,
+  actionsHtml = '',
+  messageId = '',
+  compact = false,
+  title = '',
+) {
   const severity = normalizeAlertSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
-    title: compact ? '' : severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    title: compact
+      ? ''
+      : String(title || '').trim()
+        || (severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update'),
     message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
     className: compact ? 'on-page-alert--compact' : '',
   });
@@ -289,7 +327,7 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');
@@ -308,13 +346,26 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   const capabilities = typeof window !== 'undefined' ? window.AlbumHavenCapabilities : null;
   const showLogHistoryLink = options.logHistoryLink === true
     && (!capabilities || capabilities.allows('library.logs.read'));
-  const actionsHtml = ButtonComponent.renderButton({
-    label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
-  }) + ButtonComponent.renderButton({
-    label: 'Dismiss', className: 'on-page-alert__dismiss',
-    attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
-  });
-  alert.innerHTML = buildFloatingNotificationAlertHtml(options.html ? '' : message, variant, actionsHtml, 'repair-alert-message');
+  const actions = [];
+  if (showLogHistoryLink) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
+    }));
+  }
+  if (options.dismissible !== false) {
+    actions.push(ButtonComponent.renderButton({
+      label: 'Dismiss', className: 'on-page-alert__dismiss',
+      attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
+    }));
+  }
+  alert.innerHTML = buildFloatingNotificationAlertHtml(
+    options.html ? '' : message,
+    variant,
+    actions.join(''),
+    'repair-alert-message',
+    false,
+    options.title,
+  );
   const messageEl = document.getElementById('repair-alert-message');
   const logHistoryLink = document.getElementById('repair-alert-log-history');
   if (!messageEl) return;
@@ -342,7 +393,7 @@ function showRepairAlert(message, variant = 'success', duration = 2000, options 
   alert.hidden = false;
   state.repairAlertPresentationVersion = Number(state.repairAlertPresentationVersion || 0) + 1;
   const presentationVersion = state.repairAlertPresentationVersion;
-  registerFloatingNotification(alert, { origin: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
+  registerFloatingNotification(alert, { lane: showLogHistoryLink ? 'top-center' : 'bottom-right', abovePlayer: !showLogHistoryLink, onPlaced() {
     scheduleBrowserAnimationFrame(() => {
       if (state.repairAlertPresentationVersion !== presentationVersion) return;
       alert.classList.add('is-visible');

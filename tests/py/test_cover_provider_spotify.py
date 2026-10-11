@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import urllib.error
+from contextlib import nullcontext
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +32,31 @@ def _config(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_automatic_spotify_issues_at_most_two_album_queries_without_artist_fallback(spotify):
+    calls = []
+    result = spotify.search_spotify(
+        "Artist", "Album", None, 2001, "AlbumHavenTests/1.0",
+        automatic=True, max_queries=2,
+        config=_config(), api_enabled=lambda: True,
+        global_rate_limit_active=lambda: False,
+        reset_rate_limit_state=lambda: None,
+        rate_limited=lambda: False,
+        search_timed_out=lambda _started: False,
+        build_query_variants=lambda *_args: [
+            ("Artist", "Album", None, 2001),
+            ("Normalized Artist", "Album", None, 2001),
+        ],
+        collect_album_matches=lambda query, **_kwargs: (calls.append(query) or [], []),
+        collect_artist_album_matches=lambda *_args, **_kwargs: pytest.fail("automatic artist graph is too slow"),
+        select_largest_candidate=lambda **_kwargs: None,
+        log_event=None,
+    )
+
+    assert result is None
+    assert len(calls) == 2
+    assert "Normalized Artist" in calls[1]
 
 
 def test_access_token_uses_client_credentials_headers_and_cache(spotify, monkeypatch):
@@ -87,6 +114,17 @@ def test_access_token_missing_credentials_logs_and_skips_request(spotify):
     ]
 
 
+def test_queued_automatic_request_rechecks_latest_spotify_cooldown(spotify, monkeypatch):
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget
+
+    monkeypatch.setattr(spotify.time, "time", lambda: 200.0)
+    monkeypatch.setattr(spotify, "spotify_wait_for_request_slot", lambda: spotify.spotify_apply_retry_after(12.0))
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("Cooldown must prevent transport"))
+    with automatic_cover_budget(30.0), pytest.raises(AutomaticCoverSearchFailed) as failure:
+        spotify.spotify_request_json("https://api.spotify.com/v1/search", method="GET", headers={}, log_event=None)
+    assert failure.value.retry_at == 212.0
+
+
 def test_request_json_marks_thread_local_and_global_cooldown_on_429(spotify, monkeypatch):
     class Headers:
         def get(self, name):
@@ -119,6 +157,66 @@ def test_request_json_marks_thread_local_and_global_cooldown_on_429(spotify, mon
     with spotify._SPOTIFY_REQUEST_PACING_LOCK:
         assert spotify._SPOTIFY_REQUEST_PACING["rate_limited_until"] == pytest.approx(207.0)
     assert "Spotify API request failed" in events
+
+
+def test_automatic_429_logs_failure_body_and_cooldown_before_deferral(spotify, monkeypatch):
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget
+
+    error = urllib.error.HTTPError("https://api.spotify.com/v1/search", 429, "quota", {"Retry-After": "7"}, BytesIO(b'{"error":"quota"}'))
+    events = []
+    monkeypatch.setattr(spotify.time, "time", lambda: 200.0)
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    with automatic_cover_budget(30), pytest.raises(AutomaticCoverSearchFailed):
+        spotify.spotify_request_json(error.url, method="GET", headers={}, log_event=lambda _config, _logger, action, **fields: events.append((action, fields)))
+    failure = next(fields for action, fields in events if action == "Spotify API request failed")
+    assert failure["error_body"] == '{"error":"quota"}'
+    assert failure["status"] == 429
+    assert failure["retry_at"] == 207.0
+    assert failure["retry_after_seconds"] == 7.0
+
+
+def test_manual_queued_request_preserves_transport_behavior(spotify, monkeypatch):
+    from contextlib import closing
+
+    monkeypatch.setattr(spotify.time, "time", lambda: 200.0)
+    monkeypatch.setattr(spotify, "spotify_wait_for_request_slot", lambda: spotify.spotify_apply_retry_after(12.0))
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", lambda *_args, **_kwargs: closing(BytesIO(b'{"ok":true}')))
+    assert spotify.spotify_request_json("https://api.spotify.com/v1/search", method="GET", headers={}, log_event=None) == {"ok": True}
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500])
+@pytest.mark.parametrize("automatic", [False, True])
+def test_request_json_http_errors_are_not_automatic_no_matches(spotify, monkeypatch, status, automatic):
+    from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget
+
+    error = urllib.error.HTTPError(
+        "https://api.spotify.com/v1/search", status, "Request rejected", {},
+        BytesIO(b'{"error":{"message":"Request rejected"}}'),
+    )
+
+    def reject_request(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(spotify.urllib.request, "urlopen", reject_request)
+    with automatic_cover_budget(5.0) if automatic else nullcontext():
+        if automatic:
+            with pytest.raises(AutomaticCoverSearchFailed):
+                spotify.spotify_request_json(error.url, method="GET", headers={}, log_event=None)
+        else:
+            assert spotify.spotify_request_json(error.url, method="GET", headers={}, log_event=None) is None
+
+
+def test_request_json_valid_empty_automatic_search_remains_successful(spotify, monkeypatch):
+    from music_app.services.cover_provider_deadline import automatic_cover_budget
+
+    monkeypatch.setattr(
+        spotify.urllib.request, "urlopen",
+        lambda *_args, **_kwargs: BytesIO(b'{"albums":{"items":[]}}'),
+    )
+    with automatic_cover_budget(5.0):
+        assert spotify.spotify_request_json(
+            "https://api.spotify.com/v1/search", method="GET", headers={}, log_event=None,
+        ) == {"albums": {"items": []}}
 
 
 def test_market_is_sent_to_search_artist_albums_and_album_link_fetch(spotify, monkeypatch):

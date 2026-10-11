@@ -17,6 +17,14 @@ const buttonStylesPath = path.join(
   'css',
   'button-component.css',
 );
+const playerLayoutStylesPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'runtime',
+  'shell-persistent-player.css',
+);
 const buttonRuntimePath = path.join(
   repositoryRoot,
   'music_app',
@@ -179,4 +187,100 @@ await expect(stopIcon).toHaveCSS('stroke-width', '1.8px');
 await expect(stopIcon).toHaveCSS('fill', 'none');
 
 });
+}
+
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844, playerHeight: 92 },
+  { name: 'desktop', width: 1280, height: 900, playerHeight: 76 },
+]) {
+  test(`cover lookup drawer keeps full cards in a bounded scrolling lane on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.setContent(`<!doctype html>
+      <html style="--player-height:${viewport.playerHeight}px">
+        <body>
+          <button id="cover-lookup-drawer-button"></button>
+          <span id="cover-lookup-drawer-badge"></span>
+          <aside class="cover-lookup-drawer" id="cover-lookup-drawer" hidden>
+            <div class="cover-lookup-drawer-header">
+              <div>
+                <h3 class="cover-lookup-drawer-title">Cover lookups</h3>
+                <div class="cover-lookup-drawer-subtitle" id="cover-lookup-drawer-summary"></div>
+              </div>
+              <button id="cover-lookup-drawer-clear"></button>
+            </div>
+            <div class="cover-lookup-drawer-body" id="cover-lookup-drawer-body"></div>
+          </aside>
+          <footer class="global-player" style="height:${viewport.playerHeight}px"></footer>
+        </body>
+      </html>`);
+    await page.addStyleTag({ content: '* { box-sizing: border-box; } body { margin: 0; }' });
+    await page.addStyleTag({ path: cardStylesPath });
+    await page.addStyleTag({ path: buttonStylesPath });
+    await page.addStyleTag({ path: playerLayoutStylesPath });
+    await page.evaluate(() => {
+      window.state = {
+        coverLookup: {
+          drawerOpen: true,
+          elapsedTimer: 0,
+          modal: { taskId: '' },
+          pollingTimer: 0,
+          tasks: Array.from({ length: 24 }, (_, index) => ({
+            id: `completed-${index}`,
+            status: 'completed',
+            artist: `Artist ${index}`,
+            album: `Album ${index}`,
+            year: 2000 + index,
+            progress: 100,
+            album_payload: { album_artist: `Artist ${index}`, name: `Album ${index}` },
+          })),
+        },
+      };
+      window.escapeHtml = (value) => String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+      window.formatCoverLookupTaskElapsedLabel = () => 'Took 1m';
+      window.scheduleBrowserTimeout = (callback, delay) => window.setTimeout(callback, delay);
+    });
+    await page.addScriptTag({ path: buttonRuntimePath });
+    await page.addScriptTag({ path: drawerRuntimePath });
+    await page.evaluate(() => renderCoverLookupDrawer());
+
+    const drawer = page.locator('#cover-lookup-drawer');
+    const body = page.locator('#cover-lookup-drawer-body');
+    const cards = body.locator('.cover-lookup-task-card');
+    await expect(cards).toHaveCount(24);
+    await expect(cards.first().locator('.cover-lookup-task-title')).toBeVisible();
+    await expect(cards.first()).toHaveCSS('min-height', '66px');
+
+    const geometry = await page.evaluate(() => {
+      const drawerElement = document.getElementById('cover-lookup-drawer');
+      const bodyElement = document.getElementById('cover-lookup-drawer-body');
+      const player = document.querySelector('.global-player');
+      const firstCard = bodyElement.querySelector('.cover-lookup-task-card');
+      const drawerBox = drawerElement.getBoundingClientRect();
+      const playerBox = player.getBoundingClientRect();
+      const firstCardBox = firstCard.getBoundingClientRect();
+      return {
+        drawerBottom: drawerBox.bottom,
+        playerTop: playerBox.top,
+        bodyClientHeight: bodyElement.clientHeight,
+        bodyScrollHeight: bodyElement.scrollHeight,
+        bodyOverflowY: getComputedStyle(bodyElement).overflowY,
+        firstCardHeight: firstCardBox.height,
+      };
+    });
+    expect(geometry.drawerBottom).toBeCloseTo(geometry.playerTop, 0);
+    expect(geometry.bodyOverflowY).toBe('auto');
+    expect(geometry.bodyScrollHeight).toBeGreaterThan(geometry.bodyClientHeight);
+    expect(geometry.firstCardHeight).toBeGreaterThanOrEqual(66);
+
+    await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await expect(cards.last()).toBeInViewport();
+    const lastCardBottom = await cards.last().evaluate(element => element.getBoundingClientRect().bottom);
+    expect(lastCardBottom).toBeLessThanOrEqual(geometry.playerTop);
+    await expect(drawer).toBeVisible();
+  });
 }

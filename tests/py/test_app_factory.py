@@ -592,7 +592,7 @@ def test_create_asgi_app_lifespan_starts_and_stops_cover_preview_backfill(
     assert calls[0][2] is asgi_app.state.logger
 
 
-def test_dynamic_request_notifies_cover_preview_backfill(monkeypatch):
+def test_status_poll_does_not_interrupt_cover_preview_backfill(monkeypatch):
     import music_app
 
     asgi_app = music_app.create_asgi_app()
@@ -606,6 +606,23 @@ def test_dynamic_request_notifies_cover_preview_backfill(monkeypatch):
     status, _headers, _body = run_asgi_request(asgi_app, "GET", "/status")
 
     assert status == 200
+    assert activities == []
+
+
+def test_dynamic_request_interrupts_cover_preview_backfill(monkeypatch):
+    import music_app
+
+    asgi_app = music_app.create_asgi_app()
+    activities = []
+    asgi_app.state.cover_preview_backfill = type(
+        "Backfill",
+        (),
+        {"note_foreground_activity": lambda self: activities.append("activity")},
+    )()
+
+    status, _headers, _body = run_asgi_request(asgi_app, "GET", "/not-found")
+
+    assert status == 404
     assert activities == ["activity"]
 
 

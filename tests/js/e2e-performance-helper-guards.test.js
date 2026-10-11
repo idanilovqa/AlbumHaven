@@ -596,11 +596,19 @@ test('focused selected-artist and root browse reports own complete terminal timi
   for (const metricId of [
     'selected-artist.selectedArtistApiMs',
     'selected-artist.albumDetailsOpenMs',
+    'selected-artist.tagEditorFocusMs',
+    'selected-artist.tagEditorTypingMs',
+    'selected-artist.tagEditorCancelMs',
+    'selected-artist.notificationDrawerOpenMs',
+    'selected-artist.notificationDrawerCloseMs',
+    'selected-artist.galleryReturnMs',
     'root-album-browse.rootAlbumBrowseApiMs',
   ]) {
     assert.match(`${selectedArtist}\n${rootBrowse}\n${fixtures}`, new RegExp(metricId.replaceAll('.', '\\.')));
   }
-  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 2);
+  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 3);
+  assert.match(selectedArtist, /measureInteractionToPaint/);
+  assert.match(selectedArtist, /maxLongTaskMs/);
   assert.match(selectedArtist, /recordContractCompletion\(\)/);
   assert.equal((rootBrowse.match(/recordTerminalTimingOutcome\(/g) || []).length, 1);
   assert.match(rootBrowse, /recordContractCompletion\(\)/);

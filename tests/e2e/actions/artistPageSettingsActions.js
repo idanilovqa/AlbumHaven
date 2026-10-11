@@ -1,6 +1,11 @@
 import { expect } from '@playwright/test';
 
 export class ArtistPageSettingsActions {
+  async expectNonAlbumTrackPaths(paths) {
+    for (const trackPath of paths) {
+      await expect(this.artistPageSettings.nonAlbumTrackRowByPath(trackPath)).toHaveCount(1);
+    }
+  }
   constructor(artistPageSettings) {
     this.artistPageSettings = artistPageSettings;
   }
@@ -43,6 +48,27 @@ export class ArtistPageSettingsActions {
       Number(expectedCount),
       { timeout },
     );
+  }
+
+  async openLibraryWideNonAlbumTracks(options = {}) {
+    const timeout = options.timeout || 10000;
+    await expect(this.artistPageSettings.libraryWideNonAlbumTracksButton).toBeEnabled({ timeout });
+    await this.artistPageSettings.libraryWideNonAlbumTracksButton.click({ noWaitAfter: true });
+    await expect(this.artistPageSettings.nonAlbumTracksModal).toBeVisible({ timeout });
+  }
+
+  async expectCollapsibleNonAlbumSection(title, trackTitles, options = {}) {
+    const timeout = options.timeout || 10000;
+    const section = this.artistPageSettings.nonAlbumSectionByTitle(title);
+    await expect(section).toHaveCount(1, { timeout });
+    await expect(section.locator('summary')).toHaveAttribute('aria-expanded', 'true');
+    for (const trackTitle of trackTitles) {
+      await expect(section).toContainText(trackTitle, { timeout });
+    }
+    await section.locator('summary').click();
+    await expect(section).not.toHaveAttribute('open', '');
+    await section.locator('summary').click();
+    await expect(section).toHaveAttribute('open', '');
   }
 
   async readNonAlbumTrackTitles() {

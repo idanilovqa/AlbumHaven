@@ -3115,10 +3115,13 @@ def build_status_payload(
     *,
     watcher_health: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    from music_app.services.cover_refresh_runtime import build_cover_progress_status
+
     if library_state is None:
         raise ValueError("library_state is required")
     st = library_state
     return {
+        **build_cover_progress_status(st),
         "scan_in_progress": bool(st.get("scan_in_progress")),
         "scan_processed": int(st.get("scan_processed") or 0),
         "scan_total": int(st.get("scan_total") or 0),
@@ -3146,6 +3149,7 @@ def build_status_payload(
         },
         "covers_in_progress": bool(st.get("covers_in_progress")),
         "covers_processed": int(st.get("covers_processed") or 0),
+        "covers_completed": int(st.get("covers_completed", st.get("covers_processed")) or 0),
         "covers_total": int(st.get("covers_total") or 0),
         "covers_downloaded": int(st.get("covers_downloaded") or 0),
         "covers_current_folder": st.get("covers_current_folder") or "",

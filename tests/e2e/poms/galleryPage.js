@@ -458,25 +458,34 @@ export class GalleryPage extends BasePage {
     };
   }
 
-  async readViewGenerationState() {
+
+  readViewGenerationState(artistName = '') {
     const observation = this.productionViewObserver.read();
+    const error = observation.latestFullPayloadError || observation.latestGalleryPageError;
+    if (error) throw new Error(`Production view observation failed: ${error}`);
+    if (artistName) {
+      return {
+        revision: Number(observation.topologyRevision || 0),
+        activityRevision: Number(observation.stateRevision || 0),
+        artistTopology: observation.galleryArtistTopologies?.[artistName] ?? null,
+        settled: Number(observation.activeRequestCount || 0) === 0
+          && Number(observation.pendingPayloadReadCount || 0) === 0,
+      };
+    }
     // parity-check: allow-read-only-measurement-evaluate -- correlate production request and render generations
-    const browserState = await this.page.evaluate(() => ({
+    return this.page.evaluate(() => ({
       nowMs: performance.now(),
       query: new URL(location.href).searchParams.get('q') || '',
       renderGeneration: Number(
         globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__?.latestRender?.renderGeneration || 0,
       ),
-    }));
-    return {
-      nowMs: browserState.nowMs,
-      query: browserState.query,
-      renderGeneration: browserState.renderGeneration,
+    })).then((browserState) => ({
+      ...browserState,
       requestGeneration: Number(observation.requestGeneration || 0),
       revision: Number(observation.stateRevision || 0),
       settled: Number(observation.activeRequestCount || 0) === 0
         && Number(observation.pendingPayloadReadCount || 0) === 0,
-    };
+    }));
   }
 
   async startSearchFirstVisibleObservation(expectedQuery, options = {}) {
@@ -792,6 +801,7 @@ export class GalleryPage extends BasePage {
     const location = observation.onlyRootContinuationsPending ? new URL(this.page.url()) : null;
     const rootContinuation = location && !['q', 'artist', 'playlist'].some(key => location.searchParams.get(key))
       && (!location.searchParams.get('surface') || location.searchParams.get('surface') === 'albums');
+    if (idle && observation.allowBootstrapFallback === false && !rootContinuation) return null;
     if (idle || rootContinuation) {
       const bootstrap = await this.readProductionBootstrapPayload();
       const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
@@ -802,15 +812,24 @@ export class GalleryPage extends BasePage {
   }
 
   async readAlbumTargetState(expected = {}) {
-    const initialObservation = this.productionViewObserver.read();
-    if (initialObservation.latestFullPayloadError) {
-      throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError}`);
+    let initialObservation = this.productionViewObserver.read();
+    if (initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError) {
+      throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError}`);
     }
     const initiallyBusy = initialObservation.activeRequestCount > 0
       || initialObservation.pendingPayloadReadCount > 0;
-    const bootstrapPayload = !initialObservation.latestFullPayload && !initiallyBusy
+    let bootstrapPayload = initialObservation.allowBootstrapFallback !== false
+      && !initialObservation.latestFullPayload && !initiallyBusy
       ? await this.readProductionBootstrapPayload()
       : null;
+    if (bootstrapPayload) {
+      const accepted = this.productionViewObserver.acceptBootstrapPresence(
+        bootstrapPayload.startup_payload?.first_paint_view || bootstrapPayload.initial_view,
+        initialObservation.stateRevision,
+      );
+      if (!accepted) bootstrapPayload = null;
+      initialObservation = this.productionViewObserver.read();
+    }
     const payload = initialObservation.latestFullPayload
       || bootstrapPayload?.startup_payload?.first_paint_view
       || bootstrapPayload?.initial_view
@@ -822,7 +841,18 @@ export class GalleryPage extends BasePage {
       : String(expected.query || '').trim();
     const expectedArtist = String(expected.artist || '').trim();
     const expectedAlbum = String(expected.album || '').trim();
-    const projection = await this.readAppliedGalleryProjection();
+    const canReadAppliedProjection = typeof this.page.evaluate === 'function'
+      || Object.prototype.hasOwnProperty.call(this, 'readAppliedGalleryProjection');
+    const projection = canReadAppliedProjection
+      ? await this.readAppliedGalleryProjection()
+      : {
+        ...(payload || {}),
+        busy: false,
+        pendingViewTransition: false,
+        surface: 'albums',
+        locationQuery: new URL(this.page.url()).searchParams.get('q') || '',
+        locationArtist: new URL(this.page.url()).searchParams.get('artist') || '',
+      };
     const targetLocation = new URL(this.page.url());
     const rootLocation = !['q', 'artist', 'playlist'].some(key => targetLocation.searchParams.get(key));
     const rootBootstrap = projection.gallery_page && rootLocation && !matchesAccumulatedRootProjection(payload, projection)
@@ -856,7 +886,9 @@ export class GalleryPage extends BasePage {
     const attachedArtists = (await this.artistHeadings.allTextContents())
       .map((artist) => String(artist || '').trim())
       .filter(Boolean);
-    const startupHydrating = payload === null || Boolean(
+    const payloadObserved = payload !== null || initialObservation.galleryPayloadObserved === true
+      || Boolean(initialObservation.latestCompletedSaveTaskPayload);
+    const startupHydrating = !payloadObserved || Boolean(
       bootstrapPayload?.bootstrap?.startupHydration?.required,
     );
     const finalAttachedMatch = await this.albumCard
@@ -866,10 +898,12 @@ export class GalleryPage extends BasePage {
       .map((artist) => String(artist || '').trim())
       .filter(Boolean);
     const finalObservation = this.productionViewObserver.read();
-    if (finalObservation.latestFullPayloadError) {
-      throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError}`);
+    if (finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError) {
+      throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError}`);
     }
-    const finalProjection = await this.readAppliedGalleryProjection();
+    const finalProjection = canReadAppliedProjection
+      ? await this.readAppliedGalleryProjection()
+      : projection;
     const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision
       || finalProjection.viewRevision !== projection.viewRevision
       || finalProjection.query !== projection.query
@@ -890,7 +924,7 @@ export class GalleryPage extends BasePage {
       finalAttachedArtists,
       {
         loaderVisible,
-        payloadPresent: payload !== null,
+        payloadPresent: payloadObserved,
         settledEmpty,
       },
     );
@@ -905,6 +939,8 @@ export class GalleryPage extends BasePage {
       canonicalMatch: canonicalEvidence.canonicalMatch,
       canonicalReadyMatch: canonicalEvidence.canonicalReadyMatch,
       canonicalSource: canonicalEvidence.canonicalSource,
+      canonicalScopeComplete: initialObservation.canonicalScopeComplete === true
+        && String(payload?.query || '').trim() === expectedQuery,
       canonicalQuery,
       expectedAlbum,
       expectedArtist,

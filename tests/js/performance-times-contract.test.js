@@ -47,7 +47,6 @@ test('performance timing contract defaults to local and requires trusted explici
     /unknown|local|ci/i,
   );
 });
-
 test('performance timing contract fails closed for missing metrics and invalid triplets', (t) => {
   const { loadPerformanceTimesContract, resolveTimingBudget } = loadAuthority();
   const missingMetricPath = writeContract(t, {
@@ -133,6 +132,30 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       ci: [1800, 400, 2200],
     },
     'selected-artist.albumDetailsOpenMs': {
+      local: [1000, 400, 1400],
+      ci: [1000, 400, 1400],
+    },
+    'selected-artist.tagEditorFocusMs': {
+      local: [600, 300, 900],
+      ci: [600, 300, 900],
+    },
+    'selected-artist.tagEditorTypingMs': {
+      local: [600, 300, 900],
+      ci: [600, 300, 900],
+    },
+    'selected-artist.tagEditorCancelMs': {
+      local: [600, 300, 900],
+      ci: [600, 300, 900],
+    },
+    'selected-artist.notificationDrawerOpenMs': {
+      local: [500, 300, 800],
+      ci: [500, 300, 800],
+    },
+    'selected-artist.notificationDrawerCloseMs': {
+      local: [500, 300, 800],
+      ci: [500, 300, 800],
+    },
+    'selected-artist.galleryReturnMs': {
       local: [1000, 400, 1400],
       ci: [1000, 400, 1400],
     },
@@ -224,4 +247,3 @@ test('CI differs from local for exactly the five owner-approved metrics', () => 
     'playback-start.maximumStartMs',
   ].sort());
 });
-

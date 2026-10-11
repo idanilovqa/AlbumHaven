@@ -24,6 +24,12 @@ operate, or contribute to the application.
   private fixture assets.
 - Use environment variables for machine-specific paths and credentials.
 - Keep tests independent and give state-mutating tests uniquely owned data.
+- Never infer a user action from pre-existing data during migration or backfill.
+  In particular, an existing cover path or remote URL is not evidence of an
+  explicit in-app cover selection. Preserve proven manual choices; leave
+  ambiguous legacy provenance unknown; any repair policy needs explicit owner
+  authorization and guarded updates. Do not blanket-promote
+  inherited covers to user-owned or blanket-clear genuine manual ownership.
 - Shared UI presentation belongs to its component CSS/templates: anchored menus
   match their originating surface (light content stays light; dark chrome stays
   dark), switch rows have no hover fill, checkbox hover uses neutral control
@@ -32,6 +38,14 @@ operate, or contribute to the application.
   copies or overrides of these rules.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
+- E2E tests for owner-reported regressions must assert every named
+  user-visible outcome and failure mode through the real UI. Internal calls,
+  request parameters, mocked helper success, or state inspection may support
+  diagnosis, but they do not replace assertions that the requested content is
+  rendered, positioned, stable, complete, and usable exactly as specified.
+- Scroll and navigation regressions must also assert the requested target's
+  visible identity in page chrome, its exact unobscured content boundary, and
+  the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
 ## Subagents and token burning

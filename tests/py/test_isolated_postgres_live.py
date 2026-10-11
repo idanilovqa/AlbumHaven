@@ -57,6 +57,123 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
         isolatedPostgres.reset_application_tables(setup_url)
 
 
+@pytest.mark.parametrize("missing_cover", [False, True])
+def test_live_spotify_quota_problem_is_durable_and_clears_after_recovery(watcher_repair_inventory, missing_cover):
+    from music_app.services.cover_provider_outcomes_postgres import persist_cover_provider_outcomes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    entry = fixture.entry("Owner/Quota Album/01.flac", album="Quota Album")
+    if not missing_cover:
+        cover = Path(entry["path"]).with_name("cover.jpg")
+        cover.write_bytes(b"existing-test-cover")
+        entry.update(cover_path=str(cover), local_cover_width=1200, local_cover_height=1200)
+    fixture.seed(entry)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        album = connection.execute("select id, album_key from library.local_albums where title = 'Quota Album'").fetchone()
+    repository = PostgresLibraryBrowseRepository(fixture.config)
+    initial = repository.build_problematic_files_payload()
+    assert all("Spotify cover search quota exceeded" not in item["problem_reasons"] for item in initial["items"])
+
+    persist_cover_provider_outcomes(fixture.config, album_id=album["id"], album_key=album["album_key"], outcomes={
+        "search_spotify": {"category": "rate_limit_quota", "http_status": 429, "retry_at": 9999999999},
+    })
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        outcome = connection.execute("select task_key, status, metadata from ops.cover_lookup_tasks where metadata ->> 'source_family' = 'automatic_cover_provider_outcomes_v1'").fetchone()
+    assert outcome is not None
+    assert outcome["task_key"] == f"{album['id']}:search_spotify"
+    assert outcome["status"] == "failed"
+    assert outcome["metadata"]["category"] == "rate_limit_quota"
+    assert any(row["spotify_cover_quota_exceeded"] for row in repository._load_problematic_file_rows())
+    payload = repository.build_problematic_files_payload()
+    item = next(item for item in payload["items"] if item["name"] == "Quota Album")
+    assert "Spotify cover search quota exceeded" in item["problem_reasons"]
+    assert ("Missing cover art" in item["problem_reasons"]) is missing_cover
+    detail = repository.build_problematic_file_detail_payload(item["key"])
+    assert "Spotify cover search quota exceeded" in detail["problem_reasons"]
+
+    persist_cover_provider_outcomes(fixture.config, album_id=album["id"], album_key=album["album_key"], outcomes={
+        "search_spotify": {"category": "no_candidate"},
+    })
+    recovered = repository.build_problematic_files_payload()
+    assert all("Spotify cover search quota exceeded" not in item["problem_reasons"] for item in recovered["items"])
+    if missing_cover:
+        item = next(item for item in recovered["items"] if item["name"] == "Quota Album")
+        assert "Missing cover art" in item["problem_reasons"]
+
+
+def test_live_duplicate_sources_only_projection_matches_complete_candidate_rows(watcher_repair_inventory):
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows, _problematic_files_sql
+    from psycopg.types.json import Jsonb
+
+    fixture = watcher_repair_inventory
+    entries = []
+    for root in (0, 1):
+        for disc in (1, 2):
+            item = fixture.entry(f"Owner/Unicode Copy/CD{disc}/song.flac", root=root, album="Caf\u00e9")
+            item.update(album_artist="Stra\u00dfe", artist="Stra\u00dfe", disc_number=disc)
+            entries.append(item)
+    mixed = fixture.entry("Owner/Mixed/CD1/main.flac", album="Mixed Main")
+    companion = fixture.entry("Owner/Mixed/CD2/companion.flac", album="Mixed Companion")
+    entries.extend([mixed, companion])
+    for year in (2001, 2002):
+        item = fixture.entry(f"Owner/Year Split/{year}.flac", album="Year Split")
+        item["year"] = year
+        entries.append(item)
+    metadata_entries = {}
+    for kind in ("missing", "null", "scalar", "empty", "explicit_null"):
+        item = fixture.entry(f"Owner/Metadata {kind}/song.flac", album=f"Metadata {kind}")
+        metadata_entries[kind] = item
+        entries.append(item)
+    stale = fixture.entry("Owner/Stale/song.flac", album="Stale")
+    entries.append(stale)
+    fixture.seed(*entries)
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        for kind, item in metadata_entries.items():
+            if kind == "missing":
+                connection.execute("update library.local_track_files set metadata = metadata #- '{scan_cache,file_entry}' where private_path = %s", (item["path"],))
+            else:
+                raw = {"null": None, "scalar": "not-an-object", "empty": {},
+                       "explicit_null": {"album": None, "album_artist": None, "year": None}}[kind]
+                connection.execute("update library.local_track_files set metadata = jsonb_set(metadata, '{scan_cache,file_entry}', %s::jsonb) where private_path = %s", (Jsonb(raw), item["path"]))
+        connection.execute("update library.local_track_files set metadata = jsonb_set(metadata, '{scan_cache,stale}', 'true'::jsonb) where private_path = %s", (stale["path"],))
+        # Omit the companion ID: both query modes must discover it through the
+        # complete physical-container closure, including the other disc folder.
+        companion_id = connection.execute("select tracks.album_id from library.local_track_files files join library.local_tracks tracks on tracks.id = files.track_id where files.private_path = %s", (companion["path"],)).fetchone()["album_id"]
+        album_ids = [row["id"] for row in connection.execute("select id from library.local_albums where id <> %s", (companion_id,)).fetchall()]
+        for inactive in (False, True):
+            if inactive:
+                connection.execute("update library.library_roots set is_active = false where root_path = %s", (fixture.roots[1]["path"],))
+            params = {"album_ids": album_ids}
+            full = connection.execute(_problematic_files_sql(duplicate_candidates=True), params).fetchall()
+            slim = connection.execute(_problematic_files_sql(duplicate_candidates=True, duplicate_sources_only=True), params).fetchall()
+            full_by_identity = {(row["album_key"], row["track_key"], row["file_private_path"]): row for row in full}
+            slim_by_identity = {(row["album_key"], row["track_key"], row["file_private_path"]): row for row in slim}
+            assert len(full_by_identity) == len(full)
+            assert len(slim_by_identity) == len(slim)
+            assert set(slim_by_identity) == set(full_by_identity)
+            slim_by_path = {row["file_private_path"]: row for row in slim if row["file_private_path"]}
+            assert companion["path"] in slim_by_path
+            assert stale["path"] not in slim_by_path
+            assert any(path.startswith(fixture.roots[1]["path"]) for path in slim_by_path) is not inactive
+            preserved = (
+                "album_key", "album_title", "album_release_year", "album_cover_path", "artist_name",
+                "track_key", "track_title", "disc_number", "track_number", "duration_seconds",
+                "file_private_path", "file_library_root_id", "file_library_root_category",
+                "file_entry",
+            )
+            for identity, row in full_by_identity.items():
+                assert {key: slim_by_identity[identity][key] for key in preserved} == {key: row[key] for key in preserved}
+                assert slim_by_identity[identity].get("file_entry_is_object") == row.get("file_entry_is_object")
+            assert slim_by_path[metadata_entries["missing"]["path"]]["file_entry"] is None
+            assert slim_by_path[metadata_entries["null"]["path"]]["file_entry"] is None
+            assert slim_by_path[metadata_entries["scalar"]["path"]]["file_entry"] == "not-an-object"
+            assert slim_by_path[metadata_entries["empty"]["path"]]["file_entry"] == {}
+            assert slim_by_path[metadata_entries["explicit_null"]["path"]]["file_entry"] == {"album": None, "album_artist": None, "year": None}
+            assert _duplicate_sources_from_rows(slim) == _duplicate_sources_from_rows(full)
+
+
 @pytest.mark.parametrize("exception_source", ["stored", "path_override", "track_override", "clear_override"])
 def test_live_missing_album_projection_respects_effective_rarity(watcher_repair_inventory, exception_source):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -3498,7 +3615,7 @@ def test_live_phase6_browse_queries_use_bounded_production_plans_and_search_inde
                 insert into library.local_track_files (track_id, private_path, metadata)
                 select
                   tracks.id,
-                  format('C:\\Music\\Scale\\%%s.mp3', tracks.track_key),
+                  format('C:\\Music\\Scale\\%%s\\%%s.mp3', tracks.album_id, tracks.track_key),
                   '{}'::jsonb
                 from library.local_tracks as tracks
                 where tracks.library_id = %s
@@ -5092,10 +5209,14 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
                   and library.local_album_featured_artists.featured_kind = 'featured_track_artist'
                 """
             ).fetchone()
-        browse_payload = PostgresLibraryBrowseRepository(
+        browse_repository = PostgresLibraryBrowseRepository(
             config,
             connect=isolatedPostgres._connect,
-        ).build_root_sidebar_payload()
+        )
+        browse_payload = browse_repository.build_root_sidebar_payload()
+        search_payload = browse_repository.build_search_payload(
+            query_params={"q": "Multi Disc Album", "surface": "albums"}
+        )
         guest_group = next(
             group
             for group in browse_payload["artist_groups"]
@@ -5106,6 +5227,11 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
         assert int(guest_membership["membership_count"]) == 1
         assert any(
             item["name"] == "Multi Disc Album" for item in guest_group["albums"]
+        )
+        assert any(
+            item["name"] == "Multi Disc Album"
+            for group in search_payload["artist_groups"]
+            for item in group["albums"]
         )
 
         isolatedPostgres.reset_application_tables(setup_url)

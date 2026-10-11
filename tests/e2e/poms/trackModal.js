@@ -38,6 +38,7 @@ export class TrackModal extends BasePage {
     this.coverLookupButton = page.locator(this.coverLookupButtonSelector);
     this.fastCoverFetchButton = page.locator(this.fastCoverFetchButtonSelector);
     this.releaseTabs = page.locator('#track-modal-tabs [data-track-tab-index]');
+    this.duplicateSourceTabs = page.locator('#track-modal-duplicate-tabs [data-track-duplicate-source-index]');
     this.editTagsButton = page.getByRole('button', { name: 'Edit album tags', exact: true });
     this.coverLightboxButton = page.locator(this.coverLightboxButtonSelector);
     this.lightbox = page.locator(this.lightboxSelector);
@@ -92,6 +93,48 @@ export class TrackModal extends BasePage {
       if (layout === 'stacked_bar') return [primary, values[0]].filter(Boolean).join(' • ');
       return primary;
     });
+  }
+
+  async startVisibleContentObservation() {
+    const observation = await this.dialog.evaluateHandle((dialog) => {
+      const samples = [];
+      const inspect = (phase) => {
+        if (dialog.hidden || getComputedStyle(dialog).display === 'none') return;
+        samples.push({
+          phase,
+          title: String(dialog.querySelector('#track-modal-title')?.textContent || '').trim(),
+          subtitle: String(dialog.querySelector('#track-modal-subtitle')?.textContent || '').trim(),
+          loading: Boolean(dialog.querySelector('.track-modal-loading-row')),
+          tracks: Array.from(
+            dialog.querySelectorAll('[data-track-row-path] .album-track-table__title'),
+            (node) => String(node.textContent || '').trim(),
+          ).filter(Boolean),
+        });
+      };
+      const observer = new MutationObserver(() => inspect('mutation'));
+      observer.observe(dialog, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      return {
+        finish() {
+          if (observer.takeRecords().length) inspect('pending-mutation');
+          inspect('final');
+          observer.disconnect();
+          return samples;
+        },
+      };
+    });
+    let finished = false;
+    return {
+      async finish() {
+        if (finished) return [];
+        finished = true;
+        return observation.evaluate((ownedObservation) => ownedObservation.finish());
+      },
+    };
   }
 
   get subtitleSelector() {

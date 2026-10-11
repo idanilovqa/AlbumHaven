@@ -170,6 +170,36 @@ def test_asgi_search_reload_preserves_all_artists_hydration(app, monkeypatch, pa
     assert params.get("all_artists") == (["1"] if all_artists in {"1", "true"} else None)
 
 
+@pytest.mark.parametrize("path", ["/", "/bootstrap-data"])
+def test_asgi_root_empty_shell_hydration_requests_bounded_gallery_page(app, monkeypatch, path):
+    from music_app.routes import web_asgi
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    asgi_app = _make_asgi_app(app)
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        path,
+        query={
+            "surface": "albums",
+            "all_artists": "1",
+            "gallery_scope": "all",
+            "category": ["main_library", "new_arrivals", "hoard"],
+        },
+    )
+
+    assert status == 200
+    payload = _decode_json(body) if path == "/bootstrap-data" else _extract_bootstrap_payload_from_shell(body)
+    hydration = payload["bootstrap"]["startupHydration"]
+    assert hydration["required"] is True
+    params = parse_qs(urlsplit(hydration["endpoint"]).query)
+    assert params["gallery_page_size"] == ["50"]
+    assert params["omit_sidebar"] == ["1"]
+    sidebar_params = parse_qs(urlsplit(hydration["followupEndpoint"]).query)
+    assert sidebar_params["payload_tier"] == ["sidebar"]
+    assert "gallery_page_size" not in sidebar_params
+
+
 def test_asgi_web_routes_register_natively(asgi_app):
     route_paths = _collect_route_paths(asgi_app)
     for route_path in (

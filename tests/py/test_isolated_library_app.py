@@ -2322,6 +2322,7 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
                 "featured_kind": "featured_member",
                 "track_file_id": index,
                 "library_root_id": "isolated-main-root",
+                "root_kind": "main_library",
                 "root_path": str(relation_root),
                 "relative_path": str(
                     Path(str(entry["path"])).relative_to(relation_root)
@@ -3154,6 +3155,7 @@ def test_isolated_fixture_seeds_alias_parity_rows_and_nested_family_paths(tmp_pa
             "owner_artist_name": artist,
             "member_artist_name": artist,
             "library_root_id": "isolated-main-root",
+            "root_kind": "main_library",
             "root_path": str(relation_root),
             "relative_path": str(track_path.relative_to(relation_root)),
             "private_path": str(track_path),

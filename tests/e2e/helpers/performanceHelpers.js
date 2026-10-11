@@ -30,6 +30,44 @@ export async function collectJsonResponsesDuringAction(page, matchesResponse, ac
   return Promise.all(responseJsonPromises);
 }
 
+export async function collectResponseTrafficDuringAction(page, matchesResource, action) {
+  const requests = [];
+  const responseBodyPromises = [];
+  const collectRequest = (request) => {
+    if (matchesResource(request)) requests.push(request.url());
+  };
+  const collectResponse = (response) => {
+    if (!matchesResource(response)) return;
+    responseBodyPromises.push((async () => ({
+      bodyBytes: (await response.body()).byteLength,
+      status: response.status(),
+      url: response.url(),
+    }))());
+  };
+
+  page.on('request', collectRequest);
+  page.on('response', collectResponse);
+  let result;
+  let actionError = null;
+  try {
+    result = await action();
+  } catch (error) {
+    actionError = error;
+  } finally {
+    page.off('request', collectRequest);
+    page.off('response', collectResponse);
+  }
+  if (actionError) {
+    await Promise.allSettled(responseBodyPromises);
+    throw actionError;
+  }
+  return {
+    requests,
+    responses: await Promise.all(responseBodyPromises),
+    result,
+  };
+}
+
 export function isRootAlbumsViewDataResponse(response) {
   const url = new URL(response.url());
   return url.pathname === '/view-data'
@@ -181,6 +219,54 @@ export async function measureActionTime(action, readyCheck = null) {
     await readyCheck();
   }
   return Date.now() - startedAt;
+}
+
+async function discardInteractionMeasurement(page) {
+  await page.evaluate(() => {
+    window.__albumHavenInteractionMeasure?.observer?.disconnect?.();
+    delete window.__albumHavenInteractionMeasure;
+  });
+}
+
+export async function measureInteractionToPaint(page, action, readyCheck = null) {
+  await page.evaluate(() => {
+    const samples = [];
+    const observer = typeof PerformanceObserver === 'function'
+      && PerformanceObserver.supportedEntryTypes?.includes('longtask')
+      ? new PerformanceObserver((list) => samples.push(...list.getEntries().map((entry) => entry.duration)))
+      : null;
+    observer?.observe({ type: 'longtask', buffered: false });
+    window.__albumHavenInteractionMeasure = {
+      observer,
+      samples,
+      startedAt: performance.now(),
+    };
+  });
+  try {
+    await action();
+    if (readyCheck) await readyCheck();
+  } catch (error) {
+    await discardInteractionMeasurement(page);
+    throw error;
+  }
+  return page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const measurement = window.__albumHavenInteractionMeasure;
+      const durationMs = performance.now() - Number(measurement?.startedAt || performance.now());
+      const buffered = measurement?.observer?.takeRecords?.() || [];
+      const longTasks = [
+        ...(measurement?.samples || []),
+        ...buffered.map((entry) => entry.duration),
+      ];
+      measurement?.observer?.disconnect?.();
+      delete window.__albumHavenInteractionMeasure;
+      resolve({
+        durationMs,
+        longTaskCount: longTasks.length,
+        maxLongTaskMs: Math.max(0, ...longTasks),
+      });
+    }));
+  }));
 }
 
 export async function samplePeakMemory(page, options = {}) {

@@ -176,10 +176,19 @@ function buildApiUrl(view, options = {}) {
       .some(key => params.has(key))) {
     params.set('gallery_page_size', '50');
   }
+  const galleryAnchorArtist = String(options.galleryAnchorArtist || '').trim();
+  if (galleryAnchorArtist) params.set('gallery_anchor_artist', galleryAnchorArtist);
   if (options.omitSidebar) params.set('omit_sidebar', '1');
   if (options.rootSidebar) params.set('root_sidebar', '1');
   if (String(options.payloadTier || '').trim()) {
     params.set('payload_tier', String(options.payloadTier).trim());
+  } else if (
+    options.rootFullPayload
+    && resolvedSurface === 'albums'
+    && !view.query
+    && !view.selected_artist
+  ) {
+    params.set('payload_tier', 'full');
   }
   const qs = params.toString();
   return `/view-data${qs ? `?${qs}` : ''}`;

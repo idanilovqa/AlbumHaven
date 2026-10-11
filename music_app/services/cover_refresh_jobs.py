@@ -27,6 +27,9 @@ def select_background_cover_refresh_jobs(
         )
         if belongs_to_user_owned_album:
             job["cover_selection_origin"] = "user"
+        if str(job.get("cover_selection_origin") or "").strip().casefold() == "user":
+            if job.get("needs_cover_fetch") is False:
+                continue
         if bool(job.get("needs_cover_fetch")) or belongs_to_user_owned_album or (
             str(job.get("cover_selection_origin") or "").strip().casefold() == "user"
         ):

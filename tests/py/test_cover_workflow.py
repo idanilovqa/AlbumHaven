@@ -840,6 +840,33 @@ def test_write_remote_cover_bytes_as_authoritative_cover_reserves_existing_cover
     assert image_dimensions(album_root / "cover-existing-1.jpg") == (16, 16)
 
 
+def test_authoritative_cover_replace_is_hidden_from_library_watcher(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from music_app.services.library_watch_suppression import (
+        is_library_watch_event_suppressed,
+    )
+
+    album_root = tmp_path / "Artist" / "Album"
+    target = album_root / "cover.jpg"
+    real_replace = cover_workflow.os.replace
+    observed = []
+
+    def checked_replace(source, destination):
+        observed.append(is_library_watch_event_suppressed(destination))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(cover_workflow.os, "replace", checked_replace)
+    written = write_remote_cover_bytes_as_authoritative_cover(
+        album_root,
+        _image_bytes((30, 160, 220), image_format="PNG", size=(24, 24)),
+    )
+
+    assert written == target
+    assert observed == [True]
+
+
 class _LifecycleConvertedImage:
     def __init__(
         self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
 import threading
@@ -323,7 +324,10 @@ def _configure_asgi_app(app, runtime) -> None:
 
     @app.middleware("http")
     async def require_runtime_javascript_revalidation(request, call_next):
-        if not request.url.path.startswith("/static/"):
+        if (
+            not request.url.path.startswith("/static/")
+            and request.url.path != "/status"
+        ):
             cover_preview_backfill = getattr(
                 app.state,
                 "cover_preview_backfill",
@@ -386,6 +390,7 @@ def create_asgi_app():
     from music_app.services.library_event_coordinator import (
         CoordinatorProblem,
         LibraryEventCoordinator,
+        TargetedReconciliationRequest,
     )
     from music_app.services.exception_overrides import load_exception_overrides
     from music_app.services.runtime_shutdown import create_daemon_executor
@@ -393,6 +398,9 @@ def create_asgi_app():
     from music_app.services.save_tasks import acquire_structural_tag_edit_reservation
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
+    )
+    from music_app.services.targeted_reconciliation_scheduler import (
+        TargetedReconciliationScheduler,
     )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.postgres_connections import prewarm_connection_pool
@@ -495,7 +503,7 @@ def create_asgi_app():
                     max_workers=1,
                     thread_name_prefix="albumhaven-targeted-reconciliation",
                 ),
-                max_outstanding=256,
+                max_outstanding=1,
             )
             targeted_reconciler = TargetedLibraryReconciler(
                 runtime.config,
@@ -541,34 +549,7 @@ def create_asgi_app():
                     )
 
         def submit_targeted_reconciliation(request) -> None:
-            affected_root_ids = targeted_request_root_ids(request)
-            future = targeted_executor.submit(reconcile_targeted_request, request)
-            if future is None:
-                runtime.logger.error(
-                    "Targeted library reconciliation backlog is full."
-                )
-                for root_id in affected_root_ids:
-                    persist_library_watch_problem(
-                        CoordinatorProblem("overflow", root_id)
-                    )
-                return
-
-            def report_reconciliation_failure(completed) -> None:
-                try:
-                    completed.result()
-                except Exception:
-                    runtime.logger.exception(
-                        "Targeted library reconciliation failed."
-                    )
-                    for root_id in affected_root_ids:
-                        persist_library_watch_problem(
-                            CoordinatorProblem(
-                                "reconciliation_failed",
-                                root_id,
-                            )
-                        )
-
-            future.add_done_callback(report_reconciliation_failure)
+            targeted_executor.submit(request)
 
         def persist_library_watch_health(event) -> None:
             try:
@@ -586,11 +567,65 @@ def create_asgi_app():
                     "Unable to persist library watcher health problem."
                 )
 
+        automatic_recovery_started_at: dict[frozenset[str], str] = {}
+
+        def catch_up_library_roots(root_ids: frozenset[str]) -> None:
+            recovery_started_at = datetime.now(timezone.utc).isoformat()
+            roots_by_id = {
+                str(root.get("id") or ""): dict(root)
+                for root in get_library_roots(runtime.config)
+            }
+            for root_id in sorted(root_ids):
+                root = roots_by_id.get(root_id)
+                if root is None:
+                    raise RuntimeError(
+                        f"Library watcher catch-up root is no longer configured: {root_id}"
+                    )
+                root_path = Path(str(root.get("path") or ""))
+                if not root_path.is_dir():
+                    raise OSError(
+                        f"Library watcher catch-up root is unavailable: {root_id}"
+                    )
+                result = targeted_reconciler.reconcile(
+                    TargetedReconciliationRequest(
+                        root_id=root_id,
+                        paths=frozenset({root_path}),
+                        deleted_subtrees=frozenset({root_path}),
+                    ),
+                    root_healthy=True,
+                    publication_guard=(
+                        runtime.library_watch_health_service
+                        .recovery_publication_guard(recovery_started_at)
+                    ),
+                )
+                if getattr(result, "health", None) != "healthy":
+                    raise RuntimeError(
+                        f"Library watcher catch-up failed for root {root_id}."
+                    )
+            automatic_recovery_started_at[root_ids] = recovery_started_at
+
+        def clear_recovered_library_roots(root_ids: frozenset[str]) -> None:
+            recovery_started_at = automatic_recovery_started_at.pop(root_ids)
+            runtime.library_watch_health_service.clear_after_reconciliation(
+                observed_root_ids=root_ids,
+                reconciliation_started_at=recovery_started_at,
+            )
+
+        targeted_executor = TargetedReconciliationScheduler(
+            reconcile=reconcile_targeted_request,
+            catch_up=catch_up_library_roots,
+            record_problem=persist_library_watch_problem,
+            clear_recovered=clear_recovered_library_roots,
+            executor=targeted_executor,
+            logger=runtime.logger,
+        )
+
         try:
             runtime.library_event_coordinator = LibraryEventCoordinator(
                 emit_request=submit_targeted_reconciliation,
                 emit_health_event=persist_library_watch_health,
                 emit_problem=persist_library_watch_problem,
+                drain_at_capacity=True,
                 auto_schedule=True,
             )
             runtime.library_watch_service = LibraryWatchService(

@@ -4,7 +4,9 @@ from copy import deepcopy
 from difflib import SequenceMatcher
 from pathlib import Path
 import re
+import os
 import time
+import unicodedata
 from music_app.models.library import Album, Track
 from music_app.services.move_planner import build_move_availability_payload
 from music_app.services.library_roots import build_root_provenance_payload, summarize_root_provenance_payloads
@@ -46,7 +48,10 @@ _NON_ALBUM_ALBUM_VALUE_RE = re.compile(r"^[!\-\s\[\(]*non[\s\-_]*album(?:\b.*)?$
 _DISC_FOLDER_RE = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?![A-Za-z0-9])", re.IGNORECASE)
 _VARIOUS_ARTIST_KEYS = {"va", "v.a.", "various artists", "various artist", "various"}
 _FEATURE_ARTIST_SPLIT_RE = re.compile(r"\s+(?:feat\.?|featuring|with|vs|x)\s+", re.IGNORECASE)
-_SPLIT_ARTIST_SPLIT_RE = re.compile(r"\s+(?:and|\u0438)\s+|(?:\s*&\s*)|/|;|,", re.IGNORECASE)
+_SPLIT_ARTIST_SPLIT_RE = re.compile(
+    r"\s+(?:and|\u0438)\s+|(?:\s*&\s*)|\s+/\s+|;|,",
+    re.IGNORECASE,
+)
 _ARTIST_PUNCT_TRANSLATION = str.maketrans({
     "\u2018": "'",
     "\u2019": "'",
@@ -109,7 +114,7 @@ def _normalize_display_artist_name(value: object) -> str:
     return repair_display_text(str(value or "")) or str(value or "")
 
 
-def _split_album_artist_members(value: object) -> list[str]:
+def split_album_artist_members(value: object) -> list[str]:
     text = _normalize_display_artist_name(value).strip()
     if not text or _is_various_artist(text):
         return []
@@ -293,7 +298,7 @@ def _classify_album_artists(entries: list[dict[str, object]]) -> tuple[bool, str
     top_artist_share = (top_artist_count / total_tracks) if total_tracks else 1
     significant_artist_count = sum(1 for count in track_artist_counts.values() if count >= 2)
     explicit_various = any(_is_various_artist(value) for value in album_artist_values)
-    album_artist_members = _split_album_artist_members(album_artist_values[0]) if len({_normalize_artist_key(value) for value in album_artist_values if value}) <= 1 and album_artist_values else []
+    album_artist_members = split_album_artist_members(album_artist_values[0]) if len({_normalize_artist_key(value) for value in album_artist_values if value}) <= 1 and album_artist_values else []
     matched_album_artist_members = [
         member for member in album_artist_members
         if any(_normalize_artist_key(member) == _normalize_artist_key(track_artist) or _are_probable_artist_typos(member, track_artist) for track_artist in distinct_track_artists)
@@ -367,7 +372,7 @@ def _entry_album_container(entry: dict[str, object]) -> str:
     raw_path = str(entry.get("path") or "").strip()
     if not raw_path:
         return ""
-    parent = Path(raw_path).parent
+    parent = Path(os.path.normpath(raw_path)).parent
     if _DISC_FOLDER_RE.search(parent.name) and parent.parent != parent:
         parent = parent.parent
     return str(parent).strip().lower()
@@ -377,64 +382,14 @@ def _track_album_container(path_value: object) -> str:
     raw_path = str(path_value or "").strip()
     if not raw_path:
         return ""
-    parent = Path(raw_path).parent
+    normalized_path = os.path.normpath(raw_path)
+    path = path_value if isinstance(path_value, Path) and str(path_value) == normalized_path else Path(normalized_path)
+    parent = path.parent
     if _DISC_FOLDER_RE.search(parent.name) and parent.parent != parent:
         parent = parent.parent
     return str(parent).strip()
 
 
-def _normalize_duplicate_text(value: object) -> str:
-    text = repair_display_text(str(value or "")) or str(value or "")
-    text = text.translate(_ARTIST_PUNCT_TRANSLATION).casefold()
-    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE)
-
-
-def _duplicate_text_matches(left: object, right: object) -> bool:
-    left_key = _normalize_duplicate_text(left)
-    right_key = _normalize_duplicate_text(right)
-    if not left_key or not right_key:
-        return left_key == right_key
-    if left_key == right_key:
-        return True
-    if min(len(left_key), len(right_key)) >= 6 and (left_key in right_key or right_key in left_key):
-        return True
-    return SequenceMatcher(None, left_key, right_key).ratio() >= 0.92
-
-
-def _duplicate_track_sort_key(track: Track) -> tuple[int, int, str, str, int]:
-    disc_number = safe_int(getattr(track, "disc_number", None)) or 0
-    track_number = safe_int(getattr(track, "track_number", None)) or 0
-    title_key = _normalize_duplicate_text(getattr(track, "title", ""))
-    artist_key = _normalize_artist_key(getattr(track, "artist", ""))
-    duration = safe_int(getattr(track, "duration_seconds", None)) or 0
-    return (disc_number, track_number, title_key, artist_key, duration)
-
-
-def _duplicate_track_groups_match(left_tracks: list[Track], right_tracks: list[Track]) -> bool:
-    if len(left_tracks) != len(right_tracks):
-        return False
-    left_sorted = sorted(left_tracks, key=_duplicate_track_sort_key)
-    right_sorted = sorted(right_tracks, key=_duplicate_track_sort_key)
-    for left_track, right_track in zip(left_sorted, right_sorted):
-        if (safe_int(getattr(left_track, "disc_number", None)) or 0) != (safe_int(getattr(right_track, "disc_number", None)) or 0):
-            return False
-        if (safe_int(getattr(left_track, "track_number", None)) or 0) != (safe_int(getattr(right_track, "track_number", None)) or 0):
-            return False
-        if _normalize_artist_key(getattr(left_track, "artist", "")) != _normalize_artist_key(getattr(right_track, "artist", "")):
-            return False
-        if _normalize_duplicate_text(getattr(left_track, "album", "")) != _normalize_duplicate_text(getattr(right_track, "album", "")):
-            return False
-        if (safe_int(getattr(left_track, "year", None)) or 0) != (safe_int(getattr(right_track, "year", None)) or 0):
-            return False
-        if _normalize_duplicate_text(getattr(left_track, "edition", "")) != _normalize_duplicate_text(getattr(right_track, "edition", "")):
-            return False
-        left_duration = safe_int(getattr(left_track, "duration_seconds", None)) or 0
-        right_duration = safe_int(getattr(right_track, "duration_seconds", None)) or 0
-        if abs(left_duration - right_duration) > 2:
-            return False
-        if not _duplicate_text_matches(getattr(left_track, "title", ""), getattr(right_track, "title", "")):
-            return False
-    return True
 
 
 def _track_to_dict(track: Track) -> dict[str, object]:
@@ -453,6 +408,7 @@ def _track_to_dict(track: Track) -> dict[str, object]:
         "edition": track.edition,
         "album_rating": int(track.album_rating or 0),
         "exception_type": track.exception_type,
+        "custom_collection_name": getattr(track, "custom_collection_name", ""),
         "cover_path": str(track.cover_path) if track.cover_path else None,
         "cover_revision": getattr(track, "cover_revision", None),
         "local_cover_width": getattr(track, "local_cover_width", None),
@@ -481,9 +437,15 @@ def _build_album_detail_track_payloads(
     client_surface_class: object,
     viewer_opinion_preferences: dict[str, object],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    track_payloads = [_track_to_dict(track) for track in album.tracks]
+    tracks = album.tracks
+    sources = get_album_duplicate_sources(album)
+    if sources:
+        own_folders = {os.path.normcase(_track_album_container(track.path)) for track in tracks}
+        folder = next(os.path.normcase(source["folder_path"]) for source in sources if os.path.normcase(source["folder_path"]) in own_folders)
+        tracks = [track for track in tracks if os.path.normcase(_track_album_container(track.path)) == folder]
+    track_payloads = [_track_to_dict(track) for track in tracks]
     track_rows = build_track_rows(
-        album.tracks,
+        tracks,
         album=album,
         client_surface_class=client_surface_class,
         viewer_opinion_preferences=viewer_opinion_preferences,
@@ -648,6 +610,8 @@ def _album_payload_signature_core(
         bool(getattr(album, "is_compilation", False)),
         str(getattr(album, "cover_path", "") or ""),
         str(getattr(album, "cover_revision", "") or "").strip() or None,
+        getattr(album, "cover_selection_origin", None),
+        getattr(album, "cover_selection_provenance", None),
         getattr(album, "local_cover_width", None),
         getattr(album, "local_cover_height", None),
         getattr(album, "remote_cover_url", None),
@@ -903,6 +867,7 @@ def _build_album_base_payload(
         "cover_path": str(album.cover_path) if album.cover_path else None,
         "cover_revision": getattr(album, "cover_revision", None),
         "cover_selection_origin": cover_selection_origin,
+        "cover_selection_provenance": getattr(album, "cover_selection_provenance", None),
         "local_cover_width": getattr(album, "local_cover_width", None),
         "local_cover_height": getattr(album, "local_cover_height", None),
         "remote_cover_url": getattr(album, "remote_cover_url", None),
@@ -1055,6 +1020,7 @@ def album_preview_to_dict(
             move_availability=move_availability,
         ),
     }
+    payload["has_duplicate_files"] = bool(get_album_duplicate_sources(album))
     payload = _normalize_album_preview_payload(
         payload,
         track_count=len(getattr(album, "tracks", []) or []),
@@ -1110,24 +1076,115 @@ def _ordered_album_duplicate_track_groups(
     tracks: list[Track],
 ) -> list[tuple[str, list[Track]]]:
     grouped_tracks: dict[str, list[Track]] = {}
+    folder_paths: dict[str, str] = {}
     for track in tracks:
         container = _track_album_container(getattr(track, "path", ""))
         if not container:
             return []
-        grouped_tracks.setdefault(container, []).append(track)
+        key = os.path.normcase(container)
+        folder_paths.setdefault(key, container)
+        grouped_tracks.setdefault(key, []).append(track)
 
     if len(grouped_tracks) <= 1:
         return []
 
     ordered_groups = sorted(
-        grouped_tracks.items(),
+        ((folder_paths[key], group) for key, group in grouped_tracks.items()),
         key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
     )
-    reference_tracks = ordered_groups[0][1]
-    if not all(_duplicate_track_groups_match(reference_tracks, candidate_tracks) for _, candidate_tracks in ordered_groups[1:]):
-        return []
+    identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
+    counts = Counter(identities)
+    return [group for group, identity in zip(ordered_groups, identities) if identity is not None and counts[identity] > 1]
 
-    return ordered_groups
+
+def _duplicate_album_identity(tracks: list[Track]) -> tuple[str, str, int] | None:
+    """Require complete, consistent album tags; never infer identity from encodes."""
+    identities = set()
+    for track in tracks:
+        artist = " ".join(unicodedata.normalize("NFC", str(track.album_artist or "")).casefold().split())
+        title = " ".join(unicodedata.normalize("NFC", str(track.album or "")).casefold().split())
+        year = safe_int(track.year)
+        if not artist or not title or year is None or not 1000 <= year <= 9999:
+            return None
+        identities.add((artist, title, year))
+    return next(iter(identities)) if len(identities) == 1 else None
+
+
+def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
+    disc_number = safe_int(track.disc_number) or 1
+    track_number = safe_int(track.track_number)
+    if track_number is not None:
+        return ("position", disc_number, track_number)
+    title = " ".join(unicodedata.normalize("NFC", str(track.title or "")).casefold().split())
+    return ("title", title)
+
+
+def _summarize_duplicate_album_provenance(
+    own_tracks: list[Track],
+    linked_tracks: list[Track],
+) -> dict[str, object]:
+    own_identities = {_duplicate_track_coverage_identity(track) for track in own_tracks}
+    category_identities: dict[str, set[tuple[object, ...]]] = {}
+    track_payloads: list[tuple[dict[str, object], Track]] = []
+    for track in [*own_tracks, *linked_tracks]:
+        payload = track.root_provenance or build_root_provenance_payload(
+            track.library_root_id,
+            track.library_root_category,
+        )
+        track_payloads.append((payload, track))
+        category_identities.setdefault(str(payload.get("category") or ""), set()).add(
+            _duplicate_track_coverage_identity(track)
+        )
+    qualifying_categories = {
+        category
+        for category, identities in category_identities.items()
+        if own_identities and len(identities & own_identities) * 2 > len(own_identities)
+    }
+    return summarize_root_provenance_payloads([
+        payload
+        for payload, _track in track_payloads
+        if str(payload.get("category") or "") in qualifying_categories
+    ])
+
+
+def _link_duplicate_album_sources(albums: list[Album]) -> None:
+    """Link physical copies across edition records without changing their queues."""
+    containers: dict[str, dict[str, Track]] = {}
+    folder_paths: dict[str, str] = {}
+    album_folder_keys: list[list[str]] = []
+    for album in albums:
+        folder_keys: list[str] = []
+        for track in album.tracks:
+            folder = _track_album_container(track.path)
+            key = os.path.normcase(folder)
+            folder_keys.append(key)
+            folder_paths.setdefault(key, folder)
+            containers.setdefault(key, {})[os.path.normcase(str(track.path))] = track
+        album_folder_keys.append(folder_keys)
+    identities: dict[tuple[str, str, int], list[tuple[str, list[Track]]]] = {}
+    folder_identities = {}
+    for folder, tracks_by_path in containers.items():
+        tracks = list(tracks_by_path.values())
+        identity = _duplicate_album_identity(tracks)
+        folder_identities[folder] = identity
+        if identity is not None:
+            identities.setdefault(identity, []).append((folder_paths[folder], tracks))
+    sources_by_identity = {
+        identity: [
+            _build_album_duplicate_source_payload(index=index, folder_path=folder, tracks=tracks)
+            for index, (folder, tracks) in enumerate(sorted(groups, key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold())))
+        ]
+        for identity, groups in identities.items() if len(groups) > 1
+    }
+    for album, folder_keys in zip(albums, album_folder_keys):
+        own_identities = {folder_identities[key] for key in folder_keys}
+        duplicate_identities = own_identities.intersection(sources_by_identity)
+        sources = [source for identity in sorted(duplicate_identities) for source in sources_by_identity[identity]]
+        sources = [{**source, "index": index, "label": str(index + 1)} for index, source in enumerate(sources)]
+        album._cached_duplicate_sources = sources
+        if sources:
+            linked_tracks = [track for identity in duplicate_identities for _, tracks in identities[identity] for track in tracks]
+            album.root_provenance = _summarize_duplicate_album_provenance(album.tracks, linked_tracks)
 
 
 def _build_album_duplicate_source_payload(
@@ -1197,6 +1254,9 @@ def _cooperative_album_build_yield(processed: int, *, enabled: bool) -> None:
 
 
 def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separate_release_keys: set[str] | None = None) -> list[Album]:
+    from music_app.services.album_local_membership import rejected_local_album_paths
+
+    rejected_paths = rejected_local_album_paths(file_cache.values())
     separate_release_keys = separate_release_keys or set()
     albums: dict[str, Album] = {}
     grouped_entries: dict[tuple[str, str, str], list[dict[str, object]]] = {}
@@ -1234,6 +1294,8 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
 
     for grouping_count, entry in enumerate(file_cache.values(), start=1):
         _cooperative_album_build_yield(grouping_count, enabled=cooperative_yields_enabled)
+        if str(entry.get("path") or "") in rejected_paths:
+            continue
         if normalize_exception_value(entry.get("exception_type")):
             continue
         album_name = cached_display_text(entry["album"])
@@ -1285,6 +1347,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                     is_compilation=is_compilation,
                     cover_path=Path(cover_value) if cover_value else None,
                     cover_revision=str(entry.get("cover_revision") or "").strip() or None,
+                    cover_selection_provenance=str(entry.get("cover_selection_provenance") or "").strip() or None,
                     cover_selection_origin=(
                         str(entry.get("cover_selection_origin") or "").strip().casefold()
                         if str(entry.get("cover_selection_origin") or "").strip().casefold()
@@ -1376,6 +1439,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
                 edition=str(entry.get("edition")).strip() if entry.get("edition") else None,
                 album_rating=safe_int(entry.get("album_rating")),
                 exception_type=normalize_exception_value(entry.get("exception_type")) or None,
+                custom_collection_name=str(entry.get("custom_collection_name") or "").strip() or None,
                 cover_path=cached_path(entry["cover_path"]) if entry.get("cover_path") else None,
                 cover_revision=str(entry.get("cover_revision") or "").strip() or None,
                 local_cover_width=safe_int(entry.get("local_cover_width")),
@@ -1399,6 +1463,9 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         root_provenance_payloads = getattr(album, "_root_provenance_payloads", None)
         if isinstance(root_provenance_payloads, list):
             album.root_provenance = summarize_root_provenance_payloads(root_provenance_payloads)
+        from music_app.services.album_local_cover_integrity import apply_scoped_local_cover
+
+        apply_scoped_local_cover(album, file_cache, rejected_paths)
         album.tracks.sort(key=lambda t: (
             t.disc_number if t.disc_number is not None else 999,
             t.track_number if t.track_number is not None else 999,
@@ -1406,6 +1473,7 @@ def build_albums_from_file_cache(file_cache: dict[str, dict[str, object]], separ
         ))
         _cooperative_album_build_yield(finalization_count, enabled=cooperative_yields_enabled)
     album_list.sort(key=album_sort_key)
+    _link_duplicate_album_sources(album_list)
     return album_list
 
 

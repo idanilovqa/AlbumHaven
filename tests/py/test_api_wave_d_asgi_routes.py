@@ -1040,6 +1040,48 @@ def test_asgi_cover_lookup_mark_seen_failure_keeps_unseen_improvement_active(
     assert payload["candidate_snapshot"]["diagnostic"] == "mark_seen_failed"
 
 
+def test_asgi_local_cover_selection_response_and_runtime_preserve_explicit_authority(app, monkeypatch):
+    from music_app.models.library import Album, Track
+    from music_app.routes import api_cover_helpers, api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    selected_image = track_path.parent / "Front.jpg"
+    selected_image.write_bytes(_jpeg_bytes((40, 180, 220), size=(4000, 4000)))
+    _seed_album_state(app.library_state, track_path)
+    app.library_state["albums"] = [Album(
+        key="album-1", name="Test Album", album_artist="Test Artist",
+        local_cover_width=1600, local_cover_height=1600,
+        tracks=[Track(path=track_path, title="Song", album="Test Album", album_artist="Test Artist")],
+    )]
+    asgi_app = _make_wave_d_app(app)
+    persisted = []
+    def persist_selection(*_args, **kwargs):
+        persisted.append(kwargs)
+        return {"album_rows_updated": 1, "track_file_rows_updated": 1}
+    monkeypatch.setattr(api_cover_helpers, "persist_cover_selection_for_tracks_for_config", persist_selection)
+    monkeypatch.setattr(api_cover_helpers, "build_problematic_albums_payload", lambda **_kwargs: {"albums": []})
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/local-select",
+        json_body={"album": _album_payload(track_path), "source_path": str(selected_image)},
+    )
+    assert status == 200
+    updated = _decode_json(body)["updated_album"]
+    assert updated["cover_selection_origin"] == "user"
+    assert updated["cover_selection_provenance"] == "explicit"
+    assert (updated["local_cover_width"], updated["local_cover_height"]) == (4000, 4000)
+    assert (persisted[0]["local_cover_width"], persisted[0]["local_cover_height"]) == (4000, 4000)
+    assert app.library_state["albums"][0].cover_selection_origin == "user"
+    assert app.library_state["albums"][0].cover_selection_provenance == "explicit"
+    assert app.library_state["albums"][0].local_cover_width == 4000
+    assert app.library_state["albums"][0].tracks[0].local_cover_width == 4000
+    assert app.library_state["file_cache"][str(track_path)]["cover_selection_origin"] == "user"
+    assert app.library_state["file_cache"][str(track_path)]["cover_selection_provenance"] == "explicit"
+    assert app.library_state["file_cache"][str(track_path)]["local_cover_width"] == 4000
+
+
 def test_asgi_local_cover_selection_persists_before_success_and_logs_safe_completion(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 
@@ -2111,6 +2153,64 @@ def test_remote_candidate_image_download_does_not_block_cover_lookup_api(app, mo
     assert image_body == b"image-bytes"
 
 
+def test_bulk_cover_preparation_does_not_block_cover_lookup_api(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    preparation_started = Event()
+    release_preparation = Event()
+    preparation_finished = Event()
+
+    def held_preparation(**_kwargs):
+        preparation_started.set()
+        release_preparation.wait()
+        preparation_finished.set()
+        return {"started": True, "queued_count": 3}
+
+    monkeypatch.setattr(asgi_routes, "start_manual_cover_refresh_request", held_preparation)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+
+    async def exercise_concurrent_requests():
+        preparation_request = asyncio.create_task(
+            _run_asgi_request_async(
+                asgi_app, "POST", "/utilities/fetch-covers-unsuccessful",
+                json_body={"force_search": True},
+            )
+        )
+        try:
+            while not preparation_started.is_set() and not preparation_request.done():
+                await asyncio.sleep(0.001)
+            tasks_status, _tasks_headers, tasks_body = await _run_asgi_request_async(
+                asgi_app, "GET", "/utilities/cover-lookup/tasks"
+            )
+            preparation_still_running = (
+                preparation_started.is_set() and not preparation_finished.is_set()
+            )
+        finally:
+            release_preparation.set()
+            preparation_response = await preparation_request
+        return tasks_status, tasks_body, preparation_still_running, preparation_response
+
+    deadlock_watchdog = Timer(5, release_preparation.set)
+    deadlock_watchdog.daemon = True
+    deadlock_watchdog.start()
+    try:
+        tasks_status, tasks_body, still_running, preparation_response = asyncio.run(
+            exercise_concurrent_requests()
+        )
+    finally:
+        release_preparation.set()
+        deadlock_watchdog.cancel()
+        deadlock_watchdog.join()
+
+    assert tasks_status == 200
+    assert _decode_json(tasks_body)["ok"] is True
+    assert still_running is True
+    status, _headers, body = preparation_response
+    assert status == 200
+    assert _decode_json(body)["queued_count"] == 3
+
+
 def test_asgi_cover_lookup_save_remote_queues_selected_candidate(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services import cover_lookup_tasks
@@ -2175,7 +2275,7 @@ def test_asgi_cover_lookup_save_remote_queues_selected_candidate(app, monkeypatc
     assert payload["optimistic_remote_width"] == 1000
     assert payload["optimistic_remote_height"] == 1000
     assert payload["task"]["selected_candidate_id"] == "candidate-1"
-    assert payload["gallery"]["task"]["selected_candidate_id"] == "candidate-1"
+    assert "gallery" not in payload
     assert update_calls[0]["config"] is app.config
     assert update_calls[0]["job_contract"]["job_kind"] == "save_remote_selection"
     assert update_calls[0]["job_contract"]["provider_groups"] == [
@@ -2852,8 +2952,8 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
         fake_start_background_refresh_for_state,
     )
 
-    def fake_cover_file_cache_snapshot_for_state(library_state):
-        cache_snapshot_calls.append({"library_state": library_state})
+    def fake_cover_file_cache_snapshot_for_state(library_state, config):
+        cache_snapshot_calls.append({"library_state": library_state, "config": config})
         return {"snap": {"path": "snap"}}
 
     monkeypatch.setattr(
@@ -2862,7 +2962,10 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
         fake_cover_file_cache_snapshot_for_state,
     )
 
-    def fake_refresh_unsuccessful_cover_artwork_for_state(library_state, config, logger, *, force_search):
+    prepared_request = object()
+
+    def fake_refresh_unsuccessful_cover_artwork_for_state(library_state, config, logger, *, force_search, prepared=None):
+        assert prepared is prepared_request
         unsuccessful_refresh_calls.append(
             {
                 "library_state": library_state,
@@ -2888,10 +2991,11 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
                 "snapshot": kwargs["get_file_cache_snapshot"](),
                 "submit_cover_job": kwargs.get("submit_cover_job"),
                 "force_search": kwargs.get("force_search"),
+                "defer_preparation": kwargs.get("defer_preparation"),
             }
         )
         kwargs["start_background_refresh"](force=True, scan_mode="manual")
-        kwargs["refresh_unsuccessful_cover_artwork"](force_search=True)
+        kwargs["refresh_unsuccessful_cover_artwork"](force_search=True, prepared=prepared_request)
         return {
             "started": True,
             "already_running": False,
@@ -2953,6 +3057,7 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
             "snapshot": {"snap": {"path": "snap"}},
             "submit_cover_job": asgi_routes.state_service._COVER_EXECUTOR.submit,
             "force_search": True,
+            "defer_preparation": True,
         }
     ]
     assert background_refresh_calls == [
@@ -2964,7 +3069,10 @@ def test_asgi_cover_refresh_routes_preserve_manual_payloads_and_cancel_status(ap
             "scan_mode": "manual",
         }
     ]
-    assert cache_snapshot_calls == [{"library_state": asgi_app.state.library_state}]
+    assert cache_snapshot_calls == [{
+        "library_state": asgi_app.state.library_state,
+        "config": app.config,
+    }]
     assert unsuccessful_refresh_calls == [
         {
             "library_state": asgi_app.state.library_state,

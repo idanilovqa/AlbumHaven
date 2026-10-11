@@ -574,15 +574,24 @@ async function performAlbumMove(album, action, options = {}) {
 async function fetchUnsuccessfulAlbumCovers() {
   const previousStatus = { ...state.status };
   const statusAction = claimLibraryStatusAction(true);
+  statusAction.coverPreparation = true;
   try {
     console.log('[AlbumHaven][Covers] Starting manual bulk cover fetch.');
     startStatusIndicatorImmediately({
       covers_in_progress: true,
+      covers_phase: 'preparing',
+      covers_run_mode: 'manual-bulk',
+      covers_outcome: '',
+      covers_elapsed_seconds: null,
+      covers_estimated_remaining_seconds: null,
       covers_processed: 0,
+      covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: 0,
       covers_downloaded: 0,
       covers_current_folder: '',
     });
+    scheduleStatusPoll(250);
     const response = await fetch('/utilities/fetch-covers-unsuccessful', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -616,6 +625,8 @@ async function fetchUnsuccessfulAlbumCovers() {
         scan_total: Number(state.status?.scan_total || 0),
         covers_in_progress: false,
         covers_processed: 0,
+        covers_completed: 0,
+        covers_spotify_quota_exceeded: false,
         covers_total: 0,
         covers_downloaded: 0,
         covers_current_folder: '',
@@ -628,7 +639,11 @@ async function fetchUnsuccessfulAlbumCovers() {
     updateStatusIndicator({
       ...state.status,
       covers_in_progress: true,
+      covers_phase: 'fetching',
+      covers_run_mode: 'manual-bulk',
       covers_processed: 0,
+      covers_completed: 0,
+      covers_spotify_quota_exceeded: false,
       covers_total: Number(data.queued_count || 0),
       covers_downloaded: 0,
       covers_current_folder: String(data.current_folder || ''),
@@ -1675,6 +1690,7 @@ function getTrackTagInitialValues(track, album) {
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
     exception_type: String(track?.exception_type || ''),
+    custom_collection_name: String(track?.custom_collection_name || ''),
     edition: String(track?.edition || album?.edition || ''),
     album_rating: String(track?.album_rating ?? album?.album_rating ?? ''),
   };
@@ -1721,7 +1737,11 @@ function applyTagEditsToNonAlbumView(album, updates) {
   Object.entries(updates || {}).forEach(([path, edits]) => {
     const hasAlbumEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'album');
     const hasExceptionEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'exception_type');
-    if (!hasAlbumEdit && !hasExceptionEdit) return;
+    const hasCollectionNameEdit = Object.prototype.hasOwnProperty.call(
+      edits || {},
+      'custom_collection_name',
+    );
+    if (!hasAlbumEdit && !hasExceptionEdit && !hasCollectionNameEdit) return;
     const normalizedPath = String(path || '');
     if (!normalizedPath) return;
     const track = tracksByPath.get(normalizedPath) || nextByPath.get(normalizedPath) || {};
@@ -1747,6 +1767,9 @@ function applyTagEditsToNonAlbumView(album, updates) {
       title: String(edits.title || track?.title || 'Unknown track'),
       album: albumName,
       exception_type: exceptionType,
+      custom_collection_name: hasCollectionNameEdit
+        ? String(edits.custom_collection_name || '').trim()
+        : String(track?.custom_collection_name || '').trim(),
       reason_label: exceptionType,
       display_path: String(track?.display_path || normalizedPath),
     });
@@ -1819,6 +1842,139 @@ function getTagEditorPendingIconMarkup() {
     </span>`;
 }
 
+function getLibraryExceptionTypeChoices() {
+  const values = ['Interview', 'Non-album rarity', 'Custom Collection'];
+  const seen = new Set(values.map((value) => value.toLocaleLowerCase()));
+  (Array.isArray(state.view?.non_album_tracks) ? state.view.non_album_tracks : []).forEach((track) => {
+    const value = String(track?.exception_type || '').trim();
+    const key = value.toLocaleLowerCase();
+    if (!value || seen.has(key)) return;
+    seen.add(key);
+    values.push(value);
+  });
+  return values;
+}
+
+function isCustomCollectionException(value) {
+  return String(value || '').trim() === 'Custom Collection';
+}
+
+function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoices(), currentValue = '') {
+  const selected = String(currentValue || '').trim();
+  return values.map((value) => (
+    `<button type="button" role="option" aria-selected="${value === selected ? 'true' : 'false'}" tabindex="-1" data-tag-editor-exception-option="${escapeHtml(value)}">${escapeHtml(value)}</button>`
+  )).join('');
+}
+
+let tagEditorExceptionMenuCleanup = null;
+
+function getTagEditorExceptionMenuLayout(inputRect, menuHeight, boundaryRect, viewportWidth, viewportHeight) {
+  const inset = 8;
+  const maxMenuHeight = Math.min(240, Math.floor(viewportHeight * 0.4));
+  const boundaryTop = Math.max(inset, Number(boundaryRect?.top ?? inset));
+  const boundaryBottom = Math.min(viewportHeight - inset, Number(boundaryRect?.bottom ?? viewportHeight - inset));
+  const availableBelow = Math.max(0, boundaryBottom - inputRect.bottom);
+  const availableAbove = Math.max(0, inputRect.top - boundaryTop);
+  const placement = availableBelow >= Math.min(menuHeight, maxMenuHeight) || availableBelow >= availableAbove
+    ? 'below'
+    : 'above';
+  const availableHeight = placement === 'below' ? availableBelow : availableAbove;
+  const height = Math.max(0, Math.min(menuHeight, maxMenuHeight, availableHeight));
+  const width = Math.min(inputRect.width, viewportWidth - (inset * 2));
+  const left = Math.max(inset, Math.min(inputRect.left, viewportWidth - inset - width));
+  const top = placement === 'below' ? inputRect.bottom - 1 : inputRect.top - height + 1;
+  return { placement, top, left, width, maxHeight: height };
+}
+
+function positionTagEditorExceptionMenu(input, menu) {
+  const footer = document.getElementById('tag-editor-footer');
+  const dialog = input.closest('.tag-editor-dialog');
+  const viewportWidth = window.visualViewport?.width || window.innerWidth;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const dialogRect = dialog?.getBoundingClientRect();
+  const footerRect = footer?.getBoundingClientRect();
+  const layout = getTagEditorExceptionMenuLayout(
+    input.getBoundingClientRect(),
+    menu.scrollHeight,
+    {
+      top: dialogRect?.top ?? 0,
+      bottom: footerRect?.top ?? dialogRect?.bottom ?? viewportHeight,
+    },
+    viewportWidth,
+    viewportHeight,
+  );
+  menu.dataset.placement = layout.placement;
+  menu.style.position = 'fixed';
+  menu.style.top = `${layout.top}px`;
+  menu.style.left = `${layout.left}px`;
+  menu.style.width = `${layout.width}px`;
+  menu.style.maxHeight = `${layout.maxHeight}px`;
+}
+
+function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!menu) return;
+  tagEditorExceptionMenuCleanup?.();
+  tagEditorExceptionMenuCleanup = null;
+  menu.hidden = true;
+  delete menu.dataset.placement;
+  ['position', 'top', 'left', 'width', 'max-height'].forEach((name) => menu.style.removeProperty(name));
+  input?.setAttribute('aria-expanded', 'false');
+  if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  if (restoreFocus) input?.focus?.({ preventScroll: true });
+}
+
+function openTagEditorExceptionMenu() {
+  const form = getTagEditorElements().form;
+  const input = form?.querySelector('[data-tag-field="exception_type"]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (!input || !menu || input.disabled) return false;
+  tagEditorExceptionMenuCleanup?.();
+  tagEditorExceptionMenuCleanup = null;
+  menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), input.value);
+  menu.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  positionTagEditorExceptionMenu(input, menu);
+  const closeOnScroll = () => closeTagEditorExceptionMenu();
+  const reposition = () => positionTagEditorExceptionMenu(input, menu);
+  form.addEventListener('scroll', closeOnScroll, { once: true });
+  window.addEventListener('resize', reposition);
+  window.visualViewport?.addEventListener('resize', reposition);
+  tagEditorExceptionMenuCleanup = () => {
+    form.removeEventListener('scroll', closeOnScroll);
+    window.removeEventListener('resize', reposition);
+    window.visualViewport?.removeEventListener('resize', reposition);
+  };
+  return true;
+}
+
+function selectTagEditorExceptionOption(value) {
+  const input = getTagEditorElements().form?.querySelector('[data-tag-field="exception_type"]');
+  if (!input) return;
+  input.value = String(value || '');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  closeTagEditorExceptionMenu({ restoreFocus: true });
+}
+
+function syncTagEditorCollectionFields(selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || [])) {
+  const form = getTagEditorElements().form;
+  if (!form) return true;
+  const exceptionInput = form.querySelector('[data-tag-field="exception_type"]');
+  const collectionInput = form.querySelector('[data-tag-field="custom_collection_name"]');
+  const collectionField = form.querySelector('[data-custom-collection-name-field]');
+  const menu = document.getElementById('tag-editor-exception-menu');
+  if (menu) menu.innerHTML = buildTagEditorExceptionOptionsHtml(getLibraryExceptionTypeChoices(), exceptionInput?.value);
+  const isCollection = isCustomCollectionException(exceptionInput?.value);
+  if (collectionField) collectionField.hidden = !isCollection;
+  if (collectionInput) collectionInput.disabled = !isCollection || selectedPaths.length === 0;
+  if (!isCollection) return true;
+  return selectedPaths.every((path) => (
+    String(state.tagEditor.values?.[path]?.custom_collection_name || '').trim()
+  ));
+}
+
 function syncTagEditorPendingChanges() {
   const els = getTagEditorElements();
   const pending = buildChangedTagEditorUpdates(
@@ -1832,7 +1988,8 @@ function syncTagEditorPendingChanges() {
     els.albumInput.removeAttribute('aria-describedby');
   }
   if (els.applyButton) {
-    els.applyButton.disabled = pendingPaths.size === 0;
+    els.applyButton.disabled = pendingPaths.size === 0
+      || !syncTagEditorCollectionFields();
   }
   els.list?.querySelectorAll('[data-tag-editor-track]').forEach((button) => {
     const path = String(button.getAttribute('data-tag-editor-track') || '');
@@ -2159,13 +2316,92 @@ function getTagEditorFieldDisplayValue(field, selectedPaths) {
 function renderTagEditorArtwork(selectedPaths) {
   const els = getTagEditorElements();
   if (!els.artwork) return;
-  const firstSelectedPath = selectedPaths[0] || '';
-  const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === firstSelectedPath);
+  const selectedPathSet = new Set(selectedPaths);
+  const focusedPath = selectedPathSet.has(String(state.tagEditor.anchorPath || ''))
+    ? String(state.tagEditor.anchorPath || '')
+    : (selectedPaths[0] || '');
+  const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === focusedPath);
   const coverPath = track?.cover_path || state.tagEditor.album?.cover_path || '';
-  const label = getFilenameFromPath(firstSelectedPath) || track?.title || 'selected track';
-  els.artwork.innerHTML = coverPath
+  const label = getFilenameFromPath(focusedPath) || track?.title || 'selected track';
+  const separatorIndex = Math.max(focusedPath.lastIndexOf('/'), focusedPath.lastIndexOf('\\'));
+  const folderPath = separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '';
+  const artwork = coverPath
     ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
-    : '<div class="tag-editor-artwork-placeholder">No artwork</div>';
+    : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
+  els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
+}
+
+function getTagEditorFocusedPath() {
+  const tracks = state.tagEditor?.tracks || [];
+  const knownPaths = new Set(tracks.map((track) => String(track.path || '')).filter(Boolean));
+  const anchorPath = String(state.tagEditor?.anchorPath || '');
+  if (knownPaths.has(anchorPath)) return anchorPath;
+  const selectedPath = (state.tagEditor?.selectedPaths || [])
+    .map((path) => String(path || ''))
+    .find((path) => knownPaths.has(path));
+  return selectedPath || String(tracks[0]?.path || '');
+}
+
+function normalizeTagEditorPathKey(path) {
+  return String(path || '').replaceAll('/', '\\').toLocaleLowerCase();
+}
+
+async function loadTagEditorFolderFiles() {
+  const tagEditor = state.tagEditor;
+  const sourcePath = getTagEditorFocusedPath();
+  const button = document.getElementById('tag-editor-folder-load');
+  if (!tagEditor || !sourcePath || tagEditor.folderLoading) return;
+
+  tagEditor.folderLoading = true;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+  }
+  try {
+    const response = await fetch('/utilities/tag-editor/folder-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        source_path: sourcePath,
+        album: {
+          tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
+        },
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load files from this folder.');
+    if (state.tagEditor !== tagEditor || getTagEditorElements().overlay?.hidden === true) return;
+
+    const existingPathKeys = new Set(
+      (tagEditor.tracks || []).map((track) => normalizeTagEditorPathKey(track.path)),
+    );
+    const addedTracks = [];
+    (Array.isArray(data.tracks) ? data.tracks : []).forEach((track) => {
+      const path = String(track?.path || '');
+      const pathKey = normalizeTagEditorPathKey(path);
+      if (!path || existingPathKeys.has(pathKey)) return;
+      existingPathKeys.add(pathKey);
+      addedTracks.push(track);
+      tagEditor.values[path] = getTrackTagInitialValues(track, tagEditor.album);
+    });
+
+    if (!addedTracks.length) {
+      showRepairAlert('All supported files from this folder are already loaded.', 'success');
+      return;
+    }
+    tagEditor.tracks = [...tagEditor.tracks, ...addedTracks];
+    renderTagEditor();
+  } catch (error) {
+    showRepairAlert(error.message || 'Unable to load files from this folder.', 'error');
+  } finally {
+    if (state.tagEditor === tagEditor) {
+      tagEditor.folderLoading = false;
+    }
+    if (button && state.tagEditor === tagEditor) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
 }
 
 function stageTagEditorTrackOrder(tracks) {
@@ -2281,5 +2517,6 @@ function renderTagEditor(options = {}) {
     input.value = displayValue.value;
     input.placeholder = displayValue.mixed ? 'Mixed values' : '';
   });
+  syncTagEditorCollectionFields(selectedPaths);
   syncTagEditorPendingChanges();
 }

@@ -300,7 +300,6 @@ mergerTest('every registered coverage-only target materializes its own functiona
     }
   }
 });
-
 mergerTest('sample generator keeps the functional IDs for every coverage-only target', () => {
   let input;
   const samplePath = path.join(repoRoot, 'scripts/ci/generate-cloud-e2e-report-sample.cjs');
@@ -949,4 +948,3 @@ mergerTest('authenticated inventory retains structured E2E results for 14 days a
     ...inventory.debugArtifacts.map((entry) => entry.name),
   ]).size, 28);
 });
-

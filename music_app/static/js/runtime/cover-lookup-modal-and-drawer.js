@@ -805,6 +805,8 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
     || getUpdatedAlbumForTrackPaths(candidates, getAlbumTrackPaths(state.coverLookup.modal.album))
     || candidates[0];
   if (!updatedAlbum) return;
+  state.ui = state.ui || {};
+  state.ui.albumCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0) + 1;
   const applyRefresh = () => {
     patchVisibleAlbumsByTrackPath(candidates);
     refreshRenderedAlbumCoverOnly(updatedAlbum);
@@ -1231,7 +1233,11 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const clearButton = document.getElementById('cover-lookup-drawer-clear');
   const summary = document.getElementById('cover-lookup-drawer-summary');
   if (!drawer || !body || !button || !badge) return;
-  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const tasks = (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
+    .filter((task) => !(
+      String(task?.status || '') === 'completed'
+      && Boolean(task?.notification_action_taken)
+    ));
   if (state.coverLookup.drawerOpen && typeof activateTriggerSurface === 'function' && !drawer.classList.contains('is-open')) {
     activateTriggerSurface(drawer, () => {
       state.coverLookup.drawerOpen = false;
@@ -1284,8 +1290,6 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? 'Canceled'
       : isNoResult
       ? 'No covers found'
-      : isCompleted && task?.notification_action_taken
-      ? 'Art chosen'
       : status === 'completed'
         ? `${foundCount ? `${foundCount} ` : ''}covers found`
       : status === 'pending'
@@ -1312,7 +1316,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
-      <div class="cover-lookup-task-card navigation-tree-item ${taskStateClass}">
+      <div class="cover-lookup-task-card ${taskStateClass}">
         <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" data-open-cover-lookup-task="${escapeHtml(task.id || '')}">
           ${coverMarkup}
           <span class="cover-lookup-task-copy">
@@ -2043,6 +2047,8 @@ function closeCoverLookupDeleteConfirm() {
 async function startCoverLookupForAlbum(album, options = {}) {
   if (!album) return;
   const backgroundOnly = Boolean(options?.backgroundOnly);
+  const triggerButton = backgroundOnly ? options?.triggerButton : null;
+  const triggerWasDisabled = Boolean(triggerButton?.disabled);
   const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
   if (!backgroundOnly) {
     const selectedLocalCard = document.getElementById('cover-lookup-modal-body')
@@ -2059,6 +2065,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
     }
   }
   try {
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.setAttribute?.('aria-busy', 'true');
+    }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = true;
       renderCoverLookupModal();
@@ -2106,6 +2116,10 @@ async function startCoverLookupForAlbum(album, options = {}) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);
     showToast(error.message || 'Failed to start cover art lookup.', 'error', 2800);
   } finally {
+    if (triggerButton) {
+      triggerButton.disabled = triggerWasDisabled;
+      triggerButton.removeAttribute?.('aria-busy');
+    }
     if (!backgroundOnly) {
       state.coverLookup.modal.manualBusy = false;
       renderCoverLookupModal();
@@ -2167,7 +2181,6 @@ async function saveLocalCoverFromLookup(sourcePath) {
       renderCoverLookupDrawer();
     }
     if (ownsModal()) closeCoverLookupModal();
-    showToast('Local cover art selected.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (previousAlbum) {
@@ -2237,7 +2250,6 @@ async function deleteLocalCoverFromLookup(sourcePath) {
         await refreshCoverLookupGallery(false);
       }
     }
-    showToast('Local cover art deleted.', 'success', 2200);
   } catch (error) {
     if (buildTrackPathSignature(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (ownsModal()) state.coverLookup.modal.localCovers = previousLocalCovers;
@@ -2321,10 +2333,6 @@ async function saveRemoteCoverFromLookup() {
     await loadCoverLookupTasks({ toast: false });
     ensureCoverLookupPolling();
     renderCoverLookupDrawer();
-    const successMessage = selectedMatch?.display_only
-      ? 'Remote cover art linked.'
-      : (data.queued ? 'Saving selected cover art in the background.' : 'Selected cover art saved.');
-    showToast(successMessage, 'success', 2400);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);
@@ -2438,7 +2446,6 @@ async function savePastedCoverFromLookup(imageId) {
       markCoverLookupTaskActionTaken(taskId, album);
       renderCoverLookupDrawer();
     }
-    showToast('Pasted image saved as cover art.', 'success', 2200);
   } catch (error) {
     if (previousAlbum) {
       markAlbumCoverPathsFresh([previousAlbum]);

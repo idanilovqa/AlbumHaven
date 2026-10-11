@@ -144,9 +144,9 @@
         <section class="discovery-center-page-summary">
           <h2>Open Discovery Center</h2>
           <p>{{ discovery_center_page.summary.drawer_preview.empty_state.detail if discovery_center_page.summary and discovery_center_page.summary.drawer_preview and discovery_center_page.summary.drawer_preview.empty_state else '' }}</p>
-          <p><a href="{{ discovery_center_page.summary_route or '/news-center/summary' }}">Summary payload</a></p>
-          <p><a href="{{ discovery_center_page.entries_route or '/news-center/entries?tab=inbox&source=all' }}">Entries payload</a></p>
-          <p><a href="{{ discovery_center_page.preferences_route or '/news-center/preferences' }}">Preferences payload</a></p>
+          <p><a href="{{ discovery_center_page.summary_route or '/news-center/summary' }}" target="_blank" rel="noopener">Summary payload</a></p>
+          <p><a href="{{ discovery_center_page.entries_route or '/news-center/entries?tab=inbox&source=all' }}" target="_blank" rel="noopener">Entries payload</a></p>
+          <p><a href="{{ discovery_center_page.preferences_route or '/news-center/preferences' }}" target="_blank" rel="noopener">Preferences payload</a></p>
         </section>
       </section>
       <div class="albums-scroll" id="albums-scroll" hidden aria-hidden="true">
@@ -175,6 +175,7 @@
       <section class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery" aria-label="Gallery controls"{% if query and not effective_selected_artist %} hidden{% endif %}>
           <div class="gallery-bar__context"><div class="gallery-bar__title">{% call action_button('Open library navigation', id='mobile-library-button', class_name='mobile-bar-action', attributes={'data-toggle-artists-drawer': '1', 'aria-controls': 'shell-navigation-rail', 'aria-expanded': 'false'}) %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>{% endcall %}<span data-gallery-context-name>Gallery</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>{{ bootstrap_payload.initial_view.artist_count | default(0) }} artists · {{ bootstrap_payload.initial_view.album_count | default(0) }} albums</span></div>
         <div class="gallery-bar__actions">
+          <button class="gallery-action-button" type="button" data-open-non-album-tracks="1" data-library-wide="1" aria-label="Loose Tracks" aria-disabled="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg></button>
           <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family"{% if not effective_selected_artist %} hidden{% endif %} aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
 
           <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster>
@@ -190,6 +191,8 @@
         {% for value, label in [('studio', 'Studio'), ('ep', 'EP'), ('live', 'Live'), ('demo', 'Demo'), ('compilation', 'Compilation'), ('single', 'Single')] %}
         <button class="gallery-type-choice" type="button" data-gallery-album-type="{{ value }}" aria-pressed="{{ 'true' if value in ['studio', 'ep'] else 'false' }}" disabled aria-disabled="true"><span aria-hidden="true">✓</span>{{ label }}</button>
         {% endfor %}
+        <div class="gallery-menu-divider"></div>
+        <button class="gallery-type-choice" type="button" data-gallery-featured-on="1" aria-pressed="true"><span aria-hidden="true">✓</span>Featured On</button>
         <div class="gallery-menu-divider"></div>
         <button class="gallery-menu-action" type="button" data-open-non-album-tracks="1" disabled aria-disabled="true">Non-album tracks</button>
         <button class="gallery-menu-action" type="button" data-gallery-customize-preview="1" aria-disabled="true">Customize</button>

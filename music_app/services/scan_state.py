@@ -9,7 +9,12 @@ from typing import Callable
 
 from music_app.services.app_logging import log_app_event
 from music_app.services.library import build_albums_from_file_cache
-from music_app.services.library_indexing import ScanCancelled
+from music_app.services.library_indexing import (
+    ScanCancelled,
+    finish_scan_stage,
+    reset_scan_stage_timings,
+    start_scan_stage,
+)
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.scan_cache_persistence import (
     ScanCachePublicationSuperseded,
@@ -207,6 +212,7 @@ def refresh_library_state(
             library_state.get("scan_mode") or "background"
         )
         scan_started_at = time.time()
+        reset_scan_stage_timings(library_state)
         library_state["scan_generation"] = int(library_state.get("scan_generation") or 0) + 1
         scan_generation = int(library_state.get("scan_generation") or 0)
         library_state["last_error"] = None
@@ -432,6 +438,7 @@ def refresh_library_state(
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_phase"] = "finalizing"
+                start_scan_stage(library_state, "relations")
         relation_refresh_options: dict[str, object] = {
             "seed_missing_album_ratings": True,
             "expected_scan_generation": scan_generation,
@@ -446,6 +453,8 @@ def refresh_library_state(
                 expected_inventory_mutation_revision
             )
         refresh_relation_views(**relation_refresh_options)
+        finish_scan_stage(library_state, "relations")
+        library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)
         with cache_lock:
             generation_is_current = (
                 int(library_state.get("scan_generation") or 0) == scan_generation
@@ -501,7 +510,10 @@ def refresh_library_state(
                  history_scope=history_scope)
                 library_state["last_error"] = str(exc)
                 library_state["scan_outcome"] = "failed"
+        raise
     finally:
+        for stage in ("discover", "metadata", "relations"):
+            finish_scan_stage(library_state, stage)
         with cache_lock:
             _clear_matching_scan_preview(
                 library_state,

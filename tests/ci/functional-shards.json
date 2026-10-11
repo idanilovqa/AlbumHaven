@@ -121,7 +121,10 @@
               "project": "functional",
               "test": "tests/e2e/specs/albumTrackCredits.spec.js",
               "case": "FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split",
-              "area": "album-details"
+              "area": "album-details",
+              "relatedAreas": [
+                "tag-edit"
+              ]
             },
             {
               "config": "playwright.config.js",
@@ -364,6 +367,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+              "case": "FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and advances beyond the first full-page boundary",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/rootGalleryPagination.spec.js",
+              "case": "FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
               "case": "FTC-GALLERY-032 hydrates version tracks and preserves table playback, selection and fixed modal identity",
               "area": "album-details"
@@ -374,6 +391,20 @@
               "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
               "case": "FTC-GALLERY-033 acknowledges warning alerts without hiding Scan health and resurfaces new warnings",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
+              "case": "FTC-ALBUM-DETAILS-024 desktop identifies cold album B before its details settle without restoring album A",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
+              "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
+              "area": "album-details"
             }
           ]
         }
@@ -519,6 +550,41 @@
               "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
               "case": "FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submit after recovery",
               "area": "playback"
+            }
+          ]
+        },
+        {
+          "config": "playwright.config.js",
+          "project": "functional",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+              "area": "cover-providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumSourceOwnership.spec.js",
+              "case": "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+              "area": "cover-providers"
             }
           ]
         },
@@ -809,6 +875,13 @@
               "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
               "case": "FTC-NON-ALBUM-012 renders exception groups as the approved compact track table",
               "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks",
+              "area": "tag-edit"
             },
             {
               "config": "playwright.config.js",

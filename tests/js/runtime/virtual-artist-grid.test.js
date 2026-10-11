@@ -403,6 +403,7 @@ function createRuntimeContext() {
     },
     queuedTrackModalAlbumDetailPrewarms: [],
     queuedVisibleTrackModalAlbumDetailPrewarms: 0,
+    visibleTrackModalAlbumDetailPrewarmCalls: [],
     galleryCoverSchedulerEnqueues: [],
     galleryCoverSchedulerGeneration: 0,
     galleryCoverFamilyPrefetchEnsures: 0,
@@ -458,8 +459,9 @@ function createRuntimeContext() {
     queueTrackModalAlbumDetailsPrewarm(albumKey) {
       context.queuedTrackModalAlbumDetailPrewarms.push(albumKey);
     },
-    queueVisibleTrackModalAlbumDetailsPrewarm() {
+    queueVisibleTrackModalAlbumDetailsPrewarm(container, scroll, limit) {
       context.queuedVisibleTrackModalAlbumDetailPrewarms += 1;
+      context.visibleTrackModalAlbumDetailPrewarmCalls.push({ container, scroll, limit });
     },
   };
 
@@ -1461,6 +1463,36 @@ test('a newer user scroll invalidates a pending absolute setGroups restoration',
   );
 });
 
+test('a newer user wheel cancels a pending relative setGroups restoration', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 920;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  context.cancelBrowserAnimationFrame = (frameId) => {
+    context.canceledBrowserAnimationFrames.push(frameId);
+    scheduledFrames.delete(frameId);
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  scrollEl.scrollTop = 900;
+  virtualGrid.setGroups([], [], [], { preserveScroll: true });
+  const staleRestoreFrameId = virtualGrid._scrollRestoreRaf;
+  const staleRestoreFrame = scheduledFrames.get(staleRestoreFrameId);
+  assert.equal(typeof staleRestoreFrame, 'function');
+
+  scrollEl.scrollTop = 1400;
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  staleRestoreFrame();
+
+  assert.ok(context.canceledBrowserAnimationFrames.includes(staleRestoreFrameId));
+  assert.equal(scrollEl.scrollTop, 1400);
+});
+
 test('an album-card click does not surrender pending absolute scroll restoration', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -1718,6 +1750,7 @@ test('scroll render timer completes a pending frame when animation frames are st
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const scheduledFrames = new Map();
   let nextFrameId = 1000;
+  virtualGrid.scheduleVisibleAlbumDetailPrewarm = () => {};
   context.scheduleBrowserAnimationFrame = (callback) => {
     nextFrameId += 1;
     scheduledFrames.set(nextFrameId, callback);
@@ -1974,9 +2007,9 @@ test('scroll render timer completes a pending frame when animation frames are st
     context.canceledBrowserAnimationFrames.push(frameId);
   };
   let restoreCount = 0;
-  virtualGrid.restoreScrollAnchor = (anchor) => {
+  virtualGrid.restoreScrollAnchor = () => {
     restoreCount += 1;
-    scrollEl.scrollTop = Number(anchor?.scrollTop || 0);
+    scrollEl.scrollTop -= 130;
   };
   virtualGrid.primeVisibleCoverImages = () => {};
 
@@ -1984,7 +2017,7 @@ test('scroll render timer completes a pending frame when animation frames are st
   virtualGrid.stabilizeScrollAfterMeasurement({ scrollTop: 6336 });
   const stabilizeFrameId = virtualGrid._stabilizeRaf;
   const stabilizeFrame = scheduledFrames.get(stabilizeFrameId);
-  assert.equal(scrollEl.scrollTop, 6336);
+  assert.equal(scrollEl.scrollTop, 6190);
   assert.equal(restoreCount, 1);
 
   scrollEl.dispatchEvent({ type: 'scroll' });
@@ -1992,9 +2025,10 @@ test('scroll render timer completes a pending frame when animation frames are st
 
   assert.equal(
     restoreCount,
-    2,
-    'the scroll event from the immediate anchor restore must preserve its next-frame stabilization',
+    1,
+    'the next-frame stabilization must not apply the relative anchor delta twice',
   );
+  assert.equal(scrollEl.scrollTop, 6190);
   assert.equal(
     context.canceledBrowserAnimationFrames.includes(stabilizeFrameId),
     false,
@@ -2255,6 +2289,14 @@ test('scroll render timer completes a pending frame when animation frames are st
   const { context } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const events = [];
+  const scheduledFrames = [];
+  let nextFrameId = 0;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.push({ callback, id: nextFrameId });
+    return nextFrameId;
+  };
+  virtualGrid.scheduleMeasureRows = () => {};
   const groups = [
     {
       artist: 'Root Artist',
@@ -2272,7 +2314,19 @@ test('scroll render timer completes a pending frame when animation frames are st
 
   virtualGrid.setGroups(groups, [], null, {});
   assert.deepEqual(context.queuedTrackModalAlbumDetailPrewarms, []);
-  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 0);
+  assert.deepEqual(context.visibleTrackModalAlbumDetailPrewarmCalls, []);
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  assert.deepEqual(
+    context.visibleTrackModalAlbumDetailPrewarmCalls,
+    [],
+    'visible-detail scanning must wait until the second animation frame',
+  );
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  assert.deepEqual(context.visibleTrackModalAlbumDetailPrewarmCalls, [{
+    container: virtualGrid.containerEl,
+    scroll: virtualGrid.scrollEl,
+    limit: 2,
+  }], 'a settled render should schedule the bounded visible-detail prewarm after paint');
 
   context.queueTrackModalAlbumDetailsPrewarm = (albumKey) => {
     events.push(`prewarm:${albumKey}`);
@@ -2280,8 +2334,10 @@ test('scroll render timer completes a pending frame when animation frames are st
   };
   context.state.view.selected_artist = 'Root Artist';
   virtualGrid.setGroups(groups, [], null, {});
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
+  scheduledFrames.splice(0).forEach(({ callback }) => callback());
   assert.deepEqual(context.queuedTrackModalAlbumDetailPrewarms, []);
-  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 0);
+  assert.equal(context.queuedVisibleTrackModalAlbumDetailPrewarms, 2);
   assert.deepEqual(events, [], 'rendering must not speculate album-detail requests without user intent');
 
   assert.equal(
@@ -3406,6 +3462,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
     patchCount += 1;
   };
   virtualGrid.scheduleMeasureRows = () => {};
+  virtualGrid.scheduleVisibleAlbumDetailPrewarm = () => {};
   virtualGrid.sections = [];
   virtualGrid.totalHeight = 0;
 
@@ -4214,6 +4271,19 @@ test('rating row component derives star size and score reservation from its rend
   );
 });
 
+test('artist search cards preserve mixed-source styling and hover actions', () => {
+  const { context } = createRuntimeContext();
+  context.state.view.query = 'Neal Morse';
+  const markup = context.albumCardHtml({
+    key: 'neal-morse::test', name: 'Test Album', album_artist: 'Neal Morse',
+    root_provenance: { categories: ['main_library', 'hoard', 'new_arrivals'] }, tracks: [],
+  });
+  assert.match(markup, /data-library-sources="main hoard new_arrivals"/);
+  assert.match(markup, /--library-source-gradient:conic-gradient/);
+  assert.match(markup, /aria-label="Hoard"/);
+  assert.match(markup, /aria-label="New Arrivals"/);
+});
+
 test('missing album card renders an accessible bottom-right small alert', () => {
   const { context } = createRuntimeContext();
   const markup = context.albumCardHtml({
@@ -4435,4 +4505,183 @@ test('startup preview cards survive layout events until an authoritative virtual
   virtualGrid.setGroups([], [], []);
   assert.ok(virtualGrid._renderGeneration > 0);
   assert.equal(containerEl.children.length, 0, 'An authoritative empty result must clear the old preview');
+});
+
+
+test('scrollToArtist puts the first album row at the gallery top without applying artist filter', () => {
+  const { context, scrollEl, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.setGroups([
+    { artist: 'Alpha', albums: [{ key: 'alpha::one', name: 'One', tracks: [] }] },
+    { artist: 'Beta', albums: [{ key: 'beta::two', name: 'Two', tracks: [] }] },
+  ], [], null, {});
+  const target = virtualGrid.sections.find((section) => section.group?.artist === 'Beta');
+  const selectedArtistBefore = context.state.view.selected_artist;
+  virtualGrid._scrollRestoreRaf = 73;
+  virtualGrid._resetScrollAfterMeasure = true;
+  containerEl.getBoundingClientRect = () => ({ top: -scrollEl.scrollTop });
+  const renderedHeader = new context.HTMLElement();
+  const renderedRows = new context.HTMLElement();
+  renderedHeader.getAttribute = (name) => name === 'data-scroll-artist' ? 'Beta' : '';
+  renderedHeader.parentElement = {
+    querySelector: selector => (selector === '.artist-rows' ? renderedRows : null),
+  };
+  renderedRows.getBoundingClientRect = () => ({
+    top: target.top + virtualGrid.sectionHeaderHeight - 24.25 - scrollEl.scrollTop,
+  });
+  const originalQuerySelectorAll = containerEl.querySelectorAll.bind(containerEl);
+  containerEl.querySelectorAll = (selector) => (
+    selector === '[data-scroll-artist]' ? [renderedHeader] : originalQuerySelectorAll(selector)
+  );
+
+  assert.equal(virtualGrid.scrollToArtist('Beta'), true);
+  assert.equal(scrollEl.scrollTop, target.top + virtualGrid.sectionHeaderHeight - 24.25);
+  assert.equal(context.state.view.selected_artist, selectedArtistBefore);
+  assert.equal(virtualGrid._scrollRestoreRaf, null);
+  assert.equal(virtualGrid._resetScrollAfterMeasure, false);
+  assert.equal(context.canceledBrowserAnimationFrames.includes(73), true);
+});
+
+test('scrollToArtist uses the absolute modeled offset when a previous virtual spacer is active', () => {
+ const { context, scrollEl, containerEl } = createRuntimeContext();
+ const virtualGrid = vm.runInContext('virtualGrid', context);
+ virtualGrid.setGroups([
+ { artist: 'Alpha', albums: [{ key: 'alpha::one', name: 'One', tracks: [] }] },
+ { artist: 'Beta', albums: [{ key: 'beta::two', name: 'Two', tracks: [] }] },
+ ], [], null, {});
+ const target = virtualGrid.sections.find(section => section.group?.artist === 'Beta');
+  const previousVirtualSpacer = 2400;
+  scrollEl.scrollTop = previousVirtualSpacer + 300;
+  containerEl.getBoundingClientRect = () => ({
+    top: previousVirtualSpacer - scrollEl.scrollTop,
+  });
+ containerEl.querySelectorAll = () => [];
+
+ assert.equal(virtualGrid.scrollToArtist('Beta'), true);
+ assert.equal(scrollEl.scrollTop, target.top + virtualGrid.sectionHeaderHeight);
+});
+
+test('gallery cover activation schedules visible images before overscan images', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const image = (id, priority) => {
+    const element = new context.HTMLImageElement();
+    element.id = id;
+    element.setAttribute('data-gallery-cover-src', `/cover?path=${id}`);
+    element.setAttribute('data-gallery-cover-priority', priority);
+    return element;
+  };
+  const images = [
+    image('near-above', 'near'),
+    image('visible-first', 'visible'),
+    image('near-below', 'near'),
+    image('visible-second', 'visible'),
+  ];
+
+  virtualGrid.activateGalleryCoverImages({
+    querySelectorAll(selector) {
+      assert.equal(selector, 'img[data-gallery-cover-src]');
+      return images;
+    },
+  });
+
+  assert.deepEqual(
+    context.galleryCoverSchedulerEnqueues.map(({ productionUrl }) => productionUrl),
+    [
+      '/cover?path=visible-first',
+      '/cover?path=visible-second',
+      '/cover?path=near-above',
+      '/cover?path=near-below',
+    ],
+  );
+});
+
+test('artist blocks place owned albums before a counted Featured On subsection', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 2;
+    const legacyOwned = { key: 'legacy-owned', name: 'Legacy owned' };
+    const explicitOwned = { key: 'explicit-owned', name: 'Explicit owned', artist_relationship: 'owned' };
+    const featured = { key: 'featured', name: 'Featured album', artist_relationship: 'featured' };
+    const duplicateFeatured = {
+        key: 'explicit-owned',
+        name: 'Explicit owned',
+        artist_relationship: 'featured',
+    };
+    const blocks = virtualGrid.getBlocksForSection({
+        group: { albums: [legacyOwned, featured, duplicateFeatured, explicitOwned] },
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(blocks)), [
+        { kind: 'row', albums: [legacyOwned, explicitOwned] },
+        { kind: 'subheading', title: 'Featured On', count: 1 },
+        { kind: 'row', albums: [featured] },
+    ]);
+});
+
+test('artist blocks render a Featured On subsection for a featured-only artist', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const albums = [
+        { key: 'guest-one', artist_relationship: 'featured' },
+        { key: 'guest-two', artist_relationship: 'featured' },
+    ];
+    assert.deepEqual(JSON.parse(JSON.stringify(
+        virtualGrid.getBlocksForSection({ group: { albums } }),
+    )), [
+        { kind: 'subheading', title: 'Featured On', count: 2 },
+        { kind: 'row', albums },
+    ]);
+});
+
+test('artist blocks omit Featured On when filtered albums contain no featured relationship', () => {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 2;
+    const albums = [
+        { key: 'owned-one', artist_relationship: 'owned' },
+        { key: 'owned-two', artist_relationship: 'unexpected-value' },
+    ];
+    assert.deepEqual(JSON.parse(JSON.stringify(
+        virtualGrid.getBlocksForSection({ group: { albums } }),
+    )), [
+        { kind: 'row', albums },
+    ]);
+});
+
+test('Featured On subheading renders singular and plural album counts', () => {
+  for (const [count, label] of [[1, '1 album'], [2, '2 albums']]) {
+    const { context } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    virtualGrid.columns = 3;
+    const albums = Array.from({ length: count }, (_unused, index) => ({
+      key: `featured-${index}`,
+      artist_relationship: 'featured',
+    }));
+    const section = {
+      kind: 'artist',
+      sectionType: 'primary',
+      sectionKey: 'artist:25-17',
+      top: 0,
+      group: { artist: '25/17', artist_display: '25/17', albums },
+    };
+    section.blocksData = virtualGrid.getBlocksForSection(section);
+    section.blockOffsets = [0, virtualGrid.subsectionLabelHeight];
+    section.blockHeights = [virtualGrid.subsectionLabelHeight, 200];
+    section.blocksHeight = virtualGrid.subsectionLabelHeight + 200;
+    const html = virtualGrid.renderSection(section, 0, Number.POSITIVE_INFINITY);
+    assert.match(html, /artist-subsection-label/);
+    assert.match(
+      html,
+      new RegExp(`Featured On[\\s\\S]*gallery-divider__line[\\s\\S]*artist-subsection-separator[^>]*>•[\\s\\S]*${label}`),
+    );
+  }
+  const subsectionRule = galleryCssSource.match(/\.artist-subsection-label\s*\{([^}]*)\}/)?.[1] || '';
+  assert.match(subsectionRule, /display\s*:\s*grid/);
+  assert.match(
+    subsectionRule,
+    /grid-template-columns\s*:\s*max-content\s+minmax\(0,\s*1fr\)\s+max-content\s+max-content/,
+  );
+  assert.match(subsectionRule, /margin\s*:\s*2px\s+0\s+-2px\s+28px/);
+  assert.match(subsectionRule, /font-size\s*:\s*0\.68rem/);
 });

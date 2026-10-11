@@ -183,6 +183,7 @@ def relation_source_fingerprint(rows: list[object]) -> str:
                 _text_value(row, "relation_evidence_kind"),
                 _int_value(row, "track_file_id"),
                 _text_value(row, "library_root_id"),
+                _text_value(row, "root_kind"),
                 _text_value(row, "root_path"),
                 _text_value(row, "relative_path"),
                 _text_value(row, "private_path"),
@@ -898,6 +899,7 @@ def load_relation_source_rows_sql() -> str:
           ) as relation_evidence_kind,
           library.local_track_files.id as track_file_id,
           library.local_track_files.library_root_id,
+          library.library_roots.root_kind,
           library.library_roots.root_path,
           library.local_track_files.relative_path,
           library.local_track_files.private_path as private_path

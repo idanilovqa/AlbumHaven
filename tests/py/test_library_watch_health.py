@@ -156,6 +156,112 @@ def test_delayed_older_insertion_preserves_newer_failed_health_after_scan():
             pytest.fail("newer failed warning must hold destructive publication")
 
 
+def test_recovery_publication_guard_allows_warning_from_before_reconciliation():
+    from datetime import datetime, timedelta, timezone
+
+    health = _health_module()
+    warning_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    connection = _HealthConnection()
+    service = health.LibraryWatchHealthService(
+        health.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _url: connection,
+        ),
+        now=lambda: warning_at,
+    )
+    service.record_event(
+        health.LibraryEvent(
+            health.LibraryEventKind.OVERFLOW,
+            "main-root",
+            Path("C:/Music"),
+        )
+    )
+
+    guard = service.recovery_publication_guard(
+        warning_at + timedelta(seconds=1)
+    )
+    entered = False
+    with guard(connection, ["main-root"]):
+        entered = True
+
+    assert entered
+
+
+def test_recovery_publication_guard_rejects_warning_newer_than_reconciliation():
+    from datetime import datetime, timedelta, timezone
+
+    health = _health_module()
+    reconciliation_started_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    connection = _HealthConnection()
+    service = health.LibraryWatchHealthService(
+        health.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _url: connection,
+        ),
+        now=lambda: reconciliation_started_at + timedelta(seconds=1),
+    )
+    service.record_event(
+        health.LibraryEvent(
+            health.LibraryEventKind.OVERFLOW,
+            "main-root",
+            Path("C:/Music"),
+        )
+    )
+
+    guard = service.recovery_publication_guard(reconciliation_started_at)
+    with pytest.raises(health.LibraryRootUnhealthyError):
+        with guard(connection, ["main-root"]):
+            pytest.fail("a newer warning must block recovery publication")
+
+
+def test_reconciliation_clear_removes_older_warning_and_preserves_newer_warning():
+    from datetime import datetime, timedelta, timezone
+
+    health = _health_module()
+    warning_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    reconciliation_started_at = warning_at + timedelta(seconds=1)
+    current_time = warning_at
+    connection = _HealthConnection()
+    service = health.LibraryWatchHealthService(
+        health.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _url: connection,
+        ),
+        now=lambda: current_time,
+    )
+    service.record_event(
+        health.LibraryEvent(
+            health.LibraryEventKind.OVERFLOW,
+            "recovered-root",
+            Path("C:/Music/Recovered"),
+        )
+    )
+    service.record_event(
+        health.LibraryEvent(
+            health.LibraryEventKind.OVERFLOW,
+            "concurrent-root",
+            Path("C:/Music/Concurrent"),
+        )
+    )
+    current_time = reconciliation_started_at + timedelta(seconds=1)
+    service.record_event(
+        health.LibraryEvent(
+            health.LibraryEventKind.ROOT_UNAVAILABLE,
+            "concurrent-root",
+            Path("C:/Music/Concurrent"),
+        )
+    )
+
+    assert service.clear_after_reconciliation(
+        observed_root_ids=["recovered-root", "concurrent-root"],
+        reconciliation_started_at=reconciliation_started_at,
+    ) == 1
+    assert [problem.root_id for problem in service.load_problems()] == [
+        "concurrent-root"
+    ]
+    assert service.load_problems()[0].state == "root_unavailable"
+
+
 @pytest.mark.parametrize("warning_kind", ["root_unavailable", "reconciliation_failed"])
 def test_new_warning_after_recovery_is_preserved_with_the_same_clock_tick(warning_kind):
     from datetime import datetime, timezone

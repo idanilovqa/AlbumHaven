@@ -3,6 +3,7 @@ import path from 'node:path';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import { expect, test } from '../support/baseFixtures.js';
 import { GalleryRegressions } from '../poms/galleryRegressions.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import { parseProductionBootstrapPayloadScriptSources } from '../poms/basePage.js';
 import { PERFORMANCE_AUTH_USERNAME, PERFORMANCE_AUTH_PASSWORD } from '../support/performanceAuthentication.js';
 
@@ -162,3 +163,407 @@ test(CASE, { tag: '@area:gallery-search' }, async ({ page, galleryActions, testA
   await page.screenshot({ path: screenshot });
   testArtifacts.queuePathAttachment('root-gallery-pagination.png', screenshot, 'image/png');
 });
+
+test('FTC-GALLERY-STARTUP-006M mobile native scrolling prefetches before and advances beyond the first full-page boundary', { tag: '@area:gallery-search' }, async ({ page, galleryActions, testArtifacts }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = new MobileLayoutPage(page);
+  const requests = [];
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (url.pathname === '/view-data' && url.searchParams.has('gallery_cursor')) {
+      requests.push(url.searchParams.get('gallery_cursor'));
+    }
+  });
+
+  await page.goto('/login');
+  await page.getByLabel('Username').fill(PERFORMANCE_AUTH_USERNAME);
+  await page.getByLabel('Password', { exact: true }).fill(PERFORMANCE_AUTH_PASSWORD);
+  const documentResponse = page.waitForResponse(response => response.request().isNavigationRequest()
+    && new URL(response.url()).pathname === '/' && response.ok());
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await documentResponse;
+  await mobile.libraryButton.click();
+  await expect(mobile.artistRail).toHaveAttribute('aria-hidden', 'false');
+  await mobile.allArtists.click();
+  await expect(mobile.home).toBeHidden();
+  await galleryActions.waitForGalleryReady();
+  await galleryActions.waitForInitialRefreshCompleted();
+
+  const readLoaded = () => page.evaluate(() => ({
+    count: state.view.artist_groups.reduce((total, group) => total + group.albums.length, 0),
+    groups: state.view.artist_groups.map(group => ({
+      artist: group.artist,
+      keys: group.albums.map(album => album.key),
+    })),
+    page: { ...state.view.gallery_page },
+  }));
+  const scrollIncrementallyUntilRequest = async (cursor, maximumSteps = 80) => {
+    const samples = [];
+    for (let step = 0; step < maximumSteps && !requests.includes(cursor); step += 1) {
+      const before = await galleryActions.readGalleryScrollState();
+      await galleryActions.scrollGalleryBy(Math.max(160, Math.floor(before.clientHeight * 0.7)));
+      await page.waitForTimeout(25);
+      const after = await galleryActions.readGalleryScrollState();
+      samples.push({ before, after });
+    }
+    expect(requests, `Expected native mobile scrolling to request cursor ${cursor}.`).toContain(cursor);
+    return samples;
+  };
+
+  const firstFullPage = await readLoaded();
+  expect(firstFullPage.count).toBe(50);
+  const reportedBoundaryArtist = firstFullPage.groups.at(-1).artist;
+  const oldExtent = await galleryActions.readGalleryScrollState();
+  const secondCursor = firstFullPage.page.next_cursor;
+  expect(secondCursor).toBeTruthy();
+  const secondResponsePromise = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/view-data' && url.searchParams.get('gallery_cursor') === secondCursor;
+  });
+  const approachSamples = await scrollIncrementallyUntilRequest(secondCursor);
+  expect(approachSamples.length).toBeGreaterThan(0);
+  // The request event and a local response can both settle inside one browser turn.
+  // Derive the old-extent boundary from the geometry immediately before the
+  // triggering fixed-size native wheel so a fast response cannot inflate it.
+  const requestBoundary = approachSamples.at(-1).before;
+  const triggeringDelta = Math.max(160, Math.floor(requestBoundary.clientHeight * 0.7));
+  const remainingAtRequest = Math.max(
+    0,
+    requestBoundary.maxScrollTop - requestBoundary.scrollTop - triggeringDelta,
+  );
+  expect(
+    remainingAtRequest,
+    `Mobile continuation after ${reportedBoundaryArtist} must begin with at least three viewports of travel remaining.`,
+  ).toBeGreaterThanOrEqual(requestBoundary.clientHeight * 3);
+
+  let stationaryOldMaximum = false;
+  for (let step = 0; step < 24; step += 1) {
+    const before = await galleryActions.readGalleryScrollState();
+    if (before.maxScrollTop > oldExtent.maxScrollTop + 2) break;
+    await galleryActions.scrollGalleryBy(Math.max(160, Math.floor(before.clientHeight * 0.7)));
+    await page.waitForTimeout(25);
+    const after = await galleryActions.readGalleryScrollState();
+    stationaryOldMaximum ||= before.scrollTop >= before.maxScrollTop - 2
+      && after.scrollTop === before.scrollTop
+      && after.maxScrollTop === before.maxScrollTop;
+  }
+  const secondResponse = await secondResponsePromise;
+  expect(secondResponse.status()).toBe(200);
+  const secondPage = await secondResponse.json();
+  await expect.poll(async () => (await readLoaded()).count).toBeGreaterThan(50);
+  expect(stationaryOldMaximum, `Mobile scrolling stopped at the old ${reportedBoundaryArtist} extent.`).toBe(false);
+
+  let finalScroll = await galleryActions.readGalleryScrollState();
+  for (let step = 0; step < 24 && finalScroll.scrollTop <= oldExtent.maxScrollTop + 2; step += 1) {
+    await galleryActions.scrollGalleryBy(Math.max(160, Math.floor(finalScroll.clientHeight * 0.7)));
+    await page.waitForTimeout(25);
+    finalScroll = await galleryActions.readGalleryScrollState();
+  }
+  expect(finalScroll.maxScrollTop).toBeGreaterThan(oldExtent.maxScrollTop);
+  expect(finalScroll.scrollTop, `Expected native scrolling to advance beyond ${reportedBoundaryArtist}.`)
+    .toBeGreaterThan(oldExtent.maxScrollTop + 2);
+  const appendedKeys = new Set(occurrences(secondPage).map(item => item.split('\u0000')[1]));
+  // parity-check: allow-read-only-measurement-evaluate -- prove newly appended production cards reached the mobile viewport
+  const mountedKeys = await page.locator('.album-card[data-gallery-card-key]')
+    .evaluateAll(cards => cards.map(card => card.getAttribute('data-gallery-card-key')));
+  expect(mountedKeys.some(key => appendedKeys.has(key))).toBe(true);
+
+  testArtifacts.queueJsonAttachment('root-gallery-pagination-mobile.json', {
+    reportedBoundaryArtist,
+    remainingAtRequest,
+    requestBoundary,
+    oldExtent,
+    finalScroll,
+    requests,
+  });
+});
+
+async function openArtistTreeContextMenu(ui, artist) {
+  const rows = ui.sidebarArtists;
+  // parity-check: allow-read-only-measurement-evaluate -- find the owned Artist Tree locator index
+  const rowIndex = await rows.evaluateAll((items, targetArtist) => (
+    items.findIndex(candidate => candidate.getAttribute('data-sidebar-artist') === targetArtist)
+  ), artist);
+  expect(rowIndex, `Expected Artist Tree row for ${artist}`).toBeGreaterThanOrEqual(0);
+  const row = rows.nth(rowIndex);
+  await row.scrollIntoViewIfNeeded();
+  await row.click({ button: 'right' });
+  await expect(ui.scrollToArtistAction).toBeVisible();
+}
+
+test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports complete backward traversal',
+  { tag: '@area:gallery-search' },
+  async ({ page, galleryActions, testArtifacts }) => {
+    const ui = new GalleryRegressions(page);
+    const requests = [];
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (url.pathname === '/view-data') requests.push(url.search);
+    });
+
+    await page.goto('/login');
+    await page.getByLabel('Username').fill(PERFORMANCE_AUTH_USERNAME);
+    await page.getByLabel('Password', { exact: true }).fill(PERFORMANCE_AUTH_PASSWORD);
+    const navigation = page.waitForResponse(response => (
+      response.request().isNavigationRequest() && new URL(response.url()).pathname === '/' && response.ok()
+    ));
+    await page.getByRole('button', { name: /sign in/i }).click();
+    await navigation;
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.waitForInitialRefreshCompleted();
+
+    // parity-check: allow-read-only-measurement-evaluate -- choose a mounted artist below the gallery top
+    const localTarget = await page.evaluate(({ scrollSelector, sidebarSelector, headingSelector }) => {
+      const scroll = document.querySelector(scrollSelector);
+      const sidebarArtists = new Set(
+        [...document.querySelectorAll(sidebarSelector)]
+          .map(item => item.getAttribute('data-sidebar-artist')),
+      );
+      return [...document.querySelectorAll(headingSelector)]
+        .map(header => ({
+          artist: header.getAttribute('data-scroll-artist'),
+          top: header.getBoundingClientRect().top,
+        }))
+        .filter(item => sidebarArtists.has(item.artist))
+        .sort((left, right) => right.top - left.top)
+        .find(item => item.top > scroll.getBoundingClientRect().top + 24)?.artist || '';
+    }, {
+      scrollSelector: '#albums-scroll',
+      sidebarSelector: ui.sidebarArtistSelector,
+      headingSelector: ui.artistHeadingSelector,
+    });
+    expect(localTarget, 'Fixture needs a mounted artist below the gallery top').not.toBe('');
+
+    const localUrl = page.url();
+    const loaderObservation = await ui.observeLoaderVisibility();
+    const requestCountBeforeLocalJump = requests.length;
+    await openArtistTreeContextMenu(ui, localTarget);
+    await ui.scrollToArtistAction.click();
+
+    await expect.poll(() => ui.readArtistJumpPlacement(localTarget)).toEqual({
+      rendered: true,
+      chromeMatches: true,
+      rowsAligned: true,
+      firstCardUncut: true,
+    });
+    expect(page.url()).toBe(localUrl);
+    expect(requests.slice(requestCountBeforeLocalJump).some(query => (
+      new URLSearchParams(query).has('gallery_anchor_artist')
+    ))).toBe(false);
+    expect(await ui.finishLoaderVisibility(loaderObservation)).toBe(false);
+
+    // parity-check: allow-read-only-measurement-evaluate -- read native gallery position before wheel input
+    const localScrollBeforeWheel = await ui.galleryScroll.evaluate(element => element.scrollTop);
+    const scrollBox = await ui.galleryScroll.boundingBox();
+    await page.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2);
+    await page.mouse.wheel(0, -Math.max(320, Math.floor(scrollBox.height * 0.8)));
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- confirm native wheel movement
+      return ui.galleryScroll.evaluate(element => element.scrollTop);
+    })
+      .toBeLessThan(localScrollBeforeWheel);
+
+    const selectedArtistResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && url.searchParams.get('artist') === localTarget
+        && response.ok();
+    });
+    // parity-check: allow-read-only-measurement-evaluate -- locate the selected artist in the rendered sidebar
+    const localSidebarIndex = await ui.sidebarArtists.evaluateAll((items, artist) => (
+      items.findIndex(candidate => candidate.getAttribute('data-sidebar-artist') === artist)
+    ), localTarget);
+    expect(localSidebarIndex, 'Mounted artist must remain available in Artist Tree').toBeGreaterThanOrEqual(0);
+    await ui.sidebarArtists.nth(localSidebarIndex).click();
+    await selectedArtistResponse;
+
+    // parity-check: allow-read-only-measurement-evaluate -- choose a sidebar artist outside the loaded model
+    const remoteTarget = await page.evaluate(sidebarSelector => {
+      const loaded = new Set((state.view.artist_groups || []).map(group => String(group.artist || '')));
+      const rendered = [...document.querySelectorAll(sidebarSelector)]
+        .map(item => String(item.getAttribute('data-sidebar-artist') || ''));
+      return rendered.reverse().find(artist => artist && !loaded.has(artist)) || '';
+    }, ui.sidebarArtistSelector);
+    expect(remoteTarget, 'Fixture needs a rendered Artist Tree row outside the loaded gallery page').not.toBe('');
+    const anchorResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && url.searchParams.get('gallery_anchor_artist') === remoteTarget
+        && response.ok();
+    });
+    await openArtistTreeContextMenu(ui, remoteTarget);
+    await ui.scrollToArtistAction.click();
+    await anchorResponse;
+    await page.waitForFunction(
+      () => !new URL(window.location.href).searchParams.has('artist'),
+      null,
+      { timeout: 10_000 },
+    );
+
+    await expect.poll(() => ui.readArtistJumpPlacement(remoteTarget)).toEqual({
+      rendered: true,
+      chromeMatches: true,
+      rowsAligned: true,
+      firstCardUncut: true,
+    });
+
+    // parity-check: allow-read-only-measurement-evaluate -- compare anchored group sizes with sidebar totals
+    const leading = await page.evaluate(artist => {
+      const groups = state.view.artist_groups || [];
+      const targetIndex = groups.findIndex(group => String(group.artist || '') === artist);
+      const group = targetIndex > 0 ? groups[targetIndex - 1] : null;
+      const sidebar = group
+        ? (state.view.artists_sidebar || []).find(item => String(item.artist || '') === String(group.artist || ''))
+        : null;
+      return {
+        artist: String(group?.artist || ''),
+        loadedAlbums: group?.albums?.length || 0,
+        authoritativeAlbums: Number(sidebar?.count || 0),
+        hasPrevious: Boolean(state.view.gallery_page?.has_previous),
+      };
+    }, remoteTarget);
+    expect(leading.artist, 'Anchored page must include an artist above the target').not.toBe('');
+    expect(leading.loadedAlbums).toBe(leading.authoritativeAlbums);
+    expect(leading.hasPrevious, 'Fixture target must leave earlier pages for upward traversal').toBe(true);
+
+    let resolvePrependAnchor;
+    let rejectPrependAnchor;
+    let prependRequested = false;
+    const markPrependRequest = request => {
+      const url = new URL(request.url());
+      if (url.pathname === '/view-data'
+        && url.searchParams.get('gallery_page_direction') === 'previous') {
+        prependRequested = true;
+      }
+    };
+    const prependAnchorAtResponse = new Promise((resolve, reject) => {
+      resolvePrependAnchor = resolve;
+      rejectPrependAnchor = reject;
+    });
+    const capturePrependAnchor = async response => {
+      const url = new URL(response.url());
+      if (url.pathname !== '/view-data'
+        || url.searchParams.get('gallery_page_direction') !== 'previous'
+        || !response.ok()) return;
+      // parity-check: allow-read-only-measurement-evaluate -- headers follow wheel settlement and precede prepend rendering
+      const anchor = await page.evaluate(({ scrollSelector, cardSelector }) => {
+        const scroll = document.querySelector(scrollSelector);
+        const scrollTop = scroll.getBoundingClientRect().top;
+        const visible = [...document.querySelectorAll(cardSelector)]
+          .map(card => ({
+            cardKey: card.getAttribute('data-gallery-card-key'),
+            sectionKey: card.closest('[data-virtual-section-key]')
+              ?.getAttribute('data-virtual-section-key') || '',
+            top: card.getBoundingClientRect().top - scrollTop,
+            bottom: card.getBoundingClientRect().bottom - scrollTop,
+          }))
+          .filter(item => item.cardKey && item.sectionKey && item.bottom > 0 && item.top < scroll.clientHeight)
+          .sort((left, right) => left.top - right.top)[0];
+        if (!visible) return null;
+        return {
+          cardKey: visible.cardKey,
+          sectionKey: visible.sectionKey,
+          top: visible.top,
+        };
+      }, { scrollSelector: '#albums-scroll', cardSelector: '.album-card[data-gallery-card-key]' });
+      resolvePrependAnchor(anchor);
+    };
+    page.on('request', markPrependRequest);
+    page.on('response', capturePrependAnchor);
+    const prependTimeout = setTimeout(() => {
+      rejectPrependAnchor(new Error('Timed out waiting for a previous-page request'));
+    }, 20_000);
+    let retainedAnchor;
+    try {
+      const previousResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && url.searchParams.get('gallery_page_direction') === 'previous'
+        && response.ok();
+    }, { timeout: 20_000 });
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const box = await ui.galleryScroll.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(0, -Math.max(500, Math.floor(box.height * 1.5)));
+      await page.waitForTimeout(40);
+      if (prependRequested) break;
+      // parity-check: allow-read-only-measurement-evaluate -- stop after reaching production's previous-page buffer
+      const reachedTopBuffer = await ui.galleryScroll.evaluate(element => (
+        element.scrollTop <= element.clientHeight * 2
+      ));
+      if (reachedTopBuffer) break;
+    }
+      [retainedAnchor] = await Promise.all([prependAnchorAtResponse, previousResponse]);
+    } finally {
+      clearTimeout(prependTimeout);
+      page.off('request', markPrependRequest);
+      page.off('response', capturePrependAnchor);
+    }
+    expect(retainedAnchor?.cardKey, 'Previous-page request must retain a visible album anchor').toBeTruthy();
+    expect(retainedAnchor?.sectionKey, 'Previous-page anchor must identify its exact artist occurrence').toBeTruthy();
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- prepend must not visibly jump the retained album
+      return page.evaluate(({
+        cardKey,
+        sectionKey,
+        expectedTop,
+        scrollSelector,
+        cardSelector,
+      }) => {
+        const scroll = document.querySelector(scrollSelector);
+        const card = [...document.querySelectorAll(cardSelector)].find(item => (
+          item.getAttribute('data-gallery-card-key') === cardKey
+          && item.closest('[data-virtual-section-key]')
+            ?.getAttribute('data-virtual-section-key') === sectionKey
+        ));
+        if (!card) return 9999;
+        const currentTop = card.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+        return Math.abs(currentTop - expectedTop);
+      }, {
+        cardKey: retainedAnchor.cardKey,
+        sectionKey: retainedAnchor.sectionKey,
+        expectedTop: retainedAnchor.top,
+        scrollSelector: '#albums-scroll',
+        cardSelector: '.album-card[data-gallery-card-key]',
+      });
+    }).toBeLessThanOrEqual(2);
+
+    await expect.poll(() => {
+      // parity-check: allow-read-only-measurement-evaluate -- wait for complete prepended leading artist data
+      return page.evaluate(() => {
+      const groups = state.view.artist_groups || [];
+      const first = groups[0];
+      const sidebar = (state.view.artists_sidebar || [])
+        .find(item => String(item.artist || '') === String(first?.artist || ''));
+      return {
+        artist: String(first?.artist || ''),
+        loadedAlbums: first?.albums?.length || 0,
+        authoritativeAlbums: Number(sidebar?.count || 0),
+      };
+      });
+    }).toEqual(expect.objectContaining({
+      loadedAlbums: expect.any(Number),
+      authoritativeAlbums: expect.any(Number),
+    }));
+    // parity-check: allow-read-only-measurement-evaluate -- capture final leading artist completeness evidence
+    const firstLoaded = await page.evaluate(() => {
+      const first = (state.view.artist_groups || [])[0];
+      const sidebar = (state.view.artists_sidebar || [])
+        .find(item => String(item.artist || '') === String(first?.artist || ''));
+      return {
+        artist: String(first?.artist || ''),
+        loadedAlbums: first?.albums?.length || 0,
+        authoritativeAlbums: Number(sidebar?.count || 0),
+      };
+    });
+    expect(firstLoaded.artist).not.toBe('');
+    expect(firstLoaded.loadedAlbums).toBe(firstLoaded.authoritativeAlbums);
+
+    testArtifacts.queueJsonAttachment('artist-tree-scroll-jump.json', {
+      localTarget,
+      remoteTarget,
+      leading,
+      firstLoaded,
+      requests,
+    });
+  });

@@ -28,6 +28,7 @@ EXTENDED_DEFAULTS = {
     "floating_player_edge": {"source": "player", "color": None},
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
+    "library_source_indicators": {"card_colors": False, "hover_outline_colors": False, "icons": True},
     "alert_family": "ember",
 }
 CUSTOM = {"main_surface_color": "#12ABCD", "panel_background_color": "#FE019A"}

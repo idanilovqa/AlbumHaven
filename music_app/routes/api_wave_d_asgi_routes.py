@@ -113,6 +113,11 @@ def _authoritative_local_cover_album_payload(
     authoritative_album = dict(album)
     authoritative_album["cover_path"] = str(cover_path)
     authoritative_album["cover_revision"] = cover_revision
+    authoritative_album["cover_selection_origin"] = "user"
+    authoritative_album["cover_selection_provenance"] = "explicit"
+    width, height = image_dimensions(cover_path)
+    authoritative_album["local_cover_width"] = width or None
+    authoritative_album["local_cover_height"] = height or None
     for field in remote_fields:
         authoritative_album[field] = None
     authoritative_tracks: list[JsonDict] = []
@@ -122,6 +127,8 @@ def _authoritative_local_cover_album_payload(
         authoritative_track = dict(track)
         authoritative_track["cover_path"] = str(cover_path)
         authoritative_track["cover_revision"] = cover_revision
+        authoritative_track["local_cover_width"] = width or None
+        authoritative_track["local_cover_height"] = height or None
         for field in remote_fields:
             authoritative_track[field] = None
         authoritative_tracks.append(authoritative_track)
@@ -214,7 +221,8 @@ async def _serialize_cover_gallery_from_asgi(
         )
         file_cache = {**file_cache, **selected_entries}
     task_payload = serialize_cover_lookup_task_payload(cover_lookup_result(task_id) if task_id else {})
-    return serialize_cover_gallery_payload(
+    return await run_in_threadpool(
+        serialize_cover_gallery_payload,
         album_root=album_root,
         track_paths=track_paths,
         file_cache=file_cache,
@@ -622,6 +630,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
             logger=logger,
             cover_revision=cover_revision,
             cover_selection_origin="user",
+            explicit_selection=True,
             commit_guard=commit_cover_selection,
         )
     except Exception as exc:
@@ -822,6 +831,7 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
             config=config,
             logger=logger,
             cover_selection_origin="user" if next_cover is not None else None,
+            explicit_selection=next_cover is not None,
             clear_selection=next_cover is None,
         )
     except Exception:
@@ -885,6 +895,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             config=config,
             logger=logger,
             cover_selection_origin="user",
+            explicit_selection=True,
         )
     except Exception:
         if prior_cover_bytes is None:
@@ -1036,12 +1047,6 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     response_task_payload = serialize_cover_lookup_task_payload(
         cover_lookup_result(task_id)
     )
-    response_gallery_payload = await _serialize_cover_gallery_from_asgi(
-        request,
-        album_context.album_root,
-        album_context.track_paths,
-        task_id,
-    )
     queue_cover_lookup_save_remote_task(
         task_id,
         album_context.album_root,
@@ -1073,7 +1078,6 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             "optimistic_remote_width": int(selected_match.get("width") or 0),
             "optimistic_remote_height": int(selected_match.get("height") or 0),
             "task": response_task_payload,
-            "gallery": response_gallery_payload,
         }
     )
 
@@ -1254,7 +1258,9 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     force_search = bool(payload.get("force_search")) if isinstance(payload, dict) else False
     try:
-        start_result = start_manual_cover_refresh_request(
+        start_result = await run_in_threadpool(
+            start_manual_cover_refresh_request,
+            cache_lock=state_service._CACHE_LOCK,
             config=config,
             logger=logger,
             get_state=lambda: library_state,
@@ -1267,17 +1273,22 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
                     scan_mode=scan_mode,
                 )
             ),
-            get_file_cache_snapshot=lambda: state_service.cover_file_cache_snapshot_for_state(library_state),
+            get_file_cache_snapshot=lambda: state_service.cover_file_cache_snapshot_for_state(
+                library_state,
+                config,
+            ),
             submit_cover_job=state_service._COVER_EXECUTOR.submit,
             refresh_unsuccessful_cover_artwork=(
-                lambda force_search=False: state_service.refresh_unsuccessful_cover_artwork_for_state(
+                lambda force_search=False, prepared=None: state_service.refresh_unsuccessful_cover_artwork_for_state(
                     library_state,
                     config,
                     logger,
                     force_search=force_search,
+                    prepared=prepared,
                 )
             ),
             force_search=force_search,
+            defer_preparation=True,
         )
     except Exception as exc:
         log_app_event(
@@ -1312,4 +1323,4 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
 
 @router.post("/utilities/cancel-cover-scan")
 async def utilities_cancel_cover_scan(request: Request) -> JSONResponse:
-    return JSONResponse({"ok": True, **cancel_cover_refresh_status(get_state=lambda: _library_state(request))})
+    return JSONResponse({"ok": True, **cancel_cover_refresh_status(get_state=lambda: _library_state(request), cache_lock=state_service._CACHE_LOCK)})

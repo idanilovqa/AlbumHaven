@@ -133,8 +133,13 @@ test(refreshWhilePressed
 
   const titleBox = await card.locator('.cover-lookup-task-title').boundingBox();
   const elapsedBox = await card.locator('.cover-lookup-task-elapsed').boundingBox();
+  const metadataBox = await card.locator('.cover-lookup-task-meta').boundingBox();
+  const progressBox = await card.locator('.cover-lookup-task-progress').boundingBox();
   expect(titleBox).not.toBeNull();
   expect(elapsedBox).not.toBeNull();
+  expect(metadataBox).not.toBeNull();
+  expect(progressBox).not.toBeNull();
+  expect(metadataBox.y + metadataBox.height).toBeLessThanOrEqual(progressBox.y - 4);
   await page.mouse.move(titleBox.x, titleBox.y + (titleBox.height / 2));
   await page.mouse.down();
   if (refreshWhilePressed) {
@@ -260,9 +265,13 @@ for (const viewport of [
       const bodyElement = document.getElementById('cover-lookup-drawer-body');
       const player = document.querySelector('.global-player');
       const firstCard = bodyElement.querySelector('.cover-lookup-task-card');
+      const firstMetadata = firstCard.querySelector('.cover-lookup-task-meta');
+      const firstProgress = firstCard.querySelector('.cover-lookup-task-progress');
       const drawerBox = drawerElement.getBoundingClientRect();
       const playerBox = player.getBoundingClientRect();
       const firstCardBox = firstCard.getBoundingClientRect();
+      const firstMetadataBox = firstMetadata.getBoundingClientRect();
+      const firstProgressBox = firstProgress.getBoundingClientRect();
       return {
         drawerBottom: drawerBox.bottom,
         playerTop: playerBox.top,
@@ -270,15 +279,18 @@ for (const viewport of [
         bodyScrollHeight: bodyElement.scrollHeight,
         bodyOverflowY: getComputedStyle(bodyElement).overflowY,
         firstCardHeight: firstCardBox.height,
+        firstCardProgressClearance: firstProgressBox.top - firstMetadataBox.bottom,
       };
     });
     expect(geometry.drawerBottom).toBeCloseTo(geometry.playerTop, 0);
     expect(geometry.bodyOverflowY).toBe('auto');
     expect(geometry.bodyScrollHeight).toBeGreaterThan(geometry.bodyClientHeight);
     expect(geometry.firstCardHeight).toBeGreaterThanOrEqual(66);
+    expect(geometry.firstCardProgressClearance).toBeGreaterThanOrEqual(4);
 
     await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
     await expect(cards.last()).toBeInViewport();
+    await expect(cards.last().getByRole('button', { name: 'Delete notification', exact: true })).toBeVisible();
     const lastCardBottom = await cards.last().evaluate(element => element.getBoundingClientRect().bottom);
     expect(lastCardBottom).toBeLessThanOrEqual(geometry.playerTop);
     await expect(drawer).toBeVisible();

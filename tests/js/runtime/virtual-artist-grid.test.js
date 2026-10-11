@@ -1463,6 +1463,36 @@ test('a newer user scroll invalidates a pending absolute setGroups restoration',
   );
 });
 
+test('a newer user wheel cancels a pending relative setGroups restoration', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 920;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  context.cancelBrowserAnimationFrame = (frameId) => {
+    context.canceledBrowserAnimationFrames.push(frameId);
+    scheduledFrames.delete(frameId);
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  scrollEl.scrollTop = 900;
+  virtualGrid.setGroups([], [], [], { preserveScroll: true });
+  const staleRestoreFrameId = virtualGrid._scrollRestoreRaf;
+  const staleRestoreFrame = scheduledFrames.get(staleRestoreFrameId);
+  assert.equal(typeof staleRestoreFrame, 'function');
+
+  scrollEl.scrollTop = 1400;
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  staleRestoreFrame();
+
+  assert.ok(context.canceledBrowserAnimationFrames.includes(staleRestoreFrameId));
+  assert.equal(scrollEl.scrollTop, 1400);
+});
+
 test('an album-card click does not surrender pending absolute scroll restoration', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

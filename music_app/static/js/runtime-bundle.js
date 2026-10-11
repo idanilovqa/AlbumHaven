@@ -35451,6 +35451,14 @@ class VirtualArtistGrid {
       cancelBrowserAnimationFrame(this._stabilizeRaf);
       this._stabilizeRaf = null;
     }
+    if (options.cancelScrollRestore === true) {
+      this._absoluteScrollRestore = null;
+      if (this._scrollRestoreRaf) {
+        cancelBrowserAnimationFrame(this._scrollRestoreRaf);
+        this._scrollRestoreRaf = null;
+      }
+      return;
+    }
     if (options.preserveAbsoluteScroll === true || !this._absoluteScrollRestore) return;
     this._absoluteScrollRestore = null;
     if (!this._scrollRestoreRaf) return;
@@ -35958,7 +35966,7 @@ class VirtualArtistGrid {
 
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
-    this.invalidateScrollStabilization();
+    this.invalidateScrollStabilization({ cancelScrollRestore: true });
   }
 
   onArtistTreeSettled() {

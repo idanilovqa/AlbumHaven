@@ -429,33 +429,47 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
     let resolvePrependAnchor;
     let rejectPrependAnchor;
     let prependRequested = false;
-    const prependAnchorAtRequest = new Promise((resolve, reject) => {
+    const markPrependRequest = request => {
+      const url = new URL(request.url());
+      if (url.pathname === '/view-data'
+        && url.searchParams.get('gallery_page_direction') === 'previous') {
+        prependRequested = true;
+      }
+    };
+    const prependAnchorAtResponse = new Promise((resolve, reject) => {
       resolvePrependAnchor = resolve;
       rejectPrependAnchor = reject;
     });
-    const capturePrependAnchor = async request => {
-      const url = new URL(request.url());
+    const capturePrependAnchor = async response => {
+      const url = new URL(response.url());
       if (url.pathname !== '/view-data'
-        || url.searchParams.get('gallery_page_direction') !== 'previous') return;
-      prependRequested = true;
-      // parity-check: allow-read-only-measurement-evaluate -- capture visible ownership before prepend applies
+        || url.searchParams.get('gallery_page_direction') !== 'previous'
+        || !response.ok()) return;
+      // parity-check: allow-read-only-measurement-evaluate -- headers follow wheel settlement and precede prepend rendering
       const anchor = await page.evaluate(({ scrollSelector, cardSelector }) => {
         const scroll = document.querySelector(scrollSelector);
         const scrollTop = scroll.getBoundingClientRect().top;
         const visible = [...document.querySelectorAll(cardSelector)]
           .map(card => ({
             cardKey: card.getAttribute('data-gallery-card-key'),
+            sectionKey: card.closest('[data-virtual-section-key]')
+              ?.getAttribute('data-virtual-section-key') || '',
             top: card.getBoundingClientRect().top - scrollTop,
             bottom: card.getBoundingClientRect().bottom - scrollTop,
           }))
-          .filter(item => item.cardKey && item.bottom > 0 && item.top < scroll.clientHeight)
+          .filter(item => item.cardKey && item.sectionKey && item.bottom > 0 && item.top < scroll.clientHeight)
           .sort((left, right) => left.top - right.top)[0];
         if (!visible) return null;
-        return { cardKey: visible.cardKey, top: visible.top };
+        return {
+          cardKey: visible.cardKey,
+          sectionKey: visible.sectionKey,
+          top: visible.top,
+        };
       }, { scrollSelector: '#albums-scroll', cardSelector: '.album-card[data-gallery-card-key]' });
       resolvePrependAnchor(anchor);
     };
-    page.on('request', capturePrependAnchor);
+    page.on('request', markPrependRequest);
+    page.on('response', capturePrependAnchor);
     const prependTimeout = setTimeout(() => {
       rejectPrependAnchor(new Error('Timed out waiting for a previous-page request'));
     }, 20_000);
@@ -479,23 +493,35 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
       ));
       if (reachedTopBuffer) break;
     }
-      [retainedAnchor] = await Promise.all([prependAnchorAtRequest, previousResponse]);
+      [retainedAnchor] = await Promise.all([prependAnchorAtResponse, previousResponse]);
     } finally {
       clearTimeout(prependTimeout);
-      page.off('request', capturePrependAnchor);
+      page.off('request', markPrependRequest);
+      page.off('response', capturePrependAnchor);
     }
     expect(retainedAnchor?.cardKey, 'Previous-page request must retain a visible album anchor').toBeTruthy();
+    expect(retainedAnchor?.sectionKey, 'Previous-page anchor must identify its exact artist occurrence').toBeTruthy();
     await expect.poll(() => {
       // parity-check: allow-read-only-measurement-evaluate -- prepend must not visibly jump the retained album
-      return page.evaluate(({ cardKey, expectedTop, scrollSelector, cardSelector }) => {
+      return page.evaluate(({
+        cardKey,
+        sectionKey,
+        expectedTop,
+        scrollSelector,
+        cardSelector,
+      }) => {
         const scroll = document.querySelector(scrollSelector);
-        const card = [...document.querySelectorAll(cardSelector)]
-          .find(item => item.getAttribute('data-gallery-card-key') === cardKey);
-        return card
-          ? Math.abs((card.getBoundingClientRect().top - scroll.getBoundingClientRect().top) - expectedTop)
-          : 9999;
+        const card = [...document.querySelectorAll(cardSelector)].find(item => (
+          item.getAttribute('data-gallery-card-key') === cardKey
+          && item.closest('[data-virtual-section-key]')
+            ?.getAttribute('data-virtual-section-key') === sectionKey
+        ));
+        if (!card) return 9999;
+        const currentTop = card.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+        return Math.abs(currentTop - expectedTop);
       }, {
         cardKey: retainedAnchor.cardKey,
+        sectionKey: retainedAnchor.sectionKey,
         expectedTop: retainedAnchor.top,
         scrollSelector: '#albums-scroll',
         cardSelector: '.album-card[data-gallery-card-key]',

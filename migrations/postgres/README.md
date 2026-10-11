@@ -247,6 +247,15 @@ back before invoking the migrator-only rollback routine. Rollback preserves any
 unapplied lane as a `rollback_pending_work` incident; do not drop retained lane,
 incident, or legacy-import evidence until an operator has reconciled it.
 
+`0108_create_watcher_runtime_sessions.sql` adds token-fenced watcher-session
+evidence and database-root participants. Deployments support one watcher writer
+per library. Apply `0108` before starting matching application code: old code
+ignores the additive schema, while new code fails closed before starting its
+observer when the schema is missing. For rollback, let the new instance stop,
+flush, and finish its session before deploying old code. If shutdown or rollback
+cannot prove a clean finish, leave the session row, participant rows, and
+additive schema intact so the next compatible startup can recover them.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 `0081_grant_move_policy_settings_delete.sql` grants the application role the scoped `DELETE` privilege required when root-setting saves replace move-policy rows in one transaction.

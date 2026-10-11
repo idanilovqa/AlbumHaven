@@ -267,6 +267,125 @@ def test_unclean_takeover_filters_inactive_prior_and_installs_exact_current_set(
         assert _occurrences(setup, session_scope, "old-active") == 1
         assert _occurrences(setup, session_scope, "shared-active") == 1
         assert _occurrences(setup, session_scope, "old-inactive") == 0
+
+
+def test_unclean_takeover_chunks_a_512_root_prior_union_and_installs_new_set(
+    session_scope,
+):
+    old_roots = tuple(f"union-old-{index:03d}" for index in range(256))
+    new_roots = tuple(f"union-new-{index:03d}" for index in range(256))
+    with isolatedPostgres._connect(session_scope.setup_url) as setup:
+        setup.execute(
+            "insert into library.library_roots "
+            "(library_id, root_path, root_kind, is_active, metadata) "
+            "select %s, %s || '/' || family || '-' || item::text, 'main', true, "
+            "pg_catalog.jsonb_build_object("
+            "'root_id', 'union-' || family || '-' || pg_catalog.lpad(item::text, 3, '0')"
+            ") "
+            "from (values ('old', 0), ('new', 1)) families(family, family_order) "
+            "cross join pg_catalog.generate_series(0, 255) item "
+            "order by family_order, item",
+            (session_scope.library_id, "C:/watcher-session-union"),
+        )
+
+    old_token = uuid4()
+    new_token = uuid4()
+    with isolatedPostgres._connect(session_scope.app_url) as app:
+        assert _begin(app, session_scope, old_token, old_roots) == ()
+        app.execute(
+            "select library.expand_watcher_runtime_session_participants(%s, %s, %s)",
+            (session_scope.library_id, old_token, list(new_roots)),
+        )
+    with isolatedPostgres._connect(session_scope.app_url) as app:
+        recovered = _begin(
+            app,
+            session_scope,
+            new_token,
+            new_roots,
+            NOW + timedelta(seconds=1),
+        )
+
+    with isolatedPostgres._connect(session_scope.setup_url) as setup:
+        assert recovered == old_roots + new_roots
+        assert _participants(setup, session_scope.library_id) == set(new_roots)
+        recovered_occurrences = setup.execute(
+            "select count(*) as recovered_count "
+            "from library.watcher_incidents incident "
+            "join library.library_roots root on "
+            "root.library_id = incident.library_id and root.id = incident.root_id "
+            "where incident.library_id = %s and incident.resolved_at is null "
+            "and root.metadata ->> 'root_id' = any(%s)",
+            (session_scope.library_id, list(old_roots + new_roots)),
+        ).fetchone()["recovered_count"]
+        assert int(recovered_occurrences) == 512
+
+
+@pytest.mark.parametrize(
+    "corrupt_root_id",
+    [None, "   "],
+    ids=["null", "blank"],
+)
+def test_begin_rejects_ambiguous_active_prior_metadata_and_preserves_evidence(
+    session_scope,
+    corrupt_root_id,
+):
+    import psycopg
+
+    old_token = uuid4()
+    new_token = uuid4()
+    prior_root_ids = (
+        session_scope.root_ids["old-active"],
+        session_scope.root_ids["shared-active"],
+    )
+    with isolatedPostgres._connect(session_scope.app_url) as app:
+        assert _begin(
+            app,
+            session_scope,
+            old_token,
+            ("old-active", "shared-active"),
+        ) == ()
+    with isolatedPostgres._connect(session_scope.setup_url) as setup:
+        setup.execute(
+            "update library.library_roots "
+            "set metadata = pg_catalog.jsonb_set("
+            "metadata, '{root_id}', %s::jsonb, true"
+            ") where id = %s",
+            (json.dumps(corrupt_root_id), session_scope.root_ids["shared-active"]),
+        )
+
+    with isolatedPostgres._connect(session_scope.app_url) as app:
+        app.autocommit = True
+        with pytest.raises(psycopg.errors.InvalidParameterValue):
+            _begin(
+                app,
+                session_scope,
+                new_token,
+                ("new-active",),
+                NOW + timedelta(seconds=1),
+            )
+
+    with isolatedPostgres._connect(session_scope.setup_url) as setup:
+        session = setup.execute(
+            "select session_token from library.watcher_runtime_sessions "
+            "where library_id = %s",
+            (session_scope.library_id,),
+        ).fetchone()
+        participant_ids = tuple(
+            row["root_id"]
+            for row in setup.execute(
+                "select root_id from library.watcher_runtime_session_participants "
+                "where library_id = %s order by root_id",
+                (session_scope.library_id,),
+            ).fetchall()
+        )
+        incident_count = setup.execute(
+            "select count(*) as incident_count from library.watcher_incidents "
+            "where library_id = %s",
+            (session_scope.library_id,),
+        ).fetchone()["incident_count"]
+        assert session["session_token"] == old_token
+        assert participant_ids == tuple(sorted(prior_root_ids))
+        assert int(incident_count) == 0
         reasons = {
             str(row["logical_id"]): str(row["reason_code"])
             for row in setup.execute(

@@ -620,6 +620,10 @@ class _DirtyConnection:
         self.query_release.set()
         self.commit_release.set()
 
+    def cancel_safe(self, *, timeout):
+        assert timeout > 0
+        self.cancel()
+
     def close(self):
         self.close_count += 1
         self.closed = True
@@ -966,6 +970,130 @@ def test_dirty_attempt_cancel_during_connect_query_and_commit_closes_exact_conne
     assert attempt.is_terminal is True
     assert result[0].state in {"rolled_back", "indeterminate"}
     assert result[0].committed_root_ids == ()
+
+
+@pytest.mark.parametrize("cancel_failure", [None, TimeoutError("cancel timed out")])
+def test_dirty_attempt_cancel_uses_bounded_safe_cancel_and_always_closes(
+    cancel_failure,
+):
+    class SafeCancelConnection(_DirtyConnection):
+        def __init__(self):
+            super().__init__()
+            self.cancel_safe_timeouts = []
+            self.unbounded_cancel_called = False
+
+        def cancel(self):
+            self.unbounded_cancel_called = True
+            raise AssertionError("unbounded connection cancellation is forbidden")
+
+        def cancel_safe(self, *, timeout):
+            self.cancel_safe_timeouts.append(timeout)
+            if cancel_failure is not None:
+                raise cancel_failure
+            self.query_release.set()
+
+    remaining = 1.5
+    connection = SafeCancelConnection()
+    connection.query_release.clear()
+    _module, attempt, _factory, connection = _dirty_attempt(
+        connection=connection,
+        deadline=time.monotonic() + remaining,
+    )
+    outcomes = []
+    worker = Thread(target=lambda: outcomes.append(attempt.execute()), daemon=True)
+    worker.start()
+    assert connection.query_entered.wait(1.0)
+
+    attempt.cancel()
+    worker.join(2.0)
+
+    assert connection.unbounded_cancel_called is False
+    assert len(connection.cancel_safe_timeouts) == 1
+    assert 0 < connection.cancel_safe_timeouts[0] <= remaining
+    assert not worker.is_alive()
+    assert connection.closed is True
+    assert connection.close_count >= 1
+    assert outcomes[0].state in {"rolled_back", "indeterminate"}
+    assert outcomes[0].committed_root_ids == ()
+
+
+def test_dirty_attempt_safe_cancel_reserves_time_to_close_and_join(monkeypatch):
+    module = _recovery_module()
+
+    class FakeMonotonic:
+        def __init__(self):
+            self.value = 100.0
+
+        def __call__(self):
+            return self.value
+
+        def advance(self, seconds):
+            self.value += seconds
+
+    clock = FakeMonotonic()
+    monkeypatch.setattr(module.time, "monotonic", clock)
+
+    class WorstCaseCancelConnection(_DirtyConnection):
+        def __init__(self):
+            super().__init__()
+            self.cancel_safe_timeouts = []
+            self.cancel_returned_at = None
+            self.close_times = []
+            self.unbounded_cancel_called = False
+
+        def cancel(self):
+            self.unbounded_cancel_called = True
+            self.query_release.set()
+            raise AssertionError("unbounded connection cancellation is forbidden")
+
+        def cancel_safe(self, *, timeout):
+            self.cancel_safe_timeouts.append(timeout)
+            clock.advance(timeout)
+            self.cancel_returned_at = clock()
+            self.query_release.set()
+
+        def close(self):
+            self.close_times.append(clock())
+            super().close()
+
+    operation_deadline = clock() + 4.0
+    connection = WorstCaseCancelConnection()
+    connection.query_release.clear()
+    connection.commit_release.clear()
+    repository = module.PostgresWatcherRecoveryRepository(
+        database_url="postgresql://watcher.invalid/album_haven",
+        connect_to_database=_DirtyConnectionFactory(connection),
+    )
+    attempt = repository.prepare_overflow_dirty_write(
+        library_id=7,
+        logical_root_ids=("root-a", "root-b"),
+        observed_at=NOW,
+        operation_deadline=operation_deadline,
+    )
+    outcomes = []
+    worker = Thread(target=lambda: outcomes.append(attempt.execute()), daemon=True)
+    worker.start()
+    assert connection.query_entered.wait(1.0)
+    remaining_before_cancel = operation_deadline - clock()
+
+    attempt.cancel()
+    worker.join(1.0)
+    connection.commit_release.set()
+    worker.join(1.0)
+
+    assert connection.unbounded_cancel_called is False
+    assert len(connection.cancel_safe_timeouts) == 1
+    cancel_timeout = connection.cancel_safe_timeouts[0]
+    assert 0 < cancel_timeout < remaining_before_cancel
+    assert connection.cancel_returned_at == 100.0 + cancel_timeout
+    assert connection.close_times
+    assert max(connection.close_times) < operation_deadline
+    assert operation_deadline - clock() > 0
+    assert not worker.is_alive()
+    assert not connection.commit_entered.is_set()
+    assert connection.committed is False
+    assert outcomes[0].state in {"rolled_back", "indeterminate"}
+    assert outcomes[0].committed_root_ids == ()
 
 
 def test_dirty_attempt_commit_acknowledged_before_cancel_is_the_only_committed_outcome():

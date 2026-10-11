@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from threading import Lock
+import time
+from typing import Any, Callable, Iterable, Literal, Mapping, Protocol
+from uuid import UUID
 
 from music_app.services.library_event_coordinator import CoordinatorProblem
 from music_app.services.library_watch import LibraryEvent, LibraryEventKind
@@ -85,6 +89,34 @@ class WatcherMetrics:
     oldest_repair_seconds: float
 
 
+class WatcherSessionReplacedError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class WatcherDirtyWriteOutcome:
+    state: Literal["committed", "rolled_back", "indeterminate"]
+    committed_root_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.state not in {"committed", "rolled_back", "indeterminate"}:
+            raise ValueError("watcher dirty write outcome state is invalid")
+        if self.state != "committed" and self.committed_root_ids:
+            raise ValueError("only a committed outcome may contain committed root IDs")
+
+
+class WatcherDirtyWriteAttempt(Protocol):
+    @property
+    def is_terminal(self) -> bool: ...
+
+    @property
+    def outcome(self) -> WatcherDirtyWriteOutcome | None: ...
+
+    def execute(self) -> WatcherDirtyWriteOutcome: ...
+
+    def cancel(self) -> None: ...
+
+
 def _relative_path(path: Path, root: Path) -> str:
     try:
         relative = path.resolve(strict=False).relative_to(root.resolve(strict=False))
@@ -158,11 +190,212 @@ def _timestamp_text(value: object) -> str:
     return str(value or "").strip()
 
 
-def _default_connect(database_url: str) -> Any:
+def _default_connect(database_url: str, **kwargs: Any) -> Any:
     import psycopg
     from psycopg.rows import dict_row
 
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return psycopg.connect(database_url, row_factory=dict_row, **kwargs)
+
+
+def _runtime_session_identity(library_id: int, session_token: UUID) -> tuple[int, UUID]:
+    if not isinstance(library_id, int) or isinstance(library_id, bool) or library_id < 1:
+        raise ValueError("library_id must be positive")
+    if not isinstance(session_token, UUID):
+        raise ValueError("session_token must be a UUID")
+    return library_id, session_token
+
+
+def _root_id_tuple(logical_root_ids: tuple[str, ...], *, unique: bool) -> tuple[str, ...]:
+    if not isinstance(logical_root_ids, tuple) or len(logical_root_ids) > 256:
+        raise ValueError("logical_root_ids must be a bounded tuple")
+    if any(not isinstance(value, str) or not value.strip() for value in logical_root_ids):
+        raise ValueError("logical_root_ids contains an invalid value")
+    if unique and len(set(logical_root_ids)) != len(logical_root_ids):
+        raise ValueError("logical_root_ids must be unique")
+    return logical_root_ids
+
+
+def _ordered_sql_root_ids(logical_root_ids: tuple[str, ...]) -> list[str]:
+    if len(set(logical_root_ids)) == len(logical_root_ids):
+        return sorted(logical_root_ids)
+    return list(logical_root_ids)
+
+
+def _runtime_session_error(exc: BaseException, *, begin: bool = False) -> BaseException:
+    sqlstate = getattr(exc, "sqlstate", None)
+    if sqlstate == "22023":
+        return ValueError("watcher runtime session arguments are invalid")
+    if sqlstate == "55000" and not begin:
+        return WatcherSessionReplacedError("watcher runtime session was replaced")
+    if begin:
+        return RuntimeError("watcher runtime session could not begin")
+    return RuntimeError("watcher runtime session operation failed")
+
+
+class _PostgresWatcherDirtyWriteAttempt:
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        connect_to_database: Callable[..., Any],
+        library_id: int,
+        logical_root_ids: tuple[str, ...],
+        observed_at: datetime,
+        operation_deadline: float,
+    ) -> None:
+        self._database_url = database_url
+        self._connect_to_database = connect_to_database
+        self._library_id = library_id
+        self._logical_root_ids = logical_root_ids
+        self._observed_at = observed_at
+        self._operation_deadline = operation_deadline
+        self._lock = Lock()
+        self._cancelled = False
+        self._cancel_sent = False
+        self._connection: Any | None = None
+        self._executing = False
+        self._outcome: WatcherDirtyWriteOutcome | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        with self._lock:
+            return self._outcome is not None
+
+    @property
+    def outcome(self) -> WatcherDirtyWriteOutcome | None:
+        with self._lock:
+            return self._outcome
+
+    def _publish(self, outcome: WatcherDirtyWriteOutcome) -> WatcherDirtyWriteOutcome:
+        with self._lock:
+            if self._outcome is None:
+                self._outcome = outcome
+            return self._outcome
+
+    @staticmethod
+    def _close(connection: Any) -> None:
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _rollback(connection: Any) -> bool:
+        try:
+            connection.rollback()
+        except Exception:
+            return False
+        return True
+
+    def execute(self) -> WatcherDirtyWriteOutcome:
+        with self._lock:
+            if self._outcome is not None:
+                return self._outcome
+            if self._executing:
+                raise RuntimeError("watcher dirty write attempt is already executing")
+            self._executing = True
+            if self._cancelled:
+                return self._publish_locked(WatcherDirtyWriteOutcome("rolled_back"))
+
+        remaining = self._operation_deadline - time.monotonic()
+        if remaining < 1.0:
+            return self._publish(WatcherDirtyWriteOutcome("rolled_back"))
+
+        connection = None
+        commit_started = False
+        try:
+            connection = self._connect_to_database(
+                self._database_url,
+                connect_timeout=max(1, int(remaining)),
+            )
+            with self._lock:
+                self._connection = connection
+                cancelled = self._cancelled
+            if cancelled:
+                rolled_back = self._rollback(connection)
+                self._close(connection)
+                return self._publish(
+                    WatcherDirtyWriteOutcome("rolled_back" if rolled_back else "indeterminate")
+                )
+
+            remaining_ms = int((self._operation_deadline - time.monotonic()) * 1000)
+            if remaining_ms < 1:
+                raise TimeoutError
+            timeout = f"{remaining_ms}ms"
+            connection.execute(
+                "select pg_catalog.set_config('statement_timeout', %s, true)",
+                (timeout,),
+            )
+            connection.execute(
+                "select pg_catalog.set_config('lock_timeout', %s, true)",
+                (timeout,),
+            )
+            connection.execute(
+                "select * from library.mark_watcher_roots_dirty(%s, %s, %s, %s)",
+                (
+                    self._library_id,
+                    list(self._logical_root_ids),
+                    "overflow",
+                    self._observed_at,
+                ),
+            ).fetchall()
+            with self._lock:
+                cancelled = self._cancelled
+            if cancelled:
+                rolled_back = self._rollback(connection)
+                self._close(connection)
+                return self._publish(
+                    WatcherDirtyWriteOutcome(
+                        "rolled_back" if rolled_back else "indeterminate"
+                    )
+                )
+            commit_started = True
+            connection.commit()
+            with self._lock:
+                cancelled = self._cancelled
+            self._close(connection)
+            return self._publish(
+                WatcherDirtyWriteOutcome(
+                    "indeterminate" if cancelled else "committed",
+                    () if cancelled else self._logical_root_ids,
+                )
+            )
+        except Exception:
+            rolled_back = not commit_started and (
+                connection is None or self._rollback(connection)
+            )
+            if connection is not None:
+                self._close(connection)
+            return self._publish(
+                WatcherDirtyWriteOutcome("rolled_back" if rolled_back else "indeterminate")
+            )
+        finally:
+            with self._lock:
+                self._connection = None
+
+    def _publish_locked(self, outcome: WatcherDirtyWriteOutcome) -> WatcherDirtyWriteOutcome:
+        if self._outcome is None:
+            self._outcome = outcome
+        return self._outcome
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            connection = self._connection
+            if connection is None or self._cancel_sent:
+                return
+            self._cancel_sent = True
+        remaining = self._operation_deadline - time.monotonic()
+        if remaining <= 0:
+            self._close(connection)
+            return
+        cancel_timeout = min(max(0.001, remaining / 2), remaining * 0.9)
+        try:
+            connection.cancel_safe(timeout=cancel_timeout)
+        except Exception:
+            pass
+        finally:
+            self._close(connection)
 
 
 class PostgresWatcherRecoveryRepository:
@@ -177,6 +410,144 @@ class PostgresWatcherRecoveryRepository:
 
     def _connect(self) -> Any:
         return self._connect_to_database(self._database_url)
+
+    def begin_runtime_session(
+        self,
+        *,
+        library_id: int,
+        session_token: UUID,
+        logical_root_ids: tuple[str, ...],
+        started_at: datetime,
+    ) -> tuple[str, ...]:
+        library_id, session_token = _runtime_session_identity(library_id, session_token)
+        logical_root_ids = _root_id_tuple(logical_root_ids, unique=False)
+        if (
+            not isinstance(started_at, datetime)
+            or started_at.tzinfo is None
+            or started_at.utcoffset() != timezone.utc.utcoffset(started_at)
+        ):
+            raise ValueError("started_at must be an aware UTC timestamp")
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "select * from library.begin_watcher_runtime_session(%s, %s, %s, %s)",
+                    (
+                        library_id,
+                        session_token,
+                        _ordered_sql_root_ids(logical_root_ids),
+                        started_at,
+                    ),
+                ).fetchall()
+        except Exception as exc:
+            raise _runtime_session_error(exc, begin=True) from None
+        recovered = tuple(
+            str(row.get("recovered_logical_root_id") or "").strip() for row in rows
+        )
+        if any(not root_id for root_id in recovered) or len(set(recovered)) != len(recovered):
+            raise RuntimeError("watcher runtime session recovery result is invalid")
+        return tuple(sorted(recovered))
+
+    def expand_runtime_session_participants(
+        self,
+        *,
+        library_id: int,
+        session_token: UUID,
+        logical_root_ids: tuple[str, ...],
+    ) -> None:
+        self._mutate_runtime_session_participants(
+            function="expand_watcher_runtime_session_participants",
+            library_id=library_id,
+            session_token=session_token,
+            logical_root_ids=logical_root_ids,
+        )
+
+    def set_runtime_session_participants(
+        self,
+        *,
+        library_id: int,
+        session_token: UUID,
+        logical_root_ids: tuple[str, ...],
+    ) -> None:
+        self._mutate_runtime_session_participants(
+            function="set_watcher_runtime_session_participants",
+            library_id=library_id,
+            session_token=session_token,
+            logical_root_ids=logical_root_ids,
+        )
+
+    def _mutate_runtime_session_participants(
+        self,
+        *,
+        function: str,
+        library_id: int,
+        session_token: UUID,
+        logical_root_ids: tuple[str, ...],
+    ) -> None:
+        library_id, session_token = _runtime_session_identity(library_id, session_token)
+        logical_root_ids = _root_id_tuple(logical_root_ids, unique=False)
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    f"select library.{function}(%s, %s, %s)",
+                    (
+                        library_id,
+                        session_token,
+                        _ordered_sql_root_ids(logical_root_ids),
+                    ),
+                )
+        except Exception as exc:
+            raise _runtime_session_error(exc) from None
+
+    def finish_runtime_session(
+        self,
+        *,
+        library_id: int,
+        session_token: UUID,
+    ) -> bool:
+        library_id, session_token = _runtime_session_identity(library_id, session_token)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "select library.finish_watcher_runtime_session(%s, %s) as finished",
+                    (library_id, session_token),
+                ).fetchone()
+        except Exception as exc:
+            raise _runtime_session_error(exc) from None
+        return bool(row and row.get("finished"))
+
+    def prepare_overflow_dirty_write(
+        self,
+        *,
+        library_id: int,
+        logical_root_ids: tuple[str, ...],
+        observed_at: datetime,
+        operation_deadline: float,
+    ) -> WatcherDirtyWriteAttempt:
+        if not isinstance(library_id, int) or isinstance(library_id, bool) or library_id < 1:
+            raise ValueError("library_id must be positive")
+        logical_root_ids = _root_id_tuple(logical_root_ids, unique=True)
+        if not logical_root_ids:
+            raise ValueError("logical_root_ids must not be empty")
+        if (
+            not isinstance(observed_at, datetime)
+            or observed_at.tzinfo is None
+            or observed_at.utcoffset() != timezone.utc.utcoffset(observed_at)
+        ):
+            raise ValueError("observed_at must be an aware UTC timestamp")
+        try:
+            operation_deadline = float(operation_deadline)
+        except (TypeError, ValueError):
+            raise ValueError("operation_deadline must be finite") from None
+        if not math.isfinite(operation_deadline):
+            raise ValueError("operation_deadline must be finite")
+        return _PostgresWatcherDirtyWriteAttempt(
+            database_url=self._database_url,
+            connect_to_database=self._connect_to_database,
+            library_id=library_id,
+            logical_root_ids=logical_root_ids,
+            observed_at=observed_at,
+            operation_deadline=operation_deadline,
+        )
 
     def dispatch_ready(self, *, now: datetime, limit: int = 32) -> tuple[int, ...]:
         now = _aware_utc(now, "now")
@@ -520,8 +891,11 @@ __all__ = [
     "ClaimedWatcherGeneration",
     "MarkedDirtyWatcherGeneration",
     "PostgresWatcherRecoveryRepository",
+    "WatcherDirtyWriteAttempt",
+    "WatcherDirtyWriteOutcome",
     "WatcherMetrics",
     "WatcherParticipantFence",
     "WatcherRollbackResult",
     "WatcherRootRecord",
+    "WatcherSessionReplacedError",
 ]

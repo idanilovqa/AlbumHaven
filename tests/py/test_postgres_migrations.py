@@ -271,6 +271,22 @@ def test_0108_filters_inactive_prior_participants_before_dirty_recovery():
     assert "recovered_logical_root_id" in begin
 
 
+def test_0108_rejects_ambiguous_active_prior_metadata_before_dirty_recovery():
+    begin = _watcher_session_function_sql(
+        "library.begin_watcher_runtime_session"
+    )
+    dirty_call = begin.index("library.mark_watcher_roots_dirty")
+
+    required_prior_scope_guards = (
+        "root.metadata ->> 'root_id' is null",
+        "pg_catalog.btrim(root.metadata ->> 'root_id') = ''",
+        "count(*) <> count(distinct root.metadata ->> 'root_id')",
+    )
+    for guard in required_prior_scope_guards:
+        assert guard in begin
+        assert begin.index(guard) < dirty_call
+
+
 def test_0108_denies_direct_dml_to_every_runtime_role():
     sql = _watcher_session_sql()
     relations = (

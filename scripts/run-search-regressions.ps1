@@ -60,7 +60,7 @@ Set-Location $repositoryRoot
 
 Invoke-Checked {
     & $PythonPath -m pytest tests\py\test_library_browse_postgres.py `
-        -k 'search or test_duplicate_source_attachment_defers_global_index_cache_miss' -q
+        -k 'search or test_duplicate_source_attachment_defers_global_index_cache_miss or test_selected_artist_browse_preserves_split_albums_in_one_folder' -q
 } 'Search API and PostgreSQL contracts'
 
 Invoke-Checked {

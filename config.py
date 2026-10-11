@@ -276,7 +276,7 @@ class Config:
     ).strip()
     MUSICBRAINZ_BASE_URL = os.environ.get(
         "MUSICBRAINZ_BASE_URL",
-        "https://musicbrainz.org/ws/2",
+        "http://localhost:5050/ws/2/",
     ).strip().rstrip("/")
     COVER_ART_ARCHIVE_BASE_URL = os.environ.get(
         "COVER_ART_ARCHIVE_BASE_URL",

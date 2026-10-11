@@ -27,6 +27,11 @@ test('search regression gate keeps the complete required suite in one command', 
   assert.match(runner, /performance-change-impact\.test\.js/u);
   assert.match(runner, /searchInput\.spec\.js/u);
   assert.match(runner, /-Shard gallery-search-visual/u);
+  assert.match(
+    runner,
+    /\$fixtureDistributionRoot\s*=\s*Split-Path -Parent \(Split-Path -Parent \(\[IO\.Path\]::GetFullPath\(\$FixtureRoot\)\)\)/u,
+  );
+  assert.match(runner, /-FixtureDistribution\s+\$fixtureDistributionRoot/u);
   assert.match(runner, /artist-family,search-all-artists,search-browse/u);
 });
 

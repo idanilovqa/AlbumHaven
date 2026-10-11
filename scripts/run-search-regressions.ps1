@@ -45,6 +45,7 @@ $node = (Get-Command node -ErrorAction Stop).Source
 $playwright = Join-Path $repositoryRoot 'node_modules\.bin\playwright.cmd'
 $functionalRunner = Join-Path $repositoryRoot 'scripts\run-functional-e2e-local.ps1'
 $performanceRunner = Join-Path $repositoryRoot 'scripts\ci\run-performance-shard.ps1'
+$fixtureDistributionRoot = Split-Path -Parent (Split-Path -Parent ([IO.Path]::GetFullPath($FixtureRoot)))
 $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-search-regressions-$PID"
 $githubEnv = Join-Path $performanceTemp 'database.env'
 
@@ -82,7 +83,8 @@ Invoke-Checked {
 
 Invoke-Checked {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $functionalRunner `
-        -Shard gallery-search-visual -PythonPath $PythonPath
+        -Shard gallery-search-visual -PythonPath $PythonPath `
+        -FixtureDistribution $fixtureDistributionRoot
 } 'Search functional E2E shard'
 
 New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null

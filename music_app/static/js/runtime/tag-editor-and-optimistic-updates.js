@@ -1852,6 +1852,7 @@ function renderTrackModalRelease(album) {
   const resolvedAlbumKey = getTrackModalAlbumRequestKey(album) || getTrackModalAlbumIdentity(album) || String(album?.key || '');
   const albumKey = escapeHtml(resolvedAlbumKey);
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
+  const hasVersionTabs = Array.isArray(state.modalReleases) && state.modalReleases.length > 1;
   const candidateSnapshot = album?.cover_candidate_snapshot && typeof album.cover_candidate_snapshot === 'object'
     ? album.cover_candidate_snapshot
     : null;
@@ -1902,7 +1903,7 @@ function renderTrackModalRelease(album) {
       album: album.name || 'Album',
       year: album.year || '',
       releaseType: album.release_type || 'ALBUM',
-      tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });

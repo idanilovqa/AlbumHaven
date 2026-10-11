@@ -211,6 +211,53 @@ test('album editions render the same keyboard tab component as Home', () => {
   assert.match(tabs.innerHTML, /Anniversary Remix - 2018/);
 });
 
+test('version tabs are the sole edition indicator while standalone editions retain their header tag', () => {
+  const original = {
+    key: 'original',
+    name: 'Shared Album',
+    album_artist: 'Shared Artist',
+    year: 1998,
+    release_type: 'ALBUM',
+    tabLabel: 'Original - 1998',
+    cover_path: 'C:\\Music\\Shared Artist\\Shared Album\\cover.png',
+    tracks: [],
+  };
+  const specialEdition = {
+    ...original,
+    key: 'special-edition',
+    edition: 'Special Edition',
+    tabLabel: 'Special Edition - 1998',
+  };
+  const tabbed = createTrackModalCoverContext({
+    albums: [original, specialEdition],
+    resolvePreview: async () => ({ displayUrl: 'blob:tabbed-cover', cached: true }),
+  });
+  tabbed.context.state.modalReleaseIndex = 1;
+
+  tabbed.context.renderTrackModalRelease(specialEdition);
+
+  assert.match(tabbed.elements.tabs.innerHTML, /Special Edition - 1998/);
+  assert.match(tabbed.elements.header.innerHTML, /Shared Artist/);
+  assert.match(tabbed.elements.header.innerHTML, /1998/);
+  assert.match(tabbed.elements.header.innerHTML, /ALBUM/);
+  assert.doesNotMatch(
+    tabbed.elements.header.innerHTML,
+    /album-details-header__tag">Special Edition<\/span>/,
+  );
+
+  const standalone = createTrackModalCoverContext({
+    albums: [specialEdition],
+    resolvePreview: async () => ({ displayUrl: 'blob:standalone-cover', cached: true }),
+  });
+  standalone.context.renderTrackModalRelease(specialEdition);
+
+  assert.equal(standalone.elements.tabs.hidden, true);
+  assert.match(
+    standalone.elements.header.innerHTML,
+    /album-details-header__tag">Special Edition<\/span>/,
+  );
+});
+
 test('buildPlayerTrackPayload carries numeric duration_seconds into durationSeconds', () => {
   const context = loadHelper([]);
 
@@ -2909,6 +2956,7 @@ function createTrackModalCoverContext(options = {}) {
   const elements = {
     overlay: new TrackModalTestElement('div'),
     cover,
+    header: new TrackModalTestElement('div'),
     title: new TrackModalTestElement('h2'),
     subtitle: new TrackModalTestElement('div'),
     list: new TrackModalTestElement('div'),

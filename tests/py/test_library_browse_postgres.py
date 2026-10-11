@@ -11246,6 +11246,33 @@ def test_non_album_candidate_track_filter_is_applied_before_inventory_scans():
     assert discovery.count("library.local_tracks.id = any(%(track_ids)s::bigint[])") >= 2
 
 
+def test_duplicate_source_attachment_defers_global_index_cache_miss(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-deferred-cache-test"}
+    )
+    browse.invalidate_postgres_utility_projection_cache()
+    fingerprint = {"fingerprint": (1, 1, 1, 1, 1), "observed_at": 1}
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: fingerprint)
+    queued = []
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", queued.append)
+
+    class Connection:
+        def execute(self, _sql, _params):
+            raise AssertionError("interactive payload must not scan the global duplicate index")
+
+    album = {"key": "one", "preview_only": True}
+    repository._attach_duplicate_sources(
+        [album],
+        connection=Connection(),
+        defer_on_cache_miss=True,
+    )
+
+    assert queued == ["duplicate-identities"]
+    assert "has_duplicate_files" not in album
+
+
 def test_duplicate_absence_cache_never_retains_positive_source_payloads(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 

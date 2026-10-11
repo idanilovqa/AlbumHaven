@@ -225,14 +225,18 @@ class PostgresLibraryBrowseRepository:
         )
 
     def _attach_duplicate_sources(
-        self, albums: Iterable[dict[str, object]], *, connection: Any | None = None,
+        self,
+        albums: Iterable[dict[str, object]],
+        *,
+        connection: Any | None = None,
+        defer_on_cache_miss: bool = False,
     ) -> None:
         albums = list(albums)
         keys = list({str(album.get("_persisted_album_key") or album.get("key") or album.get("album_ref") or "") for album in albums} - {""})
         if not keys:
             return
 
-        def load(active_connection: Any) -> dict[str, dict[str, object]]:
+        def load(active_connection: Any) -> dict[str, dict[str, object]] | None:
             kind = "duplicate-absence"
             fingerprint = _duplicate_inventory_fingerprint(active_connection)
             cached = self._get_cached_utility_projection(kind) if fingerprint else None
@@ -244,7 +248,14 @@ class PostgresLibraryBrowseRepository:
             cache_key = self._utility_projection_cache_key(kind)
             with _UTILITY_PROJECTION_CACHE_LOCK:
                 generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
-            candidate_ids = _load_duplicate_candidate_album_ids(active_connection, pending, repository=self)
+            candidate_ids = _load_duplicate_candidate_album_ids(
+                active_connection,
+                pending,
+                repository=self,
+                cache_only=defer_on_cache_miss,
+            )
+            if candidate_ids is None:
+                return None
             cursor = active_connection.execute(
                 _problematic_files_sql(duplicate_candidates=True, duplicate_sources_only=True),
                 {"album_ids": candidate_ids},
@@ -269,6 +280,8 @@ class PostgresLibraryBrowseRepository:
                 duplicates = load(owned_connection)
         else:
             duplicates = load(connection)
+        if duplicates is None:
+            return
         for album in albums:
             result = duplicates.get(str(album.get("_persisted_album_key") or album.get("key") or album.get("album_ref") or ""), {})
             sources = _duplicate_sources_for_projected_album(album, result)
@@ -551,7 +564,11 @@ class PostgresLibraryBrowseRepository:
                 missing_albums if gallery_offset == 0 else [],
                 alias_to_canonical=root_alias_to_canonical,
             )
-            self._attach_duplicate_sources(_album_payloads_from_groups(preview_artist_groups), connection=connection)
+            self._attach_duplicate_sources(
+                _album_payloads_from_groups(preview_artist_groups),
+                connection=connection,
+                defer_on_cache_miss=True,
+            )
             self._apply_private_album_rating_overlays(
                 _album_payloads_from_groups(preview_artist_groups),
                 source_rows=preview_rows,
@@ -1262,7 +1279,15 @@ class PostgresLibraryBrowseRepository:
                     query=query,
                 )
             )
-        self._attach_duplicate_sources(_album_payloads_from_groups([*artist_groups, *reusable_primary_artist_groups, *sidebar_family_artist_groups]), connection=_connection)
+        self._attach_duplicate_sources(
+            _album_payloads_from_groups([
+                *artist_groups,
+                *reusable_primary_artist_groups,
+                *sidebar_family_artist_groups,
+            ]),
+            connection=_connection,
+            defer_on_cache_miss=True,
+        )
         self._apply_private_album_rating_overlays(
             _album_payloads_from_groups(
                 [
@@ -1570,7 +1595,10 @@ class PostgresLibraryBrowseRepository:
             _album_payloads_from_groups(artist_groups),
             source_rows=rows,
         )
-        self._attach_duplicate_sources(_album_payloads_from_groups(artist_groups))
+        self._attach_duplicate_sources(
+            _album_payloads_from_groups(artist_groups),
+            defer_on_cache_miss=True,
+        )
         album_count = len(_album_identity_set(rows)) + len(missing_albums)
         non_album_entries = self._load_non_album_entries(
             view_state=view_state,
@@ -1958,7 +1986,15 @@ class PostgresLibraryBrowseRepository:
             if selected_artist and not requested_all_artists
             else artist_groups
         )
-        self._attach_duplicate_sources(_album_payloads_from_groups([*rendered_artist_groups, *primary_artist_groups, *family_artist_groups]), connection=connection)
+        self._attach_duplicate_sources(
+            _album_payloads_from_groups([
+                *rendered_artist_groups,
+                *primary_artist_groups,
+                *family_artist_groups,
+            ]),
+            connection=connection,
+            defer_on_cache_miss=True,
+        )
         self._apply_private_album_rating_overlays(
             _album_payloads_from_groups(
                 [*rendered_artist_groups, *primary_artist_groups, *family_artist_groups]
@@ -3942,8 +3978,12 @@ def _duplicate_inventory_fingerprint(connection: Any) -> dict[str, object]:
 
 
 def _load_duplicate_candidate_album_ids(
-    connection: Any, album_keys: list[str], *, repository: PostgresLibraryBrowseRepository,
-) -> list[int]:
+    connection: Any,
+    album_keys: list[str],
+    *,
+    repository: PostgresLibraryBrowseRepository,
+    cache_only: bool = False,
+) -> list[int] | None:
     # Compare only compact tag identities before loading full file metadata. SQL
     # collation is not Python's NFC/casefold rule; broad Unicode SQL candidates
     # otherwise pull thousands of unrelated albums into every artist request.
@@ -3953,6 +3993,9 @@ def _load_duplicate_candidate_album_ids(
     if fingerprint and cached and cached.get("fingerprint") == fingerprint["fingerprint"]:
         candidate_ids = _duplicate_candidate_ids_from_index(cached["index"], album_keys)
         return candidate_ids
+    if cache_only:
+        repository.queue_utility_projection_prewarm(kind)
+        return None
     cache_key = repository._utility_projection_cache_key(kind)
     with _UTILITY_PROJECTION_CACHE_LOCK:
         generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0

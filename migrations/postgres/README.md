@@ -212,3 +212,19 @@ Set `PGPASSFILE` when passwordless local automation is required. Keep migration 
 Migration `0085_add_stale_track_file_candidate_index.sql` indexes the generated stale-file predicate used by missing-album discovery. It avoids scanning every active file when the stale set is empty or small. The partial index is maintained by PostgreSQL as files become stale or return; it changes no rows, result semantics, or privileges. Older application versions remain compatible. Rollback removes only this index through a subsequent migration.
 
 This ordinary transactional index build allows reads but temporarily blocks writes to the track-file table. Apply it during a controlled migration window before starting application writers.
+
+Migration `0086_create_root_gallery_projection.sql` adds the derived,
+library-scoped Gallery projection and its transactional invalidation boundary.
+Rollback first disables projection readers and writers, then removes its triggers,
+functions, and projection tables in dependency order; local inventory remains the
+source of truth.
+
+Migration `0087_create_musicbrainz_artist_enrichment.sql` adds the bounded
+artist-only MusicBrainz canonical projection, aliases, countries, complete tag
+facts, current library-scoped matches and candidates, durable jobs, and diagnostic
+history. The display view chooses at most three official genres, preferring
+positive-vote genres and using zero-vote genres only when the artist has no
+positive-vote genre; negative-vote and non-genre tags remain retained but are not
+displayed. Rollback first disables scheduling, workers, and enrichment readers.
+The additive tables remain as retained identity and audit evidence until a
+separately authorized contraction.

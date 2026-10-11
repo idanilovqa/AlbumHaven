@@ -25,10 +25,9 @@ def apply_scoped_local_cover(album, file_cache: Mapping[str, Mapping[str, object
             and active.is_relative_to(Path(physical_album_root(path)))
             for path, entry in file_cache.items() if path in rejected_paths
         )
-    # Unknown legacy selections remain protected unless their invalid source is proven.
-    if album.cover_selection_origin == "user" and not inherited and active and all(
-        edge >= automatic_cover_repair_minimum_edge() for edge in image_dimensions(active)
-    ):
+    # Inventory reconstruction repairs proven source contamination only.
+    # Cover discovery and quality upgrades belong to the cover workflow.
+    if not inherited:
         return
     folders = roots | {Path(track.path).parent for track in album.tracks}
     candidates = set()

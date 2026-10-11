@@ -36,3 +36,27 @@ def test_contaminated_inherited_cover_is_repaired_but_explicit_user_choice_is_pr
         assert album.local_cover_height == 1600
         assert all(Path(track.cover_path) == good for track in album.tracks)
         assert album.cover_selection_repair_previous["cover_path"] == str(unrelated)
+
+
+@pytest.mark.parametrize("origin", ["automatic", "user"])
+@pytest.mark.parametrize("selected", ["local", "unknown", "missing"])
+def test_uncontaminated_album_rebuild_does_not_inspect_cover_files(tmp_path, monkeypatch, origin, selected):
+    from music_app.services import album_local_cover_integrity as integrity
+
+    root = tmp_path / "Artist" / "Album"
+    track_path = root / "track.flac"
+    cover = {"local": root / "cover.jpg", "unknown": tmp_path / "legacy.jpg", "missing": None}[selected]
+    album = SimpleNamespace(tracks=[SimpleNamespace(path=track_path)], cover_path=cover,
+        cover_selection_origin=origin, cover_selection_provenance=None, remote_cover_url=None)
+    unrelated = str(tmp_path / "Rejected" / "track.flac")
+    cache = {str(track_path): {"cover_path": str(cover or "")},
+        unrelated: {"cover_path": str(tmp_path / "Rejected" / "cover.jpg")}}
+
+    def unexpected_io(*args, **kwargs):
+        pytest.fail("Uncontaminated inventory rebuild must not inspect cover files")
+
+    monkeypatch.setattr(Path, "iterdir", unexpected_io)
+    monkeypatch.setattr(integrity, "image_dimensions", unexpected_io)
+    integrity.apply_scoped_local_cover(album, cache, {unrelated})
+    assert album.cover_path == cover
+    assert not hasattr(album, "cover_selection_repair_previous")

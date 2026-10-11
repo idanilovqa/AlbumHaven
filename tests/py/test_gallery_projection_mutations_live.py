@@ -282,6 +282,33 @@ def test_other_library_is_not_published_or_selected_by_cursor(gallery_inventory)
                                                     {"library_id": str(other_id)}) is not None
 
 
+def test_publisher_accepts_and_round_trips_featured_kind(gallery_inventory):
+    fixture = gallery_inventory
+    occurrence = {
+        "artist_id": "guest-id",
+        "artist_name": "Guest",
+        "album_id": 42,
+        "album_key": "featured-proof",
+        "album_title": "Featured Proof",
+        "album_release_year": 2000,
+        "featured_kind": "featured_track_artist",
+    }
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert publish(
+            connection,
+            fixture.context,
+            fixture.view_state,
+            rows=[occurrence],
+        ) is True
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        page = gallery.load_gallery_projection_page(connection, fixture.view_state, {})
+
+    assert page is not None
+    assert page[0] == [occurrence]
+
+
 @pytest.mark.parametrize("field", ["private_path", "metadata", "rating", "cover"])
 def test_publisher_rejects_private_payload_and_preserves_ready_snapshot(gallery_inventory, field):
     fixture = gallery_inventory

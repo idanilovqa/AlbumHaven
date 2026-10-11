@@ -33,6 +33,9 @@ MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION = (
 ARTIST_SEARCH_PROJECTION_MIGRATION = (
     MIGRATIONS_DIR / "0084_create_local_artist_search_projection.sql"
 )
+GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION = (
+    MIGRATIONS_DIR / "0089_allow_gallery_projection_featured_kind.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -438,7 +441,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-49:] == [
+    assert migration_names[-50:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -488,6 +491,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0086_create_root_gallery_projection.sql",
         "0087_library_source_indicators.sql",
         "0088_add_active_physical_parent_index.sql",
+        "0089_allow_gallery_projection_featured_kind.sql",
     ]
 
 
@@ -502,6 +506,24 @@ def test_album_raw_artist_search_index_matches_search_preview_expression():
     assert "local_albums_normalized_raw_artists_trgm_idx" in sql
     assert "lower(btrim(coalesce(metadata ->> 'artists', '')))" in sql
     assert "gin_trgm_ops" in sql
+
+
+def test_gallery_projection_featured_role_migration_extends_field_allowlist():
+    assert GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION.is_file()
+    sql = _normalized_sql(
+        GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert (
+        "create or replace function library.replace_gallery_projection(" in sql
+    )
+    assert "security definer set search_path = pg_catalog" in sql
+    occurrence_fields = re.search(
+        r"jsonb_object_keys\(item\) field where field not in \(([^)]*)\)",
+        sql,
+    )
+    assert occurrence_fields is not None
+    assert "'featured_kind'" in occurrence_fields.group(1)
 
 
 def test_album_raw_artist_search_index_verifier_checks_the_complete_definition():

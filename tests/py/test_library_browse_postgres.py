@@ -11335,6 +11335,74 @@ def test_non_album_candidate_track_filter_is_applied_before_inventory_scans():
     assert discovery.count("library.local_tracks.id = any(%(track_ids)s::bigint[])") >= 2
 
 
+@pytest.mark.parametrize("unrelated_count", [0, 10000])
+def test_duplicate_absence_hit_copies_only_requested_entries(monkeypatch, unrelated_count):
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-absence-borrow-test"}
+    )
+    fingerprint = {"fingerprint": (1,), "observed_at": 1}
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: fingerprint)
+
+    class UnrelatedEntry(dict):
+        def __deepcopy__(self, _memo):
+            raise AssertionError("A requested album must not copy unrelated absence entries")
+
+    provenance = {"categories": ["main_library"], "root_ids": ["main"]}
+    entries = {
+        str(index): UnrelatedEntry(duplicate_sources=[]) for index in range(unrelated_count)
+    }
+    entries["one"] = {"duplicate_sources": [], "_root_provenance_by_year": {2001: provenance}}
+    cached = {**fingerprint, "albums": entries}
+    cache_key = repository._utility_projection_cache_key("duplicate-absence")
+    monkeypatch.setitem(browse._UTILITY_PROJECTION_CACHE, cache_key, cached)
+    album = {"key": "one::year::2001", "_persisted_album_key": "one", "year": 2001}
+
+    repository._attach_duplicate_sources([album], connection=object())
+
+    assert album["has_duplicate_files"] is False
+    assert album["root_provenance"] == provenance
+    album["root_provenance"]["root_ids"].append("changed")
+    assert provenance["root_ids"] == ["main"]
+    assert browse._UTILITY_PROJECTION_CACHE[cache_key] is cached
+
+
+def test_duplicate_absence_miss_does_not_mutate_borrowed_snapshot(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-absence-publication-test"}
+    )
+    fingerprint = {"fingerprint": (1,), "observed_at": 1}
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: fingerprint)
+    monkeypatch.setattr(browse, "_load_duplicate_candidate_album_ids", lambda *_args, **_kwargs: [1])
+    provenance = {"categories": ["main_library"], "root_ids": ["main"]}
+    monkeypatch.setattr(browse, "_duplicate_sources_from_rows", lambda _rows: {
+        "new": {"duplicate_sources": [], "_root_provenance_by_year": {2001: provenance}},
+    })
+    cached = {**fingerprint, "albums": {"old": {"duplicate_sources": []}}}
+    cache_key = repository._utility_projection_cache_key("duplicate-absence")
+    monkeypatch.setitem(browse._UTILITY_PROJECTION_CACHE, cache_key, cached)
+    monkeypatch.setitem(browse._UTILITY_PROJECTION_GENERATIONS, cache_key, 0)
+
+    class Connection:
+        def execute(self, _sql, _params):
+            return self
+
+        def fetchall(self):
+            return []
+
+    album = {"key": "new::year::2001", "_persisted_album_key": "new", "year": 2001}
+    repository._attach_duplicate_sources([album], connection=Connection())
+
+    assert set(cached["albums"]) == {"old"}
+    published = browse._UTILITY_PROJECTION_CACHE[cache_key]
+    assert set(published["albums"]) == {"old", "new"}
+    album["root_provenance"]["root_ids"].append("changed")
+    assert published["albums"]["new"]["_root_provenance_by_year"][2001]["root_ids"] == ["main"]
+
+
 def test_duplicate_source_attachment_defers_global_index_cache_miss(monkeypatch):
     from time import perf_counter
 

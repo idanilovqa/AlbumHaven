@@ -17,6 +17,7 @@ test('search regression gate keeps the complete required suite in one command', 
     'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-search-regressions.ps1',
   );
   assert.match(runner, /test_duplicate_source_attachment_defers_global_index_cache_miss/u);
+  assert.match(runner, /or duplicate_absence/u);
   assert.match(runner, /search or selected_artist/u);
   assert.match(runner, /test_api_read_asgi_routes\.py/u);
   assert.match(runner, /test_web_asgi_routes\.py/u);

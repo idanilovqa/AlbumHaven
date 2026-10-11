@@ -239,9 +239,9 @@ class PostgresLibraryBrowseRepository:
         def load(active_connection: Any) -> dict[str, dict[str, object]] | None:
             kind = "duplicate-absence"
             fingerprint = _duplicate_inventory_fingerprint(active_connection)
-            cached = self._get_cached_utility_projection(kind) if fingerprint else None
+            cached = self._get_cached_utility_projection(kind, copy_payload=False) if fingerprint else None
             absent = cached["albums"] if cached and cached.get("fingerprint") == fingerprint.get("fingerprint") else {}
-            known = {key: absent[key] for key in keys if key in absent}
+            known = {key: deepcopy(absent[key]) for key in keys if key in absent}
             pending = [key for key in keys if key not in known]
             if not pending:
                 return known
@@ -263,6 +263,7 @@ class PostgresLibraryBrowseRepository:
             rows = list(cursor.fetchall())
             duplicates = _duplicate_sources_from_rows(rows)
             if fingerprint:
+                absent = dict(absent)
                 # Only requested albums have every matching identity loaded.
                 # Incidental container companions may have unqueried identities.
                 for key in pending:
@@ -270,7 +271,7 @@ class PostgresLibraryBrowseRepository:
                     if result is not None and not result.get("duplicate_sources"):
                         absent[key] = {
                             "duplicate_sources": [],
-                            "_root_provenance_by_year": result.get("_root_provenance_by_year", {}),
+                            "_root_provenance_by_year": deepcopy(result.get("_root_provenance_by_year", {})),
                         }
                 _cache_compact_inventory_payload(active_connection, self, kind, fingerprint, {"albums": absent}, generation)
             return {**duplicates, **known}

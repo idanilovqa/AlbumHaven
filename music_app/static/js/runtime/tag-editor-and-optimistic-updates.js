@@ -250,13 +250,24 @@ function openTagEditor(album, options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
   bindOverlayPointerOrigin(els.overlay);
+  const openGeneration = ++tagEditorCleanupGeneration;
+  if (typeof albumRequiresHydration === 'function' && albumRequiresHydration(album)) {
+    return loadTrackModalAlbumDetails(getAlbumRequestKey(album)).then((hydratedAlbum) => {
+      if (openGeneration !== tagEditorCleanupGeneration) return;
+      if (!hydratedAlbum?.allowed_actions?.['library.files.edit_tags']) return;
+      return openTagEditor(hydratedAlbum, options);
+    }).catch(() => {
+      if (openGeneration === tagEditorCleanupGeneration) {
+        showRepairAlert('Unable to load album tracks for editing.', 'error');
+      }
+    });
+  }
   const tracksMode = options.tracksMode || 'problematic';
   const tracks = orderAlbumTracks(getTagEditorTracks(album, tracksMode));
   if (!tracks.length) {
     showRepairAlert(tracksMode === 'all' ? 'No tracks to edit.' : 'No problematic tracks to edit.', 'error');
     return;
   }
-  tagEditorCleanupGeneration += 1;
   const values = {};
   tracks.forEach((track) => {
     const path = String(track.path || '');

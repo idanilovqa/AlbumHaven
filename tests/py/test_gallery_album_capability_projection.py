@@ -8,7 +8,8 @@ from music_app.services.library_browse_postgres import _root_album_browse_album_
 
 
 @pytest.mark.parametrize("granted", [False, True])
-def test_gallery_summary_projects_request_edit_permission(monkeypatch, granted):
+@pytest.mark.parametrize("preview_only", [False, True])
+def test_gallery_summary_projects_request_edit_permission(monkeypatch, granted, preview_only):
     action = "library.files.edit_tags"
     request = SimpleNamespace()
     monkeypatch.setattr(
@@ -20,6 +21,7 @@ def test_gallery_summary_projects_request_edit_permission(monkeypatch, granted):
          "artist_name": "Artist", "track_count": 1},
     ], "Artist")
     assert len(albums) == 1
+    albums[0]["preview_only"] = preview_only
     assert "suggested_edits" not in albums[0]
     payload = {"artist_groups": [{"artist": "Artist", "albums": albums}]}
 

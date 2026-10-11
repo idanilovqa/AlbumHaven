@@ -27,6 +27,38 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
   + '\n' + fs.readFileSync(helperPath, 'utf8');
+
+test('summary tag editor hydrates only the latest requested album and preserves permission', async () => {
+  const pending = new Map();
+  const opened = [];
+  const context = vm.createContext({
+    getTagEditorElements: () => ({ overlay: {} }),
+    bindOverlayPointerOrigin() {},
+    getTagEditorTracks: () => [],
+    orderAlbumTracks: tracks => tracks,
+    albumRequiresHydration: album => album.preview_only === true,
+    getAlbumRequestKey: album => album.key,
+    loadTrackModalAlbumDetails: key => new Promise(resolve => pending.set(key, resolve)),
+    showRepairAlert() {},
+  });
+  vm.runInContext(helperSource, context);
+  const open = context.openTagEditor;
+  const first = open({ key: 'first', preview_only: true }, { tracksMode: 'all' });
+  const second = open({ key: 'second', preview_only: true }, { tracksMode: 'all' });
+  context.openTagEditor = (album, options) => opened.push({ album, options });
+  const allowed = { key: 'second', allowed_actions: { 'library.files.edit_tags': true } };
+  pending.get('second')(allowed);
+  await second;
+  pending.get('first')({ ...allowed, key: 'first' });
+  await first;
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].album, allowed);
+  assert.equal(opened[0].options.tracksMode, 'all');
+  const denied = open({ key: 'denied', preview_only: true });
+  pending.get('denied')({ key: 'denied', allowed_actions: {} });
+  await denied;
+  assert.equal(opened.length, 1);
+});
 const albumUiComponentSources = [
   'gallery-main-components.js',
   'alert-components.js',

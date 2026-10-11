@@ -414,3 +414,58 @@ for (const pendingArtist of ['', 'Latest Artist']) {
   assert.equal(opener.getAttribute('data-search-results'), null);
   assert.equal(opener.getAttribute('aria-description'), null);
 }
+
+for (const targetKind of ['backdrop', 'exposed-background']) {
+  const { context, drawerRail, drawerBackdrop } = loadHelper({ isMobile: true });
+  const opener = createElement();
+  opener.focus = () => { context.document.activeElement = opener; };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'mobile-library-button'
+    ? opener
+    : originalGetElementById(id);
+  const target = targetKind === 'backdrop' ? drawerBackdrop : createElement();
+  drawerRail.contains = candidate => candidate === drawerRail;
+  let prevented = false;
+  let stopped = false;
+  const event = {
+    target: {
+      closest(selector) {
+        return targetKind === 'backdrop' && selector.includes('#shell-navigation-rail-backdrop')
+          ? drawerBackdrop
+          : null;
+      },
+    },
+    preventDefault() { prevented = true; },
+    stopImmediatePropagation() { stopped = true; },
+  };
+  context.openArtistsDrawer();
+
+  const handled = context.handleArtistsDrawerClick(event);
+
+  assert.equal(handled, true, `${targetKind} must stop the delegated dispatcher`);
+  assert.equal(prevented, true, `${targetKind} must prevent underlying default activation`);
+  assert.equal(stopped, true, `${targetKind} must stop remaining click listeners`);
+  assert.equal(context.state.ui.artistsDrawerOpen, false);
+  assert.equal(context.document.activeElement, opener);
+}
+
+{
+  const { context, drawerRail } = loadHelper({ isMobile: true });
+  const inside = createElement();
+  inside.closest = () => null;
+  drawerRail.contains = candidate => candidate === inside;
+  let prevented = false;
+  let stopped = false;
+  context.openArtistsDrawer();
+
+  const handled = context.handleArtistsDrawerClick({
+    target: inside,
+    preventDefault() { prevented = true; },
+    stopImmediatePropagation() { stopped = true; },
+  });
+
+  assert.equal(handled, false);
+  assert.equal(prevented, false);
+  assert.equal(stopped, false);
+  assert.equal(context.state.ui.artistsDrawerOpen, true);
+}

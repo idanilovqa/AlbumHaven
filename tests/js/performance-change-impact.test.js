@@ -100,6 +100,7 @@ test('Problematic Files dependencies require both real-app performance targets',
   const paths = [
     'music_app/services/library_browse_postgres.py',
     'music_app/services/problematic_albums.py',
+    'music_app/services/album_local_membership.py',
     'music_app/routes/api_problematic_albums.py',
     'music_app/routes/api_read_asgi_routes.py',
     'music_app/services/scan_state.py',

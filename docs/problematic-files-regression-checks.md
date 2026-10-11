@@ -13,7 +13,7 @@ SQL tests skip without it; a skipped test does not satisfy this gate.
 
 ```powershell
 python -m pytest tests/py/test_library_browse_postgres.py tests/py/test_api_read_asgi_routes.py -k problematic -q
-python -m pytest tests/py/test_problematic_albums.py tests/py/test_problematic_detail_identity.py tests/py/test_problematic_physical_files_postgres.py tests/py/test_problematic_file_projection_migration_postgres.py -q
+python -m pytest tests/py/test_multi_root_duplicates.py tests/py/test_problematic_albums.py tests/py/test_problematic_detail_identity.py tests/py/test_problematic_physical_files_postgres.py tests/py/test_problematic_file_projection_migration_postgres.py -q
 ```
 
 Check bounded candidate hydration, one read snapshot, compact summary/detail

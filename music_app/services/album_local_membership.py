@@ -37,20 +37,27 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
         if path:
             physical_sources[(str(entry.get("library_root_id") or ""), physical_album_root(path))].append(entry)
     rejected: dict[str, str] = {}
-    sources: dict[tuple[str, str, str, str], list[tuple[list[Mapping[str, object]], set[tuple[str, str, int]]]]] = defaultdict(list)
+    sources: dict[tuple[str, str, str, str], list[list[Mapping[str, object]]]] = defaultdict(list)
 
     for files in physical_sources.values():
         groups: dict[tuple[str, str, str, str], list[Mapping[str, object]]] = defaultdict(list)
         for entry in files:
             groups[(_text(entry.get("album_artist") or entry.get("artist")), _text(entry.get("album")), _text(entry.get("edition")), _text(entry.get("year")))].append(entry)
         for identity, group in groups.items():
-            signatures = {
+            sources[identity].append(group)
+    for source_groups in sources.values():
+        # Strict subsets require competing physical sources. Ordinary albums do
+        # not need per-track signatures during a browse projection.
+        if len(source_groups) < 2:
+            continue
+        copies = [
+            (group, {
                 (_text(entry.get("title")), _text(entry.get("artist") or entry.get("album_artist")), _duration(entry.get("duration_seconds")))
                 for entry in group
                 if _text(entry.get("title"))
-            }
-            sources[identity].append((group, signatures))
-    for copies in sources.values():
+            })
+            for group in source_groups
+        ]
         for files, signatures in copies:
             if signatures and any(signatures < other for _files, other in copies):
                 rejected.update((str(entry["path"]), "Duplicate track outside album folder") for entry in files)

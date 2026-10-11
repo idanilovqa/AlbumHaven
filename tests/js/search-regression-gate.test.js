@@ -22,6 +22,7 @@ test('search regression gate keeps the complete required suite in one command', 
   assert.match(runner, /or gallery_summary_projects_request_edit_permission/u);
   assert.match(runner, /search or selected_artist/u);
   assert.match(runner, /test_api_read_asgi_routes\.py/u);
+  assert.match(runner, /test_multi_root_duplicates\.py/u);
   assert.match(runner, /test_web_asgi_routes\.py/u);
   assert.match(runner, /gallery-search-clear-continuity\.test\.js/u);
   assert.match(runner, /search-toolbar-query-state\.test\.js/u);

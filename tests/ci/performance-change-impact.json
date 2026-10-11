@@ -51,7 +51,8 @@
     "tests/e2e/helpers/utilityPerformanceHelpers.js",
     "tests/e2e/helpers/problematicPayloadEvidence.js",
     "tests/e2e/actions/utilityProblematicFilesActions.js",
-    "tests/e2e/poms/utilityProblematicFilesTab.js"
+    "tests/e2e/poms/utilityProblematicFilesTab.js",
+    "music_app/services/album_local_membership.py"
   ],
   "rules": [
     {
@@ -173,7 +174,8 @@
         "tests/e2e/helpers/problematicPayloadEvidence.js",
         "tests/e2e/actions/utilityProblematicFilesActions.js",
         "tests/e2e/poms/utilityProblematicFilesTab.js",
-        "tests/e2e/utilityProblematicFiles/**"
+        "tests/e2e/utilityProblematicFiles/**",
+        "music_app/services/album_local_membership.py"
       ],
       "targets": [
         "utility-problematic-files",

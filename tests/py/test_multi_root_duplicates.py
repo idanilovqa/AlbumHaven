@@ -332,3 +332,31 @@ def test_linked_duplicate_source_category_requires_strict_majority_track_coverag
 
     assert len(get_album_duplicate_sources(albums[0])) == 2
     assert set(albums[0].root_provenance["categories"]) == expected_categories
+
+
+def test_membership_does_not_build_track_signatures_without_competing_sources(monkeypatch):
+    from music_app.services import album_local_membership as membership
+
+    entries = [
+        {**asdict(_track(f"main/album-{album}", number, album=f"Album {album}")), "library_root_id": 1}
+        for album in range(50) for number in range(1, 13)
+    ]
+
+    def unnecessary_signature(_value):
+        pytest.fail("A single physical source cannot be a strict subset of another source")
+
+    monkeypatch.setattr(membership, "_duration", unnecessary_signature)
+    assert membership.rejected_local_album_paths(entries) == {}
+
+
+def test_membership_still_rejects_only_strict_subset_from_competing_sources():
+    entries = [
+        {**asdict(_track(folder, number)), "library_root_id": root}
+        for folder, root, numbers in [("main/full", 1, (1, 2)),
+                                    ("hoard/subset", 2, (1,)),
+                                    ("arrivals/equal", 3, (1, 2))]
+        for number in numbers
+    ]
+    assert rejected_local_album_paths(entries) == {
+        str(Path("hoard/subset/01.flac")): "Duplicate track outside album folder",
+    }

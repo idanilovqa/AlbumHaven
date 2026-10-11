@@ -66,6 +66,10 @@ Invoke-Checked {
 } 'Search API and PostgreSQL contracts'
 
 Invoke-Checked {
+    & $PythonPath -m pytest tests\py\test_multi_root_duplicates.py -q
+} 'Shared browse membership and duplicate contracts'
+
+Invoke-Checked {
     & $node --test --test-concurrency=1 `
         tests\js\gallery-search-clear-continuity.test.js `
         tests\js\search-toolbar-query-state.test.js `

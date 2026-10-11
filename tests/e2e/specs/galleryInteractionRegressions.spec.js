@@ -104,8 +104,9 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
     await ui.cards.first().hover();
     await expect(ui.yearWithin(ui.cards.first())).not.toBeVisible();
   });
-  await stepLogger.step('Search hides artist information; explicit artist navigation restores it',async()=>{
-    await expect(ui.info).not.toBeVisible();
+  await stepLogger.step('Search hides toolbar artist information but retains result-heading information; explicit navigation restores it',async()=>{
+    await expect(ui.toolbarInfo).not.toBeVisible();
+    await expect(ui.headingInfo).toBeVisible();
     await expect(ui.infoPanel).not.toBeVisible();
     await searchToolbarActions.clearSearch({submitWithEnter:true});
     await searchToolbarActions.waitForQuery('');

@@ -27,6 +27,8 @@ export class GalleryRegressions {
     this.noInfo=page.getByRole('button',{name:'No info',exact:true});
     this.cardsView=page.getByRole('button',{name:'Cards',exact:true});
     this.info=page.locator('[data-artist-info-trigger]').first();
+    this.toolbarInfo=page.locator('[data-gallery-bar-instance="gallery"] [data-artist-info-trigger]').first();
+    this.headingInfo=page.locator('#artist-groups .family-artist-header [data-artist-info-trigger]').first();
     this.infoPanel=page.locator('[data-artist-info-overlay]');
     this.modal=page.locator('#track-modal');
     this.dialog=this.modal.locator('.track-modal-dialog');

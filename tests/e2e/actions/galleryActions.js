@@ -334,18 +334,22 @@ export class GalleryActions {
       const loaderHidden = !(libraryLoader instanceof HTMLElement) || libraryLoader.hidden;
       const startupProgress = document.querySelector(selectors.startupProgressSelector);
       const startupProgressHidden = !(startupProgress instanceof HTMLElement) || startupProgress.hidden;
+      const navigationSettled = typeof state !== 'undefined' && !state.busy
+        && !state.ui?.activeViewRequestUrl && !state.ui?.pendingViewRequest;
       if (selectors.snapshot) return {
         visibleCards: visibleCards.length,
         minimumCards: selectors.minimumCards,
         refreshFinished,
         loaderHidden,
         startupProgressHidden,
+        navigationSettled,
         metrics,
       };
       return visibleCards.length >= selectors.minimumCards
         && refreshFinished
         && loaderHidden
-        && startupProgressHidden;
+        && startupProgressHidden
+        && navigationSettled;
     };
     const selectors = {
       albumCardSelector: this.galleryPage.albumCard.cardSelector,

@@ -60,6 +60,24 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/utilities/problematic-files"): "library.problems.read",
     ("GET", "/utilities/problematic-files/detail"): "library.problems.read",
     ("GET", "/utilities/problematic-files/{album_key:path}"): "library.problems.read",
+    ("GET", "/api/musicbrainz/artists/review"): "library.problems.read",
+    ("GET", "/api/musicbrainz/artists/{local_artist_id}"): "library.problems.read",
+    (
+        "POST",
+        "/api/musicbrainz/artists/sync",
+    ): "catalogue.enrichment.request",
+    (
+        "POST",
+        "/api/musicbrainz/artists/{local_artist_id}/retry",
+    ): "catalogue.enrichment.request",
+    (
+        "POST",
+        "/api/musicbrainz/artists/{local_artist_id}/validate",
+    ): "library.metadata_matches.review",
+    (
+        "PUT",
+        "/api/musicbrainz/artists/{local_artist_id}/match",
+    ): "library.metadata_matches.review",
     ("GET", "/utilities/rules"): "library.rules.read",
     ("GET", "/utilities/log-history"): "library.logs.read",
     ("POST", "/utilities/log-history/export"): "library.logs.export",

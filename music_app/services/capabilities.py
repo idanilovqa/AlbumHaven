@@ -79,6 +79,7 @@ def effective_capability_keys(keys: Iterable[str]) -> tuple[str, ...]:
 # separately assignable. These finite extras await a more granular user-facing
 # mapping; they must not accidentally become part of Listener or Musician.
 _OWNER_ADDITIONAL_ACTIONS = frozenset({
+    "catalogue.enrichment.request", "library.metadata_matches.review",
     "integration.settings.read", "integration.foobar.read",
     "integration.lastfm.manage", "integration.lastfm.scrobbles.submit",
     "integration.local_playlists.analyze", "integration.local_playlists.import",

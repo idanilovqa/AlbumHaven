@@ -299,6 +299,10 @@ export class NavigationPanelActions {
 
   async selectSidebarArtistByName(artistName, options = {}) {
     await this.openArtistTree();
+    await this.clickVisibleSidebarArtistByName(artistName, options);
+  }
+
+  async clickVisibleSidebarArtistByName(artistName, options = {}) {
     const selectedArtist = String(artistName || '').trim();
     const artistLocator = this.navigationPanel.sidebarArtistByName(selectedArtist);
     await artistLocator.click({ noWaitAfter: true, ...options });

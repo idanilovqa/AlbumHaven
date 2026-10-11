@@ -1136,10 +1136,23 @@ export class GalleryActions {
   }
 
   async clickAlbumDetailsByHeadingAndIndex(artistName, indexWithinSection) {
+    await this.prepareAlbumDetailsByHeadingAndIndex(artistName, indexWithinSection);
+    await this.clickVisibleAlbumDetailsByHeadingAndIndex(artistName, indexWithinSection);
+  }
+
+  albumDetailsButtonByHeadingAndIndex(artistName, indexWithinSection) {
     const section = this.galleryPage.sectionByArtistHeading(artistName);
     const card = section.locator(this.galleryPage.albumCardWithinSectionSelector).nth(indexWithinSection);
-    const button = card.locator(this.galleryPage.albumDetailsButtonWithinSectionSelector).first();
+    return card.locator(this.galleryPage.albumDetailsButtonWithinSectionSelector).first();
+  }
+
+  async prepareAlbumDetailsByHeadingAndIndex(artistName, indexWithinSection) {
+    const button = this.albumDetailsButtonByHeadingAndIndex(artistName, indexWithinSection);
     await button.scrollIntoViewIfNeeded();
+  }
+
+  async clickVisibleAlbumDetailsByHeadingAndIndex(artistName, indexWithinSection) {
+    const button = this.albumDetailsButtonByHeadingAndIndex(artistName, indexWithinSection);
     await button.click();
   }
 

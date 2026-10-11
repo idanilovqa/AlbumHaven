@@ -398,6 +398,40 @@ test('artist-family benchmark explicitly submits the empty query before awaiting
   assert.match(clearStep, /waitForUrlWithoutQueryParameter\('q', \{ timeout: 10000 \}\)/);
 });
 
+test('artist-family click-to-response timings exclude tree and gallery preparation work', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
+
+  const treeTimingStart = spec.indexOf('const treeNealSelectionMs =');
+  const treeTimingEnd = spec.indexOf("key: 'tree-neal-selection'", treeTimingStart);
+  const treePreparation = spec.lastIndexOf('await navigationPanelActions.openArtistTree();', treeTimingStart);
+  assert.ok(treePreparation >= 0 && treePreparation < treeTimingStart);
+  assert.match(
+    spec.slice(treePreparation + 'await navigationPanelActions.openArtistTree();'.length, treeTimingStart),
+    /^\s*$/,
+  );
+  const treeTiming = spec.slice(treeTimingStart, treeTimingEnd);
+  assert.match(treeTiming, /clickVisibleSidebarArtistByName\(EXPECTED_FAMILY\.primary\)/);
+  assert.doesNotMatch(treeTiming, /selectSidebarArtistByName|openArtistTree/);
+
+  for (const [index, timingName] of [[0, 'firstAlbumOpenMs'], [6, 'secondAlbumOpenMs']]) {
+    const timingStart = spec.indexOf(`const ${timingName} =`);
+    const timingEnd = spec.indexOf('recordTimingCheckpoint', timingStart);
+    const preparation = spec.lastIndexOf(
+      `await galleryActions.prepareAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, ${index});`,
+      timingStart,
+    );
+    assert.ok(preparation >= 0 && preparation < timingStart);
+    const preparationStatement = `await galleryActions.prepareAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, ${index});`;
+    assert.match(spec.slice(preparation + preparationStatement.length, timingStart), /^\s*$/);
+    const timing = spec.slice(timingStart, timingEnd);
+    assert.match(
+      timing,
+      new RegExp(`clickVisibleAlbumDetailsByHeadingAndIndex\\(EXPECTED_FAMILY\\.primary, ${index}\\)`),
+    );
+    assert.doesNotMatch(timing, /prepareAlbumDetailsByHeadingAndIndex|scrollIntoViewIfNeeded/);
+  }
+});
+
 test('artist-family benchmark keeps browser mechanics outside the scenario spec', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
   const artistFamilyActions = readRepoFile('tests/e2e/actions/artistFamilyActions.js');

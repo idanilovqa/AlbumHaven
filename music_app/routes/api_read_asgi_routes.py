@@ -106,7 +106,9 @@ def _project_missing_album_actions_for_request(
                 value["duplicate_source_count"] = len(value["duplicate_sources"])
                 if not allowed_actions.as_payload().get("library.paths.read"):
                     value["duplicate_sources"] = []
-            if "suggested_edits" in value:
+            if "suggested_edits" in value or (
+                value.get("preview_only") and "album_id" in value and value.get("key")
+            ):
                 value["allowed_actions"] = allowed_actions.as_payload()
             if value.get("inventory_status") == "missing":
                 value.update(project_missing_album_actions(value, allowed_actions))

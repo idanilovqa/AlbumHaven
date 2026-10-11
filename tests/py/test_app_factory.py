@@ -5,12 +5,14 @@ import asyncio
 import importlib.util
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 import runpy
 import subprocess
 import sys
 import threading
 import types
+from uuid import UUID
 
 import pytest
 from packaging.requirements import Requirement
@@ -490,6 +492,426 @@ def test_create_asgi_app_lifespan_hydrates_and_shuts_down(monkeypatch):
         assert runtime.config is asgi_app.state.config
         assert runtime.logger is asgi_app.state.logger
         assert runtime.library_state is asgi_app.state.library_state
+
+
+def _watcher_session_lifecycle_harness(
+    monkeypatch, *, host_library_id=41, resolve_error=None, session_state=None
+):
+    import music_app
+    from music_app.services import (
+        cover_preview_backfill,
+        library_event_coordinator,
+        library_reconciliation,
+        library_roots,
+        library_watch_health,
+        log_history,
+        runtime_shutdown,
+        scan_jobs_postgres,
+        watcher_recovery_postgres,
+        watcher_session_recovery,
+    )
+
+    events = []
+    callbacks = {}
+    failures = {"begin": None, "expand": None, "replace": None, "set": None}
+    state = session_state if session_state is not None else {
+        "open": False,
+        "overflow_occurrences": 0,
+        "participants": set(),
+    }
+    expected_library_id = host_library_id if host_library_id is not None else 52
+
+    class ScanJobs:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://watcher-session-test"
+
+        @staticmethod
+        def resolve_local_library_id():
+            events.append("library.resolve")
+            if resolve_error is not None:
+                raise resolve_error
+            return 52
+
+    class WatcherRepository:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://watcher-session-test"
+
+        @staticmethod
+        def record_problem(**_values):
+            return True
+
+    class SessionController:
+        def __init__(self, repository):
+            assert isinstance(repository, WatcherRepository)
+            callbacks["controller"] = self
+
+        def start(
+            self, *, library_id, session_token, logical_root_ids, started_at
+        ):
+            assert library_id == expected_library_id
+            assert isinstance(session_token, UUID)
+            assert logical_root_ids == ("root-a",)
+            assert isinstance(started_at, datetime)
+            assert started_at.tzinfo is not None
+            assert started_at.utcoffset() == timezone.utc.utcoffset(started_at)
+            events.append("session.begin")
+            if failures["begin"] is not None:
+                raise failures["begin"]
+            if state["open"]:
+                state["overflow_occurrences"] += 1
+            state["open"] = True
+            state["participants"] = set(logical_root_ids)
+            return ()
+
+        def expand_participants(self, logical_root_ids):
+            events.append(("session.expand", logical_root_ids))
+            if failures["expand"] is not None:
+                raise failures["expand"]
+            state["participants"].update(logical_root_ids)
+
+        def set_participants(self, logical_root_ids):
+            events.append(("session.set", logical_root_ids))
+            if failures["set"] is not None:
+                raise failures["set"]
+            state["participants"] = set(logical_root_ids)
+
+        def report_admission_failure(self, *, logical_root_ids):
+            assert isinstance(logical_root_ids, tuple)
+            assert all(isinstance(root_id, str) for root_id in logical_root_ids)
+            events.append(("session.report", logical_root_ids))
+            callbacks.setdefault("reporters", []).append(id(self))
+
+        def stop_retry_and_flush(self, *, deadline):
+            assert isinstance(deadline, float)
+            events.append("retry.cancel_join_flush")
+
+        def finish(self):
+            events.append("session.finish")
+            state["open"] = False
+            state["participants"] = set()
+            return True
+
+    class Coordinator:
+        def __init__(
+            self,
+            _accept_event,
+            *,
+            record_problem,
+            report_admission_failure=None,
+        ):
+            assert callable(record_problem)
+            callbacks["coordinator"] = report_admission_failure
+            events.append("coordinator.construct")
+
+        @staticmethod
+        def accept(_event):
+            return True
+
+        def stop(self):
+            events.append("coordinator.stop")
+            return True
+
+    class Source:
+        def __init__(self, _roots, *, report_unattributed_failure=None):
+            callbacks["source"] = report_unattributed_failure
+            events.append("source.construct")
+
+    class WatchService:
+        def __init__(self, _source, _publish):
+            pass
+
+        def start(self):
+            events.append("watch.start")
+            return True
+
+        def stop(self):
+            events.append("watch.stop")
+            return True
+
+        def replace_roots(self, roots):
+            events.append(
+                ("watch.replace", tuple(root["id"] for root in roots))
+            )
+            if failures["replace"] is not None:
+                raise failures["replace"]
+            return True
+
+    monkeypatch.setattr(
+        library_watch_health,
+        "LibraryWatchHealthService",
+        lambda _store: types.SimpleNamespace(
+            uses_durable_repository=lambda _repository, _library_id: True
+        ),
+    )
+    monkeypatch.setattr(
+        cover_preview_backfill,
+        "CoverPreviewBackfill",
+        lambda *_args, **_kwargs: types.SimpleNamespace(
+            start=lambda: True, stop=lambda: True
+        ),
+    )
+    monkeypatch.setattr(scan_jobs_postgres, "PostgresScanJobRepository", ScanJobs)
+    monkeypatch.setattr(
+        watcher_recovery_postgres,
+        "PostgresWatcherRecoveryRepository",
+        WatcherRepository,
+    )
+    monkeypatch.setattr(
+        watcher_session_recovery,
+        "WatcherSessionRecoveryController",
+        SessionController,
+    )
+    monkeypatch.setattr(library_event_coordinator, "LibraryEventCoordinator", Coordinator)
+    monkeypatch.setattr(library_reconciliation, "LibraryWatchService", WatchService)
+    monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", Source)
+    monkeypatch.setattr(
+        library_roots,
+        "get_library_roots",
+        lambda _config: ({"id": "root-a", "path": "C:/Music"},),
+    )
+    monkeypatch.setattr(
+        log_history,
+        "resolve_media_host_history_scope",
+        lambda _config: (
+            None
+            if host_library_id is None
+            else types.SimpleNamespace(library_id=host_library_id)
+        ),
+    )
+    monkeypatch.setattr(music_app, "_start_library_warmup", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
+
+    app = music_app.create_asgi_app()
+    app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://watcher-session-test"
+    )
+    return types.SimpleNamespace(
+        app=app,
+        callbacks=callbacks,
+        events=events,
+        failures=failures,
+        state=state,
+    )
+
+
+def test_watcher_session_startup_resolves_library_then_wires_one_controller(
+    monkeypatch,
+):
+    harness = _watcher_session_lifecycle_harness(monkeypatch, host_library_id=None)
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            assert harness.events == [
+                "library.resolve",
+                "session.begin",
+                "coordinator.construct",
+                "source.construct",
+                "watch.start",
+            ]
+            assert callable(harness.callbacks["coordinator"])
+            assert callable(harness.callbacks["source"])
+            harness.callbacks["coordinator"](("root-a",))
+            harness.callbacks["source"](("root-a", "root-b"))
+            assert harness.events[-2:] == [
+                ("session.report", ("root-a",)),
+                ("session.report", ("root-a", "root-b")),
+            ]
+            assert harness.callbacks["reporters"] == [
+                id(harness.callbacks["controller"]),
+                id(harness.callbacks["controller"]),
+            ]
+
+    asyncio.run(exercise())
+
+    assert harness.events[-4:] == [
+        "watch.stop",
+        "retry.cancel_join_flush",
+        "session.finish",
+        "coordinator.stop",
+    ]
+
+
+@pytest.mark.parametrize("failed_stage", ("library-resolution", "session-begin"))
+def test_watcher_session_startup_failure_prevents_runtime_construction(
+    monkeypatch, failed_stage
+):
+    failure = RuntimeError(f"{failed_stage} unavailable")
+    if failed_stage == "library-resolution":
+        harness = _watcher_session_lifecycle_harness(
+            monkeypatch, host_library_id=None, resolve_error=failure
+        )
+        expected_events = ["library.resolve"]
+    else:
+        harness = _watcher_session_lifecycle_harness(monkeypatch)
+        harness.failures["begin"] = failure
+        expected_events = ["session.begin"]
+
+    async def exercise():
+        with pytest.raises(RuntimeError, match=f"{failed_stage} unavailable"):
+            async with harness.app.router.lifespan_context(harness.app):
+                raise AssertionError("failed watcher startup must not yield")
+
+    asyncio.run(exercise())
+    assert harness.events == expected_events
+
+
+def test_watcher_session_clean_shutdown_prevents_recovery_on_next_start(monkeypatch):
+    state = {"open": False, "overflow_occurrences": 0, "participants": set()}
+
+    for _ in range(2):
+        harness = _watcher_session_lifecycle_harness(
+            monkeypatch, session_state=state
+        )
+
+        async def exercise():
+            async with harness.app.router.lifespan_context(harness.app):
+                pass
+
+        asyncio.run(exercise())
+        assert harness.events.count("session.begin") == 1
+        assert harness.events.count("session.finish") == 1
+
+    assert state == {"open": False, "overflow_occurrences": 0, "participants": set()}
+
+
+@pytest.mark.parametrize("stale_token", (False, True), ids=("storage", "stale-token"))
+def test_watcher_session_expand_failure_leaves_existing_observer_running(
+    monkeypatch, stale_token
+):
+    from music_app.services.watcher_recovery_postgres import (
+        WatcherSessionReplacedError,
+    )
+
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+    error_type = WatcherSessionReplacedError if stale_token else RuntimeError
+    harness.failures["expand"] = error_type("session expansion unavailable")
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            harness.events.clear()
+            with pytest.raises(error_type, match="session expansion unavailable"):
+                harness.app.state.replace_library_watch_roots(
+                    ({"id": "root-b", "path": "D:/Music"},)
+                )
+            assert harness.events == [("session.expand", ("root-b",))]
+            assert harness.state["participants"] == {"root-a"}
+
+    asyncio.run(exercise())
+
+
+def test_watcher_session_replacement_failures_retain_union_until_successful_set(
+    monkeypatch,
+):
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            harness.events.clear()
+            harness.failures["set"] = RuntimeError("session set unavailable")
+            with pytest.raises(RuntimeError, match="session set unavailable"):
+                harness.app.state.replace_library_watch_roots(
+                    ({"id": "root-b", "path": "D:/Music"},)
+                )
+            assert harness.events[-1] == (
+                "session.report",
+                ("root-a", "root-b"),
+            )
+            assert harness.state["participants"] == {"root-a", "root-b"}
+
+            harness.events.clear()
+            harness.failures["set"] = None
+            harness.failures["replace"] = RuntimeError(
+                "watch replace unavailable"
+            )
+            with pytest.raises(RuntimeError, match="watch replace unavailable"):
+                harness.app.state.replace_library_watch_roots(
+                    ({"id": "root-c", "path": "E:/Music"},)
+                )
+            assert harness.events[-1] == (
+                "session.report",
+                ("root-a", "root-b", "root-c"),
+            )
+            assert harness.state["participants"] == {"root-a", "root-b", "root-c"}
+
+            harness.events.clear()
+            harness.failures["replace"] = None
+            harness.app.state.replace_library_watch_roots(
+                ({"id": "root-c", "path": "E:/Music"},)
+            )
+            assert harness.events == [
+                ("session.expand", ("root-c",)),
+                ("watch.replace", ("root-c",)),
+                ("session.set", ("root-c",)),
+            ]
+            assert harness.state["participants"] == {"root-c"}
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "failed_stage",
+    (
+        "observer-stop",
+        "callback-cancel",
+        "callback-join",
+        "final-flush",
+        "session-finish",
+        "session-finish-false",
+    ),
+)
+def test_watcher_session_shutdown_failure_surfaces_and_leaves_session_open(
+    failed_stage,
+):
+    from music_app import _stop_library_watch_runtime
+
+    calls = []
+
+    def stop_watch():
+        calls.append("watch.stop")
+        if failed_stage == "observer-stop":
+            raise RuntimeError(failed_stage)
+
+    stop_failures = {"callback-cancel", "callback-join", "final-flush"}
+    flush_label = (
+        f"retry.cancel_join_flush:{failed_stage}"
+        if failed_stage in stop_failures
+        else "retry.cancel_join_flush"
+    )
+
+    def stop_retry_and_flush(*, deadline):
+        assert deadline == 123.0
+        calls.append(flush_label)
+        if failed_stage in stop_failures:
+            raise RuntimeError(failed_stage)
+
+    def finish():
+        calls.append("session.finish")
+        if failed_stage == "session-finish":
+            raise RuntimeError(failed_stage)
+        return failed_stage != "session-finish-false"
+
+    with pytest.raises(
+        RuntimeError,
+        match=("finish" if failed_stage == "session-finish-false" else failed_stage),
+    ):
+        _stop_library_watch_runtime(
+            watch_service=types.SimpleNamespace(stop=stop_watch),
+            watcher_session_controller=types.SimpleNamespace(
+                stop_retry_and_flush=stop_retry_and_flush,
+                finish=finish,
+            ),
+            event_coordinator=types.SimpleNamespace(
+                stop=lambda: calls.append("coordinator.stop")
+            ),
+            deadline=123.0,
+        )
+
+    expected = ["watch.stop"]
+    if failed_stage != "observer-stop":
+        expected.append(flush_label)
+    if failed_stage.startswith("session-finish"):
+        expected.append("session.finish")
+    assert calls == expected
 
 
 def test_create_asgi_app_lifespan_requests_warmup_stop_before_worker_shutdown(

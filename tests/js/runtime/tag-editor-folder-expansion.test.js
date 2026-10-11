@@ -89,7 +89,7 @@ test('loading folder files preserves selection and pending values while deduplic
   const existingPath = 'C:\\Music\\Album\\01 - One.mp3';
   const newPath = 'C:\\Music\\Album\\02 - Two.mp3';
   const tagEditor = {
-    album: { name: 'Album' },
+    album: { key: 'artist::album', name: 'Album' },
     tracks: [{ path: existingPath, title: 'One' }],
     selectedPaths: [existingPath],
     anchorPath: existingPath,
@@ -124,6 +124,7 @@ test('loading folder files preserves selection and pending values while deduplic
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/utilities/tag-editor/folder-files');
   const payload = JSON.parse(requests[0].options.body);
+  assert.equal(payload.album.key, 'artist::album');
   assert.equal(payload.source_path, existingPath);
   assert.deepEqual(Array.from(tagEditor.selectedPaths), [existingPath]);
   assert.equal(tagEditor.anchorPath, existingPath);

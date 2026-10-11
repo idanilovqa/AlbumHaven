@@ -27219,6 +27219,7 @@ async function loadTagEditorFolderFiles() {
       body: JSON.stringify({
         source_path: sourcePath,
         album: {
+          key: String(tagEditor.album?.key || tagEditor.album?.album_key || ''),
           tracks: (tagEditor.tracks || []).map((track) => ({ path: String(track.path || '') })),
         },
       }),

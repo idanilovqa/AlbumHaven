@@ -25,30 +25,19 @@ def physical_album_folder(path: object) -> str:
 
 
 def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[str, str]:
-    """Keep unrelated physical collections out of a tagged album's sources."""
+    """Exclude redundant subset copies while preserving distinct tagged releases."""
     from music_app.services.non_album_view_payloads import is_loose_track_album_value
     from music_app.services.metadata import normalize_exception_value
 
-    folders: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
+    physical_sources: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
     for entry in entries:
         if normalize_exception_value(entry.get("exception_type")) or is_loose_track_album_value(entry.get("album")):
             continue
         path = str(entry.get("path") or "")
         if path:
-            folders[(str(entry.get("library_root_id") or ""), physical_album_folder(path))].append(entry)
+            physical_sources[(str(entry.get("library_root_id") or ""), physical_album_root(path))].append(entry)
     rejected: dict[str, str] = {}
-    physical_sources: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
     sources: dict[tuple[str, str, str, str], list[tuple[list[Mapping[str, object]], set[tuple[str, str, int]]]]] = defaultdict(list)
-    for files in folders.values():
-        album_names = {_text(entry.get("album")) for entry in files if _text(entry.get("album"))}
-        if len(album_names) > 1:
-            rejected.update((str(entry["path"]), "Mixed album metadata in one folder") for entry in files)
-            continue
-        for entry in files:
-            path = str(entry.get("path") or "")
-            physical_sources[
-                (str(entry.get("library_root_id") or ""), physical_album_root(path))
-            ].append(entry)
 
     for files in physical_sources.values():
         groups: dict[tuple[str, str, str, str], list[Mapping[str, object]]] = defaultdict(list)

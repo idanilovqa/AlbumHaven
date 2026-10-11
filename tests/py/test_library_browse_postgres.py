@@ -617,6 +617,36 @@ def test_postgres_featured_track_artist_remains_featured_with_member_relation():
     )[0]["artist_relationship"] == "featured"
 
 
+def test_selected_artist_browse_preserves_split_albums_in_one_folder():
+    from music_app.services import library_browse_postgres as browse
+
+    rows = []
+    for number, title in enumerate(("Original album", "Renamed subset"), 1):
+        row = _browse_album_row(
+            artist="Synthetic Artist",
+            album_id=number,
+            album_key=f"synthetic-artist::{title.casefold()}",
+            title=title,
+        )
+        row["album_release_year"] = 2004
+        row["file_private_path"] = rf"D:\Music\Synthetic Artist\Shared folder\{number}.flac"
+        row["file_entry"] = {
+            "album": title,
+            "album_artist": "Synthetic Artist",
+            "artist": "Synthetic Artist",
+            "title": row["track_title"],
+            "year": row["album_release_year"],
+        }
+        rows.append(row)
+
+    albums = browse._selected_artist_album_payloads(rows, "Synthetic Artist")
+
+    assert {album["key"] for album in albums} == {row["album_key"] for row in rows}
+    assert {album["name"]: [track["title"] for track in album["tracks"]] for album in albums} == {
+        row["album_title"]: [row["track_title"]] for row in rows
+    }
+
+
 def test_album_detail_projection_keeps_only_mixed_folder_file_when_no_valid_source():
     from music_app.services import library_browse_postgres as browse
 

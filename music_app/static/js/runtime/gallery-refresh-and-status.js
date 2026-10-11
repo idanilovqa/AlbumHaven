@@ -858,7 +858,15 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
       state.awaitingInitialDataRefresh = false;
       return;
     }
-    if (String(state.view.query || '').trim() || String(state.view.selected_artist || '').trim()) {
+    const retainedView = normalizedFollowup.options?.retainMountedSelectedViewState;
+    const retainsSelectedSidebar = Boolean(
+      normalizedFollowup.options?.startupHydrationTier === 'sidebar'
+      && retainedView
+      && String(retainedView.query || '').trim() === String(state.view.query || '').trim()
+      && String(retainedView.selected_artist || '').trim() === String(state.view.selected_artist || '').trim()
+    );
+    if (!retainsSelectedSidebar
+      && (String(state.view.query || '').trim() || String(state.view.selected_artist || '').trim())) {
       clearStartupHydrationFollowup();
       state.awaitingInitialDataRefresh = false;
       return;

@@ -2439,6 +2439,39 @@ test('fetchAndRender clears queued startup followup state before a user request 
   await requestPromise;
 });
 
+test('dispatchStartupHydrationFollowup dispatches sidebar hydration for the retained selected artist', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.view.selected_artist = 'Selected artist';
+  context.queueStartupHydrationFollowup('/view-data?payload_tier=sidebar', {
+    startupHydrationTier: 'sidebar',
+    retainMountedSelectedViewState: { ...context.state.view },
+  });
+  context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup);
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 1);
+  assert.equal(pendingRequests[0].url, '/view-data?payload_tier=sidebar');
+});
+
+test('dispatchStartupHydrationFollowup cancels retained sidebar hydration after navigation changes', async () => {
+  for (const change of [
+    (context) => { context.state.view.selected_artist = 'Another artist'; },
+    (context) => { context.state.view.query = 'Another query'; },
+    (context) => { context.state.ui.viewStateRevision += 1; },
+  ]) {
+    const { context, pendingRequests } = createContext();
+    context.state.view.selected_artist = 'Selected artist';
+    context.queueStartupHydrationFollowup('/view-data?payload_tier=sidebar', {
+      startupHydrationTier: 'sidebar',
+      retainMountedSelectedViewState: { ...context.state.view },
+    });
+    change(context);
+    context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup);
+    await flushMicrotasks();
+    assert.equal(pendingRequests.length, 0);
+    assert.equal(context.state.ui.pendingStartupHydrationFollowup, null);
+  }
+});
+
 test('dispatchStartupHydrationFollowup retries a queued startup followup when the first dispatch sees the app still busy', async () => {
   const { context, pendingRequests } = createContext();
   const scheduledTimeouts = [];

@@ -111,7 +111,9 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
   const summaryPathname = String(options.summaryPathname || '/utilities/problematic-files');
   const detailPathname = String(options.detailPathname || '/utilities/problematic-files/detail');
   const detailRequests = [];
+  const summaryRequests = [];
   const recordDetailRequest = (request) => {
+    if (new URL(request.url()).pathname === summaryPathname) summaryRequests.push(request);
     if (new URL(request.url()).pathname === detailPathname) {
       detailRequests.push(request);
     }
@@ -160,6 +162,7 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
       summaryResponse: summaryResponseResult.value,
       completeSummaryResponse: completeSummaryResponseResult.value,
       detailRequestCount: detailRequests.length,
+      summaryRequestCount: summaryRequests.length,
       coverPreemptionWindow: {
         sequenceBefore: preemptionBefore.sequence,
         sequenceAfter: preemptionAfter.sequence,

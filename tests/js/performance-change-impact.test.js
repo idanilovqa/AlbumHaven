@@ -35,7 +35,7 @@ test('PR classifier applies changed-path performance ownership before selecting 
 
 test('sensitive browse, sidebar, modal, status, and mobile changes select their focused targets', () => {
   const cases = [
-    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
+    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/static/js/runtime/track-modal-lightbox-helpers.js', ['selected-artist', 'all-artists', 'gapless-playback']],
@@ -94,4 +94,49 @@ test('change-impact contract rejects unknown targets, invalid patterns, and unco
     ...contract,
     requiredPaths: [...contract.requiredPaths, 'music_app/static/js/runtime/unowned-sensitive.js'],
   }, knownTargets).join('\n'), /has no performance target mapping/);
+});
+
+test('Problematic Files dependencies require both real-app performance targets', () => {
+  const paths = [
+    'music_app/services/library_browse_postgres.py',
+    'music_app/services/problematic_albums.py',
+    'music_app/routes/api_problematic_albums.py',
+    'music_app/routes/api_read_asgi_routes.py',
+    'music_app/services/scan_state.py',
+    'music_app/services/edit_workflows.py',
+    'music_app/static/js/runtime/utility-loaders-and-cover-lookup.js',
+    'music_app/static/js/runtime/problematic-files-virtual-list.js',
+    'music_app/static/js/runtime/problem-exclusion-mutations.js',
+    'music_app/static/js/utilities/problematic-tab.js',
+    'music_app/static/js/utilities/shell.js',
+    'music_app/static/js/runtime/utility-list-builders.js',
+    'music_app/static/js/runtime/utility-renderers-and-actions.js',
+    'music_app/static/css/runtime/utilities.css',
+    'tests/e2e/helpers/utilityPerformanceHelpers.js',
+    'tests/e2e/helpers/problematicPayloadEvidence.js',
+    'tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js',
+  ];
+  for (const changedPath of paths) {
+    const result = applyPerformanceChangeImpact({
+      pipelineMode: 'focused-e2e', focusedPerformanceTargets: [], focusedPerformanceShards: [],
+    }, [changedPath], contract);
+    for (const target of ['utility-problematic-files', 'problematic-files-focused']) {
+      assert.ok(result.focusedPerformanceTargets.includes(target), `${changedPath} must select ${target}`);
+    }
+    assert.ok(result.focusedPerformanceShards.includes('utility-problematic-files'), changedPath);
+  }
+});
+
+test('agent guidance requires all PF performance layers without weakening the budget', () => {
+  const guidance = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
+  const checks = fs.readFileSync(path.join(repoRoot, 'docs/problematic-files-regression-checks.md'), 'utf8');
+  for (const target of ['utility-problematic-files', 'problematic-files-focused']) {
+    assert.ok(guidance.includes(target));
+    assert.ok(checks.includes(`--test ${target}`));
+  }
+  for (const required of ['test_problematic_physical_files_postgres.py', 'test_api_read_asgi_routes.py',
+    'utility-problematic-load-diagnostics.test.js', 'problematicFilesVirtualFocus.spec.js',
+    'functional-shards.json']) assert.ok(checks.includes(required), required);
+  assert.match(guidance, /1000 ms.*200 ms/);
+  assert.match(checks, /skipped test does not satisfy/);
 });

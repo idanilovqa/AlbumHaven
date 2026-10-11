@@ -1,3 +1,4 @@
+import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { expect, test } from '../support/performanceFixtures.js';
 import { SettingsRefactorShell } from '../poms/settingsRefactorShell.js';
 import { observeProblematicDetails, exerciseProblematicNativeJumps } from '../helpers/problematicVirtualScrollHelpers.js';
@@ -74,7 +75,28 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         expect(coldPayload.projection_cache_status, 'Expected the timed API request to be SQL-bounded.').toBe('bounded');
         expect(coldPayload.complete).toBe(false);
         expect(coldPayload.items).toHaveLength(50);
-        const completePayload = await networkEvidence.completeSummaryResponse.json();
+        const completeResponseBody = await networkEvidence.completeSummaryResponse.text();
+        const completePayload = JSON.parse(completeResponseBody);
+        const completeResponseBytes = new TextEncoder().encode(completeResponseBody).byteLength;
+        const completeResponseMs = await readCompletedResponseDurationMs(networkEvidence.completeSummaryResponse);
+        await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
+          key: 'problematic-files-complete-api',
+          label: 'Complete Problematic Files response fully received',
+          timingMs: completeResponseMs,
+          details: { responseBytes: completeResponseBytes, itemCount: completePayload.items.length },
+        });
+        utilityProblematicFilesLocalReport.recordTextCheckpoint({
+          key: 'problematic-files-complete-response-bytes',
+          label: 'Complete Problematic Files response body size',
+          valueText: `${completeResponseBytes} bytes`,
+        });
+        const payloadBudget = UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.expectations
+          .find((expectation) => expectation.key === 'problematicResponseBytes');
+        expect(completeResponseBytes, 'The approved full-fixture payload budget also applies beyond the first page')
+          .toBeLessThanOrEqual(payloadBudget.maxAllowed);
+        assertCompactProblematicSummary(coldPayload);
+        assertCompactProblematicSummary(completePayload);
+        expect(networkEvidence.summaryRequestCount, 'One bounded summary and one complete summary only').toBe(2);
         expect(
           evaluateProblematicFilesDatasetContract(
             completePayload,
@@ -129,6 +151,8 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         );
         const timingMs = networkEvidence.readyMs;
         problematicFilesPayload = await networkEvidence.completeSummaryResponse.json();
+        assertCompactProblematicSummary(problematicFilesPayload);
+        expect(networkEvidence.summaryRequestCount, 'Warm opening must not duplicate summary requests').toBe(2);
         initialDetailRequestCount = networkEvidence.detailRequestCount;
         await utilityProblematicFilesLocalReport.recordTimingCheckpoint({
           key: 'problematic-files-ready',

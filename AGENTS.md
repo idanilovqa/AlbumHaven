@@ -62,6 +62,26 @@ operate, or contribute to the application.
   gate so an interactive search cannot synchronously rebuild the global
   album/file inventory.
 
+## Mandatory Problematic Files regression gate
+
+- Immediately run both `utility-problematic-files` and
+  `problematic-files-focused` performance targets after changing Problematic
+  Files queries, candidate discovery, summaries/details, cache invalidation,
+  watcher reconciliation, tag-edit/cover/move projection invalidation, utility
+  loading, search/filtering, virtualization, or shared rendering that affects
+  this surface. This applies to every agent and chat; a narrow unit pass is
+  not a substitute.
+- Follow `docs/problematic-files-regression-checks.md` for PostgreSQL/API,
+  JavaScript, component, functional, and measured browser coverage. Use real
+  isolated Postgres fixtures. Skipped database checks or setup failures do not
+  satisfy the gate. Run Python, Node, and browser stages serially.
+- Keep the approved 1000 ms readiness target plus 200 ms grace. Retain cold
+  and warm measurements, full response sizes, and populated visible detail
+  assertions. Do not relax budgets, remove cases, or rerun until green.
+- Maintain `tests/ci/performance-change-impact.json` when ownership moves or
+  new dependencies are introduced. Its tested mapping must select both PF
+  targets; full CI remains mandatory before release.
+
 ## Subagents and token burning
 
 All wait_agent tool calls MUST use at least 10 minutes timeout. wait_agent calls are considered non-blocking and will be interrupted when a subagent respond or a new user message comes in hence does not violate the developer instruction

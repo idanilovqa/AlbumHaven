@@ -30,7 +30,28 @@
     "music_app/static/js/runtime/view-state-helpers.js",
     "music_app/static/js/runtime/virtual-artist-grid.js",
     "music_app/static/css/runtime/album-details-components.css",
-    "music_app/static/css/mobile-layout.css"
+    "music_app/static/css/mobile-layout.css",
+    "music_app/services/problematic_albums.py",
+    "music_app/routes/api_problematic_albums.py",
+    "music_app/services/scan_state.py",
+    "music_app/services/edit_workflows.py",
+    "music_app/services/cover_state.py",
+    "music_app/services/move_executor.py",
+    "music_app/services/save_tasks.py",
+    "music_app/services/state.py",
+    "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+    "music_app/static/js/runtime/problematic-files-virtual-list.js",
+    "music_app/static/js/runtime/problematic-album-helpers.js",
+    "music_app/static/js/runtime/problem-exclusion-mutations.js",
+    "music_app/static/js/utilities/problematic-tab.js",
+    "music_app/static/css/runtime/utilities.css",
+    "music_app/static/js/utilities/shell.js",
+    "music_app/static/js/runtime/utility-list-builders.js",
+    "music_app/static/js/runtime/utility-renderers-and-actions.js",
+    "tests/e2e/helpers/utilityPerformanceHelpers.js",
+    "tests/e2e/helpers/problematicPayloadEvidence.js",
+    "tests/e2e/actions/utilityProblematicFilesActions.js",
+    "tests/e2e/poms/utilityProblematicFilesTab.js"
   ],
   "rules": [
     {
@@ -125,6 +146,38 @@
       "targets": [
         "selected-artist",
         "all-artists"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/problematic_albums.py",
+        "music_app/routes/api_problematic_albums.py",
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/scan_state.py",
+        "music_app/services/edit_workflows.py",
+        "music_app/services/cover_state.py",
+        "music_app/services/move_executor.py",
+        "music_app/services/save_tasks.py",
+        "music_app/services/state.py",
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+        "music_app/static/js/runtime/problematic-files-virtual-list.js",
+        "music_app/static/js/runtime/problematic-album-helpers.js",
+        "music_app/static/js/runtime/problem-exclusion-mutations.js",
+        "music_app/static/js/utilities/problematic-tab.js",
+        "music_app/static/css/runtime/utilities.css",
+        "music_app/static/js/utilities/shell.js",
+        "music_app/static/js/runtime/utility-list-builders.js",
+        "music_app/static/js/runtime/utility-renderers-and-actions.js",
+        "tests/e2e/helpers/utilityPerformanceHelpers.js",
+        "tests/e2e/helpers/problematicPayloadEvidence.js",
+        "tests/e2e/actions/utilityProblematicFilesActions.js",
+        "tests/e2e/poms/utilityProblematicFilesTab.js",
+        "tests/e2e/utilityProblematicFiles/**"
+      ],
+      "targets": [
+        "utility-problematic-files",
+        "problematic-files-focused"
       ]
     }
   ]

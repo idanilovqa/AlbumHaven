@@ -1,3 +1,4 @@
+import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { expect, test } from '../support/performanceFixtures.js';
 
 import {
@@ -8,6 +9,8 @@ import {
   measureProblematicFilesSettingsOpenWithNetworkEvidence,
   partitionProblematicFilesRuntimeLogs,
   performanceTimingBudget,
+  readCompletedResponseDurationMs,
+  summarizeProblematicFilesDiagnostics,
 } from '../helpers/index.js';
 
 const CASE_ID = 'FTC-UTIL-PROBLEMS-010';
@@ -56,6 +59,9 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     } = networkEvidence;
     expect(summaryResponse.ok()).toBe(true);
     const summary = await summaryResponse.json();
+    assertCompactProblematicSummary(summary);
+    assertCompactProblematicSummary(await networkEvidence.completeSummaryResponse.json());
+    expect(networkEvidence.summaryRequestCount, 'One bounded summary and one complete summary only').toBe(2);
     const firstSummary = summary.items[0];
     const detail = summary.initial_detail;
     let readinessOutcome;
@@ -111,7 +117,17 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         readinessOutcome,
       ),
     });
+    const loadDiagnostics = await utilityProblematicFilesActions.readLoadDiagnostics();
+    problematicFilesFocusedLocalReport.recordTextCheckpoint({
+      key: 'problematic-files-load-diagnostics',
+      label: 'Problematic Files request, parse, state, and render timings',
+      valueText: summarizeProblematicFilesDiagnostics(loadDiagnostics),
+    });
     const focusedMetrics = {
+      boundedResponseMs: await readCompletedResponseDurationMs(summaryResponse),
+      completeResponseMs: await readCompletedResponseDurationMs(networkEvidence.completeSummaryResponse),
+      summaryRequestCount: networkEvidence.summaryRequestCount,
+      loadDiagnostics,
       problematicFilesApiMs: readyMs,
       problematicItemCount: summary.items.length,
       firstSummaryDetailLoaded: firstSummary.detail_loaded,

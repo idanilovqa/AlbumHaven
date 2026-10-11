@@ -2492,7 +2492,7 @@ def test_pcm_socket_serializes_current_and_continuity_websocket_sends():
     asyncio.run(scenario())
 
 
-def test_pcm_credit_drain_yields_to_unrelated_app_work(monkeypatch):
+def test_pcm_credit_drain_yields_without_timer_delay_amplification(monkeypatch):
     class ImmediatelyBufferedDecoderDouble:
         def __init__(self, frame_count: int) -> None:
             self.outstanding_credit_frames = frame_count
@@ -2551,7 +2551,7 @@ def test_pcm_credit_drain_yields_to_unrelated_app_work(monkeypatch):
         assert observed_send_counts[0] < 64
         assert websocket.send_count == 64
         assert len(cooperative_pauses) == 64
-        assert all(delay > 0 for delay in cooperative_pauses)
+        assert cooperative_pauses == [0] * 64
 
     asyncio.run(scenario())
 

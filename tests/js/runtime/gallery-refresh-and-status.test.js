@@ -2369,6 +2369,39 @@ test('fetchAndRender marks visible startup readiness after sidebar hydration wit
   });
 });
 
+test('fetchAndRender completes selected artist startup through its sidebar followup', async () => {
+  const { context, pendingRequests } = createContext();
+  const fetchAndRender = context.fetchAndRender;
+  let followupRequest;
+  context.fetchAndRender = (...args) => {
+    const result = fetchAndRender(...args);
+    if (args[0] === '/view-data?payload_tier=sidebar') followupRequest = result;
+    return result;
+  };
+  const scheduled = [];
+  context.scheduleBrowserTimeout = (callback) => { scheduled.push(callback); return scheduled.length; };
+  context.state.view.selected_artist = 'Broadcast';
+  const request = context.fetchAndRender('/view-data?artist=Broadcast', false, {
+    startupRefresh: true,
+    startupHydrationTier: 'full',
+    startupHydrationFollowupEndpoint: '/view-data?payload_tier=sidebar',
+  });
+  pendingRequests[0].resolveWith({
+    selected_artist: 'Broadcast', query: '', artist_groups: [], payload_tier: 'full',
+  });
+  await request;
+  for (const callback of scheduled.splice(0)) callback();
+  await flushMicrotasks();
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, '/view-data?payload_tier=sidebar');
+  pendingRequests[1].resolveWith({
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }], payload_tier: 'sidebar',
+  });
+  await followupRequest;
+  assert.equal(context.startupMetrics.completed, 1);
+  assert.equal(context.state.view.selected_artist, 'Broadcast');
+});
+
 test('fetchAndRender completes startup refresh after sidebar hydration when no followup endpoint is present', async () => {
   const { context, pendingRequests } = createContext();
 

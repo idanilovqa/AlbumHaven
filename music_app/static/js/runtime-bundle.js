@@ -16258,11 +16258,7 @@ async function fetchAndRender(url, push = true, options = {}) {
         // The one-shot post-scan refresh now owns the active request slot.
       } else if (await dispatchPendingCoverCompletionViewRefresh()) {
         // The one-shot post-cover refresh now owns the active request slot.
-      } else if (
-        pendingStartupHydrationFollowup
-        && !String(state.view.query || '').trim()
-        && !String(state.view.selected_artist || '').trim()
-      ) {
+      } else if (pendingStartupHydrationFollowup) {
         dispatchStartupHydrationFollowup(
           pendingStartupHydrationFollowup,
           STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS,

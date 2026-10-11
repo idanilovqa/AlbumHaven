@@ -99,6 +99,9 @@ VACATED_STRUCTURAL_ALBUM_MIGRATION = (
 WATCHER_RECOVERY_MIGRATION = (
     MIGRATIONS_DIR / "0107_create_durable_watcher_recovery.sql"
 )
+WATCHER_SESSION_MIGRATION = (
+    MIGRATIONS_DIR / "0108_create_watcher_runtime_sessions.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -114,6 +117,220 @@ def _watcher_function_sql(name: str) -> str:
     marker = f"create or replace function {name}("
     assert marker in sql, f"missing watcher function {name}"
     return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def _watcher_session_sql() -> str:
+    assert WATCHER_SESSION_MIGRATION.is_file(), (
+        "missing additive watcher runtime session migration 0108"
+    )
+    return _normalized_sql(WATCHER_SESSION_MIGRATION.read_text(encoding="utf-8"))
+
+
+def _watcher_session_function_sql(name: str) -> str:
+    sql = _watcher_session_sql()
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing watcher session function {name}"
+    return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def test_0108_is_additive_and_keeps_released_0107_bytes():
+    assert hashlib.sha256(WATCHER_RECOVERY_MIGRATION.read_bytes()).hexdigest() == (
+        "c7a968f87b2d9841b5958cce16e6caca32ecb1e5a5b9708e2efa8046246a6ae6"
+    )
+    assert WATCHER_SESSION_MIGRATION.name == (
+        "0108_create_watcher_runtime_sessions.sql"
+    )
+    session_sql = _watcher_session_sql()
+    assert "alter table library.watcher_lanes" not in session_sql
+    assert "alter table library.watcher_generations" not in session_sql
+
+
+def test_0108_declares_only_session_and_participant_storage():
+    sql = _watcher_session_sql()
+    released_sql = _watcher_recovery_sql()
+
+    assert "create table library.watcher_runtime_sessions" in sql
+    assert "library_id bigint primary key" in sql
+    assert "session_token uuid not null" in sql
+    assert "started_at timestamptz not null" in sql
+    assert "started_at not in ('-infinity'::timestamptz, 'infinity'::timestamptz)" in sql
+    assert "create table library.watcher_runtime_session_participants" in sql
+    assert "primary key (library_id, root_id)" in sql
+    assert (
+        "foreign key (library_id, root_id) references "
+        "library.library_roots(library_id, id) on delete restrict"
+    ) in sql
+    assert (
+        "create unique index if not exists "
+        "library_roots_library_id_id_watcher_uniq"
+    ) in released_sql
+    assert "library_roots_library_id_id_watcher_uniq" not in sql
+    session_indexes = re.findall(
+        r"create\s+(?:unique\s+)?index\s+[^;]+watcher_runtime_session[^;]+;",
+        sql,
+    )
+    assert session_indexes == []
+
+
+def test_0108_definers_have_exact_signatures_and_hardened_search_paths():
+    sql = _watcher_session_sql()
+    signatures = (
+        "library.begin_watcher_runtime_session(bigint,uuid,text[],timestamptz)",
+        "library.expand_watcher_runtime_session_participants(bigint,uuid,text[])",
+        "library.set_watcher_runtime_session_participants(bigint,uuid,text[])",
+        "library.finish_watcher_runtime_session(bigint,uuid)",
+    )
+
+    for signature in signatures:
+        function_name = signature.split("(", 1)[0]
+        body = _watcher_session_function_sql(function_name)
+        assert "security definer" in body
+        assert "set search_path = pg_catalog" in body
+        assert "set search_path = pg_catalog, " not in body
+        assert f"revoke all on function {signature} from public" in sql
+        assert f"revoke all on function {signature} from album_haven_worker" in sql
+        assert f"revoke all on function {signature} from album_haven_readonly" in sql
+        assert f"grant execute on function {signature} to album_haven_app" in sql
+
+
+def test_0108_validates_identity_time_and_bounded_unique_roots():
+    begin = _watcher_session_function_sql(
+        "library.begin_watcher_runtime_session"
+    )
+    expand = _watcher_session_function_sql(
+        "library.expand_watcher_runtime_session_participants"
+    )
+    exact_set = _watcher_session_function_sql(
+        "library.set_watcher_runtime_session_participants"
+    )
+    finish = _watcher_session_function_sql(
+        "library.finish_watcher_runtime_session"
+    )
+
+    for body in (begin, expand, exact_set, finish):
+        assert "p_library_id < 1" in body
+        assert "p_session_token is null" in body
+        assert "errcode = '22023'" in body
+    assert "p_started_at is null" in begin
+    assert "isfinite(p_started_at)" in begin
+    for body in (begin, expand, exact_set):
+        assert "cardinality(p_logical_root_ids) > 256" in body
+        assert "pg_catalog.btrim" in body
+        assert "count(*) <> count(distinct" in body
+
+
+def test_0108_serializes_lifecycle_and_fences_stale_tokens():
+    released_lock = (
+        "perform pg_catalog.pg_advisory_xact_lock( "
+        "pg_catalog.hashtextextended('album-haven:watcher:' || "
+        "p_library_id::text, 0) );"
+    )
+    assert released_lock in _watcher_function_sql(
+        "library.mark_watcher_roots_dirty"
+    )
+    for name in (
+        "library.begin_watcher_runtime_session",
+        "library.expand_watcher_runtime_session_participants",
+        "library.set_watcher_runtime_session_participants",
+        "library.finish_watcher_runtime_session",
+    ):
+        body = _watcher_session_function_sql(name)
+        assert released_lock in body
+        lifecycle_access = min(
+            index
+            for marker in (
+                "library.watcher_runtime_sessions",
+                "library.watcher_runtime_session_participants",
+                "library.library_roots",
+            )
+            if (index := body.find(marker)) >= 0
+        )
+        assert body.index(released_lock) < lifecycle_access
+    for name in (
+        "library.expand_watcher_runtime_session_participants",
+        "library.set_watcher_runtime_session_participants",
+        "library.finish_watcher_runtime_session",
+    ):
+        body = _watcher_session_function_sql(name)
+        assert "session_token = p_session_token" in body
+        assert "errcode = '55000'" in body
+
+
+def test_0108_filters_inactive_prior_participants_before_dirty_recovery():
+    begin = _watcher_session_function_sql(
+        "library.begin_watcher_runtime_session"
+    )
+    active_partition = "root.is_active is true"
+    dirty_call = "library.mark_watcher_roots_dirty"
+
+    assert active_partition in begin
+    assert dirty_call in begin
+    assert begin.index(active_partition) < begin.index(dirty_call)
+    assert "order by root.id" in begin
+    assert "'overflow'" in begin
+    assert "recovered_logical_root_id" in begin
+
+
+def test_0108_denies_direct_dml_to_every_runtime_role():
+    sql = _watcher_session_sql()
+    relations = (
+        "library.watcher_runtime_sessions",
+        "library.watcher_runtime_session_participants",
+    )
+    roles = ("public", "album_haven_app", "album_haven_worker", "album_haven_readonly")
+
+    for relation in relations:
+        for role in roles:
+            assert f"revoke all on table {relation} from {role}" in sql
+
+
+def test_0108_is_the_exact_ordered_migration_successor():
+    migration_names = sorted(
+        path.name
+        for path in MIGRATIONS_DIR.iterdir()
+        if path.is_file() and path.suffix.casefold() == ".sql"
+    )
+    assert migration_names[-2:] == [
+        "0107_create_durable_watcher_recovery.sql",
+        "0108_create_watcher_runtime_sessions.sql",
+    ]
+
+
+def test_0108_creates_only_the_approved_schema_objects_and_overloads():
+    sql = _watcher_session_sql()
+
+    assert set(
+        re.findall(
+            r"create (?:temporary |temp )?table (?:if not exists )?"
+            r"([a-z0-9_.]+)",
+            sql,
+        )
+    ) == {
+        "library.watcher_runtime_sessions",
+        "library.watcher_runtime_session_participants",
+    }
+    assert re.findall(
+        r"create sequence (?:if not exists )?([a-z0-9_.]+)", sql
+    ) == []
+    assert re.findall(
+        r"create (?:unique )?index (?:concurrently )?"
+        r"(?:if not exists )?([a-z0-9_.]+)",
+        sql,
+    ) == []
+    function_names = re.findall(
+        r"create (?:or replace )?function ([a-z0-9_.]+)\(",
+        sql,
+    )
+    assert set(function_names) == {
+        "library.begin_watcher_runtime_session",
+        "library.expand_watcher_runtime_session_participants",
+        "library.set_watcher_runtime_session_participants",
+        "library.finish_watcher_runtime_session",
+    }
+    assert len(function_names) == len(set(function_names)) == 4
+    assert re.findall(
+        r"create (?:constraint )?trigger ([a-z0-9_]+)", sql
+    ) == []
 
 
 def test_0107_normalizes_crlf_before_splicing_targeted_authorization_source():
@@ -1490,7 +1707,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-68:] == [
+    assert migration_names[-69:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -1559,6 +1776,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0105_validate_durable_worker_startup.sql",
         "0106_retire_vacated_structural_album.sql",
         "0107_create_durable_watcher_recovery.sql",
+        "0108_create_watcher_runtime_sessions.sql",
     ]
 
 

@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import importlib
+from inspect import signature
 from pathlib import Path
+import re
+from threading import Event, Thread
+import time
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -11,6 +16,7 @@ from music_app.services.library_watch import LibraryEvent, LibraryEventKind
 
 
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+SESSION_TOKEN = UUID("00000000-0000-0000-0000-000000000007")
 
 
 def _recovery_module():
@@ -487,3 +493,675 @@ def test_operator_rollback_disables_acceptance_and_maps_retained_scope():
     assert result.affected_root_ids == ("root-a", "root-b")
     assert "disable_watcher_acceptance" in connection.executed[0][0]
     assert "prepare_legacy_watcher_rollback" in connection.executed[1][0]
+
+
+def test_runtime_session_repository_uses_typed_restricted_boundaries():
+    recovered = [{"recovered_logical_root_id": "root-b"}, {"recovered_logical_root_id": "root-a"}]
+    repository, connection = _repository([recovered, [], [], [{"finished": True}]])
+
+    assert repository.begin_runtime_session(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+        logical_root_ids=("root-b", "root-a"),
+        started_at=NOW,
+    ) == ("root-a", "root-b")
+    repository.expand_runtime_session_participants(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+        logical_root_ids=("root-a", "root-b"),
+    )
+    repository.set_runtime_session_participants(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+        logical_root_ids=("root-b",),
+    )
+    assert repository.finish_runtime_session(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+    ) is True
+
+    assert connection.executed == [
+        (
+            "select * from library.begin_watcher_runtime_session(%s, %s, %s, %s)",
+            (7, SESSION_TOKEN, ["root-a", "root-b"], NOW),
+        ),
+        (
+            "select library.expand_watcher_runtime_session_participants(%s, %s, %s)",
+            (7, SESSION_TOKEN, ["root-a", "root-b"]),
+        ),
+        (
+            "select library.set_watcher_runtime_session_participants(%s, %s, %s)",
+            (7, SESSION_TOKEN, ["root-b"]),
+        ),
+        (
+            "select library.finish_watcher_runtime_session(%s, %s) as finished",
+            (7, SESSION_TOKEN),
+        ),
+    ]
+
+
+def test_runtime_session_repository_preserves_duplicate_roots_for_sql_rejection():
+    repository, connection = _repository([[], [], []])
+    duplicate_roots = ("root-b", "root-a", "root-a")
+
+    assert repository.begin_runtime_session(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+        logical_root_ids=duplicate_roots,
+        started_at=NOW,
+    ) == ()
+    repository.expand_runtime_session_participants(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+        logical_root_ids=duplicate_roots,
+    )
+    repository.set_runtime_session_participants(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+        logical_root_ids=duplicate_roots,
+    )
+
+    assert connection.executed == [
+        (
+            "select * from library.begin_watcher_runtime_session(%s, %s, %s, %s)",
+            (7, SESSION_TOKEN, ["root-b", "root-a", "root-a"], NOW),
+        ),
+        (
+            "select library.expand_watcher_runtime_session_participants(%s, %s, %s)",
+            (7, SESSION_TOKEN, ["root-b", "root-a", "root-a"]),
+        ),
+        (
+            "select library.set_watcher_runtime_session_participants(%s, %s, %s)",
+            (7, SESSION_TOKEN, ["root-b", "root-a", "root-a"]),
+        ),
+    ]
+
+
+class _DirtyConnection:
+    def __init__(self, *, roots=("root-a", "root-b"), fail_commit=None):
+        self.roots = tuple(roots)
+        self.fail_commit = fail_commit
+        self.executed = []
+        self.cancel_count = 0
+        self.close_count = 0
+        self.closed = False
+        self.committed = False
+        self.rolled_back = False
+        self.query_entered = Event()
+        self.query_release = Event()
+        self.query_release.set()
+        self.commit_entered = Event()
+        self.commit_release = Event()
+        self.commit_release.set()
+
+    def execute(self, statement, parameters=()):
+        normalized = " ".join(str(statement).split())
+        self.executed.append((normalized, parameters))
+        if "mark_watcher_roots_dirty" in normalized:
+            self.query_entered.set()
+            assert self.query_release.wait(2.0)
+            return _Result(
+                {"logical_root_id": root_id} for root_id in self.roots
+            )
+        return _Result([])
+
+    def commit(self):
+        self.commit_entered.set()
+        assert self.commit_release.wait(2.0)
+        if self.fail_commit is not None:
+            raise self.fail_commit
+        self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def cancel(self):
+        self.cancel_count += 1
+        self.query_release.set()
+        self.commit_release.set()
+
+    def close(self):
+        self.close_count += 1
+        self.closed = True
+        self.query_release.set()
+        self.commit_release.set()
+
+
+class _DirtyConnectionFactory:
+    def __init__(self, connection):
+        self.connection = connection
+        self.calls = []
+        self.connect_entered = Event()
+        self.connect_release = Event()
+        self.connect_release.set()
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        self.connect_entered.set()
+        assert self.connect_release.wait(2.0)
+        return self.connection
+
+
+@pytest.mark.parametrize(
+    ("method_name", "kwargs"),
+    [
+        (
+            "begin_runtime_session",
+            dict(
+                library_id=0,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("root-a",),
+                started_at=NOW,
+            ),
+        ),
+        (
+            "begin_runtime_session",
+            dict(
+                library_id=7,
+                session_token=str(SESSION_TOKEN),
+                logical_root_ids=("root-a",),
+                started_at=NOW,
+            ),
+        ),
+        (
+            "begin_runtime_session",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=["root-a"],
+                started_at=NOW,
+            ),
+        ),
+        (
+            "begin_runtime_session",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("root-a",),
+                started_at=NOW.replace(tzinfo=None),
+            ),
+        ),
+        (
+            "begin_runtime_session",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("root-a",),
+                started_at=NOW.astimezone(timezone(timedelta(hours=2))),
+            ),
+        ),
+        (
+            "expand_runtime_session_participants",
+            dict(
+                library_id=0,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("root-a",),
+            ),
+        ),
+        (
+            "expand_runtime_session_participants",
+            dict(
+                library_id=7,
+                session_token=str(SESSION_TOKEN),
+                logical_root_ids=("root-a",),
+            ),
+        ),
+        (
+            "expand_runtime_session_participants",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=["root-a"],
+            ),
+        ),
+        (
+            "set_runtime_session_participants",
+            dict(
+                library_id=-1,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("root-a",),
+            ),
+        ),
+        (
+            "set_runtime_session_participants",
+            dict(
+                library_id=7,
+                session_token=str(SESSION_TOKEN),
+                logical_root_ids=("root-a",),
+            ),
+        ),
+        (
+            "set_runtime_session_participants",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=["root-a"],
+            ),
+        ),
+        (
+            "finish_runtime_session",
+            dict(library_id=0, session_token=SESSION_TOKEN),
+        ),
+        (
+            "finish_runtime_session",
+            dict(library_id=7, session_token=str(SESSION_TOKEN)),
+        ),
+        (
+            "prepare_overflow_dirty_write",
+            dict(
+                library_id=0,
+                logical_root_ids=("root-a",),
+                observed_at=NOW,
+                operation_deadline=10**15,
+            ),
+        ),
+        (
+            "prepare_overflow_dirty_write",
+            dict(
+                library_id=7,
+                logical_root_ids=["root-a"],
+                observed_at=NOW,
+                operation_deadline=10**15,
+            ),
+        ),
+        (
+            "prepare_overflow_dirty_write",
+            dict(
+                library_id=7,
+                logical_root_ids=("",),
+                observed_at=NOW,
+                operation_deadline=10**15,
+            ),
+        ),
+        (
+            "prepare_overflow_dirty_write",
+            dict(
+                library_id=7,
+                logical_root_ids=("root-a", "root-a"),
+                observed_at=NOW,
+                operation_deadline=10**15,
+            ),
+        ),
+        (
+            "prepare_overflow_dirty_write",
+            dict(
+                library_id=7,
+                logical_root_ids=("root-a",),
+                observed_at=NOW.replace(tzinfo=None),
+                operation_deadline=10**15,
+            ),
+        ),
+        (
+            "prepare_overflow_dirty_write",
+            dict(
+                library_id=7,
+                logical_root_ids=("root-a",),
+                observed_at=NOW.astimezone(timezone(timedelta(hours=-7))),
+                operation_deadline=10**15,
+            ),
+        ),
+    ],
+)
+def test_runtime_session_repository_rejects_invalid_typed_boundaries_before_io(
+    method_name, kwargs
+):
+    module = _recovery_module()
+    connection = _DirtyConnection()
+    factory = _DirtyConnectionFactory(connection)
+    repository = module.PostgresWatcherRecoveryRepository(
+        database_url="postgresql://watcher.invalid/album_haven",
+        connect_to_database=factory,
+    )
+
+    with pytest.raises(ValueError):
+        getattr(repository, method_name)(**kwargs)
+
+    assert factory.calls == []
+    assert connection.executed == []
+
+
+def _dirty_attempt(*, connection=None, deadline=None):
+    module = _recovery_module()
+    connection = connection or _DirtyConnection()
+    factory = _DirtyConnectionFactory(connection)
+    repository = module.PostgresWatcherRecoveryRepository(
+        database_url="postgresql://watcher.invalid/album_haven",
+        connect_to_database=factory,
+    )
+    attempt = repository.prepare_overflow_dirty_write(
+        library_id=7,
+        logical_root_ids=("root-a", "root-b"),
+        observed_at=NOW,
+        operation_deadline=(deadline if deadline is not None else time.monotonic() + 5.0),
+    )
+    return module, attempt, factory, connection
+
+
+def test_prepare_overflow_dirty_write_does_no_io_or_thread_work(monkeypatch):
+    started_threads = []
+    monkeypatch.setattr(Thread, "start", lambda thread: started_threads.append(thread))
+
+    _module, attempt, factory, connection = _dirty_attempt()
+
+    assert factory.calls == []
+    assert connection.executed == []
+    assert started_threads == []
+    assert attempt.is_terminal is False
+    assert attempt.outcome is None
+    assert "reason" not in signature(
+        _recovery_module().PostgresWatcherRecoveryRepository.prepare_overflow_dirty_write
+    ).parameters
+
+    outcome = attempt.execute()
+
+    assert outcome.state == "committed"
+    assert started_threads == []
+
+
+def test_dirty_attempt_expired_deadline_is_owned_by_execute_not_prepare():
+    _module, attempt, factory, connection = _dirty_attempt(deadline=0.0)
+
+    assert factory.calls == []
+    assert connection.executed == []
+    assert attempt.is_terminal is False
+
+    outcome = attempt.execute()
+
+    assert outcome.state == "rolled_back"
+    assert outcome.committed_root_ids == ()
+    assert factory.calls == []
+    assert connection.executed == []
+
+
+def test_dirty_attempt_uses_overflow_and_bulk_logical_ids_only():
+    _module, attempt, factory, connection = _dirty_attempt()
+
+    outcome = attempt.execute()
+
+    assert len(factory.calls) == 1
+    dirty_calls = [
+        call for call in connection.executed if "mark_watcher_roots_dirty" in call[0]
+    ]
+    assert dirty_calls == [
+        (
+            "select * from library.mark_watcher_roots_dirty(%s, %s, %s, %s)",
+            (7, ["root-a", "root-b"], "overflow", NOW),
+        )
+    ]
+    assert outcome.state == "committed"
+    assert outcome.committed_root_ids == ("root-a", "root-b")
+
+
+def test_dirty_attempt_sets_bounded_connect_statement_and_lock_timeouts():
+    remaining = 4.0
+    _module, attempt, factory, connection = _dirty_attempt(
+        deadline=time.monotonic() + remaining
+    )
+
+    attempt.execute()
+
+    [(connect_args, connect_kwargs)] = factory.calls
+    connect_timeout = connect_kwargs.get("connect_timeout")
+    if connect_timeout is None:
+        connect_timeout = float(str(connect_args[0]).split("connect_timeout=")[-1])
+    assert 0 < float(connect_timeout) <= remaining
+    timeout_calls = [
+        (statement, parameters)
+        for statement, parameters in connection.executed
+        if "statement_timeout" in statement or "lock_timeout" in statement
+    ]
+    assert len(timeout_calls) == 2
+    for statement, parameters in timeout_calls:
+        if parameters:
+            timeout_ms = float(str(parameters[0]).removesuffix("ms"))
+        else:
+            match = re.search(r"(\d+(?:\.\d+)?)\s*ms", statement)
+            assert match is not None
+            timeout_ms = float(match.group(1))
+        assert 0 < timeout_ms <= remaining * 1000
+
+
+def test_dirty_attempt_cancel_before_connect_proves_rolled_back_without_connecting():
+    _module, attempt, factory, connection = _dirty_attempt()
+
+    attempt.cancel()
+    outcome = attempt.execute()
+
+    assert factory.calls == []
+    assert connection.executed == []
+    assert outcome.state == "rolled_back"
+    assert outcome.committed_root_ids == ()
+    assert attempt.is_terminal is True
+
+
+@pytest.mark.parametrize("phase", ["connect", "query", "commit"])
+def test_dirty_attempt_cancel_during_connect_query_and_commit_closes_exact_connection(phase):
+    connection = _DirtyConnection()
+    _module, attempt, factory, connection = _dirty_attempt(connection=connection)
+    if phase == "connect":
+        factory.connect_release.clear()
+        entered = factory.connect_entered
+    elif phase == "query":
+        connection.query_release.clear()
+        entered = connection.query_entered
+    else:
+        connection.commit_release.clear()
+        entered = connection.commit_entered
+    result = []
+    worker = Thread(target=lambda: result.append(attempt.execute()), daemon=True)
+    worker.start()
+    assert entered.wait(1.0)
+
+    attempt.cancel()
+    factory.connect_release.set()
+    connection.query_release.set()
+    connection.commit_release.set()
+    worker.join(2.0)
+
+    assert not worker.is_alive()
+    assert connection.closed is True
+    assert connection.close_count >= 1
+    if phase != "connect":
+        assert connection.cancel_count >= 1
+    assert attempt.is_terminal is True
+    assert result[0].state in {"rolled_back", "indeterminate"}
+    assert result[0].committed_root_ids == ()
+
+
+def test_dirty_attempt_commit_acknowledged_before_cancel_is_the_only_committed_outcome():
+    _module, attempt, _factory, connection = _dirty_attempt()
+
+    outcome = attempt.execute()
+    attempt.cancel()
+
+    assert connection.committed is True
+    assert outcome.state == "committed"
+    assert outcome.committed_root_ids == ("root-a", "root-b")
+    assert attempt.outcome == outcome
+
+
+def test_dirty_attempt_ambiguous_commit_retains_every_root_as_indeterminate():
+    connection = _DirtyConnection(fail_commit=ConnectionError("acknowledgement lost"))
+    _module, attempt, _factory, _connection = _dirty_attempt(connection=connection)
+
+    outcome = attempt.execute()
+
+    assert outcome.state == "indeterminate"
+    assert outcome.committed_root_ids == ()
+    assert attempt.is_terminal is True
+    assert connection.closed is True
+
+
+def test_dirty_attempt_outcome_allows_root_ids_only_for_committed_state():
+    module = _recovery_module()
+
+    assert module.WatcherDirtyWriteOutcome("committed", ("root-a",)).state == (
+        "committed"
+    )
+    for state in ("rolled_back", "indeterminate"):
+        with pytest.raises(ValueError, match="committed"):
+            module.WatcherDirtyWriteOutcome(state, ("root-a",))
+    with pytest.raises(ValueError, match="state"):
+        module.WatcherDirtyWriteOutcome("failed")
+
+
+def test_dirty_attempt_cancelled_joined_attempt_cannot_commit_later():
+    class LateCommitProbeConnection(_DirtyConnection):
+        def cancel(self):
+            self.cancel_count += 1
+            self.query_release.set()
+
+        def close(self):
+            self.close_count += 1
+            self.closed = True
+            self.query_release.set()
+
+    connection = LateCommitProbeConnection()
+    connection.query_release.clear()
+    connection.commit_release.clear()
+    _module, attempt, _factory, connection = _dirty_attempt(connection=connection)
+    results = []
+    worker = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+    worker.start()
+    assert connection.query_entered.wait(1.0)
+
+    attempt.cancel()
+    worker.join(1.0)
+    was_alive_after_join = worker.is_alive()
+    connection.commit_release.set()
+    worker.join(2.0)
+
+    assert was_alive_after_join is False
+    assert not connection.commit_entered.is_set()
+    assert not worker.is_alive()
+    assert connection.closed is True
+    assert connection.committed is False
+    assert results[0].state in {"rolled_back", "indeterminate"}
+
+
+class _SqlStateError(RuntimeError):
+    def __init__(self, sqlstate, private_text):
+        super().__init__(private_text)
+        self.sqlstate = sqlstate
+
+
+def test_begin_runtime_session_sanitizes_acceptance_disabled_without_claiming_replacement():
+    module = _recovery_module()
+    private_text = "acceptance disabled for private-logical-root"
+
+    class FailingConnection(_Connection):
+        def execute(self, _statement, _parameters=()):
+            raise _SqlStateError("55000", private_text)
+
+    repository = module.PostgresWatcherRecoveryRepository(
+        database_url="postgresql://watcher.invalid/album_haven",
+        connect_to_database=lambda _url: FailingConnection([]),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        repository.begin_runtime_session(
+            library_id=7,
+            session_token=SESSION_TOKEN,
+            logical_root_ids=("private-logical-root",),
+            started_at=NOW,
+        )
+
+    error = raised.value
+    assert type(error) is RuntimeError
+    assert not isinstance(error, module.WatcherSessionReplacedError)
+    assert str(error) == "watcher runtime session could not begin"
+    assert getattr(error, "sqlstate", None) is None
+    assert error.__cause__ is None
+    assert private_text not in repr(error)
+    assert str(SESSION_TOKEN) not in repr(error)
+
+
+@pytest.mark.parametrize(
+    ("method_name", "sqlstate", "kwargs"),
+    [
+        (
+            "begin_runtime_session",
+            "22023",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("private-logical-root",),
+                started_at=NOW,
+            ),
+        ),
+        (
+            "expand_runtime_session_participants",
+            "22023",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("private-logical-root",),
+            ),
+        ),
+        (
+            "set_runtime_session_participants",
+            "22023",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("private-logical-root",),
+            ),
+        ),
+        (
+            "finish_runtime_session",
+            "22023",
+            dict(library_id=7, session_token=SESSION_TOKEN),
+        ),
+        (
+            "expand_runtime_session_participants",
+            "55000",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("private-logical-root",),
+            ),
+        ),
+        (
+            "set_runtime_session_participants",
+            "55000",
+            dict(
+                library_id=7,
+                session_token=SESSION_TOKEN,
+                logical_root_ids=("private-logical-root",),
+            ),
+        ),
+        (
+            "finish_runtime_session",
+            "55000",
+            dict(library_id=7, session_token=SESSION_TOKEN),
+        ),
+    ],
+)
+def test_runtime_session_repository_maps_22023_and_55000_without_leaking_parameters(
+    method_name, sqlstate, kwargs
+):
+    module = _recovery_module()
+    token_text = str(SESSION_TOKEN)
+    root_text = "private-logical-root"
+
+    class FailingConnection(_Connection):
+        def execute(self, _statement, _parameters=()):
+            raise _SqlStateError(sqlstate, f"token={token_text}; root={root_text}")
+
+    repository = module.PostgresWatcherRecoveryRepository(
+        database_url="postgresql://watcher.invalid/album_haven",
+        connect_to_database=lambda _url: FailingConnection([]),
+    )
+    expected_type = ValueError if sqlstate == "22023" else module.WatcherSessionReplacedError
+    fixed_message = (
+        "watcher runtime session arguments are invalid"
+        if sqlstate == "22023"
+        else "watcher runtime session was replaced"
+    )
+
+    with pytest.raises(expected_type) as raised:
+        getattr(repository, method_name)(**kwargs)
+
+    assert str(raised.value) == fixed_message
+    assert token_text not in repr(raised.value)
+    assert root_text not in repr(raised.value)

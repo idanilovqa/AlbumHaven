@@ -396,6 +396,33 @@ def _browse_album_row(*, artist: str, album_id: int, album_key: str, title: str)
     }
 
 
+@pytest.mark.parametrize("guest_name", ["Guest", "Guest Alias"])
+def test_exact_artist_search_recanonicalization_keeps_guest_role_and_source_identity(guest_name):
+    from music_app.services import library_browse_postgres as browse
+
+    row = _browse_album_row(
+        artist="Owner", album_id=81, album_key="owner-album", title="Owner Album",
+    )
+    row["album_featured_artists"] = [
+        {"artist_id": 1, "artist_name": "Owner", "featured_kind": "owner"},
+        {"artist_id": 2, "artist_name": guest_name, "featured_kind": "featured_track_artist"},
+    ]
+    aliases = {"Guest Alias": "Guest"}
+    expanded = browse._canonicalize_artist_rows([row], aliases)
+    selected = [credit for credit in expanded if credit["artist_name"] == "Guest"]
+
+    # Exact-artist search delegates its selected rows to the normal artist builder.
+    canonical = browse._canonicalize_artist_rows(selected, aliases)
+
+    assert [credit["artist_name"] for credit in canonical] == ["Guest"]
+    assert canonical[0]["source_artist_id"] == 2
+    assert canonical[0]["featured_kind"] == "featured_track_artist"
+    albums = browse._root_album_browse_album_payloads(canonical, "Guest")
+    assert len(albums) == 1
+    assert albums[0]["artist_relationship"] == "featured"
+    assert len(row["album_featured_artists"]) == 2
+
+
 def test_postgres_browse_payloads_preserve_owned_and_featured_relationships_per_artist_occurrence():
     from music_app.services import library_browse_postgres as browse
 

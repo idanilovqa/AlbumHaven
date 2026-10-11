@@ -6062,7 +6062,10 @@ def _canonicalize_artist_rows(
                 normalized_alias_to_canonical=normalized_alias_to_canonical or {},
             )
             next_payload = dict(credited_payload)
-            next_payload["source_artist_id"] = credited_payload.get("artist_id")
+            # This row now represents one credit. A delegated artist request
+            # must not expand the album's other credits back into that scope.
+            next_payload.pop("album_featured_artists", None)
+            next_payload.setdefault("source_artist_id", credited_payload.get("artist_id"))
             next_payload["artist_name"] = canonical_name
             if expanded_featured_artists and canonical_name == artist_name:
                 next_payload["sort_name"] = str(

@@ -10,13 +10,13 @@ from psycopg.types.json import Jsonb
 
 from music_app.services.library_roots import library_category_slugs
 
-BUILDER_VERSION = "root-gallery-v2"
+BUILDER_VERSION = "root-gallery-v3"
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()
 _OCCURRENCE_FIELDS = frozenset({
     "artist_id", "artist_name", "artist_sort_name", "album_id", "album_key",
-    "album_title", "album_release_year", "missing_album_key",
+    "album_title", "album_release_year", "featured_kind", "missing_album_key",
 })
 
 

@@ -155,7 +155,7 @@ def test_projection_scope_canonicalizes_category_order_and_namespaces_builder(mo
     assert scope_key == projection.gallery_projection_scope_key(changed)
     assert scope_key == projection.gallery_projection_scope_key(reordered_categories)
     assert scope_key == projection.gallery_projection_scope_key(repeated_categories)
-    monkeypatch.setattr(projection, "BUILDER_VERSION", "root-gallery-v3")
+    monkeypatch.setattr(projection, "BUILDER_VERSION", "root-gallery-v4")
     assert scope_key != projection.gallery_projection_scope_key(first)
 
 
@@ -167,6 +167,52 @@ def test_projection_occurrences_exclude_mutable_missing_details_and_private_path
     assert result[0]["missing_album_key"] == "lost"
     assert "private_path" not in result[0]
     assert "missing_album" not in result[0]
+
+
+@pytest.mark.parametrize(
+    ("artist", "album", "album_artist"),
+    [
+        ("Bella Ramsey", "Hilda: Season 2 (Original Series Soundtrack)", "Ryan Carlson"),
+        ("Belle Stars", "Rain Man", "Various Artists"),
+    ],
+)
+def test_projection_occurrences_preserve_featured_track_artist_role(
+    artist,
+    album,
+    album_artist,
+):
+    from music_app.services.gallery_projection_postgres import projection_occurrences
+
+    row = {
+        **membership(artist, album),
+        "featured_kind": "featured_track_artist",
+    }
+
+    result = projection_occurrences({"ordered": [row]})
+
+    assert result == [
+        {
+            "artist_id": artist,
+            "artist_name": artist,
+            "album_id": len(album),
+            "album_key": album,
+            "album_title": album,
+            "album_release_year": 2000,
+            "featured_kind": "featured_track_artist",
+        }
+    ]
+    hydrated_album = {
+        "album_artist": album_artist,
+        "artist_relationship": "owned",
+    }
+
+    artist_occurrence = browse._copy_album_for_artist_occurrence(
+        hydrated_album,
+        result[0],
+    )
+
+    assert artist_occurrence["artist_relationship"] == "featured"
+    assert artist_occurrence["album_artist"] == album_artist
 
 
 def test_refresh_scheduled_during_publication_runs_once_afterward(monkeypatch):
@@ -306,7 +352,7 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
             if "source_generation = %(generation)s" in sql:
                 return Cursor([])
             if "order by source_generation desc" in sql:
-                assert params["builder_version"] == "root-gallery-v2"
+                assert params["builder_version"] == "root-gallery-v3"
                 return Cursor([header])
             if "gallery_projection_occurrences" in sql:
                 return Cursor([{"payload": membership("Artist", "album-1")}])

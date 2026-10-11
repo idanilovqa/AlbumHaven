@@ -50,6 +50,52 @@ test('sidebar artist names use one bulk DOM read without changing list semantics
   assert.equal(bulkReadCount, 1);
 });
 
+test('sidebar preview readiness accepts a fully hydrated virtualized artist list', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/navigationPanelActions.js'),
+  ).href;
+  const { NavigationPanelActions } = await import(moduleUrl);
+  const originalDocument = global.document;
+  const originalHTMLElement = global.HTMLElement;
+
+  class FakeElement {}
+  const countNode = new FakeElement();
+  countNode.textContent = '1427';
+  const sidebarList = new FakeElement();
+  sidebarList.getAttribute = (name) => (name === 'data-sidebar-virtualized' ? 'true' : null);
+  sidebarList.albumHavenSidebarArtistsSource = Array.from({ length: 1427 }, () => ({}));
+  let mountedCount = 0;
+  global.HTMLElement = FakeElement;
+  global.document = {
+    querySelector(selector) {
+      if (selector === '#all-artists-count') return countNode;
+      if (selector === '#sidebar-list') return sidebarList;
+      return null;
+    },
+    querySelectorAll(selector) {
+      assert.equal(selector, '#sidebar-artists');
+      return Array.from({ length: mountedCount }, () => new FakeElement());
+    },
+  };
+
+  try {
+    const actions = new NavigationPanelActions({
+      sidebarArtistSelector: '#sidebar-artists',
+      sidebarListSelector: '#sidebar-list',
+      allArtistsCountSelector: '#all-artists-count',
+      async waitForPageCondition(callback, _options, selectors) {
+        assert.equal(callback(selectors), false);
+        mountedCount = 170;
+        assert.equal(callback(selectors), true);
+      },
+    });
+    await actions.waitForSidebarPreviewHydrated();
+  } finally {
+    global.document = originalDocument;
+    global.HTMLElement = originalHTMLElement;
+  }
+});
+
 test('mounted-family continuity flags synchronous clear/rebuild but permits stable child reordering', async () => {
   const modulePath = path.join(repoRoot, 'tests/e2e/poms/navigationPanel.js');
   const moduleUrl = pathToFileURL(modulePath).href;

@@ -56,6 +56,10 @@ export class NavigationPanel extends BasePage {
     return '#sidebar-list [data-sidebar-artist]';
   }
 
+  get sidebarListSelector() {
+    return '#sidebar-list';
+  }
+
   get allArtistsSelector() {
     return '#sidebar-list [data-sidebar-all-artists="1"]';
   }

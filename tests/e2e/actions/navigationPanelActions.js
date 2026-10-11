@@ -81,11 +81,24 @@ export class NavigationPanelActions {
       const countNode = document.querySelector(selectors.allArtistsCountSelector);
       if (!(countNode instanceof HTMLElement)) return false;
       const visibleCount = Number.parseInt(String(countNode.textContent || '').replace(/[^\d-]/g, '').trim(), 10) || 0;
+      const sidebarList = document.querySelector(selectors.sidebarListSelector);
+      if (
+        sidebarList instanceof HTMLElement
+        && sidebarList.getAttribute('data-sidebar-virtualized') === 'true'
+      ) {
+        const runtimeSidebarCount = Array.isArray(sidebarList.albumHavenSidebarArtistsSource)
+          ? sidebarList.albumHavenSidebarArtistsSource.length
+          : 0;
+        return sidebarArtists > 0
+          && runtimeSidebarCount > 0
+          && visibleCount === runtimeSidebarCount;
+      }
       return visibleCount === sidebarArtists;
     }, {
       timeout: options.timeout || 60000,
     }, {
       sidebarArtistSelector: this.navigationPanel.sidebarArtistSelector,
+      sidebarListSelector: this.navigationPanel.sidebarListSelector,
       allArtistsCountSelector: this.navigationPanel.allArtistsCountSelector,
       maximumSidebarCount: Number(options.maximumSidebarCount || 40),
     });

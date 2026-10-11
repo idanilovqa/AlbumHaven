@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:PGCLIENTENCODING = 'UTF8'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $windowsPowerShellModules = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\Modules'
 if (Test-Path -LiteralPath $windowsPowerShellModules) {

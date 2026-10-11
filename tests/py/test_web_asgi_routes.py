@@ -256,6 +256,60 @@ def test_asgi_bootstrap_keeps_health_responsive_during_database_work(app, monkey
     assert finished.is_set()
 
 
+@pytest.mark.parametrize("path", ["/", "/news"])
+def test_asgi_html_render_keeps_health_responsive_during_template_preparation(
+    app,
+    monkeypatch,
+    path,
+):
+    from music_app.routes import web_asgi
+    from tests.py.asgi_testing import run_asgi_request_async
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    monkeypatch.setattr(
+        web_asgi,
+        "build_news_payload",
+        lambda **_kwargs: {
+            "shell_layout": {"slots": {"main_content": {"content_kind": "discovery_center_page"}}},
+            "discovery_center": {"page_kind": "discovery_center"},
+        },
+    )
+    asgi_app = _make_asgi_app(app)
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    original_template_response = web_asgi._template_response
+
+    def blocked_template_response(request, context):
+        entered.set()
+        try:
+            release.wait(timeout=2)
+            return original_template_response(request, context)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(web_asgi, "_template_response", blocked_template_response)
+
+    async def exercise():
+        request_task = asyncio.create_task(run_asgi_request_async(asgi_app, "GET", path))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3), "Template preparation did not start"
+            status, _headers, _body = await asyncio.wait_for(
+                run_asgi_request_async(asgi_app, "GET", "/health"), timeout=1,
+            )
+            assert status == 200
+            assert not finished.is_set(), "Health could not respond until template preparation finished"
+        finally:
+            release.set()
+            response = await asyncio.wait_for(request_task, timeout=5)
+        return response
+
+    status, _headers, body = asyncio.run(exercise())
+    assert status == 200
+    assert b"<!doctype html>" in body
+    assert finished.is_set()
+
+
 def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
     from music_app.routes import web_asgi
 

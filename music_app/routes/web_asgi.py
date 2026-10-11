@@ -205,14 +205,15 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
     actor = getattr(request.state, "current_actor", None)
-    request.app.state.runtime_asset_version = _runtime_asset_version()
+    runtime_asset_version = _runtime_asset_version()
+    request.app.state.runtime_asset_version = runtime_asset_version
     return request.app.state.templates.TemplateResponse(
         request,
         "index.html",
         {
             "request": request,
             "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
-            "runtime_asset_version": request.app.state.runtime_asset_version,
+            "runtime_asset_version": runtime_asset_version,
             "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
             "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
             "account_menu_csrf_token": issue_session_csrf(
@@ -974,7 +975,8 @@ async def index(request: Request) -> Response:
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
     template_started_at = time.perf_counter()
-    response = _template_response(
+    response = await run_in_threadpool(
+        _template_response,
         request,
         {
             **appearance_context,
@@ -1077,7 +1079,8 @@ async def news_center(request: Request) -> Response:
         "has_related": False,
         "initial_view_partial": False,
     }
-    response = _template_response(
+    response = await run_in_threadpool(
+        _template_response,
         request,
         {
             **await load_appearance_context(request),

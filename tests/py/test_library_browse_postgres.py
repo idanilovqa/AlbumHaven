@@ -3028,7 +3028,66 @@ def test_postgres_selected_artist_expands_persisted_alias_projection_and_preserv
     ]
 
 
-def test_postgres_selected_artist_preview_expands_aliases_in_one_query(monkeypatch):
+@pytest.mark.parametrize("album_count", [1, 60])
+def test_selected_artist_gallery_summary_avoids_track_rows_and_preserves_playback(monkeypatch, album_count):
+    import json
+    from music_app.services import artist_family_postgres
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Broadcast": "Broadcast"},
+        "canonical_to_aliases": {"Broadcast": ["Broadcast"]},
+    })
+    monkeypatch.setattr(
+        artist_family_postgres, "load_selected_artist_family_projection",
+        lambda *_args, **_kwargs: {"loaded": True, "family_artists": []},
+    )
+    monkeypatch.setattr(
+        repository, "_load_selected_artist_rows",
+        lambda *_args, **_kwargs: pytest.fail("gallery navigation loaded full track rows"),
+    )
+    rows = [{
+        "artist_id": 10, "artist_name": "Broadcast", "album_id": 101 + index,
+        "album_key": f"broadcast-tender-buttons-{index:03d}", "album_title": "Tender Buttons",
+        "album_release_year": 2005, "album_cover_path": "covers/tender.jpg",
+        "album_metadata": {"album_artist": "Broadcast", "artists": ["Broadcast"]},
+        "track_count": 14, "total_duration_seconds": 2520,
+    } for index in range(album_count)]
+    monkeypatch.setattr(repository, "_load_selected_artist_preview_rows", lambda *_args, **_kwargs: rows)
+
+    payload = repository.build_selected_artist_payload(query_params={
+        "artist": "Broadcast", "payload_tier": "gallery_summary", "omit_sidebar": "1",
+    })
+
+    group = payload["primary_artist_groups"][0]
+    assert payload["payload_tier"] == "full"
+    album = group["albums"][0]
+    assert len(group["albums"]) == album_count
+    assert album["key"] == "broadcast-tender-buttons-000"
+    assert album["preview_only"] is True
+    assert album["track_count_preview"] == 14
+    assert album["total_duration_display"] == "42m 00s"
+    assert "tracks" not in album
+    assert [section["section_ref"] for section in group["sections"]] == ["unclassified"]
+    assert group["sections"][0]["albums"] == group["albums"]
+    assert payload["playback_context"] == {
+        "kind": "artist_page", "end_behavior": "stop",
+        "ordered_album_refs": [row["album_key"] for row in rows],
+        "albums": [{"album_ref": row["album_key"], "can_play": True} for row in rows],
+    }
+    assert len(json.dumps(payload).encode("utf-8")) < 500_000
+
+
+@pytest.mark.parametrize("query_params", [
+    {"artist": "Alias", "q": "Alias"},
+    {"artist": "Alias", "payload_tier": "gallery_summary"},
+])
+def test_postgres_selected_artist_preview_expands_aliases_in_one_query(monkeypatch, query_params):
     from music_app.services import artist_family_postgres
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
@@ -3059,7 +3118,7 @@ def test_postgres_selected_artist_preview_expands_aliases_in_one_query(monkeypat
     )
     monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [])
 
-    repository.build_selected_artist_payload(query_params={"artist": "Alias", "q": "Alias"})
+    repository.build_selected_artist_payload(query_params=query_params)
 
     assert scopes == [["Canonical", "Alias"]]
 

@@ -17,7 +17,9 @@ test('search regression gate keeps the complete required suite in one command', 
     'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-search-regressions.ps1',
   );
   assert.match(runner, /test_duplicate_source_attachment_defers_global_index_cache_miss/u);
-  assert.match(runner, /test_selected_artist_browse_preserves_split_albums_in_one_folder/u);
+  assert.match(runner, /search or selected_artist/u);
+  assert.match(runner, /test_api_read_asgi_routes\.py/u);
+  assert.match(runner, /test_web_asgi_routes\.py/u);
   assert.match(runner, /gallery-search-clear-continuity\.test\.js/u);
   assert.match(runner, /search-toolbar-query-state\.test\.js/u);
   assert.match(runner, /search-toolbar-anchor-geometry\.test\.js/u);
@@ -27,6 +29,7 @@ test('search regression gate keeps the complete required suite in one command', 
   assert.match(runner, /gallery-refresh-and-status\.test\.js/u);
   assert.match(runner, /sidebar-selection-visibility\.test\.js/u);
   assert.match(runner, /sidebar-virtualization\.test\.js/u);
+  assert.match(runner, /view-state-helpers\.test\.js/u);
   assert.match(runner, /synthetic-performance-benchmark\.test\.js/u);
   assert.match(runner, /performance-change-impact\.test\.js/u);
   assert.match(runner, /searchInput\.spec\.js/u);

@@ -704,7 +704,7 @@ def _is_postgres_selected_artist_request(request: Request) -> bool:
     if not artist:
         return False
     payload_tier = str(request.query_params.get("payload_tier") or "").strip().casefold()
-    if payload_tier not in {"", "full"}:
+    if payload_tier not in {"", "full", "gallery_summary"}:
         return False
     if str(request.query_params.get("surface") or "").strip().casefold() not in {"", "albums"}:
         return False

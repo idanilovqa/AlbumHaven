@@ -624,8 +624,13 @@ def _build_postgres_selected_artist_startup_view(
         return None, 0.0
     payload_started_at = time.perf_counter()
     repository = PostgresLibraryBrowseRepository(config)
+    selected_query_args = QueryParams(query_args)
+    if not selected_query_args.get("q") and not selected_query_args.get("payload_tier"):
+        selected_query_args = QueryParams([
+            *selected_query_args.multi_items(), ("payload_tier", "gallery_summary"),
+        ])
     payload = repository.build_selected_artist_payload(
-        query_params=query_args,
+        query_params=selected_query_args,
         library_state=library_state,
     )
     root_sidebar: list[object] | None = None

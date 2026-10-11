@@ -1023,12 +1023,14 @@ class PostgresLibraryBrowseRepository:
         )
         omit_sidebar = _request_flag((query_params or {}).get("omit_sidebar"))
         use_preview_albums = bool(query)
+        gallery_summary = str((query_params or {}).get("payload_tier") or "").strip().casefold() == "gallery_summary"
+        use_summary_albums = use_preview_albums or gallery_summary
         hydrate_query_primary_albums = bool(
             query
             and selected_artist
             and _request_flag((query_params or {}).get("primary_filter"))
         )
-        if use_preview_albums and not hydrate_query_primary_albums:
+        if use_summary_albums and not hydrate_query_primary_albums:
             rows = (
                 _selected_artist_preview_rows
                 if _selected_artist_preview_rows is not None
@@ -1063,8 +1065,12 @@ class PostgresLibraryBrowseRepository:
         )
         artist_display = _selected_artist_display_name(rows, selected_artist)
         albums = (
-            _root_album_browse_album_payloads(rows, artist_display)
-            if use_preview_albums and not hydrate_query_primary_albums
+            _root_album_browse_album_payloads(
+                rows, artist_display,
+                include_total_duration_seconds=gallery_summary,
+                include_artist_members=gallery_summary,
+            )
+            if use_summary_albums and not hydrate_query_primary_albums
             else _selected_artist_album_payloads(rows, artist_display)
         )
 
@@ -1097,8 +1103,11 @@ class PostgresLibraryBrowseRepository:
             in selected_artist_keys
         ]
         _replace_active_albums_with_missing(albums, missing_albums)
-        if not use_preview_albums or hydrate_query_primary_albums:
+        if not use_summary_albums or hydrate_query_primary_albums:
             _annotate_album_payload_problematic_tracks(albums, rows)
+        if gallery_summary:
+            for album in albums:
+                album["can_play"] = bool(album.get("track_count_preview"))
         family_artists = list(family_context["family_artists"])
         full_family_artist_scope = _expanded_artist_name_list(
             [artist_display, *family_artists],
@@ -1298,7 +1307,7 @@ class PostgresLibraryBrowseRepository:
             ),
             source_rows=[*rows, *family_preview_rows],
             connection=_connection,
-            ensure_gallery_summary=use_preview_albums,
+            ensure_gallery_summary=use_summary_albums,
         )
         selected_artist_family_filters = _selected_artist_family_filter_payloads(
             artist_display,

@@ -362,6 +362,35 @@ def test_asgi_index_and_news_render_current_template_shell(app, monkeypatch):
     assert b"Discovery Center" in news_body
 
 
+@pytest.mark.parametrize("requested_tier, expected_tier", [(None, "gallery_summary"), ("full", "full")])
+def test_selected_artist_startup_requests_summary_without_losing_repeated_filters(monkeypatch, requested_tier, expected_tier):
+    from starlette.datastructures import QueryParams
+    from music_app.routes import web_asgi
+
+    captured = []
+
+    class SummaryRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_selected_artist_payload(self, *, query_params, library_state):
+            captured.append(query_params)
+            return {"selected_artist": "Broadcast", "artist_groups": []}
+
+        def build_root_sidebar_payload(self, *, query_params):
+            return {}
+
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", SummaryRepository)
+    params = [("artist", "Broadcast"), ("category", "hoard"), ("category", "main_library")]
+    if requested_tier:
+        params.append(("payload_tier", requested_tier))
+    web_asgi._build_postgres_selected_artist_startup_view(
+        config={}, query_args=QueryParams(params), library_state={},
+    )
+    assert captured[0].get("payload_tier") == expected_tier
+    assert captured[0].getlist("category") == ["hoard", "main_library"]
+
+
 def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_distinct(
     app,
     monkeypatch,

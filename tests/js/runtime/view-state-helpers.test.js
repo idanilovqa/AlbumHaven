@@ -3,6 +3,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
+test('artist navigation requests summaries while explicit full and sidebar tiers remain available', () => {
+  const { buildApiUrl } = loadHelpers();
+  const view = { selected_artist: 'Broadcast', gallery_scope: 'all' };
+  const tier = options => new URL(buildApiUrl(view, options), 'http://localhost').searchParams.get('payload_tier');
+  assert.equal(tier({}), 'gallery_summary');
+  assert.equal(tier({ payloadTier: 'full' }), 'full');
+  assert.equal(tier({ payloadTier: 'sidebar' }), 'sidebar');
+  assert.equal(tier({ rootSidebar: true }), null);
+});
 const ButtonComponent = require('../../../music_app/static/js/button-component.js');
 
 const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
@@ -256,7 +265,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&gallery_display=list&gallery_scale_percent=80&category=main_library&category=hoard&category=new_arrivals&payload_tier=gallery_summary',
   );
 }
 
@@ -273,7 +282,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1',
+    '/view-data?surface=albums&artist=A.C.T&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals&omit_sidebar=1&payload_tier=gallery_summary',
   );
 }
 
@@ -312,7 +321,7 @@ test('rootFullPayload requests full root albums without changing other browse UR
   });
   assert.equal(
     url,
-    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library',
+    '/view-data?surface=albums&artist=Mono&gallery_scope=all&gallery_display=covers&family_display=chronological&category=main_library&payload_tier=gallery_summary',
   );
 }
 

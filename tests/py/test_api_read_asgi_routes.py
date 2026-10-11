@@ -2698,7 +2698,8 @@ def test_postgres_selected_artist_request_allows_query_context(app, asgi_app, mo
     assert asgi_read_routes._is_postgres_selected_artist_request(request) is True
 
 
-def test_postgres_selected_artist_request_does_not_require_omit_sidebar(app, asgi_app, monkeypatch):
+@pytest.mark.parametrize("payload_tier", ["", "full", "gallery_summary"])
+def test_postgres_selected_artist_request_does_not_require_omit_sidebar(app, asgi_app, monkeypatch, payload_tier):
     from starlette.requests import Request
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -2714,7 +2715,10 @@ def test_postgres_selected_artist_request_does_not_require_omit_sidebar(app, asg
             "type": "http",
             "method": "GET",
             "path": "/view-data",
-            "query_string": b"artist=Broadcast&surface=albums&include_library_wide_non_album=1",
+            "query_string": (
+                "artist=Broadcast&surface=albums&include_library_wide_non_album=1"
+                f"&payload_tier={payload_tier}"
+            ).encode("ascii"),
             "headers": [],
             "app": asgi_app,
         }

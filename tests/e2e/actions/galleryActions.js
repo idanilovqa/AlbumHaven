@@ -320,7 +320,7 @@ export class GalleryActions {
     const minimumCards = options.minimumCards === undefined
       ? 1
       : Math.max(1, Number(options.minimumCards) || 1);
-    await this.galleryPage.waitForPageCondition((selectors) => {
+    const readReadiness = (selectors) => {
       const visibleCards = Array.from(document.querySelectorAll(selectors.albumCardSelector))
         .filter((card) => {
           if (!(card instanceof HTMLElement) || card.hidden) return false;
@@ -334,18 +334,39 @@ export class GalleryActions {
       const loaderHidden = !(libraryLoader instanceof HTMLElement) || libraryLoader.hidden;
       const startupProgress = document.querySelector(selectors.startupProgressSelector);
       const startupProgressHidden = !(startupProgress instanceof HTMLElement) || startupProgress.hidden;
+      if (selectors.snapshot) return {
+        visibleCards: visibleCards.length,
+        minimumCards: selectors.minimumCards,
+        refreshFinished,
+        loaderHidden,
+        startupProgressHidden,
+        metrics,
+      };
       return visibleCards.length >= selectors.minimumCards
         && refreshFinished
         && loaderHidden
         && startupProgressHidden;
-    }, {
-      timeout: options.timeout || 60000,
-    }, {
+    };
+    const selectors = {
       albumCardSelector: this.galleryPage.albumCard.cardSelector,
       libraryLoaderSelector: this.galleryPage.libraryLoaderSelector,
       startupProgressSelector: this.galleryPage.startupProgressSelector,
       minimumCards,
-    });
+    };
+    try {
+      await this.galleryPage.waitForPageCondition(readReadiness, {
+        timeout: options.timeout || 60000,
+      }, selectors);
+    } catch (error) {
+      let snapshot;
+      try {
+        // parity-check: allow-read-only-measurement-evaluate -- failure-only gallery readiness diagnostics
+        snapshot = await this.galleryPage.page.evaluate(readReadiness, { ...selectors, snapshot: true });
+      } catch (snapshotError) {
+        snapshot = { error: String(snapshotError?.message || snapshotError) };
+      }
+      throw new Error("Gallery did not become ready. " + JSON.stringify(snapshot), { cause: error });
+    }
   }
 
   async expectCentralLoaderHidden(options = {}) {

@@ -17,6 +17,9 @@ const CASE_ID = 'FTC-GALLERY-STARTUP-005R';
 const SEARCH_BROWSE_BUDGET = Object.freeze(
   performanceTimingBudget('search-browse.searchBrowseReadyMs'),
 );
+const SEARCH_POPULATED_BUDGET = Object.freeze(
+  performanceTimingBudget('search-browse.searchPopulatedReadyMs'),
+);
 
 test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
 
@@ -36,27 +39,39 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
     });
 
     const searchQuery = pickSearchableArtistName(await navigationPanelActions.readSidebarArtistNames());
-  const searchReadyMs = await stepLogger.step('Search from the visible UI and wait for query results', async () => {
+    const expectedAlbums = await galleryActions.readAlbumNamesByHeading(searchQuery);
+    expect(expectedAlbums.length, 'The pre-search gallery must provide an independent album identity.').toBeGreaterThan(0);
     let searchSubmittedAt = 0;
-    await searchToolbarActions.search(searchQuery, {
-      recordSubmissionBoundary() {
-        searchSubmittedAt = Date.now();
-      },
+    const searchReadyMs = await stepLogger.step('Search from the visible UI and wait for query results', async () => {
+      await searchToolbarActions.search(searchQuery, {
+        recordSubmissionBoundary() {
+          searchSubmittedAt = Date.now();
+        },
+      });
+      await searchToolbarActions.waitForQuery(searchQuery, { timeout: 120000 });
+      return Date.now() - searchSubmittedAt;
     });
-    await searchToolbarActions.waitForQuery(searchQuery, { timeout: 120000 });
-    return Date.now() - searchSubmittedAt;
-  });
 
-    await stepLogger.step('Wait for the filtered gallery and visible covers to settle', async () => {
+    const searchPopulatedReadyMs = await stepLogger.step('Wait for the filtered gallery and visible covers to settle', async () => {
       await navigationPanelActions.waitForSidebarSelection(searchQuery, { timeout: 120000 });
       await galleryActions.waitForSelectedArtistGallery(searchQuery, {
         timeout: 120000,
         queryValue: searchQuery,
       });
+      const albumCard = galleryActions.galleryPage.albumCard;
+      const expectedCover = albumCard.cardByArtistAndAlbum(searchQuery, expectedAlbums[0], { visible: true })
+        .locator(albumCard.coverImageWithinCardSelector);
+      await expect(expectedCover).toBeInViewport({ timeout: 120000 });
+      await expect.poll(async () => {
+        const cover = await albumCard
+          .readCoverImageReadinessByArtistAndAlbum(searchQuery, expectedAlbums[0]);
+        return cover.ready;
+      }, { timeout: 120000 }).toBe(true);
       await galleryActions.waitForVisibleGalleryCoversLoaded({
         minimumCount: 1,
         timeout: 120000,
       });
+      return Date.now() - searchSubmittedAt;
     });
     const searchPayload = await readRuntimeView(page);
     let albums = [];
@@ -91,6 +106,8 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
 
     searchBrowseFocusedLocalReport.setMetricsPayload({
       searchReadyMs,
+      searchPopulatedReadyMs,
+      expectedAlbum: expectedAlbums[0],
       query: searchQuery,
       albumCount: Number(searchPayload.album_count || 0),
       artistGroupCount: searchPayload.artist_groups.length,
@@ -108,6 +125,22 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
         searchReadyMs,
         SEARCH_BROWSE_BUDGET,
         'Normal search committed-query readiness',
+      ),
+    );
+    await searchBrowseFocusedLocalReport.recordTimingCheckpoint({
+      key: 'search-browse-populated',
+      label: 'Matching gallery and visible covers ready',
+      timingMs: searchPopulatedReadyMs,
+      details: { query: searchQuery, expectedAlbum: expectedAlbums[0] },
+    });
+    searchBrowseFocusedLocalReport.recordTerminalTimingOutcome(
+      SEARCH_POPULATED_BUDGET.metricId,
+      'searchPopulatedReadyMs',
+      expectTimingBudget(
+        expect.soft,
+        searchPopulatedReadyMs,
+        SEARCH_POPULATED_BUDGET,
+        'Search matching album and visible artwork readiness',
       ),
     );
     searchBrowseFocusedLocalReport.recordContractCompletion();

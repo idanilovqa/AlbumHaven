@@ -1498,3 +1498,27 @@ test('new gallery and cold saved-loop playback cases own their exact sample evid
   assert.match(cases[0], /const row=ui\.rows\.filter\(\{hasText:'Clean Signal'\}\)\.first\(\);[\s\S]*?const trackPath=await ui\.readTrackPath\(row\);/);
   assert.match(cases[1], /path: track\.path/);
 });
+
+
+test('populated search timer includes selected album identity and visible cover readiness', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
+  const start = spec.indexOf('const searchPopulatedReadyMs = await stepLogger.step(');
+  const end = spec.indexOf('const searchPayload = await readRuntimeView(page);', start);
+  assert.ok(start >= 0 && end > start);
+  const timedReadiness = spec.slice(start, end);
+  const terminal = timedReadiness.indexOf('return Date.now() - searchSubmittedAt;');
+  assert.doesNotMatch(timedReadiness, /waitForAlbumVisibleUnderHeading|scrollTo/);
+  for (const requiredWait of [
+    'await navigationPanelActions.waitForSidebarSelection(',
+    'await galleryActions.waitForSelectedArtistGallery(',
+    'await expect(expectedCover).toBeInViewport(',
+    '.readCoverImageReadinessByArtistAndAlbum(searchQuery, expectedAlbums[0])',
+    'await galleryActions.waitForVisibleGalleryCoversLoaded(',
+  ]) {
+    const wait = timedReadiness.indexOf(requiredWait);
+    assert.ok(wait >= 0 && wait < terminal, `${requiredWait} must complete inside the populated timer`);
+  }
+  assert.ok(spec.indexOf('const expectedAlbums =') < spec.indexOf('const searchReadyMs ='));
+  assert.match(spec, /performanceTimingBudget\('search-browse\.searchPopulatedReadyMs'\)/);
+  assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_POPULATED_BUDGET\.metricId/);
+});

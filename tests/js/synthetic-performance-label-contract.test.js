@@ -124,3 +124,33 @@ test('Problematic Files report copy matches the approved readiness ceiling', () 
   assert.match(summaryBuilder[0], /1200 ms hard ceiling/u);
   assert.doesNotMatch(summaryBuilder[0], /1400 ms hard ceiling/u);
 });
+
+
+test('search report distinguishes populated readiness from query commitment without fallback evidence', () => {
+  const source = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const start = source.indexOf('function buildSearchBrowseFocusedLocalSummaryCards(');
+  const end = source.indexOf('function buildRootAlbumBrowseFocusedLocalSummaryCards(', start);
+  assert.ok(start >= 0 && end > start);
+  const buildSummary = vm.runInNewContext(
+    `${source.slice(start, end)}\nbuildSearchBrowseFocusedLocalSummaryCards`,
+  );
+  for (const [metrics, expected] of [
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: 950 }, '950 ms'],
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: 0 }, '0 ms'],
+    [{ searchReadyMs: 80 }, 'Not recorded'],
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: null }, 'Not recorded'],
+    [{ searchReadyMs: 80, searchPopulatedReadyMs: NaN }, 'Not recorded'],
+  ]) {
+    const cards = buildSummary([], metrics);
+    assert.equal(cards.find(card => card.label === 'Populated Search Ready')?.value, expected);
+    assert.equal(cards.find(card => card.label === 'Search UI Ready')?.value, '80 ms');
+  }
+});
+
+test('populated search readiness is required by the report and uses the unchanged search ceiling', () => {
+  const fixtures = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const report = fixtures.slice(fixtures.indexOf('searchBrowseFocusedLocalReport:'), fixtures.indexOf('rootAlbumBrowseFocusedLocalReport:'));
+  assert.ok(report.includes("'search-browse.searchPopulatedReadyMs'"));
+  const times = JSON.parse(readRepositoryFile('tests', 'ci', 'performance-times.json'));
+  assert.deepEqual(times['search-browse.searchPopulatedReadyMs'], times['search-browse.searchBrowseReadyMs']);
+});

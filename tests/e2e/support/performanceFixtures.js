@@ -352,11 +352,18 @@ function buildSelectedArtistFocusedLocalSummaryCards(_checkpoints, metricsPayloa
 function buildSearchBrowseFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
   return [
     {
+      label: 'Populated Search Ready',
+      value: Number.isFinite(metricsPayload?.searchPopulatedReadyMs)
+        ? `${Math.round(metricsPayload.searchPopulatedReadyMs)} ms`
+        : 'Not recorded',
+      note: 'Matching album and decoded visible covers',
+    },
+    {
       label: 'Search UI Ready',
       value: Number.isFinite(metricsPayload?.searchReadyMs)
         ? `${Math.round(metricsPayload.searchReadyMs)} ms`
         : 'Not recorded',
-      note: 'Visible search into filtered gallery',
+      note: 'Query commitment; populated readiness measured separately',
     },
     {
       label: 'Query',
@@ -1048,7 +1055,7 @@ export const test = base.extend({
       title: 'Visible Search Browse Benchmark',
       intro: 'This synthetic performance report captures the visible search UI flow through the selected library_browse repository after choosing a query from the root sidebar. It is a focused seam checkpoint inside the broader synthetic performance suite.',
       buildSummaryCards: buildSearchBrowseFocusedLocalSummaryCards,
-      expectedTimingMetricIds: ['search-browse.searchBrowseReadyMs'],
+      expectedTimingMetricIds: ['search-browse.searchBrowseReadyMs', 'search-browse.searchPopulatedReadyMs'],
     });
   },
 

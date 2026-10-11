@@ -203,6 +203,256 @@ def test_library_watch_service_replaces_roots_by_restarting_source():
     assert calls == ["start", ("stop", 2.0), ("roots", ("new-root",)), "start"]
 
 
+def _capturing_observer():
+    class Observer:
+        ident = None
+        emitters = ()
+
+        def __init__(self):
+            self.handlers = []
+            self.alive = False
+
+        def schedule(self, handler, _path, *, recursive):
+            assert recursive
+            self.handlers.append(handler)
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+
+        def join(self, _timeout):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+    return Observer()
+
+
+def test_pre_attribution_dispatch_failure_reports_copied_configured_root_ids(
+    monkeypatch, tmp_path: Path,
+):
+    from music_app.services import library_watch
+
+    private_root = tmp_path / "private-music-root"
+    second_root = tmp_path / "second-music-root"
+    private_root.mkdir()
+    second_root.mkdir()
+    roots = (
+        {"id": "root-a", "path": private_root},
+        {"id": "root-b", "path": second_root},
+    )
+    observer = _capturing_observer()
+    unattributed_reports = []
+    monkeypatch.setattr(
+        library_watch,
+        "publish_watchdog_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("normalization failed")
+        ),
+    )
+    source = library_watch.WatchdogLibraryEventSource(
+        roots,
+        observer_factory=lambda: observer,
+        report_unattributed_failure=unattributed_reports.append,
+    )
+    try:
+        source.start(lambda _event: None)
+        observer.handlers[0].on_any_event(
+            SimpleNamespace(
+                event_type="created",
+                src_path=str(private_root / "Album" / "track.flac"),
+                is_directory=False,
+            )
+        )
+    finally:
+        source.stop(timeout=1.0)
+
+    assert unattributed_reports == [("root-a", "root-b")]
+    assert all(isinstance(value, str) for value in unattributed_reports[0])
+    assert str(private_root) not in repr(unattributed_reports)
+
+
+def test_pre_attribution_reporter_failure_does_not_stop_later_dispatch(
+    monkeypatch, tmp_path: Path,
+):
+    from music_app.services import library_watch
+
+    root = tmp_path / "music"
+    root.mkdir()
+    observer = _capturing_observer()
+    original = RuntimeError("normalization failed")
+    dispatches = []
+    unattributed_reports = []
+
+    def publish_event(event, **_kwargs):
+        if not dispatches:
+            dispatches.append(original)
+            raise original
+        dispatches.append(event)
+
+    def report(root_ids):
+        unattributed_reports.append(root_ids)
+        raise LookupError("recovery reporter unavailable")
+
+    monkeypatch.setattr(library_watch, "publish_watchdog_event", publish_event)
+    source = library_watch.WatchdogLibraryEventSource(
+        ({"id": "root-a", "path": root},),
+        observer_factory=lambda: observer,
+        report_unattributed_failure=report,
+    )
+    try:
+        source.start(lambda _event: None)
+        first = SimpleNamespace(
+            event_type="created",
+            src_path=str(root / "first.flac"),
+            is_directory=False,
+        )
+        second = SimpleNamespace(
+            event_type="created",
+            src_path=str(root / "second.flac"),
+            is_directory=False,
+        )
+
+        observer.handlers[0].on_any_event(first)
+        assert source.is_alive
+        observer.handlers[0].on_any_event(second)
+    finally:
+        source.stop(timeout=1.0)
+
+    assert dispatches == [original, second]
+    assert unattributed_reports == [("root-a",)]
+
+
+@pytest.mark.parametrize(
+    "reporter_fails",
+    [False, True],
+    ids=["report-recorded", "reporter-failure-preserves-startup-error"],
+)
+def test_startup_instrumentation_failure_reports_all_configured_roots_once(
+    monkeypatch, tmp_path: Path, reporter_fails: bool,
+):
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    roots = tuple(
+        {"id": root_id, "path": tmp_path / root_id}
+        for root_id in ("root-a", "root-b")
+    )
+    for root in roots:
+        Path(root["path"]).mkdir()
+    unattributed_reports = []
+    startup_failure = RuntimeError("instrumentation failed")
+
+    def report(root_ids):
+        unattributed_reports.append(root_ids)
+        if reporter_fails:
+            raise LookupError("recovery reporter unavailable")
+
+    class Emitter:
+        def __init__(self, path):
+            self.watch = SimpleNamespace(path=path)
+            self.run = lambda: None
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+    class Observer:
+        ident = None
+
+        def __init__(self):
+            self.emitters = set()
+            self.alive = False
+
+        def schedule(self, _handler, path, *, recursive):
+            assert recursive
+            emitter = Emitter(path)
+            self.emitters.add(emitter)
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+            for emitter in self.emitters:
+                emitter.alive = False
+
+        def join(self, _timeout):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+    observer = Observer()
+    source = WatchdogLibraryEventSource(
+        roots,
+        observer_factory=lambda: observer,
+        report_unattributed_failure=report,
+    )
+    monkeypatch.setattr(
+        source,
+        "_instrument_emitter",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(startup_failure),
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        source.start(lambda _event: None)
+
+    assert caught.value is startup_failure
+    assert unattributed_reports == [("root-a", "root-b")]
+    assert all(isinstance(value, str) for value in unattributed_reports[0])
+    assert all(not emitter.is_alive() for emitter in observer.emitters)
+
+
+def test_cross_root_normalized_failure_remains_coordinator_attributed(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    root_paths = {
+        root_id: tmp_path / root_id
+        for root_id in ("root-a", "root-b", "root-c")
+    }
+    for root_path in root_paths.values():
+        root_path.mkdir()
+    exact_reports = []
+    unattributed_reports = []
+    coordinator = LibraryEventCoordinator(
+        lambda _event: (_ for _ in ()).throw(
+            RuntimeError("database unavailable")
+        ),
+        record_problem=lambda _problem: None,
+        report_admission_failure=exact_reports.append,
+    )
+    observer = _capturing_observer()
+    source = WatchdogLibraryEventSource(
+        tuple(
+            {"id": root_id, "path": root_path}
+            for root_id, root_path in root_paths.items()
+        ),
+        observer_factory=lambda: observer,
+        report_unattributed_failure=unattributed_reports.append,
+    )
+    try:
+        source.start(coordinator.accept)
+        observer.handlers[0].on_any_event(
+            SimpleNamespace(
+                event_type="moved",
+                src_path=str(root_paths["root-a"] / "old.flac"),
+                dest_path=str(root_paths["root-b"] / "new.flac"),
+                is_directory=False,
+            )
+        )
+    finally:
+        source.stop(timeout=1.0)
+
+    assert exact_reports == [("root-a", "root-b")]
+    assert unattributed_reports == []
+
+
 def test_native_watcher_reattaches_root_when_repair_restores_directory(tmp_path):
     from music_app.services.library_watch import (
         LibraryEventKind,
@@ -598,7 +848,7 @@ def _recording_watchdog_observer_factory(calls):
 
 
 @pytest.mark.parametrize("platform", ["linux", "linux2"])
-def test_linux_default_watcher_stays_idle_through_manual_recovery(
+def test_linux_default_watcher_stays_idle_without_loading_native_backend(
     monkeypatch, tmp_path: Path, caplog, platform: str,
 ):
     import builtins
@@ -607,9 +857,9 @@ def test_linux_default_watcher_stays_idle_through_manual_recovery(
 
     import watchdog.observers
 
-    from music_app import _recover_library_watch_after_manual_scan
     from music_app.services.library_watch import (
-        LibraryEvent, LibraryEventKind, LibraryWatchService, WatchdogLibraryEventSource,
+        LibraryWatchService,
+        WatchdogLibraryEventSource,
     )
 
     root = tmp_path / "private-music-root"
@@ -618,7 +868,6 @@ def test_linux_default_watcher_stays_idle_through_manual_recovery(
     calls = []
     imports = []
     events = []
-    health = _native_watch_health()
     source = WatchdogLibraryEventSource(roots)
     watcher = LibraryWatchService(source, events.append)
     original_import = builtins.__import__
@@ -639,22 +888,6 @@ def test_linux_default_watcher_stays_idle_through_manual_recovery(
         assert not watcher.is_alive
         assert source._observer is None
         assert events == []
-        assert health.root_allows_destructive_reconciliation("main")
-
-        health.record_event(LibraryEvent(LibraryEventKind.OVERFLOW, "main", root, observed_at=1.0))
-        assert not health.root_allows_destructive_reconciliation("main")
-        reconciler_roots = []
-        assert _recover_library_watch_after_manual_scan(
-            health_service=health,
-            targeted_reconciler=SimpleNamespace(replace_roots=reconciler_roots.append),
-            watch_service=watcher,
-            root_definitions=roots,
-            scan_mode="manual_full_rescan",
-            scan_started_at=None,
-            observed_root_ids={"main"},
-        ) == 1
-        assert reconciler_roots == [tuple(roots)]
-        assert health.root_allows_destructive_reconciliation("main")
 
         assert watcher.replace_roots([{"id": "unavailable", "path": str(root / "absent")}])
         assert watcher.stop()

@@ -23,6 +23,7 @@ def test_accept_returns_only_after_durable_commit():
     coordinator = LibraryEventCoordinator(
         lambda event: committed.append(event),
         record_problem=lambda _problem: None,
+        report_admission_failure=lambda _root_ids: None,
     )
     event = _event()
 
@@ -35,6 +36,7 @@ def test_distinct_events_are_not_rejected_by_process_local_capacity():
     coordinator = LibraryEventCoordinator(
         lambda event: accepted.append(event),
         record_problem=lambda _problem: None,
+        report_admission_failure=lambda _root_ids: None,
     )
 
     assert all(coordinator.accept(_event(index)) for index in range(4097))
@@ -50,6 +52,7 @@ def test_health_event_records_problem_without_exact_admission(kind):
     coordinator = LibraryEventCoordinator(
         accepted.append,
         record_problem=problems.append,
+        report_admission_failure=lambda _root_ids: None,
     )
 
     assert coordinator.accept(LibraryEvent(kind, "root-a", Path("C:/Music"))) is True
@@ -61,35 +64,137 @@ def test_admission_failure_propagates_without_reporting_success():
     def fail(_event):
         raise RuntimeError("database unavailable")
 
-    coordinator = LibraryEventCoordinator(fail, record_problem=lambda _problem: None)
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        coordinator.accept(_event())
-
-
-def test_storage_failure_is_not_replayed_by_a_later_admission():
-    available = False
-    accepted = []
-    durable_problems = []
-
-    def accept_event(event):
-        if not available:
-            raise RuntimeError("database unavailable")
-        accepted.append(event)
-
     coordinator = LibraryEventCoordinator(
-        accept_event,
-        record_problem=durable_problems.append,
+        fail,
+        record_problem=lambda _problem: None,
+        report_admission_failure=lambda _root_ids: None,
     )
 
     with pytest.raises(RuntimeError, match="database unavailable"):
         coordinator.accept(_event())
 
-    available = True
-    later = _event(1)
-    assert coordinator.accept(later) is True
-    assert accepted == [later]
-    assert durable_problems == []
+
+def test_exact_admission_failure_reports_source_and_move_destination_then_reraises():
+    reported = []
+    coordinator = LibraryEventCoordinator(
+        lambda _event: (_ for _ in ()).throw(
+            RuntimeError("database unavailable")
+        ),
+        record_problem=lambda _problem: None,
+        report_admission_failure=lambda root_ids: reported.append(root_ids),
+    )
+    event = LibraryEvent(
+        LibraryEventKind.MOVED,
+        "root-a",
+        Path("C:/Music/A/old.flac"),
+        destination=Path("D:/Music/B/new.flac"),
+        destination_root_id="root-b",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        coordinator.accept(event)
+
+    assert reported == [("root-a", "root-b")]
+
+
+def test_exact_reporter_failure_preserves_original_admission_exception_object():
+    original = RuntimeError("database unavailable")
+    reported = []
+
+    def report(root_ids):
+        reported.append(root_ids)
+        raise LookupError("recovery reporter unavailable")
+
+    coordinator = LibraryEventCoordinator(
+        lambda _event: (_ for _ in ()).throw(original),
+        record_problem=lambda _problem: None,
+        report_admission_failure=report,
+    )
+    event = LibraryEvent(
+        LibraryEventKind.MOVED,
+        "root-a",
+        Path("C:/Music/A/old.flac"),
+        destination=Path("D:/Music/B/new.flac"),
+        destination_root_id="root-b",
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        coordinator.accept(event)
+
+    assert caught.value is original
+    assert reported == [("root-a", "root-b")]
+
+
+def test_dirty_admission_failure_reports_one_root_then_reraises():
+    reported = []
+    coordinator = LibraryEventCoordinator(
+        lambda _event: None,
+        record_problem=lambda _problem: (_ for _ in ()).throw(
+            RuntimeError("database unavailable")
+        ),
+        report_admission_failure=lambda root_ids: reported.append(root_ids),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        coordinator.accept(
+            LibraryEvent(
+                LibraryEventKind.OVERFLOW,
+                "root-a",
+                Path("C:/Music/A"),
+            )
+        )
+
+    assert reported == [("root-a",)]
+
+
+def test_dirty_reporter_failure_preserves_original_problem_exception_object():
+    original = RuntimeError("database unavailable")
+    reported = []
+
+    def report(root_ids):
+        reported.append(root_ids)
+        raise LookupError("recovery reporter unavailable")
+
+    coordinator = LibraryEventCoordinator(
+        lambda _event: None,
+        record_problem=lambda _problem: (_ for _ in ()).throw(original),
+        report_admission_failure=report,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        coordinator.accept(
+            LibraryEvent(
+                LibraryEventKind.ROOT_UNAVAILABLE,
+                "root-a",
+                Path("C:/Music/A"),
+            )
+        )
+
+    assert caught.value is original
+    assert reported == [("root-a",)]
+
+
+def test_same_root_move_reports_one_logical_id():
+    reported = []
+    coordinator = LibraryEventCoordinator(
+        lambda _event: (_ for _ in ()).throw(
+            RuntimeError("database unavailable")
+        ),
+        record_problem=lambda _problem: None,
+        report_admission_failure=lambda root_ids: reported.append(root_ids),
+    )
+    event = LibraryEvent(
+        LibraryEventKind.MOVED,
+        "root-a",
+        Path("C:/Music/A/old.flac"),
+        destination=Path("C:/Music/A/new.flac"),
+        destination_root_id="root-a",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        coordinator.accept(event)
+
+    assert reported == [("root-a",)]
 
 
 def test_coordinator_has_no_process_local_capacity_retry_or_suspension_controls():
@@ -97,9 +202,14 @@ def test_coordinator_has_no_process_local_capacity_retry_or_suspension_controls(
     coordinator = LibraryEventCoordinator(
         lambda _event: None,
         record_problem=lambda _problem: None,
+        report_admission_failure=lambda _root_ids: None,
     )
 
-    assert set(parameters) == {"accept_event", "record_problem"}
+    assert set(parameters) == {
+        "accept_event",
+        "record_problem",
+        "report_admission_failure",
+    }
     assert {
         "_pending",
         "_pending_problems",
@@ -121,6 +231,7 @@ def test_stop_is_idempotent_and_rejects_later_events():
     coordinator = LibraryEventCoordinator(
         accepted.append,
         record_problem=lambda _problem: None,
+        report_admission_failure=lambda _root_ids: None,
     )
 
     assert coordinator.stop() is True

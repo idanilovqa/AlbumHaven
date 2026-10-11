@@ -404,6 +404,17 @@ def create_asgi_app():
         invalidate_targeted_library_projections,
         start_background_refresh_for_state,
     )
+    from music_app.services.musicbrainz_enrichment import MusicBrainzEnrichmentScheduler
+    from music_app.services.musicbrainz_enrichment_postgres import (
+        MusicBrainzEnrichmentPostgresRepository,
+    )
+    from music_app.services.musicbrainz_enrichment_triggers import (
+        schedule_startup_backfill,
+    )
+    from music_app.services.musicbrainz_enrichment_worker import (
+        start_musicbrainz_enrichment_worker,
+        stop_musicbrainz_enrichment_worker,
+    )
 
     runtime = _create_asgi_runtime_state()
 
@@ -434,6 +445,7 @@ def create_asgi_app():
         targeted_reconciler = None
         runtime.library_event_coordinator = None
         runtime.library_watch_service = None
+        _app.state.musicbrainz_enrichment_worker = None
 
         async def shutdown_resources() -> None:
             _app.state.library_warmup_thread.request_stop()
@@ -467,6 +479,10 @@ def create_asgi_app():
                     if lastfm_started
                     else None,
                 ),
+                (
+                    "MusicBrainz enrichment worker",
+                    lambda: stop_musicbrainz_enrichment_worker(_app),
+                ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
                 ("runtime", lambda: request_runtime_shutdown(runtime)),
@@ -488,6 +504,20 @@ def create_asgi_app():
 
         lastfm_started = True
         try:
+            if (
+                runtime.config.get("MUSICBRAINZ_ENRICHMENT_ENABLED") is True
+                and str(
+                    runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
+                ).strip()
+            ):
+                enrichment_scheduler = MusicBrainzEnrichmentScheduler(
+                    MusicBrainzEnrichmentPostgresRepository(runtime.config)
+                )
+                runtime.config["_MUSICBRAINZ_ENRICHMENT_SCHEDULER"] = (
+                    enrichment_scheduler
+                )
+                schedule_startup_backfill(enrichment_scheduler)
+            start_musicbrainz_enrichment_worker(_app)
             start_lastfm_retry_worker(runtime)
             welcome_worker = start_welcome_retry_worker(_app)
             targeted_executor = _BoundedExecutorAdmission(

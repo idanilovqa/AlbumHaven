@@ -114,6 +114,26 @@ def test_enqueue_excludes_fresh_matched_and_manual_artists_without_deleting_reta
     assert "delete from integration.musicbrainz_artists" not in sql
 
 
+def test_authorized_retry_enqueue_is_current_library_scoped_and_idempotent():
+    connection = FakeConnection([FakeCursor(row={"enqueued": True})])
+
+    result = repository_for(connection).enqueue_artist(
+        local_artist_id=41,
+        reason="authorized_retry",
+        observed_at=NOW,
+    )
+
+    assert result == {"enqueued": True}
+    sql, params = connection.calls[0]
+    sql = " ".join(sql.lower().split())
+    assert "from app.bootstrap_owners" in sql
+    assert "join library.local_artists" in sql
+    assert "insert into ops.metadata_enrichment_jobs" in sql
+    assert "on conflict" in sql
+    assert params["local_artist_id"] == 41
+    assert "library_id" not in params
+
+
 def test_claim_due_job_uses_skip_locked_and_recovers_an_expired_lease():
     job = {
         "id": 17,
@@ -144,6 +164,38 @@ def test_claim_due_job_uses_skip_locked_and_recovers_an_expired_lease():
     assert connection.calls[0][1]["worker_id"] == "worker-a"
 
 
+def test_load_claimed_artist_context_is_safe_current_library_evidence_only():
+    row = {
+        "job_id": 17,
+        "local_artist_id": 41,
+        "local_name": "Guardian",
+        "album_titles": ["First Watch"],
+        "embedded_artist_mbids": [],
+        "existing_artist_mbid": ARTIST_MBID,
+        "existing_match_state": "matched",
+        "manual_decision": True,
+        "projection_is_fresh": True,
+    }
+    connection = FakeConnection([FakeCursor(row=row)])
+
+    result = repository_for(connection).load_artist_context(
+        job_id=17,
+        worker_id="worker-a",
+    )
+
+    assert result == row
+    sql, params = connection.calls[0]
+    sql = " ".join(sql.lower().split())
+    assert "from app.bootstrap_owners" in sql
+    assert "ops.metadata_enrichment_jobs" in sql
+    assert "library.local_artists" in sql
+    assert "library.local_albums" in sql
+    assert "lease_owner = %(worker_id)s" in sql
+    assert "private_path" not in sql
+    assert "source_payload" not in sql and "provider_payload" not in sql
+    assert params == {"job_id": 17, "worker_id": "worker-a"}
+
+
 def test_retry_wait_records_bounded_safe_failure_and_not_before_time():
     retry_at = NOW + timedelta(minutes=15)
     connection = FakeConnection([FakeCursor(row={"updated": True})])
@@ -166,6 +218,34 @@ def test_retry_wait_records_bounded_safe_failure_and_not_before_time():
     assert "where" in sql and "lease_owner = %(worker_id)s" in sql
     assert params["retry_at"] == retry_at
     assert "password" not in repr(params).lower()
+
+
+@pytest.mark.parametrize("state", ["succeeded", "needs_review", "exhausted"])
+def test_terminal_completion_is_lease_owned_scoped_and_preserves_artist_data(state):
+    connection = FakeConnection([FakeCursor(row={"updated": True})])
+
+    updated = repository_for(connection).complete_job(
+        job_id=17,
+        worker_id="worker-a",
+        state=state,
+        classification="found" if state == "succeeded" else "ambiguous",
+        safe_error=None,
+        observed_at=NOW,
+        preserve_existing=True,
+    )
+
+    assert updated is True
+    sql, params = connection.calls[0]
+    sql = " ".join(sql.lower().split())
+    assert "from app.bootstrap_owners" in sql
+    assert "update ops.metadata_enrichment_jobs" in sql
+    assert "lease_owner = %(worker_id)s" in sql
+    assert "state = 'leased'" in sql
+    assert "lease_owner = null" in sql and "lease_expires_at = null" in sql
+    assert "completed_at" in sql
+    assert "local_artist_musicbrainz_matches" not in sql
+    assert "integration.musicbrainz_artists" not in sql
+    assert params["state"] == state
 
 
 def test_candidate_replacement_is_atomic_scoped_and_replaces_the_complete_set():

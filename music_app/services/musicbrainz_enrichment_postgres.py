@@ -95,6 +95,44 @@ class MusicBrainzEnrichmentPostgresRepository:
         row = self._execute_one(sql, params)
         return {"enqueued_count": _integer(row.get("enqueued_count"))}
 
+    def enqueue_artist(
+        self,
+        *,
+        local_artist_id: int,
+        reason: str,
+        observed_at: datetime,
+    ) -> dict[str, bool]:
+        params = {
+            "local_artist_id": _positive_id(local_artist_id),
+            "reason": _bounded_text(reason, 128, required=True),
+            "observed_at": _aware_utc(observed_at),
+            "job_kind": _JOB_KIND,
+        }
+        sql = _active_library_cte() + """
+            , eligible_artist as (
+              select artists.id as local_artist_id, active_library.library_id
+              from active_library
+              join library.local_artists artists
+                on artists.library_id = active_library.library_id
+               and artists.id = %(local_artist_id)s
+            ), inserted as (
+              insert into ops.metadata_enrichment_jobs (
+                library_id, local_artist_id, target_kind, job_kind, reason,
+                state, next_attempt_at, created_at, updated_at
+              )
+              select library_id, local_artist_id, 'artist', %(job_kind)s,
+                     %(reason)s, 'queued', %(observed_at)s, %(observed_at)s,
+                     %(observed_at)s
+              from eligible_artist
+              on conflict (library_id, local_artist_id, job_kind)
+                where state in ('queued', 'leased', 'retry_wait')
+              do nothing
+              returning 1
+            )
+            select exists (select 1 from inserted) as enqueued;
+        """
+        return {"enqueued": bool(self._execute_one(sql, params).get("enqueued"))}
+
     def claim_due_job(
         self,
         *,
@@ -145,6 +183,72 @@ class MusicBrainzEnrichmentPostgresRepository:
         row = self._execute_one(sql, params)
         return row or None
 
+    def load_artist_context(
+        self,
+        *,
+        job_id: int,
+        worker_id: str,
+    ) -> dict[str, object] | None:
+        params = {
+            "job_id": _positive_id(job_id),
+            "worker_id": _bounded_text(worker_id, 128, required=True),
+        }
+        sql = _active_library_cte() + """
+            select
+              jobs.id as job_id,
+              artists.id as local_artist_id,
+              artists.name as local_name,
+              coalesce(albums.album_titles, array[]::text[]) as album_titles,
+              coalesce(identifiers.embedded_artist_mbids, array[]::text[])
+                as embedded_artist_mbids,
+              assertion.artist_mbid as existing_assertion_mbid,
+              assertion.confidence as existing_assertion_confidence,
+              matches.artist_mbid::text as existing_artist_mbid,
+              matches.state as existing_match_state,
+              coalesce(matches.decision_source = 'manual', false) as manual_decision,
+              coalesce(remote.refreshed_at >= now() - interval '30 days', false)
+                as projection_is_fresh
+            from active_library
+            join ops.metadata_enrichment_jobs jobs
+              on jobs.library_id = active_library.library_id
+             and jobs.id = %(job_id)s
+             and jobs.target_kind = 'artist'
+             and jobs.state = 'leased'
+             and jobs.lease_owner = %(worker_id)s
+            join library.local_artists artists
+              on artists.library_id = active_library.library_id
+             and artists.id = jobs.local_artist_id
+            left join library.local_artist_musicbrainz_matches matches
+              on matches.library_id = active_library.library_id
+             and matches.local_artist_id = artists.id
+            left join integration.musicbrainz_artists remote
+              on remote.mbid = matches.artist_mbid
+            left join lateral (
+              select array_agg(distinct albums.title order by albums.title)
+                as album_titles
+              from library.local_albums albums
+              where albums.library_id = active_library.library_id
+                and albums.artist_id = artists.id
+            ) albums on true
+            left join lateral (
+              select array[artists.mbid::text] as embedded_artist_mbids
+              where artists.mbid is not null
+            ) identifiers on true
+            left join lateral (
+              select assertions.mbid::text as artist_mbid, assertions.confidence
+              from library.local_artist_mbid_assertions assertions
+              where assertions.artist_id = artists.id
+                and assertions.mbid is not null
+                and assertions.mbid_assertion_state in ('confirmed', 'high_confidence')
+              order by assertions.confidence desc nulls last,
+                       assertions.observed_at desc,
+                       assertions.id desc
+              limit 1
+            ) assertion on true;
+        """
+        row = self._execute_one(sql, params)
+        return row or None
+
     def schedule_retry(
         self,
         *,
@@ -174,6 +278,49 @@ class MusicBrainzEnrichmentPostgresRepository:
                 provider_classification = %(classification)s,
                 provider_observed_at = %(observed_at)s,
                 last_error = %(safe_error)s,
+                updated_at = %(observed_at)s
+            from active_library
+            where jobs.library_id = active_library.library_id
+              and jobs.id = %(job_id)s
+              and jobs.target_kind = 'artist'
+              and jobs.state = 'leased'
+              and jobs.lease_owner = %(worker_id)s
+            returning true as updated;
+        """
+        return bool(self._execute_one(sql, params).get("updated"))
+
+    def complete_job(
+        self,
+        *,
+        job_id: int,
+        worker_id: str,
+        state: str,
+        classification: str,
+        safe_error: str | None,
+        observed_at: datetime,
+        preserve_existing: bool,
+    ) -> bool:
+        terminal_state = str(state or "").strip()
+        if terminal_state not in {"succeeded", "needs_review", "exhausted"}:
+            raise ValueError("MusicBrainz job completion state is invalid.")
+        params = {
+            "job_id": _positive_id(job_id),
+            "worker_id": _bounded_text(worker_id, 128, required=True),
+            "state": terminal_state,
+            "classification": _bounded_text(classification, 64, required=True),
+            "safe_error": _bounded_text(safe_error, 1024) or None,
+            "observed_at": _aware_utc(observed_at),
+            "preserve_existing": bool(preserve_existing),
+        }
+        sql = _active_library_cte() + """
+            update ops.metadata_enrichment_jobs jobs
+            set state = %(state)s,
+                lease_owner = null,
+                lease_expires_at = null,
+                provider_classification = %(classification)s,
+                provider_observed_at = %(observed_at)s,
+                last_error = %(safe_error)s,
+                completed_at = %(observed_at)s,
                 updated_at = %(observed_at)s
             from active_library
             where jobs.library_id = active_library.library_id

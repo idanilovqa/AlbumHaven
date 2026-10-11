@@ -925,6 +925,9 @@ def refresh_library_for_state(
                 kwargs,
             ),
         ),
+        queue_musicbrainz_enrichment=config.get(
+            "_MUSICBRAINZ_ENRICHMENT_SCHEDULER"
+        ),
         recover_library_watch_health=config.get(
             "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"
         ),

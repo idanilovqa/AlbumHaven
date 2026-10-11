@@ -260,6 +260,10 @@ class Config:
         os.environ.get("ALBUM_HAVEN_ENABLED_MUSIC_SERVICES")
     )
     MUSICBRAINZ_ENABLED = os.environ.get("MUSICBRAINZ_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+    MUSICBRAINZ_ENRICHMENT_ENABLED = (
+        os.environ.get("MUSICBRAINZ_ENRICHMENT_ENABLED", "0").strip().lower()
+        not in {"0", "false", "no"}
+    )
     MUSICBRAINZ_CONTACT_EMAIL = os.environ.get("MUSICBRAINZ_CONTACT_EMAIL", "albumhaven@example.com").strip()
     MUSICBRAINZ_USER_AGENT = os.environ.get(
         "MUSICBRAINZ_USER_AGENT",

@@ -1727,8 +1727,21 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.tag-editor-exception-field::after {
+  content: '';
+  position: absolute;
+  right: 13px;
+  bottom: 14px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--appearance-interaction-outline, #93c5fd);
+  border-bottom: 2px solid var(--appearance-interaction-outline, #93c5fd);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
 #tag-editor-modal .tag-editor-exception-field input,
 #tag-editor-modal .tag-editor-exception-field input:focus {
+  padding-right: 34px;
   border-color: var(--border);
   box-shadow: none;
   background: rgba(255,255,255,0.03);

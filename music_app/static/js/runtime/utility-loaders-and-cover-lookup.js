@@ -1909,6 +1909,13 @@ function buildTagEditorExceptionOptionsHtml(values = getLibraryExceptionTypeChoi
 
 let tagEditorExceptionMenuCleanup = null;
 
+function getTagEditorExceptionMenuHeight(menu) {
+  return Math.max(
+    Number(menu?.scrollHeight || 0),
+    Number(menu?.getBoundingClientRect?.().height || 0),
+  );
+}
+
 function getTagEditorExceptionMenuLayout(inputRect, menuHeight, boundaryRect, viewportWidth, viewportHeight) {
   const inset = 8;
   const maxMenuHeight = Math.min(240, Math.floor(viewportHeight * 0.4));
@@ -1924,7 +1931,7 @@ function getTagEditorExceptionMenuLayout(inputRect, menuHeight, boundaryRect, vi
   const width = Math.min(inputRect.width, viewportWidth - (inset * 2));
   const left = Math.max(inset, Math.min(inputRect.left, viewportWidth - inset - width));
   const top = placement === 'below' ? inputRect.bottom - 1 : inputRect.top - height + 1;
-  return { placement, top, left, width, maxHeight: height };
+  return { placement, top, left, width, maxHeight: height, scrolling: height < menuHeight };
 }
 
 function positionTagEditorExceptionMenu(input, menu) {
@@ -1936,7 +1943,7 @@ function positionTagEditorExceptionMenu(input, menu) {
   const footerRect = footer?.getBoundingClientRect();
   const layout = getTagEditorExceptionMenuLayout(
     input.getBoundingClientRect(),
-    menu.scrollHeight,
+    getTagEditorExceptionMenuHeight(menu),
     {
       top: dialogRect?.top ?? 0,
       bottom: footerRect?.top ?? dialogRect?.bottom ?? viewportHeight,
@@ -1950,6 +1957,7 @@ function positionTagEditorExceptionMenu(input, menu) {
   menu.style.left = `${layout.left}px`;
   menu.style.width = `${layout.width}px`;
   menu.style.maxHeight = `${layout.maxHeight}px`;
+  menu.style.overflowY = layout.scrolling ? 'auto' : 'visible';
 }
 
 function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
@@ -1961,7 +1969,7 @@ function closeTagEditorExceptionMenu({ restoreFocus = false } = {}) {
   tagEditorExceptionMenuCleanup = null;
   menu.hidden = true;
   delete menu.dataset.placement;
-  ['position', 'top', 'left', 'width', 'max-height'].forEach((name) => menu.style.removeProperty(name));
+  ['position', 'top', 'left', 'width', 'max-height', 'overflow-y'].forEach((name) => menu.style.removeProperty(name));
   input?.setAttribute('aria-expanded', 'false');
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
   if (restoreFocus) input?.focus?.({ preventScroll: true });

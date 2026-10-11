@@ -174,6 +174,7 @@ def test_projection_occurrences_exclude_mutable_missing_details_and_private_path
     [
         ("Bella Ramsey", "Hilda: Season 2 (Original Series Soundtrack)", "Ryan Carlson"),
         ("Belle Stars", "Rain Man", "Various Artists"),
+        ("Ben Del Maestro", "The Lord Of The Rings: The Return Of The King", "Various Artists"),
     ],
 )
 def test_projection_occurrences_preserve_featured_track_artist_role(

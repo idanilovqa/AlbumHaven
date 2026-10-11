@@ -34,6 +34,7 @@ test('search regression gate keeps the complete required suite in one command', 
   assert.match(runner, /sidebar-selection-visibility\.test\.js/u);
   assert.match(runner, /sidebar-virtualization\.test\.js/u);
   assert.match(runner, /view-state-helpers\.test\.js/u);
+  assert.match(runner, /bootstrap-gallery-event-handlers\.test\.js/u);
   assert.match(runner, /synthetic-performance-benchmark\.test\.js/u);
   assert.match(runner, /performance-change-impact\.test\.js/u);
   assert.match(runner, /searchInput\.spec\.js/u);

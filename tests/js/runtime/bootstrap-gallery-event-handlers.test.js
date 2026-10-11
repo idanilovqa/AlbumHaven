@@ -1016,8 +1016,39 @@ test('scrollRootGalleryToArtist cancels stale selected-artist reconciliation bef
   assert.equal(calls.buildApiUrlOptions.at(-1).galleryAnchorArtist, 'Bal-Sagoth');
 });
 
+for (const query of ['', 'A.C.T']) {
+  test(`scrollRootGalleryToArtist leaves a selected artist view even when its albums are mounted (query=${query})`, async () => {
+    const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+    context.state.view.query = query;
+    context.state.view.selected_artist = 'A.C.T';
+    context.virtualGrid.scrollToArtist = () => true;
+
+    assert.equal(await context.scrollRootGalleryToArtist('A.C.T'), true);
+
+    assert.equal(calls.fetchAndRender.length, 1, 'mounted filtered albums cannot stand in for the full gallery');
+    assert.equal(calls.buildApiUrl.at(-1).query, '');
+    assert.equal(calls.buildApiUrl.at(-1).selected_artist, '');
+    assert.equal(calls.buildApiUrl.at(-1).all_artists_active, true);
+    assert.deepEqual(Array.from(calls.buildApiUrl.at(-1).related_filter_artists), []);
+    assert.equal(calls.buildApiUrlOptions.at(-1).galleryAnchorArtist, 'A.C.T');
+    assert.equal(calls.renderLibraryLoader.length, 1);
+  });
+}
+
+function createRootGalleryContext(options = {}) {
+  const result = createContext(options);
+  Object.assign(result.context.state.view, {
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    related_filter_artists: [],
+    primary_filter_active: false,
+  });
+  return result;
+}
+
 test('scrollRootGalleryToArtist uses the mounted grid without loading another page', async () => {
-  const { context, calls } = createContext({ useProductionBuildApiUrl: true });
+  const { context, calls } = createRootGalleryContext({ useProductionBuildApiUrl: true });
   const scrolledArtists = [];
   context.virtualGrid.scrollToArtist = (artist) => {
     scrolledArtists.push(artist);
@@ -1032,7 +1063,7 @@ test('scrollRootGalleryToArtist uses the mounted grid without loading another pa
 });
 
 test('scrollRootGalleryToArtist keeps correcting the requested heading until it is stably at the top', async () => {
-  const { context } = createContext();
+  const { context } = createRootGalleryContext();
   const frames = [];
   let headerTop = 96;
   let scrollCalls = 0;
@@ -1065,7 +1096,7 @@ test('scrollRootGalleryToArtist keeps correcting the requested heading until it 
 });
 
 test('Artist Tree alignment does not accept a covered separator with stale gallery chrome', async () => {
- const { context } = createContext();
+ const { context } = createRootGalleryContext();
  const frames = [];
  let scrollCalls = 0;
  const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
@@ -1103,7 +1134,7 @@ test('Artist Tree alignment does not accept a covered separator with stale galle
 });
 
 test('a second Artist Tree jump cancels the first artist alignment before its page loads', async () => {
- const { context } = createContext({ useProductionBuildApiUrl: true });
+ const { context } = createRootGalleryContext({ useProductionBuildApiUrl: true });
  const frames = [];
  const scrolledArtists = [];
  let finishFetch;
@@ -1138,7 +1169,7 @@ test('a second Artist Tree jump cancels the first artist alignment before its pa
 });
 
 test('a local Artist Tree jump cancels an older remote jump waiting for its section to render', async () => {
-  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const { context } = createRootGalleryContext({ useProductionBuildApiUrl: true });
   const frames = [];
   const scrolledArtists = [];
   let remoteLoaded = false;
@@ -1165,7 +1196,7 @@ test('a local Artist Tree jump cancels an older remote jump waiting for its sect
 });
 
 test('Artist Tree alignment keeps ownership through delayed virtual-grid measurement drift', async () => {
- const { context } = createContext();
+ const { context } = createRootGalleryContext();
  const frames = [];
  let frameReads = 0;
  let rowsTop = 0;
@@ -1210,7 +1241,7 @@ test('Artist Tree alignment keeps ownership through delayed virtual-grid measure
 });
 
 test('user wheel input cancels pending Artist Tree alignment', async () => {
-  const { context } = createContext();
+  const { context } = createRootGalleryContext();
   const frames = [];
   let scrollCalls = 0;
   const scroll = { getBoundingClientRect: () => ({ top: 0 }) };
@@ -1242,7 +1273,7 @@ test('user wheel input cancels pending Artist Tree alignment', async () => {
 });
 
 test('scrollRootGalleryToArtist waits for the replacement grid before accepting the same artist', async () => {
-  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const { context } = createRootGalleryContext({ useProductionBuildApiUrl: true });
   const frames = [];
   const scrolledArtists = [];
   context.virtualGrid._renderGeneration = 4;
@@ -1274,7 +1305,7 @@ test('scrollRootGalleryToArtist waits for the replacement grid before accepting 
 });
 
 test('scrollRootGalleryToArtist abandons delayed alignment after the anchored page loses ownership', async () => {
-  const { context } = createContext({ useProductionBuildApiUrl: true });
+  const { context } = createRootGalleryContext({ useProductionBuildApiUrl: true });
   const frames = [];
   context.state.view.gallery_page = {
     anchor_artist: 'Anthony',
@@ -3043,7 +3074,7 @@ test('clearing an interactive canonical-root search reloads the full auto-select
   assert.equal(calls.fetchAndRender.length, 1);
   const requestUrl = new URL(calls.fetchAndRender[0].url, 'http://localhost');
   assert.equal(requestUrl.searchParams.get('artist'), 'The Neal Morse Band');
-  assert.equal(requestUrl.searchParams.has('payload_tier'), false);
+  assert.equal(requestUrl.searchParams.get('payload_tier'), 'gallery_summary');
   assert.equal(calls.fetchAndRender[0].runtimeOptions, undefined);
 });
 
@@ -3279,7 +3310,7 @@ test('selecting a different tree artist preserves search and resets filters whil
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.gallery.mainState)), {
     sources: { main_library: true, new_arrivals: true, hoard: true },
-    albumTypes: ['studio', 'ep'],
+    albumTypes: ['studio', 'ep', 'compilation'],
     view: 'covers',
     familyArtists: [],
     showFeaturedOn: true,
@@ -3408,7 +3439,7 @@ test('handleGalleryBootstrapSearchSubmit retains a requested artist selected dur
     'new_arrivals',
   ]);
   assert.equal(requestUrl.searchParams.has('q'), false);
-  assert.equal(requestUrl.searchParams.has('payload_tier'), false);
+  assert.equal(requestUrl.searchParams.get('payload_tier'), 'gallery_summary');
   assert.equal(calls.fetchAndRender[0].push, true);
   assert.equal(calls.fetchAndRender[0].runtimeOptions, undefined);
 });

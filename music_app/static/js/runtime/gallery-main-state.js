@@ -9,7 +9,7 @@ const GALLERY_TRIAL_ARTIST_IMAGES = Object.freeze({
 function createGalleryMainState(overrides = {}) {
   const galleryState = {
     sources: { main_library: true, new_arrivals: true, hoard: true, ...(overrides.sources || {}) },
-    albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep'],
+    albumTypes: Array.isArray(overrides.albumTypes) ? overrides.albumTypes.slice() : ['studio', 'ep', 'compilation'],
     showFeaturedOn: overrides.showFeaturedOn !== false,
     view: normalizeGalleryView(overrides.view),
     familyArtists: Array.isArray(overrides.familyArtists) ? overrides.familyArtists.slice() : [],
@@ -226,8 +226,8 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
   if (view.query) return rootTotals;
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
-    || filterState.albumTypes?.length !== 2
-    || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep')
+    || filterState.albumTypes?.length !== 3
+    || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep') || !filterState.albumTypes.includes('compilation')
     || filterState.showFeaturedOn === false
     || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
       view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])

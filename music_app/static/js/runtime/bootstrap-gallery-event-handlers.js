@@ -541,7 +541,11 @@ function scrollRootGalleryToArtist(artist) {
   if (!targetArtist) return Promise.resolve(false);
   cancelRootGalleryArtistAlignment();
   const navigationGeneration = rootGalleryArtistAlignmentGeneration;
-  if (virtualGrid?.scrollToArtist?.(targetArtist)) {
+  const isUnfilteredGallery = !String(state.view?.query || '').trim()
+    && !String(state.view?.selected_artist || '').trim()
+    && !(state.view?.related_filter_artists || []).length
+    && !state.view?.primary_filter_active;
+  if (isUnfilteredGallery && virtualGrid?.scrollToArtist?.(targetArtist)) {
     stabilizeRootGalleryArtistAlignment(targetArtist);
     return Promise.resolve(true);
   }
@@ -624,12 +628,13 @@ function handleSidebarArtistSelectionClick(event) {
   const primaryArtistChanged = String(artist || '').trim() !== currentSelectedArtist;
   const activeSearchQuery = String(state.view?.query || '').trim();
   const previousGalleryMainState = state.gallery.mainState;
-  const previousAlbumTypes = new Set(previousGalleryMainState?.albumTypes || ['studio', 'ep']);
+  const previousAlbumTypes = new Set(previousGalleryMainState?.albumTypes || ['studio', 'ep', 'compilation']);
   const galleryFiltersWereCustomized = Boolean(previousGalleryMainState && (
     Object.values(previousGalleryMainState.sources || {}).some((enabled) => enabled === false)
-    || previousAlbumTypes.size !== 2
+    || previousAlbumTypes.size !== 3
     || !previousAlbumTypes.has('studio')
     || !previousAlbumTypes.has('ep')
+    || !previousAlbumTypes.has('compilation')
     || previousGalleryMainState.familySelectionExplicit === true
     || (previousGalleryMainState.familyArtists || []).length
   ));

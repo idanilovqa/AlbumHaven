@@ -189,7 +189,7 @@
       <div class="gallery-anchored-menu" id="gallery-album-types-menu" data-anchored-surface="album-types" data-trigger-anchor-context="content" role="group" aria-label="Album types" hidden>
         <span class="gallery-menu-title">Album types</span>
         {% for value, label in [('studio', 'Studio'), ('ep', 'EP'), ('live', 'Live'), ('demo', 'Demo'), ('compilation', 'Compilation'), ('single', 'Single')] %}
-        <button class="gallery-type-choice" type="button" data-gallery-album-type="{{ value }}" aria-pressed="{{ 'true' if value in ['studio', 'ep'] else 'false' }}" disabled aria-disabled="true"><span aria-hidden="true">✓</span>{{ label }}</button>
+        <button class="gallery-type-choice" type="button" data-gallery-album-type="{{ value }}" aria-pressed="{{ 'true' if value in ['studio', 'ep', 'compilation'] else 'false' }}" disabled aria-disabled="true"><span aria-hidden="true">✓</span>{{ label }}</button>
         {% endfor %}
         <div class="gallery-menu-divider"></div>
         <button class="gallery-type-choice" type="button" data-gallery-featured-on="1" aria-pressed="true"><span aria-hidden="true">✓</span>Featured On</button>

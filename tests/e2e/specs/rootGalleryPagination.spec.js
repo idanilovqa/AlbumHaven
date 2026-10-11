@@ -376,6 +376,28 @@ test('FTC-GALLERY-NAV-031 Artist Tree jump stays local when mounted and supports
     expect(localSidebarIndex, 'Mounted artist must remain available in Artist Tree').toBeGreaterThanOrEqual(0);
     await ui.sidebarArtists.nth(localSidebarIndex).click();
     await selectedArtistResponse;
+    await galleryActions.waitForSelectedArtistGallery(localTarget);
+
+    // A selected gallery has mounted albums too, but cannot satisfy a root jump.
+    const sameArtistAnchorResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/view-data'
+        && url.searchParams.get('gallery_anchor_artist') === localTarget
+        && !url.searchParams.has('artist')
+        && !url.searchParams.has('q')
+        && response.ok();
+    });
+    await openArtistTreeContextMenu(ui, localTarget);
+    await ui.scrollToArtistAction.click();
+    await sameArtistAnchorResponse;
+    await expect.poll(() => ui.readArtistJumpPlacement(localTarget)).toEqual({
+      rendered: true,
+      chromeMatches: true,
+      rowsAligned: true,
+      firstCardUncut: true,
+    });
+    expect(new URL(page.url()).searchParams.has('artist')).toBe(false);
+    expect(new URL(page.url()).searchParams.has('q')).toBe(false);
 
     // parity-check: allow-read-only-measurement-evaluate -- choose a sidebar artist outside the loaded model
     const remoteTarget = await page.evaluate(sidebarSelector => {

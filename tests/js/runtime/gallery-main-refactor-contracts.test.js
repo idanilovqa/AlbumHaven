@@ -405,7 +405,7 @@ test('the live Album types menu starts with unavailable loose tracks disabled', 
   );
   assert.match(
     indexTemplateSource,
-    /data-gallery-album-type="\{\{ value \}\}"[^>]*aria-pressed="\{\{ 'true' if value in \['studio', 'ep'\] else 'false' \}\}" disabled aria-disabled="true"/,
+    /data-gallery-album-type="\{\{ value \}\}"[^>]*aria-pressed="\{\{ 'true' if value in \['studio', 'ep', 'compilation'\] else 'false' \}\}" disabled aria-disabled="true"/,
   );
   assert.match(
     indexTemplateSource,
@@ -516,7 +516,7 @@ test('the collapsed Gallery view control hides the inactive icon instead of over
   assert.doesNotMatch(css, /border-left:/);
 });
 
-test('client Gallery state defaults to all sources, Studio plus EP, cards, and an unfiltered gallery', () => {
+test('client Gallery state defaults to all sources, Studio plus EP and Compilation, cards, and an unfiltered gallery', () => {
   const context = loadRuntime();
  const createGalleryMainState = requireContract(context, 'createGalleryMainState');
  assert.deepEqual(
@@ -525,11 +525,21 @@ test('client Gallery state defaults to all sources, Studio plus EP, cards, and a
  );
  assert.deepEqual(plain(createGalleryMainState()), {
     sources: { main_library: true, new_arrivals: true, hoard: true },
-    albumTypes: ['studio', 'ep'],
+    albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
     view: 'cards',
     familyArtists: [],
   });
+});
+
+test('explicit release-type choices remain intact instead of acquiring default compilations', () => {
+  const context = loadRuntime();
+  const createGalleryMainState = requireContract(context, 'createGalleryMainState');
+  for (const albumTypes of [[], ['studio', 'ep'], ['compilation']]) {
+    const created = createGalleryMainState({ albumTypes });
+    assert.deepEqual(plain(created.albumTypes), albumTypes);
+    assert.notEqual(created.albumTypes, albumTypes);
+  }
 });
 
 test('new primary artist navigation resets filters while preserving the display preference', () => {
@@ -545,7 +555,7 @@ test('new primary artist navigation resets filters while preserving the display 
 
   assert.deepEqual(plain(reset), {
     sources: { main_library: true, new_arrivals: true, hoard: true },
-    albumTypes: ['studio', 'ep'],
+    albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: true,
     view: 'covers',
     familyArtists: [],
@@ -564,7 +574,7 @@ test('source, featured relationship, unavailable type, view, and family transiti
   state = reduceGalleryMainState(state, { type: 'toggle-family-artist', artist: 'Flying Colors' });
   assert.deepEqual(plain(state), {
     sources: { main_library: true, new_arrivals: true, hoard: false },
-    albumTypes: ['studio', 'ep'],
+    albumTypes: ['studio', 'ep', 'compilation'],
     showFeaturedOn: false,
     view: 'covers',
     familyArtists: ['Flying Colors'],
@@ -1028,7 +1038,7 @@ test('all unavailable release types remain inert while catalog-backed facts are 
   assert.equal(classifyGalleryReleaseType({ title: 'Radio Single' }), 'studio');
   assert.equal(classifyGalleryReleaseType({ title: 'Ordinary Record' }), 'studio');
 
-  assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep']);
+  assert.deepEqual(plain(createGalleryMainState().albumTypes), ['studio', 'ep', 'compilation']);
   for (const albumType of ['studio', 'live', 'demo', 'compilation', 'ep', 'single']) {
     const state = createGalleryMainState();
     assert.deepEqual(
@@ -1050,7 +1060,7 @@ test('all unavailable release types remain inert while catalog-backed facts are 
     ],
     filterState: {
       sources: { main_library: true, new_arrivals: true, hoard: true },
-      albumTypes: ['studio', 'ep'],
+      albumTypes: ['studio', 'ep', 'compilation'],
       view: 'cards',
       familyArtists: [],
     },
@@ -1074,7 +1084,7 @@ test('art-only Gallery hover frame covers the complete card edge', () => {
   assert.doesNotMatch(galleryMainCssSource, /\.gallery-card__year-frame\s*\{/);
 });
 
-test('default Gallery filters exclude compilation metadata while type controls are unavailable', () => {
+test('default Gallery filters retain compilation metadata while type controls are unavailable', () => {
   const context = loadRuntime();
   const createGalleryMainState = requireContract(context, 'createGalleryMainState');
   const filterGalleryModel = requireContract(context, 'filterGalleryModel');
@@ -1091,8 +1101,10 @@ test('default Gallery filters exclude compilation metadata while type controls a
     filterState: createGalleryMainState(),
   }));
 
-  assert.deepEqual(filtered.groups, []);
-  assert.deepEqual(filtered.totals, { artistCount: 0, albumCount: 0 });
+  assert.equal(filtered.groups.length, 1);
+  assert.equal(filtered.groups[0].artist, 'IR8 / Sexoturica');
+  assert.deepEqual(filtered.groups[0].albums.map((album) => album.key), ['ir8 / sexoturica::ir8 vs sexoturica']);
+  assert.deepEqual(filtered.totals, { artistCount: 1, albumCount: 1 });
 });
 
 test('targeted reconciliation updates affected groups and counts without loader, menu, scroll, or root replacement', () => {
@@ -1403,6 +1415,7 @@ test('full root gallery summary preserves client-filtered and query totals', () 
   const filters = [
     { sources: { hoard: false } },
     { albumTypes: ['studio'] },
+    { albumTypes: ['studio', 'ep'] },
     { showFeaturedOn: false },
     { familyArtists: ['Artist'] },
     { familySelectionExplicit: true },

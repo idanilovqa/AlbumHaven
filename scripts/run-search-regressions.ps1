@@ -81,6 +81,7 @@ Invoke-Checked {
         tests\js\runtime\sidebar-selection-visibility.test.js `
         tests\js\runtime\sidebar-virtualization.test.js `
         tests\js\runtime\view-state-helpers.test.js `
+        tests\js\runtime\bootstrap-gallery-event-handlers.test.js `
         tests\js\synthetic-performance-benchmark.test.js `
         tests\js\performance-change-impact.test.js `
         tests\js\search-regression-gate.test.js

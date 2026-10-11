@@ -275,6 +275,42 @@ def test_pre_attribution_dispatch_failure_reports_copied_configured_root_ids(
     assert str(private_root) not in repr(unattributed_reports)
 
 
+def test_replace_roots_normalization_failure_preserves_and_reports_old_roots(
+    tmp_path: Path,
+):
+    from music_app.services.library_watch import WatchdogLibraryEventSource
+
+    original = LookupError("root id conversion failed")
+
+    class FailingRootId:
+        def __str__(self):
+            raise original
+
+    old_roots = (
+        {"id": "root-a", "path": tmp_path / "private-a"},
+        {"id": "root-b", "path": tmp_path / "private-b"},
+    )
+    unattributed_reports = []
+    source = WatchdogLibraryEventSource(
+        old_roots,
+        report_unattributed_failure=unattributed_reports.append,
+    )
+    old_root_snapshot = source._roots
+    old_id_snapshot = source._configured_root_ids
+
+    with pytest.raises(LookupError) as caught:
+        source.replace_roots(
+            ({"id": FailingRootId(), "path": tmp_path / "replacement"},)
+        )
+
+    assert caught.value is original
+    assert source._roots == old_root_snapshot
+    assert source._configured_root_ids == old_id_snapshot
+    assert unattributed_reports == [("root-a", "root-b")]
+    assert all(isinstance(root_id, str) for root_id in unattributed_reports[0])
+    assert all(str(root["path"]) not in repr(unattributed_reports) for root in old_roots)
+
+
 def test_pre_attribution_reporter_failure_does_not_stop_later_dispatch(
     monkeypatch, tmp_path: Path,
 ):

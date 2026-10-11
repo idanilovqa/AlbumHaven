@@ -97,6 +97,28 @@ def test_exact_admission_failure_reports_source_and_move_destination_then_rerais
     assert reported == [("root-a", "root-b")]
 
 
+def test_non_move_admission_failure_ignores_stray_destination_root_id():
+    reported = []
+    coordinator = LibraryEventCoordinator(
+        lambda _event: (_ for _ in ()).throw(
+            RuntimeError("database unavailable")
+        ),
+        record_problem=lambda _problem: None,
+        report_admission_failure=reported.append,
+    )
+    event = LibraryEvent(
+        LibraryEventKind.CREATED,
+        "root-a",
+        Path("C:/Music/A/new.flac"),
+        destination_root_id="root-b",
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        coordinator.accept(event)
+
+    assert reported == [("root-a",)]
+
+
 def test_exact_reporter_failure_preserves_original_admission_exception_object():
     original = RuntimeError("database unavailable")
     reported = []

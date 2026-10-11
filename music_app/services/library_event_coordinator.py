@@ -44,9 +44,11 @@ class LibraryEventCoordinator:
         accept_event: Callable[[LibraryEvent], object],
         *,
         record_problem: Callable[[CoordinatorProblem], object],
+        report_admission_failure: Callable[[tuple[str, ...]], object],
     ) -> None:
         self._accept_event = accept_event
         self._record_problem = record_problem
+        self._report_admission_failure = report_admission_failure
         self._lock = Lock()
         self._stopped = False
 
@@ -54,13 +56,27 @@ class LibraryEventCoordinator:
         with self._lock:
             if self._stopped:
                 return False
-        if event.kind in {
-            LibraryEventKind.ROOT_UNAVAILABLE,
-            LibraryEventKind.OVERFLOW,
-        }:
-            self._record_problem(CoordinatorProblem(event.kind.value, event.root_id))
-        else:
-            self._accept_event(event)
+        root_ids = (event.root_id,)
+        if (
+            event.kind is LibraryEventKind.MOVED
+            and event.destination_root_id is not None
+            and event.destination_root_id != event.root_id
+        ):
+            root_ids += (event.destination_root_id,)
+        try:
+            if event.kind in {
+                LibraryEventKind.ROOT_UNAVAILABLE,
+                LibraryEventKind.OVERFLOW,
+            }:
+                self._record_problem(CoordinatorProblem(event.kind.value, event.root_id))
+            else:
+                self._accept_event(event)
+        except Exception:
+            try:
+                self._report_admission_failure(root_ids)
+            except Exception:
+                pass
+            raise
         return True
 
     def stop(self) -> bool:

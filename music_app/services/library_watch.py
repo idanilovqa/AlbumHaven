@@ -56,6 +56,14 @@ def _resolved_roots(
     return tuple(resolved)
 
 
+def _logical_root_ids(roots: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(
+        root_id
+        for root in roots
+        if (root_id := str(root.get("id") or "").strip())
+    ))
+
+
 def _root_for_path(
     path: Path,
     roots: tuple[tuple[str, Path], ...],
@@ -223,10 +231,13 @@ class WatchdogLibraryEventSource:
         clock: Callable[[], datetime | float] | None = None,
         retry_timer_factory: Callable[[float, Callable[[], None]], object] = Timer,
         retry_interval_seconds: float = 5.0,
+        report_unattributed_failure: Callable[[tuple[str, ...]], object] | None = None,
     ) -> None:
         self._roots = tuple(dict(root) for root in roots)
+        self._configured_root_ids = _logical_root_ids(self._roots)
         self._observer_factory = observer_factory
         self._clock = clock
+        self._report_unattributed_failure = report_unattributed_failure
         self._observer: object | None = None
         self._emitters: tuple[object, ...] = ()
         self._stopping = Event()
@@ -240,6 +251,14 @@ class WatchdogLibraryEventSource:
         self._publish: Callable[[LibraryEvent], None] | None = None
         self._active_clock: Callable[[], datetime | float] | None = None
         self._instrumented_emitters: set[int] = set()
+
+    def _report_pre_attribution_failure(self) -> None:
+        if self._report_unattributed_failure is None or not self._configured_root_ids:
+            return
+        try:
+            self._report_unattributed_failure(self._configured_root_ids)
+        except Exception:
+            pass
 
     @property
     def is_alive(self) -> bool:
@@ -326,41 +345,62 @@ class WatchdogLibraryEventSource:
             self._stopping.clear()
         stopping = self._stopping
         resolved_roots = ()
+        report_pre_attribution_failure = self._report_pre_attribution_failure
+
+        def publish_unavailable_roots() -> None:
+            for root_id, root_path in resolved_roots:
+                try:
+                    publish(LibraryEvent(
+                        LibraryEventKind.ROOT_UNAVAILABLE,
+                        root_id,
+                        root_path,
+                        observed_at=clock(),
+                        is_directory=True,
+                    ))
+                except Exception:
+                    continue
 
         class Handler(FileSystemEventHandler):
             def on_any_event(self, event) -> None:
                 if stopping.is_set():
                     return
+                attributed = False
+
+                def publish_attributed(normalized: LibraryEvent) -> None:
+                    nonlocal attributed
+                    attributed = True
+                    publish(normalized)
+
                 try:
                     publish_watchdog_event(
-                        event, roots=roots, publish=publish, clock=clock,
+                        event, roots=roots, publish=publish_attributed, clock=clock,
                     )
                 except Exception:
-                    # Normalization can fail before a root can be attributed.
-                    # Use the validated startup identities, not the failed path,
-                    # and keep the dispatcher alive for subsequent events.
-                    for root_id, root_path in resolved_roots:
-                        try:
-                            publish(LibraryEvent(
-                                LibraryEventKind.ROOT_UNAVAILABLE,
-                                root_id, root_path, observed_at=clock(), is_directory=True,
-                            ))
-                        except Exception:
-                            # Failed health writes are retained by the health
-                            # service; do not leave another root unprotected.
-                            continue
+                    if not attributed:
+                        report_pre_attribution_failure()
+                        publish_unavailable_roots()
 
         handler = Handler()
         self._handler = handler
         self._publish = publish
         self._active_clock = clock
         self._observer = observer
+        startup_admission_error: Exception | None = None
+
+        def publish_startup(event: LibraryEvent) -> None:
+            nonlocal startup_admission_error
+            try:
+                publish(event)
+            except Exception as error:
+                startup_admission_error = error
+                raise
+
         try:
             resolved_roots = _resolved_roots(roots)
             for root_id, root_path in resolved_roots:
                 if not root_path.is_dir():
                     self._missing_roots[root_id] = root_path
-                    publish(
+                    publish_startup(
                         LibraryEvent(
                             LibraryEventKind.ROOT_UNAVAILABLE,
                             root_id,
@@ -376,21 +416,14 @@ class WatchdogLibraryEventSource:
             observer.start()
             with self._retry_lock:
                 self._schedule_missing_root_retry_locked()
-        except Exception:
+        except Exception as startup_error:
             # on_thread_start runs before run(), so its failures cannot reach
             # the producer's finally bridge. The whole aborted source is lost.
             self._stopping.set()
             try:
-                for root_id, root_path in _resolved_roots(roots):
-                    try:
-                        publish(LibraryEvent(
-                            LibraryEventKind.ROOT_UNAVAILABLE,
-                            root_id, root_path, observed_at=clock(), is_directory=True,
-                        ))
-                    except Exception:
-                        # The health service retains failed writes in memory;
-                        # continue blocking the remaining affected roots too.
-                        continue
+                if startup_error is not startup_admission_error:
+                    self._report_pre_attribution_failure()
+                    publish_unavailable_roots()
             finally:
                 self.stop(timeout=5.0)
             raise
@@ -505,7 +538,13 @@ class WatchdogLibraryEventSource:
     def replace_roots(self, roots: Iterable[Mapping[str, object]]) -> None:
         if self._observer is not None:
             raise RuntimeError("Stop the library event source before replacing roots")
-        self._roots = tuple(dict(root) for root in roots)
+        try:
+            next_roots = tuple(dict(root) for root in roots)
+            next_root_ids = _logical_root_ids(next_roots)
+        except Exception:
+            self._report_pre_attribution_failure()
+            raise
+        self._roots, self._configured_root_ids = next_roots, next_root_ids
         self._missing_roots.clear()
 
 

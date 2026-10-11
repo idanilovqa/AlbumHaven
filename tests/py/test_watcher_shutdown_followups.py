@@ -9,11 +9,11 @@ from watchdog.events import FileModifiedEvent
 from watchdog.observers.api import BaseObserver, EventEmitter
 
 from music_app.services import library_watch
+from music_app.services.library_event_coordinator import LibraryEventCoordinator
 from tests.py.test_library_reconciliation import _native_watch_health
 
 
-@pytest.mark.parametrize("failure", ["normalization", "publication"])
-def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path, monkeypatch, failure):
+def test_normalization_failure_records_root_health_without_losing_dispatcher(tmp_path, monkeypatch):
     health = _native_watch_health()
     recorded = Event()
     delivered = Event()
@@ -30,7 +30,7 @@ def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path
 
     def normalize(event, **kwargs):
         nonlocal failed
-        if failure == "normalization" and not failed:
+        if not failed:
             failed = True
             raise RuntimeError("cyclic link cannot resolve")
         return original_publish(event, **kwargs)
@@ -40,9 +40,6 @@ def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path
         if event.kind is library_watch.LibraryEventKind.ROOT_UNAVAILABLE:
             health.record_event(event)
             recorded.set()
-        elif failure == "publication" and not failed:
-            failed = True
-            raise OSError("publication callback failed")
         else:
             delivered.set()
 
@@ -61,6 +58,74 @@ def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path
         assert observer.is_alive() and all(emitter.is_alive() for emitter in emitters)
         observer.event_queue.put((FileModifiedEvent(str(tmp_path / "second.flac")), watch))
         assert delivered.wait(1), "one bad event must not silently terminate intake"
+        assert exceptions == []
+    finally:
+        source.stop(timeout=2)
+        assert not observer.is_alive()
+        assert all(not emitter.is_alive() for emitter in emitters)
+
+
+def test_exact_admission_failure_is_reported_without_losing_dispatcher(tmp_path, monkeypatch):
+    original = OSError("publication callback failed")
+    attempted = []
+    accepted = []
+    reported = []
+    problems = []
+    caught = []
+    failure_reported = Event()
+    delivered = Event()
+    exceptions = []
+    monkeypatch.setattr("threading.excepthook", exceptions.append)
+
+    class IdleEmitter(EventEmitter):
+        def queue_events(self, _timeout):
+            self.stopped_event.wait(2)
+
+    observer = BaseObserver(IdleEmitter)
+
+    def accept_event(event):
+        attempted.append(event)
+        if len(attempted) == 1:
+            raise original
+        accepted.append(event)
+        delivered.set()
+
+    def report_admission_failure(root_ids):
+        reported.append(root_ids)
+        failure_reported.set()
+        raise LookupError("recovery reporter unavailable")
+
+    coordinator = LibraryEventCoordinator(
+        accept_event,
+        record_problem=problems.append,
+        report_admission_failure=report_admission_failure,
+    )
+
+    def publish(event):
+        try:
+            coordinator.accept(event)
+        except Exception as exc:
+            caught.append(exc)
+            raise
+
+    source = library_watch.WatchdogLibraryEventSource(
+        [{"id": "main", "path": str(tmp_path)}], observer_factory=lambda: observer,
+    )
+    emitters = ()
+    try:
+        source.start(publish)
+        emitters = tuple(observer.emitters)
+        watch = emitters[0].watch
+        observer.event_queue.put((FileModifiedEvent(str(tmp_path / "first.flac")), watch))
+        assert failure_reported.wait(1), "failed exact admission must report its root scope"
+        observer.event_queue.put((FileModifiedEvent(str(tmp_path / "second.flac")), watch))
+        assert delivered.wait(1), "one failed admission must not terminate intake"
+        assert [event.path.name for event in attempted] == ["first.flac", "second.flac"]
+        assert reported == [("main",)]
+        assert caught == [original]
+        assert problems == []
+        assert accepted == [attempted[1]]
+        assert observer.is_alive() and all(emitter.is_alive() for emitter in emitters)
         assert exceptions == []
     finally:
         source.stop(timeout=2)

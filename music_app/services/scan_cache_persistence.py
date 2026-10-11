@@ -316,6 +316,7 @@ class PostgresScanCacheAdapter:
 
         with self._connect_to_database() as connection, ExitStack() as publication_stack:
             connection.execute(_inventory_publication_advisory_lock_sql())
+            connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             if any(target["paths"] or target["subtrees"] for target in stale_by_root.values()):
                 from music_app.services.library_watch_health import guard_destructive_library_publication

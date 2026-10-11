@@ -472,3 +472,82 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
     aliases = repository._load_relation_alias_maps()
     assert not aliases["projection_stale_reason"]
     assert "Concurrent" in aliases["alias_to_canonical"]
+
+
+def test_targeted_publication_coexists_with_legacy_relation_only_publisher(gallery_inventory, monkeypatch):
+    from threading import Event
+    from music_app.services import relation_projection_postgres as relations
+    from music_app.services import scan_cache_persistence as persistence
+
+    fixture = gallery_inventory
+    added = fixture.entry("Added/Third/three.flac", artist="Added", album="Third")
+    fixture.seed(fixture.first, fixture.second, added)
+    concurrent = fixture.entry("Concurrent/Fourth/four.flac", artist="Concurrent", album="Fourth")
+    family_locked, release_publisher = Event(), Event()
+    replace_families = relations.replace_artist_family_projection_in_transaction
+
+    def pause_legacy_publisher(*args, **kwargs):
+        result = replace_families(*args, **kwargs)
+        family_locked.set()
+        assert release_publisher.wait(10)
+        return result
+
+    class Connection:
+        def __init__(self, connection, *, targeted):
+            self.connection = connection
+            self.targeted = targeted
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.connection.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def execute(self, query, params=None):
+            statement = str(query)
+            if not self.targeted and statement == relations.inventory_publication_advisory_lock_sql():
+                # Emulate the old publisher protocol using real SQL everywhere else.
+                return self.connection.execute("select 1")
+            if self.targeted and statement == relations.relation_projection_advisory_lock_sql():
+                # The fixed writer waits before touching metadata or family rows.
+                release_publisher.set()
+            result = self.connection.execute(query, params)
+            if self.targeted and statement == persistence._increment_inventory_mutation_revision_sql():
+                # Without the early relation lock, reproduce metadata/family inversion.
+                release_publisher.set()
+            return result
+
+    def connect(database_url, *, targeted):
+        connection = isolatedPostgres._connect(database_url)
+        connection.execute("set statement_timeout = '5s'")
+        return Connection(connection, targeted=targeted)
+
+    monkeypatch.setattr(relations, "replace_artist_family_projection_in_transaction", pause_legacy_publisher)
+    adapter = persistence.PostgresScanCacheAdapter(
+        fixture.config, connect=lambda url: connect(url, targeted=True),
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        refresh = executor.submit(
+            relations.ensure_relation_projection_ready, fixture.config,
+            connect=lambda url: connect(url, targeted=False),
+        )
+        try:
+            assert family_locked.wait(10)
+            mutation = executor.submit(
+                adapter.persist_targeted_inventory_mutation,
+                root_id=fixture.roots[0]["id"],
+                active_file_entries={concurrent["path"]: concurrent},
+            )
+            mutation.result(timeout=15)
+            refresh.result(timeout=15)
+        finally:
+            release_publisher.set()
+    aliases = browse.PostgresLibraryBrowseRepository(
+        fixture.config, connect=isolatedPostgres._connect,
+    )._load_relation_alias_maps()
+    assert not aliases["projection_stale_reason"]
+    assert "Concurrent" in aliases["alias_to_canonical"]

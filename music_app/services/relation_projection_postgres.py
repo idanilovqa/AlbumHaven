@@ -363,6 +363,9 @@ def _ensure_relation_projection_ready(
             retry_with_current_sources = False
             with connector(database_url) as connection:
                 with _cancel_active_connection_on_request(connection, cancel_requested):
+                    # Inventory writers lock library metadata before replacing family
+                    # rows. Join that publication order only after source building.
+                    connection.execute(inventory_publication_advisory_lock_sql())
                     connection.execute(relation_projection_advisory_lock_sql())
                     locked_snapshot_row = _first_row(connection.execute(_load_scan_cache_sql()))
                     locked_scan_cache = _scan_cache_from_row(locked_snapshot_row)
@@ -975,6 +978,10 @@ def load_relation_source_rows_sql() -> str:
           member_artist.id nulls first,
           library.local_track_files.id nulls first;
     """
+
+
+def inventory_publication_advisory_lock_sql() -> str:
+    return "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));"
 
 
 def relation_projection_advisory_lock_sql() -> str:

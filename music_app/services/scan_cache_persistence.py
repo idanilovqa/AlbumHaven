@@ -35,6 +35,7 @@ from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_METADATA_KEY,
     build_ready_relation_projection_metadata,
     build_relation_views_from_postgres_rows,
+    inventory_publication_advisory_lock_sql as _inventory_publication_advisory_lock_sql,
     load_relation_source_rows_sql,
     relation_projection_advisory_lock_sql,
     relation_projection_structure_complete,
@@ -2865,10 +2866,6 @@ def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
         "library_root_category": row.get("library_root_category"),
         "exception_type": None,
     }
-
-
-def _inventory_publication_advisory_lock_sql() -> str:
-    return "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));"
 
 
 def _load_cover_mutation_revision_sql() -> str:

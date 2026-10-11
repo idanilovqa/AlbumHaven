@@ -141,6 +141,9 @@ class _ProjectionConnection:
 
     def execute(self, sql, params=None):
         self.database.executed.append((sql, params))
+        if sql == projection.inventory_publication_advisory_lock_sql():
+            self.database.events.append("inventory_advisory_lock")
+            return _Cursor([])
         if "pg_advisory_xact_lock" in sql:
             self.database.advisory_lock_count += 1
             if self.database.before_advisory_lock is not None:
@@ -1337,20 +1340,28 @@ def test_relation_projection_shapes_sources_before_short_locked_publication(monk
             "source_load",
             "fingerprint",
             "pure_build",
+            "inventory_advisory_lock",
             "advisory_lock",
             "family_replace",
             "scan_cache_save",
             "commit",
         }
     ]
-    assert rebuild_events[-7:] == [
+    assert rebuild_events[-8:] == [
         "source_load",
         "fingerprint",
         "pure_build",
+        "inventory_advisory_lock",
         "advisory_lock",
         "family_replace",
         "scan_cache_save",
         "commit",
+    ]
+
+    locks = [sql for sql, _params in database.executed if "pg_advisory_xact_lock" in sql]
+    assert locks == [
+        projection.inventory_publication_advisory_lock_sql(),
+        projection.relation_projection_advisory_lock_sql(),
     ]
 
 

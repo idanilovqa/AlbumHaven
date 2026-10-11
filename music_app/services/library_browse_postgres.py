@@ -569,16 +569,29 @@ class PostgresLibraryBrowseRepository:
                 ).fetchall()), root_alias_to_canonical) if album_ids else []
                 hydrated = {}
                 for group in _root_album_browse_artist_groups(preview_rows):
+                    artist_identity = _row_artist_identity(
+                        {"artist_name": group.get("artist")}
+                    )
                     for album in group["albums"]:
-                        hydrated[str(album.get("key") or "")] = album
+                        hydrated[(artist_identity, str(album.get("key") or ""))] = (
+                            album,
+                            group.get("artist_musicbrainz"),
+                        )
                 groups = {}
                 for occurrence in page:
                     artist = occurrence["artist_name"]
-                    album = occurrence.get("missing_album") or hydrated.get(occurrence["album_key"])
+                    hydrated_album = hydrated.get(
+                        (occurrence["artist_id"], occurrence["album_key"])
+                    )
+                    album = occurrence.get("missing_album") or (
+                        hydrated_album[0] if hydrated_album else None
+                    )
                     if album is None:
                         raise ValueError("Gallery changed; restart required.")
                     group = groups.setdefault(occurrence["artist_id"], dict(artist=artist,
                         artist_display=_artist_tree_display_value(artist), albums=[], sections=[]))
+                    if hydrated_album and hydrated_album[1] is not None:
+                        group["artist_musicbrainz"] = hydrated_album[1]
                     group["albums"].append(album)
                 preview_artist_groups = list(groups.values())
             else:
@@ -871,6 +884,11 @@ class PostgresLibraryBrowseRepository:
             if use_preview_albums and not hydrate_query_primary_albums
             else _selected_artist_album_payloads(rows, artist_display)
         )
+        if use_preview_albums and not hydrate_query_primary_albums:
+            artist_musicbrainz = _artist_musicbrainz_projection_from_rows(rows)
+            if artist_musicbrainz is not None:
+                for album in albums:
+                    album["artist_musicbrainz"] = artist_musicbrainz
 
         selected_artist_keys = {
             _artist_display_dedupe_key(artist)
@@ -5480,14 +5498,19 @@ def _selected_artist_primary_groups(
 ) -> list[dict[str, object]]:
     if not selected_artist or not albums:
         return []
-    primary_artist_groups = [{
+    primary_artist_group = {
         "artist": selected_artist,
         "artist_display": _artist_tree_display_value(selected_artist),
         "albums": albums,
         "sections": [] if use_preview_albums else _selected_artist_sections(albums),
-    }]
+    }
+    artist_musicbrainz = _consistent_artist_musicbrainz_projection(
+        [album.get("artist_musicbrainz") for album in albums]
+    )
+    if artist_musicbrainz is not None:
+        primary_artist_group["artist_musicbrainz"] = artist_musicbrainz
     return _decorate_selected_artist_group_payloads(
-        primary_artist_groups,
+        [primary_artist_group],
         alias_to_canonical=alias_to_canonical,
         canonical_to_aliases=canonical_to_aliases,
     )
@@ -5909,6 +5932,9 @@ def _query_param_list(query_params: Mapping[str, object] | None, key: str) -> li
 def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> list[dict[str, object]]:
     albums: dict[object, dict[str, object]] = {}
     track_ids_by_album: dict[object, set[object]] = {}
+    artist_musicbrainz_rows_by_album: dict[object, list[Mapping[str, object]]] = {}
+    stored_track_counts_by_album: dict[object, int] = {}
+    stored_durations_by_album: dict[object, int] = {}
     directory_paths_by_album: dict[object, list[str]] = {}
     seen_directory_paths_by_album: dict[object, set[str]] = {}
     for row in rows:
@@ -5976,8 +6002,20 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
             }
             albums[album_identity] = album
             track_ids_by_album[album_identity] = set()
+            artist_musicbrainz_rows_by_album[album_identity] = []
+            stored_track_counts_by_album[album_identity] = 0
+            stored_durations_by_album[album_identity] = 0
             directory_paths_by_album[album_identity] = []
             seen_directory_paths_by_album[album_identity] = set()
+        artist_musicbrainz_rows_by_album[album_identity].append(row_payload)
+        stored_track_counts_by_album[album_identity] = max(
+            stored_track_counts_by_album[album_identity],
+            _coerce_int(row_payload.get("track_count")),
+        )
+        stored_durations_by_album[album_identity] = max(
+            stored_durations_by_album[album_identity],
+            _coerce_int(row_payload.get("total_duration_seconds")),
+        )
         track_id = row_payload.get("track_id")
         track_key = str(row_payload.get("track_key") or "").strip()
         track_identity = track_id if track_id is not None else track_key
@@ -6023,6 +6061,11 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
             seen_directory_paths_by_album[album_identity].add(directory_path)
             directory_paths_by_album[album_identity].append(directory_path)
     for album_identity, album in albums.items():
+        artist_musicbrainz = _artist_musicbrainz_projection_from_rows(
+            artist_musicbrainz_rows_by_album[album_identity]
+        )
+        if artist_musicbrainz is not None:
+            album["artist_musicbrainz"] = artist_musicbrainz
         album["tracks"] = sorted(
             list(album["tracks"]),
             key=lambda track: (
@@ -6031,11 +6074,20 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
                 str(track.get("title") or "").casefold(),
             ),
         )
-        album["track_count_preview"] = len(track_ids_by_album[album_identity])
+        album["track_count_preview"] = (
+            len(track_ids_by_album[album_identity])
+            or stored_track_counts_by_album[album_identity]
+        )
+        if not track_ids_by_album[album_identity]:
+            album["total_duration_seconds"] = stored_durations_by_album[album_identity]
         album["total_duration_display"] = format_duration(int(album["total_duration_seconds"]))
         album["open_directory_paths"] = directory_paths_by_album[album_identity]
     return sorted(
-        (album for album in albums.values() if album.get("tracks")),
+        (
+            album
+            for album in albums.values()
+            if album.get("tracks") or _coerce_int(album.get("track_count_preview")) > 0
+        ),
         key=lambda album: (
             _coerce_int(album.get("year")) if album.get("year") else 9999,
             str(album.get("name") or "").casefold(),
@@ -6171,18 +6223,72 @@ def _root_album_browse_artist_groups(rows: list[object]) -> list[dict[str, objec
         albums = _root_album_browse_album_payloads(artist_rows, artist_display)
         if not albums:
             continue
-        artist_groups.append(
-            {
-                "artist": artist_display,
-                "artist_display": _artist_tree_display_value(artist_display),
-                "albums": albums,
-                # The root all-artists grid renders directly from albums and does not
-                # consume compatibility sections, so avoid serializing the same album
-                # list twice during startup hydration.
-                "sections": [],
-            }
-        )
+        artist_group = {
+            "artist": artist_display,
+            "artist_display": _artist_tree_display_value(artist_display),
+            "albums": albums,
+            # The root all-artists grid renders directly from albums and does not
+            # consume compatibility sections, so avoid serializing the same album
+            # list twice during startup hydration.
+            "sections": [],
+        }
+        artist_musicbrainz = _artist_musicbrainz_projection_from_rows(artist_rows)
+        if artist_musicbrainz is not None:
+            artist_group["artist_musicbrainz"] = artist_musicbrainz
+        artist_groups.append(artist_group)
     return artist_groups
+
+
+def _artist_musicbrainz_projection(
+    row: Mapping[str, object],
+) -> dict[str, object] | None:
+    artist_mbid = str(row.get("artist_mbid") or "").strip().lower()
+    if not artist_mbid:
+        return None
+    raw_genres = row.get("artist_genres")
+    genres = (
+        [
+            str(genre).strip()
+            for genre in raw_genres
+            if str(genre or "").strip()
+        ][:3]
+        if isinstance(raw_genres, (list, tuple))
+        else []
+    )
+    return {
+        "artist_mbid": artist_mbid,
+        "musicbrainz_url": f"https://musicbrainz.org/artist/{artist_mbid}",
+        "canonical_name": str(row.get("artist_canonical_name") or "").strip()
+        or None,
+        "native_name": str(row.get("artist_native_name") or "").strip() or None,
+        "country": str(row.get("artist_country") or "").strip() or None,
+        "genres": genres or ["Genre unavailable"],
+    }
+
+
+def _artist_musicbrainz_projection_from_rows(
+    rows: list[object],
+) -> dict[str, object] | None:
+    return _consistent_artist_musicbrainz_projection(
+        [
+            _artist_musicbrainz_projection(_row_mapping(row))
+            for row in rows
+        ]
+    )
+
+
+def _consistent_artist_musicbrainz_projection(
+    projections: list[object],
+) -> dict[str, object] | None:
+    projection = None
+    for candidate in projections:
+        if not isinstance(candidate, dict):
+            continue
+        if projection is None:
+            projection = candidate
+        elif candidate != projection:
+            return None
+    return projection
 
 
 def _merge_missing_albums_into_artist_groups(
@@ -6282,16 +6388,18 @@ def _search_artist_groups(rows: list[object], *, query: str = "") -> list[dict[s
         )
         if not albums:
             continue
-        artist_groups.append(
-            {
-                "artist": artist_display,
-                "artist_display": _artist_tree_display_value(artist_display),
-                "albums": albums,
-                # Query-scoped gallery results only need preview cards; they do not
-                # consume duplicate section payloads during the initial render.
-                "sections": [],
-            }
-        )
+        artist_group = {
+            "artist": artist_display,
+            "artist_display": _artist_tree_display_value(artist_display),
+            "albums": albums,
+            # Query-scoped gallery results only need preview cards; they do not
+            # consume duplicate section payloads during the initial render.
+            "sections": [],
+        }
+        artist_musicbrainz = _artist_musicbrainz_projection_from_rows(artist_rows)
+        if artist_musicbrainz is not None:
+            artist_group["artist_musicbrainz"] = artist_musicbrainz
+        artist_groups.append(artist_group)
     return artist_groups
 
 
@@ -6521,6 +6629,48 @@ def _root_gallery_membership_sql() -> str:
     """
 
 
+def _artist_musicbrainz_projection_columns_sql() -> str:
+    return """
+          artist_match.artist_mbid::text as artist_mbid,
+          musicbrainz_artist.canonical_name as artist_canonical_name,
+          musicbrainz_artist.preferred_native_name as artist_native_name,
+          coalesce(artist_country.country_name, artist_country.country_code)
+            as artist_country,
+          coalesce(artist_genres.names, array[]::text[]) as artist_genres,
+    """.strip()
+
+
+def _artist_musicbrainz_projection_joins_sql(
+    *,
+    library_id: str,
+    artist_id: str,
+) -> str:
+    return f"""
+        left join library.local_artist_musicbrainz_matches artist_match
+          on artist_match.library_id = {library_id}
+         and artist_match.local_artist_id = {artist_id}
+         and artist_match.state = 'matched'
+         and artist_match.artist_mbid is not null
+        left join integration.musicbrainz_artists musicbrainz_artist
+          on musicbrainz_artist.mbid = artist_match.artist_mbid
+        left join lateral (
+          select countries.country_code, countries.country_name
+          from integration.musicbrainz_artist_countries countries
+          where countries.artist_mbid = artist_match.artist_mbid
+          order by countries.country_code
+          limit 1
+        ) artist_country on true
+        left join lateral (
+          select array_agg(
+            display_genres.tag_name order by display_genres.display_rank
+          ) as names
+          from integration.musicbrainz_artist_display_genres display_genres
+          where display_genres.artist_mbid = artist_match.artist_mbid
+            and display_genres.display_rank <= 3
+        ) artist_genres on true
+    """.strip()
+
+
 def _root_gallery_page_rows_sql() -> str:
     query = _root_album_browse_sql()
     original = _eligible_album_tracks_cte_sql()
@@ -6629,6 +6779,12 @@ def _selected_artist_sql() -> str:
           selected_artist_albums.album_release_year,
           selected_artist_albums.album_cover_path,
           selected_artist_albums.album_metadata,
+          artist_match.artist_mbid::text as artist_mbid,
+          musicbrainz_artist.canonical_name as artist_canonical_name,
+          musicbrainz_artist.preferred_native_name as artist_native_name,
+          coalesce(artist_country.country_name, artist_country.country_code)
+            as artist_country,
+          coalesce(artist_genres.names, array[]::text[]) as artist_genres,
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
           library.local_tracks.title as track_title,
@@ -6645,6 +6801,10 @@ def _selected_artist_sql() -> str:
             false
           ) as exception_override_present
         from selected_artist_albums
+        {_artist_musicbrainz_projection_joins_sql(
+            library_id="selected_artist_albums.library_id",
+            artist_id="selected_artist_albums.artist_id",
+        )}
         left join library.local_tracks
           on library.local_tracks.library_id = selected_artist_albums.library_id
          and library.local_tracks.album_id = selected_artist_albums.album_id
@@ -6680,7 +6840,7 @@ def _selected_artist_sql() -> str:
 
 
 def _album_detail_sql() -> str:
-    return """
+    query = """
         with bootstrap_context as (
           select
             library.libraries.id as library_id,
@@ -6778,6 +6938,7 @@ def _album_detail_sql() -> str:
           library.local_albums.release_year as album_release_year,
           library.local_albums.cover_path as album_cover_path,
           library.local_albums.metadata as album_metadata,
+          __ARTIST_MUSICBRAINZ_COLUMNS__
           case
             when cover_candidate_snapshots.album_id is null then null
             else jsonb_build_object(
@@ -6818,6 +6979,7 @@ def _album_detail_sql() -> str:
         join library.local_artists
           on library.local_artists.library_id = library.local_albums.library_id
          and library.local_artists.id = library.local_albums.artist_id
+        __ARTIST_MUSICBRAINZ_JOINS__
         left join library.local_album_cover_candidate_snapshots cover_candidate_snapshots
           on cover_candidate_snapshots.album_id = library.local_albums.id
         join library.local_tracks
@@ -6859,6 +7021,16 @@ def _album_detail_sql() -> str:
           library.local_tracks.title,
           library.local_tracks.track_key;
     """
+    return query.replace(
+        "__ARTIST_MUSICBRAINZ_COLUMNS__",
+        _artist_musicbrainz_projection_columns_sql(),
+    ).replace(
+        "__ARTIST_MUSICBRAINZ_JOINS__",
+        _artist_musicbrainz_projection_joins_sql(
+            library_id="library.local_artists.library_id",
+            artist_id="library.local_artists.id",
+        ),
+    )
 
 
 def _root_album_browse_sql() -> str:
@@ -6922,6 +7094,7 @@ def _root_album_browse_sql() -> str:
           album_rows.album_release_year,
           album_rows.album_cover_path,
           album_rows.album_metadata,
+          {_artist_musicbrainz_projection_columns_sql()}
           case
             when cover_candidate_snapshots.album_id is null then null
             else jsonb_build_object(
@@ -6939,6 +7112,10 @@ def _root_album_browse_sql() -> str:
           on track_rollups.album_id = album_rows.album_id
         left join library.local_album_cover_candidate_snapshots cover_candidate_snapshots
           on cover_candidate_snapshots.album_id = album_rows.album_id
+        {_artist_musicbrainz_projection_joins_sql(
+            library_id="album_rows.library_id",
+            artist_id="album_rows.artist_id",
+        )}
         order by
           coalesce(
             nullif(album_rows.artist_sort_name, ''),
@@ -7203,12 +7380,17 @@ def _root_startup_payload_sql(artist_limit: int) -> str:
             matched_album_rows.album_release_year,
             matched_album_rows.album_cover_path,
             matched_album_rows.album_metadata,
+            {_artist_musicbrainz_projection_columns_sql()}
             coalesce(track_rollups.track_count, 0) as track_count,
             coalesce(
               track_rollups.total_duration_seconds,
               0
             ) as total_duration_seconds
           from matched_album_rows
+          {_artist_musicbrainz_projection_joins_sql(
+              library_id="matched_album_rows.library_id",
+              artist_id="matched_album_rows.artist_id",
+          )}
           join track_rollups
             on track_rollups.album_id = matched_album_rows.album_id
         )
@@ -7604,9 +7786,14 @@ def _selected_artist_preview_sql(
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
           matched_album_rows.album_metadata,
+          {_artist_musicbrainz_projection_columns_sql()}
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
         from matched_album_rows
+        {_artist_musicbrainz_projection_joins_sql(
+            library_id="matched_album_rows.library_id",
+            artist_id="matched_album_rows.artist_id",
+        )}
         left join track_rollups
           on track_rollups.album_id = matched_album_rows.album_id
         order by
@@ -8038,10 +8225,21 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
             select
               jsonb_agg(
                 jsonb_build_object(
-                  'artist_id', credited_artists.id,
-                  'artist_name', credited_artists.name,
-                  'artist_sort_name', credited_artists.sort_name,
-                  'featured_kind', library.local_album_featured_artists.featured_kind
+                   'artist_id', credited_artists.id,
+                   'artist_name', credited_artists.name,
+                   'artist_sort_name', credited_artists.sort_name,
+                   'featured_kind', library.local_album_featured_artists.featured_kind,
+                   'artist_mbid', artist_match.artist_mbid::text,
+                   'artist_canonical_name', musicbrainz_artist.canonical_name,
+                   'artist_native_name', musicbrainz_artist.preferred_native_name,
+                   'artist_country', coalesce(
+                     artist_country.country_name,
+                     artist_country.country_code
+                   ),
+                   'artist_genres', coalesce(
+                     artist_genres.names,
+                     array[]::text[]
+                   )
                 )
                 order by
                   library.local_album_featured_artists.featured_kind,
@@ -8067,10 +8265,14 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
                 where library.local_album_featured_artists.featured_kind = 'owner'
               ))[1] as owner_artist_sort_name
             from library.local_album_featured_artists
-            join library.local_artists as credited_artists
-              on credited_artists.library_id = library.local_album_featured_artists.library_id
-             and credited_artists.id = library.local_album_featured_artists.artist_id
-            where library.local_album_featured_artists.library_id = library.local_albums.library_id
+             join library.local_artists as credited_artists
+               on credited_artists.library_id = library.local_album_featured_artists.library_id
+              and credited_artists.id = library.local_album_featured_artists.artist_id
+             {_artist_musicbrainz_projection_joins_sql(
+                 library_id="credited_artists.library_id",
+                 artist_id="credited_artists.id",
+             )}
+             where library.local_album_featured_artists.library_id = library.local_albums.library_id
               and library.local_album_featured_artists.album_id = library.local_albums.id
           ) as featured_credits on true
         ),
@@ -8164,9 +8366,10 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
               matched_album_rows.album_key,
               matched_album_rows.album_title,
               matched_album_rows.album_release_year,
-              matched_album_rows.album_cover_path,
-              matched_album_rows.album_metadata,
-              matched_album_rows.album_featured_artists,
+               matched_album_rows.album_cover_path,
+               matched_album_rows.album_metadata,
+               {_artist_musicbrainz_projection_columns_sql()}
+               matched_album_rows.album_featured_artists,
               array[]::text[] as album_featured_artist_names,
               null::bigint as track_id,
               null::text as track_key,
@@ -8179,8 +8382,12 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
               null::text as file_library_root_category,
               coalesce(track_rollups.track_count, 0) as track_count,
               coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
-            from matched_album_rows
-            left join track_rollups
+             from matched_album_rows
+             {_artist_musicbrainz_projection_joins_sql(
+                 library_id="matched_album_rows.library_id",
+                 artist_id="matched_album_rows.artist_id",
+             )}
+             left join track_rollups
               on track_rollups.album_id = matched_album_rows.album_id
           ),
           missing_preview_rows as (
@@ -8193,9 +8400,14 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
               library.local_albums.album_key,
               library.local_albums.title as album_title,
               library.local_albums.release_year as album_release_year,
-              library.local_albums.cover_path as album_cover_path,
-              library.local_albums.metadata as album_metadata,
-              null::jsonb as album_featured_artists,
+               library.local_albums.cover_path as album_cover_path,
+               library.local_albums.metadata as album_metadata,
+               null::text as artist_mbid,
+               null::text as artist_canonical_name,
+               null::text as artist_native_name,
+               null::text as artist_country,
+               array[]::text[] as artist_genres,
+               null::jsonb as album_featured_artists,
               coalesce(missing_album_featured_artists.artist_names, array[]::text[])
                 as album_featured_artist_names,
               library.local_tracks.id as track_id,

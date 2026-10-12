@@ -16639,3 +16639,90 @@ def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
         assert after['relation_projection'] == before['relation_projection']
         assert after['relations_last_built'] == before['relations_last_built']
         assert projections.artist_search_projection_stale_reason(after) == ''
+
+@pytest.mark.parametrize('search_state', ['ready', 'missing', 'stale'])
+def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
+    watcher_repair_inventory, monkeypatch, search_state,
+):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services import relation_projection_postgres as projections
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    entry = fixture.entry('Owner/Album/01.flac')
+    fixture.seed(entry)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        original = persistence._commit_structural_relation_projection(connection, fixture.config)
+        if search_state == 'missing':
+            connection.execute('delete from library.local_artist_search_projection')
+        elif search_state == 'stale':
+            connection.execute(
+                "update library.local_artist_search_projection "
+                "set source_fingerprint = case when source_fingerprint = repeat('0', 64) "
+                "then repeat('1', 64) else repeat('0', 64) end"
+            )
+
+    revision_before = fixture.adapter.load_inventory_mutation_revision()
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('unchanged watcher publication must reuse scan-built family relations')
+
+    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', unexpected)
+    monkeypatch.setattr(persistence, 'replace_artist_family_projection_in_transaction', unexpected)
+    if search_state == 'ready':
+        monkeypatch.setattr(persistence, 'replace_artist_search_projection_in_transaction', unexpected)
+
+    # Exercise the actual caller: it marks the projection stale while advancing
+    # the inventory revision, even when the observed track has not changed.
+    result = fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: entry},
+    )
+    assert result['inventory_mutation_revision'] > revision_before
+    assert fixture.adapter.load_inventory_mutation_revision() == result['inventory_mutation_revision']
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        after = projections._relation_projection_scan_cache_from_row(
+            connection.execute(projections._load_relation_projection_sql()).fetchone()
+        )
+    assert not projections.relation_projection_stale_reason(after)
+    assert not projections.artist_search_projection_stale_reason(after)
+    assert after['relations_last_built'] == original['relations_last_built']
+    assert persistence.deserialize_relation_views(after['relation_views']) == original['relation_views']
+
+
+def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
+    watcher_repair_inventory, monkeypatch,
+):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services import relation_projection_postgres as projections
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    entry = fixture.entry('Owner/Album/01.flac')
+    fixture.seed(entry)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        persistence._commit_structural_relation_projection(connection, fixture.config)
+        before = projections._relation_projection_scan_cache_from_row(
+            connection.execute(projections._load_relation_projection_sql()).fetchone()
+        )
+    revision_before = fixture.adapter.load_inventory_mutation_revision()
+    calls = []
+    original_builder = persistence.build_relation_views_from_postgres_rows
+
+    def build(config, rows):
+        calls.append(True)
+        return original_builder(config, rows)
+
+    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', build)
+    changed = {**entry, 'artist': 'Guest'}
+    result = fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: changed},
+    )
+    assert calls == [True]
+    assert result['inventory_mutation_revision'] > revision_before
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        after = projections._relation_projection_scan_cache_from_row(
+            connection.execute(projections._load_relation_projection_sql()).fetchone()
+        )
+    assert not projections.relation_projection_stale_reason(after)
+    assert not projections.artist_search_projection_stale_reason(after)
+    assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']

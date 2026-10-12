@@ -3450,7 +3450,10 @@ def test_load_last_scan_reads_only_root_bound_timestamp_metadata(stored_root, ex
 
 
 @pytest.mark.parametrize("search_state", ["ready", "missing", "stale"])
-def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(monkeypatch, search_state):
+@pytest.mark.parametrize("projection_state", ["ready", "stale"])
+def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(
+    monkeypatch, search_state, projection_state,
+):
     from music_app.services import scan_cache_persistence as persistence
     from music_app.services.cache import serialize_relation_views
 
@@ -3464,6 +3467,8 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(monk
         'relation_projection': persistence.build_ready_relation_projection_metadata(
             'same-source', reason='scan', duration_ms=1.0),
     }
+    snapshot['relation_projection']['status'] = projection_state
+    monkeypatch.setattr(persistence, '_jsonb', lambda value: value)
     connection = FakeConnection(snapshot_rows=[{'scan_cache': snapshot}])
     from music_app.services.relation_projection_postgres import _artist_search_projection_rows
     search_rows = [dict(row, builder_version=snapshot['relation_projection']['builder_version'],
@@ -3489,7 +3494,7 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(monk
     def repair(conn, saved_views, *, metadata, relations_last_built):
         assert conn is connection
         assert saved_views == snapshot['relation_views']
-        assert metadata == snapshot['relation_projection']
+        assert metadata == {**snapshot['relation_projection'], 'status': 'ready'}
         assert relations_last_built == 123.0
         repairs.append('search')
     monkeypatch.setattr(persistence, 'replace_artist_search_projection_in_transaction', repair)
@@ -3498,10 +3503,21 @@ def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(monk
     assert result['relations_last_built'] == 123.0
     assert serialize_relation_views(result['relation_views']) == snapshot['relation_views']
     assert repairs == ([] if search_state == 'ready' else ['search'])
-    assert all(params is None for _, params in connection.executed)
+    writes = [(sql, params) for sql, params in connection.executed if params is not None]
+    if projection_state == 'ready':
+        assert writes == []
+    else:
+        assert len(writes) == 1
+        assert writes[0][0] == persistence._save_scan_snapshot_sql()
+        saved = writes[0][1]['scan_cache']
+        assert saved == {
+            **snapshot,
+            'relation_projection': {**snapshot['relation_projection'], 'status': 'ready'},
+        }
+        assert snapshot['relation_projection']['status'] == 'stale'
 
 
-@pytest.mark.parametrize('invalidity', ['changed_source', 'stale', 'old_builder', 'incomplete'])
+@pytest.mark.parametrize('invalidity', ['changed_source', 'stale_mismatch', 'unknown_status', 'old_builder', 'incomplete'])
 def test_targeted_reconciliation_does_not_reuse_invalid_relation_projection(monkeypatch, invalidity):
     from copy import deepcopy
     from music_app.services import scan_cache_persistence as persistence
@@ -3515,14 +3531,16 @@ def test_targeted_reconciliation_does_not_reuse_invalid_relation_projection(monk
         'relation_projection': persistence.build_ready_relation_projection_metadata(
             'same-source', reason='scan', duration_ms=1.0),
     }
-    if invalidity == 'stale':
+    if invalidity == 'stale_mismatch':
         snapshot['relation_projection']['status'] = 'stale'
+    elif invalidity == 'unknown_status':
+        snapshot['relation_projection']['status'] = 'unknown'
     elif invalidity == 'old_builder':
         snapshot['relation_projection']['builder_version'] = 'obsolete'
     elif invalidity == 'incomplete':
         snapshot['relation_views'].pop('family_to_artists')
     connection = FakeConnection(snapshot_rows=[{'scan_cache': snapshot}])
-    fingerprint = 'changed-source' if invalidity == 'changed_source' else 'same-source'
+    fingerprint = 'changed-source' if invalidity in {'changed_source', 'stale_mismatch'} else 'same-source'
     monkeypatch.setattr(persistence, 'relation_source_fingerprint', lambda rows: fingerprint)
     events = []
     monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows',

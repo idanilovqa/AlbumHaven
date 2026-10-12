@@ -2292,11 +2292,26 @@ def _commit_structural_relation_projection(
     next_scan_cache = dict(loaded_snapshot) if isinstance(loaded_snapshot, dict) else {}
     relation_source_rows = list(connection.execute(load_relation_source_rows_sql()).fetchall())
     source_fingerprint = relation_source_fingerprint(relation_source_rows)
+    projection_metadata = next_scan_cache.get(RELATION_PROJECTION_METADATA_KEY)
+    # Inventory publication marks relations stale before this transaction checks
+    # whether any relation inputs actually changed. Validate a ready candidate
+    # against the freshly loaded source before restoring that status.
+    was_stale = (
+        isinstance(projection_metadata, dict)
+        and projection_metadata.get("status") == "stale"
+    )
+    if was_stale:
+        next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = {
+            **projection_metadata,
+            "status": "ready",
+        }
     if (
         not relation_projection_stale_reason(next_scan_cache)
         and next_scan_cache[RELATION_PROJECTION_METADATA_KEY]["built_from_fingerprint"]
         == source_fingerprint
     ):
+        if was_stale:
+            connection.execute(_save_scan_snapshot_sql(), {"scan_cache": _jsonb(next_scan_cache)})
         persisted_projection = _relation_projection_scan_cache_from_row(
             _first_row(connection.execute(_load_relation_projection_sql()))
         )

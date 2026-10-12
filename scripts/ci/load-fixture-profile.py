@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Any, Callable, Iterator, Mapping
@@ -2185,6 +2186,20 @@ def validate_synthetic_scale(profile: str, definition: dict, preset: str | None)
         raise ValueError(f"production-calibration fixture counts must equal {expected}; got {actual}")
 
 
+def prepare_relation_projection(database_url: str) -> None:
+    """Publish normal product relationships before a persisted-startup benchmark."""
+    validate_database_url(database_url)
+    repository_root = str(Path(__file__).resolve().parents[2])
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
+    from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
+
+    result = ensure_relation_projection_ready({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    if not result.get("ready"):
+        raise RuntimeError("Fixture relation projection did not become ready")
+    print(json.dumps({"fixture_relation_projection": "ready", "preparation_ms": result.get("duration_ms")}))
+
+
 def load_fixture_profile(
     *,
     fixture_root: Path,
@@ -2192,8 +2207,11 @@ def load_fixture_profile(
     database_url: str,
     replace_existing: bool = False,
     synthetic_scale_preset: str | None = None,
+    relation_projection: str = "missing",
     connect: Callable[[str], Any] = psycopg.connect,
 ) -> None:
+    if relation_projection not in {"missing", "ready"}:
+        raise ValueError("relation_projection must be missing or ready")
     fixture_root = fixture_root.resolve()
     manifest_path = fixture_root / "manifest.json"
     try:
@@ -2288,6 +2306,8 @@ def load_fixture_profile(
                 definition["counts"],
                 definition["namedScenarioAssertions"],
             )
+    if relation_projection == "ready":
+        prepare_relation_projection(database_url)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -2319,6 +2339,12 @@ def _parse_args() -> argparse.Namespace:
         default=os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET") or None,
         help="Require calibrated synthetic manifest counts before database loading.",
     )
+    parser.add_argument(
+        "--relation-projection",
+        choices=["missing", "ready"],
+        default=os.environ.get("ALBUM_HAVEN_FIXTURE_RELATION_PROJECTION", "missing"),
+        help="Prepare saved product relationships before startup; missing preserves recovery coverage.",
+    )
     return parser.parse_args()
 
 
@@ -2330,6 +2356,7 @@ def main() -> int:
         database_url=args.database_url,
         replace_existing=args.replace_existing,
         synthetic_scale_preset=args.synthetic_scale_preset,
+        relation_projection=args.relation_projection,
     )
     return 0
 

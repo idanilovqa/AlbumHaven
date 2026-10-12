@@ -18,6 +18,77 @@ LOADER_PATH = Path(__file__).parents[2] / "scripts" / "ci" / "load-fixture-profi
 BOOTSTRAP_PATH = Path(__file__).parents[2] / "scripts" / "ci" / "bootstrap-windows-postgres.ps1"
 
 
+@pytest.mark.parametrize("ready", [True, False])
+def test_prepare_relation_projection_uses_product_readiness_and_requires_success(monkeypatch, ready):
+    from music_app.services import relation_projection_postgres as projection
+
+    loader = _load_fixture_loader_module()
+    calls = []
+    database_url = "postgresql://album_haven_migrator_123@localhost/album_haven_ci_123"
+    monkeypatch.setattr(projection, "ensure_relation_projection_ready", lambda config: (
+        calls.append(config) or {"ready": ready, "duration_ms": 12}
+    ))
+    if ready:
+        loader.prepare_relation_projection(database_url)
+    else:
+        with pytest.raises(RuntimeError, match="did not become ready"):
+            loader.prepare_relation_projection(database_url)
+    assert calls == [{"ALBUM_HAVEN_APP_DATABASE_URL": database_url}]
+
+
+def test_prepare_relation_projection_rejects_non_fixture_database_before_builder(monkeypatch):
+    from music_app.services import relation_projection_postgres as projection
+
+    loader = _load_fixture_loader_module()
+    monkeypatch.setattr(projection, "ensure_relation_projection_ready", lambda config: pytest.fail("unsafe builder call"))
+    with pytest.raises(ValueError):
+        loader.prepare_relation_projection("postgresql://postgres@localhost/album_haven_core")
+
+
+def test_prepare_relation_projection_propagates_product_failure(monkeypatch):
+    from music_app.services import relation_projection_postgres as projection
+
+    def fail(config):
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr(projection, "ensure_relation_projection_ready", fail)
+    with pytest.raises(RuntimeError, match="publication failed"):
+        _load_fixture_loader_module().prepare_relation_projection(
+            "postgresql://album_haven_migrator_123@localhost/album_haven_ci_123"
+        )
+
+
+@pytest.mark.parametrize("configured,explicit,expected", [(None, None, "missing"), ("ready", None, "ready"), ("ready", "missing", "missing")])
+def test_fixture_cli_forwards_relation_projection_mode(monkeypatch, tmp_path, configured, explicit, expected):
+    import sys
+
+    loader = _load_fixture_loader_module()
+    argv = [str(LOADER_PATH), "--fixture-root", str(tmp_path), "--profile", "functional-core",
+            "--database-url", "postgresql://album_haven_migrator_123@localhost/album_haven_ci_123"]
+    if configured is None:
+        monkeypatch.delenv("ALBUM_HAVEN_FIXTURE_RELATION_PROJECTION", raising=False)
+    else:
+        monkeypatch.setenv("ALBUM_HAVEN_FIXTURE_RELATION_PROJECTION", configured)
+    if explicit:
+        argv.extend(["--relation-projection", explicit])
+    monkeypatch.setattr(sys, "argv", argv)
+    calls = []
+    monkeypatch.setattr(loader, "load_fixture_profile", lambda **kwargs: calls.append(kwargs))
+    assert loader.main() == 0
+    assert calls[0]["relation_projection"] == expected
+
+
+def test_invalid_relation_projection_mode_fails_before_database_access(tmp_path):
+    loader = _load_fixture_loader_module()
+    with pytest.raises(ValueError, match="relation_projection"):
+        loader.load_fixture_profile(
+            fixture_root=tmp_path, profile="functional-core",
+            database_url="postgresql://album_haven_migrator_123@localhost/album_haven_ci_123",
+            relation_projection="unknown",
+            connect=lambda _: pytest.fail("invalid mode reached database"),
+        )
+
+
 def _load_fixture_loader_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("album_haven_ci_fixture_loader", LOADER_PATH)
     assert spec is not None and spec.loader is not None, f"loader is missing: {LOADER_PATH}"
@@ -1686,9 +1757,11 @@ def test_loader_rolls_back_transaction_when_seed_is_corrupt(tmp_path: Path) -> N
     assert "commit" not in connection.events
 
 
+@pytest.mark.parametrize("relation_projection", ["missing", "ready"])
 def test_loader_replace_existing_resets_normal_product_tables_inside_load_transaction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    relation_projection: str,
 ) -> None:
     loader = _load_fixture_loader_module()
     fixture_root = tmp_path / "fixture"
@@ -1718,11 +1791,18 @@ def test_loader_replace_existing_resets_normal_product_tables_inside_load_transa
     monkeypatch.setattr(loader, "validate_projected_scan_discovery_absence", lambda *_args: None)
     monkeypatch.setattr(loader, "validate_projected_problematic_files_scenario", lambda *_args: None)
 
+    prepared = []
+    def prepare(database_url):
+        assert connection.events == ["begin", "commit"]
+        prepared.append(database_url)
+    monkeypatch.setattr(loader, "prepare_relation_projection", prepare)
+
     loader.load_fixture_profile(
         fixture_root=fixture_root,
         profile="functional-core",
         database_url="postgresql://album_haven_migrator_123@localhost/album_haven_ci_123",
         replace_existing=True,
+        relation_projection=relation_projection,
         connect=lambda _url: connection,
     )
 
@@ -1733,6 +1813,8 @@ def test_loader_replace_existing_resets_normal_product_tables_inside_load_transa
         "context",
         "insert into fixture_context (profile, fixture_root, media_root, root_settings, root_identity) values (%s, %s, %s, %s::jsonb, %s)",
     ]
+
+    assert len(prepared) == (1 if relation_projection == "ready" else 0)
 
 
 def test_loader_reset_targets_only_application_tables_and_preserves_migration_authority() -> None:

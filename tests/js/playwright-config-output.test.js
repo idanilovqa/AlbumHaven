@@ -468,6 +468,29 @@ test('synthetic-large Playwright config forces a single worker so benchmark spec
   assert.equal(syntheticLargeLibraryConfig.fullyParallel, false);
 });
 
+test('synthetic-large config exposes the isolated provider endpoint to fixture cleanup', () => {
+  for (const providerPort of ['', '4499']) {
+    const result = spawnSync(process.execPath, ['-e', [
+      "process.argv.push('--list');",
+      "const config = require('./playwright.synthetic-large-library.config.cjs');",
+      'process.stdout.write(JSON.stringify(config.metadata || {}));',
+    ].join(' ')], {
+      cwd: path.join(__dirname, '..', '..'),
+      encoding: 'utf8',
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ALBUM_HAVEN_PLAYWRIGHT_INVENTORY_DISCOVERY: '1',
+        PLAYWRIGHT_SERVE_REAL_APP: '0',
+        PLAYWRIGHT_REAL_APP_PORT: '44100',
+        PLAYWRIGHT_PROVIDER_PORT: providerPort,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).providerBaseURL, `http://127.0.0.1:${providerPort || '44102'}`);
+  }
+});
+
 test('default Playwright config stays pointed at the functional specs directory', () => {
   assert.equal(
     relativeSegments(defaultConfig.testDir).join('/'),

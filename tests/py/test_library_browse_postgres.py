@@ -16573,3 +16573,69 @@ def test_live_compact_alias_source_matches_full_join_for_multiroot_inventory(wat
     actual = builder.build_postgres_relation_alias_views(compact_rows)
     for key in ('alias_to_canonical', 'canonical_to_aliases', 'artists_sidebar'):
         assert actual[key] == expected[key]
+
+
+def test_live_watcher_reuses_scan_relations_after_cover_only_change(watcher_repair_inventory, monkeypatch):
+    from music_app.services import scan_cache_persistence as persistence
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    entry = fixture.entry('Owner/Album/01.flac')
+    fixture.seed(entry)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        original = persistence._commit_structural_relation_projection(connection, fixture.config)
+    def unexpected(*args, **kwargs):
+        pytest.fail('cover-only metadata must not rebuild or republish family/search relations')
+    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', unexpected)
+    monkeypatch.setattr(persistence, 'replace_artist_family_projection_in_transaction', unexpected)
+    monkeypatch.setattr(persistence, 'replace_artist_search_projection_in_transaction', unexpected)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("update library.local_albums set metadata = metadata || %s::jsonb",
+                           (json.dumps({'selected_cover_path': 'synthetic-cover.jpg'}),))
+        reused = persistence._commit_structural_relation_projection(connection, fixture.config,
+                                                                     reason='targeted_reconciliation')
+    assert reused == original
+
+
+@pytest.mark.parametrize("search_state", ["missing", "stale"])
+def test_live_watcher_repairs_search_without_rebuilding_scan_relations(
+    watcher_repair_inventory, monkeypatch, search_state,
+):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services import relation_projection_postgres as projections
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry('Owner/Album/01.flac'))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        original = persistence._commit_structural_relation_projection(connection, fixture.config)
+        if search_state == 'missing':
+            connection.execute("delete from library.local_artist_search_projection")
+        else:
+            connection.execute(
+                "update library.local_artist_search_projection "
+                "set source_fingerprint = case when source_fingerprint = repeat('0', 64) "
+                "then repeat('1', 64) else repeat('0', 64) end"
+            )
+        connection.execute(
+            "update library.local_albums set metadata = metadata || %s::jsonb",
+            (json.dumps({'selected_cover_path': 'synthetic-cover.jpg'}),),
+        )
+        before = projections._relation_projection_scan_cache_from_row(
+            connection.execute(projections._load_relation_projection_sql()).fetchone())
+        assert projections.artist_search_projection_stale_reason(before)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('search repair must preserve stored family relations')
+    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', unexpected)
+    monkeypatch.setattr(persistence, 'replace_artist_family_projection_in_transaction', unexpected)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        repaired = persistence._commit_structural_relation_projection(
+            connection, fixture.config, reason='targeted_reconciliation')
+        after = projections._relation_projection_scan_cache_from_row(
+            connection.execute(projections._load_relation_projection_sql()).fetchone())
+        assert repaired == original
+        assert after['relation_views'] == before['relation_views']
+        assert after['relation_projection'] == before['relation_projection']
+        assert after['relations_last_built'] == before['relations_last_built']
+        assert projections.artist_search_projection_stale_reason(after) == ''

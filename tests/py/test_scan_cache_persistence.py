@@ -3447,3 +3447,91 @@ def test_load_last_scan_reads_only_root_bound_timestamp_metadata(stored_root, ex
     assert "'library_root_identity'" in statements[0]
     assert "as scan_cache" not in statements[0].lower()
     assert "file_entries" not in statements[0].lower()
+
+
+@pytest.mark.parametrize("search_state", ["ready", "missing", "stale"])
+def test_targeted_reconciliation_reuses_unchanged_ready_relation_projection(monkeypatch, search_state):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.cache import serialize_relation_views
+
+    views = {
+        'artists': ['Owner'], 'artists_sidebar': [{'artist': 'Owner', 'count': 1}],
+        'family_to_artists': {}, 'folder_related': {}, 'sidebar_families': [],
+        'alias_to_canonical': {'Owner': 'Owner'}, 'canonical_to_aliases': {'Owner': ['Owner']},
+    }
+    snapshot = {
+        'relation_views': serialize_relation_views(views), 'relations_last_built': 123.0,
+        'relation_projection': persistence.build_ready_relation_projection_metadata(
+            'same-source', reason='scan', duration_ms=1.0),
+    }
+    connection = FakeConnection(snapshot_rows=[{'scan_cache': snapshot}])
+    from music_app.services.relation_projection_postgres import _artist_search_projection_rows
+    search_rows = [dict(row, builder_version=snapshot['relation_projection']['builder_version'],
+                        source_fingerprint='same-source', relations_last_built=123.0)
+                   for row in _artist_search_projection_rows(snapshot['relation_views'])]
+    if search_state == 'missing':
+        search_rows = []
+    elif search_state == 'stale':
+        search_rows[0]['source_fingerprint'] = 'old-source'
+    original_execute = connection.execute
+    def execute(sql, params=None):
+        if sql == persistence._load_relation_projection_sql():
+            connection.executed.append((sql, params))
+            return FakeCursor([dict(snapshot, artist_search_projection=search_rows)])
+        return original_execute(sql, params)
+    monkeypatch.setattr(connection, 'execute', execute)
+    monkeypatch.setattr(persistence, 'relation_source_fingerprint', lambda rows: 'same-source')
+    def unexpected(*args, **kwargs):
+        pytest.fail('unchanged watcher input must reuse scan-derived relation data')
+    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows', unexpected)
+    monkeypatch.setattr(persistence, 'replace_artist_family_projection_in_transaction', unexpected)
+    repairs = []
+    def repair(conn, saved_views, *, metadata, relations_last_built):
+        assert conn is connection
+        assert saved_views == snapshot['relation_views']
+        assert metadata == snapshot['relation_projection']
+        assert relations_last_built == 123.0
+        repairs.append('search')
+    monkeypatch.setattr(persistence, 'replace_artist_search_projection_in_transaction', repair)
+    result = persistence._commit_structural_relation_projection(
+        connection, {}, reason='targeted_reconciliation')
+    assert result['relations_last_built'] == 123.0
+    assert serialize_relation_views(result['relation_views']) == snapshot['relation_views']
+    assert repairs == ([] if search_state == 'ready' else ['search'])
+    assert all(params is None for _, params in connection.executed)
+
+
+@pytest.mark.parametrize('invalidity', ['changed_source', 'stale', 'old_builder', 'incomplete'])
+def test_targeted_reconciliation_does_not_reuse_invalid_relation_projection(monkeypatch, invalidity):
+    from copy import deepcopy
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.cache import serialize_relation_views
+
+    views = persistence.build_relation_views_from_postgres_rows({}, [
+        {'album_id': 1, 'owner_artist_name': 'Owner', 'album_artist': 'Owner'},
+    ])
+    snapshot = {
+        'relation_views': serialize_relation_views(views), 'relations_last_built': 123.0,
+        'relation_projection': persistence.build_ready_relation_projection_metadata(
+            'same-source', reason='scan', duration_ms=1.0),
+    }
+    if invalidity == 'stale':
+        snapshot['relation_projection']['status'] = 'stale'
+    elif invalidity == 'old_builder':
+        snapshot['relation_projection']['builder_version'] = 'obsolete'
+    elif invalidity == 'incomplete':
+        snapshot['relation_views'].pop('family_to_artists')
+    connection = FakeConnection(snapshot_rows=[{'scan_cache': snapshot}])
+    fingerprint = 'changed-source' if invalidity == 'changed_source' else 'same-source'
+    monkeypatch.setattr(persistence, 'relation_source_fingerprint', lambda rows: fingerprint)
+    events = []
+    monkeypatch.setattr(persistence, 'build_relation_views_from_postgres_rows',
+                        lambda *args: events.append('build') or deepcopy(views))
+    monkeypatch.setattr(persistence, 'replace_artist_family_projection_in_transaction',
+                        lambda *args, **kwargs: events.append('family'))
+    monkeypatch.setattr(persistence, 'replace_artist_search_projection_in_transaction',
+                        lambda *args, **kwargs: events.append('search'))
+    result = persistence._commit_structural_relation_projection(
+        connection, {}, reason='targeted_reconciliation')
+    assert events == ['build', 'family', 'search']
+    assert result['relations_last_built'] > 123.0

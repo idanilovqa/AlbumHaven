@@ -33,12 +33,16 @@ from music_app.services.persistence_selection import select_runtime_persistence_
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
     RELATION_PROJECTION_METADATA_KEY,
+    _load_relation_projection_sql,
+    _relation_projection_scan_cache_from_row,
+    artist_search_projection_stale_reason,
     build_ready_relation_projection_metadata,
     build_relation_views_from_postgres_rows,
     inventory_publication_advisory_lock_sql as _inventory_publication_advisory_lock_sql,
     load_relation_source_rows_sql,
     relation_projection_advisory_lock_sql,
     relation_projection_structure_complete,
+    relation_projection_stale_reason,
     relation_source_fingerprint,
     replace_artist_search_projection_in_transaction,
 )
@@ -2288,6 +2292,25 @@ def _commit_structural_relation_projection(
     next_scan_cache = dict(loaded_snapshot) if isinstance(loaded_snapshot, dict) else {}
     relation_source_rows = list(connection.execute(load_relation_source_rows_sql()).fetchall())
     source_fingerprint = relation_source_fingerprint(relation_source_rows)
+    if (
+        not relation_projection_stale_reason(next_scan_cache)
+        and next_scan_cache[RELATION_PROJECTION_METADATA_KEY]["built_from_fingerprint"]
+        == source_fingerprint
+    ):
+        persisted_projection = _relation_projection_scan_cache_from_row(
+            _first_row(connection.execute(_load_relation_projection_sql()))
+        )
+        if artist_search_projection_stale_reason(persisted_projection):
+            replace_artist_search_projection_in_transaction(
+                connection,
+                next_scan_cache["relation_views"],
+                metadata=next_scan_cache[RELATION_PROJECTION_METADATA_KEY],
+                relations_last_built=_float_or_zero(next_scan_cache.get("relations_last_built")),
+            )
+        return {
+            "relation_views": deserialize_relation_views(next_scan_cache["relation_views"]),
+            "relations_last_built": _float_or_zero(next_scan_cache.get("relations_last_built")),
+        }
     relation_views = build_relation_views_from_postgres_rows(config, relation_source_rows)
     if not relation_projection_structure_complete(relation_views):
         raise RuntimeError("Relation projection builder returned an incomplete projection.")

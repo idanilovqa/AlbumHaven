@@ -2,8 +2,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
+
+test('search gate binds all performance targets to the shard string parameter', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const runner = fs.readFileSync(path.join(repositoryRoot, 'scripts/run-search-regressions.ps1'), 'utf8');
+  const argument = runner.match(/-Targets\s+([^\r\n`]+)/u)?.[1];
+  assert.ok(argument, 'performance target argument must exist');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command',
+    `function Bind-Targets { [CmdletBinding()] param([string]$Targets) $Targets }; Bind-Targets -Targets ${argument}`,
+  ], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'artist-family,search-all-artists,search-browse');
+});
 
 test('search regression gate keeps the complete required suite in one command', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8'));

@@ -110,7 +110,7 @@ New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
 try {
     Invoke-Checked {
         & $performanceRunner `
-            -Targets artist-family,search-all-artists,search-browse `
+            -Targets 'artist-family,search-all-artists,search-browse' `
             -FixtureProfile synthetic-large-library `
             -FixtureMode preloaded-release `
             -BasePort $PerformanceBasePort `

@@ -618,13 +618,14 @@ def _watcher_session_lifecycle_harness(
 
     class WatchService:
         def __init__(self, _source, _publish):
-            pass
+            callbacks["watch"] = self
+            self.root_ids = ("root-a",)
 
         def start(self):
             events.append("watch.start")
             return True
 
-        def stop(self):
+        def stop(self, *, timeout=None):
             events.append("watch.stop")
             return True
 
@@ -634,6 +635,7 @@ def _watcher_session_lifecycle_harness(
             )
             if failures["replace"] is not None:
                 raise failures["replace"]
+            self.root_ids = tuple(root["id"] for root in roots)
             return True
 
     monkeypatch.setattr(
@@ -829,7 +831,7 @@ def test_watcher_session_replacement_failures_retain_union_until_successful_set(
                 )
             assert harness.events[-1] == (
                 "session.report",
-                ("root-a", "root-b", "root-c"),
+                ("root-b", "root-c"),
             )
             assert harness.state["participants"] == {"root-a", "root-b", "root-c"}
 
@@ -848,6 +850,77 @@ def test_watcher_session_replacement_failures_retain_union_until_successful_set(
     asyncio.run(exercise())
 
 
+def test_watcher_session_concurrent_replacements_serialize_complete_transition(
+    monkeypatch,
+):
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    second_completed = threading.Event()
+    errors = []
+
+    async def exercise():
+        async with harness.app.router.lifespan_context(harness.app):
+            harness.events.clear()
+            watch = harness.callbacks["watch"]
+            replace_roots = watch.replace_roots
+
+            def blocked_replace(roots):
+                if roots[0]["id"] == "root-b":
+                    first_entered.set()
+                    assert release_first.wait(5), "first replacement was not released"
+                return replace_roots(roots)
+
+            monkeypatch.setattr(watch, "replace_roots", blocked_replace)
+
+            def replace(root_id, *, second=False):
+                if second:
+                    second_started.set()
+                try:
+                    harness.app.state.replace_library_watch_roots(
+                        ({"id": root_id, "path": f"C:/Music/{root_id}"},)
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    if second:
+                        second_completed.set()
+
+            first = threading.Thread(target=replace, args=("root-b",))
+            second = threading.Thread(
+                target=replace, args=("root-c",), kwargs={"second": True}
+            )
+            first.start()
+            try:
+                assert first_entered.wait(5), "first replacement did not enter observer"
+                second.start()
+                assert second_started.wait(5), "second replacement did not start"
+                assert not second_completed.wait(0.1), "replacement interleaved"
+                assert harness.events == [("session.expand", ("root-b",))]
+            finally:
+                release_first.set()
+                first.join(5)
+                if second.ident is not None:
+                    second.join(5)
+                assert not first.is_alive()
+                assert not second.is_alive()
+
+            assert errors == []
+            assert harness.events == [
+                ("session.expand", ("root-b",)),
+                ("watch.replace", ("root-b",)),
+                ("session.set", ("root-b",)),
+                ("session.expand", ("root-c",)),
+                ("watch.replace", ("root-c",)),
+                ("session.set", ("root-c",)),
+            ]
+            assert watch.root_ids == ("root-c",)
+            assert harness.state["participants"] == {"root-c"}
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     "failed_stage",
     (
@@ -860,13 +933,15 @@ def test_watcher_session_replacement_failures_retain_union_until_successful_set(
     ),
 )
 def test_watcher_session_shutdown_failure_surfaces_and_leaves_session_open(
-    failed_stage,
+    failed_stage, monkeypatch,
 ):
+    import time
     from music_app import _stop_library_watch_runtime
 
+    monkeypatch.setattr(time, "monotonic", lambda: 120.0)
     calls = []
 
-    def stop_watch():
+    def stop_watch(*, timeout=None):
         calls.append("watch.stop")
         if failed_stage == "observer-stop":
             raise RuntimeError(failed_stage)
@@ -912,6 +987,54 @@ def test_watcher_session_shutdown_failure_surfaces_and_leaves_session_open(
     if failed_stage.startswith("session-finish"):
         expected.append("session.finish")
     assert calls == expected
+
+
+@pytest.mark.parametrize("now", (120.0, 124.0))
+def test_watcher_session_shutdown_observer_uses_remaining_deadline(monkeypatch, now):
+    import time
+    from music_app import _stop_library_watch_runtime
+
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+    calls = []
+
+    def stop_watch(*, timeout):
+        calls.append(("watch.stop", timeout))
+        assert timeout == max(0.0, 123.0 - now)
+        if timeout == 0:
+            raise TimeoutError("observer deadline exhausted")
+
+    def stop_retry_and_flush(*, deadline):
+        assert deadline == 123.0
+        calls.append("retry.cancel_join_flush")
+
+    def finish():
+        calls.append("session.finish")
+        return True
+
+    def stop():
+        _stop_library_watch_runtime(
+            watch_service=types.SimpleNamespace(stop=stop_watch),
+            watcher_session_controller=types.SimpleNamespace(
+                stop_retry_and_flush=stop_retry_and_flush, finish=finish
+            ),
+            event_coordinator=types.SimpleNamespace(
+                stop=lambda: calls.append("coordinator.stop")
+            ),
+            deadline=123.0,
+        )
+
+    if now > 123.0:
+        with pytest.raises(TimeoutError, match="observer deadline exhausted"):
+            stop()
+        assert calls == [("watch.stop", 0.0)]
+    else:
+        stop()
+        assert calls == [
+            ("watch.stop", 3.0),
+            "retry.cancel_join_flush",
+            "session.finish",
+            "coordinator.stop",
+        ]
 
 
 def test_create_asgi_app_lifespan_requests_warmup_stop_before_worker_shutdown(

@@ -5,6 +5,14 @@ import {
   waitForPostgresBrowseWarmRoot,
 } from '../helpers/realAppBenchmarkHelpers.js';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
+import {
+  evaluateTimingBudget,
+  expectTimingBudgetOutcome,
+  formatTimingBudgetOutcome,
+  performanceTimingBudget,
+} from '../helpers/timingBudget.js';
+
+const JUMP_ALIGNED_BUDGET = performanceTimingBudget('artist-tree-scroll-navigation.jumpAlignedMs');
 
 async function openContextMenuForArtist(ui, artist) {
   await ui.openArtistTreeContextMenu(artist);
@@ -15,6 +23,7 @@ async function openContextMenuForArtist(ui, artist) {
 async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
   const loaderObservation = expectLoader === false ? await ui.observeLoaderVisibility() : null;
   await openContextMenuForArtist(ui, artist);
+  const jumpStartedAt = performance.now();
   await ui.scrollToArtistAction.click();
   await expect.poll(
     () => ui.readArtistJumpPlacement(artist),
@@ -25,23 +34,20 @@ async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
     rowsAligned: true,
     firstCardUncut: true,
   }).catch(async error => {
-    // parity-check: allow-read-only-measurement-evaluate -- retain authoritative anchor ownership when exact visual placement fails
-    const evidence = await ui.page.evaluate(requestedArtist => ({
-      requestedArtist,
-      anchorArtist: state.view?.gallery_page?.anchor_artist || null,
-      anchorGroupArtist: state.view?.gallery_page?.anchor_group_artist || null,
-      offset: state.view?.gallery_page?.offset ?? null,
-      sidebarCount: (state.view?.artists_sidebar || []).length,
-      loadedArtists: (state.view?.artist_groups || []).map(group => group.artist),
-      renderedArtists: [...document.querySelectorAll('[data-scroll-artist]')]
-        .map(element => element.getAttribute('data-scroll-artist')),
-    }), artist);
+    const evidence = await ui.readArtistJumpOwnership(artist);
     await test.info().attach('failed-artist-jump-ownership', {
       body: JSON.stringify(evidence, null, 2),
       contentType: 'application/json',
     });
     throw error;
   });
+  const timing = evaluateTimingBudget(performance.now() - jumpStartedAt, JUMP_ALIGNED_BUDGET);
+  await test.info().attach('artist-jump-timing', {
+    body: JSON.stringify({ artist, ...timing }, null, 2),
+    contentType: 'application/json',
+  });
+  console.log(formatTimingBudgetOutcome(`Artist jump to ${artist}`, timing));
+  expectTimingBudgetOutcome(expect, timing, `Artist jump to ${artist}`);
   if (loaderObservation) expect(await ui.finishLoaderVisibility(loaderObservation)).toBe(false);
 }
 async function resolveRenderedAnchorArtist(page, artist, visited = new Set()) {
@@ -252,9 +258,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     if (Number.isFinite(minimumRemaining)) expect(minimumRemaining).toBeGreaterThan(0);
     expect(continuationDuration).not.toBeNull();
     expect(continuationDuration).toBeLessThan(3000);
-    const appendedCard = page.locator('.album-card').filter({
-      has: page.locator(`[data-album-key=${JSON.stringify(appendedAlbumKey)}]`),
-    }).first();
+    const appendedCard = ui.albumCardByKey(appendedAlbumKey);
     let crossedBoundary = false;
     for (let step = 0; step < 100; step += 1) {
       const viewport = await ui.galleryScroll.boundingBox();

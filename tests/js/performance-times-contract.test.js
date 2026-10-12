@@ -83,6 +83,10 @@ test('checked-in timing authority contains the approved local and CI triplets', 
   } = loadAuthority();
   const contract = loadPerformanceTimesContract();
   const approved = {
+    'artist-tree-scroll-navigation.jumpAlignedMs': {
+      local: [2000, 400, 2400],
+      ci: [2000, 400, 2400],
+    },
     'utility-problematic-files-isolated-postgres.coldProblematicApiMs': {
       local: [1000, 200, 1200],
       ci: [1000, 200, 1200],

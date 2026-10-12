@@ -73,6 +73,24 @@ export class GalleryRegressions {
       };
     }, { targetArtist: artist, headingSelector: this.artistHeadingSelector });
   }
+  async readArtistJumpOwnership(artist) {
+    // parity-check: allow-read-only-measurement-evaluate -- retain authoritative anchor ownership on placement failure
+    return this.page.evaluate(requestedArtist => ({
+      requestedArtist,
+      anchorArtist: state.view?.gallery_page?.anchor_artist || null,
+      anchorGroupArtist: state.view?.gallery_page?.anchor_group_artist || null,
+      offset: state.view?.gallery_page?.offset ?? null,
+      sidebarCount: (state.view?.artists_sidebar || []).length,
+      loadedArtists: (state.view?.artist_groups || []).map(group => group.artist),
+      renderedArtists: [...document.querySelectorAll('[data-scroll-artist]')]
+        .map(element => element.getAttribute('data-scroll-artist')),
+    }), artist);
+  }
+  albumCardByKey(key) {
+    return this.cards.filter({
+      has: this.page.locator(`[data-album-key=${JSON.stringify(key)}]`),
+    }).first();
+  }
 
   async openArtistTreeContextMenu(artist) {
     const normalizedArtist = String(artist || '').trim();

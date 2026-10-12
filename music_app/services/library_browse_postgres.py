@@ -7,10 +7,12 @@ from collections.abc import Callable, Iterable, Mapping
 import fnmatch
 import hashlib
 import json
+import logging
 from pathlib import Path
 from os.path import basename
 import re
 from threading import Event, Lock
+from time import perf_counter, thread_time
 from types import SimpleNamespace
 from typing import Any
 
@@ -690,6 +692,10 @@ class PostgresLibraryBrowseRepository:
         query_params: Mapping[str, object] | None = None,
         library_state: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
+        started_at = perf_counter()
+        started_cpu = thread_time()
+        phase_ms = {}
+        phase_started_at = started_at
         view_state = _root_sidebar_view_state(query_params)
         paged = (query_params or {}).get("gallery_page_size") is not None
         include_non_album_tracks = _should_load_non_album_tracks(query_params)
@@ -704,6 +710,8 @@ class PostgresLibraryBrowseRepository:
         non_album_entries = []
         configured_root_paths = ()
         connection = self._connect_to_database()
+        phase_ms["connection"] = (perf_counter() - phase_started_at) * 1000
+        phase_started_at = perf_counter()
         try:
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
@@ -713,6 +721,9 @@ class PostgresLibraryBrowseRepository:
                 connection, view_state, query_params or {}, context=projection_context,
                 allow_stale=bool((library_state or {}).get("scan_in_progress")),
             ) if projection_context else None
+            projection_hit = cached_page is not None
+            phase_ms["projection_lookup"] = (perf_counter() - phase_started_at) * 1000
+            phase_started_at = perf_counter()
             if cached_page is None:
                 relation_alias_maps = self._load_relation_alias_maps(connection=connection)
             else:
@@ -731,18 +742,28 @@ class PostgresLibraryBrowseRepository:
                     relation_alias_maps["alias_to_canonical"]
                 )
             )
+            phase_ms["aliases"] = (perf_counter() - phase_started_at) * 1000
+            phase_started_at = perf_counter()
             support_state = self._inventory_repository.load_support_state(
                 connection=connection,
             )
+            phase_ms["support"] = (perf_counter() - phase_started_at) * 1000
+            phase_started_at = perf_counter()
             if paged:
                 if cached_page is None:
                     membership = list(connection.execute(
                         _root_gallery_membership_sql(), _root_sidebar_params(view_state)).fetchall())
+                    phase_ms["membership_query"] = (perf_counter() - phase_started_at) * 1000
+                    phase_started_at = perf_counter()
                     missing = _missing_album_projection_payloads(
                         self._load_missing_album_rows(connection=connection), view_state=view_state)
+                    phase_ms["missing_albums"] = (perf_counter() - phase_started_at) * 1000
+                    phase_started_at = perf_counter()
                     prepared_snapshot = _prepare_root_gallery_snapshot(
                         membership, missing, root_alias_to_canonical, view_state)
                     cached_page = _select_root_gallery_snapshot_page(prepared_snapshot, query_params or {})
+                    phase_ms["snapshot_prepare"] = (perf_counter() - phase_started_at) * 1000
+                phase_started_at = perf_counter()
                 page, artists_sidebar, album_count, gallery_page = cached_page
                 missing_keys = list({str(row["missing_album_key"]) for row in page if row.get("missing_album_key")})
                 missing_by_key = {album["key"]: album for album in _missing_album_projection_payloads(
@@ -809,6 +830,10 @@ class PostgresLibraryBrowseRepository:
                 preview_artist_groups = _root_album_browse_artist_groups(preview_rows)[
                     :_STARTUP_PREVIEW_ARTIST_LIMIT
                 ]
+            phase_ms["page_hydration" if paged else "unpaged_preview"] = (
+                perf_counter() - phase_started_at
+            ) * 1000
+            phase_started_at = perf_counter()
             if (
                 paged
                 and include_non_album_tracks
@@ -916,6 +941,21 @@ class PostgresLibraryBrowseRepository:
             self._config,
             preview_artist_groups,
         )
+        phase_ms["overlays_and_payload"] = (perf_counter() - phase_started_at) * 1000
+        if not (query_params or {}).get("gallery_cursor"):
+            logging.getLogger(__name__).info(
+                "Root gallery preparation completed %s",
+                json.dumps({
+                    "paged": paged,
+                    "projection_hit": projection_hit,
+                    "elapsed_ms": round((perf_counter() - started_at) * 1000, 2),
+                    "thread_cpu_ms": round((thread_time() - started_cpu) * 1000, 2),
+                    "phase_ms": {key: round(value, 2) for key, value in phase_ms.items()},
+                    "page_occurrence_count": sum(len(group["albums"]) for group in preview_artist_groups),
+                    "album_count": album_count,
+                    "artist_count": len(artists_sidebar),
+                }, sort_keys=True),
+            )
         return payload
 
     def build_selected_artist_payload(

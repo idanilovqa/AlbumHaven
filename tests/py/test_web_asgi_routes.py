@@ -1820,3 +1820,25 @@ def test_explicit_home_startup_keeps_legacy_hydration(monkeypatch):
     assert captured["query_params"].get("gallery_page_size") is None
     assert captured["query_params"].get("surface") == "home"
     assert initial["initial_view_partial"] is True
+
+
+def test_index_logs_actual_bootstrap_counts(app, monkeypatch):
+    from music_app.routes import web_asgi
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    build = web_asgi._build_postgres_root_startup_view
+
+    def populated(**kwargs):
+        initial, patch, elapsed = build(**kwargs)
+        initial.update(album_count=14673, artist_count=6345)
+        return initial, patch, elapsed
+
+    events = []
+    monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", populated)
+    monkeypatch.setattr(web_asgi, "log_app_event",
+                        lambda _config, _logger, action, **fields: events.append((action, fields)))
+    status, _, _ = _run_asgi_request(_make_asgi_app(app), "GET", "/")
+    assert status == 200
+    event = next(fields for action, fields in events if action == "Index request completed")
+    assert event["album_count"] == 14673
+    assert event["artist_count"] == 6345

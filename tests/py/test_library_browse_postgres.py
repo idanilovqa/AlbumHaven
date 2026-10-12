@@ -3405,7 +3405,8 @@ def test_search_preview_reloads_snapshot_when_ready_runtime_relation_maps_are_st
     )
 
 
-def test_stale_projected_exact_alias_defers_to_current_exact_artist_sql(monkeypatch):
+def test_stale_projected_exact_alias_waits_for_current_projection(monkeypatch):
+    from music_app.services.library_browse_postgres import SearchProjectionPending
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     connection = _NoopSearchSnapshotConnection()
@@ -3443,14 +3444,11 @@ def test_stale_projected_exact_alias_defers_to_current_exact_artist_sql(monkeypa
         },
     )
 
-    payload = repository.build_search_payload(
-        query_params={"q": "Alias", "omit_sidebar": "1"},
-    )
+    with pytest.raises(SearchProjectionPending):
+        repository.build_search_payload(query_params={"q": "Alias", "omit_sidebar": "1"})
 
-    assert payload["selected_artist"] == "Current Canonical"
-    assert exact_calls == [("Alias", connection)]
-    assert delegated[0]["query_params"]["artist"] == "Current Canonical"
-    assert delegated[0]["_connection"] is connection
+    assert exact_calls == []
+    assert delegated == []
 
 
 @pytest.mark.parametrize(
@@ -3648,11 +3646,14 @@ def test_complete_current_relation_projection_proves_non_exact_search_without_ex
         "source_fingerprint_changed",
     ],
 )
-def test_non_current_relation_projection_retains_exact_artist_sql_fallback(
+def test_non_current_relation_projection_waits_without_exact_artist_sql_fallback(
     monkeypatch,
     projection_stale_reason,
 ):
-    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+        SearchProjectionPending,
+    )
 
     connection = _NoopSearchSnapshotConnection()
     exact_calls = []
@@ -3686,12 +3687,12 @@ def test_non_current_relation_projection_retains_exact_artist_sql_fallback(
         },
     )
 
-    payload = repository.build_search_payload(
-        query_params={"q": "Signal Artist", "omit_sidebar": "1"},
-    )
+    with pytest.raises(SearchProjectionPending):
+        repository.build_search_payload(
+            query_params={"q": "Signal Artist", "omit_sidebar": "1"},
+        )
 
-    assert payload["selected_artist"] == "Signal Artist"
-    assert exact_calls == [("Signal Artist", connection)]
+    assert exact_calls == []
 
 
 def test_exact_artist_fallback_sql_constrains_identity_before_album_expansion():

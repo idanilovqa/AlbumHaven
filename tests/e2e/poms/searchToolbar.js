@@ -787,10 +787,14 @@ export class SearchToolbar extends BasePage {
       }
       const initiallyBusy = initialObservation.activeRequestCount > 0
         || initialObservation.pendingPayloadReadCount > 0;
-      const bootstrapPayload = initialObservation.allowBootstrapFallback !== false
+      let bootstrapPayload = initialObservation.allowBootstrapFallback !== false
         && !initialObservation.latestFullPayload && !initiallyBusy
         ? await this.readProductionBootstrapPayload()
         : null;
+      if (bootstrapPayload && !this.productionViewObserver.acceptBootstrapPresence(
+        bootstrapPayload.startup_payload?.first_paint_view || bootstrapPayload.initial_view,
+        initialObservation.stateRevision,
+      )) bootstrapPayload = null;
       const payload = initialObservation.latestFullPayload
         || bootstrapPayload?.startup_payload?.first_paint_view
         || bootstrapPayload?.initial_view

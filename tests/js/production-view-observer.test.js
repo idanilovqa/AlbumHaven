@@ -1691,7 +1691,7 @@ test('accumulated root evidence rejects stale page revision and scope', async ()
   ]) assert.equal(matchesAccumulatedRootProjection(payload, { ...projection, ...changed }), false, JSON.stringify(changed));
 });
 
-for (const sourceKind of ['response', 'reload SSR']) {
+for (const sourceKind of ['response', 'reload SSR', 'SearchToolbar reload SSR']) {
 test(`${sourceKind}: cleared search certifies only the exact restored server family`, async () => {
   const { ProductionViewObserver, readAppliedAlbumTargetEvidence } = await import(observerUrl);
   const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
@@ -1702,7 +1702,22 @@ test(`${sourceKind}: cleared search certifies only the exact restored server fam
   const source = { payload_tier: 'full', query: 'Partner', selected_artist: 'Partner',
     visible_library_categories: ['main_library'], artist_groups: groups,
     primary_artist_groups: groups.slice(1), family_artist_groups: groups.slice(0, 1) };
-  if (sourceKind === 'reload SSR') {
+  if (sourceKind === 'SearchToolbar reload SSR') {
+    const { SearchToolbar } = await import(new URL('../poms/searchToolbar.js', observerUrl));
+    page.emit('documentcommitted');
+    await SearchToolbar.prototype.waitForQuerySettled.call({
+      productionViewObserver: observer,
+      readProductionBootstrapPayload: async () => ({ initial_view: source }),
+      input: { inputValue: async () => source.query },
+      page: {
+        url: () => 'http://localhost/?q=Partner',
+        evaluate: async () => ({ query: source.query, surface: 'albums',
+          artists: groups.map(group => group.artist), sidebarArtists: groups.map(group => group.artist) }),
+        locator: () => ({ isVisible: async () => false,
+          allTextContents: async () => groups.map(group => group.artist) }),
+      },
+    }, source.query, { timeout: 1000 });
+  } else if (sourceKind === 'reload SSR') {
     page.emit('documentcommitted');
     assert.equal(observer.read().retainedFamilyPayload, null);
     assert.equal(await GalleryPage.prototype.readLatestProductionViewPayload.call({

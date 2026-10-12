@@ -1,6 +1,7 @@
 """Derived root membership; source data and the browse selector stay authoritative."""
 from __future__ import annotations
 
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import hashlib
 import json
 import logging
@@ -14,6 +15,8 @@ BUILDER_VERSION = "root-gallery-v4"
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()
+_PREPARATIONS: dict[str, Future] = {}
+_PREPARATIONS_LOCK = Lock()
 _OCCURRENCE_FIELDS = frozenset({
     "artist_id", "artist_name", "artist_sort_name", "album_id", "album_key",
     "album_title", "album_release_year", "featured_kind", "missing_album_key",
@@ -261,38 +264,69 @@ def schedule_gallery_projection_refresh(config, *, connect=None):
 
 
 def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None):
-    """Prepare common startup scopes once, using one coherent source snapshot."""
-    from music_app.services import library_browse_postgres as browse
+    """Share one background preparation across startup and queued refreshes."""
     from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
+
     if config.get("SHARED_LIBRARY_BROWSE_ONLY"):
         return {"built": 0}
+    _raise_if_projection_cancelled(cancel_requested)
+    identity = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    with _PREPARATIONS_LOCK:
+        future = _PREPARATIONS.get(identity)
+        owns_preparation = future is None
+        if owns_preparation:
+            future = Future()
+            _PREPARATIONS[identity] = future
+    if not owns_preparation:
+        while True:
+            _raise_if_projection_cancelled(cancel_requested)
+            try:
+                return future.result(timeout=0.1)
+            except FutureTimeoutError:
+                if future.done():
+                    raise
+    try:
+        result = _ensure_gallery_projection_ready(
+            config, connect=connect, cancel_requested=cancel_requested,
+        )
+        future.set_result(result)
+        return result
+    except BaseException as error:
+        future.set_exception(error)
+        raise
+    finally:
+        with _PREPARATIONS_LOCK:
+            _PREPARATIONS.pop(identity, None)
+
+
+def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None):
+    """Publish each common scope from its own coherent source snapshot."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
     repository = browse.PostgresLibraryBrowseRepository(config, connect=connect)
     if repository._load_relation_alias_maps().get("projection_stale_reason"):
         from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
 
         ensure_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
-    pending = []
-    with repository._connect_to_database() as connection:
-        connection.execute("set transaction isolation level repeatable read, read only")
-        context = gallery_projection_context(connection)
-        if not context:
-            return {"built": 0}
-        scopes = [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})]
-        stale = [state for state in scopes if not _ready_header(connection, context, state)]
-        if not stale:
-            return {"built": 0}
-        aliases = repository._load_relation_alias_maps(connection=connection)
-        if aliases.get("projection_stale_reason"):
-            return {"built": 0}
-        root_aliases = browse._root_browse_alias_to_canonical(aliases["alias_to_canonical"])
-        missing_rows = repository._load_missing_album_rows(connection=connection)
-        for state in stale:
-            _raise_if_projection_cancelled(cancel_requested)
+    built = 0
+    scopes = [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})]
+    for state in scopes:
+        _raise_if_projection_cancelled(cancel_requested)
+        with repository._connect_to_database() as connection:
+            connection.execute("set transaction isolation level repeatable read, read only")
+            context = gallery_projection_context(connection)
+            if not context:
+                return {"built": built}
+            if _ready_header(connection, context, state):
+                continue
+            aliases = repository._load_relation_alias_maps(connection=connection)
+            if aliases.get("projection_stale_reason"):
+                return {"built": built}
+            root_aliases = browse._root_browse_alias_to_canonical(aliases["alias_to_canonical"])
+            missing_rows = repository._load_missing_album_rows(connection=connection)
             rows = connection.execute(browse._root_gallery_membership_sql(), browse._root_sidebar_params(state)).fetchall()
             missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
-            pending.append((state, browse._prepare_root_gallery_snapshot(rows, missing, root_aliases, state)))
-    built = 0
-    for state, snapshot in pending:
+            snapshot = browse._prepare_root_gallery_snapshot(rows, missing, root_aliases, state)
         _raise_if_projection_cancelled(cancel_requested)
         built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect))
     return {"built": built}

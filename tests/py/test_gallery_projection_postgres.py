@@ -588,7 +588,8 @@ def test_relation_repair_preflight_runs_only_when_stale_and_before_gallery_snaps
 
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"}
     connect = object()
-    cancelled = lambda: False
+    from threading import Event
+    cancelled = Event()
 
     def repair(current_config, **kwargs):
         assert current_config is config

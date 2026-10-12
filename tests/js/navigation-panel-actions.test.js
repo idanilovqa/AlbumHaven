@@ -126,3 +126,101 @@ test('mounted-family continuity flags synchronous clear/rebuild but permits stab
   assert.doesNotMatch(source, /globalThis\.state/);
   assert.match(source, /typeof state !== ['"]undefined['"]/);
 });
+
+test('complete sidebar readiness uses logical virtual rows but requires mounted content and an exact badge', async () => {
+  const { NavigationPanelActions } = await import('../e2e/actions/navigationPanelActions.js');
+  const previous = { document: global.document, HTMLElement: global.HTMLElement };
+  class Element {}
+  const badge = Object.assign(new Element(), { textContent: '6343' });
+  const list = Object.assign(new Element(), {
+    getAttribute: () => 'true',
+    albumHavenSidebarArtistsSource: Array.from({ length: 6343 }, (_, i) => ({ artist: `Artist ${i}` })),
+  });
+  let mounted = 40;
+  global.HTMLElement = Element;
+  global.document = {
+    querySelector: selector => selector === '#count' ? badge : list,
+    querySelectorAll: () => Array.from({ length: mounted }, () => new Element()),
+  };
+  try {
+    const actions = new NavigationPanelActions({
+      sidebarArtistSelector: '#artists', sidebarListSelector: '#list', allArtistsCountSelector: '#count',
+      async waitForPageCondition(predicate, _options, selectors) {
+        assert.equal(predicate(selectors), true, 'A populated virtual window represents the complete logical tree');
+        mounted = 0;
+        assert.equal(predicate(selectors), false, 'An empty visible tree must not pass');
+        mounted = 40;
+        const source = list.albumHavenSidebarArtistsSource;
+        list.albumHavenSidebarArtistsSource = undefined;
+        assert.equal(predicate(selectors), false, 'Missing virtual data must not pass');
+        list.albumHavenSidebarArtistsSource = source;
+        if (selectors.allArtistsCountSelector) {
+          badge.textContent = '6000';
+          assert.equal(predicate(selectors), false, 'A stale count must not pass');
+          badge.textContent = '6343';
+        }
+      },
+    });
+    await actions.waitForSidebarFullyHydrated();
+    await actions.waitForSidebarAndAllArtistsCountSynchronized();
+  } finally {
+    global.document = previous.document;
+    global.HTMLElement = previous.HTMLElement;
+  }
+});
+
+test('logical sidebar name reads retain all virtual identities without changing mounted-row accessors', async () => {
+  const { NavigationPanelActions } = await import('../e2e/actions/navigationPanelActions.js');
+  const previous = global.document;
+  const source = [{ artist: ' Gamma ' }, { artist: 'Alpha' }, { artist: 'Beta' }];
+  global.document = { querySelector: () => ({
+    getAttribute: () => 'true', albumHavenSidebarArtistsSource: source,
+  }) };
+  try {
+    const actions = new NavigationPanelActions({
+      sidebarListSelector: '#list',
+      sidebarArtists: {
+        count: async () => 1,
+        evaluateAll: async (callback, arg) => callback([{ getAttribute: () => 'Gamma' }], arg),
+      },
+    });
+    assert.deepEqual(await actions.readHydratedSidebarArtistNames(), ['Gamma', 'Alpha', 'Beta']);
+    assert.deepEqual(await actions.readSidebarArtistNames(), ['Gamma']);
+    assert.equal(await actions.readSidebarArtistCount(), 1);
+  } finally { global.document = previous; }
+});
+
+test('complete sidebar count checks preserve nonvirtual behavior', async () => {
+  const { NavigationPanelActions } = await import('../e2e/actions/navigationPanelActions.js');
+  const previous = { document: global.document, HTMLElement: global.HTMLElement };
+  class Element {}
+  const badge = Object.assign(new Element(), { textContent: '120' });
+  const list = Object.assign(new Element(), { getAttribute: () => null });
+  global.HTMLElement = Element;
+  global.document = {
+    querySelector: selector => selector === '#count' ? badge : list,
+    querySelectorAll: () => Array.from({ length: 120 }, () => new Element()),
+  };
+  try {
+    const actions = new NavigationPanelActions({
+      sidebarArtistSelector: '#artists', sidebarListSelector: '#list', allArtistsCountSelector: '#count',
+      sidebarArtists: { evaluateAll: async (callback, arg) => callback([
+        { getAttribute: () => ' Alpha ' }, { getAttribute: () => 'Beta' },
+      ], arg) },
+      async waitForPageCondition(predicate, _options, selectors) {
+        assert.equal(predicate(selectors), true);
+        if (selectors.allArtistsCountSelector) {
+          badge.textContent = '121';
+          assert.equal(predicate(selectors), false);
+          badge.textContent = '120';
+        }
+      },
+    });
+    await actions.waitForSidebarFullyHydrated();
+    await actions.waitForSidebarAndAllArtistsCountSynchronized();
+    assert.deepEqual(await actions.readHydratedSidebarArtistNames(), ['Alpha', 'Beta']);
+  } finally {
+    global.document = previous.document;
+    global.HTMLElement = previous.HTMLElement;
+  }
+});

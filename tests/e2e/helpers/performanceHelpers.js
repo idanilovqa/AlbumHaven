@@ -32,12 +32,16 @@ export async function collectJsonResponsesDuringAction(page, matchesResponse, ac
 
 export async function collectResponseTrafficDuringAction(page, matchesResource, action) {
   const requests = [];
+  const observedRequests = new Set();
   const responseBodyPromises = [];
   const collectRequest = (request) => {
-    if (matchesResource(request)) requests.push(request.url());
+    if (matchesResource(request)) {
+      observedRequests.add(request);
+      requests.push(request.url());
+    }
   };
   const collectResponse = (response) => {
-    if (!matchesResource(response)) return;
+    if (!observedRequests.has(response.request()) || !matchesResource(response)) return;
     responseBodyPromises.push((async () => ({
       bodyBytes: (await response.body()).byteLength,
       status: response.status(),

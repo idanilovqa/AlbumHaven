@@ -87,9 +87,9 @@ test.describe(`${CASE_ID} synthetic-large app-open All Artists UI`, () => {
       awaitFullSidebarProof()
     ));
     const fullRuntimeView = await readRuntimeView(page);
-    const fullSidebarArtistCount = await navigationPanelActions.readSidebarArtistCount();
+    const sidebarArtistNames = await navigationPanelActions.readHydratedSidebarArtistNames();
+    const fullSidebarArtistCount = sidebarArtistNames.length;
     const fullVisibleAllArtistsCount = await navigationPanelActions.readAllArtistsVisibleCount();
-    const sidebarArtistNames = await navigationPanelActions.readSidebarArtistNames();
     const coverPreemptionAfter = await readGalleryCoverPreemptionSnapshot(page);
     const coverPreemptionWindow = {
       sequenceBefore: coverPreemptionBefore.sequence,

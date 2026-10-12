@@ -90,6 +90,8 @@ Invoke-Checked {
         tests\js\runtime\bootstrap-gallery-event-handlers.test.js `
         tests\js\synthetic-performance-benchmark.test.js `
         tests\js\performance-change-impact.test.js `
+        tests\js\performance-traffic-observer.test.js `
+        tests\js\navigation-panel-actions.test.js `
         tests\js\search-regression-gate.test.js
 } 'Search JavaScript contracts'
 

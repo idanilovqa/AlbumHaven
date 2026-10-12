@@ -1842,6 +1842,14 @@ def test_index_logs_actual_bootstrap_counts(app, monkeypatch):
     event = next(fields for action, fields in events if action == "Index request completed")
     assert event["album_count"] == 14673
     assert event["artist_count"] == 6345
+    assert event["template_response_bytes"] > 0
+    for name in ("template_worker_wait_ms", "template_work_elapsed_ms",
+                 "template_thread_cpu_ms", "template_asset_hash_ms",
+                 "template_context_ms", "template_render_ms"):
+        assert isinstance(event[name], (float, int))
+        assert event[name] >= 0
+    assert event["template_elapsed_ms"] + 0.02 >= (
+        event["template_worker_wait_ms"] + event["template_work_elapsed_ms"])
 
 def test_pending_gallery_bootstrap_hydrates_without_starting_a_scan(app, monkeypatch):
     from music_app.routes import web_asgi

@@ -204,29 +204,42 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
+    started_at = time.perf_counter()
+    cpu_started_at = time.thread_time()
+    submitted_at = getattr(request.state, "index_template_submitted_at", started_at)
     actor = getattr(request.state, "current_actor", None)
     runtime_asset_version = _runtime_asset_version()
     request.app.state.runtime_asset_version = runtime_asset_version
-    return request.app.state.templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "request": request,
-            "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
-            "runtime_asset_version": runtime_asset_version,
-            "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
-            "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
-            "account_menu_csrf_token": issue_session_csrf(
-                request.cookies.get("__Host-album_haven_session"),
-                request.app.state.auth_policy_config,
-            ),
-            **context,
-            "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
-            "utility_allowed_actions": allowed_actions_for_request(request, (
-                "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
-            )),
-        },
-    )
+    hash_finished_at = time.perf_counter()
+    template_context = {
+        "request": request,
+        "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
+        "runtime_asset_version": runtime_asset_version,
+        "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+        "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
+        "account_menu_csrf_token": issue_session_csrf(
+            request.cookies.get("__Host-album_haven_session"),
+            request.app.state.auth_policy_config,
+        ),
+        **context,
+        "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
+        "utility_allowed_actions": allowed_actions_for_request(request, (
+            "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
+        )),
+    }
+    context_finished_at = time.perf_counter()
+    response = request.app.state.templates.TemplateResponse(request, "index.html", template_context)
+    finished_at = time.perf_counter()
+    request.state.index_template_timing = {
+        "template_worker_wait_ms": round(max(0.0, started_at - submitted_at) * 1000, 2),
+        "template_work_elapsed_ms": round((finished_at - started_at) * 1000, 2),
+        "template_thread_cpu_ms": round((time.thread_time() - cpu_started_at) * 1000, 2),
+        "template_asset_hash_ms": round((hash_finished_at - started_at) * 1000, 2),
+        "template_context_ms": round((context_finished_at - hash_finished_at) * 1000, 2),
+        "template_render_ms": round((finished_at - context_finished_at) * 1000, 2),
+        "template_response_bytes": len(getattr(response, "body", b"")),
+    }
+    return response
 
 
 def _request_targets_home_root_surface(query_args: Any, query_raw: str, selected_artist: str) -> bool:
@@ -984,6 +997,7 @@ async def index(request: Request) -> Response:
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
     template_started_at = time.perf_counter()
+    request.state.index_template_submitted_at = template_started_at
     response = await run_in_threadpool(
         _template_response,
         request,
@@ -1023,6 +1037,7 @@ async def index(request: Request) -> Response:
         bootstrap_elapsed_ms=bootstrap_elapsed_ms,
         appearance_elapsed_ms=appearance_elapsed_ms,
         template_elapsed_ms=template_elapsed_ms,
+        **getattr(request.state, "index_template_timing", {}),
         query=query_raw,
         selected_artist=selected_artist,
         album_count=int(initial_view.get("album_count") or 0),

@@ -48,6 +48,7 @@ from music_app.services.loops import resolve_loop_media_path, resolve_loop_previ
 from music_app.services.playlist_read_seams import build_view_surface_payload, resolve_active_view_surface
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.runtime_shutdown import create_daemon_executor
+from music_app.services.runtime_asset_versions import runtime_asset_version_cache
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -184,13 +185,13 @@ def _template_url_for(request: Request, name: str, **path_params: object) -> str
 def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
     if asset_paths is None:
         static_root = Path(__file__).resolve().parent.parent / "static"
-        runtime_stylesheets = tuple(sorted((static_root / "css").rglob("*.css")))
-        runtime_javascript = tuple(sorted((static_root / "js").rglob("*.js")))
-        asset_paths = (
-            static_root / "app.js",
-            *runtime_javascript,
-            *runtime_stylesheets,
-        )
+        def build_version():
+            return _runtime_asset_version((
+                static_root / "app.js",
+                *sorted((static_root / "js").rglob("*.js")),
+                *sorted((static_root / "css").rglob("*.css")),
+            ))
+        return runtime_asset_version_cache.get(static_root, build_version)
     digest = hashlib.sha256()
     try:
         for asset_path in asset_paths:

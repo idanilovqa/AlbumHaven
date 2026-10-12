@@ -83,6 +83,10 @@ test('checked-in timing authority contains the approved local and CI triplets', 
   } = loadAuthority();
   const contract = loadPerformanceTimesContract();
   const approved = {
+    'artist-tree-scroll-navigation.rootHtmlResponseMs': {
+      local: [1000, 400, 1400],
+      ci: [1000, 400, 1400],
+    },
     'artist-tree-scroll-navigation.jumpAlignedMs': {
       local: [2000, 400, 2400],
       ci: [2000, 400, 2400],

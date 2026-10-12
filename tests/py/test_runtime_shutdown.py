@@ -333,6 +333,8 @@ def test_asgi_lifespan_awaits_peak_and_pcm_registry_shutdown_before_runtime_shut
         lambda _runtime: calls.append("runtime-shutdown"),
     )
 
+    from music_app.services.runtime_asset_versions import runtime_asset_version_cache
+    monkeypatch.setattr(runtime_asset_version_cache, "close", lambda: calls.append("asset-cache-close"))
     app = create_asgi_app()
     app.state.playback_pcm_registry = RegistryDouble()
     app.state.waveform_peaks_registry = WaveformRegistryDouble()
@@ -347,6 +349,7 @@ def test_asgi_lifespan_awaits_peak_and_pcm_registry_shutdown_before_runtime_shut
         "lastfm-stop",
         "waveform-shutdown",
         "pcm-shutdown",
+        "asset-cache-close",
         "runtime-shutdown",
     ]
 

@@ -62,6 +62,22 @@ operate, or contribute to the application.
   gate so an interactive search cannot synchronously rebuild the global
   album/file inventory.
 
+## Mandatory HTML reload regression gate
+
+- Changes to HTML bootstrap, static asset versioning, or their cache/lifecycle
+  owners must run the focused Python bootstrap, asset-version, and shutdown
+  tests, plus the real-Postgres `artist-tree-scroll-navigation` performance
+  target on the full production-calibration synthetic fixture.
+- Keep both first-load and post-browsing document-response measurements:
+  1000 ms target, 400 ms grace, 1400 ms hard ceiling. Scroll placement passing
+  does not excuse a slow HTML response. Pending-shell timing does not prove
+  gallery readiness; preserve separate readiness and populated-content gates.
+- Preserve live asset invalidation, including same-size/restored-timestamp
+  changes, and explicit native resource cleanup. Keep
+  `tests/ci/performance-change-impact.json` synchronized with new owners.
+- This gate supplements the search and Problematic Files gates below; it does
+  not replace them or authorize relaxed budgets.
+
 ## Mandatory Problematic Files regression gate
 
 - Immediately run both `utility-problematic-files` and

@@ -35,6 +35,7 @@ test('PR classifier applies changed-path performance ownership before selecting 
 
 test('sensitive browse, sidebar, modal, status, and mobile changes select their focused targets', () => {
   const cases = [
+    ['music_app/services/runtime_asset_versions.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation']],

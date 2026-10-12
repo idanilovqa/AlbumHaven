@@ -12,6 +12,7 @@ import {
   performanceTimingBudget,
 } from '../helpers/timingBudget.js';
 
+const ROOT_HTML_BUDGET = performanceTimingBudget('artist-tree-scroll-navigation.rootHtmlResponseMs');
 const JUMP_ALIGNED_BUDGET = performanceTimingBudget('artist-tree-scroll-navigation.jumpAlignedMs');
 
 async function openContextMenuForArtist(ui, artist) {
@@ -108,14 +109,28 @@ async function resolveDistinctFarTargets(page, artists, fractions) {
   return targets;
 }
 
-async function waitForSyntheticRoot(page, galleryActions, navigationPanelActions) {
-  await galleryActions.goto('/');
+async function waitForSyntheticRoot(page, galleryActions, navigationPanelActions, label = 'Root HTML response') {
+  const [response] = await Promise.all([
+    page.waitForResponse(response =>
+      response.request().isNavigationRequest()
+      && response.request().frame() === page.mainFrame()
+      && new URL(response.url()).pathname === '/'),
+    galleryActions.goto('/'),
+  ]);
+  expect(response.status()).toBe(200);
+  expect(await response.finished()).toBeNull();
+  const htmlTiming = evaluateTimingBudget(response.request().timing().responseEnd, ROOT_HTML_BUDGET);
+  await test.info().attach('root-html-response-timing', {
+    body: JSON.stringify({ label, ...htmlTiming }, null, 2), contentType: 'application/json',
+  });
+  console.log(formatTimingBudgetOutcome(label, htmlTiming));
   await waitForLibraryStartupEntryVisible(page, galleryActions, navigationPanelActions, {
     timeout: 120000,
   });
   await waitForPostgresBrowseWarmRoot(page, galleryActions, navigationPanelActions, {
     timeout: 120000,
   });
+  return htmlTiming;
 }
 
 test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation', () => {
@@ -125,7 +140,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     page,
   }) => {
     const ui = new GalleryRegressions(page);
-    await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
+    const htmlTiming = await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
     const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
     expect(artists.length).toBeGreaterThan(1000);
 
@@ -194,6 +209,10 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       await jumpToArtist(ui, group.artist, { expectLoader: false });
       expect(await ui.readRenderedArtistAlbumCount(group.artist)).toBe(group.authoritativeAlbums);
     }
+    const reloadTiming = await waitForSyntheticRoot(
+      page, galleryActions, navigationPanelActions, 'Root HTML after browsing');
+    expectTimingBudgetOutcome(expect, htmlTiming, 'Root HTML response');
+    expectTimingBudgetOutcome(expect, reloadTiming, 'Root HTML after browsing');
   });
 
   test('root continuation starts eight viewports early and never reaches a hard stop during its real request', async ({
@@ -202,7 +221,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     page,
   }) => {
     const ui = new GalleryRegressions(page);
-    await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
+    const htmlTiming = await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
 
     let requestGeometry = null;
     // parity-check: allow-read-only-measurement-evaluate -- distinguish appended albums from the initial page
@@ -277,5 +296,6 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     }
     expect(crossedBoundary, 'continued native scrolling must reach a newly appended album').toBe(true);
     await expect(appendedCard).toBeInViewport();
+    expectTimingBudgetOutcome(expect, htmlTiming, 'Root HTML response');
   });
 });

@@ -403,6 +403,7 @@ def create_asgi_app():
         TargetedReconciliationScheduler,
     )
     from music_app.services.runtime_shutdown import request_runtime_shutdown
+    from music_app.services.runtime_asset_versions import runtime_asset_version_cache
     from music_app.services.postgres_connections import prewarm_connection_pool
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
@@ -477,6 +478,7 @@ def create_asgi_app():
                 ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
+                ("runtime asset versions", runtime_asset_version_cache.close),
                 ("runtime", lambda: request_runtime_shutdown(runtime)),
             )
             for stage, shutdown in shutdown_stages:

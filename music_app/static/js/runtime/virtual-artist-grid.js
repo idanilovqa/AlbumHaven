@@ -810,6 +810,9 @@ class VirtualArtistGrid {
       || !Number.isFinite(Number(position?.scrollLeft))
     ) return false;
     this.invalidateScrollStabilization();
+    // Returning from a mobile child page supersedes any deferred reset that
+    // belonged to the artist selection which produced the retained parent.
+    this._resetScrollAfterMeasure = false;
     const preservedAbsoluteScroll = {
       renderGeneration: this._renderGeneration,
       scrollLeft: Math.max(0, Number(position.scrollLeft)),
@@ -1292,9 +1295,18 @@ class VirtualArtistGrid {
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     if (event?.type === 'touchstart') {
+      const pendingMeasurement = Boolean(this._measureRaf || this._measureTimeout);
+      if (this._measureRaf) {
+        cancelBrowserAnimationFrame(this._measureRaf);
+        this._measureRaf = null;
+      }
+      if (this._measureTimeout) {
+        clearBrowserTimeout(this._measureTimeout);
+        this._measureTimeout = 0;
+      }
       this._touchScrollGestureActive = true;
       this._touchScrollGestureHadScroll =
-        this._touchScrollGestureHadScroll || Boolean(this._measureTimeout);
+        this._touchScrollGestureHadScroll || pendingMeasurement;
     }
     this.invalidateScrollStabilization({ cancelScrollRestore: true });
   }
@@ -1884,6 +1896,7 @@ class VirtualArtistGrid {
     }
     let measureRafOwner = 0;
     measureRafOwner = scheduleBrowserAnimationFrame(() => {
+      if (this._measureRaf !== measureRafOwner) return;
       this._activeMeasureRafOwner = measureRafOwner;
       this._measureRaf = null;
       this.recordDiagnosticEvent('measure-frame-started', { measureRafOwner });

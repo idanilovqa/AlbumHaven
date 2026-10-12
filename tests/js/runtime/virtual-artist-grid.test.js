@@ -1551,6 +1551,40 @@ test('mobile album return refresh preserves a jump-scroll coordinate while its v
   );
 });
 
+test('mobile album return cancels a stale artist-selection reset before delayed measurement', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.restoreScrollAnchor = (anchor) => {
+    scrollEl.scrollTop = Number(anchor?.scrollTop || 0);
+  };
+
+  virtualGrid._resetScrollAfterMeasure = true;
+  scrollEl.scrollTop = 5320;
+  assert.equal(
+    virtualGrid.restoreOwnedAbsoluteScrollPosition({ scrollLeft: 0, scrollTop: 5320 }),
+    true,
+  );
+  virtualGrid.stabilizeScrollAfterMeasurement(null);
+
+  assert.equal(
+    scrollEl.scrollTop,
+    5320,
+    'the restored gallery must own the viewport before a delayed artist-selection measurement',
+  );
+  scheduledFrames.at(-1)();
+  assert.equal(
+    scrollEl.scrollTop,
+    5320,
+    'the delayed stabilization frame must not replay the superseded reset-to-top intent',
+  );
+});
+
 test('mobile touch scrolling defers row measurement until the gesture ends', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -1583,6 +1617,42 @@ test('mobile touch scrolling defers row measurement until the gesture ends', () 
   );
   releaseSettleTimer.callback();
   assert.equal(measurementRequests, 1);
+});
+
+test('mobile touch start cancels a row measurement queued before the gesture', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    const id = scheduledFrames.size + 1;
+    scheduledFrames.set(id, callback);
+    return id;
+  };
+  let measurementCount = 0;
+  virtualGrid.measureRenderedRows = () => {
+    measurementCount += 1;
+  };
+
+  virtualGrid.scheduleMeasureRows(true);
+  const preGestureFrameId = virtualGrid._measureRaf;
+  const preGestureFrame = scheduledFrames.get(preGestureFrameId);
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+
+  assert.ok(
+    context.canceledBrowserAnimationFrames.includes(preGestureFrameId),
+    'touch start must cancel row reconciliation queued before the gesture',
+  );
+  assert.equal(virtualGrid._measureRaf, null);
+  preGestureFrame();
+  assert.equal(measurementCount, 0, 'a cancelled frame must not alter layout during the swipe');
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  const settleTimer = context.__scheduledBrowserTimeouts
+    .filter(({ delay }) => delay === 96)
+    .at(-1);
+  settleTimer.callback();
+  scheduledFrames.get(virtualGrid._measureRaf)();
+  assert.equal(measurementCount, 1, 'the deferred measurement must run after touch release');
 });
 
 test('mobile album taps do not schedule scroll measurement on touch release', () => {

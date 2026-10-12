@@ -1493,6 +1493,64 @@ test('a newer user wheel cancels a pending relative setGroups restoration', () =
   assert.equal(scrollEl.scrollTop, 1400);
 });
 
+test('mobile album return refresh preserves a jump-scroll coordinate while its virtual render is pending', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  let relativeAnchorCaptureCount = 0;
+  virtualGrid.captureScrollAnchor = () => {
+    relativeAnchorCaptureCount += 1;
+    return { scrollLeft: 0, scrollTop: 320 };
+  };
+  virtualGrid.restoreScrollAnchor = (anchor) => {
+    scrollEl.scrollTop = Number(anchor?.scrollTop || 0);
+  };
+
+  scrollEl.scrollTop = 5320;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  const pendingJumpRenderFrameId = virtualGrid._raf;
+  assert.ok(pendingJumpRenderFrameId, 'jump scroll must still be awaiting its virtual render');
+
+  assert.equal(
+    virtualGrid.restoreOwnedAbsoluteScrollPosition({ scrollLeft: 0, scrollTop: 5320 }),
+    true,
+    'Back to Gallery must restore the retained mobile parent coordinate immediately',
+  );
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveMountedGalleryChildren: true,
+  });
+
+  assert.ok(
+    context.canceledBrowserAnimationFrames.includes(pendingJumpRenderFrameId),
+    'the superseded pre-refresh render frame must be cancelled',
+  );
+  assert.equal(
+    relativeAnchorCaptureCount,
+    0,
+    'refresh must not capture a relative anchor from the stale pre-jump DOM',
+  );
+  assert.equal(
+    scrollEl.scrollTop,
+    5320,
+    'background pagination must retain the user-owned jump position',
+  );
+  scheduledFrames.at(-1)();
+  assert.equal(
+    scrollEl.scrollTop,
+    5320,
+    'the delayed settled restoration must not return to the stale pre-jump artist',
+  );
+});
+
 test('an album-card click does not surrender pending absolute scroll restoration', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

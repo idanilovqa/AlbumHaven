@@ -35530,6 +35530,7 @@ class VirtualArtistGrid {
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
+    const hasPendingScrollRender = Boolean(supersededScrollRenderRafOwner);
     this._renderGeneration += 1;
     const renderGeneration = this._renderGeneration;
     this._preserveExistingChildrenGeneration = options.preserveMountedGalleryChildren
@@ -35579,7 +35580,10 @@ class VirtualArtistGrid {
         scrollTop: Math.max(0, Number(options.absoluteScrollPosition.scrollTop)),
       }
       : null;
-    const preservedAbsoluteScroll = preserveScroll && options.preserveAbsoluteScroll === true
+    const preservedAbsoluteScroll = preserveScroll && (
+      options.preserveAbsoluteScroll === true
+      || hasPendingScrollRender
+    )
       ? {
         renderGeneration,
         scrollLeft: requestedAbsoluteScroll?.scrollLeft ?? Number(this.scrollEl?.scrollLeft || 0),

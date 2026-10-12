@@ -1,3 +1,39 @@
+function observeArtistPlacement({ targetArtist, headingSelector, observe = false }) {
+  const read = () => {
+    const scroll = document.getElementById('albums-scroll');
+    const header = [...document.querySelectorAll(headingSelector)]
+      .find(item => item.getAttribute('data-scroll-artist') === targetArtist);
+    const section = header?.closest('.artist-section');
+    const rows = section?.querySelector('.artist-rows');
+    const firstCard = section?.querySelector('.album-card');
+    const chromeName = document.querySelector(
+      '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]',
+    );
+    if (!scroll || !header || !rows || !firstCard || !chromeName) {
+      return { rendered: false, chromeMatches: false, rowsAligned: false, firstCardUncut: false };
+    }
+    const scrollRect = scroll.getBoundingClientRect();
+    const rowsRect = rows.getBoundingClientRect();
+    const firstCardRect = firstCard.getBoundingClientRect();
+    return {
+      rendered: true,
+      chromeMatches: chromeName.textContent.trim() === targetArtist,
+      rowsAligned: Math.abs(rowsRect.top - scrollRect.top) <= 1,
+      firstCardUncut: firstCardRect.top >= scrollRect.top - 1,
+    };
+
+  };
+  if (!observe) return read();
+  const samples = [];
+  let frame;
+  const sample = () => {
+    samples.push({ at: performance.now(), stable: Object.values(read()).every(Boolean) });
+    frame = requestAnimationFrame(sample);
+  };
+  frame = requestAnimationFrame(sample);
+  return { finish() { cancelAnimationFrame(frame); return samples; } };
+}
+
 export class GalleryRegressions {
   constructor(page) {
     this.page=page;
@@ -49,29 +85,46 @@ export class GalleryRegressions {
   }
   async readArtistJumpPlacement(artist) {
     // parity-check: allow-read-only-measurement-evaluate -- assert rendered artist content and chrome placement
-    return this.page.evaluate(({ targetArtist, headingSelector }) => {
-      const scroll = document.getElementById('albums-scroll');
-      const header = [...document.querySelectorAll(headingSelector)]
-        .find(item => item.getAttribute('data-scroll-artist') === targetArtist);
-      const section = header?.closest('.artist-section');
-      const rows = section?.querySelector('.artist-rows');
-      const firstCard = section?.querySelector('.album-card');
-      const chromeName = document.querySelector(
-        '[data-gallery-bar-instance="gallery"] [data-gallery-context-name]',
-      );
-      if (!scroll || !header || !rows || !firstCard || !chromeName) {
-        return { rendered: false, chromeMatches: false, rowsAligned: false, firstCardUncut: false };
-      }
-      const scrollRect = scroll.getBoundingClientRect();
-      const rowsRect = rows.getBoundingClientRect();
-      const firstCardRect = firstCard.getBoundingClientRect();
-      return {
-        rendered: true,
-        chromeMatches: chromeName.textContent.trim() === targetArtist,
-        rowsAligned: Math.abs(rowsRect.top - scrollRect.top) <= 1,
-        firstCardUncut: firstCardRect.top >= scrollRect.top - 1,
-      };
-    }, { targetArtist: artist, headingSelector: this.artistHeadingSelector });
+    return this.page.evaluate(observeArtistPlacement, {
+      targetArtist: artist, headingSelector: this.artistHeadingSelector,
+    });
+  }
+  async startArtistJumpPlacementObservation(artist) {
+    const handle = await this.page.evaluateHandle(observeArtistPlacement, {
+      targetArtist: artist, headingSelector: this.artistHeadingSelector, observe: true,
+    });
+    let finished = false;
+    return { async finish() {
+      if (finished) return [];
+      finished = true;
+      try {
+        // parity-check: allow-read-only-measurement-evaluate -- collect closure-owned geometry samples and stop its frame
+        return await handle.evaluate(observation => observation.finish());
+      } finally { await handle.dispose(); }
+    } };
+  }
+  async firstAlbumKeyForArtist(artist) {
+    // parity-check: allow-read-only-measurement-evaluate -- read first rendered album identity under exact artist heading
+    return this.page.evaluate(({ artist, headingSelector }) => {
+      const heading = [...document.querySelectorAll(headingSelector)]
+        .find(candidate => candidate.getAttribute('data-scroll-artist') === artist);
+      return heading?.closest('.artist-section')?.querySelector('[data-open-tracklist="1"][data-album-key]')
+        ?.getAttribute('data-album-key') || '';
+    }, { artist, headingSelector: this.artistHeadingSelector });
+  }
+  albumMetadataByKey(key) { return this.albumCardByKey(key).locator('.album-meta-row'); }
+  get mobileAlbum() { return this.page.locator('#mobile-page-outlet #track-modal'); }
+  get mobileBack() { return this.page.locator('#mobile-back-button'); }
+  async longPressArtist(row) {
+    const box = await row.boundingBox();
+    if (!box) throw new Error('Artist row is not visible for long press');
+    const cdp = await this.page.context().newCDPSession(this.page);
+    try {
+      await cdp.send('Input.synthesizeTapGesture', {
+        x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2),
+        duration: 600, gestureSourceType: 'touch', tapCount: 1,
+      });
+    } finally { await cdp.detach(); }
   }
   async readArtistJumpOwnership(artist) {
     // parity-check: allow-read-only-measurement-evaluate -- retain authoritative anchor ownership on placement failure
@@ -92,18 +145,21 @@ export class GalleryRegressions {
     }).first();
   }
 
-  async openArtistTreeContextMenu(artist) {
+  async sidebarArtistSourceIndex(artist) {
+    // parity-check: allow-read-only-measurement-evaluate -- read canonical sidebar source index
+    return this.sidebarList.evaluate((list, targetArtist) => (
+      Array.isArray(list.albumHavenSidebarArtistsSource)
+        ? list.albumHavenSidebarArtistsSource.findIndex(item => String(item?.artist || '') === targetArtist)
+        : -1
+    ), artist);
+  }
+  async revealArtistWithWheel(artist) {
     const normalizedArtist = String(artist || '').trim();
     const row = this.page.locator(
       `${this.sidebarArtistSelector}[data-sidebar-artist=${JSON.stringify(normalizedArtist)}]`,
     ).first();
     if (!await row.count()) {
-      // parity-check: allow-read-only-measurement-evaluate -- locate the requested source index before native wheel input
-      const targetIndex = await this.sidebarList.evaluate((list, targetArtist) => (
-        Array.isArray(list.albumHavenSidebarArtistsSource)
-          ? list.albumHavenSidebarArtistsSource.findIndex(item => String(item?.artist || '') === targetArtist)
-          : -1
-      ), normalizedArtist);
+      const targetIndex = await this.sidebarArtistSourceIndex(normalizedArtist);
       if (targetIndex < 0) throw new Error(`Artist Tree does not contain ${normalizedArtist}`);
       for (let attempt = 0; attempt < 5 && !await row.count(); attempt += 1) {
         // parity-check: allow-read-only-measurement-evaluate -- aim native wheel input inside the actual visible scroll owner
@@ -127,13 +183,16 @@ export class GalleryRegressions {
         if (!position) throw new Error('Artist Tree scroll viewport is not visible');
         await this.page.mouse.move(position.x, position.y);
         await this.page.mouse.wheel(0, position.delta);
-        await row.waitFor({ state: 'attached', timeout: 1000 }).catch(error => {
-          if (error.name !== 'TimeoutError') throw error;
-        });
+        await this.page.waitForTimeout(1000);
       }
       await row.waitFor({ state: 'attached', timeout: 1000 });
     }
     await row.scrollIntoViewIfNeeded();
+    await row.waitFor({ state: 'visible', timeout: 1000 });
+    return row;
+  }
+  async openArtistTreeContextMenu(artist) {
+    const row = await this.revealArtistWithWheel(artist);
     await row.click({ button: 'right' });
   }
   async readMountedArtistsNearCenter() {

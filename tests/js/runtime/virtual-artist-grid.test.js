@@ -1551,6 +1551,77 @@ test('mobile album return refresh preserves a jump-scroll coordinate while its v
   );
 });
 
+test('mobile touch scrolling defers row measurement until the gesture ends', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  let measurementRequests = 0;
+  virtualGrid.scheduleMeasureRows = () => {
+    measurementRequests += 1;
+  };
+
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 840;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  const gestureSettleTimer = context.__scheduledBrowserTimeouts.find(({ delay }) => delay === 96);
+  assert.ok(gestureSettleTimer, 'scrolling must schedule a bounded settle check');
+
+  gestureSettleTimer.callback();
+  assert.equal(
+    measurementRequests,
+    0,
+    'row measurement must not compete with a touch gesture that is still active',
+  );
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  const releaseSettleTimer = context.__scheduledBrowserTimeouts
+    .filter(({ delay }) => delay === 96)
+    .at(-1);
+  assert.notEqual(
+    releaseSettleTimer?.id,
+    gestureSettleTimer.id,
+    'touch release must start a fresh quiet-period check',
+  );
+  releaseSettleTimer.callback();
+  assert.equal(measurementRequests, 1);
+});
+
+test('mobile album taps do not schedule scroll measurement on touch release', () => {
+  const { context, scrollEl } = createRuntimeContext();
+
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+
+  assert.equal(
+    context.__scheduledBrowserTimeouts.filter(({ delay }) => delay === 96).length,
+    0,
+  );
+});
+
+test('mobile multi-touch scrolling retains pending measurement until every touch ends', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  let measurementRequests = 0;
+  virtualGrid.scheduleMeasureRows = () => {
+    measurementRequests += 1;
+  };
+
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  const gestureSettleTimer = context.__scheduledBrowserTimeouts.find(({ delay }) => delay === 96);
+  gestureSettleTimer.callback();
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}, {}] });
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [{}] });
+  assert.equal(measurementRequests, 0);
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  const releaseSettleTimer = context.__scheduledBrowserTimeouts
+    .filter(({ delay }) => delay === 96)
+    .at(-1);
+  assert.notEqual(releaseSettleTimer?.id, gestureSettleTimer.id);
+  releaseSettleTimer.callback();
+  assert.equal(measurementRequests, 1);
+});
+
 test('an album-card click does not surrender pending absolute scroll restoration', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

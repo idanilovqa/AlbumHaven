@@ -35042,6 +35042,8 @@ class VirtualArtistGrid {
     this._albumCardPointerReleaseRaf = 0;
     this._deferredPointerGestureRender = null;
     this._measureTimeout = 0;
+    this._touchScrollGestureActive = false;
+    this._touchScrollGestureHadScroll = false;
     this._resetScrollAfterMeasure = false;
     this.isScrollSettled = true;
     this._diagnosticSequence = 0;
@@ -35055,6 +35057,7 @@ class VirtualArtistGrid {
     globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ = this.diagnostics;
     this.onScroll = this.onScroll.bind(this);
     this.onUserScrollIntent = this.onUserScrollIntent.bind(this);
+    this.onTouchScrollEnd = this.onTouchScrollEnd.bind(this);
     this.onResize = this.onResize.bind(this);
     this.onArtistTreeSettled = this.onArtistTreeSettled.bind(this);
     this.onPointerDown = this.onPointerDown.bind(this);
@@ -35062,6 +35065,8 @@ class VirtualArtistGrid {
     this.scrollEl.addEventListener('scroll', this.onScroll, { passive: true });
     this.scrollEl.addEventListener('wheel', this.onUserScrollIntent, { passive: true });
     this.scrollEl.addEventListener('touchstart', this.onUserScrollIntent, { passive: true });
+    this.scrollEl.addEventListener('touchend', this.onTouchScrollEnd, { passive: true });
+    this.scrollEl.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true });
     this.scrollEl.addEventListener('pointerdown', this.onUserScrollIntent, { capture: true });
     if (this.containerEl && typeof this.containerEl.addEventListener === 'function') {
       this.containerEl.addEventListener('pointerdown', this.onPointerDown, { capture: true });
@@ -35110,6 +35115,8 @@ class VirtualArtistGrid {
     this.scrollEl.removeEventListener('scroll', this.onScroll);
     this.scrollEl.removeEventListener('wheel', this.onUserScrollIntent);
     this.scrollEl.removeEventListener('touchstart', this.onUserScrollIntent);
+    this.scrollEl.removeEventListener('touchend', this.onTouchScrollEnd);
+    this.scrollEl.removeEventListener('touchcancel', this.onTouchScrollEnd);
     this.scrollEl.removeEventListener('pointerdown', this.onUserScrollIntent, { capture: true });
     if (this.containerEl && typeof this.containerEl.removeEventListener === 'function') {
       this.containerEl.removeEventListener('pointerdown', this.onPointerDown, { capture: true });
@@ -35140,6 +35147,8 @@ class VirtualArtistGrid {
     this._albumCardPointerGestureActive = false;
     this._activeAlbumCardPointerId = null;
     this._deferredPointerGestureRender = null;
+    this._touchScrollGestureActive = false;
+    this._touchScrollGestureHadScroll = false;
     if (this._measureRaf) {
       cancelBrowserAnimationFrame(this._measureRaf);
       this._measureRaf = null;
@@ -35950,14 +35959,8 @@ class VirtualArtistGrid {
       this.invalidateScrollStabilization();
     }
     this.isScrollSettled = false;
-    if (this._measureTimeout) {
-      clearBrowserTimeout(this._measureTimeout);
-    }
-    this._measureTimeout = scheduleBrowserTimeout(() => {
-      this._measureTimeout = 0;
-      this.isScrollSettled = true;
-      this.scheduleMeasureRows(true);
-    }, 96);
+    if (this._touchScrollGestureActive) this._touchScrollGestureHadScroll = true;
+    this.scheduleSettledMeasurement();
     if (this._raf) {
       this.updateScrollDiagnostic(this._raf, true);
       return;
@@ -35990,7 +35993,31 @@ class VirtualArtistGrid {
 
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
+    if (event?.type === 'touchstart') {
+      this._touchScrollGestureActive = true;
+      this._touchScrollGestureHadScroll =
+        this._touchScrollGestureHadScroll || Boolean(this._measureTimeout);
+    }
     this.invalidateScrollStabilization({ cancelScrollRestore: true });
+  }
+
+  onTouchScrollEnd(event) {
+    if (Number(event?.touches?.length || 0) > 0) return;
+    if (!this._touchScrollGestureActive) return;
+    const hadScroll = this._touchScrollGestureHadScroll;
+    this._touchScrollGestureActive = false;
+    this._touchScrollGestureHadScroll = false;
+    if (hadScroll) this.scheduleSettledMeasurement();
+  }
+
+  scheduleSettledMeasurement() {
+    if (this._measureTimeout) clearBrowserTimeout(this._measureTimeout);
+    this._measureTimeout = scheduleBrowserTimeout(() => {
+      this._measureTimeout = 0;
+      if (this._touchScrollGestureActive) return;
+      this.isScrollSettled = true;
+      this.scheduleMeasureRows(true);
+    }, 96);
   }
 
   onArtistTreeSettled() {

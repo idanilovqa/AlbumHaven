@@ -1691,8 +1691,10 @@ test('accumulated root evidence rejects stale page revision and scope', async ()
   ]) assert.equal(matchesAccumulatedRootProjection(payload, { ...projection, ...changed }), false, JSON.stringify(changed));
 });
 
-test('cleared search certifies only the exact restored server family', async () => {
+for (const sourceKind of ['response', 'reload SSR']) {
+test(`${sourceKind}: cleared search certifies only the exact restored server family`, async () => {
   const { ProductionViewObserver, readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
   const page = new FakePage();
   const observer = new ProductionViewObserver(page, page);
   const groups = ['Lead', 'Partner'].map(artist => ({ artist,
@@ -1700,11 +1702,20 @@ test('cleared search certifies only the exact restored server family', async () 
   const source = { payload_tier: 'full', query: 'Partner', selected_artist: 'Partner',
     visible_library_categories: ['main_library'], artist_groups: groups,
     primary_artist_groups: groups.slice(1), family_artist_groups: groups.slice(0, 1) };
-  const search = request('http://localhost/view-data?q=Partner&category=main_library');
-  page.emit('request', search);
-  page.emit('response', response(search, source));
-  page.emit('requestfinished', search);
-  await flushPromises();
+  if (sourceKind === 'reload SSR') {
+    page.emit('documentcommitted');
+    assert.equal(observer.read().retainedFamilyPayload, null);
+    assert.equal(await GalleryPage.prototype.readLatestProductionViewPayload.call({
+      productionViewObserver: observer,
+      readProductionBootstrapPayload: async () => ({ initial_view: source }),
+    }), source);
+  } else {
+    const search = request('http://localhost/view-data?q=Partner&category=main_library');
+    page.emit('request', search);
+    page.emit('response', response(search, source));
+    page.emit('requestfinished', search);
+    await flushPromises();
+  }
   const clear = request('http://localhost/view-data?category=main_library&payload_tier=sidebar');
   page.emit('request', clear);
   page.emit('response', response(clear, { payload_tier: 'sidebar', artist_groups: [] }));
@@ -1740,7 +1751,6 @@ test('cleared search certifies only the exact restored server family', async () 
     assert.equal(evidence({ ...applied, ...changed }).canonicalReadyMatch, false, JSON.stringify(changed));
     assert.equal(evidence({ ...applied, ...changed }).canonicalInventoryComplete, false, JSON.stringify(changed));
   }
-  const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
   const gallery = Object.create(GalleryPage.prototype);
   gallery.productionViewObserver = observer;
   gallery.page = { locator: () => ({ count: async () => 0 }),
@@ -1758,6 +1768,7 @@ test('cleared search certifies only the exact restored server family', async () 
   assert.equal(evidence().canonicalReadyMatch, false);
   assert.equal(evidence().canonicalInventoryComplete, false);
 });
+}
 
 test('local sidebar membership uses applied scope without inheriting old search completeness', async () => {
   const { readAppliedAlbumTargetEvidence } = await import(observerUrl);
@@ -1883,11 +1894,16 @@ test('bounded gallery pages expose browse telemetry without claiming a complete 
 test('browse telemetry accepts the actual SSR first-paint payload without a redundant full request', async () => {
   const { GalleryPage } = await import(pathToFileURL(path.join(__dirname, '..', 'e2e', 'poms', 'galleryPage.js')).href);
   const payload = { payload_tier: 'gallery_page', persistence_backend: 'postgres', artist_count: 6045, album_count: 14674 };
+  const accepted = [];
   const owner = {
-    productionViewObserver: { readLatestFullPayloadWhenSettled: async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 0, pendingPayloadReadCount: 0 }) },
+    productionViewObserver: {
+      readLatestFullPayloadWhenSettled: async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 0, pendingPayloadReadCount: 0, stateRevision: 1 }),
+      acceptBootstrapPresence: (value, revision) => accepted.push([value, revision]),
+    },
     readProductionBootstrapPayload: async () => ({ startup_payload: { first_paint_view: payload } }),
   };
   assert.equal(await GalleryPage.prototype.readLatestProductionViewPayload.call(owner), payload);
+  assert.deepEqual(accepted, [[payload, 1]]);
   owner.productionViewObserver.readLatestFullPayloadWhenSettled = async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 1, pendingPayloadReadCount: 0 });
   await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /Expected an observed production view/);
   owner.productionViewObserver.readLatestFullPayloadWhenSettled = async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 0, pendingPayloadReadCount: 0 });

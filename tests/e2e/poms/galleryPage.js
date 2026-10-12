@@ -806,7 +806,10 @@ export class GalleryPage extends BasePage {
       const bootstrap = await this.readProductionBootstrapPayload();
       const payload = bootstrap?.startup_payload?.first_paint_view || bootstrap?.initial_view;
       if (payload && ['full', 'gallery_page'].includes(String(payload.payload_tier || 'full'))
-          && (idle || (payload.gallery_page && !payload.query && !payload.selected_artist))) return payload;
+          && (idle || (payload.gallery_page && !payload.query && !payload.selected_artist))) {
+        this.productionViewObserver.acceptBootstrapPresence(payload, observation.stateRevision);
+        return payload;
+      }
     }
     throw new Error('Expected an observed production view response or settled SSR payload before reading browse telemetry.');
   }

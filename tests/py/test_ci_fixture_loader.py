@@ -1361,6 +1361,45 @@ def test_loader_uses_copy_staging_then_resets_identities_and_analyzes() -> None:
     assert "library.local_track_files" in normalized[-1]
 
 
+@pytest.mark.parametrize(
+    ("table", "key", "dependent"),
+    [
+        ("local_artists", "fixture_artist_key", "local_albums"),
+        ("local_albums", "fixture_album_key", "local_tracks"),
+        ("local_tracks", "fixture_track_key", "local_track_files"),
+    ],
+)
+def test_projection_lookup_indexes_exist_only_during_fixture_loading(
+    table: str, key: str, dependent: str
+) -> None:
+    loader = _load_fixture_loader_module()
+    statements = [
+        " ".join(sql.casefold().split())
+        for sql in loader.product_projection_statements("synthetic-large-library")
+    ]
+    inserted = next(
+        i for i, sql in enumerate(statements)
+        if sql.startswith(f"insert into library.{table} ")
+    )
+    lookup = next(
+        (i for i, sql in enumerate(statements)
+         if sql.startswith("create index ")
+         and f"on library.{table} " in sql
+         and f"metadata->>'{key}'" in sql),
+        None,
+    )
+    assert lookup is not None, f"Missing bulk-load lookup index for {table}"
+    index_name = statements[lookup].split()[2]
+    analyzed = statements.index(f"analyze library.{table}")
+    consumed = next(
+        i for i, sql in enumerate(statements)
+        if sql.startswith(f"insert into library.{dependent} ")
+    )
+    removed = statements.index(f"drop index library.{index_name}")
+    assert inserted < lookup < analyzed < consumed < removed < len(statements) - 1
+    assert statements[-1].startswith("analyze ")
+
+
 def test_loader_copy_seed_to_staging_uses_psycopg_row_copy(tmp_path: Path) -> None:
     loader = _load_fixture_loader_module()
     seed = _write_seed(tmp_path / "fixture.ndjson.zst", [{"table": "local_artists", "record": {"artistKey": "a", "name": "Artist"}}])
@@ -1382,6 +1421,11 @@ def test_loader_indexes_staging_join_keys_before_validation_and_projection() -> 
 
     statements = [" ".join(statement.casefold().split()) for statement, _ in connection.executed]
     assert statements[-1] == "analyze fixture_stage"
+    assert any(
+        "on fixture_stage ((record->>'trackref'))" in statement
+        and "where table_name='local_track_files'" in statement
+        for statement in statements
+    )
     assert any(
         "where table_name='local_artists'" in statement
         and "record->>'artistkey'" in statement

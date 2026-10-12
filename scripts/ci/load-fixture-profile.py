@@ -2160,12 +2160,27 @@ def validate_projected_scan_discovery_absence(
         raise ValueError("scan discovery rows exist before incremental scan")
 
 
+def validate_synthetic_scale(profile: str, definition: dict, preset: str | None) -> None:
+    if not preset:
+        return
+    if preset != "production-calibration":
+        raise ValueError(f"Unknown synthetic scale preset: {preset}")
+    if profile != "synthetic-large-library":
+        return
+    expected = {"artists": 6_345, "albums": 14_673, "tracks": 159_547, "trackFiles": 159_547}
+    counts = definition.get("counts", {})
+    actual = {key: counts.get(key) for key in expected}
+    if actual != expected:
+        raise ValueError(f"production-calibration fixture counts must equal {expected}; got {actual}")
+
+
 def load_fixture_profile(
     *,
     fixture_root: Path,
     profile: str,
     database_url: str,
     replace_existing: bool = False,
+    synthetic_scale_preset: str | None = None,
     connect: Callable[[str], Any] = psycopg.connect,
 ) -> None:
     fixture_root = fixture_root.resolve()
@@ -2175,6 +2190,7 @@ def load_fixture_profile(
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("fixture manifest is invalid JSON") from exc
     definition = validate_manifest_profile(manifest, profile)
+    validate_synthetic_scale(profile, definition, synthetic_scale_preset)
     validate_auxiliary_contract(fixture_root, profile, definition)
     validate_database_url(database_url)
     seed_path = (fixture_root / str(definition["databaseSeed"])).resolve()
@@ -2286,6 +2302,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Transactionally reset normal application tables before loading the fixture.",
     )
+    parser.add_argument(
+        "--synthetic-scale-preset",
+        choices=["production-calibration"],
+        default=os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET") or None,
+        help="Require calibrated synthetic manifest counts before database loading.",
+    )
     return parser.parse_args()
 
 
@@ -2296,6 +2318,7 @@ def main() -> int:
         profile=args.profile,
         database_url=args.database_url,
         replace_existing=args.replace_existing,
+        synthetic_scale_preset=args.synthetic_scale_preset,
     )
     return 0
 

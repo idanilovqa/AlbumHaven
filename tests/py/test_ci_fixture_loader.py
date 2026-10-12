@@ -2104,3 +2104,39 @@ def test_isolated_postgres_skip_or_fail_ci_fails_in_ci_and_skips_locally(monkeyp
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     with pytest.raises(pytest.skip.Exception, match="Postgres unavailable"):
         test_isolated_postgres_live._skip_or_fail_ci("Postgres unavailable")
+
+
+@pytest.mark.parametrize("counts", [
+    {"artists": 2081, "albums": 5346, "tracks": 57980, "trackFiles": 57980},
+    {"artists": 6345, "albums": 14673, "tracks": 159547, "trackFiles": 159546},
+])
+def test_calibrated_fixture_rejects_wrong_manifest_before_database(tmp_path, counts):
+    loader = _load_fixture_loader_module()
+    manifest = _manifest(counts=counts)
+    manifest["profiles"]["synthetic-large-library"] = manifest["profiles"].pop("functional-core")
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    def unexpected_connect(_url):
+        pytest.fail("Scale preflight must run before database access")
+    with pytest.raises(ValueError, match="production-calibration.*counts"):
+        loader.load_fixture_profile(
+            fixture_root=tmp_path, profile="synthetic-large-library",
+            database_url="postgresql://album_haven_migrator_test@localhost/album_haven_ci_test",
+            synthetic_scale_preset="production-calibration", connect=unexpected_connect,
+        )
+
+
+def test_calibrated_fixture_accepts_exact_scale_and_preserves_default_profiles():
+    loader = _load_fixture_loader_module()
+    definition = {"counts": {"artists": 6345, "albums": 14673, "tracks": 159547, "trackFiles": 159547}}
+    loader.validate_synthetic_scale("synthetic-large-library", definition, "production-calibration")
+    loader.validate_synthetic_scale("synthetic-large-library", {"counts": {}}, None)
+    loader.validate_synthetic_scale("functional-core", {"counts": {}}, "production-calibration")
+    with pytest.raises(ValueError, match="Unknown synthetic scale preset"):
+        loader.validate_synthetic_scale("synthetic-large-library", definition, "unknown")
+
+
+def test_fixture_cli_inherits_opt_in_calibration(monkeypatch):
+    loader = _load_fixture_loader_module()
+    monkeypatch.setenv("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET", "production-calibration")
+    monkeypatch.setattr("sys.argv", ["loader", "--fixture-root", ".", "--profile", "synthetic-large-library", "--database-url", "unused"])
+    assert loader._parse_args().synthetic_scale_preset == "production-calibration"

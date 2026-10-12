@@ -59,3 +59,13 @@ test('agent instructions require the complete search gate for relevant changes',
   assert.match(guidance, /pagination/iu);
   assert.match(guidance, /search-related\s+rendering/iu);
 });
+
+
+test('calibrated search gate keeps functional release selection independent', () => {
+  const runner = fs.readFileSync(path.join(repositoryRoot, 'scripts/run-search-regressions.ps1'), 'utf8');
+  assert.match(runner, /\[string\]\$FunctionalFixtureDistribution/u);
+  assert.match(runner, /if \(-not \[string\]::IsNullOrWhiteSpace\(\$FunctionalFixtureDistribution\)\) \{\s*\$fixtureDistributionRoot = \[IO\.Path\]::GetFullPath\(\$FunctionalFixtureDistribution\)/u);
+  assert.match(runner, /-FixtureDistribution\s+\$fixtureDistributionRoot/u);
+  assert.match(runner, /\$env:ALBUM_HAVEN_FIXTURE_ROOT = \$FixtureRoot/u);
+  assert.match(runner, /\$env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET = \$SyntheticScalePreset/u);
+});

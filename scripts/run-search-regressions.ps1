@@ -2,6 +2,8 @@
 param(
     [string]$PythonPath = $env:PLAYWRIGHT_PYTHON,
     [string]$FixtureRoot = $env:ALBUM_HAVEN_FIXTURE_ROOT,
+    [string]$FunctionalFixtureDistribution,
+    [ValidateSet('', 'production-calibration')][string]$SyntheticScalePreset = $env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET,
     [string]$Pgbin = $env:PGBIN,
     [string]$ChromeExecutable = $env:PLAYWRIGHT_CHROME_EXECUTABLE,
     [ValidateSet('17', '18')][string]$PostgresMajor = '18',
@@ -46,6 +48,9 @@ $playwright = Join-Path $repositoryRoot 'node_modules\.bin\playwright.cmd'
 $functionalRunner = Join-Path $repositoryRoot 'scripts\run-functional-e2e-local.ps1'
 $performanceRunner = Join-Path $repositoryRoot 'scripts\ci\run-performance-shard.ps1'
 $fixtureDistributionRoot = Split-Path -Parent (Split-Path -Parent ([IO.Path]::GetFullPath($FixtureRoot)))
+if (-not [string]::IsNullOrWhiteSpace($FunctionalFixtureDistribution)) {
+    $fixtureDistributionRoot = [IO.Path]::GetFullPath($FunctionalFixtureDistribution)
+}
 $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-search-regressions-$PID"
 $githubEnv = Join-Path $performanceTemp 'database.env'
 
@@ -53,6 +58,7 @@ $env:PLAYWRIGHT_PYTHON = $PythonPath
 $env:ALBUM_HAVEN_FIXTURE_ROOT = $FixtureRoot
 $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $FixtureRoot 'media'
 $env:ALBUM_HAVEN_FIXTURE_PROFILE = 'synthetic-large-library'
+$env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET = $SyntheticScalePreset
 $env:PLAYWRIGHT_CHROME_EXECUTABLE = $ChromeExecutable
 $env:PGBIN = $Pgbin
 

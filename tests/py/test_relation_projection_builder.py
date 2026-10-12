@@ -1018,3 +1018,38 @@ def test_full_album_facts_preserve_family_evidence_and_track_locations():
     assert fact.family_artists == ('Collaborator', 'Owner')
     assert fact.locations[0].relative_parts == ('Owner', 'Album', '01.flac')
     assert fact.locations[0].root_path == r'C:\Music'
+
+
+def test_artist_typo_rejects_impossible_match_without_full_ratio(
+    monkeypatch, isolated_artist_string_caches,
+):
+    builder, _ = isolated_artist_string_caches
+    original = builder.SequenceMatcher
+
+    class GuardedMatcher(original):
+        def ratio(self):
+            pytest.fail("An upper bound below 0.9 must skip full matching")
+
+    monkeypatch.setattr(builder, "SequenceMatcher", GuardedMatcher)
+    assert not builder._are_probable_artist_typos("Solar Abcdef", "Solar Uvwxyz")
+
+
+def test_artist_typo_upper_bound_preserves_original_decisions(isolated_artist_string_caches):
+    from difflib import SequenceMatcher
+    from itertools import product
+
+    builder, _ = isolated_artist_string_caches
+    names = [
+        "Solar Artist", "Solar Artis", "Solar Artists", "Solar Artixt",
+        "Solar Abcdef", "Solar Uvwxyz", "Solar Artist feat Guest",
+        "Solar Artist & Guest", "Aarni", "Aarn", "Annot Rhul", "Annöt Rhul",
+        "Ария", "Арда", "", "A", "A B", "A-B", "B A",
+    ]
+    for left, right in product(names, repeat=2):
+        a, b = builder._compact_key(left), builder._compact_key(right)
+        expected = bool(
+            left and right and left != right and a and b
+            and a[0] == b[0] and abs(len(a) - len(b)) <= 2
+            and SequenceMatcher(None, a, b).ratio() >= 0.9
+        )
+        assert builder._are_probable_artist_typos(left, right) == expected, (left, right)

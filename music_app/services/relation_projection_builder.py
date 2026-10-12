@@ -272,7 +272,9 @@ def _are_probable_artist_typos(left: str, right: str) -> bool:
         return False
     if abs(len(left_compact) - len(right_compact)) > 2:
         return False
-    return SequenceMatcher(None, left_compact, right_compact).ratio() >= 0.9
+    matcher = SequenceMatcher(None, left_compact, right_compact)
+    # quick_ratio is an upper bound: rejected pairs cannot meet the threshold.
+    return matcher.quick_ratio() >= 0.9 and matcher.ratio() >= 0.9
 
 
 def _merge_artist_alias(

@@ -14,10 +14,144 @@ import pytest
 
 from music_app.services.library_event_coordinator import CoordinatorProblem
 from music_app.services.library_watch import LibraryEvent
+from music_app.services.watcher_recovery_postgres import WatcherSessionReplacedError
 
 
 STARTED_AT = datetime(2026, 10, 11, 8, 0, tzinfo=timezone.utc)
 SESSION_TOKEN = UUID("00000000-0000-0000-0000-000000000001")
+
+
+class FinishAttempt:
+    def __init__(self, state="committed", finished=True, *, blocked=False, error=None):
+        self.result = SimpleNamespace(state=state, finished=finished)
+        self.blocked = blocked
+        self.error = error
+        self.entered = Event()
+        self.released = Event()
+        self.exited = Event()
+        self.cancel_count = 0
+        self.execute_count = 0
+        self.is_terminal = False
+        self.outcome = None
+
+    def execute(self):
+        self.execute_count += 1
+        self.entered.set()
+        try:
+            if self.blocked:
+                assert self.released.wait(2), "finish was not cancelled"
+            self.outcome = self.result
+            self.is_terminal = True
+            if self.error is not None:
+                raise self.error
+            return self.outcome
+        finally:
+            self.exited.set()
+
+    def cancel(self):
+        self.cancel_count += 1
+        self.released.set()
+
+
+def _finish_repository(attempt):
+    repository = FakeRepository()
+    repository.finish_prepare_calls = []
+
+    def prepare_runtime_session_finish(**kwargs):
+        repository.finish_prepare_calls.append(kwargs)
+        return attempt
+
+    repository.prepare_runtime_session_finish = prepare_runtime_session_finish
+    return repository
+
+
+def test_session_finish_exhausted_deadline_performs_no_repository_io():
+    repository = _finish_repository(FinishAttempt())
+    now = [10.0]
+    controller, _ = _started_controller(repository, monotonic_clock=lambda: now[0])
+    controller.stop_retry_and_flush(deadline=11.0)
+    now[0] = 11.0
+
+    with pytest.raises(RuntimeError):
+        controller.finish(deadline=11.0)
+
+    assert controller._finished is False
+    assert repository.finish_prepare_calls == []
+    assert repository.finish_calls == []
+
+
+def test_session_finish_uses_prepared_attempt_and_preserves_deadline():
+    attempt = FinishAttempt()
+    repository = _finish_repository(attempt)
+    controller, _ = _started_controller(repository)
+    controller.stop_retry_and_flush(deadline=11.0)
+
+    assert controller.finish(deadline=11.0) is True
+    assert controller.finish(deadline=11.0) is True
+
+    assert repository.finish_prepare_calls == [{
+        "library_id": 7,
+        "session_token": SESSION_TOKEN,
+        "operation_deadline": 11.0,
+    }]
+    assert attempt.execute_count == 1
+    assert repository.finish_calls == []
+
+
+@pytest.mark.parametrize("state,finished,error", [
+    ("committed", False, None),
+    ("rolled_back", False, WatcherSessionReplacedError("session replaced")),
+    ("indeterminate", False, None),
+    ("indeterminate", True, None),
+])
+def test_session_finish_requires_confirmed_success_without_automatic_retry(state, finished, error):
+    attempt = FinishAttempt(state, finished, error=error)
+    repository = _finish_repository(attempt)
+    controller, timers = _started_controller(repository)
+    controller.stop_retry_and_flush(deadline=11.0)
+
+    with pytest.raises(type(error) if error is not None else RuntimeError) as raised:
+        controller.finish(deadline=11.0)
+
+    if error is not None:
+        assert raised.value is error
+    assert controller._finished is False
+    assert attempt.execute_count == 1
+    assert len(repository.finish_prepare_calls) == 1
+    assert repository.prepare_calls == []
+    assert repository.finish_calls == []
+    assert timers.timers == []
+
+
+def test_session_finish_cancels_and_joins_blocked_attempt_within_deadline():
+    attempt = FinishAttempt("indeterminate", False, blocked=True)
+    repository = _finish_repository(attempt)
+    threads = []
+
+    def thread_factory(target, name):
+        thread = Thread(target=target, name=name, daemon=True)
+        threads.append(thread)
+        return thread
+
+    controller, _ = _started_controller(
+        repository, monotonic_clock=monotonic, thread_factory=thread_factory,
+    )
+    deadline = monotonic() + 0.2
+    controller.stop_retry_and_flush(deadline=deadline)
+    try:
+        with pytest.raises(RuntimeError):
+            controller.finish(deadline=deadline)
+        assert controller._finished is False
+        assert attempt.entered.is_set()
+        assert attempt.cancel_count == 1
+        assert attempt.exited.is_set()
+        assert threads and all(not thread.is_alive() for thread in threads)
+        assert repository.finish_prepare_calls[0]["operation_deadline"] == deadline
+        assert repository.finish_calls == []
+    finally:
+        attempt.released.set()
+        for thread in threads:
+            thread.join(2)
 
 
 def _controller_type():

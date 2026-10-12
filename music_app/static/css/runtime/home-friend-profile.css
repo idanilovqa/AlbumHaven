@@ -1,0 +1,19 @@
+/* Composition only: native NavigationTree, ProfileIdentity, Button and Form
+   own their surfaces, interaction states, sizing and focus treatment. */
+.home-friends__directory { min-width: 0; }
+.home-friends__person-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.home-friends__person-navigation { flex: 1 1 auto; min-width: 0; }
+.home-friends__person-navigation > .navigation-tree-item { width: 100%; }
+.home-friends__person-row > .home-friends__button { flex: 0 0 auto; }
+.home-friends__requests { display: flex; flex-direction: column; gap: 6px; }
+.home-friends__requests h3 { margin: 12px 0 4px; }
+.home-member-profile, .home-friend-request { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.home-friend-request { width: min(100%, 480px); }
+.home-friend-request p { margin: 0; overflow-wrap: anywhere; }
+.home-friend-request__actions, .home-friend-request__footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.home-friend-request__footer { justify-content: flex-end; }
+@media (max-width: 600px) {
+  .home-friends__person-row { flex-wrap: wrap; }
+  .home-friends__person-navigation { flex-basis: min(100%, 180px); }
+  .home-friend-request { width: 100%; }
+}

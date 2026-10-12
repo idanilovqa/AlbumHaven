@@ -77,8 +77,77 @@
   text-transform: none;
 }
 
+/* Sort controls fit the existing header. Button owns interaction and focus. */
+.compact-data-table-header:has(.compact-data-table__sort) {
+  box-sizing: border-box;
+}
+
+:root .compact-data-table .compact-data-table__sort {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 18px;
+  text-align: inherit;
+  box-shadow: none;
+}
+
+.compact-data-table__sort .ui-button__content {
+  justify-content: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
+.compact-data-table [data-cdt-action] .compact-data-table__sort .ui-button__content {
+  justify-content: flex-end;
+}
+
+.compact-data-table__sort-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-data-table__sort-icon {
+  flex: 0 0 1em;
+  width: 1em;
+  height: 1em;
+  line-height: 1;
+  text-align: center;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+/* Expand the pointer target within header padding without changing row height. */
+.compact-data-table__sort::before {
+  content: "";
+  position: absolute;
+  inset-block: -3px;
+  inset-inline: 0;
+}
+
 .compact-data-table-row + .compact-data-table-row {
   border-top: 1px solid color-mix(in srgb, var(--cdt-divider, rgba(148, 163, 184, 0.18)) 65%, transparent);
+}
+
+/* Selection is independent of the native current-player outline and spectra. */
+.compact-data-table[data-cdt-selection="multiple"] .compact-data-table-row[aria-selected="true"] {
+  background: color-mix(in srgb, var(--appearance-selected-accent, var(--appearance-accent, var(--text))) 14%, transparent);
+}
+.compact-data-table[data-cdt-selection="multiple"] .compact-data-table-row:focus-visible {
+  outline: 2px solid var(--appearance-interaction-outline, var(--appearance-selected-accent, var(--text)));
+  outline-offset: -2px;
 }
 
 .compact-data-table [data-cdt-action] {
@@ -130,4 +199,20 @@
     white-space: nowrap;
     border: 0;
   }
+
+  .compact-data-table[data-cdt-mobile="stack"] .compact-data-table-header:has(.compact-data-table__sort) {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: var(--cdt-row-padding);
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+  }
+}
+
+.compact-data-table[data-cdt-narrow="true"] { container-type: inline-size; }
+@container (max-width: 480px) {
+  .compact-data-table[data-cdt-narrow="true"] :is(.compact-data-table-header, .compact-data-table-row:not(.compact-data-table-row--full-span)) { grid-template-columns: var(--cdt-narrow-columns); }
+  .compact-data-table[data-cdt-narrow="true"] [data-cdt-hide-narrow] { display: none; }
 }

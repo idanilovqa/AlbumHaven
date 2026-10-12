@@ -59,6 +59,32 @@
     let disposeContent = () => {};
     let destroyed = false;
     let navigationPending = false;
+    let playlistDraft = null, draftDeparture = null, retainedDraft = null;
+    const draftMarker = owner => owner ? {token: owner.token, scopeKey: owner.scopeKey} : null;
+    const ownsDraft = (owner, snapshot) => Boolean(owner && snapshot?.playlistDraft?.token === owner.token
+      && snapshot.playlistDraft.scopeKey === owner.scopeKey);
+    const liveDraft = () => {
+      const owner = playlistDraft;
+      if (owner && owner.isCurrent() !== true) {
+        playlistDraft = null; draftDeparture = null; owner.discard();
+      }
+      return playlistDraft;
+    };
+    const deferPlaylistDraftNavigation = callback => {
+      const owner = liveDraft();
+      if (!owner || retainedDraft === owner) return false;
+      if (draftDeparture) return Promise.resolve(false);
+      const position = historyPosition(window.history.state), url = window.location.href;
+      const departure = {owner}; draftDeparture = departure;
+      return Promise.resolve().then(() => owner.confirmLeave()).catch(() => false).then(accepted => {
+        if (draftDeparture !== departure) return false;
+        draftDeparture = null;
+        if (accepted !== true || liveDraft() !== owner || position !== historyPosition(window.history.state)
+          || url !== window.location.href) return false;
+        playlistDraft = null; owner.discard();
+        return callback?.();
+      });
+    };
     const urlFor = (value) => {
       try {
         const url = new URL(value, window.location.href);
@@ -75,13 +101,29 @@
         error.hidden = false;
       }
     };
-    const updateHistory = (url, mode, stateSnapshot = null) => {
+    const updateHistory = (url, mode, stateSnapshot) => {
       const position = historyPosition(window.history.state) ?? currentPosition;
       if (mode === 'push') window.history.pushState({ ...stateSnapshot, [historyPositionKey]: position + 1 }, '', url);
-      else if (mode === 'replace') window.history.replaceState({ ...window.history.state, [historyPositionKey]: position }, '', url);
+      else if (mode === 'replace') {
+        // Settings POST omits its snapshot; public replacement supplies one.
+        const snapshot = stateSnapshot === undefined ? window.history.state : stateSnapshot;
+        window.history.replaceState({ ...snapshot, [historyPositionKey]: position }, '', url);
+      }
       currentPosition = historyPosition(window.history.state) ?? position;
       currentHistoryState = window.history.state;
       currentUrl = url;
+    };
+    const commitLibraryHistory = (url, mode, stateSnapshot) => {
+      // A cached library selection can commit without starting another fetch.
+      // Its history entry still supersedes any older Settings response/body.
+      ++sequence;
+      navigationPending = false;
+      pending?.abort();
+      pending = null;
+      updateHistory(new URL(url, window.location.href).href, mode, stateSnapshot);
+      libraryUrl = currentUrl;
+      libraryHistoryState = currentHistoryState;
+      libraryTitle = document.title;
     };
     const restoreHistory = () => {
       const position = historyPosition(window.history.state);
@@ -132,6 +174,14 @@
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
       if (destroyed || restoringPosition !== null || !url || (!isSettingsPath(url.pathname) && !posting && !returning)) return false;
+      if (historyMode !== 'none' && window.deferAppFormPageReplacement) {
+        const deferred = window.deferAppFormPageReplacement(() => navigate(value, {historyMode, method, body, leaveConfirmed, hierarchy}));
+        if (deferred) return deferred;
+      }
+      if (historyMode !== 'none') {
+        const deferred = deferPlaylistDraftNavigation(() => navigate(value, {historyMode, method, body, leaveConfirmed, hierarchy}));
+        if (deferred) return deferred;
+      }
       const ownSequence = ++sequence;
       pending?.abort();
       navigationPending = false;
@@ -225,6 +275,13 @@
       const link = event.target?.closest?.('a[href]');
       if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
       const url = urlFor(link.href);
+      if (url && library && host.hidden && link.classList?.contains('app-bar-brand') && link.getAttribute('href') === '/'
+        && (window.getActiveAppFormPage?.() || window.isMobileFormReturning?.() || liveDraft())) {
+        event.preventDefault();
+        const navigateRoot = () => window.location.assign(url.href);
+        if (!window.deferAppFormPageReplacement?.(navigateRoot)) deferPlaylistDraftNavigation(navigateRoot);
+        return;
+      }
       if (!url || (!isSettingsPath(url.pathname) && !(library && !host.hidden && url.pathname === '/'))) return;
       event.preventDefault();
       void navigate(url.href, { hierarchy: link.hasAttribute('data-settings-parent') || url.pathname === '/' });
@@ -242,6 +299,17 @@
     const onPopState = (event) => {
       const url = urlFor(window.location.href);
       if (!url) return;
+      window.cancelSupersededMobileFormReturn?.();
+      const form = window.getActiveAppFormPage?.();
+      const pages = window.history.state?.mobilePages;
+      if (form && !(Array.isArray(pages) && pages.some(page => page.kind === 'form' && page.formToken === form.token))) {
+        event.stopImmediatePropagation();
+        window.handleMobilePagePopState(() => {
+          onPopState(event);
+          if (!isSettingsPath(window.location.pathname) && !window.handleMobilePagePopState()) window.handleGalleryBootstrapPopState?.();
+        });
+        return;
+      }
       if (restoringPosition !== null) {
         event.stopImmediatePropagation();
         if (historyPosition(window.history.state) === restoringPosition) {
@@ -250,6 +318,30 @@
           if (library && host.hidden) libraryUrl = url.href;
         } else restoreHistory();
         return;
+      }
+      const owner = liveDraft();
+      if (owner && !ownsDraft(owner, window.history.state)) {
+        event.stopImmediatePropagation();
+        // Native history remains the sole stack. A later traversal supersedes
+        // this prompt, and cancellation returns to the displayed entry.
+        draftDeparture = null;
+        const destination = window.location.href, position = historyPosition(window.history.state);
+        const departure = {owner}; draftDeparture = departure;
+        ++sequence; pending?.abort(); navigationPending = false;
+        void Promise.resolve().then(() => owner.confirmLeave()).catch(() => false).then(accepted => {
+          if (draftDeparture !== departure) return;
+          draftDeparture = null;
+          if (liveDraft() !== owner || destination !== window.location.href || position !== historyPosition(window.history.state)) return;
+          if (accepted !== true) {restoreHistory(); return;}
+          playlistDraft = null; owner.discard();
+          onPopState(event);
+          if (!isSettingsPath(window.location.pathname) && !window.handleMobilePagePopState?.()) window.handleGalleryBootstrapPopState?.();
+        });
+        return;
+      }
+      if (!owner && window.history.state?.playlistDraft) {
+        const snapshot = {...window.history.state}; delete snapshot.playlistDraft;
+        window.history.replaceState(snapshot, '', window.location.href);
       }
       // A pop changes the address before prompting. Invalidate an older fetch
       // even when this navigation is cancelled and its entry is restored.
@@ -297,22 +389,37 @@
     if (!host.hidden) mountContent();
     return {
       navigate,
+      setPlaylistDraftOwner(owner) {
+        if (destroyed || !owner || typeof owner.token !== 'string' || !owner.token || typeof owner.scopeKey !== 'string'
+          || typeof owner.isCurrent !== 'function' || typeof owner.confirmLeave !== 'function' || typeof owner.discard !== 'function'
+          || liveDraft()) return false;
+        playlistDraft = owner;
+        return () => {if (playlistDraft === owner) {playlistDraft = null; draftDeparture = null;}};
+      },
+      deferPlaylistDraftNavigation,
+      retainPlaylistDraftNavigation(token, callback) {
+        const owner = liveDraft();
+        if (!owner || owner.token !== token || typeof callback !== 'function') return false;
+        const previous = retainedDraft; retainedDraft = owner;
+        try {return callback();} finally {retainedDraft = previous;}
+      },
+      retainedPlaylistDraft() {const owner = liveDraft(); return owner && retainedDraft === owner ? draftMarker(owner) : null;},
+      isPlaylistDraftCurrent(marker) {const owner = liveDraft(); return ownsDraft(owner, {playlistDraft: marker});},
+      writeLibraryHistory(value, stateSnapshot, { mode } = {}) {
+        const url = urlFor(value);
+        if (destroyed || restoringPosition !== null || !url
+          || url.protocol !== window.location.protocol || (mode !== 'push' && mode !== 'replace')) return;
+        commitLibraryHistory(url.href, mode, stateSnapshot ?? null);
+      },
       pushLibraryHistory(url, stateSnapshot) {
-        // A cached library selection can commit without starting another fetch.
-        // Its history entry still supersedes any older Settings response/body.
-        ++sequence;
-        navigationPending = false;
-        pending?.abort();
-        pending = null;
-        updateHistory(new URL(url, window.location.href).href, 'push', stateSnapshot);
-        libraryUrl = currentUrl;
-        libraryHistoryState = currentHistoryState;
-        libraryTitle = document.title;
+        // Native callers commit their view before writing and ignore the result.
+        commitLibraryHistory(url, 'push', stateSnapshot);
       },
       destroy() {
         destroyed = true;
         ++sequence;
         pending?.abort();
+        const owner = playlistDraft; playlistDraft = null; draftDeparture = null; owner?.discard();
         disposeContent();
         disposeDismissal?.();
         document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);

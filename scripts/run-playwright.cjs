@@ -77,6 +77,7 @@ const ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS = 135000;
 const DEFAULT_FAKE_E2E_SETUP_DATABASE_URL = 'postgresql://album_haven_migrator@localhost:5432/album_haven_fake_e2e';
 const DEFAULT_FAKE_E2E_RUNTIME_DATABASE_URL = 'postgresql://album_haven_app@localhost:5432/album_haven_fake_e2e';
 const ISOLATED_LIBRARY_APP_PATH = path.join(repoRoot, 'tests', 'e2e', 'support', 'isolatedLibraryApp.py');
+const HOME_FEEDBACK_APP_PATH = path.join(repoRoot, 'tests', 'e2e', 'support', 'homeFeedbackApp.py');
 const SCAN_PERFORMANCE_APP_PATH = path.join(repoRoot, 'tests', 'e2e', 'support', 'scanPerformanceApp.py');
 const MANAGED_SCAN_APP_ENV = 'PLAYWRIGHT_MANAGED_SCAN_APP';
 const MANAGED_ISOLATED_APP_ENV = 'PLAYWRIGHT_MANAGED_APP';
@@ -708,8 +709,13 @@ function isDefaultIsolatedLibraryConfig(passthroughArgv = []) {
   return path.resolve(repoRoot, explicitConfig) === path.join(repoRoot, 'playwright.config.js');
 }
 
+function isHomeFeedbackConfig(passthroughArgv = []) {
+  return path.resolve(repoRoot, resolveExplicitPlaywrightConfig(passthroughArgv))
+    === path.join(repoRoot, 'playwright.home-feedback.config.js');
+}
+
 function isManagedIsolatedLibraryConfig(passthroughArgv = []) {
-  if (isDefaultIsolatedLibraryConfig(passthroughArgv)) {
+  if (isDefaultIsolatedLibraryConfig(passthroughArgv) || isHomeFeedbackConfig(passthroughArgv)) {
     return true;
   }
   return /playwright\.(?:lastfm-auto-timezone|cover-rescan|non-album-rescan)\.config\.js$/i.test(
@@ -725,7 +731,7 @@ function isScanPerformanceConfig(passthroughArgv = []) {
 
 function resolveManagedIsolatedAppPorts(passthroughArgv = [], options = {}) {
   const realAppPort = Number(options.realAppPort || 5001);
-  if (resolveManagedFixtureProfile(passthroughArgv)) {
+  if (resolveManagedFixtureProfile(passthroughArgv) || isHomeFeedbackConfig(passthroughArgv)) {
     const appPort = Number.isFinite(realAppPort) ? realAppPort : 5001;
     return { appPort, providerPort: appPort + 2 };
   }
@@ -1314,18 +1320,19 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
     PLAYWRIGHT_PROVIDER_PORT: String(providerPort),
     ALBUM_HAVEN_FAKE_E2E_PROVIDER_BASE_URL: `http://127.0.0.1:${providerPort}`,
   }));
+  const homeFeedback = options.homeFeedback === true;
+  const launcherArguments = homeFeedback
+    ? [HOME_FEEDBACK_APP_PATH, '--port', String(port), '--manifest',
+      path.join(String(managedEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || ''), 'home-feedback-manifest.json')]
+    : [ISOLATED_LIBRARY_APP_PATH, '--port', String(port), '--provider-port', String(providerPort),
+      ...(options.seedAllFunctionalCoverMisses ? ['--seed-all-functional-cover-misses'] : [])];
+  if (homeFeedback && (!path.isAbsolute(String(managedEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || ''))
+      || managedEnv.ALBUM_HAVEN_HOME_FEEDBACK_MANIFEST !== launcherArguments[4])) {
+    throw new Error('Home feedback requires its runner-owned temporary root and exact manifest path.');
+  }
   const child = spawnFn(
     resolvePlaywrightPython(managedEnv),
-    [
-      ISOLATED_LIBRARY_APP_PATH,
-      '--port',
-      String(port),
-      '--provider-port',
-      String(providerPort),
-      ...(options.seedAllFunctionalCoverMisses
-        ? ['--seed-all-functional-cover-misses']
-        : []),
-    ],
+    launcherArguments,
     {
       cwd: repoRoot,
       env: managedEnv,
@@ -1354,7 +1361,7 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
       ...options,
       getLaunchErrorFn: () => launchError,
     });
-    if (String(childEnv.ALBUM_HAVEN_FIXTURE_PROFILE || '').trim() === 'functional-core') {
+    if (!homeFeedback && String(childEnv.ALBUM_HAVEN_FIXTURE_PROFILE || '').trim() === 'functional-core') {
       const authenticateFunctionalFixtureFn = options.authenticateFunctionalFixtureFn
         || authenticateFunctionalFixture;
       const requestHeaders = await authenticateFunctionalFixtureFn(port, {
@@ -3101,6 +3108,7 @@ async function runManagedPlaywrightAttempt(options = {}) {
   try {
     const expectedFixtureProfile = resolveManagedFixtureProfile(passthroughArgv);
     const seedAllFunctionalCoverMisses = shouldSeedAllFunctionalCoverMisses(passthroughArgv);
+    const homeFeedback = isHomeFeedbackConfig(passthroughArgv);
     assertManagedSyntheticLargeFixtureEnv(childEnv, {
       managedSyntheticLarge: Boolean(expectedFixtureProfile),
       expectedFixtureProfile,
@@ -3136,17 +3144,19 @@ async function runManagedPlaywrightAttempt(options = {}) {
       const resolvedIsolatedProviderPort = Number(
         isolatedProviderPort || childEnv.PLAYWRIGHT_PROVIDER_PORT || resolvedIsolatedAppPort + 2,
       );
+      if (homeFeedback) childEnv.PLAYWRIGHT_PORT = String(resolvedIsolatedAppPort);
       managedIsolatedChild = await startManagedIsolatedAppFn(childEnv, {
         port: resolvedIsolatedAppPort,
         providerPort: resolvedIsolatedProviderPort,
         seedAllFunctionalCoverMisses,
+        ...(homeFeedback ? { homeFeedback: true } : {}),
         onSpawnFn(child) {
           managedIsolatedChild = child;
           managedIsolatedAppStarted = true;
         },
       });
       managedIsolatedAppStarted = true;
-      if (ownedIsolatedTempRoot || options.createManagedIsolatedAppRestartControllerFn) {
+      if (!homeFeedback && (ownedIsolatedTempRoot || options.createManagedIsolatedAppRestartControllerFn)) {
         managedIsolatedRestartController = createManagedIsolatedAppRestartControllerFn({
           childEnv,
           ownedIsolatedTempRoot,
@@ -3470,6 +3480,9 @@ async function main() {
         : '';
       if (ownedIsolatedTempRoot) {
         childEnv.ALBUM_HAVEN_E2E_TEMP_ROOT = ownedIsolatedTempRoot;
+        if (isHomeFeedbackConfig(passthroughArgv)) {
+          childEnv.ALBUM_HAVEN_HOME_FEEDBACK_MANIFEST = path.join(ownedIsolatedTempRoot, 'home-feedback-manifest.json');
+        }
       }
       let attemptStarted = false;
       try {
@@ -3560,6 +3573,8 @@ module.exports = {
     usesRunnerOwnedIsolatedTempRoot,
     isDefaultIsolatedLibraryConfig,
     isManagedIsolatedLibraryConfig,
+    isHomeFeedbackConfig,
+    HOME_FEEDBACK_APP_PATH,
     shouldSeedAllFunctionalCoverMisses,
     isScanPerformanceConfig,
     resolvePlaywrightBrowsersPath,

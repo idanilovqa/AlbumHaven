@@ -69,3 +69,5 @@ button.navigation-tree-item[data-navigation-tree-item="panel"] {
   .selection-accent-previews { grid-template-columns: minmax(0, 1fr); }
   .selection-accent-actions [role=status] { flex-basis: 100%; }
 }
+
+.navigation-tree-item:disabled, .navigation-tree-item[aria-disabled="true"] { opacity: .38; cursor: not-allowed; }

@@ -95,38 +95,6 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
-  const albumAction = event.target.closest('[data-album-card-action]');
-  if (albumAction) {
-    event.preventDefault();
-    const action = albumAction.getAttribute('data-album-card-action') || '';
-    const menu = document.getElementById('album-card-context-menu');
-    const album = getIndexedAlbum(menu?.dataset.albumKey || '');
-
-    hideAlbumCardContextMenu();
-
-    if (action === 'open-explorer') {
-      openAlbumInExplorer(album);
-      return;
-    }
-
-    if (action === 'move_to_hoard' || action === 'move_to_library') {
-      performAlbumMove(album, action);
-      return;
-    }
-
-    if (action === 'mark-version') {
-      openVersionPickerModal(album);
-      return;
-    }
-
-    if (action === 'unmark-version') {
-      unmarkAlbumVersion(album?.key || '');
-      return;
-    }
-
-    return;
-  }
-
   const versionPickerOption = event.target.closest('[data-version-picker-target]');
   if (versionPickerOption) {
     event.preventDefault();
@@ -164,6 +132,8 @@ function handleGalleryBootstrapClick(event) {
   const lightboxTrigger = event.target.closest('[data-open-lightbox="1"]');
   if (lightboxTrigger) {
     event.preventDefault();
+    if (typeof getTrackModalContentRoot === 'function' && getTrackModalContentRoot()?.contains(lightboxTrigger)
+      && typeof canViewTrackModalArtwork === 'function' && !canViewTrackModalArtwork()) return;
     const items = lightboxTrigger.getAttribute('data-lightbox-gallery') === 'visible'
       ? getLightboxGalleryItems()
       : [];
@@ -268,6 +238,8 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
+    if (typeof deferAppFormPageReplacement === 'function'
+      && deferAppFormPageReplacement(() => handleGalleryBootstrapClick(event))) return;
     const activeSearchQuery = String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -448,6 +420,8 @@ function handleSidebarArtistSelectionClick(event) {
   if (!sidebarArtistLink) return false;
 
   event.preventDefault();
+  if (typeof deferAppFormPageReplacement === 'function'
+    && deferAppFormPageReplacement(() => handleSidebarArtistSelectionClick(event))) return true;
   if (
     state.ui.scanPageReturnContext
     || state.ui.forceScanPageVisible
@@ -2077,6 +2051,7 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
+  if (window.AlbumHavenPlaylistRuntime?.restoreDraftFromHistory?.()) return;
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }

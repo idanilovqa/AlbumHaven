@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.private_ui_context import private_ui_context_ref
+
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.loops import get_loop
 
@@ -204,6 +206,11 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
     actor = getattr(request.state, "current_actor", None)
+    private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    bootstrap = context.get("bootstrap_payload")
+    if isinstance(bootstrap, dict) and isinstance(bootstrap.get("initial_view"), dict):
+        context = {**context, "bootstrap_payload": {**bootstrap,
+            "initial_view": {**bootstrap["initial_view"], "context_ref": private_context}}}
     request.app.state.runtime_asset_version = _runtime_asset_version()
     return request.app.state.templates.TemplateResponse(
         request,
@@ -219,6 +226,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
                 request.app.state.auth_policy_config,
             ),
             **context,
+            "private_ui_context": private_context,
             "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
             "utility_allowed_actions": allowed_actions_for_request(request, (
                 "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
@@ -1055,7 +1063,12 @@ async def bootstrap_data(request: Request) -> JSONResponse:
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
     )
-    return JSONResponse(bootstrap_payload)
+    actor = getattr(request.state, "current_actor", None)
+    private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    if isinstance(bootstrap_payload.get("initial_view"), dict):
+        bootstrap_payload = {**bootstrap_payload,
+            "initial_view": {**bootstrap_payload["initial_view"], "context_ref": private_context}}
+    return JSONResponse(bootstrap_payload, headers={"Cache-Control": "private, no-store"})
 
 
 @router.post("/refresh-api")

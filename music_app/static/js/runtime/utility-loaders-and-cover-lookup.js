@@ -1215,6 +1215,8 @@ function scheduleUtilityModalOpenWorkAfterPaint(generation, forceLoad) {
 }
 
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
+  if (typeof deferAppFormPageReplacement === 'function'
+    && deferAppFormPageReplacement(() => openUtilityModal({resetSearch, resetSelection, forceLoad}))) return;
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
   const els = getUtilityModalElements();
   if (!els.overlay) return;

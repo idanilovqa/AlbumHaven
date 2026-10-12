@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - allows import-time diagnostics without
     Jsonb = None
 
 
+_UNSCOPED = object()
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_listen_history_adapter"
 _BACKFILL_SOURCE = "phase_6_json_file_backfill"
@@ -55,10 +56,95 @@ class PostgresListenHistoryAdapter:
             rows = list(connection.execute(_load_listen_history_sql()).fetchall())
         return [_listen_history_item_from_row(row) for row in rows]
 
+    def load_recent_items(
+        self, *, account_id: int, library_id: int,
+        window_start: datetime, window_end: datetime,
+    ) -> list[dict[str, object]]:
+        window_start, window_end = _validated_recent_window(
+            account_id, library_id, window_start, window_end,
+        )
+        with self._connect_to_database() as connection:
+            rows = connection.execute("""
+                select h.id, h.account_id, h.library_id, h.track_id, h.track_key,
+                       h.played_at, h.source_family, h.measurement_version,
+                       h.finalized, h.measured_listened_seconds, h.metadata,
+                       a.id as album_id
+                from integration.listen_history h
+                left join library.local_tracks t
+                  on t.id = h.track_id and t.library_id = h.library_id
+                left join library.local_albums a
+                  on a.id = t.album_id and a.library_id = h.library_id
+                where h.account_id = %s and h.library_id = %s
+                  and h.played_at >= %s and h.played_at <= %s
+                  and h.source_family = any(%s)
+                order by h.played_at, h.id
+            """, (account_id, library_id, window_start, window_end,
+                  list(LASTFM_SCROBBLE_SOURCE_FAMILIES))).fetchall()
+        return [dict(row) for row in rows]
+
+    def load_recent_album_candidates(
+        self, *, library_id: int, legacy_track_refs: list[str],
+    ) -> list[dict[str, object]]:
+        if type(library_id) is not int or library_id <= 0:
+            raise ValueError("Exact recent listen library scope is required")
+        with self._connect_to_database() as connection:
+            rows = connection.execute("""
+                select a.id, a.album_key as key, a.title as name,
+                       coalesce(nullif(a.metadata->>'album_artist', ''), ar.name, '') as album_artist,
+                       count(t.id)::integer as album_track_count,
+                       case when count(t.duration_seconds) = count(t.id) and count(t.id) > 0
+                            then sum(t.duration_seconds) end as total_duration_seconds,
+                       coalesce(bool_or(exists (
+                           select 1 from library.local_track_files f
+                           where f.track_id = t.id and f.scan_cache_stale is false
+                       )), false) as can_play
+                from library.local_albums a
+                left join library.local_artists ar
+                  on ar.id = a.artist_id and ar.library_id = a.library_id
+                left join library.local_tracks t
+                  on t.album_id = a.id and t.library_id = a.library_id
+                where a.library_id = %s
+                group by a.id, ar.name
+                having count(t.id) > 0
+                order by a.id
+            """, (library_id,)).fetchall()
+            albums = {row['id']: {**dict(row), 'legacy_track_refs': {}} for row in rows}
+            if legacy_track_refs:
+                # Normalize references in Python exactly as the legacy matcher does;
+                # database lower() is not Unicode casefold(). Paths remain internal.
+                wanted = {_recent_track_ref(ref) for ref in legacy_track_refs}
+                aliases = connection.execute("""
+                    select t.id, t.album_id, t.track_key, f.private_path
+                    from library.local_tracks t
+                    join library.local_albums a
+                      on a.id = t.album_id and a.library_id = t.library_id
+                    left join library.local_track_files f
+                      on f.track_id = t.id and f.scan_cache_stale is false
+                    where t.library_id = %s
+                    order by t.id, f.id
+                """, (library_id,)).fetchall()
+                for row in aliases:
+                    album = albums.get(row['album_id'])
+                    if album is None:
+                        continue
+                    for ref in (row['track_key'], row['private_path']):
+                        if ref and _recent_track_ref(ref) in wanted:
+                            album['legacy_track_refs'][str(ref)] = row['id']
+        return list(albums.values())
+
     def load_scrobbled_play_count_lookup(
         self,
         track_refs: list[str] | tuple[str, ...],
+        *,
+        account_id: object = _UNSCOPED,
+        library_id: object = _UNSCOPED,
+        expected_track_ids: Mapping[str, object] | None = None,
+        require_active_paths: bool = False,
     ) -> dict[str, int]:
+        scoped = (account_id is not _UNSCOPED or library_id is not _UNSCOPED
+                  or expected_track_ids is not None or require_active_paths)
+        if scoped and any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+            raise ValueError("Exact scrobble count account and library scope is required")
         normalized_track_refs = [
             normalize_track_ref(track_ref)
             for track_ref in track_refs
@@ -66,21 +152,34 @@ class PostgresListenHistoryAdapter:
         ]
         if not normalized_track_refs:
             return {}
+        params = {"track_refs": normalized_track_refs}
         with self._connect_to_database() as connection:
-            _ensure_bootstrap_context(connection)
-            rows = list(
-                connection.execute(
-                    _load_scrobbled_play_count_lookup_sql(),
-                    {"track_refs": normalized_track_refs},
-                ).fetchall()
-            )
+            if scoped:
+                params.update({"account_id": account_id, "library_id": library_id})
+                sql = _load_scoped_scrobbled_play_count_lookup_sql()
+            else:
+                _ensure_bootstrap_context(connection)
+                sql = _load_scrobbled_play_count_lookup_sql()
+            rows = list(connection.execute(sql, params).fetchall())
         lookup: dict[str, int] = {}
         for row in rows:
-            payload = _row_mapping(row, ("track_key", "scrobble_count"))
+            payload = _row_mapping(row, ("track_key", "scrobble_count", "track_id", "is_active_path"))
             track_key = normalize_track_ref(payload.get("track_key"))
             if not track_key:
                 continue
-            lookup[track_key] = int(payload.get("scrobble_count") or 0)
+            if scoped:
+                if require_active_paths and payload.get("is_active_path") is not True:
+                    continue
+                if expected_track_ids is not None and track_key in expected_track_ids:
+                    expected = expected_track_ids[track_key]
+                    if type(expected) is not int or expected != payload.get("track_id"):
+                        continue
+                count = payload.get("scrobble_count")
+                if type(count) is not int or count < 0:
+                    continue
+                lookup[track_key] = count
+            else:
+                lookup[track_key] = int(payload.get("scrobble_count") or 0)
         return lookup
 
     def save_items(self, items: list[dict[str, object]]) -> None:
@@ -374,6 +473,86 @@ def _load_scrobbled_play_count_lookup_sql() -> str:
     )
 
 
+def _load_scoped_scrobbled_play_count_lookup_sql() -> str:
+    return f"""
+        with authorized_scope as (
+          select a.id as account_id, l.id as library_id
+          from app.accounts a
+          join library.library_memberships m on m.account_id = a.id
+          join library.libraries l on l.id = m.library_id
+          where a.id = %(account_id)s and l.id = %(library_id)s
+            and a.is_active is true and a.disabled_at is null
+        ), requested_refs as (
+          select distinct unnest(%(track_refs)s::text[]) as track_ref
+        ), matches as (
+          select r.track_ref, t.id as track_id
+          from requested_refs r
+          join library.local_tracks t on t.track_key = r.track_ref
+          join authorized_scope s on s.library_id = t.library_id
+          union
+          select r.track_ref, t.id
+          from requested_refs r
+          join library.local_track_files f on f.private_path = r.track_ref
+          join library.local_tracks t on t.id = f.track_id
+          join authorized_scope s on s.library_id = t.library_id
+        ), candidates as (
+          select track_ref, min(track_id) as track_id
+          from matches group by track_ref having count(*) = 1
+        ), resolved_tracks as (
+          select distinct t.id as track_id, t.track_key
+          from candidates c
+          join library.local_tracks t on t.id = c.track_id
+          where exists (
+            select 1 from library.local_track_files f
+            where f.track_id = t.id and f.scan_cache_stale is false
+          )
+        ), track_aliases as (
+          select track_id, track_key as track_ref from resolved_tracks
+          union
+          select t.track_id, f.private_path
+          from resolved_tracks t
+          join library.local_track_files f on f.track_id = t.track_id
+        ), alias_targets as (
+          select a.track_id, a.track_ref, t.id as target_id
+          from track_aliases a
+          join library.local_tracks t on t.track_key = a.track_ref
+          join authorized_scope s on s.library_id = t.library_id
+          union
+          select a.track_id, a.track_ref, t.id
+          from track_aliases a
+          join library.local_track_files f on f.private_path = a.track_ref
+          join library.local_tracks t on t.id = f.track_id
+          join authorized_scope s on s.library_id = t.library_id
+        ), accepted as (
+          select h.id, h.track_id, h.track_key, h.measurement_version
+          from integration.listen_history h
+          join authorized_scope s on s.library_id = h.library_id and s.account_id = h.account_id
+          where h.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}', '{_MEASURED_SOURCE}')
+            and h.scrobble_status = 'scrobbled'
+        )
+        select c.track_ref as track_key, count(distinct h.id)::int as scrobble_count,
+               c.track_id, exists (
+                 select 1 from library.local_track_files f
+                 where f.track_id = c.track_id and f.private_path = c.track_ref
+                   and f.scan_cache_stale is false
+               ) as is_active_path
+        from candidates c
+        join resolved_tracks t on t.track_id = c.track_id
+        left join accepted h on h.track_id = c.track_id or (
+          h.track_id is null and h.measurement_version is null and exists (
+            select 1 from track_aliases a
+            where a.track_id = c.track_id and a.track_ref = h.track_key
+          )
+        )
+        where not exists (
+          select 1 from alias_targets a
+          where a.track_id = c.track_id and a.target_id <> c.track_id
+        )
+        group by c.track_ref, c.track_id
+        order by c.track_ref;
+    """
+
+
 def _delete_listen_history_sql() -> str:
     return (
         _bootstrap_context_sql()
@@ -417,3 +596,19 @@ def _insert_listen_history_sql() -> str:
         from bootstrap_context;
     """
     )
+
+
+def _validated_recent_window(account_id, library_id, window_start, window_end):
+    if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+        raise ValueError("Exact recent listen account and library scope is required")
+    if any(not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None
+           for value in (window_start, window_end)):
+        raise ValueError("Recent listen window requires aware timestamps")
+    start, end = window_start.astimezone(timezone.utc), window_end.astimezone(timezone.utc)
+    if start > end:
+        raise ValueError("Recent listen window is reversed")
+    return start, end
+
+
+def _recent_track_ref(value: object) -> str:
+    return " ".join(str(value or "").strip().split()).replace("/", "\\").casefold()

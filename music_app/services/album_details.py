@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import deepcopy
+
 from music_app.services.library import album_to_dict, strip_private_album_preference_overlays
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.non_album_view_payloads import (
@@ -15,7 +18,8 @@ from music_app.services.track_stats import (
 from music_app.services.track_rows import build_album_gallery_list_block, build_track_rows
 from music_app.services.track_preferences import (
     build_track_preference_overlay_lookup,
-    normalize_track_preference_overlay,
+    default_track_preference_overlay,
+    track_preference_can_edit,
 )
 
 
@@ -26,84 +30,116 @@ def _attach_album_detail_track_rows(
     client_surface_class: object = None,
     config: object = None,
     viewer_opinion_preferences: object = None,
+    account_id: int | None = None,
+    library_id: int | None = None,
+    inventory_library_id: int | None = None,
+    preference_action_resolver: Callable[[int], bool] | None = None,
 ) -> dict[str, object]:
-    tracks = list(album_payload.get("tracks") or [])
+    # album_to_dict and duplicate-source serializers can return shared caches.
+    # No private lookup result or mutation may be written into those objects.
+    album_payload = deepcopy(album_payload)
+    containers = [album_payload]
+    for container in containers:
+        containers.extend(
+            source for source in (container.get("duplicate_sources") or [])
+            if isinstance(source, dict)
+        )
+    all_tracks = [
+        track for container in containers for track in (container.get("tracks") or [])
+        if isinstance(track, dict)
+    ]
+    track_refs = list(dict.fromkeys(
+        normalize_track_ref(track.get("path")) for track in all_tracks
+        if normalize_track_ref(track.get("path"))
+    ))
+    expected_track_ids = {}
+    for track in all_tracks:
+        if "track_id" in track:
+            ref = normalize_track_ref(track.get("path"))
+            value = track["track_id"]
+            if ref in expected_track_ids and (
+                type(expected_track_ids[ref]) is not int
+                or type(value) is not int
+                or expected_track_ids[ref] != value
+            ):
+                value = None  # Conflicting source IDs cannot confer identity.
+            expected_track_ids[ref] = value
     viewer_opinion_preferences = resolve_viewer_opinion_preferences(viewer_opinion_preferences)
-    resolved_config = config
-    prehydrated_track_rows = bool(tracks) and all(
-        isinstance(track, dict)
-        and "track_scrobble_count" in track
-        and "track_preference_overlay" in track
-        for track in tracks
-    )
-    if resolved_config is not None:
-        track_refs = [
-            track.get("path") if isinstance(track, dict) else getattr(track, "path", "")
-            for track in tracks
-        ]
-        scrobble_count_lookup = _safe_scrobble_count_lookup(
-            resolved_config,
-            track_refs,
-        )
+    track_preference_lookup = {}
+    scrobble_count_lookup = {}
+    if (
+        not public_safe and config is not None
+        and type(account_id) is int and account_id > 0
+        and type(library_id) is int and library_id > 0
+        and type(inventory_library_id) is int and inventory_library_id == library_id
+    ):
         track_preference_lookup = build_track_preference_overlay_lookup(
-            resolved_config,
-            client_surface_class=client_surface_class,
-            track_refs=track_refs,
+            config, account_id=account_id, library_id=library_id,
+            client_surface_class=client_surface_class, track_refs=track_refs,
+            preference_action_resolver=preference_action_resolver,
+            expected_track_ids=expected_track_ids, require_active_paths=True,
         )
-    elif prehydrated_track_rows:
-        scrobble_count_lookup = {
-            normalize_track_ref(track.get("path")): int(track.get("track_scrobble_count") or 0)
-            for track in tracks
-            if isinstance(track, dict) and normalize_track_ref(track.get("path"))
-        }
-        track_preference_lookup = {
-            normalize_track_ref(track.get("path")): normalize_track_preference_overlay(
-                {
-                    **dict(track.get("track_preference_overlay") or {}),
-                    "allowed_actions": {
-                        "client_surface_class": client_surface_class,
-                        "can_rate": True,
-                        "can_set_love_tier": True,
-                    },
-                },
-                client_surface_class=client_surface_class,
-            )
-            for track in tracks
-            if isinstance(track, dict)
-            and normalize_track_ref(track.get("path"))
-        }
-    else:
-        scrobble_count_lookup = {}
-        track_preference_lookup = {}
 
-    track_rows = build_track_rows(
-        tracks,
-        album=album_payload,
-        scrobble_count_resolver=lambda track: scrobble_count_lookup.get(
-            normalize_track_ref(track.get("path") if isinstance(track, dict) else getattr(track, "path", "")),
-            0,
-        ),
-        track_preference_resolver=lambda track: track_preference_lookup.get(
-            normalize_track_ref(track.get("path") if isinstance(track, dict) else getattr(track, "path", "")),
-        ),
-        client_surface_class=client_surface_class,
-        viewer_opinion_preferences=viewer_opinion_preferences,
-    )
-    album_payload["track_rows"] = track_rows
-    album_payload["gallery_list_block"] = build_album_gallery_list_block(
-        album_key=album_payload.get("key"),
-        album_name=album_payload.get("name"),
-        album_artist=album_payload.get("album_artist"),
-        album_year=album_payload.get("year"),
-        album_rating=album_payload.get("album_rating", 0),
-        total_duration_seconds=album_payload.get("total_duration_seconds"),
-        track_count=len(track_rows),
-        track_rows=track_rows,
-        track_rows_source="inline",
-        album_preference=album_payload.get("album_preference"),
-        tag_album_rating=album_payload.get("tag_album_rating"),
-        tag_album_rating_source=album_payload.get("tag_album_rating_source"),
-    )
+        scrobble_count_lookup = _safe_scrobble_count_lookup(
+            config, track_refs, account_id=account_id, library_id=library_id,
+            expected_track_ids=expected_track_ids,
+        )
+
+    for track in all_tracks:
+        ref = normalize_track_ref(track.get("path"))
+        count = scrobble_count_lookup.get(ref)
+        # Inventory caches never establish personal listening authority.
+        track["track_scrobble_count"] = count
+        track["track_stats"] = {"scrobble_count": count}
+        if "scrobble_count" in track:
+            track["scrobble_count"] = count
+        overlay = deepcopy(track_preference_lookup.get(ref))
+        if overlay is None:
+            overlay = default_track_preference_overlay(client_surface_class=client_surface_class)
+        track["track_preference_overlay"] = overlay
+        track["track_preference"] = deepcopy(overlay)
+        track["can_edit_preferences"] = track_preference_can_edit(overlay)
+        identity = track.get("track_id")
+        # This is scoped inventory identity, never musical canonical identity or
+        # permission. Playlist writers still validate current inventory/grants.
+        track["inventory_track_ref"] = (
+            f"inventory-track:{library_id}:{identity}"
+            if (not public_safe and config is not None
+                and type(account_id) is int and account_id > 0
+                and type(library_id) is int and library_id > 0
+                and type(inventory_library_id) is int and inventory_library_id == library_id
+                and type(identity) is int and identity > 0
+                and expected_track_ids.get(ref) == identity)
+            else None
+        )
+
+    for container in containers:
+        tracks = list(container.get("tracks") or [])
+        rows = build_track_rows(
+            tracks, album=container,
+            scrobble_count_resolver=lambda track: scrobble_count_lookup.get(
+                normalize_track_ref(track.get("path")),
+            ),
+            # Always return an explicit overlay, including a neutral miss.
+            track_preference_resolver=lambda track: track["track_preference_overlay"],
+            client_surface_class=client_surface_class,
+            viewer_opinion_preferences=viewer_opinion_preferences,
+        )
+        for track, row in zip(tracks, rows):
+            row["inventory_track_ref"] = track.get("inventory_track_ref")
+        if container is album_payload or "track_rows" in container:
+            container["track_rows"] = rows
+        if container is album_payload or "gallery_list_block" in container:
+            container["gallery_list_block"] = build_album_gallery_list_block(
+                album_key=container.get("key"), album_name=container.get("name"),
+                album_artist=container.get("album_artist"), album_year=container.get("year"),
+                album_rating=container.get("album_rating", 0),
+                total_duration_seconds=container.get("total_duration_seconds"),
+                track_count=len(rows), track_rows=rows, track_rows_source="inline",
+                album_preference=container.get("album_preference"),
+                tag_album_rating=container.get("tag_album_rating"),
+                tag_album_rating_source=container.get("tag_album_rating_source"),
+            )
     summary = album_payload["gallery_list_block"].setdefault("summary", {})
     summary["crowd_opinion"] = album_payload.get("crowd_opinion", {
         "is_visible": False,
@@ -129,18 +165,26 @@ def _attach_album_detail_track_rows(
         "freshness_state": "missing",
     })
     if public_safe:
-        return strip_private_album_preference_overlays(album_payload)
+        # Strip nested existing rows/gallery blocks too, not only raw tracks.
+        for container in reversed(containers):
+            sanitized = strip_private_album_preference_overlays(container)
+            container.clear()
+            container.update(sanitized)
     return album_payload
 
 
 def _safe_scrobble_count_lookup(
     config: dict[str, object],
     track_refs: list[object],
+    *,
+    account_id: int,
+    library_id: int,
+    expected_track_ids: dict[str, object],
 ) -> dict[str, int]:
     try:
         return build_scrobbled_play_count_lookup(
-            config,
-            track_refs,
+            config, track_refs, account_id=account_id, library_id=library_id,
+            expected_track_ids=expected_track_ids, require_active_paths=True,
         )
     except Exception:
         return {}
@@ -215,6 +259,10 @@ def build_album_detail_payload(
     client_surface_class: object = None,
     config: object = None,
     library_state: dict[str, object] | None = None,
+    account_id: int | None = None,
+    library_id: int | None = None,
+    inventory_library_id: int | None = None,
+    preference_action_resolver: Callable[[int], bool] | None = None,
 ) -> dict[str, object] | None:
     normalized_album_key = str(album_key or "").strip()
     if not normalized_album_key:
@@ -239,6 +287,9 @@ def build_album_detail_payload(
                 client_surface_class=client_surface_class,
                 config=config,
                 viewer_opinion_preferences=viewer_opinion_preferences,
+                account_id=account_id, library_id=library_id,
+                inventory_library_id=inventory_library_id,
+                preference_action_resolver=preference_action_resolver,
             )
 
     return _build_non_album_detail_payload(

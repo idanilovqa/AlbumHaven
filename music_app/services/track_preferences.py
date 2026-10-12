@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 from music_app.services.client_surfaces import resolve_client_surface_class
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.track_preferences_postgres import PostgresTrackPreferencesStore
-from music_app.services.track_preferences_postgres import is_track_preferences_postgres_available
+from music_app.services.track_preferences_postgres import TrackPreferenceScopeError
+from music_app.services.current_actor import CurrentActor
 from music_app.services.track_stats import normalize_track_ref
 from music_app.services.utils import safe_int
 from config import PERSISTENCE_BACKEND_POSTGRES
@@ -13,7 +14,6 @@ from config import PERSISTENCE_BACKEND_POSTGRES
 _VALID_LOVE_TIERS = {"off", "loved", "obsessed"}
 _FAVORITE_SONG_LOVE_TIERS = {"loved", "obsessed"}
 _TRACK_PREFERENCES_STORE_VERSION = 1
-_LOCAL_TRACK_PREFERENCES_ACTOR_ID = "local"
 
 
 def default_track_preference_overlay(
@@ -40,21 +40,46 @@ def _normalize_love_tier(value: object) -> str:
 
 
 def _normalize_love_tier_for_write(value: object) -> str:
-    normalized = str(value or "").strip().casefold()
-    if not normalized:
-        return "off"
-    if normalized in _VALID_LOVE_TIERS:
-        return normalized
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in _VALID_LOVE_TIERS:
+            return normalized
     raise ValueError("Track preference love_tier must be off, loved, or obsessed.")
 
 
 def _normalize_rating_for_write(value: object) -> int | None:
     if value is None:
         return None
-    normalized_rating = safe_int(value)
-    if normalized_rating is None or not 1 <= normalized_rating <= 5:
+    if type(value) is not int or not 1 <= value <= 5:
         raise ValueError("Track preference rating must be null or an integer between 1 and 5.")
-    return normalized_rating
+    return value
+
+
+def normalize_track_preference_patch(value: object) -> dict[str, object]:
+    """Validate live values without turning omitted fields into explicit intent."""
+    if not isinstance(value, dict):
+        raise ValueError("Track preference payload must include a track_preference object.")
+    patch = {}
+    if "rating" in value:
+        patch["rating"] = _normalize_rating_for_write(value["rating"])
+    if "love_tier" in value:
+        patch["love_tier"] = _normalize_love_tier_for_write(value["love_tier"])
+    return patch
+
+
+def track_preference_scope(actor: CurrentActor) -> tuple[int, int]:
+    """Require explicit current membership, including for the bootstrap owner."""
+    if (
+        not isinstance(actor, CurrentActor) or not actor.is_authenticated
+        or type(actor.account_id) is not int or actor.account_id <= 0
+        or type(actor.current_library_id) is not int or actor.current_library_id <= 0
+        or not any(
+            relationship.library_id == actor.current_library_id
+            for relationship in actor.library_relationships
+        )
+    ):
+        raise TrackPreferenceScopeError("Track preference scope is unavailable.")
+    return actor.account_id, actor.current_library_id
 
 
 def _normalize_stored_rating(value: object) -> int | None:
@@ -162,16 +187,6 @@ def strip_private_track_rows(
     return sanitized_rows
 
 
-def load_track_preferences_store(config: dict[str, object]) -> dict[str, object]:
-    _require_postgres_track_preferences_selection(config)
-    return PostgresTrackPreferencesStore(config).load_store()
-
-
-def save_track_preferences_store(config: dict[str, object], raw_payload: object) -> dict[str, object]:
-    _require_postgres_track_preferences_selection(config)
-    return PostgresTrackPreferencesStore(config).save_store(raw_payload)
-
-
 def _require_postgres_track_preferences_selection(config: dict[str, object]) -> None:
     selection = select_runtime_persistence_adapter("track_preferences", config)
     if selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES:
@@ -203,48 +218,41 @@ def normalize_track_preferences_store(raw_payload: object) -> dict[str, object]:
 def build_track_preference_overlay_lookup(
     config: dict[str, object],
     *,
-    actor_id: str = _LOCAL_TRACK_PREFERENCES_ACTOR_ID,
+    account_id: int,
+    library_id: int,
+    track_refs: Iterable[object],
     client_surface_class: object = None,
-    track_refs: Iterable[object] | None = None,
+    preference_action_resolver: Callable[[int], bool] | None = None,
+    expected_track_ids: Mapping[str, object] | None = None,
+    require_active_paths: bool = False,
 ) -> dict[str, dict[str, object]]:
-    normalized_track_refs = [
-        normalize_track_ref(track_ref)
-        for track_ref in (track_refs or [])
-        if normalize_track_ref(track_ref)
-    ]
-    track_preferences: dict[str, object]
-    if (
-        actor_id == _LOCAL_TRACK_PREFERENCES_ACTOR_ID
-        and normalized_track_refs
-        and is_track_preferences_postgres_available(config)
-    ):
-        track_preferences = PostgresTrackPreferencesStore(config).load_track_preferences(
-            normalized_track_refs
+    _require_postgres_track_preferences_selection(config)
+    selections = PostgresTrackPreferencesStore(config).load_track_preferences(
+        track_refs, account_id=account_id, library_id=library_id,
+    )
+    overlays = {}
+    for track_ref, selected in selections.items():
+        if require_active_paths and not selected["is_active_path"]:
+            continue
+        if expected_track_ids is not None and track_ref in expected_track_ids:
+            expected = expected_track_ids[track_ref]
+            if type(expected) is not int or expected != selected["track_id"]:
+                continue
+        editable = bool(
+            preference_action_resolver is not None
+            and preference_action_resolver(selected["track_id"])
         )
-    else:
-        store = load_track_preferences_store(config)
-        actors = store.get("actors")
-        actor_payload = actors.get(actor_id) if isinstance(actors, dict) else None
-        track_preferences = (
-            actor_payload.get("track_preferences")
-            if isinstance(actor_payload, dict) and isinstance(actor_payload.get("track_preferences"), dict)
-            else {}
-        )
-    return {
-        track_ref: normalize_track_preference_overlay(
+        overlays[track_ref] = normalize_track_preference_overlay(
             {
-                **overlay,
+                "rating": selected["rating"], "love_tier": selected["love_tier"],
                 "allowed_actions": {
                     "client_surface_class": client_surface_class,
-                    "can_rate": True,
-                    "can_set_love_tier": True,
+                    "can_rate": editable, "can_set_love_tier": editable,
                 },
             },
             client_surface_class=client_surface_class,
         )
-        for track_ref, overlay in track_preferences.items()
-        if isinstance(overlay, dict)
-    }
+    return overlays
 
 
 def save_track_preference(
@@ -252,70 +260,34 @@ def save_track_preference(
     track_ref: object,
     track_preference: object,
     *,
-    actor_id: str = _LOCAL_TRACK_PREFERENCES_ACTOR_ID,
+    account_id: int,
+    library_id: int,
+    expected_track_id: int,
     client_surface_class: object = None,
 ) -> dict[str, object]:
     normalized_track_ref = normalize_track_ref(track_ref)
     if not normalized_track_ref:
         raise ValueError("Track preference payload must include a track_ref.")
-
-    if not isinstance(track_preference, dict):
-        raise ValueError("Track preference payload must include a track_preference object.")
-
-    store = load_track_preferences_store(config)
-    actors = store["actors"]
-    if not isinstance(actors, dict):
-        actors = {}
-        store["actors"] = actors
-    actor_payload = actors.get(actor_id)
-    if not isinstance(actor_payload, dict):
-        actor_payload = {"track_preferences": {}}
-        actors[actor_id] = actor_payload
-    actor_track_preferences = actor_payload.get("track_preferences")
-    if not isinstance(actor_track_preferences, dict):
-        actor_track_preferences = {}
-        actor_payload["track_preferences"] = actor_track_preferences
-
-    existing_overlay = normalize_track_preference_overlay(
-        actor_track_preferences.get(normalized_track_ref),
-        client_surface_class=client_surface_class,
+    patch = normalize_track_preference_patch(track_preference)
+    _require_postgres_track_preferences_selection(config)
+    selected = PostgresTrackPreferencesStore(config).patch_preference(
+        normalized_track_ref, patch, account_id=account_id,
+        library_id=library_id, expected_track_id=expected_track_id,
     )
-    normalized_rating = (
-        _normalize_rating_for_write(track_preference.get("rating"))
-        if "rating" in track_preference
-        else existing_overlay["rating"]
-    )
-    normalized_love_tier = (
-        _normalize_love_tier_for_write(track_preference.get("love_tier"))
-        if "love_tier" in track_preference
-        else existing_overlay["love_tier"]
-    )
-    normalized_overlay = normalize_track_preference_overlay(
-        {
-            "rating": normalized_rating,
-            "love_tier": normalized_love_tier,
-            "allowed_actions": {
-                "client_surface_class": client_surface_class,
-                "can_rate": True,
-                "can_set_love_tier": True,
-            },
-        },
-        client_surface_class=client_surface_class,
-    )
-
-    if normalized_overlay["rating"] is None and normalized_overlay["love_tier"] == "off":
-        actor_track_preferences.pop(normalized_track_ref, None)
-    else:
-        actor_track_preferences[normalized_track_ref] = {
-            "rating": normalized_overlay["rating"],
-            "love_tier": normalized_overlay["love_tier"],
-        }
-
-    save_track_preferences_store(config, store)
     return {
-        "actor_id": actor_id,
+        "actor_id": str(account_id),
+        "library_id": library_id,
         "track_ref": normalized_track_ref,
-        "track_preference": normalized_overlay,
+        "track_preference": normalize_track_preference_overlay(
+            {
+                "rating": selected["rating"], "love_tier": selected["love_tier"],
+                "allowed_actions": {
+                    "client_surface_class": client_surface_class,
+                    "can_rate": True, "can_set_love_tier": True,
+                },
+            },
+            client_surface_class=client_surface_class,
+        ),
     }
 
 

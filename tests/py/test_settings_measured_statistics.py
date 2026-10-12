@@ -23,7 +23,8 @@ def test_statistics_are_scoped_completed_measured_totals_without_duplicate_retri
 
 
 @pytest.mark.parametrize('consumer', ['track_lookup', 'album_detail'])
-def test_track_counts_include_measured_receipts_and_follow_indexed_file_rename(ledger, consumer):
+def test_track_counts_include_measured_receipts_and_follow_indexed_file_rename(ledger, consumer, monkeypatch):
+    from music_app.services import album_details, track_stats
     own = ledger['own']
     accepted = measured(own, finalized=True)
     accepted_row = append(ledger, accepted)
@@ -46,6 +47,9 @@ def test_track_counts_include_measured_receipts_and_follow_indexed_file_rename(l
             connection.execute("delete from app.bootstrap_owners where owner_key='local-bootstrap-owner'")
             connection.execute("insert into app.bootstrap_owners(account_id,owner_key) values(%s,'local-bootstrap-owner')", (own['account_id'],))
             connection.execute("update library.libraries set name='Local Library' where id=%s", (own['library_id'],))
+            connection.execute("""insert into library.library_memberships(account_id,library_id,membership_role)
+                values(%s,%s,'owner') on conflict(library_id,account_id) do nothing""",
+                (own['account_id'], own['library_id']))
             track_key = connection.execute('select track_key from library.local_tracks where id=%s', (own['track_id'],)).fetchone()['track_key']
             assert track_key != own['path']
             artist_id = connection.execute("insert into library.local_artists(library_id,artist_key,name) values(%s,%s,'Artist') returning id",
@@ -61,11 +65,19 @@ def test_track_counts_include_measured_receipts_and_follow_indexed_file_rename(l
                 yield connection
             lookup = PostgresListenHistoryAdapter(ledger['config'], connect=same_connection)
             browse = PostgresLibraryBrowseRepository(ledger['config'], connect=same_connection)
+            # The final Album response now hydrates scoped history separately
+            # from inventory SQL. Keep both reads in this rollback-only fixture
+            # transaction; personal taste itself is outside this statistics case.
+            monkeypatch.setattr(track_stats, 'PostgresListenHistoryAdapter', lambda _config: lookup)
+            monkeypatch.setattr(album_details, 'build_track_preference_overlay_lookup', lambda *_a, **_k: {})
             def counts(path):
                 if consumer == 'track_lookup':
                     values = lookup.load_scrobbled_play_count_lookup([track_key, path])
                     return [values.get(track_key, 0), values.get(path, 0)]
-                return [row['track_scrobble_count'] for row in browse._load_album_detail_rows(track_key)]
+                payload = browse.build_album_detail_payload(track_key,
+                    account_id=own['account_id'], library_id=own['library_id'])
+                assert payload is not None
+                return [row['track_stats']['scrobble_count'] for row in payload['track_rows']]
             assert counts(own['path']) == ([2, 2] if consumer == 'track_lookup' else [2])
             renamed_path = own['path'] + '.renamed'
             connection.execute('update library.local_track_files set private_path=%s where track_id=%s', (renamed_path, own['track_id']))

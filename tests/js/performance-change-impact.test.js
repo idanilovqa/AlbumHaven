@@ -36,9 +36,9 @@ test('PR classifier applies changed-path performance ownership before selecting 
 test('sensitive browse, sidebar, modal, status, and mobile changes select their focused targets', () => {
   const cases = [
     ['music_app/services/runtime_asset_versions.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
-    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
+    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
-    ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
+    ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse']],
     ['music_app/static/js/runtime/track-modal-lightbox-helpers.js', ['selected-artist', 'all-artists', 'gapless-playback']],
     ['music_app/static/js/runtime/status-ui-helpers.js', ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']],
     ['music_app/static/css/mobile-layout.css', ['selected-artist', 'all-artists']],
@@ -151,5 +151,26 @@ test('backend publication and invalidation owners require family and search gate
     for (const target of ['artist-family', 'search-all-artists', 'search-browse']) {
       assert.ok(targets.includes(target), `${owner} must require ${target}`);
     }
+  }
+});
+
+test('shared browse changes retain every search gate in focused CI', () => {
+  for (const changedPath of [
+    'music_app/services/library_browse_postgres.py',
+    'music_app/routes/api_read_asgi_routes.py',
+    'music_app/routes/web_asgi.py',
+    'music_app/services/startup_bootstrap.py',
+    'music_app/static/js/runtime/bootstrap-init.js',
+    'music_app/static/js/runtime/response-state-helpers.js',
+  ]) {
+    const result = applyPerformanceChangeImpact({
+      pipelineMode: 'focused-e2e',
+      focusedPerformanceTargets: [],
+      focusedPerformanceShards: [],
+    }, [changedPath], contract);
+    for (const target of ['artist-family', 'search-all-artists', 'search-browse']) {
+      assert.ok(result.focusedPerformanceTargets.includes(target), `${changedPath} must require ${target}`);
+    }
+    assert.ok(result.focusedPerformanceShards.includes('synthetic-large-library'));
   }
 });

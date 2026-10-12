@@ -93,7 +93,10 @@
         "selected-artist",
         "root-album-browse",
         "app-open-all-artists",
-        "artist-tree-scroll-navigation"
+        "artist-tree-scroll-navigation",
+        "artist-family",
+        "search-all-artists",
+        "search-browse"
       ]
     },
     {

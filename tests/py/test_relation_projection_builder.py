@@ -945,3 +945,76 @@ def test_artist_string_reuse_preserves_alias_maps_and_live_counts(
         actual = builder.build_postgres_relation_alias_views(rows)
         assert actual == expected
         assert sum(row['count'] for row in actual['artists_sidebar']) == len(artists)
+
+@pytest.mark.parametrize('root_path', [r'C:\Music', r'\\server\music', '/srv/music'])
+def test_alias_facts_do_not_read_family_only_source_fields(root_path):
+    from music_app.services import relation_projection_builder as builder
+
+    class AliasSource(dict):
+        def get(self, key, default=None):
+            assert key not in {
+                'album_is_compilation', 'featured_kind',
+                'member_artist_is_album_wide_track_artist', 'relation_evidence_kind',
+            }, f'Alias construction accessed family-only field: {key}'
+            return super().get(key, default)
+
+    rows = _family_rows(root_path=root_path, prefix='Collective/Shared Era')
+    expected = builder.build_postgres_relation_alias_views(rows)
+    assert builder.build_postgres_relation_alias_views([AliasSource(row) for row in rows]) == expected
+
+
+@pytest.mark.parametrize('root_path', [r'C:\Music', r'\\server\music', '/srv/music'])
+def test_alias_facts_compact_validated_containers_without_losing_fallback(monkeypatch, root_path):
+    from music_app.services import relation_projection_builder as builder
+
+    private = root_path.rstrip('/\\') + '/Fallback/Shared Era/03.flac'
+    rows = [
+        _row(album_id=1, artist='Artist One', root_path=root_path,
+             relative_path='Collective/Shared Era/01.flac'),
+        _row(album_id=1, artist='Artist One', member='Guest', root_path=root_path,
+             relative_path='Collective/Shared Era/02.flac'),
+        _row(album_id=1, artist='Artist One', root_path=root_path,
+             relative_path='Collective/Shared Era/../../../../outside.flac', private_path=private),
+        _row(album_id=1, artist='Artist One', root_path=root_path,
+             relative_path='../outside.flac', private_path=root_path + '-outside/Bad/01.flac'),
+        _row(album_id=2, artist='Artist One feat. Guest', root_path=root_path,
+             relative_path='Fallback/Shared Era/04.flac'),
+    ]
+    intake = _row(album_id=3, artist='Intake Artist', root_path=root_path,
+                  relative_path='Collective/Shared Era/05.flac')
+    intake['root_kind'] = 'intake'
+    rows.append(intake)
+    expected = _build(rows)
+    original = builder._build_alias_views
+    captured = []
+
+    def capture(albums):
+        captured.extend(albums)
+        return original(albums)
+
+    monkeypatch.setattr(builder, '_build_alias_views', capture)
+    actual = builder.build_postgres_relation_alias_views(rows)
+    assert actual == {key: expected[key] for key in actual}
+    assert [(location.library_root_id, location.relative_parts)
+            for location in captured[0].locations] == [
+                ('11', ('Collective', 'Shared Era')),
+                ('11', ('Fallback', 'Shared Era')),
+            ]
+    assert captured[2].locations == ()
+    assert captured[0].artists == ('Artist One', 'Guest')
+
+
+def test_full_album_facts_preserve_family_evidence_and_track_locations():
+    from music_app.services import relation_projection_builder as builder
+
+    row = _row(album_id=1, artist='Owner', member='Collaborator',
+               relative_path='Owner/Album/01.flac', compilation=True,
+               featured_kind='featured_track_artist',
+               member_artist_is_album_wide_track_artist=True,
+               relation_evidence_kind='soundtrack_root')
+    fact, = builder._album_facts([row])
+    assert fact.is_compilation is True
+    assert fact.family_excluded is True
+    assert fact.family_artists == ('Collaborator', 'Owner')
+    assert fact.locations[0].relative_parts == ('Owner', 'Album', '01.flac')
+    assert fact.locations[0].root_path == r'C:\Music'

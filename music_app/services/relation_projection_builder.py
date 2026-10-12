@@ -297,7 +297,9 @@ def _merge_artist_alias(
             canonical_aliases.add(alias)
 
 
-def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
+def _album_facts(
+    rows: list[object], *, include_family_data: bool = True
+) -> tuple[PostgresRelationAlbumFact, ...]:
     buckets: dict[int, dict[str, object]] = {}
     for raw_row in rows:
         row = _row_mapping(raw_row)
@@ -309,25 +311,25 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
             continue
         owner_artist = _text(row, "owner_artist_name")
         album_artist = _text(row, "album_artist") or owner_artist
-        bucket = buckets.setdefault(
-            album_id,
-            {
+        if album_id not in buckets:
+            buckets[album_id] = {
                 "album_artist": album_artist,
-                "is_compilation": _postgres_bool(row.get("album_is_compilation")),
+                "is_compilation": include_family_data
+                and _postgres_bool(row.get("album_is_compilation")),
                 "artists": set(),
-                "family_artists": set(),
+                "family_artists": set() if include_family_data else None,
                 "locations": set(),
                 "location_sources": set(),
                 "family_excluded": False,
-            },
-        )
+            }
+        bucket = buckets[album_id]
         member_artist = _text(row, "member_artist_name")
         for artist in (owner_artist, member_artist):
             if artist:
                 bucket["artists"].add(artist)
-        if owner_artist:
+        if include_family_data and owner_artist:
             bucket["family_artists"].add(owner_artist)
-        if member_artist:
+        if include_family_data and member_artist:
             if (
                 _text(row, "featured_kind").casefold() != "featured_track_artist"
                 or _postgres_bool(
@@ -336,7 +338,8 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
             ):
                 bucket["family_artists"].add(member_artist)
         if (
-            _text(row, "root_kind") == "main_library"
+            include_family_data
+            and _text(row, "root_kind") == "main_library"
             and _text(row, "relation_evidence_kind").casefold() == "soundtrack_root"
         ):
             bucket["family_excluded"] = True
@@ -355,10 +358,13 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
                 location_parts = root_relative_parts(row)
         if location_parts is not None:
             root_id, relative_parts = location_parts
+            # Aliases use only the validated artist/album container.
+            if not include_family_data:
+                relative_parts = relative_parts[:2]
             bucket["locations"].add(
                 PostgresTrackLocationFact(
                     library_root_id=root_id,
-                    root_path=_text(row, "root_path"),
+                    root_path=_text(row, "root_path") if include_family_data else "",
                     relative_parts=relative_parts,
                 )
             )
@@ -369,8 +375,8 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
         artists = tuple(sorted(bucket["artists"], key=str.casefold))
         if not artists and album_artist:
             artists = (album_artist,)
-        family_artists = set(bucket["family_artists"])
-        if not family_artists and album_artist:
+        family_artists = bucket["family_artists"]
+        if include_family_data and not family_artists and album_artist:
             family_artists.add(album_artist)
         facts.append(
             PostgresRelationAlbumFact(
@@ -378,7 +384,10 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
                 album_artist=album_artist,
                 is_compilation=bool(bucket["is_compilation"]),
                 artists=artists,
-                family_artists=tuple(sorted(family_artists, key=str.casefold)),
+                family_artists=(
+                    tuple(sorted(family_artists, key=str.casefold))
+                    if include_family_data else ()
+                ),
                 locations=tuple(
                     sorted(
                         bucket["locations"],
@@ -621,7 +630,7 @@ def _build_family_views(
 
 def build_postgres_relation_alias_views(rows: list[object]) -> dict[str, object]:
     """Build current search aliases without unrelated family projections."""
-    return _build_alias_views(_album_facts(rows))
+    return _build_alias_views(_album_facts(rows, include_family_data=False))
 
 
 def build_postgres_relation_views(rows: list[object]) -> dict[str, object]:

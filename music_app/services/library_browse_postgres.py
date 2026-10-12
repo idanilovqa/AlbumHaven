@@ -1715,21 +1715,23 @@ class PostgresLibraryBrowseRepository:
         canonical_search_rows: list[object] | None = None
         selected_artist_preview_rows: list[object] | None = None
         exact_artist_match = ""
+        if (
+            relation_alias_maps.get("projection_stale_reason")
+            == "projection_not_ready"
+            and self._artist_search_projection_is_authoritative(
+                connection=connection,
+            )
+        ):
+            # A stale status alone does not invalidate matching source data.
+            # Validate its builder and fingerprints in this same snapshot.
+            relation_alias_maps = {
+                **relation_alias_maps,
+                "projection_stale_reason": "",
+            }
+        if relation_alias_maps.get("projection_stale_reason"):
+            raise SearchProjectionPending("Artist relationships are being prepared.")
         if query and not requested_all_artists:
             projected_artist_match = ""
-            if (
-                relation_alias_maps.get("projection_stale_reason")
-                == "projection_not_ready"
-                and self._artist_search_projection_is_authoritative(
-                    connection=connection,
-                )
-            ):
-                # A stale status alone does not invalidate matching source data.
-                # Validate its builder and fingerprints in this same snapshot.
-                relation_alias_maps = {
-                    **relation_alias_maps,
-                    "projection_stale_reason": "",
-                }
             projection_is_authoritative = (
                 relation_alias_maps.get("projection_stale_reason") == ""
             )

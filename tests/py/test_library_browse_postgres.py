@@ -3456,7 +3456,8 @@ def test_stale_projected_exact_alias_defers_to_current_exact_artist_sql(monkeypa
 @pytest.mark.parametrize(
     "stale_reason", ["source_fingerprint_changed", "projection_not_ready"]
 )
-def test_stale_search_requires_background_recovery_without_live_alias_build(monkeypatch, stale_reason):
+@pytest.mark.parametrize("query,all_artists", [("Alias", False), ("Partial", False), ("Partial", True)])
+def test_stale_search_requires_background_recovery_without_live_alias_build(monkeypatch, stale_reason, query, all_artists):
     from music_app.services import library_browse_postgres as browse
     repository = browse.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
@@ -3468,11 +3469,13 @@ def test_stale_search_requires_background_recovery_without_live_alias_build(monk
         "projection_stale_reason": stale_reason,
     })
     monkeypatch.setattr(repository, "_artist_search_projection_is_authoritative", lambda **_: False)
-    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *a, **k: "Alias")
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *a, **k: "Alias" if query == "Alias" else "")
     monkeypatch.setattr(repository, "_load_live_relation_alias_maps", lambda **_: pytest.fail(
         "Search must never rebuild global relationships"))
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *args, **kwargs: pytest.fail(
+        "Search must not return partial relationships while recovery is pending"))
     with pytest.raises(browse.SearchProjectionPending):
-        repository.build_search_payload(query_params={"q": "Alias", "omit_sidebar": "1"})
+        repository.build_search_payload(query_params={"q": query, "omit_sidebar": "1", "all_artists": "1" if all_artists else "0"})
 
 
 @pytest.mark.parametrize(

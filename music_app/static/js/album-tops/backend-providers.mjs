@@ -64,14 +64,16 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
     return {top_ref: ref, revision: data.revision, next_cursor: data.next_cursor,
       ...(!candidates ? {visibility: data.visibility} : {}), [key]: rows(data[key], value => {
         const person = member(value);
-        if (value.grant_ref !== null && !uuid(value.grant_ref) || value.role !== null && value.role !== 'editor') throw fail('Invalid Album Top editor.');
+        if (value.grant_ref !== null && !uuid(value.grant_ref) || value.role !== null && !['viewer', 'editor'].includes(value.role)) throw fail('Invalid Album Top access role.');
+        if ((value.grant_ref === null) !== (value.role === null)) throw fail('Invalid Album Top access role.');
+        if (!Number.isSafeInteger(value.account_id) || value.account_id <= 0) throw fail('Invalid Album Top member.');
         if (candidates) {
-          if (!Number.isSafeInteger(value.account_id) || value.account_id <= 0 || !value.allowed_actions || !Object.hasOwn(value.allowed_actions, 'can_grant_editor') || typeof value.allowed_actions.can_grant_editor !== 'boolean') throw fail('Invalid Album Top candidate.');
+          if (!value.allowed_actions || !['can_grant_viewer', 'can_grant_editor'].every(key => Object.hasOwn(value.allowed_actions, key) && typeof value.allowed_actions[key] === 'boolean')) throw fail('Invalid Album Top candidate.');
           return {...person, account_id: value.account_id, grant_ref: value.grant_ref, role: value.role,
-            allowed_actions: {can_grant_editor: value.allowed_actions.can_grant_editor}};
+            allowed_actions: {can_grant_editor: value.allowed_actions.can_grant_editor, can_grant_viewer: value.allowed_actions.can_grant_viewer}};
         }
-        if (!uuid(value.grant_ref) || value.role !== 'editor' || typeof value.is_active !== 'boolean') throw fail('Invalid Album Top editor grant.');
-        return {...person, grant_ref: value.grant_ref, role: value.role, is_active: value.is_active};
+        if (!uuid(value.grant_ref) || !['viewer', 'editor'].includes(value.role) || typeof value.is_active !== 'boolean') throw fail('Invalid Album Top access grant.');
+        return {...person, account_id: value.account_id, grant_ref: value.grant_ref, role: value.role, is_active: value.is_active};
       }, 'account_ref')};
   };
   return {
@@ -132,7 +134,7 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
     },
     async execute(action, command, options) {
       const {top_ref, ...body} = command;
-      if (!uuid(body.request_key) || !['create', 'save', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
+      if (!uuid(body.request_key) || !['create', 'save', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
       if (action === 'set_manual_completion' && (!uuid(body.album_ref) || !isProgressRevision(body.progress_revision)
         || typeof body.completed !== 'boolean' || Object.keys(body).length !== 4)) throw fail('Invalid Album Top progress command.');
       const data = await request(action === 'create' ? '/album-tops' : '/album-tops/' + top_ref + '/' + action, options, body);

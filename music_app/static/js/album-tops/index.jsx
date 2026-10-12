@@ -25,7 +25,7 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   mountNotifications();
   const unsubscribe = controller.subscribe(() => {
     const snapshot = controller.getSnapshot(), mutation = snapshot.mutation;
-    if (mutation.status === 'ready' && ['visibility', 'grant_editor', 'revoke_editor', 'decide_edit_request'].includes(mutation.action)
+    if (mutation.status === 'ready' && ['visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'decide_edit_request'].includes(mutation.action)
       && refreshedOperation !== mutation.command?.request_key) {
       refreshedOperation = mutation.command.request_key; notifications?.refresh();
     }

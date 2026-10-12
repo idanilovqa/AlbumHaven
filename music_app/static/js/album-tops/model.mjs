@@ -4,7 +4,7 @@ import {isManualProgress} from './progress.mjs';
 const BROWSE = 'library.browse.read', CREATE = 'library.album_tops.create';
 const actionPermissions = Object.freeze({create: 'can_create', save: 'can_edit', delete: 'can_delete',
   add: 'can_add', remove: 'can_remove', reorder: 'can_reorder', view_sharing: 'can_view_sharing',
-  visibility: 'can_share', grant_editor: 'can_share', revoke_editor: 'can_share', decide_edit_request: 'can_share',
+  visibility: 'can_share', grant_editor: 'can_share', grant_viewer: 'can_share', revoke_editor: 'can_share', decide_edit_request: 'can_share',
   request_edit: 'can_request_edit', copy: 'can_copy', set_manual_completion: 'can_manage_own_progress'});
 const sharingPermissions = ['can_share', 'can_copy', 'can_request_edit'];
 const empty = () => ({status: 'unavailable', data: null, error: null});

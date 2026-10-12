@@ -10,6 +10,7 @@ import re
 import secrets
 
 from music_app.services.allowed_actions import AllowedActions
+from music_app.services.capabilities import grant_keys_for_action
 from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
 from music_app.services.policy import PolicyContext, RequestOrigin
 from music_app.services.policy_evaluator import PolicyEvaluator
@@ -184,15 +185,18 @@ class HomeActivityPostgresRepository:
             with authorized_friend_read(connection, account_id=scope.account_id,
                     library_id=scope.library_id, target_account_id=scope.source_account_id) as profile:
                 facts = connection.execute("""select a.id,a.is_active,a.disabled_at,m.membership_role,
+                    exists(select 1 from app.bootstrap_owners b where b.account_id=a.id
+                      and b.owner_key='local-bootstrap-owner') as bootstrap_owner,
                     (select jsonb_agg(jsonb_build_array(c.id,c.capability_key,c.scope_kind,c.scope_id)
                        order by c.id) from app.capabilities c where c.account_id=a.id
-                       and c.capability_key='capability.social' and c.revoked_at is null
+                       and c.capability_key=any(%s) and c.revoked_at is null
                        and ((c.scope_kind='library' and c.scope_id=m.library_id)
-                         or (c.scope_kind='global' and c.scope_id is null))) as social_grants
+                         or (c.scope_kind='global' and c.scope_id is null))) as browse_grants
                     from app.accounts a join library.library_memberships m on m.account_id=a.id
                     where a.id=%s and m.library_id=%s""",
-                    (scope.source_account_id, scope.library_id)).fetchone()
-                if facts is None or not facts["social_grants"]:
+                    (sorted(grant_keys_for_action('library.browse.read')),
+                     scope.source_account_id, scope.library_id)).fetchone()
+                if facts is None or not (facts["bootstrap_owner"] or facts["browse_grants"]):
                     raise HomeActivityError("Action not permitted.", 403, "activity_denied")
                 yield {"profile": profile, "fingerprint": hashlib.sha256(
                     json.dumps(dict(facts), sort_keys=True, default=str).encode()).hexdigest()}

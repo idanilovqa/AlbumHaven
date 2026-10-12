@@ -60,6 +60,7 @@ class PostgresOwnedAlbumTopsService:
         require_top_authority(target, required_actions=actions,
             owner_account_id=top["owner_account_id"] if top else None,
             editor_grant=top.get("editor_grant", False) if top else False,
+            viewer_grant=top.get("viewer_grant", False) if top else False,
             visibility=top["visibility"] if top else "private",
             owner_only=owner_only, constraints=constraints)
 
@@ -77,11 +78,14 @@ class PostgresOwnedAlbumTopsService:
         if top["deleted_at"] is not None and (not allow_deleted or not owner):
             raise AlbumTopError("top_unavailable", 404)
         top["editor_grant"] = False
+        top["viewer_grant"] = False
         if not owner:
-            top["editor_grant"] = connection.execute("""select ref from app.album_list_access_grants
-                where top_ref=%s and library_id=%s and account_id=%s and role='editor'""",
-                (ref, context.library_id, context.actor.account_id)).fetchone() is not None
-        if not (owner or top["editor_grant"] or top["visibility"] == "server_shared"):
+            grant = connection.execute("""select ref,role from app.album_list_access_grants
+                where top_ref=%s and library_id=%s and account_id=%s""",
+                (ref, context.library_id, context.actor.account_id)).fetchone()
+            top["editor_grant"] = grant is not None and grant["role"] == "editor"
+            top["viewer_grant"] = grant is not None and grant["role"] == "viewer"
+        if not (owner or top["editor_grant"] or top["viewer_grant"] or top["visibility"] == "server_shared"):
             raise AlbumTopError("top_unavailable", 404)
         return top
 
@@ -106,7 +110,7 @@ class PostgresOwnedAlbumTopsService:
                 "can_share": self._allows(context, (BROWSE, ACCESS), constraints, top, owner_only=True),
                 "can_view_sharing": read,
                 "can_manage_own_progress": self._allows(context, (BROWSE, PROGRESS), constraints, top),
-                "can_request_edit": read and top["visibility"] == "server_shared"
+                "can_request_edit": read and (top["visibility"] == "server_shared" or top.get("viewer_grant", False))
                     and top["owner_account_id"] != context.actor.account_id and not top.get("editor_grant", False),
                 "can_copy": read and self._allows(context, (BROWSE, CREATE), constraints)}
 
@@ -121,7 +125,7 @@ class PostgresOwnedAlbumTopsService:
                 where p.library_id=%s and p.deleted_at is null and p.id>%s
                   and (p.owner_account_id=%s or p.visibility='server_shared' or exists(
                     select 1 from app.album_list_access_grants g where g.top_ref=p.ref
-                      and g.library_id=p.library_id and g.account_id=%s and g.role='editor'))
+                      and g.library_id=p.library_id and g.account_id=%s and g.role in ('editor','viewer')))
                 order by p.id limit %s""",
                 (live.library_id, after, live.actor.account_id, live.actor.account_id, limit + 1)).fetchall()
             tops = []
@@ -291,7 +295,7 @@ class PostgresOwnedAlbumTopsService:
                 "create", "add", "remove", "reorder"} else []
         order = [str(row["ref"]) for row in rows]
         changed, counts = True, {}
-        if command.action in {"visibility", "grant_editor", "revoke_editor", "request_edit", "decide_edit_request"}:
+        if command.action in {"visibility", "grant_editor", "grant_viewer", "revoke_editor", "request_edit", "decide_edit_request"}:
             changed, counts = viewers.mutate(self, connection, live, command, top, constraints,
                                              locked_target=locked_target)
         elif command.action in {"create", "add"}:

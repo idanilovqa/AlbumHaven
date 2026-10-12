@@ -134,6 +134,7 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
         "delete": {"request_key", "revision"},
         "visibility": {"request_key", "revision", "visibility"},
         "grant_editor": {"request_key", "revision", "account_id", "role"},
+        "grant_viewer": {"request_key", "revision", "account_id", "role"},
         "revoke_editor": {"request_key", "revision", "grant_ref"},
         "request_edit": {"request_key", "revision"},
         "decide_edit_request": {"request_key", "revision", "request_ref", "decision"},
@@ -168,12 +169,13 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
         if type(payload.get("visibility")) is not str or payload["visibility"] not in {"private", "server_shared"}:
             raise AlbumTopError("invalid_command")
         data["visibility"] = payload["visibility"]
-    elif action == "grant_editor":
+    elif action in {"grant_editor", "grant_viewer"}:
+        role = "editor" if action == "grant_editor" else "viewer"
         account = payload.get("account_id")
         if (type(account) is not int or not 0 < account <= 9223372036854775807
-                or type(payload.get("role")) is not str or payload["role"] != "editor"):
+                or type(payload.get("role")) is not str or payload["role"] != role):
             raise AlbumTopError("invalid_command")
-        data.update(account_id=account, role="editor")
+        data.update(account_id=account, role=role)
     elif action == "revoke_editor":
         data["grant_ref"] = top_uuid(payload.get("grant_ref"))
     elif action == "decide_edit_request":
@@ -211,7 +213,7 @@ def command_actions(command: AlbumTopCommand) -> tuple[str, ...]:
         return (BROWSE,)
     action = {"create": CREATE, "copy": CREATE, "save": MANAGE, "delete": MANAGE,
               "add": ITEMS, "remove": ITEMS, "reorder": ITEMS, "visibility": ACCESS,
-              "grant_editor": ACCESS, "revoke_editor": ACCESS,
+              "grant_editor": ACCESS, "grant_viewer": ACCESS, "revoke_editor": ACCESS,
               "decide_edit_request": ACCESS, "set_manual_completion": PROGRESS}.get(command.action)
     if action is None:
         raise AlbumTopError("invalid_command")
@@ -220,7 +222,8 @@ def command_actions(command: AlbumTopCommand) -> tuple[str, ...]:
 
 def require_top_authority(context: PolicyContext, *, required_actions: tuple[str, ...],
                           owner_account_id: int | None, constraints=None,
-                          editor_grant: bool = False, visibility: str = "private",
+                          editor_grant: bool = False, viewer_grant: bool = False,
+                          visibility: str = "private",
                           owner_only: bool = False) -> None:
     if not isinstance(context, PolicyContext) or not isinstance(context.actor, CurrentActor):
         raise AlbumTopError("forbidden", 403)
@@ -247,7 +250,7 @@ def require_top_authority(context: PolicyContext, *, required_actions: tuple[str
             raise AlbumTopError("forbidden", 403)
         owner = owner_account_id == actor.account_id
         editor = editor_grant is True
-        if not (owner or editor or visibility == "server_shared"):
+        if not (owner or editor or viewer_grant is True or visibility == "server_shared"):
             raise AlbumTopError("forbidden", 403)
         if (owner_only or ACCESS in required_actions) and not owner:
             raise AlbumTopError("forbidden", 403)

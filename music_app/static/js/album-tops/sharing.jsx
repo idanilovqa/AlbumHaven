@@ -1,6 +1,7 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {Button, Status} from '../home-friends/components.jsx';
 import {NativeDialog} from '../home-friends/native-dialog.jsx';
+import {NativeChoice} from '../home-friends/native-choice.jsx';
 import {SharingVisibility, SharingMember, SharingReaderAccess, SharingRequestDecision} from '../home-friends/resource-sharing.jsx';
 import {CreationSearch} from '../playlists/creation.jsx';
 import {MutationStatus} from '../playlists/mutation-status.jsx';
@@ -36,6 +37,7 @@ function SharingPages({runtime, page, next, disabled, label, current}) {
 export function ShareAlbumTop({runtime, controller, state, onClose, returnFocus}) {
   const detail = state.detail.data;
   const [visibility, setVisibility] = useState(null), [query, setQuery] = useState(''), [decisionDraft, setDecisions] = useState(null);
+  const [roleDraft, setRoles] = useState(null);
   const live = useRef(null);
   const busy = state.mutation.refreshing === true || ['loading', 'uncertain'].includes(state.mutation.status);
   const allowed = albumTopActionAllowed(state, 'view_sharing');
@@ -54,6 +56,22 @@ export function ShareAlbumTop({runtime, controller, state, onClose, returnFocus}
   const writable = action => active() && !conflict && albumTopActionAllowed(controller.getSnapshot(), action);
   const mutate = (action, value) => {if (writable(action)) return controller.mutate(action, value);};
   const selectedVisibility = visibility?.detail === detail ? visibility.value : data?.visibility;
+  const roles = roleDraft?.detail === detail ? roleDraft.values : {};
+  const accessControls = (person, candidate = false) => {
+    const role = roles[person.account_ref] || person.role || 'viewer';
+    const action = role === 'viewer' ? 'grant_viewer' : 'grant_editor';
+    const permitted = role !== person.role && (candidate
+      ? person.allowed_actions?.[`can_${action}`] === true : person.is_active !== false);
+    const name = person.display_name || person.username_display || 'Library member';
+    return <><NativeChoice runtime={runtime} label={`Access for ${name}`} value={role}
+      options={ [['viewer', 'Viewer'], ['editor', 'Editor']] } disabled={busy || conflict || person.is_active === false}
+      onChange={value => {if (['viewer', 'editor'].includes(value) && writable('visibility') && person.is_active !== false)
+        setRoles({detail, values: {...roles, [person.account_ref]: value}});}}/>
+      <Button runtime={runtime} disabled={busy || conflict || !permitted}
+        onClick={() => {if (permitted) mutate(action, {account_id: person.account_id, role});}}>
+        {person.grant_ref ? 'Apply access' : 'Add access'}
+      </Button></>;
+  };
   const canDismiss = () => {
     const mutation = controller.getSnapshot().mutation;
     return mutation.refreshing !== true && mutation.status !== 'loading'
@@ -72,33 +90,31 @@ export function ShareAlbumTop({runtime, controller, state, onClose, returnFocus}
       {manage && <>
         <SharingVisibility runtime={runtime} label="Album Top visibility" visibility={selectedVisibility} disabled={busy || conflict}
           onChange={value => {if (writable('visibility')) setVisibility({detail, value});}}>
-          Private Album Tops are visible to their owner and explicit editors. Server-shared Album Tops are visible to authorized members of this library.
+          Private Album Tops are visible to their owner and named viewers and editors. Server-shared Album Tops are visible to authorized members of this library.
         </SharingVisibility>
         {data.pending_requests.map(request => <SharingRequestDecision key={request.request_ref} runtime={runtime} request={request}
           role={decisions[request.request_ref] || 'viewer'} disabled={busy || conflict}
           onRole={role => {if (writable('decide_edit_request')) setDecisions({detail, values: {...decisions, [request.request_ref]: role}});}}
           onDecision={decision => {if (decision === 'decline' || decisions[request.request_ref] === 'editor') mutate('decide_edit_request', {request_ref: request.request_ref, decision});}}/>)}
         <SharingPages runtime={runtime} page={sharing} next={data.next_pending_cursor} disabled={busy} label="edit requests" current={active}/>
-        <fieldset disabled={busy || conflict}><legend>Editors</legend>
-          <Status runtime={runtime} value={grants.value} label="Album Top editors" retry={grants.retry}/>
+        <fieldset disabled={busy || conflict}><legend>People with access</legend>
+          <Status runtime={runtime} value={grants.value} label="Album Top access" retry={grants.retry}/>
           {grants.value.data?.grants.map(person => <SharingMember key={person.grant_ref} person={person}>
-            <Button runtime={runtime} disabled={busy || conflict} onClick={() => mutate('revoke_editor', {grant_ref: person.grant_ref})}>Remove editor</Button>
+            {accessControls(person)}
+            <Button runtime={runtime} disabled={busy || conflict} onClick={() => mutate('revoke_editor', {grant_ref: person.grant_ref})}>Remove access</Button>
           </SharingMember>)}
-          {grants.value.data?.grants.length === 0 && <p>No explicit editors.</p>}
+          {grants.value.data?.grants.length === 0 && <p>No named viewers or editors.</p>}
         </fieldset>
-        <SharingPages runtime={runtime} page={grants} next={grants.value.data?.next_cursor} disabled={busy} label="editors" current={active}/>
+        <SharingPages runtime={runtime} page={grants} next={grants.value.data?.next_cursor} disabled={busy} label="people with access" current={active}/>
         <CreationSearch runtime={runtime} id="album-top-sharing-search" label="Find library members" value={query} maxLength={100} disabled={busy}
           onChange={value => {if (active()) setQuery(value.slice(0, 100));}}/>
         <Status runtime={runtime} value={candidates.value} label="Eligible library members" retry={candidates.retry}/>
         {candidates.value.data?.candidates.map(person => <SharingMember key={person.account_ref} person={person}>
-          <Button runtime={runtime} disabled={busy || conflict || person.allowed_actions.can_grant_editor !== true}
-            onClick={() => {if (person.allowed_actions.can_grant_editor === true) mutate('grant_editor', {account_id: person.account_id, role: 'editor'});}}>
-            {person.grant_ref ? 'Editor' : 'Add editor'}
-          </Button>
+          {accessControls(person, true)}
         </SharingMember>)}
         {candidates.value.data?.candidates.length === 0 && <p>No matching eligible library members.</p>}
         <SharingPages runtime={runtime} page={candidates} next={candidates.value.data?.next_cursor} disabled={busy} label="library members" current={active}/>
-        <p className="playlists__note">Each editor change is saved separately. Personal ratings and listening progress stay private.</p>
+        <p className="playlists__note">Each access change is saved separately. Personal ratings and listening progress stay private.</p>
       </>}
       <MutationStatus runtime={runtime} value={{...state.mutation, status: state.mutation.status === 'uncertain' ? 'error' : state.mutation.status}} controller={controller}/>
       {state.mutation.status === 'uncertain' && !dismissalBlocked && <p className="playlists__note" role="status">

@@ -18,19 +18,21 @@ def member_context(connection, context, account_id, *, lock=False):
 def eligible_member(owner, connection, context, top, account_id, constraints, *, lock=False):
     try:
         member = member_context(connection, context, account_id, lock=lock)
-        owner._require(member, (BROWSE,), constraints, {**top, 'editor_grant': True})
+        owner._require(member, (BROWSE,), constraints, {**top, 'editor_grant': False, 'viewer_grant': True})
         return True
     except AlbumTopError:
         return False
 
 
 def request_valid(owner, connection, context, top, account_id, constraints, *, lock=False):
-    if (top['visibility'] != 'server_shared' or top['deleted_at'] is not None
-            or top['owner_account_id'] == account_id):
+    if top['deleted_at'] is not None or top['owner_account_id'] == account_id:
         return False
-    if connection.execute('''select ref from app.album_list_access_grants
-            where top_ref=%s and library_id=%s and account_id=%s''',
-            (top['ref'], context.library_id, account_id)).fetchone() is not None:
+    grant = connection.execute('''select ref,role from app.album_list_access_grants
+        where top_ref=%s and library_id=%s and account_id=%s''',
+        (top['ref'], context.library_id, account_id)).fetchone()
+    if grant is not None and grant['role'] == 'editor':
+        return False
+    if top['visibility'] != 'server_shared' and (grant is None or grant['role'] != 'viewer'):
         return False
     return eligible_member(owner, connection, context, top, account_id, constraints, lock=lock)
 
@@ -42,20 +44,26 @@ def invalidate(connection, top_ref, *, account_id=None, status='revoked'):
         (status, top_ref, account_id, account_id))
 
 
-def grant_editor(owner, connection, context, top, account_id, constraints):
+def grant_access(owner, connection, context, top, account_id, role, constraints):
     if account_id == top['owner_account_id']:
         raise AlbumTopError('invalid_editor', 409)
     if not eligible_member(owner, connection, context, top, account_id, constraints, lock=True):
         raise AlbumTopError('grant_target_unavailable', 404)
-    prior = connection.execute('''select ref from app.album_list_access_grants
-        where top_ref=%s and account_id=%s''', (top['ref'], account_id)).fetchone()
+    prior = connection.execute('''select ref,role from app.album_list_access_grants
+        where top_ref=%s and library_id=%s and account_id=%s''',
+        (top['ref'], context.library_id, account_id)).fetchone()
     ref = str(prior['ref']) if prior else str(uuid4())
     if prior is None:
         connection.execute('''insert into app.album_list_access_grants
-            (ref,top_ref,library_id,account_id,role) values(%s,%s,%s,%s,'editor')''',
-            (ref, top['ref'], context.library_id, account_id))
-    invalidate(connection, top['ref'], account_id=account_id, status='approved')
-    return prior is None, {'grant_ref': ref}
+            (ref,top_ref,library_id,account_id,role) values(%s,%s,%s,%s,%s)''',
+            (ref, top['ref'], context.library_id, account_id, role))
+    elif prior['role'] != role:
+        connection.execute('''update app.album_list_access_grants set role=%s
+            where ref=%s and top_ref=%s and library_id=%s''',
+            (role, ref, top['ref'], context.library_id))
+    if role == 'editor':
+        invalidate(connection, top['ref'], account_id=account_id, status='approved')
+    return prior is None or prior['role'] != role, {'grant_ref': ref}
 
 
 def mutate(owner, connection, context, command, top, constraints, *, locked_target=None):
@@ -66,8 +74,8 @@ def mutate(owner, connection, context, command, top, constraints, *, locked_targ
             connection.execute('update app.album_lists set visibility=%s where ref=%s',
                                (data['visibility'], top['ref']))
         return changed, {'visibility': data['visibility']}
-    if command.action == 'grant_editor':
-        return grant_editor(owner, connection, context, top, data['account_id'], constraints)
+    if command.action in {'grant_editor', 'grant_viewer'}:
+        return grant_access(owner, connection, context, top, data['account_id'], data['role'], constraints)
     if command.action == 'revoke_editor':
         row = connection.execute('''delete from app.album_list_access_grants
             where ref=%s and top_ref=%s and library_id=%s returning ref''',
@@ -78,7 +86,7 @@ def mutate(owner, connection, context, command, top, constraints, *, locked_targ
     if command.action == 'request_edit':
         if top['owner_account_id'] == context.actor.account_id or top['editor_grant']:
             raise AlbumTopError('editor_request_not_needed', 409)
-        if top['visibility'] != 'server_shared':
+        if top['visibility'] != 'server_shared' and not top.get('viewer_grant', False):
             raise AlbumTopError('top_unavailable', 404)
         prior = connection.execute('''select ref from app.album_list_edit_requests
             where top_ref=%s and requester_account_id=%s and status='pending' for update''',
@@ -108,7 +116,7 @@ def mutate(owner, connection, context, command, top, constraints, *, locked_targ
         approved = data['decision'] == 'approve'
         counts = {}
         if approved:
-            _, counts = grant_editor(owner, connection, context, top, request['requester_account_id'], constraints)
+            _, counts = grant_access(owner, connection, context, top, request['requester_account_id'], 'editor', constraints)
         status = 'approved' if approved else 'declined'
         connection.execute('update app.album_list_edit_requests set status=%s,resolved_at=now() where ref=%s',
                            (status, request['ref']))
@@ -150,7 +158,7 @@ def pending(owner, connection, context, constraints, *, top_ref=None, after=0, l
         join app.accounts a on a.id=r.requester_account_id
         join app.social_profiles s on s.account_id=a.id
         where r.library_id=%s and p.owner_account_id=%s and p.deleted_at is null
-          and p.visibility='server_shared' and r.status='pending' and r.id>%s
+          and r.status='pending' and r.id>%s
           and (%s::uuid is null or p.ref=%s) order by r.id limit %s''',
         (context.library_id, context.actor.account_id, after, top_ref, top_ref, limit + 1)).fetchall()
     result = []
@@ -226,7 +234,8 @@ def access_directory(owner, connection, context, top, constraints, *, cursor_sec
         item = {**row, 'grant_ref': str(row['grant_ref']) if row['grant_ref'] else None}
         if candidates:
             del item['is_active']
-            item['allowed_actions'] = {'can_grant_editor': row['grant_ref'] is None}
+            item['allowed_actions'] = {'can_grant_editor': row['role'] != 'editor',
+                                       'can_grant_viewer': row['role'] != 'viewer'}
         projected.append(item)
     return {'top_ref': str(top['ref']), 'revision': str(top['revision']),
             **({'visibility': top['visibility']} if not candidates else {}),

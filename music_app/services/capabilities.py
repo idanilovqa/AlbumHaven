@@ -23,17 +23,22 @@ PERSONAL_COLLECTION_ACTIONS = frozenset({
     "library.album_tops.items.manage", "library.album_tops.settings.manage",
     "library.album_tops.access.manage", "library.album_tops.progress.manage",
 })
+SOCIAL_ACTIONS = frozenset({
+    "library.social.read", "library.social.manage",
+    "library.social.history.read", "library.social.taste.read",
+})
+# Friendship and personal taste remain actor/resource scoped in their services.
+PERSONAL_ACTIONS = PERSONAL_COLLECTION_ACTIONS | SOCIAL_ACTIONS | frozenset({
+    "library.track_preferences.manage",
+})
 
 CAPABILITY_ACTIONS = MappingProxyType({
     "view": frozenset({
         "app.shell.read", "app.bootstrap.read", "app.status.read",
         "library.browse.read", "library.artwork.read",
         "library.virtual_discography.read", "library.virtual_discography.create",
-    }) | PERSONAL_COLLECTION_ACTIONS,
-    "social": frozenset({
-        "library.social.read", "library.social.manage",
-        "library.social.history.read", "library.social.taste.read",
-    }),
+    }) | PERSONAL_ACTIONS,
+    "social": SOCIAL_ACTIONS,
     "play": frozenset({
         "library.media.read", "integration.lastfm.now_playing",
         "integration.lastfm.scrobble", "integration.lastfm.complete",
@@ -125,7 +130,7 @@ ROLE_PRESETS = MappingProxyType({
 # Compatibility for fine-grained grants assigned before the artwork/custom-cover
 # split. These aliases never expand audio authority from a browse-only grant.
 ACTION_GRANT_ALIASES = MappingProxyType({
-    **{action: frozenset({"library.browse.read"}) for action in PERSONAL_COLLECTION_ACTIONS},
+    **{action: frozenset({"library.browse.read"}) for action in PERSONAL_ACTIONS},
     "library.artwork.read": frozenset({"library.media.read", "library.browse.read"}),
     "library.covers.upload": frozenset({"library.covers.write"}),
     "library.covers.link": frozenset({"library.covers.write"}),

@@ -16520,3 +16520,56 @@ def test_postgres_cover_variant_queue_uses_local_revision_cache(monkeypatch):
             "d" * 64,
         )
     ]
+
+
+def test_live_search_alias_fallback_uses_compact_source_without_full_projection(monkeypatch):
+    from music_app.services import relation_projection_postgres as projection
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    def reject_full_work(*args, **kwargs):
+        pytest.fail('cold search must not load full joined relation source or build family projections')
+    monkeypatch.setattr(projection, 'load_relation_source_rows_sql', reject_full_work)
+    monkeypatch.setattr(projection, 'build_relation_views_from_postgres_rows', reject_full_work)
+    queries = []
+    class Connection:
+        def execute(self, sql):
+            queries.append(sql)
+            return self
+        def fetchall(self):
+            return [dict(album_id=1, owner_artist_name='Artist', album_artist='Artist',
+                         member_artist_name='Artist')]
+    repository = PostgresLibraryBrowseRepository(
+        {'ALBUM_HAVEN_APP_DATABASE_URL': 'postgresql://unused'},
+        connect=lambda _: Connection(),
+    )
+    result = repository._load_live_relation_alias_maps(connection=Connection())
+    assert result['alias_to_canonical'] == {'Artist': 'Artist'}
+    assert result['canonical_to_aliases'] == {'Artist': ['Artist']}
+    assert result['projection_stale_reason'] == 'live_fallback'
+    assert len(queries) == 1
+
+
+def test_live_compact_alias_source_matches_full_join_for_multiroot_inventory(watcher_repair_inventory):
+    from music_app.services import relation_projection_builder as builder
+    from music_app.services import relation_projection_postgres as projection
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    entries = [fixture.entry(f'Collective/Album/{index:02}.flac',
+                             artist=('Owner', 'Guest', 'Owner feat. Guest')[index % 3])
+               for index in range(12)]
+    entries.append(fixture.entry('Other/Album/01.flac', root=1, artist='OWNER', album='Other'))
+    fixture.seed(*entries)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute('update library.local_track_files set relative_path = %s where private_path = %s',
+                           ('../invalid.flac', entries[0]['path']))
+        connection.execute("update library.local_track_files set metadata = jsonb_set(metadata, '{scan_cache,stale}', 'true'::jsonb) where private_path = %s",
+                           (entries[1]['path'],))
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        full_rows = list(connection.execute(projection.load_relation_source_rows_sql()).fetchall())
+        compact_rows = list(connection.execute(projection.load_relation_alias_source_rows_sql()).fetchall())
+    assert len(compact_rows) < len(full_rows), 'source cardinality must not multiply files by artist memberships'
+    expected = builder.build_postgres_relation_views(full_rows)
+    actual = builder.build_postgres_relation_alias_views(compact_rows)
+    for key in ('alias_to_canonical', 'canonical_to_aliases', 'artists_sidebar'):
+        assert actual[key] == expected[key]

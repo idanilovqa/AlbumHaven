@@ -819,3 +819,28 @@ def test_relation_builder_path_reuse_keeps_fallback_validation_inputs_distinct()
     assert [location.relative_parts for location in facts[0].locations] == [
         ('Artist', 'Album', '01.flac'), ('Artist', 'Album', '03.flac'),
     ]
+
+
+@pytest.mark.parametrize('root_path,prefix', [
+    (r'C:\Music', r'Collective\Shared Era'),
+    (r'\\server\music', r'Collective\Shared Era'),
+    ('/srv/music', 'Collective/Shared Era'),
+])
+def test_alias_only_builder_matches_full_projection_without_family_work(monkeypatch, root_path, prefix):
+    from music_app.services import relation_projection_builder as builder
+
+    rows = _family_rows(root_path=root_path, prefix=prefix)
+    rows += [
+        _row(album_id=3, artist='Artist One', member='Artist One feat. Guest',
+             root_path=root_path, relative_path='Other/Album/01.flac'),
+        _row(album_id=4, artist='ARTIST ONE', root_path=root_path,
+             relative_path='../outside.flac', private_path='/outside/invalid.flac'),
+    ]
+    expected = _build(rows)
+    def reject_family_work(*args, **kwargs):
+        pytest.fail('alias-only search must not rebuild artist-family projections')
+    monkeypatch.setattr(builder, '_build_family_views', reject_family_work)
+    actual = builder.build_postgres_relation_alias_views(rows)
+    assert actual['alias_to_canonical'] == expected['alias_to_canonical']
+    assert actual['canonical_to_aliases'] == expected['canonical_to_aliases']
+    assert actual['artists_sidebar'] == expected['artists_sidebar']

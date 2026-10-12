@@ -2985,13 +2985,11 @@ class PostgresLibraryBrowseRepository:
         }
 
     def _load_live_relation_alias_maps(self, *, connection: Any) -> dict[str, object]:
-        from music_app.services.relation_projection_postgres import (
-            build_relation_views_from_postgres_rows,
-            load_relation_source_rows_sql,
-        )
+        from music_app.services.relation_projection_builder import build_postgres_relation_alias_views
+        from music_app.services.relation_projection_postgres import load_relation_alias_source_rows_sql
 
-        rows = list(connection.execute(load_relation_source_rows_sql()).fetchall())
-        relation_views = build_relation_views_from_postgres_rows(self._config, rows)
+        rows = list(connection.execute(load_relation_alias_source_rows_sql()).fetchall())
+        relation_views = build_postgres_relation_alias_views(rows)
         return {
             "alias_to_canonical": _row_json_mapping(
                 relation_views.get("alias_to_canonical")

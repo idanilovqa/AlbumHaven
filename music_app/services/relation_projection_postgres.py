@@ -842,6 +842,62 @@ def _merge_failed_projection_status_sql() -> str:
     """
 
 
+def load_relation_alias_source_rows_sql() -> str:
+    """Keep album membership and locations separate instead of multiplying them."""
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ), live_files as materialized (
+          select tracks.album_id, files.library_root_id::text as library_root_id,
+                 roots.root_kind::text as root_kind, roots.root_path,
+                 files.relative_path, files.private_path
+          from bootstrap_context
+          join library.local_tracks as tracks
+            on tracks.library_id = bootstrap_context.library_id
+          join library.local_track_files as files
+            on files.track_id = tracks.id
+           and files.scan_cache_stale is false
+          join library.library_roots as roots
+            on roots.id = files.library_root_id
+           and roots.library_id = bootstrap_context.library_id
+          where tracks.album_id is not null
+        ), album_facts as materialized (
+          select albums.id as album_id, albums.library_id,
+                 owner.name as owner_artist_name,
+                 coalesce(nullif(albums.metadata ->> 'album_artist', ''), owner.name) as album_artist
+          from bootstrap_context
+          join library.local_albums as albums
+            on albums.library_id = bootstrap_context.library_id
+          join (select distinct album_id from live_files) as live_albums
+            on live_albums.album_id = albums.id
+          left join library.local_artists as owner on owner.id = albums.artist_id
+        )
+        select album_facts.album_id, album_facts.owner_artist_name, album_facts.album_artist,
+               member.name as member_artist_name,
+               null::text as library_root_id, null::text as root_kind,
+               null::text as root_path, null::text as relative_path, null::text as private_path
+        from album_facts
+        left join library.local_album_featured_artists as membership
+          on membership.library_id = album_facts.library_id
+         and membership.album_id = album_facts.album_id
+        left join library.local_artists as member on member.id = membership.artist_id
+        union all
+        select album_facts.album_id, album_facts.owner_artist_name, album_facts.album_artist,
+               null::text as member_artist_name,
+               live_files.library_root_id, live_files.root_kind, live_files.root_path,
+               live_files.relative_path, live_files.private_path
+        from album_facts
+        join live_files on live_files.album_id = album_facts.album_id;
+    """
+
+
 def load_relation_source_rows_sql() -> str:
     return """
         with bootstrap_context as (

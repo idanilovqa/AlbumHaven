@@ -615,6 +615,11 @@ def _build_family_views(
     }
 
 
+def build_postgres_relation_alias_views(rows: list[object]) -> dict[str, object]:
+    """Build current search aliases without unrelated family projections."""
+    return _build_alias_views(_album_facts(rows))
+
+
 def build_postgres_relation_views(rows: list[object]) -> dict[str, object]:
     albums = _album_facts(rows)
     alias_views = _build_alias_views(albums)

@@ -11,6 +11,7 @@ import json
 
 from music_app.services.admin_authority import ADMIN_LIBRARY_AUTHORITY_SQL, lock_admin_accounts
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
+from music_app.services.capabilities import grant_keys_for_action
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.track_preferences_postgres import load_track_preferences_on_connection
 
@@ -28,10 +29,12 @@ select a.id as account_id,p.account_ref::text,a.display_name,a.username_display
 from app.accounts a join app.social_profiles p on p.account_id=a.id
 join library.library_memberships m on m.account_id=a.id and m.library_id=%(library_id)s
 where a.id=any(%(accounts)s) and a.is_active and a.disabled_at is null
-  and exists (select 1 from app.capabilities c where c.account_id=a.id
-    and c.capability_key='capability.social' and c.revoked_at is null
+  and (exists (select 1 from app.bootstrap_owners b where b.account_id=a.id
+    and b.owner_key='local-bootstrap-owner')
+    or exists (select 1 from app.capabilities c where c.account_id=a.id
+    and c.capability_key=any(%(browse_grants)s) and c.revoked_at is null
     and ((c.scope_kind='library' and c.scope_id=%(library_id)s)
-      or (c.scope_kind='global' and c.scope_id is null)))
+      or (c.scope_kind='global' and c.scope_id is null))))
 """
 _PAIR_SQL = """select * from app.friend_connections
 where library_id=%(library_id)s and low_account_id=%(low)s and high_account_id=%(high)s"""
@@ -45,6 +48,7 @@ def _scope(account_id, library_id, target_account_id=None):
         raise FriendScopeError("Select another member.")
     accounts = sorted({account_id,target_account_id} - {None})
     return {"account_id":account_id,"library_id":library_id,"accounts":accounts,
+            "browse_grants":sorted(grant_keys_for_action('library.browse.read')),
             "target_account_id":target_account_id,"low":accounts[0],"high":accounts[-1]}
 
 
@@ -89,16 +93,19 @@ def authorized_friend_read(connection, *, account_id: int, library_id: int, targ
     """Guard a consumer's SQL on this connection and transaction, never cache it.
 
     Hold account and relationship locks through the consumer query and recheck
-    current Social authority before releasing the read. Cross-account consumers
+    current browse authority before releasing the read. Cross-account consumers
     must also enforce their own action/resource/deployment/client policy.
     """
     params = _scope(account_id,library_id,target_account_id)
     connection.execute("select id from app.accounts where id=any(%s) order by id for share",
                        (params['accounts'],)).fetchall()
+    connection.execute("""select account_id from app.bootstrap_owners
+        where account_id=any(%(accounts)s) and owner_key='local-bootstrap-owner'
+        order by account_id for share""",params).fetchall()
     connection.execute("""select id from library.library_memberships
         where account_id=any(%(accounts)s) and library_id=%(library_id)s order by id for share""",params).fetchall()
     connection.execute("""select id from app.capabilities where account_id=any(%(accounts)s)
-        and capability_key='capability.social' and revoked_at is null
+        and capability_key=any(%(browse_grants)s) and revoked_at is null
         and ((scope_kind='library' and scope_id=%(library_id)s) or (scope_kind='global' and scope_id is null))
         order by id for share""",params).fetchall()
     profiles = _authorize(connection,params)
@@ -253,10 +260,12 @@ class PostgresFriendsStore:
                 and f.high_account_id=greatest(a.id,%(account_id)s)
               where a.id<>%(account_id)s and a.id>%(after)s and a.is_active and a.disabled_at is null
                 and (a.display_name ilike %(query)s or a.username_display ilike %(query)s)
-                and exists (select 1 from app.capabilities c where c.account_id=a.id
-                  and c.capability_key='capability.social' and c.revoked_at is null
+                and (exists (select 1 from app.bootstrap_owners b where b.account_id=a.id
+                  and b.owner_key='local-bootstrap-owner')
+                  or exists (select 1 from app.capabilities c where c.account_id=a.id
+                  and c.capability_key=any(%(browse_grants)s) and c.revoked_at is null
                   and ((c.scope_kind='library' and c.scope_id=m.library_id)
-                    or (c.scope_kind='global' and c.scope_id is null)))
+                    or (c.scope_kind='global' and c.scope_id is null))))
                 and ( %(mode)s='discover' or ( %(mode)s='accepted' and f.state='accepted')
                   or (f.state='pending' and ((%(mode)s='incoming' and f.requester_account_id<>%(account_id)s)
                     or (%(mode)s='outgoing' and f.requester_account_id=%(account_id)s))))
@@ -354,10 +363,12 @@ class PostgresFriendsStore:
                   and f.low_account_id=n.low_account_id and f.high_account_id=n.high_account_id
                 where n.library_id=%(library_id)s and n.recipient_account_id=%(account_id)s
                   and (%(after)s=0 or n.id<%(after)s) and a.is_active and a.disabled_at is null
-                  and exists(select 1 from app.capabilities c where c.account_id=a.id
-                    and c.capability_key='capability.social' and c.revoked_at is null
+                  and (exists (select 1 from app.bootstrap_owners b where b.account_id=a.id
+                    and b.owner_key='local-bootstrap-owner')
+                    or exists(select 1 from app.capabilities c where c.account_id=a.id
+                    and c.capability_key=any(%(browse_grants)s) and c.revoked_at is null
                     and ((c.scope_kind='library' and c.scope_id=n.library_id)
-                      or (c.scope_kind='global' and c.scope_id is null)))
+                      or (c.scope_kind='global' and c.scope_id is null))))
                 order by n.id desc limit %(limit)s""",{**params,'after':after,'limit':limit+1}).fetchall()
             _authorize(connection,params)
         notices=[dict(row) for row in rows[:limit]]

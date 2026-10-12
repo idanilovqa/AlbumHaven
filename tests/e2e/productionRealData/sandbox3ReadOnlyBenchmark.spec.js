@@ -71,7 +71,7 @@ test('Sandbox3 visible read-only journeys', async ({ page, galleryActions, navig
     await measure('initial-navigation', async () => {
       await galleryActions.goto('/');
       await galleryActions.waitForGalleryReady();
-      await galleryActions.waitForVisibleGalleryCoversLoaded();
+      await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 1 });
     });
     await navigationPanelActions.openArtistTree();
     const baselineCount = (await navigation.allArtistsCount.innerText()).trim();
@@ -87,19 +87,19 @@ test('Sandbox3 visible read-only journeys', async ({ page, galleryActions, navig
       await galleryActions.waitForGalleryReady();
     }, 800, () => submittedAt);
     await measure('search-populated', async () => {
-      await galleryActions.waitForVisibleGalleryCoversLoaded();
+      await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 1 });
     }, 1200, () => submittedAt);
     await measure('clear-search', async () => {
       await searchToolbarActions.search('', { clickApply: true });
       await expect(navigation.allArtistsCount).toHaveText(baselineCount);
       await expect.poll(() => navigation.sidebarArtists.count()).toBeGreaterThan(1);
       await galleryActions.waitForGalleryReady();
-      await galleryActions.waitForVisibleGalleryCoversLoaded();
+      await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 1 });
     });
     await measure('artist-selection', async () => {
       await navigationPanelActions.selectSidebarArtistByName(artist);
       await galleryActions.waitForSelectedArtistGallery(artist);
-      await galleryActions.waitForVisibleGalleryCoversLoaded();
+      await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 1 });
     });
     await navigationPanelActions.clickAllArtists();
     await galleryActions.waitForGalleryReady();
@@ -110,7 +110,7 @@ test('Sandbox3 visible read-only journeys', async ({ page, galleryActions, navig
     await measure('root-jump', async () => {
       await ui.scrollToArtistAction.click();
       await expect.poll(() => ui.readArtistJumpPlacement(artist)).toEqual({ rendered: true, chromeMatches: true, rowsAligned: true, firstCardUncut: true });
-      await galleryActions.waitForVisibleGalleryCoversLoaded();
+      await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 1 });
     }, 2000);
     await navigationPanelActions.clickAllArtists();
     await galleryActions.waitForGalleryReady();

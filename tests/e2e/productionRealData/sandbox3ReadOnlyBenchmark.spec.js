@@ -122,20 +122,23 @@ test('Sandbox3 visible read-only journeys', async ({ page, galleryActions, navig
       const title = (await card.locator('.album-title-button').first().innerText()).trim();
       const requestKey = await card.locator('[data-open-tracklist]').first().getAttribute('data-album-key');
       expect(requestKey).toBeTruthy();
-      // Preflight does not populate the browser cache, but warms server-side details.
-      // Request routing disables browser HTTP caching for the entire benchmark.
-      const expectedDetails = await page.request.get(`${TARGET}/album-details?album_key=${encodeURIComponent(requestKey)}`, { maxRedirects: 0 });
-      expect(expectedDetails.ok()).toBe(true);
-      const expectedAlbum = (await expectedDetails.json()).album;
-      const trackCount = expectedAlbum?.tracks?.length;
-      expect(trackCount).toBeGreaterThan(0);
-      await expectedDetails.dispose();
-
       await measure('album-details', async () => {
-        await card.locator('.album-title-button[data-open-tracklist="1"]').click();
-        if (previousIdentity && previousIdentity !== title && await modal.title.isVisible()) {
-          expect((await modal.title.innerText()).trim()).not.toBe(previousIdentity);
-        }
+        const [detailsResponse] = await Promise.all([
+          page.waitForResponse(response => {
+            const url = new URL(response.url());
+            return url.origin === TARGET && url.pathname === '/album-details'
+              && url.searchParams.get('album_key') === requestKey;
+          }),
+          (async () => {
+            await card.locator('.album-title-button[data-open-tracklist="1"]').click();
+            if (previousIdentity && previousIdentity !== title && await modal.title.isVisible()) {
+              expect((await modal.title.innerText()).trim()).not.toBe(previousIdentity);
+            }
+          })(),
+        ]);
+        expect(detailsResponse.ok()).toBe(true);
+        const trackCount = (await detailsResponse.json()).album?.tracks?.length;
+        expect(trackCount).toBeGreaterThan(0);
         await trackModalActions.waitForLoadedSummary();
         await expect(modal.title).toContainText(title);
         await expect(modal.trackRows).toHaveCount(trackCount);
@@ -149,6 +152,6 @@ test('Sandbox3 visible read-only journeys', async ({ page, galleryActions, navig
     page.off('request', onRequest);
     page.off('requestfinished', onFinished);
     page.off('requestfailed', onFinished);
-    await fs.writeFile(testInfo.outputPath('sanitized-timings.json'), JSON.stringify({ metadata: { browserHttpCache: 'disabled-by-request-routing', albumDetailsServerState: 'warmed-by-read-only-preflight', unbudgetedActions: 'diagnostic-readiness-only' }, actions: timings, requests: requestTimings }, null, 2));
+    await fs.writeFile(testInfo.outputPath('sanitized-timings.json'), JSON.stringify({ metadata: { browserHttpCache: 'disabled-by-request-routing', albumDetailsServerState: 'not-prewarmed-by-benchmark', unbudgetedActions: 'diagnostic-readiness-only' }, actions: timings, requests: requestTimings }, null, 2));
   }
 });

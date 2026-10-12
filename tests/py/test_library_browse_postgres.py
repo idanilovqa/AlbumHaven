@@ -2206,7 +2206,7 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert connection.commands[:1] == [
         ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", {}),
     ]
-    assert len(connection.commands) == 7
+    assert len(connection.commands) == 5
     missing_reads = [(command, params) for command, params in connection.commands if _is_missing_album_query(command)]
     assert len(missing_reads) == 1
     assert missing_reads[0][1] == {"album_key": None}
@@ -2214,8 +2214,7 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert len(fingerprint_reads) == 3
     assert all(params == {} for _command, params in fingerprint_reads)
     identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album as album" in command]
-    assert len(identity_reads) == 1
-    assert identity_reads[0][1] == {}
+    assert identity_reads == []
     duplicate_source_reads = [
         command
         for command in connection.commands
@@ -2225,8 +2224,8 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
             duplicate_sources_only=True,
         )
     ]
-    assert len(duplicate_source_reads) == 1
-    assert duplicate_source_reads[0][1] == {"album_ids": []}
+    # Sidebar reads must not run full duplicate-file discovery.
+    assert duplicate_source_reads == []
     assert connection.rollback_count == 1
     assert connection.close_count == 1
     assert payload["artists_sidebar"] == [

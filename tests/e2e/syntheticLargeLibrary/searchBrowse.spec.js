@@ -39,6 +39,8 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
     });
 
     const searchQuery = pickSearchableArtistName(await navigationPanelActions.readSidebarArtistNames());
+    await galleryActions.waitForDisplayedArtistSections([searchQuery]);
+    await galleryActions.waitForFirstAlbumVisibleUnderHeading(searchQuery);
     const expectedAlbums = await galleryActions.readAlbumNamesByHeading(searchQuery);
     expect(expectedAlbums.length, 'The pre-search gallery must provide an independent album identity.').toBeGreaterThan(0);
     let searchSubmittedAt = 0;

@@ -1518,7 +1518,12 @@ test('populated search timer includes selected album identity and visible cover 
     const wait = timedReadiness.indexOf(requiredWait);
     assert.ok(wait >= 0 && wait < terminal, `${requiredWait} must complete inside the populated timer`);
   }
-  assert.ok(spec.indexOf('const expectedAlbums =') < spec.indexOf('const searchReadyMs ='));
+  const expectedIdentity = spec.indexOf('const expectedAlbums =');
+  const materializeArtist = spec.indexOf('await galleryActions.waitForDisplayedArtistSections([searchQuery])');
+  const materializeAlbum = spec.indexOf('await galleryActions.waitForFirstAlbumVisibleUnderHeading(searchQuery)');
+  assert.ok(materializeArtist >= 0 && materializeArtist < materializeAlbum);
+  assert.ok(materializeAlbum < expectedIdentity);
+  assert.ok(expectedIdentity < spec.indexOf('const searchReadyMs ='));
   assert.match(spec, /performanceTimingBudget\('search-browse\.searchPopulatedReadyMs'\)/);
   assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_POPULATED_BUDGET\.metricId/);
 });

@@ -844,3 +844,104 @@ def test_alias_only_builder_matches_full_projection_without_family_work(monkeypa
     assert actual['alias_to_canonical'] == expected['alias_to_canonical']
     assert actual['canonical_to_aliases'] == expected['canonical_to_aliases']
     assert actual['artists_sidebar'] == expected['artists_sidebar']
+
+
+@pytest.fixture
+def isolated_artist_string_caches():
+    from music_app.services import relation_projection_builder as builder
+
+    names = (
+        '_normalize_key', '_looks_like_collaboration',
+        '_low_value_artist_key', '_are_probable_artist_typos',
+    )
+    for name in names:
+        clear = getattr(getattr(builder, name), 'cache_clear', None)
+        if clear:
+            clear()
+    yield builder, names
+    for name in names:
+        clear = getattr(getattr(builder, name), 'cache_clear', None)
+        if clear:
+            clear()
+
+
+def test_artist_key_normalization_reuses_identical_strings(monkeypatch, isolated_artist_string_caches):
+    builder, _ = isolated_artist_string_caches
+    calls = []
+    original = builder._normalize_spaces
+
+    def counted(text):
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(builder, '_normalize_spaces', counted)
+    for _ in range(25):
+        assert builder._normalize_key('  Solar   Artist  ') == 'solar artist'
+        assert builder._normalize_key('SOLAR ARTIST') == 'solar artist'
+    assert calls == ['  Solar   Artist  ', 'SOLAR ARTIST']
+
+
+@pytest.mark.parametrize('helper,regex_method,value,expected', [
+    ('_looks_like_collaboration', 'search', 'Solar Artist feat. Guest', True),
+    ('_low_value_artist_key', 'sub', 'Solar & Artist', 'solar artist'),
+])
+def test_artist_alias_classifiers_reuse_regex_work(
+    monkeypatch, isolated_artist_string_caches, helper, regex_method, value, expected,
+):
+    builder, _ = isolated_artist_string_caches
+    calls = []
+    original = getattr(builder.re, regex_method)
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(builder.re, regex_method, counted)
+    assert getattr(builder, helper)(value) == expected
+    first_call_work = len(calls)
+    assert first_call_work > 0
+    for _ in range(25):
+        assert getattr(builder, helper)(value) == expected
+    assert len(calls) == first_call_work
+
+
+def test_artist_typo_comparison_reuses_ordered_pairs(monkeypatch, isolated_artist_string_caches):
+    builder, _ = isolated_artist_string_caches
+    calls = []
+    original = builder.SequenceMatcher
+
+    def counted(*args, **kwargs):
+        calls.append(args[1:3])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(builder, 'SequenceMatcher', counted)
+    for _ in range(25):
+        assert builder._are_probable_artist_typos('Solar Artist', 'Solar Artis')
+        assert builder._are_probable_artist_typos('Solar Artis', 'Solar Artist')
+    assert calls == [('solarartist', 'solarartis'), ('solarartis', 'solarartist')]
+
+
+def test_artist_string_reuse_preserves_alias_maps_and_live_counts(
+    monkeypatch, isolated_artist_string_caches,
+):
+    builder, names = isolated_artist_string_caches
+    # The second build reverses display-name popularity without clearing caches.
+    for upper_count, lower_count in [(1, 1), (4, 1), (1, 4)]:
+        artists = (
+            ['SOLAR ARTIST'] * upper_count + ['Solar Artist'] * lower_count
+            + ['Solar Artist feat. Guest', 'Solar Artis', 'Solar Artiss'] * 4
+            + ['Other & Collective', 'Other and Collective'] * 3
+        )
+        rows = [
+            _row(album_id=index, artist=artist,
+                 relative_path=f'Collective/Shared Era/{index}/01.flac')
+            for index, artist in enumerate(artists, 1)
+        ]
+        with monkeypatch.context() as uncached:
+            for name in names:
+                function = getattr(builder, name)
+                uncached.setattr(builder, name, getattr(function, '__wrapped__', function))
+            expected = builder.build_postgres_relation_alias_views(rows)
+        actual = builder.build_postgres_relation_alias_views(rows)
+        assert actual == expected
+        assert sum(row['count'] for row in actual['artists_sidebar']) == len(artists)

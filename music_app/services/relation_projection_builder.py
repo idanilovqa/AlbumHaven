@@ -164,6 +164,7 @@ def _normalize_spaces(text: str) -> str:
     return " ".join((text or "").strip().split())
 
 
+@lru_cache(maxsize=32768)
 def _normalize_key(text: str) -> str:
     return _normalize_spaces(text).translate(_ARTIST_PUNCT_TRANSLATION).casefold()
 
@@ -172,6 +173,7 @@ def _is_va_name(name: str) -> bool:
     return _normalize_key(name) in _VA_NAMES
 
 
+@lru_cache(maxsize=32768)
 def _looks_like_collaboration(name: str) -> bool:
     normalized = _normalize_key(name)
     if _is_va_name(normalized):
@@ -245,6 +247,7 @@ def _compact_key(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", _normalize_key(text))
 
 
+@lru_cache(maxsize=32768)
 def _low_value_artist_key(text: str) -> str:
     normalized = _normalize_key(text)
     if not normalized:
@@ -257,6 +260,7 @@ def _low_value_artist_key(text: str) -> str:
     return " ".join(normalized.split())
 
 
+@lru_cache(maxsize=32768)
 def _are_probable_artist_typos(left: str, right: str) -> bool:
     if not left or not right or left == right:
         return False

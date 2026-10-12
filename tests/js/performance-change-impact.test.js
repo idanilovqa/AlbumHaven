@@ -141,3 +141,14 @@ test('agent guidance requires all PF performance layers without weakening the bu
   assert.match(guidance, /1000 ms.*200 ms/);
   assert.match(checks, /skipped test does not satisfy/);
 });
+
+test('backend publication and invalidation owners require family and search gates', () => {
+  for (const owner of ['scan_cache_persistence.py', 'relation_projection_postgres.py', 'gallery_projection_postgres.py']) {
+    const changedPath = `music_app/services/${owner}`;
+    assert.ok(contract.requiredPaths.includes(changedPath), `${owner} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    for (const target of ['artist-family', 'search-all-artists', 'search-browse']) {
+      assert.ok(targets.includes(target), `${owner} must require ${target}`);
+    }
+  }
+});

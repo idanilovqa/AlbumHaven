@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
     Jsonb = None
 
 
-RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v10"
+RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v11"
 RELATION_PROJECTION_METADATA_KEY = "relation_projection"
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _PROJECTION_READY_MAX_ATTEMPTS = 3

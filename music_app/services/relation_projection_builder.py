@@ -272,6 +272,9 @@ def _are_probable_artist_typos(left: str, right: str) -> bool:
         return False
     if abs(len(left_compact) - len(right_compact)) > 2:
         return False
+    # Shared album locations do not make different numbered artists aliases.
+    if re.findall(r"\d+", left_compact) != re.findall(r"\d+", right_compact):
+        return False
     matcher = SequenceMatcher(None, left_compact, right_compact)
     # quick_ratio is an upper bound: rejected pairs cannot meet the threshold.
     return matcher.quick_ratio() >= 0.9 and matcher.ratio() >= 0.9

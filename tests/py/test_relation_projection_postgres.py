@@ -921,7 +921,7 @@ def test_v4_ready_metadata_forces_corrected_alias_builder_rebuild(monkeypatch):
     assert result["builder_version"] == projection.RELATION_PROJECTION_BUILDER_VERSION
 
 
-@pytest.mark.parametrize("old_version", ["local-relation-builder-v7", "local-relation-builder-v9"])
+@pytest.mark.parametrize("old_version", ["local-relation-builder-v7", "local-relation-builder-v9", "local-relation-builder-v10"])
 def test_old_ready_metadata_forces_corrected_folder_evidence_rebuild(old_version):
     fingerprint = projection.relation_source_fingerprint(_morse_rows())
     scan_cache = {

@@ -15,6 +15,31 @@ from music_app.services.relation_projection_postgres import (
 )
 
 
+@pytest.mark.parametrize("owner,guest", [
+    ("Synthetic Scale Artist 0647", "Synthetic Scale Artist 0594"),
+    ("Chamber Ensemble 1001", "Chamber Ensemble 1002"),
+])
+def test_shared_album_does_not_merge_artists_with_different_numeric_identities(owner, guest):
+    rows = [_row(
+        album_id=1, artist=owner, member=guest,
+        relative_path=r"Shared\Release\01.flac",
+        private_path=r"C:\Music\Shared\Release\01.flac",
+    )]
+    result = _build(rows)
+    assert result["alias_to_canonical"][owner] == owner
+    assert result["alias_to_canonical"][guest] == guest
+
+
+def test_shared_album_still_reconciles_spelling_variant_with_the_same_number():
+    owner, guest = "Chamber Ensemble 1001", "Chamber Ensembel 1001"
+    result = _build([_row(
+        album_id=1, artist=owner, member=guest,
+        relative_path=r"Shared\Release\01.flac",
+        private_path=r"C:\Music\Shared\Release\01.flac",
+    )])
+    assert result["alias_to_canonical"][owner] == result["alias_to_canonical"][guest]
+
+
 def _row(
     *,
     album_id: int,

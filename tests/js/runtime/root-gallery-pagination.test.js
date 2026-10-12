@@ -203,8 +203,37 @@ test('anchored gallery does not request earlier pages until the user scrolls nea
     previous_cursor: 'earlier-page',
     has_previous: true,
   };
-  f.scroll.scrollTop = 1500;
+  f.scroll.scrollTop = 4500;
+  f.scroll.scrollHeight = 10000;
 
   assert.equal(await f.context.loadPreviousRootGalleryPage(), false);
   assert.equal(f.pending.length, 0);
 });
+
+for (const mobile of [false, true]) {
+  for (const scrollTop of [1779, 754 * 8]) {
+    test(`reverse prefetch loads earlier groups before the boundary (${mobile ? 'mobile' : 'desktop'}, ${scrollTop}px)`, async () => {
+      const f = fixture({ mobile });
+      f.scroll.clientHeight = 754;
+      f.scroll.scrollHeight = 20000;
+      f.scroll.scrollTop = scrollTop;
+      f.state.view.gallery_page = {
+        ...f.state.view.gallery_page,
+        previous_cursor: 'earlier-page',
+        has_previous: true,
+      };
+      const loading = f.context.loadPreviousRootGalleryPage();
+      assert.equal(f.pending.length, 1, 'earlier groups must load before the two-viewport boundary');
+      assert.equal(await f.context.loadPreviousRootGalleryPage(), false);
+      assert.equal(f.pending.length, 1, 'prefetch must retain one request owner');
+      f.pending[0].resolve(page([{ artist: 'Earlier', albums: [{ key: 'earlier-1' }] }], {
+        gallery_page: { revision: 'r1', previous_cursor: 'older-page', has_previous: true },
+      }));
+      assert.equal(await loading, true);
+      assert.equal(f.state.view.gallery_page.next_cursor, 'page-1');
+      assert.equal(f.renders[0].preserveScroll, true);
+      assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
+      assert.equal(f.timers.length, 0, 'reverse prefetch must not drain earlier pages on an idle timer');
+    });
+  }
+}

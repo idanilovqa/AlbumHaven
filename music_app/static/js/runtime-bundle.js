@@ -14826,6 +14826,7 @@ function formatLogHistoryTimestamp(value) {
 // Root browsing has authoritative navigation and totals but only a bounded page
 // of albums. Continuations never own the foreground/search request slot.
 let rootGalleryPageRequest = null;
+const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -14872,12 +14873,11 @@ async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
   const scroll = document.getElementById('albums-scroll');
-  const prefetchViewportCount = 8;
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
     || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
-      > prefetchViewportCount * scroll.clientHeight) return false;
+      > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
     viewRevision: readViewStateRevision(),
@@ -14977,7 +14977,8 @@ async function loadPreviousRootGalleryPage() {
   const scroll = document.getElementById('albums-scroll');
   if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
-    || !scroll || scroll.clientHeight <= 0 || scroll.scrollTop > scroll.clientHeight * 2) return false;
+    || !scroll || scroll.clientHeight <= 0
+    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
 
   const request = {
     controller: new AbortController(),

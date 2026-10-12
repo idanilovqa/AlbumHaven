@@ -221,22 +221,16 @@ export async function measureActionTime(action, readyCheck = null) {
   return Date.now() - startedAt;
 }
 
-async function discardInteractionMeasurement(page) {
-  await page.evaluate(() => {
-    window.__albumHavenInteractionMeasure?.observer?.disconnect?.();
-    delete window.__albumHavenInteractionMeasure;
-  });
-}
-
 export async function measureInteractionToPaint(page, action, readyCheck = null) {
-  await page.evaluate(() => {
+  // parity-check: allow-read-only-measurement-evaluate -- observe timing without changing application or window state
+  const measurement = await page.evaluateHandle(() => {
     const samples = [];
     const observer = typeof PerformanceObserver === 'function'
       && PerformanceObserver.supportedEntryTypes?.includes('longtask')
       ? new PerformanceObserver((list) => samples.push(...list.getEntries().map((entry) => entry.duration)))
       : null;
     observer?.observe({ type: 'longtask', buffered: false });
-    window.__albumHavenInteractionMeasure = {
+    return {
       observer,
       samples,
       startedAt: performance.now(),
@@ -245,28 +239,28 @@ export async function measureInteractionToPaint(page, action, readyCheck = null)
   try {
     await action();
     if (readyCheck) await readyCheck();
-  } catch (error) {
-    await discardInteractionMeasurement(page);
-    throw error;
-  }
-  return page.evaluate(() => new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const measurement = window.__albumHavenInteractionMeasure;
-      const durationMs = performance.now() - Number(measurement?.startedAt || performance.now());
-      const buffered = measurement?.observer?.takeRecords?.() || [];
-      const longTasks = [
-        ...(measurement?.samples || []),
-        ...buffered.map((entry) => entry.duration),
-      ];
-      measurement?.observer?.disconnect?.();
-      delete window.__albumHavenInteractionMeasure;
-      resolve({
-        durationMs,
-        longTaskCount: longTasks.length,
-        maxLongTaskMs: Math.max(0, ...longTasks),
-      });
+    // parity-check: allow-read-only-measurement-evaluate -- finish timing after two paint opportunities
+    return await measurement.evaluate(sample => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const longTasks = [
+          ...sample.samples,
+          ...(sample.observer?.takeRecords() || []).map(entry => entry.duration),
+        ];
+        resolve({
+          durationMs: performance.now() - sample.startedAt,
+          longTaskCount: longTasks.length,
+          maxLongTaskMs: Math.max(0, ...longTasks),
+        });
+      }));
     }));
-  }));
+  } finally {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- release only this measurement's observer
+      await measurement.evaluate(sample => sample.observer?.disconnect());
+    } finally {
+      await measurement.dispose();
+    }
+  }
 }
 
 export async function samplePeakMemory(page, options = {}) {

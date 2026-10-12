@@ -687,7 +687,6 @@ class PostgresLibraryBrowseRepository:
         )
         if gallery_offset:
             payload.pop("artists_sidebar", None)
-        self.queue_settings_projection_prewarm()
         return payload
 
     def build_root_startup_preview_payload(
@@ -1504,7 +1503,6 @@ class PostgresLibraryBrowseRepository:
                 else artist_groups if artist_groups else [*primary_artist_groups, *family_artist_groups]
             ),
         )
-        self.queue_settings_projection_prewarm()
         return payload
 
     def build_album_detail_payload(
@@ -1725,7 +1723,6 @@ class PostgresLibraryBrowseRepository:
             self._config,
             artist_groups,
         )
-        self.queue_settings_projection_prewarm()
         return payload
 
     def build_search_payload(
@@ -2225,7 +2222,6 @@ class PostgresLibraryBrowseRepository:
             self._config,
             rendered_artist_groups if selected_artist and not requested_all_artists else artist_groups,
         )
-        self.queue_settings_projection_prewarm()
         return payload
 
     def build_problematic_files_payload(self) -> dict[str, object]:

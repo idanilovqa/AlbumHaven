@@ -1936,7 +1936,7 @@ def test_root_startup_sql_pages_canonical_artists():
     assert "canonical_artist_rank <= 18" in sql
 
 
-def test_root_sidebar_defers_settings_projection_prewarm_until_after_database_work(monkeypatch):
+def test_root_sidebar_does_not_queue_settings_work_and_closes_database(monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     events: list[str] = []
@@ -1982,10 +1982,8 @@ def test_root_sidebar_defers_settings_projection_prewarm_until_after_database_wo
 
     repository.build_root_sidebar_payload()
 
-    assert events.count("settings_prewarm") == 1
-    assert events.index("settings_prewarm") > events.index("query"), events
-    assert events.index("settings_prewarm") > events.index("rollback"), events
-    assert events.index("settings_prewarm") > events.index("close"), events
+    assert "settings_prewarm" not in events
+    assert events.index("query") < events.index("rollback") < events.index("close")
 
 
 def test_postgres_root_sidebar_aggregates_distinct_artist_ids_through_persisted_alias_projection(monkeypatch):
@@ -2320,8 +2318,17 @@ def test_postgres_library_browse_omits_category_filter_for_all_visible_categorie
 
 
 @pytest.mark.parametrize("all_artists", [False, True])
-def test_postgres_library_browse_builds_root_album_browse_payload_from_rows(all_artists):
+def test_postgres_library_browse_builds_root_album_browse_payload_from_rows(all_artists, monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    def reject_unrequested_settings_work(_repository):
+        pytest.fail("Browsing must not queue full-library settings work")
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "queue_settings_projection_prewarm",
+        reject_unrequested_settings_work,
+    )
 
     executed: list[object] = []
 
@@ -2617,6 +2624,15 @@ def test_postgres_root_album_browse_payload_can_omit_sidebar():
 
 def test_postgres_library_browse_builds_selected_artist_payload_from_direct_membership_rows(monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    def reject_unrequested_settings_work(_repository):
+        pytest.fail("Browsing must not queue full-library settings work")
+
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "queue_settings_projection_prewarm",
+        reject_unrequested_settings_work,
+    )
 
     _stub_windows_media_root(monkeypatch)
     executed: list[object] = []
@@ -5193,7 +5209,8 @@ def test_postgres_direct_search_queues_visible_covers_before_family_and_non_albu
     assert events.count("cover_queue") == 2
     assert queue_limits == [1, browse_module._DISPLAY_COVER_QUEUE_LIMIT]
     assert queue_priorities == ["interactive", "background"]
-    assert events[-2:] == ["cover_queue", "settings_prewarm"]
+    assert events[-1] == "cover_queue"
+    assert "settings_prewarm" not in events
 
 
 def test_postgres_search_payload_groups_featured_artist_results_without_rewriting_album_artist_credit():

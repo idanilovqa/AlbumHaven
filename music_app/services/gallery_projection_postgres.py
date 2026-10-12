@@ -90,6 +90,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     from music_app.services.library_browse_postgres import (
         _root_gallery_anchor_metadata, _root_gallery_cursor, _root_gallery_page_bounds,
         _root_gallery_page_metadata,
+        _relation_alias_maps_sql, _root_browse_alias_to_canonical, _canonical_artist_name,
     )
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
@@ -103,6 +104,11 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
         return None
     count = int(header["occurrence_count"])
     anchor_artist = str(params.get("gallery_anchor_artist") or "").strip()
+    requested_artist = anchor_artist
+    if anchor_artist and not params.get("gallery_cursor") and not stale:
+        alias_row = _first(connection.execute(_relation_alias_maps_sql())) or {}
+        aliases = _root_browse_alias_to_canonical(alias_row.get("alias_to_canonical") or {})
+        anchor_artist = _canonical_artist_name(anchor_artist, aliases)
     anchor_offset = None
     if anchor_artist and not params.get("gallery_cursor"):
         anchor_row = _first(connection.execute("""
@@ -180,7 +186,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
             if previous_offset < offset:
                 previous_cursor = _root_gallery_cursor(header["revision"], previous_offset)
         metadata.update({"previous_cursor": previous_cursor, "has_previous": previous_cursor is not None})
-    metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset))
+    metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset, requested_artist=requested_artist))
     if stale:
         metadata.update({
             "projection_stale": True,

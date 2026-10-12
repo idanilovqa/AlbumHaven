@@ -653,3 +653,52 @@ def test_failed_snapshot_still_publishes_its_latest_queued_generation(monkeypatc
     assert [action for action, future in submitted] == [old, latest]
     submitted[1][1].set_result(True)
     assert (config["ALBUM_HAVEN_APP_DATABASE_URL"], "root-snapshot") not in gallery._PENDING
+
+
+def test_gallery_snapshot_anchor_resolves_published_artist_alias():
+    snapshot = browse._prepare_root_gallery_snapshot(
+        [membership("Artist alias", "album-one")], [],
+        {"Artist alias": "Canonical artist"}, {},
+    )
+    page, _, _, metadata = browse._select_root_gallery_snapshot_page(
+        snapshot, {"gallery_page_size": "3", "gallery_anchor_artist": "Artist alias"},
+    )
+    assert page[0]["artist_name"] == "Canonical artist"
+    assert metadata["anchor_artist"] == "Artist alias"
+    assert metadata["anchor_group_artist"] == "Canonical artist"
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_persisted_gallery_anchor_resolves_published_artist_alias(monkeypatch, stale):
+    from music_app.services import gallery_projection_postgres as projection
+    header = {"source_generation": 1, "revision": "r1", "sidebar": [],
+              "album_count": 1, "occurrence_count": 1}
+    monkeypatch.setattr(projection, "_ready_header", lambda *_: None if stale else header)
+    monkeypatch.setattr(projection, "_latest_compatible_header", lambda *_: header)
+    displayed_artist = "Artist alias" if stale else "Canonical artist"
+
+    class Cursor:
+        def __init__(self, rows): self.rows = rows
+        def fetchone(self): return self.rows[0] if self.rows else None
+        def fetchall(self): return self.rows
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if "canonical_to_aliases" in sql:
+                assert not stale, "Do not apply current aliases to an older snapshot"
+                return Cursor([{"alias_to_canonical": {"Artist alias": "Canonical artist"}}])
+            if "min(ordinal) as ordinal" in sql:
+                return Cursor([{"ordinal": 0 if params["anchor_artist"] == displayed_artist else None}])
+            if "first_ordinal" in sql:
+                return Cursor([{"first_ordinal": 0, "end_ordinal": 1}])
+            if "select payload" in sql:
+                return Cursor([{"payload": membership(displayed_artist, "album-one")}])
+            raise AssertionError(sql)
+
+    page, _, _, metadata = projection.load_gallery_projection_page(
+        Connection(), {}, {"gallery_page_size": "3", "gallery_anchor_artist": "Artist alias"},
+        context={"library_id": 1, "generation": 2 if stale else 1}, allow_stale=stale,
+    )
+    assert page[0]["artist_name"] == displayed_artist
+    assert metadata["anchor_artist"] == "Artist alias"
+    assert metadata["anchor_group_artist"] == displayed_artist

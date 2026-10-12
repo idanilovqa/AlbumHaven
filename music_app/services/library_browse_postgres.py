@@ -3595,7 +3595,7 @@ def _prepare_root_gallery_snapshot(
             sidebar[identity] = dict(artist=row["artist_name"],
                 artist_display=_artist_tree_display_value(row["artist_name"]), count=0)
         sidebar[identity]["count"] += 1
-    return {"ordered": ordered, "sidebar": list(sidebar.values()),
+    return {"ordered": ordered, "artist_aliases": dict(aliases), "sidebar": list(sidebar.values()),
             "album_count": len({row["album_key"] for row in ordered}),
             "occurrence_count": len(ordered), "revision": revision}
 
@@ -3686,7 +3686,7 @@ def _root_gallery_previous_cursor(
     return _root_gallery_cursor(revision, previous_offset) if previous_offset < offset else None
 
 
-def _root_gallery_anchor_metadata(page, anchor_artist: str, anchor_offset: int | None):
+def _root_gallery_anchor_metadata(page, anchor_artist: str, anchor_offset: int | None, *, requested_artist: str = ""):
     if anchor_offset is None:
         return {}
     anchor = next((
@@ -3700,7 +3700,7 @@ def _root_gallery_anchor_metadata(page, anchor_artist: str, anchor_offset: int |
         item for item in page if item.get("artist_id") == anchor_identity
     ), anchor)
     return {
-        "anchor_artist": anchor_artist,
+        "anchor_artist": requested_artist or anchor_artist,
         "anchor_offset": anchor_offset,
         "anchor_group_artist": str(rendered_group.get("artist_name") or anchor_artist),
     }
@@ -3709,6 +3709,9 @@ def _root_gallery_anchor_metadata(page, anchor_artist: str, anchor_offset: int |
 def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: Mapping[str, object]):
     ordered = snapshot["ordered"]
     anchor_artist = str(params.get("gallery_anchor_artist") or "").strip()
+    requested_artist = anchor_artist
+    if anchor_artist:
+        anchor_artist = _canonical_artist_name(anchor_artist, snapshot.get("artist_aliases") or {})
     anchor_offset = next((
         index for index, item in enumerate(ordered)
         if str(item.get("artist_name") or "") == anchor_artist
@@ -3740,7 +3743,7 @@ def _select_root_gallery_snapshot_page(snapshot: Mapping[str, object], params: M
             ordered, snapshot["revision"], size, offset,
         )
         metadata.update({"previous_cursor": previous_cursor, "has_previous": previous_cursor is not None})
-    metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset))
+    metadata.update(_root_gallery_anchor_metadata(page, anchor_artist, anchor_offset, requested_artist=requested_artist))
     return page, snapshot["sidebar"], snapshot["album_count"], metadata
 
 

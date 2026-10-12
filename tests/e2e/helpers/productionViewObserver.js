@@ -429,17 +429,34 @@ export class ProductionViewObserver {
       if (detail.mutationGeneration !== this.mutationGeneration
         || detail.galleryGeneration !== this.galleryGeneration) return;
       if (!response.ok()) {
-        if (detail.gallery && detail.documentGeneration === this.documentGeneration
-          && detail.sequence === this.latestGalleryRequestSequence) {
-          this.observedFamilyAlbums.clear();
-          this.latestGalleryPageError = `HTTP ${response.status()} for ${detail.url}`;
-          this.stateRevision += 1;
-        }
-        if (detail.documentGeneration === this.documentGeneration
-          && detail.sequence === this.latestFullRequestSequence) {
-          this.observedFamilyAlbums.clear();
-          this.latestFullPayloadError = `HTTP ${response.status()} for ${detail.url}`;
-          this.stateRevision += 1;
+        const recordHttpFailure = () => {
+          if (detail.mutationGeneration !== this.mutationGeneration || detail.galleryGeneration !== this.galleryGeneration) return;
+          if (detail.gallery && detail.documentGeneration === this.documentGeneration
+            && detail.sequence === this.latestGalleryRequestSequence) {
+            this.observedFamilyAlbums.clear();
+            this.latestGalleryPageError = `HTTP ${response.status()} for ${detail.url}`;
+            this.stateRevision += 1;
+          }
+          if (detail.documentGeneration === this.documentGeneration
+            && detail.sequence === this.latestFullRequestSequence) {
+            this.observedFamilyAlbums.clear();
+            this.latestFullPayloadError = `HTTP ${response.status()} for ${detail.url}`;
+            this.stateRevision += 1;
+          }
+        };
+        if (response.status() === 503 && new URL(detail.url).searchParams.get('q')) {
+          this.pendingPayloadReads.set(detail.sequence, detail);
+          Promise.resolve(response.json())
+            .then(payload => {
+              if (payload?.code !== 'search_projection_pending') recordHttpFailure();
+            })
+            .catch(recordHttpFailure)
+            .finally(() => {
+              this.pendingPayloadReads.delete(detail.sequence);
+              this.stateRevision += 1;
+            });
+        } else {
+          recordHttpFailure();
         }
         return;
       }

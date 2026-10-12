@@ -11,6 +11,51 @@ const observerUrl = pathToFileURL(path.join(
   'productionViewObserver.js',
 )).href;
 
+for (const code of ['search_projection_pending', 'unavailable']) {
+  test(`search recovery response ${code} never counts as a completed search`, async () => {
+    const { ProductionViewObserver } = await import(observerUrl);
+    const page = new FakePage();
+    const observer = new ProductionViewObserver(page, page);
+    const search = request('http://127.0.0.1/view-data?surface=albums&q=Artist');
+    page.emit('request', search);
+    page.emit('response', response(search, { ok: false, code }, { status: 503, ok: false }));
+    page.emit('requestfinished', search);
+    await flushPromises();
+    const result = observer.read();
+    assert.equal(result.latestFullPayload, null);
+    if (code === 'search_projection_pending') {
+      assert.equal(result.latestFullPayloadError, null);
+    } else {
+      assert.match(result.latestFullPayloadError, /HTTP 503/);
+    }
+  });
+}
+
+test('search recovery body stays pending and only a later successful response supplies results', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const search = request('http://127.0.0.1/view-data?surface=albums&q=Artist');
+  let finishBody;
+  const body = new Promise(resolve => { finishBody = resolve; });
+  page.emit('request', search);
+  page.emit('response', response(search, null, { status: 503, ok: false, json: () => body }));
+  page.emit('requestfinished', search);
+  assert.equal(observer.read().pendingPayloadReadCount, 1);
+  assert.equal(observer.read().latestFullPayload, null);
+  finishBody({ ok: false, code: 'search_projection_pending' });
+  await flushPromises();
+  assert.equal(observer.read().pendingPayloadReadCount, 0);
+  assert.equal(observer.read().latestFullPayload, null);
+  const retry = request('http://127.0.0.1/view-data?surface=albums&q=Artist');
+  page.emit('request', retry);
+  page.emit('response', response(retry, { payload_tier: 'full', query: 'Artist' }));
+  page.emit('requestfinished', retry);
+  await flushPromises();
+  assert.equal(observer.read().latestFullPayload.query, 'Artist');
+  assert.equal(observer.read().latestFullPayloadError, null);
+});
+
 class FakePage {
   constructor() {
     this.listeners = new Map();
@@ -886,6 +931,7 @@ test('production view observer never falls back to an older payload after the ne
   page.emit('request', newerRequest);
   page.emit('response', response(newerRequest, null, { ok: false, status: 503 }));
   page.emit('requestfinished', newerRequest);
+  await flushPromises();
 
   assert.equal(observer.read().latestFullPayload, null);
   assert.match(observer.read().latestFullPayloadError, /HTTP 503/);

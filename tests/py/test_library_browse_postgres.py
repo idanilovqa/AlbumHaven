@@ -3400,7 +3400,7 @@ def _assert_search_reloads_snapshot_when_ready_runtime_relation_maps_are_stale(
 
     assert projection_loads == [connection]
     assert payload["selected_artist"] == "Current Canonical"
-    assert len(prewarm_requests) == 1
+    assert prewarm_requests == []
     expected_artists = ["Current Canonical", "Current Sibling"]
     assert [group["artist"] for group in payload["artist_groups"]] == expected_artists
     assert "Old Canonical" not in json.dumps(payload)

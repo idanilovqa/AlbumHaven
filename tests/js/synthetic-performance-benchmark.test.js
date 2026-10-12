@@ -1,6 +1,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('approved search and gallery budgets reject delays above 2 seconds plus grace', async () => {
+  const benchmarks = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
+  const contracts = require('../ci/performance-times.json');
+  const cases = [
+    [benchmarks.ARTIST_FAMILY_LOCAL_BENCHMARK, 'searchAutoSelectionMs', benchmarks.evaluateArtistFamilyLocalBenchmark],
+    [benchmarks.SEARCH_ALL_ARTISTS_LOCAL_BENCHMARK, 'searchAutoSelectionMs', benchmarks.evaluateSearchAllArtistsLocalBenchmark],
+    [benchmarks.SEARCH_ALL_ARTISTS_LOCAL_BENCHMARK, 'bi2GalleryReadyMs', benchmarks.evaluateSearchAllArtistsLocalBenchmark],
+  ];
+  for (const [benchmark, key, evaluate] of cases) {
+    const metricId = `${benchmark.id}.${key}`;
+    for (const environment of ['local', 'ci']) {
+      assert.deepEqual(contracts[metricId][environment], {
+        targetMs: 2000, graceMs: 400, hardCeilingMs: 2400,
+      }, `${metricId} ${environment}`);
+    }
+    const expectation = benchmark.expectations.find((entry) => entry.key === key);
+    assert.equal(expectation.targetMaximum, 2000, metricId);
+    assert.equal(expectation.graceMs, 400, metricId);
+    assert.equal(expectation.maxAllowed, 2400, metricId);
+    for (const [elapsed, expectedPassed] of [[2000, true], [2400, true], [2401, false]]) {
+      const result = evaluate({ [key]: elapsed }).results.find((entry) => entry.key === key);
+      assert.equal(result.passed, expectedPassed, `${metricId} at ${elapsed} ms`);
+    }
+  }
+});
+
 test('shared millisecond benchmarks enforce ordinary grace limits', async () => {
   const benchmarks = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
   const catalog = [
@@ -323,10 +349,10 @@ test('benchmark validation payload keeps retained threshold overlay fields for s
   assert.equal(payload.benchmarkId, 'search-all-artists-local-managed-chrome');
   assert.equal(payload.benchmarkVersion, '2026-07-07-managed-chrome-search-follow-up-selection-calibration-1');
   assert.ok(searchAutoSelection);
-  assert.equal(searchAutoSelection.targetMaximum, 24000);
+  assert.equal(searchAutoSelection.targetMaximum, 2000);
   assert.equal(searchAutoSelection.graceMs, 400);
-  assert.equal(searchAutoSelection.allowedMaximum, 24400);
-  assert.equal(searchAutoSelection.allowedText, '24400 ms');
+  assert.equal(searchAutoSelection.allowedMaximum, 2400);
+  assert.equal(searchAutoSelection.allowedText, '2400 ms');
 });
 
 test('artist-family benchmark labels its synthetic correlated evidence without real-data claims', async () => {

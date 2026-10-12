@@ -514,7 +514,7 @@ export const ARTIST_FAMILY_LOCAL_BENCHMARK = defineBenchmark({
       description: 'Searching for Neal Morse should auto-select the canonical artist quickly.',
       observedBaseline: 13000,
       observedRange: { min: 0, max: 16000 },
-      maxAllowed: 20000,
+      maxAllowed: 2000,
     },
     {
       key: 'searchGalleryReadyMs',
@@ -749,7 +749,7 @@ export const SEARCH_ALL_ARTISTS_LOCAL_BENCHMARK = defineBenchmark({
       description: 'Searching for Ария should auto-select the intended artist in the filtered tree without an excessive stall.',
       observedBaseline: 20601,
       observedRange: { min: 0, max: 20601 },
-      maxAllowed: 24000,
+      maxAllowed: 2000,
     },
     {
       key: 'searchGalleryReadyMs',
@@ -839,7 +839,7 @@ export const SEARCH_ALL_ARTISTS_LOCAL_BENCHMARK = defineBenchmark({
       description: 'The БИ-2 gallery should become ready within the current warm search-navigation budget.',
       observedBaseline: 10376,
       observedRange: { min: 10079, max: 10673 },
-      maxAllowed: 12000,
+      maxAllowed: 2000,
     },
     {
       key: 'finalIdleMemoryBytes',

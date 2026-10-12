@@ -3456,69 +3456,23 @@ def test_stale_projected_exact_alias_defers_to_current_exact_artist_sql(monkeypa
 @pytest.mark.parametrize(
     "stale_reason", ["source_fingerprint_changed", "projection_not_ready"]
 )
-def test_stale_full_exact_search_loads_live_relation_aliases_before_delegating(
-    monkeypatch,
-    stale_reason,
-):
-    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-
-    connection = _NoopSearchSnapshotConnection()
-    delegated = []
-    live_loads = []
-    repository = PostgresLibraryBrowseRepository(
+def test_stale_search_requires_background_recovery_without_live_alias_build(monkeypatch, stale_reason):
+    from music_app.services import library_browse_postgres as browse
+    repository = browse.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: connection,
+        connect=lambda _: _NoopSearchSnapshotConnection(),
     )
-    monkeypatch.setattr(
-        repository,
-        "_load_relation_alias_maps",
-        lambda *, connection=None: {
-            "alias_to_canonical": {"Alias": "Stale Canonical"},
-            "canonical_to_aliases": {
-                "Stale Canonical": ["Stale Canonical", "Alias"],
-            },
-            "projection_stale_reason": stale_reason,
-        },
-    )
-    monkeypatch.setattr(
-        repository,
-        "_artist_search_projection_is_authoritative",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        repository,
-        "_load_exact_artist_match",
-        lambda *_args, **_kwargs: "Current Canonical",
-    )
-    live_maps = {
-        "alias_to_canonical": {"Alias": "Current Canonical"},
-        "canonical_to_aliases": {
-            "Current Canonical": ["Current Canonical", "Alias"],
-        },
-        "projection_stale_reason": "live_fallback",
-    }
-    monkeypatch.setattr(
-        repository,
-        "_load_live_relation_alias_maps",
-        lambda *, connection: live_loads.append(connection) or live_maps,
-    )
-    monkeypatch.setattr(
-        repository,
-        "build_selected_artist_payload",
-        lambda **kwargs: delegated.append(kwargs)
-        or {
-            "selected_artist": str(kwargs["query_params"]["artist"]),
-            "primary_artist_groups": [],
-            "family_artist_groups": [],
-        },
-    )
-
-    repository.build_search_payload(
-        query_params={"q": "Alias", "omit_sidebar": "1"},
-    )
-
-    assert live_loads == [connection]
-    assert delegated[0]["_relation_alias_maps"] == live_maps
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_: {
+        "alias_to_canonical": {"Alias": "Saved canonical"},
+        "canonical_to_aliases": {"Saved canonical": ["Alias"]},
+        "projection_stale_reason": stale_reason,
+    })
+    monkeypatch.setattr(repository, "_artist_search_projection_is_authoritative", lambda **_: False)
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *a, **k: "Alias")
+    monkeypatch.setattr(repository, "_load_live_relation_alias_maps", lambda **_: pytest.fail(
+        "Search must never rebuild global relationships"))
+    with pytest.raises(browse.SearchProjectionPending):
+        repository.build_search_payload(query_params={"q": "Alias", "omit_sidebar": "1"})
 
 
 @pytest.mark.parametrize(
@@ -3808,6 +3762,12 @@ def test_postgres_exact_search_preserves_family_with_outside_sidebar_match(monke
         },
     )
 
+    # Search reads the relationships already published by reconciliation.
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {'Signal Artist': 'Signal Artist'},
+        "canonical_to_aliases": {'Signal Artist': ['Signal Artist']},
+        "projection_stale_reason": "",
+    })
     payload = repository.build_search_payload(query_params={"q": "Signal Artist"})
 
     preview_rows = delegated[0]["_selected_artist_preview_rows"]
@@ -4498,6 +4458,12 @@ def test_postgres_exact_search_without_sidebar_keeps_the_selected_preview_query(
         },
     )
 
+    # Search reads the relationships already published by reconciliation.
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {'Signal Artist': 'Signal Artist'},
+        "canonical_to_aliases": {'Signal Artist': ['Signal Artist']},
+        "projection_stale_reason": "",
+    })
     repository.build_search_payload(
         query_params={"q": "Signal Artist", "omit_sidebar": "1"}
     )
@@ -7550,6 +7516,12 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
             }
         ),
     )
+    # Search reads the relationships already published by reconciliation.
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {'Neal Morse': 'Neal Morse'},
+        "canonical_to_aliases": {'Neal Morse': ['Neal Morse']},
+        "projection_stale_reason": "",
+    })
     payload = repository.build_search_payload(
         query_params=QueryParams([
             ("surface", "albums"),
@@ -7586,17 +7558,7 @@ def test_postgres_search_payload_uses_exact_artist_fast_path(monkeypatch):
             },
         )
     ]
-    assert exact_match_calls == [
-        (
-                "Neal Morse",
-                {
-                    "gallery_scope": "all",
-                    "gallery_display_mode": "cards",
-                    "gallery_scale_percent": 100,
-                    "visible_library_categories": ["main_library", "hoard", "new_arrivals"],
-                },
-            )
-        ]
+    assert exact_match_calls == []
     assert delegated_calls == [
         (
             {
@@ -8040,7 +8002,7 @@ def test_postgres_search_rows_query_authoritative_database_on_every_request():
     ]
 
 
-def test_postgres_search_payload_exact_artist_match_applies_category_filter_params():
+def test_postgres_search_payload_exact_artist_match_applies_category_filter_params(monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     executed: list[tuple[str, dict[str, object]]] = []
@@ -8065,8 +8027,6 @@ def test_postgres_search_payload_exact_artist_match_applies_category_filter_para
 
         def execute(self, sql, params=None):
             executed.append((str(sql), dict(params or {})))
-            if len(executed) == 2:
-                return FakeCursor(row={"artist_name": "Ария"})
             return FakeCursor(rows=[
                 {
                     "artist_id": 10,
@@ -8099,6 +8059,11 @@ def test_postgres_search_payload_exact_artist_match_applies_category_filter_para
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
 
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {"Ария": "Ария"},
+        "canonical_to_aliases": {"Ария": ["Ария"]},
+        "projection_stale_reason": "",
+    })
     payload = repository.build_search_payload(
         query_params={
             "surface": "albums",
@@ -8112,12 +8077,10 @@ def test_postgres_search_payload_exact_artist_match_applies_category_filter_para
     assert payload["search_context"]["committed_query"] == "Ария"
     assert payload["search_context"]["selected_artist_source"] == "auto_top_match"
     assert executed
-    assert executed[1][1] == {
-        "artist_name": "Ария",
-        "artist_key": "ария",
-        "category_count": 1,
-        "visible_categories": ["main_library"],
-    }
+    category_queries = [params for _, params in executed if "category_count" in params]
+    assert category_queries
+    assert all(params["category_count"] == 1 for params in category_queries)
+    assert all(params["visible_categories"] == ["main_library"] for params in category_queries)
 
 
 def test_postgres_artist_identity_queries_collapse_repeated_whitespace_and_preserve_display():
@@ -15760,6 +15723,12 @@ def test_exact_artist_search_sidebar_includes_other_missing_matches(
         "family_artist_groups": [], "search_context": {},
     })
 
+    # Search reads the relationships already published by reconciliation.
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {'Broadcast': 'Broadcast'},
+        "canonical_to_aliases": {'Broadcast': ['Broadcast']},
+        "projection_stale_reason": "",
+    })
     payload = repository.build_search_payload(query_params={"q": "Broadcast", "category": ["main_library"]})
 
     expected_other = "Broadcast Collaboration" if outside_match == "artist" else "Other Artist"
@@ -16483,6 +16452,12 @@ def test_exact_artist_full_search_passes_guest_rows_for_featured_on_classificati
                 'family_artist_groups': [], 'search_context': {}}
 
     monkeypatch.setattr(repository, 'build_selected_artist_payload', selected_payload)
+    # Search reads the relationships already published by reconciliation.
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **kwargs: {
+        "alias_to_canonical": {'Control Signal Partner': 'Control Signal Partner'},
+        "canonical_to_aliases": {'Control Signal Partner': ['Control Signal Partner']},
+        "projection_stale_reason": "",
+    })
     repository.build_search_payload(query_params={'q': 'Control Signal Partner'})
     assert [row['album_key'] for row in selected_rows] == list(roles)
 

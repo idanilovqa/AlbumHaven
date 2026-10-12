@@ -2459,6 +2459,33 @@ def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_a
     assert payload["view_data_source"] == "postgres_library_browse"
 
 
+def test_asgi_search_pending_projection_schedules_recovery_and_returns_retryable_response(app, asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as routes
+    from music_app.services import gallery_projection_postgres as projection
+
+    scheduled = []
+
+    class PendingRepository:
+        def __init__(self, config):
+            pass
+
+        def build_search_payload(self, **kwargs):
+            raise routes.SearchProjectionPending("not ready")
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", PendingRepository)
+    monkeypatch.setattr(projection, "schedule_gallery_projection_refresh", lambda config: scheduled.append(config))
+    status, headers, body = _run_asgi_request(
+        asgi_app, "GET", "/view-data", query={"q": "Broadcast", "surface": "albums"},
+    )
+    assert status == 503
+    assert _decode_json(body)["code"] == "search_projection_pending"
+    assert headers["retry-after"] == "1"
+    assert headers["cache-control"] == "no-store"
+    assert scheduled == [app.config]
+
+
 def test_asgi_album_search_all_artists_without_omit_sidebar_uses_postgres_browse(app, asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 

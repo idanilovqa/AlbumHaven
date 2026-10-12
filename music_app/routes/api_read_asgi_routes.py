@@ -41,7 +41,7 @@ from music_app.services.album_cover_candidate_snapshots_postgres import (
 )
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
-    PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
+    PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
@@ -640,10 +640,19 @@ def view_data(request: Request) -> JSONResponse:
             level="info",
             query=query,
         )
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_search_payload(
-            query_params=request.query_params,
-            library_state=_postgres_browse_library_state(request),
-        )
+        try:
+            payload = PostgresLibraryBrowseRepository(_app_config(request)).build_search_payload(
+                query_params=request.query_params,
+                library_state=_postgres_browse_library_state(request),
+            )
+        except SearchProjectionPending:
+            from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+            schedule_gallery_projection_refresh(_app_config(request))
+            return JSONResponse(
+                {"ok": False, "code": "search_projection_pending",
+                 "error": "Artist relationships are being prepared."},
+                status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
+            )
         _log_view_data_request_from_asgi(request, payload, request_started_at)
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)

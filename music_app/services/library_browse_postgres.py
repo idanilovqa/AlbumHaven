@@ -198,6 +198,10 @@ def _preferred_duplicate_source(
     return max(sources, key=credit_score)
 
 
+class SearchProjectionPending(RuntimeError):
+    """Search awaits a valid persisted relationship projection."""
+
+
 class PostgresLibraryBrowseRepository:
     def __init__(
         self,
@@ -1776,11 +1780,7 @@ class PostgresLibraryBrowseRepository:
                     connection=connection,
                 )
                 if exact_artist_match:
-                    relation_alias_maps = self._load_live_relation_alias_maps(
-                        connection=connection
-                    )
-                    alias_to_canonical = relation_alias_maps["alias_to_canonical"]
-                    canonical_to_aliases = relation_alias_maps["canonical_to_aliases"]
+                    raise SearchProjectionPending("Artist relationships are being prepared.")
         if exact_artist_match:
             sidebar_artist_groups = []
             search_missing_album_rows: list[object] | None = None

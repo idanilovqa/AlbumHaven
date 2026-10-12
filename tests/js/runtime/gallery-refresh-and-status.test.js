@@ -406,6 +406,9 @@ function createContext() {
             resolve({
               ok: payload?.responseOk ?? (payload?.ok !== false),
               status: payload?.status || 200,
+              clone() {
+                return { json: async () => payload };
+              },
               async json() {
                 return payload;
               },
@@ -584,6 +587,85 @@ test('fetchAndRender rejects JSON HTTP errors without applying their payload', a
 
   await assert.rejects(request, /Search unavailable/);
   assert.equal(calls.applyViewPayload.length, 0);
+});
+
+test('pending search retries and applies only the recovered payload', async () => {
+  const { context, pendingRequests, calls } = createContext();
+  const timers = [];
+  context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+  const request = context.fetchAndRender('/view-data?q=recover', false);
+  pendingRequests[0].resolveWith({ status: 503, ok: false, code: 'search_projection_pending' });
+  await new Promise(setImmediate);
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(timers.length, 1);
+  timers.shift()();
+  await new Promise(setImmediate);
+  assert.equal(pendingRequests.length, 2);
+  const payload = { query: 'recover', artist_groups: [] };
+  pendingRequests[1].resolveWith(payload);
+  await request;
+  assert.deepEqual(calls.applyViewPayload, [payload]);
+});
+
+test('pending search cancellation clears its retry timer without another request', async () => {
+  const { context, pendingRequests } = createContext();
+  const controller = new AbortController();
+  const cleared = [];
+  context.setTimeout = () => 17;
+  context.clearTimeout = (timer) => cleared.push(timer);
+  const response = { status: 503, clone: () => ({ json: async () => ({ code: 'search_projection_pending' }) }) };
+  const request = context.retryPendingGalleryViewResponse(response, '/view-data?q=old', controller.signal);
+  await new Promise(setImmediate);
+  controller.abort();
+  await assert.rejects(request, { name: 'AbortError' });
+  assert.deepEqual(cleared, [17]);
+  assert.equal(pendingRequests.length, 0);
+});
+
+test('a superseding query cancels pending recovery and never applies the old search', async () => {
+  const { context, pendingRequests, calls } = createContext();
+  const timers = [];
+  const cleared = [];
+  context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+  context.clearTimeout = (timer) => cleared.push(timer);
+  const oldRequest = context.fetchAndRender('/view-data?q=old', false);
+  pendingRequests[0].resolveWith({ status: 503, ok: false, code: 'search_projection_pending' });
+  await new Promise(setImmediate);
+  const newRequest = context.fetchAndRender('/view-data?q=new', false);
+  await new Promise(setImmediate);
+  assert.equal(pendingRequests.length, 2);
+  const payload = { query: 'new', artist_groups: [] };
+  pendingRequests[1].resolveWith(payload);
+  await Promise.all([oldRequest, newRequest]);
+  assert.deepEqual(calls.applyViewPayload, [payload]);
+  assert.deepEqual(cleared, [1]);
+});
+
+test('pending search recovery stops retrying at its deadline', async () => {
+  const { context, pendingRequests } = createContext();
+  let now = 0;
+  context.Date = { now: () => now };
+  context.setTimeout = (callback) => {
+    now += 60000;
+    queueMicrotask(callback);
+    return 1;
+  };
+  const response = { status: 503, clone: () => ({ json: async () => ({ code: 'search_projection_pending' }) }) };
+  const request = context.retryPendingGalleryViewResponse(response, '/view-data?q=missing');
+  await new Promise(setImmediate);
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({ status: 503, ok: false, code: 'search_projection_pending' });
+  const result = await request;
+  assert.equal(result.status, 503);
+  assert.equal(pendingRequests.length, 1);
+});
+
+test('unrelated service errors never schedule search recovery', async () => {
+  const { context, pendingRequests } = createContext();
+  context.setTimeout = () => { throw new Error('unexpected retry'); };
+  const response = { status: 503, clone: () => ({ json: async () => ({ error: 'unavailable' }) }) };
+  assert.equal(await context.retryPendingGalleryViewResponse(response, '/view-data'), response);
+  assert.equal(pendingRequests.length, 0);
 });
 
 test('fetchAndRender skips the loaded-album snapshot when no album modal is open', async () => {

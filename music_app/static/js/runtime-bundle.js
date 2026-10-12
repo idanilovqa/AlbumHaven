@@ -15745,6 +15745,30 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+async function retryPendingGalleryViewResponse(response, url, signal) {
+  const deadline = Date.now() + 60000;
+  while (true) {
+    if (response.status !== 503) return response;
+    const pending = await response.clone().json().catch(() => null);
+    if (pending?.code !== 'search_projection_pending' || Date.now() >= deadline) return response;
+    await new Promise((resolve, reject) => {
+      let timer;
+      const abort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        reject(Object.assign(new Error('Search cancelled'), { name: 'AbortError' }));
+      };
+      if (signal?.aborted) return abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      timer = setTimeout(() => {
+        signal?.removeEventListener('abort', abort);
+        resolve();
+      }, 1000);
+    });
+    response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+  }
+}
+
 async function readGalleryResponse(response, ownsResponse) {
   if (response.status === 401) {
     if (ownsResponse()) window.location.assign('/login');
@@ -15962,10 +15986,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    const response = await fetch(apiUrl, {
-      headers: { Accept: 'application/json' },
-      signal: controller?.signal,
-    });
+    let response = await fetch(apiUrl, { headers: { Accept: 'application/json' }, signal: controller?.signal });
+    if (response.status === 503) {
+      response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
+    }
     let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
     if (rootRefreshCoverage > 0) {
       const ownsRefresh = () => {

@@ -129,7 +129,8 @@ export function readVisibleGalleryCoverReadiness(selectors) {
       || `album card ${index + 1}`,
     ).trim();
     const coverImage = card.querySelector(selectors.coverImageSelector);
-    const placeholder = card.querySelector(selectors.coverPlaceholderSelector);
+    const placeholder = card.querySelector(selectors.coverPlaceholderSelector)
+      || (selectors.allowEmptyArtwork ? card.querySelector('[data-album-artbox-state="empty"]') : null);
     const visual = coverImage instanceof HTMLImageElement
       ? coverImage
       : (placeholder instanceof HTMLElement ? placeholder : null);
@@ -204,7 +205,9 @@ export function readVisibleGalleryCoverReadiness(selectors) {
         visibility: style.visibility,
         opacity: style.opacity,
       });
-      isReady = selectors.allowPlaceholder && !deferred && visiblyStyled;
+      const nativeEmpty = selectors.allowEmptyArtwork
+        && placeholder.getAttribute('data-album-artbox-state') === 'empty';
+      isReady = (selectors.allowPlaceholder || nativeEmpty) && !deferred && visiblyStyled;
       reason = isReady ? 'final visible placeholder' : 'placeholder is not an allowed final state';
     }
     (isReady ? ready : unready).push({ ...entry, reason });
@@ -383,6 +386,7 @@ export class GalleryActions {
     const minimumCount = Number(options.minimumCount || 6);
     const requireVisible = options.requireVisible ?? true;
     const allowPlaceholder = options.allowPlaceholder === true;
+    const allowEmptyArtwork = options.allowEmptyArtwork === true;
     const placeholderScenario = String(options.placeholderScenario || '').trim();
     if (allowPlaceholder && !placeholderScenario) {
       throw new Error('allowPlaceholder requires a named placeholderScenario for an intentional no-art fixture.');
@@ -397,6 +401,7 @@ export class GalleryActions {
       minimumCount,
       requireVisible,
       allowPlaceholder,
+      allowEmptyArtwork,
       requireLocalImage,
     };
     try {

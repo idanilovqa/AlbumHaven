@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 import json
 from pathlib import PurePosixPath, PureWindowsPath
 import re
@@ -84,6 +85,7 @@ def _postgres_bool(value: object) -> bool:
     }
 
 
+@lru_cache(maxsize=128)
 def _path_flavor(root_path: str):
     if root_path.startswith("/"):
         root = PurePosixPath(root_path)
@@ -311,6 +313,7 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
                 "artists": set(),
                 "family_artists": set(),
                 "locations": set(),
+                "location_sources": set(),
                 "family_excluded": False,
             },
         )
@@ -336,11 +339,16 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
         # Intake folder neighbors are not evidence of artist relationships.
         # Keep their artists above, but exclude their locations from both
         # folder-assisted aliases and family edges.
-        location_parts = (
-            root_relative_parts(row)
-            if _text(row, "root_kind") == "main_library"
-            else None
-        )
+        location_parts = None
+        if _text(row, "root_kind") == "main_library":
+            # Album-member joins repeat each file. Validate each distinct source
+            # once, retaining every input used by relative/fallback containment.
+            source = tuple(_text(row, key) for key in (
+                "library_root_id", "root_path", "relative_path", "private_path",
+            ))
+            if source not in bucket["location_sources"]:
+                bucket["location_sources"].add(source)
+                location_parts = root_relative_parts(row)
         if location_parts is not None:
             root_id, relative_parts = location_parts
             bucket["locations"].add(

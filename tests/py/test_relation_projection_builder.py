@@ -775,3 +775,47 @@ def test_sidebar_family_label_survives_relation_view_serialization_roundtrip():
     roundtrip = deserialize_relation_views(serialize_relation_views(relation_views))
 
     assert roundtrip["sidebar_families"] == relation_views["sidebar_families"]
+
+
+def test_relation_builder_bounds_path_parsing_by_distinct_locations(monkeypatch, request):
+    from music_app.services import relation_projection_builder as builder
+
+    request.addfinalizer(builder._path_flavor.cache_clear)
+    original_path = builder.PureWindowsPath
+    parsed = []
+
+    class CountingWindowsPath(original_path):
+        def __new__(cls, *args):
+            parsed.append(args)
+            return super().__new__(cls, *args)
+
+    monkeypatch.setattr(builder, 'PureWindowsPath', CountingWindowsPath)
+    rows = [
+        _row(album_id=1, artist='Primary', member=f'Guest {index}',
+             root_path=r'C:\FixturePerfRoot',
+             relative_path=r'Primary\Album\01.flac')
+        for index in range(100)
+    ]
+    rows.append(_row(album_id=2, artist='Other', root_path=r'C:\FixturePerfRoot',
+                     relative_path=r'Other\Album\02.flac'))
+    result = _build(rows)
+    assert 'Primary' in result['artists']
+    assert 'Other' in result['artists']
+    assert len(parsed) <= 3, 'joined artist rows must not repeatedly parse identical root/file paths'
+
+
+def test_relation_builder_path_reuse_keeps_fallback_validation_inputs_distinct():
+    from music_app.services import relation_projection_builder as builder
+
+    rows = [
+        _row(album_id=1, artist='Artist', relative_path='../invalid.flac',
+             private_path=r'C:\Music\Artist\Album\01.flac'),
+        _row(album_id=1, artist='Artist', relative_path='../invalid.flac',
+             private_path=r'C:\Elsewhere\Artist\Album\02.flac'),
+        _row(album_id=1, artist='Artist', relative_path='../invalid.flac',
+             private_path=r'C:\Music\Artist\Album\03.flac'),
+    ]
+    facts = builder._album_facts(rows)
+    assert [location.relative_parts for location in facts[0].locations] == [
+        ('Artist', 'Album', '01.flac'), ('Artist', 'Album', '03.flac'),
+    ]

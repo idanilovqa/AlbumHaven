@@ -132,7 +132,7 @@ test('Sandbox3 visible read-only journeys', async ({ page, galleryActions, navig
       await expectedDetails.dispose();
 
       await measure('album-details', async () => {
-        await galleryActions.clickAlbumDetailsAt(index);
+        await card.locator('.album-title-button[data-open-tracklist="1"]').click();
         if (previousIdentity && previousIdentity !== title && await modal.title.isVisible()) {
           expect((await modal.title.innerText()).trim()).not.toBe(previousIdentity);
         }

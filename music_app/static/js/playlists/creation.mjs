@@ -144,7 +144,8 @@ export function projectCreationState(state) {
     const order = new Map(rows.map((row, index) => [row.row_key, index]));
     const first = new Map();
     for (const row of rows) if (!first.has(groupKey(row))) first.set(groupKey(row), order.get(row.row_key));
-    entries = paged(data) ? [...rows] : rows.filter(row => !query || folded([row.title, row.artist, row.album_title].join(' ')).includes(query));
+    entries = state.mode === 'ordinary' && !query ? []
+      : paged(data) ? [...rows] : rows.filter(row => !query || folded([row.title, row.artist, row.album_title].join(' ')).includes(query));
     if (!paged(data)) entries.sort((a, b) => {
       const exact = Number(Boolean(query) && folded(b.title) === query) - Number(Boolean(query) && folded(a.title) === query);
       if (exact) return exact;
@@ -163,7 +164,7 @@ export function projectCreationState(state) {
     else groups.push({identity: key, key: `${key}:run:${groups.length}`, parent_album: row.parent_album,
       entries: [row], completeness: groupFacts.get(key)});
   }
-  return freeze({entries, groups: groups.map(({identity, ...group}) => group), selectedEntries,
+  return freeze({mode: state.mode, entries, groups: groups.map(({identity, ...group}) => group), selectedEntries,
     selectedCount: selectedEntries.length, duplicateCount: selectedEntries.length - new Set(selectedEntries.map(row => row.entry_ref)).size, visibleSelectedCount: entries.filter(row => selected.has(row.row_key)).length});
 }
 

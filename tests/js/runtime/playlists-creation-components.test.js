@@ -406,3 +406,82 @@ for (const [label, complete] of [['rejected', () => false], ['unconfirmed', () =
     assert.equal(writes, 0); fixture.dispose(); controller.dispose();
   });
 }
+
+test('queried ordinary builder renders one native table with per-row art across albums', async t => {
+  const controller = await session({entries: [
+    entry('first', {title: 'Needle first', artwork_url: '/art/first', parent_album: parent({album_ref: 'album:first'})}),
+    entry('second', {title: 'Needle second', artwork_url: '/art/second', parent_album: parent({album_ref: 'album:second'})}),
+  ]});
+  t.after(() => controller.dispose());
+  controller.setQuery('needle');
+  const state = controller.getSnapshot(), {projectCreationState} = await model, tables = [];
+  const html = creationResultsHtml({...runtime, tableHtml(config) {tables.push(config); return runtime.tableHtml(config);}},
+    {id: 'flat-builder', projection: projectCreationState(state), selectedKeys: [], disabled: false});
+  assert.equal(tables.length, 1);
+  assert.equal(tables[0].selection, 'multiple');
+  assert.deepEqual(tables[0].rows.map(row => row.key), ['entry:first', 'entry:second']);
+  const host = hostFor(html);
+  assert.equal(host.querySelectorAll('.album-track-table__disc-heading').length, 0);
+  assert.equal(host.querySelectorAll('[data-creation-row-key]').length, 2);
+  for (const identity of ['first', 'second']) {
+    const track = host.querySelector(`[data-creation-row-key="entry:${identity}"]`);
+    assert.equal(track.querySelector('img').getAttribute('src'), `/art/${identity}`);
+    assert.equal(track.querySelector('[data-creation-pick]').disabled, false);
+    assert.equal(track.getAttribute('tabindex'), '0');
+  }
+  assert.doesNotMatch(html, /data-track-path=|data-src=|play-track-button/);
+});
+
+test('ordinary builder initial All prompts for a search rather than claiming the source is empty', async t => {
+  const controller = await session({entries: [entry('unqueried', {title: 'Unqueried private title'})]});
+  t.after(() => controller.dispose());
+  controller.edit({title: 'Empty playlist is allowed'});
+  const html = render(controller), host = hostFor(html);
+  assert.equal(host.querySelectorAll('[data-creation-row-key]').length, 0);
+  assert.equal(host.querySelector('[aria-label="Select visible tracks"]').disabled, true);
+  assert.ok([...host.querySelectorAll('[role="status"]')].some(node => /search/i.test(node.textContent)));
+  assert.doesNotMatch(html, /Unqueried private title|No tracks are available in this source/);
+  assert.equal(button(host, 'Create playlist').disabled, false);
+});
+
+test('flat queried builder preserves Ctrl, Cmd and Shift highlight without changing authored selection', async t => {
+  const controller = await session({entries: ['a', 'b', 'c'].map(identity => entry(identity,
+    {title: `Needle ${identity}`, parent_album: parent({album_ref: `album:${identity}`})}))});
+  controller.setQuery('needle');
+  const {projectCreationState} = await model, host = native.document.createElement('div');
+  native.document.body.appendChild(host);
+  const fixture = lifecycle('CreationResults', host);
+  t.after(() => {fixture.dispose(); controller.dispose(); host.remove();});
+  const props = () => ({runtime, id: 'flat-selection', controller, state: controller.getSnapshot(),
+    projection: projectCreationState(controller.getSnapshot()), disabled: false});
+  const click = (identity, modifiers = {}) => {
+    host.querySelector(`[data-creation-row-key="entry:${identity}"]`).dispatchEvent(
+      Object.assign(new native.context.Event('click'), {button: 0}, modifiers));
+    fixture.render(props());
+  };
+  const highlighted = () => [...host.querySelectorAll('[aria-selected="true"][data-creation-row-key]')]
+    .map(row => row.dataset.creationRowKey);
+  fixture.render(props());
+  click('a'); click('c', {ctrlKey: true});
+  assert.deepEqual(highlighted(), ['entry:a', 'entry:c']);
+  click('c', {metaKey: true});
+  assert.deepEqual(highlighted(), ['entry:a']);
+  click('a'); click('c', {shiftKey: true});
+  assert.deepEqual(highlighted(), ['entry:a', 'entry:b', 'entry:c']);
+  assert.deepEqual(controller.getSnapshot().selectedKeys, []);
+});
+
+test('ordinary builder Create uses native primary action styling with native disabled semantics', async t => {
+  const controller = await session();
+  t.after(() => controller.dispose());
+  let host = hostFor(render(controller)), create = button(host, 'Create playlist');
+  assert.equal(create.classList.contains('ui-button--primary'), true);
+  assert.equal(create.disabled, true);
+  assert.equal(create.getAttribute('aria-disabled'), 'true');
+  controller.edit({title: 'Ready'});
+  host = hostFor(render(controller)); create = button(host, 'Create playlist');
+  assert.equal(create.classList.contains('ui-button--primary'), true);
+  assert.equal(create.disabled, false);
+  assert.equal(create.hasAttribute('aria-disabled'), false);
+  assert.equal(button(host, 'Discard').classList.contains('ui-button--secondary'), true);
+});

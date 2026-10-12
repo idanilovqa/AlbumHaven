@@ -227,6 +227,9 @@ def search_entries(connection, context, source, *, query="", cursor=None, limit=
     query = " ".join(query.strip().split())
     identity = _cursor_payload(source, query)
     after, search_revision = _decode_cursor(connection, cursor, identity) if cursor is not None else (None, str(uuid4()))
+    if not query:
+        return {**source_envelope(source), "query": query, "search_revision": search_revision,
+                "entries": [], "entries_complete": False, "limit": limit, "has_more": False, "next_cursor": None}
     identity["search_revision"] = search_revision
     pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     params = {"library": context.library_id, "query": query, "pattern": pattern,

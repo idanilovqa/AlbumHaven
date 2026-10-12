@@ -214,3 +214,27 @@ test('request validates metadata, ordered current authority and independent deta
   assert.equal(request(subject, input, ['entry:unknown']), null);
   assert.deepEqual(request(subject, input, ['entry:b', 'entry:a']).entry_refs, ['b', 'a']);
 });
+
+for (const query of ['', ' \t\n ']) {
+  test(`ordinary builder All has no rows before a nonblank query (${JSON.stringify(query)})`, () => {
+    const subject = context('ordinary');
+    const input = response(subject, [row('a', {title: 'Find me'})]);
+    const projected = model.projectCreationState(state(subject, input, {query}));
+    assert.deepEqual(projected.entries, []);
+    assert.deepEqual(projected.groups, []);
+    assert.equal(projected.visibleSelectedCount, 0);
+  });
+}
+
+test('clearing ordinary builder query hides All without losing ordered missing or unresolved selections', () => {
+  const subject = context('ordinary');
+  const input = response(subject, [row('missing', {title: 'Needle', availability: 'missing'}),
+    row('unresolved', {title: 'Needle alternate', availability: 'unresolved'})]);
+  const selectedKeys = ['entry:unresolved', 'entry:missing'];
+  const cleared = state(subject, input, {query: '', selectedKeys});
+  assert.deepEqual(model.projectCreationState(cleared).entries, []);
+  const selected = model.projectCreationState({...cleared, tab: 'selected'});
+  assert.deepEqual(selected.entries.map(item => item.entry_ref), ['unresolved', 'missing']);
+  assert.deepEqual(selected.entries.map(item => item.availability), ['unresolved', 'missing']);
+  assert.deepEqual(request(subject, input, selectedKeys).entry_refs, ['unresolved', 'missing']);
+});

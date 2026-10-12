@@ -27,7 +27,11 @@ async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
   await ui.scrollToArtistAction.click();
   await expect.poll(
     () => ui.readArtistJumpPlacement(artist),
-    { message: `Expected ${artist} to render exactly at the gallery top` },
+    {
+      message: `Expected ${artist} to render exactly at the gallery top`,
+      // Keep observation delay below the timing grace; default backoff reaches one second.
+      intervals: [50],
+    },
   ).toEqual({
     rendered: true,
     chromeMatches: true,

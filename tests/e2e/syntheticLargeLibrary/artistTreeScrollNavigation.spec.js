@@ -178,22 +178,42 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
 
     let requestGeometry = null;
+    // parity-check: allow-read-only-measurement-evaluate -- distinguish appended albums from the initial page
+    const initialAlbumKeys = new Set(await page.evaluate(() => (
+      (state.view.artist_groups || []).flatMap(group => (group.albums || []).map(album => album.key))
+    )));
     let continuationPending = false;
+    let continuationRequest = null;
+    let continuationCompletion = null;
+    let continuationError = null;
+    let appendedAlbumKey = null;
     let continuationStartedAt = 0;
     let continuationDuration = null;
     let minimumRemaining = Number.POSITIVE_INFINITY;
     page.on('request', request => {
       const url = new URL(request.url());
-      if (!url.searchParams.has('gallery_cursor')) return;
+      if (!url.searchParams.has('gallery_cursor') || continuationRequest) return;
+      continuationRequest = request;
       continuationPending = true;
       continuationStartedAt = Date.now();
       if (!requestGeometry) requestGeometry = ui.readContinuationGeometry();
     });
     page.on('response', response => {
-      const url = new URL(response.url());
-      if (!url.searchParams.has('gallery_cursor') || !continuationPending) return;
-      continuationPending = false;
-      continuationDuration = Date.now() - continuationStartedAt;
+      if (response.request() !== continuationRequest) return;
+      continuationCompletion = (async () => {
+        expect(response.ok()).toBe(true);
+        const payload = await response.json();
+        appendedAlbumKey = (payload.artist_groups || [])
+          .flatMap(group => group.albums || [])
+          .map(album => album.key)
+          .find(key => key && !initialAlbumKeys.has(key));
+        expect(appendedAlbumKey, 'continuation must return a new album').toBeTruthy();
+        // parity-check: allow-read-only-measurement-evaluate -- time production application of the page, not response headers
+        await expect.poll(() => page.evaluate(key => (
+          (state.view.artist_groups || []).some(group => (group.albums || []).some(album => album.key === key))
+        ), appendedAlbumKey), { timeout: 3000 }).toBe(true);
+        continuationDuration = Date.now() - continuationStartedAt;
+      })().catch(error => { continuationError = error; }).finally(() => { continuationPending = false; });
     });
     for (let step = 0; step < 30; step += 1) {
       const box = await ui.galleryScroll.boundingBox();
@@ -207,10 +227,30 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       }
       if (requestGeometry && !continuationPending) break;
     }
+    expect(continuationCompletion, 'native scrolling must request the next page').not.toBeNull();
+    await continuationCompletion;
+    if (continuationError) throw continuationError;
     const geometry = await requestGeometry;
     expect(geometry.remaining).toBeGreaterThanOrEqual(geometry.viewport * 6);
     if (Number.isFinite(minimumRemaining)) expect(minimumRemaining).toBeGreaterThan(0);
     expect(continuationDuration).not.toBeNull();
     expect(continuationDuration).toBeLessThan(3000);
+    const appendedCard = page.locator('.album-card').filter({
+      has: page.locator(`[data-album-key=${JSON.stringify(appendedAlbumKey)}]`),
+    }).first();
+    let crossedBoundary = false;
+    for (let step = 0; step < 100; step += 1) {
+      const viewport = await ui.galleryScroll.boundingBox();
+      const card = await appendedCard.count() ? await appendedCard.boundingBox() : null;
+      if (card && card.y < viewport.y + viewport.height && card.y + card.height > viewport.y) {
+        crossedBoundary = true;
+        break;
+      }
+      await page.mouse.move(viewport.x + viewport.width / 2, viewport.y + viewport.height / 2);
+      await page.mouse.wheel(0, 240);
+      await page.waitForTimeout(80);
+    }
+    expect(crossedBoundary, 'continued native scrolling must reach a newly appended album').toBe(true);
+    await expect(appendedCard).toBeInViewport();
   });
 });

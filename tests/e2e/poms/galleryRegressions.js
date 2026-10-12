@@ -87,15 +87,33 @@ export class GalleryRegressions {
           : -1
       ), normalizedArtist);
       if (targetIndex < 0) throw new Error(`Artist Tree does not contain ${normalizedArtist}`);
-      const box = await this.sidebarList.boundingBox();
-      if (!box) throw new Error('Artist Tree is not visible');
       for (let attempt = 0; attempt < 5 && !await row.count(); attempt += 1) {
-        const firstIndex = Number(await this.sidebarArtists.first().getAttribute('data-sidebar-virtual-index')) || 0;
-        await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        await this.page.mouse.wheel(0, (targetIndex - firstIndex) * 47);
-        await this.page.waitForTimeout(40);
+        // parity-check: allow-read-only-measurement-evaluate -- aim native wheel input inside the actual visible scroll owner
+        const position = await this.sidebarList.evaluate((list, index) => {
+          const owner = list.clientHeight > 0 && list.scrollHeight > list.clientHeight + 1
+            ? list : list.closest('.sidebar');
+          if (!owner) return null;
+          const bounds = owner.getBoundingClientRect();
+          const top = Math.max(0, bounds.top);
+          const bottom = Math.min(window.innerHeight, bounds.bottom);
+          const left = Math.max(0, bounds.left);
+          const right = Math.min(window.innerWidth, bounds.right);
+          if (bottom <= top || right <= left) return null;
+          const listTop = owner === list ? 0 : list.getBoundingClientRect().top - bounds.top + owner.scrollTop;
+          return {
+            x: (left + right) / 2,
+            y: (top + bottom) / 2,
+            delta: listTop + index * 47 - owner.scrollTop,
+          };
+        }, targetIndex);
+        if (!position) throw new Error('Artist Tree scroll viewport is not visible');
+        await this.page.mouse.move(position.x, position.y);
+        await this.page.mouse.wheel(0, position.delta);
+        await row.waitFor({ state: 'attached', timeout: 1000 }).catch(error => {
+          if (error.name !== 'TimeoutError') throw error;
+        });
       }
-      await row.waitFor({ state: 'attached' });
+      await row.waitFor({ state: 'attached', timeout: 1000 });
     }
     await row.scrollIntoViewIfNeeded();
     await row.click({ button: 'right' });

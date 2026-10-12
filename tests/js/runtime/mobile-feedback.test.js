@@ -589,6 +589,126 @@ test('canonical mobile parent route distinguishes root Gallery, Home and explici
     { mobilePages: [{ kind: 'album', albumKey: 'other', parentViewUrl: '/?q=wrong' }] }, '/'), '/');
 });
 
+test('mobile parent restoration retains the transient root gallery anchor outside the canonical URL', () => {
+  const descriptor = { kind: 'album', albumKey: 'doombound' };
+  const context = load('mobile-navigation.js');
+
+  assert.equal(
+    context.resolveMobileParentGalleryAnchorArtist(descriptor, null, {}, 'Battlelore'),
+    'Battlelore',
+  );
+  assert.equal(
+    context.resolveMobileParentGalleryAnchorArtist(
+      descriptor,
+      { ...descriptor, parentGalleryAnchorArtist: 'Battlelore' },
+      {},
+      '3 Inches of Blood',
+    ),
+    'Battlelore',
+  );
+
+  const calls = [];
+  const position = { scrollTop: 320, scrollLeft: 0 };
+  const scrollAnchor = {
+    albumKey: 'album-below-battlelore',
+    sectionOccurrenceKey: 'artist:later',
+    offsetTop: 0,
+    scrollTop: 320,
+    scrollLeft: 0,
+  };
+  const restoreContext = load('mobile-navigation.js', {
+    virtualGrid: {
+      restoreOwnedAbsoluteScrollPosition: value => {
+        calls.push(['position', value]);
+        return true;
+      },
+      render: force => calls.push(['render', force]),
+      restoreScrollAnchor: value => calls.push(['anchor', value]),
+    },
+    handleGalleryBootstrapPopState: options => calls.push(options),
+  });
+  restoreContext.restoreMobileGalleryParent({
+    parentViewUrl: '/?surface=albums&all_artists=1',
+    parentGalleryAnchorArtist: 'Battlelore',
+    parentScrollPosition: position,
+    parentScrollAnchor: scrollAnchor,
+  });
+  assert.equal(calls[0].parentViewUrl, '/?surface=albums&all_artists=1');
+  assert.equal(calls[0].galleryAnchorArtist, 'Battlelore');
+  assert.equal(calls[0].preserveScroll, false);
+  assert.equal(calls[0].preserveAbsoluteScroll, undefined);
+  assert.equal(calls[0].absoluteScrollPosition, undefined);
+  assert.equal(calls.length, 1);
+});
+
+test('mobile Back keeps an already-mounted transient artist window without refetching it', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    state: {
+      view: {
+        gallery_page: {
+          anchor_artist: 'Battlelore',
+          anchor_group_artist: 'Battlelore (canonical)',
+        },
+      },
+    },
+    virtualGrid: {
+      scrollToArtist: artist => {
+        calls.push(['align', artist]);
+        return true;
+      },
+    },
+    stabilizeRootGalleryArtistAlignment: artist => calls.push(['stabilize', artist]),
+    handleGalleryBootstrapPopState: options => calls.push(options),
+  });
+
+  context.restoreMobileGalleryParent({
+    parentViewUrl: '/?surface=albums&all_artists=1',
+    parentGalleryAnchorArtist: 'Battlelore',
+    parentScrollPosition: { scrollTop: 320, scrollLeft: 0 },
+  });
+
+  assert.deepEqual(calls, [
+    ['align', 'Battlelore (canonical)'],
+    ['stabilize', 'Battlelore (canonical)'],
+  ]);
+});
+
+test('mobile Back reloads a missing retained artist without pushing gallery history', () => {
+  const calls = [];
+  const context = load('mobile-navigation.js', {
+    state: {
+      view: {
+        gallery_page: {
+          anchor_artist: 'Battlelore',
+          anchor_group_artist: 'Battlelore (canonical)',
+        },
+      },
+    },
+    virtualGrid: {
+      scrollToArtist: artist => {
+        calls.push(['align', artist]);
+        return false;
+      },
+    },
+    stabilizeRootGalleryArtistAlignment: artist => calls.push(['stabilize', artist]),
+    handleGalleryBootstrapPopState: options => calls.push(['reload', options]),
+  });
+
+  context.restoreMobileGalleryParent({
+    parentViewUrl: '/?surface=albums&all_artists=1',
+    parentGalleryAnchorArtist: 'Battlelore',
+    parentScrollPosition: { scrollTop: 320, scrollLeft: 0 },
+  });
+
+  assert.deepEqual(calls[0], ['align', 'Battlelore (canonical)']);
+  assert.equal(calls[1][0], 'reload');
+  assert.equal(calls[1][1].preserveScroll, false);
+  assert.equal(calls[1][1].parentViewUrl, '/?surface=albums&all_artists=1');
+  assert.equal(calls[1][1].galleryAnchorArtist, 'Battlelore');
+  assert.equal(calls.length, 2);
+});
+
 test('nested mobile presentation inherits the root canonical route without creating another history entry', () => {
   const context = load('mobile-navigation.js', {
     window: { innerWidth: 390, history: { state: { albumHavenNavigationPosition: 3 } } },
@@ -631,6 +751,32 @@ test('canonical parent restoration uses one route for Gallery controls and its d
   });
   context.handleGalleryBootstrapPopState({ parentViewUrl: '/?surface=albums&artist=Northlight' });
   assert.deepEqual(calls, [['controls', '/?surface=albums&artist=Northlight'], ['data', '/?surface=albums&artist=Northlight']]);
+});
+
+test('anchored parent restoration reloads the same root window without exposing the anchor in browser history', () => {
+  const calls = [];
+  const context = load('bootstrap-gallery-event-handlers.js', {
+    URLSearchParams,
+    syncGalleryMainStateFromLocation: url => calls.push(['controls', url]),
+    getBrowserLocationHref: () => '/?surface=albums&all_artists=1',
+    parseBrowserUrlState: () => ({ surface: { active: 'albums' }, all_artists_active: true }),
+    buildApiUrl: (_view, options) => `/view-data?surface=albums&all_artists=1&gallery_anchor_artist=${encodeURIComponent(options.galleryAnchorArtist)}`,
+    fetchAndRender: (url, push, options) => calls.push(['data', url, push, options]),
+  });
+  const options = {
+    parentViewUrl: '/?surface=albums&all_artists=1',
+    galleryAnchorArtist: 'Battlelore',
+  };
+
+  context.handleGalleryBootstrapPopState(options);
+
+  assert.deepEqual(calls[0], ['controls', '/?surface=albums&all_artists=1']);
+  assert.deepEqual(calls[1].slice(0, 3), [
+    'data',
+    '/view-data?surface=albums&all_artists=1&gallery_anchor_artist=Battlelore',
+    false,
+  ]);
+  assert.equal(calls[1][3], options);
 });
 
 for (const width of [390, 1180]) test(`mobile duplicate Folder action is unavailable at ${width}px while Files browsing stays intact`, () => {

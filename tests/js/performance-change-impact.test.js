@@ -41,7 +41,7 @@ test('sensitive browse, sidebar, modal, status, and mobile changes select their 
     ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse']],
     ['music_app/static/js/runtime/track-modal-lightbox-helpers.js', ['selected-artist', 'all-artists', 'gapless-playback']],
     ['music_app/static/js/runtime/status-ui-helpers.js', ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']],
-    ['music_app/static/css/mobile-layout.css', ['selected-artist', 'all-artists']],
+    ['music_app/static/css/mobile-layout.css', ['selected-artist', 'all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/static/js/runtime/discovery-center-navigation.js', ['search-browse', 'all-artists', 'app-open-all-artists', 'artist-tree-scroll-navigation']],
   ];
   for (const [changedPath, expectedTargets] of cases) {

@@ -44,6 +44,17 @@ function buildRootGalleryPageUrl(view) {
   return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
 }
 
+function retainRootGalleryAnchorMetadata(currentPage = {}, nextPage = {}) {
+  if (String(nextPage.anchor_artist || '').trim()) return nextPage;
+  if (!String(currentPage.anchor_artist || '').trim()) return nextPage;
+  return {
+    ...nextPage,
+    anchor_artist: currentPage.anchor_artist,
+    anchor_offset: currentPage.anchor_offset,
+    anchor_group_artist: currentPage.anchor_group_artist,
+  };
+}
+
 async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -114,7 +125,7 @@ async function loadNextRootGalleryPage() {
       gallery_page: restarted
         ? data.gallery_page
         : {
-          ...data.gallery_page,
+          ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
           previous_cursor: state.view.gallery_page?.previous_cursor || null,
           has_previous: Boolean(state.view.gallery_page?.has_previous),
         },
@@ -1010,7 +1021,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     payload = {
       ...payload,
       artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
-      gallery_page: next.gallery_page,
+      gallery_page: retainRootGalleryAnchorMetadata(payload.gallery_page, next.gallery_page),
     };
   }
   return null;
@@ -1032,6 +1043,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
   const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
+  const retainedRootGalleryPage = rootRefreshCoverage > 0 ? state.view?.gallery_page : null;
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -1162,6 +1174,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
     if (rootRefreshCoverage > 0) {
+      data = {
+        ...data,
+        gallery_page: retainRootGalleryAnchorMetadata(retainedRootGalleryPage, data.gallery_page),
+      };
       const ownsRefresh = () => {
         if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
           || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;

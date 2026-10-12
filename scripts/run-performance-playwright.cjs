@@ -338,13 +338,14 @@ const PERFORMANCE_TARGETS = {
     fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
     coverageClass: 'real-app-library-browse-load',
     coverageDescription: 'Real local large-library Artist Tree jump alignment, reverse paging stability, complete groups, and early root continuation coverage.',
-    specPath: 'tests/e2e/syntheticLargeLibrary/artistTreeScrollNavigation.spec.js',
-    grep: 'FTC-GALLERY-NAV-032',
+    specPath: 'tests/e2e/syntheticLargeLibrary',
+    grep: 'FTC-GALLERY-NAV-03(?:2|3)',
     aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
-    casePattern: 'FTC-GALLERY-NAV-032',
+    casePattern: 'FTC-GALLERY-NAV-03(?:2|3)',
     casePatterns: [
       'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
       'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+      'long-press Scroll, album, Back restores an artist beyond the first root page',
     ],
     measurementExpected: false,
     env: {

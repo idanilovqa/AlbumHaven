@@ -2315,6 +2315,10 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
+  const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
-  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
+  const requestUrl = options.galleryAnchorArtist
+    ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })
+    : parentViewUrl;
+  fetchAndRender(requestUrl, false, options);
 }

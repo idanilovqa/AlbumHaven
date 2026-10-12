@@ -132,16 +132,45 @@ function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl
     ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
   return previous?.parentViewUrl ?? restored?.parentViewUrl ?? viewUrl;
 }
+function resolveMobileParentGalleryAnchorArtist(descriptor, previous, snapshot = {}, captured = '') {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  return String(
+    previous?.parentGalleryAnchorArtist ?? restored?.parentGalleryAnchorArtist ?? captured,
+  ).trim();
+}
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
   const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
   const atParent = !Number.isSafeInteger(parentPosition) || !Number.isSafeInteger(destinationPosition)
     || parentPosition === destinationPosition;
-  const position = atParent ? descriptor?.parentScrollPosition : null;
-  const options = { preserveScroll: true };
+  const galleryAnchorArtist = atParent
+    ? String(descriptor?.parentGalleryAnchorArtist || '').trim()
+    : '';
+  if (
+    galleryAnchorArtist
+    && typeof state !== 'undefined'
+    && galleryAnchorArtist === String(state.view?.gallery_page?.anchor_artist || '').trim()
+  ) {
+    const mountedGalleryArtist = String(
+      state.view?.gallery_page?.anchor_group_artist || galleryAnchorArtist,
+    ).trim();
+    if (
+      typeof virtualGrid !== 'undefined'
+      && virtualGrid?.scrollToArtist?.(mountedGalleryArtist)
+    ) {
+      stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
+      return;
+    }
+  }
+  const position = atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
+  const options = { preserveScroll: !galleryAnchorArtist };
   // Root '/' can display the canonical album gallery as well as Home. Retain
   // the owning view route, not its data, through this page's history entry.
   if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
+  if (galleryAnchorArtist) {
+    options.galleryAnchorArtist = galleryAnchorArtist;
+  }
   if (position) {
     options.preserveAbsoluteScroll = true;
     options.absoluteScrollPosition = position;
@@ -154,6 +183,7 @@ function restoreMobileGalleryParent(descriptor) {
   }
   if (
     atParent
+    && !galleryAnchorArtist
     && descriptor?.parentScrollAnchor
     && typeof virtualGrid !== 'undefined'
     && typeof virtualGrid?.restoreScrollAnchor === 'function'
@@ -181,6 +211,12 @@ function presentMobilePage(descriptor) {
   );
   descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
     mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
+  descriptor.parentGalleryAnchorArtist = resolveMobileParentGalleryAnchorArtist(
+    descriptor,
+    previous,
+    window.history.state || {},
+    mobilePageState.pages.length ? '' : state.view?.gallery_page?.anchor_artist,
+  );
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);

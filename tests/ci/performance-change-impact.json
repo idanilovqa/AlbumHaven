@@ -165,7 +165,8 @@
       ],
       "targets": [
         "selected-artist",
-        "all-artists"
+        "all-artists",
+        "artist-tree-scroll-navigation"
       ]
     },
     {

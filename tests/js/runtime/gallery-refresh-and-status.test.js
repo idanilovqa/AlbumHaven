@@ -6742,6 +6742,46 @@ test('bounded root refresh reconstructs loaded coverage atomically with fresh al
   assert.equal(f.context.state.view.gallery_page.next_cursor, 'fresh-150');
 });
 
+test('bounded root refresh retains transient anchor metadata through continuation pages', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.gallery_page.anchor_artist = 'Battlelore';
+  f.context.state.view.gallery_page.anchor_group_artist = 'Battlelore';
+
+  const request = f.start();
+  await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));
+  await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+  await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+
+  assert.equal(await request, true);
+  assert.equal(f.context.state.view.gallery_page.anchor_artist, 'Battlelore');
+  assert.equal(f.context.state.view.gallery_page.anchor_group_artist, 'Battlelore');
+});
+
+test('bounded root refresh prefers an authoritative replacement anchor before retaining it through continuations', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.gallery_page.anchor_artist = 'Artist A';
+  f.context.state.view.gallery_page.anchor_offset = 100;
+  f.context.state.view.gallery_page.anchor_group_artist = 'Artist A';
+
+  const first = boundedRootRefreshPage(0);
+  first.gallery_page = {
+    ...first.gallery_page,
+    anchor_artist: 'Artist B',
+    anchor_offset: 200,
+    anchor_group_artist: 'Artist B',
+  };
+
+  const request = f.start();
+  await resolveBoundedRootRefreshPage(f, 0, first);
+  await resolveBoundedRootRefreshPage(f, 1, boundedRootRefreshPage(50));
+  await resolveBoundedRootRefreshPage(f, 2, boundedRootRefreshPage(100));
+
+  assert.equal(await request, true);
+  assert.equal(f.context.state.view.gallery_page.anchor_artist, 'Artist B');
+  assert.equal(f.context.state.view.gallery_page.anchor_offset, 200);
+  assert.equal(f.context.state.view.gallery_page.anchor_group_artist, 'Artist B');
+});
+
 test('bounded root refresh accepts authoritative terminal shrink without fetching the whole catalog', async () => {
   const f = boundedRootRefreshFixture();
   const request = f.start();

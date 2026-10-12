@@ -14869,6 +14869,17 @@ function buildRootGalleryPageUrl(view) {
   return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
 }
 
+function retainRootGalleryAnchorMetadata(currentPage = {}, nextPage = {}) {
+  if (String(nextPage.anchor_artist || '').trim()) return nextPage;
+  if (!String(currentPage.anchor_artist || '').trim()) return nextPage;
+  return {
+    ...nextPage,
+    anchor_artist: currentPage.anchor_artist,
+    anchor_offset: currentPage.anchor_offset,
+    anchor_group_artist: currentPage.anchor_group_artist,
+  };
+}
+
 async function loadNextRootGalleryPage() {
   const view = state.view;
   const page = view?.gallery_page;
@@ -14939,7 +14950,7 @@ async function loadNextRootGalleryPage() {
       gallery_page: restarted
         ? data.gallery_page
         : {
-          ...data.gallery_page,
+          ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
           previous_cursor: state.view.gallery_page?.previous_cursor || null,
           has_previous: Boolean(state.view.gallery_page?.has_previous),
         },
@@ -15835,7 +15846,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     payload = {
       ...payload,
       artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
-      gallery_page: next.gallery_page,
+      gallery_page: retainRootGalleryAnchorMetadata(payload.gallery_page, next.gallery_page),
     };
   }
   return null;
@@ -15857,6 +15868,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
   const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
+  const retainedRootGalleryPage = rootRefreshCoverage > 0 ? state.view?.gallery_page : null;
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -15987,6 +15999,10 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
     if (rootRefreshCoverage > 0) {
+      data = {
+        ...data,
+        gallery_page: retainRootGalleryAnchorMetadata(retainedRootGalleryPage, data.gallery_page),
+      };
       const ownsRefresh = () => {
         if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
           || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
@@ -42824,8 +42840,12 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
+  const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
-  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
+  const requestUrl = options.galleryAnchorArtist
+    ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })
+    : parentViewUrl;
+  fetchAndRender(requestUrl, false, options);
 }
 
 // END js/runtime/bootstrap-gallery-event-handlers.js
@@ -42966,16 +42986,45 @@ function resolveMobileParentViewUrl(descriptor, previous, snapshot = {}, viewUrl
     ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
   return previous?.parentViewUrl ?? restored?.parentViewUrl ?? viewUrl;
 }
+function resolveMobileParentGalleryAnchorArtist(descriptor, previous, snapshot = {}, captured = '') {
+  const restored = Array.isArray(snapshot.mobilePages)
+    ? snapshot.mobilePages.find(page => page.kind === descriptor.kind && page.albumKey === descriptor.albumKey) : null;
+  return String(
+    previous?.parentGalleryAnchorArtist ?? restored?.parentGalleryAnchorArtist ?? captured,
+  ).trim();
+}
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
   const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
   const atParent = !Number.isSafeInteger(parentPosition) || !Number.isSafeInteger(destinationPosition)
     || parentPosition === destinationPosition;
-  const position = atParent ? descriptor?.parentScrollPosition : null;
-  const options = { preserveScroll: true };
+  const galleryAnchorArtist = atParent
+    ? String(descriptor?.parentGalleryAnchorArtist || '').trim()
+    : '';
+  if (
+    galleryAnchorArtist
+    && typeof state !== 'undefined'
+    && galleryAnchorArtist === String(state.view?.gallery_page?.anchor_artist || '').trim()
+  ) {
+    const mountedGalleryArtist = String(
+      state.view?.gallery_page?.anchor_group_artist || galleryAnchorArtist,
+    ).trim();
+    if (
+      typeof virtualGrid !== 'undefined'
+      && virtualGrid?.scrollToArtist?.(mountedGalleryArtist)
+    ) {
+      stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
+      return;
+    }
+  }
+  const position = atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
+  const options = { preserveScroll: !galleryAnchorArtist };
   // Root '/' can display the canonical album gallery as well as Home. Retain
   // the owning view route, not its data, through this page's history entry.
   if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
+  if (galleryAnchorArtist) {
+    options.galleryAnchorArtist = galleryAnchorArtist;
+  }
   if (position) {
     options.preserveAbsoluteScroll = true;
     options.absoluteScrollPosition = position;
@@ -42988,6 +43037,7 @@ function restoreMobileGalleryParent(descriptor) {
   }
   if (
     atParent
+    && !galleryAnchorArtist
     && descriptor?.parentScrollAnchor
     && typeof virtualGrid !== 'undefined'
     && typeof virtualGrid?.restoreScrollAnchor === 'function'
@@ -43015,6 +43065,12 @@ function presentMobilePage(descriptor) {
   );
   descriptor.parentViewUrl = resolveMobileParentViewUrl(descriptor, previous, window.history.state || {},
     mobilePageState.pages[0]?.parentViewUrl || buildUrl(state.view));
+  descriptor.parentGalleryAnchorArtist = resolveMobileParentGalleryAnchorArtist(
+    descriptor,
+    previous,
+    window.history.state || {},
+    mobilePageState.pages.length ? '' : state.view?.gallery_page?.anchor_artist,
+  );
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);

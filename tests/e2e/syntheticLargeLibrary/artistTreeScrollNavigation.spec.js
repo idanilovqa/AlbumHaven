@@ -24,6 +24,23 @@ async function jumpToArtist(ui, artist, { expectLoader = null } = {}) {
     chromeMatches: true,
     rowsAligned: true,
     firstCardUncut: true,
+  }).catch(async error => {
+    // parity-check: allow-read-only-measurement-evaluate -- retain authoritative anchor ownership when exact visual placement fails
+    const evidence = await ui.page.evaluate(requestedArtist => ({
+      requestedArtist,
+      anchorArtist: state.view?.gallery_page?.anchor_artist || null,
+      anchorGroupArtist: state.view?.gallery_page?.anchor_group_artist || null,
+      offset: state.view?.gallery_page?.offset ?? null,
+      sidebarCount: (state.view?.artists_sidebar || []).length,
+      loadedArtists: (state.view?.artist_groups || []).map(group => group.artist),
+      renderedArtists: [...document.querySelectorAll('[data-scroll-artist]')]
+        .map(element => element.getAttribute('data-scroll-artist')),
+    }), artist);
+    await test.info().attach('failed-artist-jump-ownership', {
+      body: JSON.stringify(evidence, null, 2),
+      contentType: 'application/json',
+    });
+    throw error;
   });
   if (loaderObservation) expect(await ui.finishLoaderVisibility(loaderObservation)).toBe(false);
 }

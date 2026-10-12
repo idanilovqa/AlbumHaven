@@ -179,6 +179,25 @@ def test_library_watch_service_starts_and_stops_injected_source_once(tmp_path: P
     assert source.is_alive is False
 
 
+def test_library_watch_service_timed_stop_bounds_lock_wait(monkeypatch):
+    import time
+    from music_app.services import library_watch
+
+    calls = []
+
+    class Lock:
+        def acquire(self, *, timeout):
+            calls.append(timeout)
+            return False
+
+    service = library_watch.LibraryWatchService(None, lambda _event: None)
+    service._lock = Lock()
+    monkeypatch.setattr(time, "monotonic", lambda: 100.0)
+    with pytest.raises(TimeoutError, match="watcher.*deadline"):
+        service.stop(timeout=0.25)
+    assert calls == [0.25]
+
+
 def test_library_watch_service_replaces_roots_by_restarting_source():
     from music_app.services.library_reconciliation import LibraryWatchService
 

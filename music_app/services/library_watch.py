@@ -576,14 +576,28 @@ class LibraryWatchService:
             self._started = True
             return True
 
-    def stop(self) -> bool:
-        with self._lock:
+    def stop(self, *, timeout: float | None = None) -> bool:
+        from time import monotonic
+
+        deadline = None if timeout is None else monotonic() + max(0.0, timeout)
+        acquired = (
+            self._lock.acquire()
+            if deadline is None
+            else self._lock.acquire(timeout=max(0.0, deadline - monotonic()))
+        )
+        if not acquired:
+            raise TimeoutError("watcher stop deadline exhausted waiting for lifecycle lock")
+        try:
             if not (self._started or self._start_requested):
                 return False
-            self._event_source.stop(timeout=self._stop_timeout)
+            self._event_source.stop(
+                timeout=self._stop_timeout if deadline is None else max(0.0, deadline - monotonic())
+            )
             self._start_requested = False
             self._started = False
-        return True
+            return True
+        finally:
+            self._lock.release()
 
     def replace_roots(self, roots: Iterable[Mapping[str, object]]) -> bool:
         with self._lock:

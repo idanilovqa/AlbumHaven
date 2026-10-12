@@ -293,6 +293,7 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
     from music_app.services.library_watch import LibraryEvent, LibraryEventKind
 
     callbacks, watcher_calls = {}, []
+    recovery_reports = []
     fail_dirty = {"enabled": False}
     library_id = {"value": 19}
     health = _health_module()
@@ -347,13 +348,39 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
         def start(self):
             return True
 
-        def stop(self):
+        def stop(self, *, timeout=None):
             return True
 
         def replace_roots(self, roots):
             if any(root.get("id") == "attach-failed" for root in roots):
                 raise OSError("watch attachment unavailable")
 
+    from music_app.services import watcher_session_recovery
+
+    class SessionController:
+        def __init__(self, _repository):
+            pass
+
+        def start(self, **values):
+            assert values["library_id"] == 19
+            return ()
+
+        def expand_participants(self, root_ids):
+            pass
+
+        def set_participants(self, root_ids):
+            pass
+
+        def report_admission_failure(self, *, logical_root_ids):
+            recovery_reports.append(logical_root_ids)
+
+        def stop_retry_and_flush(self, *, deadline):
+            pass
+
+        def finish(self):
+            return True
+
+    monkeypatch.setattr(watcher_session_recovery, "WatcherSessionRecoveryController", SessionController)
     monkeypatch.setattr(library_watch_health, "LibraryWatchHealthService", lambda _store: service)
     monkeypatch.setattr(cover_preview_backfill, "CoverPreviewBackfill", Backfill)
     monkeypatch.setattr(scan_jobs_postgres, "PostgresScanJobRepository", Repository)
@@ -363,7 +390,7 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
         WatcherRepository,
     )
     monkeypatch.setattr(library_reconciliation, "LibraryWatchService", WatchService)
-    monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", lambda _roots: object())
+    monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", lambda _roots, **_kwargs: object())
     monkeypatch.setattr(library_roots, "get_library_roots", lambda _config: ())
     monkeypatch.setattr(log_history, "resolve_media_host_history_scope", lambda _config: None)
     monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
@@ -399,11 +426,7 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
         async with app.router.lifespan_context(app):
             callbacks["emit_event"](created)
             library_id["value"] = None
-            with pytest.raises(
-                RuntimeError,
-                match="durable|library",
-            ):
-                callbacks["emit_event"](created)
+            callbacks["emit_event"](created)
             library_id["value"] = 19
             callbacks["emit_event"](
                 LibraryEvent(
@@ -438,11 +461,11 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
     asyncio.run(exercise_callbacks())
 
     assert {(problem.root_id, problem.state) for problem in service.load_problems()} == {
-        ("attach-failed", "root_unavailable"),
         ("main-root", "overflow"),
     }
     assert service.root_allows_destructive_reconciliation("main-root") is False
-    assert watcher_calls[:1] == [
+    assert recovery_reports == [("database-outage",), ("attach-failed",)]
+    assert watcher_calls[:2] == [
         (
             "accept",
             {
@@ -451,10 +474,10 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
                 "accepted_at": observed_at,
             },
         ),
-    ]
+    ] * 2
     assert [
         (kind, {key: value for key, value in values.items() if key != "observed_at"})
-        for kind, values in watcher_calls[1:]
+        for kind, values in watcher_calls[2:]
     ] == [
         (
             "problem",
@@ -474,19 +497,10 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
                 ),
             },
         ),
-        (
-            "problem",
-            {
-                "library_id": 19,
-                "problem": library_event_coordinator.CoordinatorProblem(
-                    "root_unavailable", "attach-failed"
-                ),
-            },
-        ),
     ]
     assert all(
         values["observed_at"].utcoffset() is not None
-        for _kind, values in watcher_calls[1:]
+        for _kind, values in watcher_calls[2:]
     )
 
 

@@ -539,7 +539,7 @@ def test_asgi_lifespan_stops_partially_started_real_watch_service_before_other_s
             calls.append("coordinator-stop")
 
     class PartiallyStartedEventSource:
-        def __init__(self, _roots) -> None:
+        def __init__(self, _roots, *, report_unattributed_failure=None) -> None:
             pass
 
         @property

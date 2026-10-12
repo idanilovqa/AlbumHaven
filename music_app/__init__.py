@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
 import threading
+import time
+from uuid import uuid4
 from pathlib import Path
 from types import SimpleNamespace
 from typing import AsyncIterator
@@ -150,7 +152,20 @@ def _stop_library_watch_runtime(
     event_coordinator,
     targeted_executor=None,
     targeted_reconciler=None,
+    watcher_session_controller=None,
+    deadline=None,
 ) -> None:
+    if watcher_session_controller is not None:
+        if deadline is None:
+            deadline = time.monotonic() + 5.0
+        if watch_service is not None:
+            watch_service.stop(timeout=max(0.0, deadline - time.monotonic()))
+        watcher_session_controller.stop_retry_and_flush(deadline=deadline)
+        if not watcher_session_controller.finish():
+            raise RuntimeError("watcher runtime session finish failed")
+        if event_coordinator is not None:
+            event_coordinator.stop()
+        return
     try:
         if watch_service is not None:
             watch_service.stop()
@@ -338,7 +353,6 @@ def create_asgi_app():
     )
     from music_app.services.library_roots import get_library_roots
     from music_app.services.library_event_coordinator import (
-        CoordinatorProblem,
         LibraryEventCoordinator,
     )
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
@@ -379,6 +393,27 @@ def create_asgi_app():
         )
         runtime.library_event_coordinator = None
         runtime.library_watch_service = None
+        watcher_session_controller = None
+        watcher_lifecycle_lock = threading.Lock()
+        watcher_stopping = False
+
+        def stop_library_watcher() -> None:
+            nonlocal watcher_stopping
+            watcher_stopping = True
+            deadline = time.monotonic() + 5.0
+            if not watcher_lifecycle_lock.acquire(
+                timeout=max(0.0, deadline - time.monotonic())
+            ):
+                raise TimeoutError("watcher lifecycle stop deadline exhausted")
+            try:
+                _stop_library_watch_runtime(
+                    watch_service=runtime.library_watch_service,
+                    event_coordinator=runtime.library_event_coordinator,
+                    watcher_session_controller=watcher_session_controller,
+                    deadline=deadline,
+                )
+            finally:
+                watcher_lifecycle_lock.release()
 
         async def shutdown_resources() -> None:
             warmup = _app.state.library_warmup_thread
@@ -396,10 +431,7 @@ def create_asgi_app():
                 ),
                 (
                     "library filesystem watcher",
-                    lambda: _stop_library_watch_runtime(
-                        watch_service=runtime.library_watch_service,
-                        event_coordinator=runtime.library_event_coordinator,
-                    ),
+                    stop_library_watcher,
                 ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
@@ -473,15 +505,6 @@ def create_asgi_app():
         if watcher_library_id is not None:
             configure_durable_health(watcher_library_id)
 
-        def watcher_library() -> int | None:
-            nonlocal watcher_library_id
-            if host_scope is None and targeted_database_url:
-                watcher_library_id = scan_jobs.resolve_local_library_id()
-                if watcher_library_id is not None:
-                    _app.state.media_host_library_id = watcher_library_id
-                    configure_durable_health(watcher_library_id)
-            return watcher_library_id
-
         def observation_time(value) -> datetime:
             if not isinstance(value, datetime):
                 return datetime.now(timezone.utc)
@@ -490,7 +513,7 @@ def create_asgi_app():
             return value.astimezone(timezone.utc)
 
         def accept_library_watch_event(event) -> None:
-            library_id = watcher_library()
+            library_id = watcher_library_id
             if library_id is None or watcher_recovery is None:
                 raise RuntimeError("durable watcher admission is unavailable")
             watcher_recovery.accept_event(
@@ -500,7 +523,7 @@ def create_asgi_app():
             )
 
         def persist_library_watch_problem(problem) -> None:
-            library_id = watcher_library()
+            library_id = watcher_library_id
             if library_id is None or watcher_recovery is None:
                 raise RuntimeError("durable watcher admission is unavailable")
             watcher_recovery.record_problem(
@@ -509,13 +532,48 @@ def create_asgi_app():
                 observed_at=datetime.now(timezone.utc),
             )
 
+        configured_root_ids = tuple(str(root["id"]) for root in targeted_roots)
+
+        def report_watcher_admission_failure(logical_root_ids) -> None:
+            if watcher_session_controller is not None:
+                watcher_session_controller.report_admission_failure(
+                    logical_root_ids=tuple(logical_root_ids)
+                )
+
         try:
+            if watcher_recovery is not None:
+                from music_app.services.watcher_session_recovery import (
+                    WatcherSessionRecoveryController,
+                )
+
+                if watcher_library_id is None:
+                    watcher_library_id = scan_jobs.resolve_local_library_id()
+                if (
+                    isinstance(watcher_library_id, bool)
+                    or not isinstance(watcher_library_id, int)
+                    or watcher_library_id <= 0
+                ):
+                    raise RuntimeError("durable watcher library is unavailable")
+                _app.state.media_host_library_id = watcher_library_id
+                configure_durable_health(watcher_library_id)
+                controller = WatcherSessionRecoveryController(watcher_recovery)
+                controller.start(
+                    library_id=watcher_library_id,
+                    session_token=uuid4(),
+                    logical_root_ids=configured_root_ids,
+                    started_at=datetime.now(timezone.utc),
+                )
+                watcher_session_controller = controller
             runtime.library_event_coordinator = LibraryEventCoordinator(
                 accept_library_watch_event,
                 record_problem=persist_library_watch_problem,
+                report_admission_failure=report_watcher_admission_failure,
             )
             runtime.library_watch_service = LibraryWatchService(
-                WatchdogLibraryEventSource(targeted_roots),
+                WatchdogLibraryEventSource(
+                    targeted_roots if watcher_session_controller is not None else (),
+                    report_unattributed_failure=report_watcher_admission_failure,
+                ),
                 runtime.library_event_coordinator.accept,
             )
             _app.state.library_watch_service = runtime.library_watch_service
@@ -533,13 +591,26 @@ def create_asgi_app():
             raise
 
         def replace_live_library_roots(roots) -> None:
+            nonlocal configured_root_ids
             root_definitions = tuple(dict(root) for root in roots)
-            try:
-                runtime.library_watch_service.replace_roots(root_definitions)
-            except Exception:
-                for root in root_definitions:
-                    persist_library_watch_problem(CoordinatorProblem("root_unavailable", str(root.get("id") or "")))
-                raise
+            requested_ids = tuple(str(root["id"]) for root in root_definitions)
+            with watcher_lifecycle_lock:
+                if watcher_stopping:
+                    raise RuntimeError("watcher runtime is stopping")
+                if watcher_session_controller is None:
+                    raise RuntimeError("durable watcher session is unavailable")
+                watcher_session_controller.expand_participants(requested_ids)
+                affected_ids = tuple(dict.fromkeys((*configured_root_ids, *requested_ids)))
+                try:
+                    runtime.library_watch_service.replace_roots(root_definitions)
+                    configured_root_ids = requested_ids
+                    watcher_session_controller.set_participants(requested_ids)
+                except Exception:
+                    try:
+                        report_watcher_admission_failure(affected_ids)
+                    except Exception:
+                        logging.getLogger(__name__).error("watcher replacement recovery reporting failed")
+                    raise
 
         runtime.replace_library_watch_roots = replace_live_library_roots
         _app.state.replace_library_watch_roots = replace_live_library_roots

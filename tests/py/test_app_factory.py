@@ -220,7 +220,7 @@ def _run_asgi_http_get(app, path: str) -> tuple[int, dict[str, str], bytes]:
     return run_asgi_request(app, "GET", path)
 
 
-def _run_asgi_lifespan(app) -> list[dict[str, object]]:
+def _run_asgi_lifespan(app, *, after_startup=None) -> list[dict[str, object]]:
     async def call() -> list[dict[str, object]]:
         sent: list[dict[str, object]] = []
         events = iter(
@@ -235,6 +235,8 @@ def _run_asgi_lifespan(app) -> list[dict[str, object]]:
 
         async def send(message: dict[str, object]) -> None:
             sent.append(message)
+            if message["type"] == "lifespan.startup.complete" and after_startup is not None:
+                after_startup()
 
         await app({"type": "lifespan", "asgi": {"version": "3.0"}}, receive, send)
         return sent
@@ -850,6 +852,53 @@ def test_watcher_session_replacement_failures_retain_union_until_successful_set(
     asyncio.run(exercise())
 
 
+def test_watcher_session_shutdown_timeout_rejects_later_replacements(monkeypatch):
+    harness = _watcher_session_lifecycle_harness(monkeypatch)
+    entered = threading.Event()
+    release = threading.Event()
+    errors = []
+
+    async def exercise():
+        worker = None
+        try:
+            with pytest.raises(RuntimeError, match="watcher lifecycle stop deadline"):
+                async with harness.app.router.lifespan_context(harness.app):
+                    watch = harness.callbacks["watch"]
+                    original_replace = watch.replace_roots
+
+                    def blocked_replace(roots):
+                        entered.set()
+                        assert release.wait(10), "replacement was not released"
+                        return original_replace(roots)
+
+                    monkeypatch.setattr(watch, "replace_roots", blocked_replace)
+
+                    def replace():
+                        try:
+                            harness.app.state.replace_library_watch_roots(
+                                ({"id": "root-b", "path": "D:/Music"},)
+                            )
+                        except BaseException as exc:
+                            errors.append(exc)
+
+                    worker = threading.Thread(target=replace)
+                    worker.start()
+                    assert entered.wait(2)
+        finally:
+            release.set()
+            if worker is not None:
+                worker.join(2)
+                assert not worker.is_alive()
+        assert errors == []
+        assert harness.state["open"] is True
+        with pytest.raises(RuntimeError, match="stopping"):
+            harness.app.state.replace_library_watch_roots(
+                ({"id": "root-c", "path": "E:/Music"},)
+            )
+
+    asyncio.run(exercise())
+
+
 def test_watcher_session_concurrent_replacements_serialize_complete_transition(
     monkeypatch,
 ):
@@ -1180,7 +1229,70 @@ def test_library_warmup_stop_during_postgres_prewarm_skips_relation_projection()
     assert relation_calls == []
 
 
-def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch):
+@pytest.fixture
+def stub_watcher_session(monkeypatch):
+    from music_app.services import (
+        cover_preview_backfill,
+        library_reconciliation,
+        postgres_connections,
+        scan_jobs_postgres,
+        watcher_session_recovery,
+    )
+
+    class Session:
+        def __init__(self, _repository):
+            pass
+
+        def start(self, **_kwargs):
+            return ()
+
+        def stop_retry_and_flush(self, *, deadline):
+            pass
+
+        def finish(self):
+            return True
+
+    class Backfill:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def note_foreground_activity(self):
+            pass
+
+    class Source:
+        is_alive = False
+
+        def __init__(self, _roots, **_kwargs):
+            pass
+
+        def start(self, _publish):
+            pass
+
+        def stop(self, *, timeout):
+            pass
+
+    monkeypatch.setattr(watcher_session_recovery, "WatcherSessionRecoveryController", Session)
+    monkeypatch.setattr(library_reconciliation, "WatchdogLibraryEventSource", Source)
+    monkeypatch.setattr(postgres_connections, "prewarm_connection_pool", lambda _url: None)
+    monkeypatch.setattr(
+        cover_preview_backfill,
+        "CoverPreviewBackfill",
+        Backfill,
+    )
+    monkeypatch.setattr(
+        scan_jobs_postgres.PostgresScanJobRepository,
+        "resolve_local_library_id",
+        lambda _self: 1,
+    )
+
+
+def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fails(monkeypatch, stub_watcher_session):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
         lambda _runtime: None,
@@ -1212,7 +1324,7 @@ def test_create_asgi_app_lifespan_starts_when_background_relation_projection_fai
     ]
 
 
-def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch):
+def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(monkeypatch, stub_watcher_session):
     monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_scan_metadata_on_startup",
         lambda _runtime: None,
@@ -1314,6 +1426,7 @@ def test_postgres_lifespan_cancels_relation_projection_warmup_before_shutdown(mo
 def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch,
     caplog,
+    stub_watcher_session,
 ):
     from config import Config
     from music_app import create_asgi_app
@@ -1321,6 +1434,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
 
     monkeypatch.setattr(state, "hydrate_runtime_scan_metadata_on_startup", lambda _runtime: None)
     calls = []
+    projection_ready = threading.Event()
     database_url = "postgresql://album_haven_app@localhost/app"
 
     def fail_prewarm(url):
@@ -1342,7 +1456,7 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     monkeypatch.setattr(
         state,
         "ensure_runtime_relation_projection_ready",
-        lambda _runtime, **_kwargs: calls.append("relations"),
+        lambda _runtime, **_kwargs: (calls.append("relations"), projection_ready.set()),
     )
     monkeypatch.setattr(
         state,
@@ -1351,8 +1465,11 @@ def test_postgres_lifespan_logs_pool_prewarm_failure_and_continues_relations(
     )
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
 
+    def wait_for_projection():
+        assert projection_ready.wait(2), "relation warmup did not complete"
+
     with caplog.at_level(logging.ERROR):
-        messages = _run_asgi_lifespan(create_asgi_app())
+        messages = _run_asgi_lifespan(create_asgi_app(), after_startup=wait_for_projection)
 
     assert messages == [
         {"type": "lifespan.startup.complete"},
@@ -1451,7 +1568,7 @@ def test_create_asgi_app_lifespan_hands_incomplete_metadata_repair_to_durable_sc
 
 
 @pytest.mark.parametrize("root_query", [{}, {"surface": "albums"}], ids=["home", "albums"])
-def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch, root_query):
+def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_available(monkeypatch, root_query, stub_watcher_session):
     from config import Config
     from music_app import create_asgi_app
     from music_app.routes import web_asgi

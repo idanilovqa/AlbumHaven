@@ -57,3 +57,28 @@ test('benchmark config fixes one worker and disables captured media', () => {
     }
   }
 });
+
+test('observed analytics script stays blocked without failing authentication', async () => {
+  const { installReadOnlyGuard } = require('../e2e/support/sandbox3ReadOnlyGuard.cjs');
+  let handler;
+  const guard = await installReadOnlyGuard({ route: async (_, callback) => { handler = callback; } }, true);
+  let aborted = 0;
+  let continued = 0;
+  await handler({
+    request: () => ({ url: () => 'https://static.cloudflareinsights.com/beacon.min.js/v4bc70e2c01a94c73b74392e4234840661791215815920', method: () => 'GET', resourceType: () => 'script' }),
+    abort: async () => { aborted += 1; }, continue: async () => { continued += 1; },
+  });
+  assert.equal(aborted, 1);
+  assert.equal(continued, 0);
+  assert.doesNotThrow(() => guard.assertClean());
+});
+test('analytics classification never forgives writes, lookalike hosts or other resources', async () => {
+  const { installReadOnlyGuard } = require('../e2e/support/sandbox3ReadOnlyGuard.cjs');
+  const script = 'https://static.cloudflareinsights.com/beacon.min.js/v4bc70e2c01a94c73b74392e4234840661791215815920';
+  for (const [url, method, resourceType] of [[script, 'POST', 'script'], [script, 'GET', 'fetch'], [script.replace('https:', 'http:'), 'GET', 'script'], [script.replace('.com/', '.com.evil.test/'), 'GET', 'script'], [script.replace('beacon.min.js', 'other.js'), 'GET', 'script'], ['https://static.cloudflareinsights.com/beacon.min.js/unversioned', 'GET', 'script']]) {
+    let handler;
+    const guard = await installReadOnlyGuard({ route: async (_, callback) => { handler = callback; } }, true);
+    await handler({ request: () => ({ url: () => url, method: () => method, resourceType: () => resourceType }), abort: async () => {}, continue: async () => assert.fail('forbidden request continued') });
+    assert.throws(() => guard.assertClean());
+  }
+});

@@ -19,7 +19,12 @@ async function installReadOnlyGuard(context, authenticating = false) {
   await context.route('**/*', async route => {
     const request = route.request();
     if (permittedRequest(request.url(), request.method(), authenticating)) return route.continue();
-    violations += 1;
+    const url = new URL(request.url());
+    const blockedAnalyticsScript = request.method() === 'GET'
+      && request.resourceType?.() === 'script'
+      && url.origin === 'https://static.cloudflareinsights.com'
+      && /^\/beacon\.min\.js\/v[0-9a-f]{32,64}$/.test(url.pathname);
+    if (!blockedAnalyticsScript) violations += 1;
     await route.abort('blockedbyclient');
   });
   return { finishAuthentication() { authenticating = false; }, assertClean() { if (violations) throw new Error('Benchmark blocked a forbidden request.'); } };

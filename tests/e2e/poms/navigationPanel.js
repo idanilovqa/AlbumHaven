@@ -293,6 +293,30 @@ export class NavigationPanel extends BasePage {
     }, String(expectedArtist || '').trim());
   }
 
+  async readSidebarSelectionSnapshot() {
+    // parity-check: allow-read-only-measurement-evaluate -- failure-only snapshot of production selection and mounted sidebar rows
+    return this.page.evaluate((sidebarArtistSelector) => {
+      const runtime = typeof state !== 'undefined' ? state : null;
+      const view = runtime?.view || {};
+      return {
+        query: view.query,
+        selectedArtist: view.selected_artist,
+        relatedArtists: view.related_artists,
+        allArtistsActive: view.all_artists_active,
+        pendingSelectedArtist: runtime?.ui?.pendingSidebarSelectedArtist,
+        pendingAllArtists: runtime?.ui?.pendingSidebarAllArtistsActive,
+        pendingRevealArtist: runtime?.ui?.pendingSidebarRevealArtist,
+        pendingViewTransition: Boolean(runtime?.ui?.pendingViewTransition),
+        scanPageReturnContext: Boolean(runtime?.ui?.scanPageReturnContext),
+        rows: Array.from(document.querySelectorAll(sidebarArtistSelector), row => ({
+          artist: row.getAttribute('data-sidebar-artist'),
+          classes: row.className,
+          current: row.getAttribute('aria-current'),
+        })),
+      };
+    }, this.sidebarArtistSelector);
+  }
+
   async readRuntimeSidebarArtistNames() {
     // parity-check: allow-read-only-measurement-evaluate -- runtime view is the canonical full tree behind the virtualized sidebar window
     return this.page.evaluate(() => (

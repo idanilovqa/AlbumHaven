@@ -41,6 +41,15 @@ const MAX_SELECTED_ARTIST_VIEW_DATA_BYTES = 2 * 1024 * 1024;
 const TAG_TYPING_PROBE = 'perf';
 
 test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
+  test.afterEach(async ({ navigationPanelActions }, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus) {
+      const snapshot = await navigationPanelActions.navigationPanel.readSidebarSelectionSnapshot();
+      await testInfo.attach('sidebar-selection-state.json', {
+        body: Buffer.from(JSON.stringify(snapshot, null, 2)),
+        contentType: 'application/json',
+      });
+    }
+  });
 
   test('Selected artist UI reports library_browse telemetry and timing', async ({
     coverLookupActions,

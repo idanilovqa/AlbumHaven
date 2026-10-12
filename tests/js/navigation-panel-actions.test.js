@@ -6,6 +6,34 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.join(__dirname, '..', '..');
 
+test('selection diagnostics report the runtime and mounted identities without changing them', async () => {
+  const { NavigationPanel } = await import('../e2e/poms/navigationPanel.js');
+  const previous = { state: global.state, document: global.document };
+  const runtime = {
+    view: { query: 'Devin Townsend', selected_artist: 'Devin Townsend', related_artists: ['IR8'] },
+    ui: { pendingSidebarSelectedArtist: 'Previous artist', pendingSidebarAllArtistsActive: false },
+  };
+  const before = JSON.stringify(runtime);
+  global.state = runtime;
+  global.document = { querySelectorAll(selector) {
+    assert.equal(selector, '#sidebar-list [data-sidebar-artist]');
+    return [{ className: 'artist-link', getAttribute: name => name === 'data-sidebar-artist' ? 'Devin Townsend' : null }];
+  } };
+  try {
+    const panel = Object.create(NavigationPanel.prototype);
+    panel.page = { evaluate: async (callback, argument) => callback(argument) };
+    const snapshot = await panel.readSidebarSelectionSnapshot();
+    assert.equal(snapshot.selectedArtist, 'Devin Townsend');
+    assert.equal(snapshot.pendingSelectedArtist, 'Previous artist');
+    assert.deepEqual(snapshot.relatedArtists, ['IR8']);
+    assert.deepEqual(snapshot.rows, [{ artist: 'Devin Townsend', classes: 'artist-link', current: null }]);
+    assert.equal(JSON.stringify(runtime), before);
+  } finally {
+    global.state = previous.state;
+    global.document = previous.document;
+  }
+});
+
 test('sidebar artist names use one bulk DOM read without changing list semantics', async () => {
   const moduleUrl = pathToFileURL(
     path.join(repoRoot, 'tests/e2e/actions/navigationPanelActions.js'),

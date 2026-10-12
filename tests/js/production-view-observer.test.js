@@ -261,6 +261,7 @@ for (const invalidation of ['document', 'category', 'completed mutation', 'empty
     }
     assert.equal(readCanonicalAlbumTargetEvidence(observer.read(), target).canonicalMatch, false,
       'retained historical family data must not validate a changed scope or library');
+    assert.equal(observer.read().retainedFamilyPayload, null);
   });
 }
 
@@ -1688,6 +1689,74 @@ test('accumulated root evidence rejects stale page revision and scope', async ()
     { gallery_page: { ...payload.gallery_page, next_cursor: 'other' } },
     { gallery_page: { ...payload.gallery_page, has_more: true } },
   ]) assert.equal(matchesAccumulatedRootProjection(payload, { ...projection, ...changed }), false, JSON.stringify(changed));
+});
+
+test('cleared search certifies only the exact restored server family', async () => {
+  const { ProductionViewObserver, readAppliedAlbumTargetEvidence } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const groups = ['Lead', 'Partner'].map(artist => ({ artist,
+    albums: [{ key: `${artist}:solo`, name: `${artist} Solo` }] }));
+  const source = { payload_tier: 'full', query: 'Partner', selected_artist: 'Partner',
+    visible_library_categories: ['main_library'], artist_groups: groups,
+    primary_artist_groups: groups.slice(1), family_artist_groups: groups.slice(0, 1) };
+  const search = request('http://localhost/view-data?q=Partner&category=main_library');
+  page.emit('request', search);
+  page.emit('response', response(search, source));
+  page.emit('requestfinished', search);
+  await flushPromises();
+  const clear = request('http://localhost/view-data?category=main_library&payload_tier=sidebar');
+  page.emit('request', clear);
+  page.emit('response', response(clear, { payload_tier: 'sidebar', artist_groups: [] }));
+  page.emit('requestfinished', clear);
+  await flushPromises();
+  const applied = { ...source, query: '', selected_artist: 'Lead', locationQuery: '',
+    locationArtist: 'Lead', surface: 'albums', authoritativeMountedFamily: true };
+  const target = { artist: 'Partner', album: 'Partner Solo' };
+  const evidence = (projection = applied, expected = target) =>
+    readAppliedAlbumTargetEvidence(observer.read(), projection, null, expected);
+  assert.equal(observer.read().latestFullPayload, null);
+  assert.equal(evidence().canonicalReadyMatch, true);
+  assert.equal(evidence().canonicalInventoryComplete, true);
+  assert.equal(evidence(applied, { artist: 'Guest', album: 'Foreign' }).canonicalMatch, false);
+  assert.equal(evidence({ ...applied, selected_artist: '', locationArtist: '' },
+    { artist: 'Guest', album: 'Foreign' }).canonicalInventoryComplete, false);
+  for (const changed of [
+    { query: 'Other' }, { locationQuery: 'Other' }, { locationArtist: 'Partner' },
+    { authoritativeMountedFamily: false }, { selected_artist: '' }, { busy: true },
+    { pendingViewTransition: true }, { surface: 'playlists' }, { gallery_scope: 'new_arrivals' },
+    { visible_library_categories: ['hoard'] }, { primary_filter_active: true },
+    { related_filter_artists: ['Partner'] },
+    { artist_groups: [{ artist: 'Partner', albums: [{ key: 'imposter', name: 'Partner Solo' }] }],
+      primary_artist_groups: [], family_artist_groups: [] },
+    { artist_groups: [{ artist: 'Partner', albums: [{ name: 'Partner Solo' }] }],
+      primary_artist_groups: [], family_artist_groups: [] },
+    { artist_groups: [{ artist: 'Partner', albums: [{ key: 'Partner:solo', name: 'Renamed' }] }],
+      primary_artist_groups: [], family_artist_groups: [] },
+    { artist_groups: [{ artist: 'Partner', albums: [] }], primary_artist_groups: [], family_artist_groups: [] },
+    { artist_groups: [{ artist: 'Unknown', albums: [{ key: 'Partner:solo', name: 'Partner Solo' }] }],
+      primary_artist_groups: [], family_artist_groups: [] },
+  ]) {
+    assert.equal(evidence({ ...applied, ...changed }).canonicalReadyMatch, false, JSON.stringify(changed));
+    assert.equal(evidence({ ...applied, ...changed }).canonicalInventoryComplete, false, JSON.stringify(changed));
+  }
+  const { GalleryPage } = await import(new URL('../poms/galleryPage.js', observerUrl));
+  const gallery = Object.create(GalleryPage.prototype);
+  gallery.productionViewObserver = observer;
+  gallery.page = { locator: () => ({ count: async () => 0 }),
+    url: () => 'http://localhost/?artist=Lead&category=main_library' };
+  gallery.readAppliedGalleryProjection = async () => applied;
+  gallery.albumCard = { detailsButtonByArtistAndAlbum: () => ({ count: async () => 1 }) };
+  gallery.libraryLoader = { isVisible: async () => false };
+  gallery.artistHeadings = { allTextContents: async () => ['Lead'] };
+  const state = await gallery.readAlbumTargetState(target);
+  assert.equal(state.canonicalReadyMatch, true);
+  assert.equal(state.canonicalApplied, true);
+  assert.equal(state.pendingViewTransition, false);
+  assert.equal(state.startupHydrating, false);
+  page.emit('request', request('http://localhost/view-data?category=hoard&payload_tier=sidebar'));
+  assert.equal(evidence().canonicalReadyMatch, false);
+  assert.equal(evidence().canonicalInventoryComplete, false);
 });
 
 test('local sidebar membership uses applied scope without inheriting old search completeness', async () => {

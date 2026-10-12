@@ -342,6 +342,10 @@ const PERFORMANCE_TARGETS = {
     grep: 'FTC-GALLERY-NAV-032',
     aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
     casePattern: 'FTC-GALLERY-NAV-032',
+    casePatterns: [
+      'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
+      'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+    ],
     measurementExpected: false,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',

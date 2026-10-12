@@ -2260,6 +2260,33 @@ test('scan-health selects only the natural unavailable-root contract without mea
   assert.equal(target.grep, 'FTC-OPS-003F');
 });
 
+test('artist scroll completion requires each distinct navigation and paging case once', () => {
+  const target = performanceRunner.PERFORMANCE_TARGETS['artist-tree-scroll-navigation'];
+  const titles = [
+    'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
+    'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+  ];
+  const parsedTestResults = titles.map(testName => ({
+    status: 'passed', testName, fullName: `FTC-GALLERY-NAV-032 > ${testName}`,
+  }));
+  const record = {
+    status: 0, processStatus: 0, structuredStatus: 'passed', reporterFinalized: true,
+    measurementExpected: false,
+    expectedCasePatterns: target.casePatterns || [target.casePattern],
+    parsedTestResults,
+  };
+  assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');
+  for (const incomplete of [
+    parsedTestResults.slice(0, 1),
+    parsedTestResults.slice(1),
+    [...parsedTestResults, parsedTestResults[0]],
+    [{ ...parsedTestResults[0], status: 'failed' }, parsedTestResults[1]],
+  ]) {
+    assert.equal(_private.classifyPerformanceAttempt({ ...record, parsedTestResults: incomplete }, 'local').outcome, 'failed');
+  }
+  assert.equal(_private.classifyPerformanceAttempt({ ...record, reporterFinalized: false }, 'local').outcome, 'failed');
+});
+
 test('coverage-only targets accept a completed Playwright JSON report as reporter finalization', () => {
   assert.equal(_private.isFinalizedPlaywrightJsonReport({
     suites: [{}],

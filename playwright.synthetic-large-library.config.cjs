@@ -33,6 +33,7 @@ const finalResultReporterOptions = { nonce: String(process.env[FINAL_RESULT_NONC
 delete process.env[FINAL_RESULT_NONCE_ENV];
 const selectedBrowser = runtimeFlags.browser;
 const browserProjectUse = resolveBrowserProjectUse(selectedBrowser);
+const jsonOutputFile = String(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE || '').trim();
 
 module.exports = defineConfig({
   testDir: path.join(__dirname, 'tests', 'e2e', 'syntheticLargeLibrary'),
@@ -49,6 +50,7 @@ module.exports = defineConfig({
     [performanceReporterPath],
     [finalResultReporterPath, finalResultReporterOptions],
     [pairedSearchReporterPath],
+    ...(jsonOutputFile ? [['json', { outputFile: jsonOutputFile }]] : []),
   ],
   use: {
     baseURL: managedAppUrl,

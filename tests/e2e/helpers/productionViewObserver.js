@@ -444,11 +444,11 @@ export class ProductionViewObserver {
             this.stateRevision += 1;
           }
         };
-        if (response.status() === 503 && new URL(detail.url).searchParams.get('q')) {
+        if (response.status() === 503) {
           this.pendingPayloadReads.set(detail.sequence, detail);
           Promise.resolve(response.json())
             .then(payload => {
-              if (payload?.code !== 'search_projection_pending') recordHttpFailure();
+              if (!['search_projection_pending', 'gallery_projection_pending'].includes(payload?.code)) recordHttpFailure();
             })
             .catch(recordHttpFailure)
             .finally(() => {

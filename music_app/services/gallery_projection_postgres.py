@@ -15,7 +15,7 @@ BUILDER_VERSION = "root-gallery-v4"
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()
-_PREPARATIONS: dict[str, Future] = {}
+_PREPARATIONS: dict[str | tuple[str, str], Future] = {}
 _PREPARATIONS_LOCK = Lock()
 _OCCURRENCE_FIELDS = frozenset({
     "artist_id", "artist_name", "artist_sort_name", "album_id", "album_key",
@@ -233,7 +233,7 @@ def _queue(config, key, action, *, trailing=False, generation=None):
     except Exception:
         with _PENDING_LOCK:
             _PENDING.pop(identity, None)
-        _LOGGER.exception("Gallery projection could not be queued; computed browse remains available")
+        _LOGGER.exception("Gallery projection could not be queued; a later request may retry")
         return None
 
     def finished(completed):
@@ -242,8 +242,8 @@ def _queue(config, key, action, *, trailing=False, generation=None):
         try:
             completed.result()
         except Exception:
-            _LOGGER.exception("Gallery projection publication failed; computed browse remains available")
-            if key == "refresh":
+            _LOGGER.exception("Gallery projection publication failed; a later request may retry")
+            if key == "refresh" or (isinstance(key, tuple) and key[0] == "refresh"):
                 return
         if following is not None:
             _queue(config, key, following, trailing=trailing, generation=following_generation)
@@ -259,11 +259,25 @@ def queue_gallery_projection_snapshot(config, context, view_state, snapshot, *, 
         config, context, view_state, snapshot, connect=connect), trailing=True, generation=context["generation"])
 
 
-def schedule_gallery_projection_refresh(config, *, connect=None):
-    return _queue(config, "refresh", lambda: ensure_gallery_projection_ready(config, connect=connect), trailing=True)
+def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None):
+    from music_app.services.library_browse_postgres import _root_sidebar_view_state
+
+    key = "refresh"
+    options = {"connect": connect}
+    if view_state is not None:
+        scope = {**view_state, "visible_library_categories": list(view_state.get("visible_library_categories") or [])}
+        scope_key = gallery_projection_scope_key(scope)
+        common_keys = {
+            gallery_projection_scope_key(_root_sidebar_view_state(params))
+            for params in ({}, {"gallery_scope": "new_arrivals"})
+        }
+        if scope_key not in common_keys:
+            key = ("refresh", scope_key)
+            options["view_state"] = scope
+    return _queue(config, key, lambda: ensure_gallery_projection_ready(config, **options), trailing=True)
 
 
-def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None):
+def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None, view_state=None):
     """Share one background preparation across startup and queued refreshes."""
     from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
 
@@ -271,6 +285,8 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
         return {"built": 0}
     _raise_if_projection_cancelled(cancel_requested)
     identity = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    if view_state is not None:
+        identity = (identity, gallery_projection_scope_key(view_state))
     with _PREPARATIONS_LOCK:
         future = _PREPARATIONS.get(identity)
         owns_preparation = future is None
@@ -287,7 +303,7 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
                     raise
     try:
         result = _ensure_gallery_projection_ready(
-            config, connect=connect, cancel_requested=cancel_requested,
+            config, connect=connect, cancel_requested=cancel_requested, view_state=view_state,
         )
         future.set_result(result)
         return result
@@ -299,7 +315,7 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
             _PREPARATIONS.pop(identity, None)
 
 
-def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None):
+def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None, view_state=None):
     """Publish each common scope from its own coherent source snapshot."""
     from music_app.services import library_browse_postgres as browse
     from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
@@ -309,7 +325,8 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
 
         ensure_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
     built = 0
-    scopes = [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})]
+    scopes = ([view_state] if view_state is not None else
+              [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})])
     for state in scopes:
         _raise_if_projection_cancelled(cancel_requested)
         with repository._connect_to_database() as connection:

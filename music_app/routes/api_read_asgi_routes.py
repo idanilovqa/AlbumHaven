@@ -41,7 +41,7 @@ from music_app.services.album_cover_candidate_snapshots_postgres import (
 )
 from music_app.services.library_indexing import resolve_scan_stage_elapsed_seconds
 from music_app.services.library_browse_postgres import (
-    PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
+    GalleryProjectionPending, PostgresLibraryBrowseRepository, SearchProjectionPending, build_transient_root_gallery_page,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
@@ -591,6 +591,12 @@ def view_data(request: Request) -> JSONResponse:
                 return _transient_scan_view_response(request, browse_state, page_params)
             payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_startup_preview_payload(
                 query_params=page_params, library_state=library_state)
+        except GalleryProjectionPending:
+            return JSONResponse(
+                {"ok": False, "code": "gallery_projection_pending",
+                 "error": "Gallery is being prepared."},
+                status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
+            )
         except ValueError as error:
             restart = "restart required" in str(error)
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},

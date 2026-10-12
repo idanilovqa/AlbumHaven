@@ -1842,3 +1842,31 @@ def test_index_logs_actual_bootstrap_counts(app, monkeypatch):
     event = next(fields for action, fields in events if action == "Index request completed")
     assert event["album_count"] == 14673
     assert event["artist_count"] == 6345
+
+def test_pending_gallery_bootstrap_hydrates_without_starting_a_scan(app, monkeypatch):
+    from music_app.routes import web_asgi
+
+    original_builder = web_asgi._build_postgres_root_startup_view
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", original_builder)
+
+    class PendingRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_root_startup_preview_payload(self, **_kwargs):
+            raise web_asgi.GalleryProjectionPending("not ready")
+
+    monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", PendingRepository)
+    monkeypatch.setattr(web_asgi.state_service, "start_background_refresh_for_state",
+                        lambda *_a, **_k: pytest.fail("pending projection started a scan"))
+    asgi_app = _make_asgi_app(app)
+    status, _, body = _run_asgi_request(asgi_app, "GET", "/")
+    assert status == 200
+    payload = _extract_bootstrap_payload_from_shell(body)
+    assert payload["bootstrap"]["startupPreview"]["mode"] == "empty_shell"
+    hydration = payload["bootstrap"]["startupHydration"]
+    assert hydration["required"] is True
+    assert "gallery_page_size=50" in hydration["endpoint"]
+    assert asgi_app.state.library_state["cold_scan_pending"] is False
+    assert asgi_app.state.library_state["cold_scan_handoff_status"] == "idle"

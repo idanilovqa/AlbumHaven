@@ -8,7 +8,7 @@ function fixture({ mobile = false } = {}) {
   const pending = [], renders = [], timers = [];
   const scroll = { scrollTop: 0, clientHeight: 500, scrollHeight: 1000 };
   const state = { ui: {}, busy: false, view: { query: '', selected_artist: '', surface_request: 'albums', artist_count: 6045, album_count: 20000, artists_sidebar: [{ artist: 'A', count: 5 }], artist_groups: [{ artist: 'A', albums: [{ key: 'a1' }] }], gallery_page: { next_cursor: 'page-1', revision: 'r1', has_more: true, page_size: 8 } } };
-  const context = vm.createContext({ state, URL, URLSearchParams, AbortController, console, window: { innerWidth: mobile ? 390 : 1024, location: { href: 'https://localhost/', assign() {} }, matchMedia: query => ({ matches: mobile && /max-width/.test(query) }) }, document: { documentElement: { clientWidth: mobile ? 390 : 1024 }, getElementById: id => id === 'albums-scroll' ? scroll : null }, buildApiUrl: () => '/view-data?surface=albums', getAlbumCardRenderKey: album => album.key, applyViewPayload: data => { state.view = { ...state.view, ...data }; }, renderArtistGroups: options => renders.push(options), scheduleBrowserAnimationFrame: callback => timers.push(callback), showToast() {}, fetch: (url, options) => new Promise((resolve, reject) => pending.push({ url, options, resolve: data => resolve({ ok: true, status: 200, json: async () => data }), reject })) });
+  const context = vm.createContext({ state, URL, URLSearchParams, AbortController, console, window: { innerWidth: mobile ? 390 : 1024, location: { href: 'https://localhost/', assign() {} }, matchMedia: query => ({ matches: mobile && /max-width/.test(query) }) }, document: { documentElement: { clientWidth: mobile ? 390 : 1024 }, getElementById: id => id === 'albums-scroll' ? scroll : null }, buildApiUrl: () => '/view-data?surface=albums', getAlbumCardRenderKey: album => album.key, applyViewPayload: data => { state.view = { ...state.view, ...data }; }, renderArtistGroups: options => renders.push(options), scheduleBrowserAnimationFrame: callback => timers.push(callback), showToast() {}, fetch: (url, options) => new Promise((resolve, reject) => pending.push({ url, options, resolveResponse: resolve, resolve: data => resolve({ ok: true, status: 200, json: async () => data }), reject })) });
   vm.runInContext(source, context);
   return { context, state, scroll, pending, renders, timers };
 }
@@ -236,4 +236,94 @@ for (const mobile of [false, true]) {
       assert.equal(f.timers.length, 0, 'reverse prefetch must not drain earlier pages on an idle timer');
     });
   }
+}
+
+
+for (const direction of ['Next', 'Previous']) {
+  for (const cancel of [false, true]) {
+    test(`pending ${direction} gallery page keeps cards and ${cancel ? 'aborts' : 'recovers'}`, async () => {
+      const f = fixture();
+      if (direction === 'Previous') {
+        f.state.view.gallery_page.previous_cursor = 'earlier-page';
+        f.state.view.gallery_page.has_previous = true;
+      }
+      const callbacks = [];
+      const cleared = [];
+      f.context.setTimeout = callback => { callbacks.push(callback); return 17; };
+      f.context.clearTimeout = timer => cleared.push(timer);
+      const mounted = f.state.view.artist_groups;
+      const request = f.context[`load${direction}RootGalleryPage`]();
+      f.pending[0].resolveResponse({
+        status: 503,
+        clone: () => ({ json: async () => ({ ok: false, code: 'gallery_projection_pending' }) }),
+      });
+      await new Promise(setImmediate);
+      assert.equal(f.state.view.artist_groups, mounted);
+      assert.equal(f.renders.length, 0);
+      assert.equal(callbacks.length, 1);
+      assert.equal(await f.context[`load${direction}RootGalleryPage`](), false);
+      if (cancel) {
+        f.context.claimLocalViewStateNavigation();
+        assert.equal(await request, false);
+        assert.deepEqual(cleared, [17]);
+        assert.equal(f.pending.length, 1);
+        assert.equal(f.state.view.artist_groups, mounted);
+      } else {
+        callbacks[0]();
+        await new Promise(setImmediate);
+        assert.equal(f.pending.length, 2);
+        assert.equal(f.pending[1].url, f.pending[0].url);
+        f.pending[1].resolve(page([{ artist: 'B', albums: [{ key: 'b1' }] }]));
+        assert.equal(await request, true);
+        assert.deepEqual(Array.from(f.state.view.artist_groups, group => group.artist),
+          direction === 'Previous' ? ['B', 'A'] : ['A', 'B']);
+        assert.equal(f.renders[0].preserveScroll, true);
+        assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
+      }
+    });
+  }
+}
+
+for (const coverageRefresh of [false, true]) {
+  test(`pending recovery after cursor restart retains cards (coverage=${coverageRefresh})`, async () => {
+    const f = fixture();
+    const retries = [];
+    f.context.setTimeout = callback => { retries.push(callback); return 1; };
+    f.context.clearTimeout = () => {};
+    f.context.renderView = options => f.renders.push(options);
+    const mounted = f.state.view.artist_groups;
+    const controller = new AbortController();
+    const request = coverageRefresh
+      ? f.context.collectRootGalleryRefresh(f.state.view, '/view-data?surface=albums&gallery_page_size=50',
+        2, controller, () => true)
+      : f.context.loadNextRootGalleryPage();
+    f.pending[0].resolveResponse({ status: 409, json: async () => ({ restart_required: true }) });
+    await new Promise(setImmediate);
+    const restartedUrl = f.pending[1].url;
+    assert.equal(new URL(restartedUrl, 'https://localhost').searchParams.has('gallery_cursor'), false);
+    f.pending[1].resolveResponse({
+      status: 503,
+      clone: () => ({ json: async () => ({ code: 'gallery_projection_pending' }) }),
+    });
+    await new Promise(setImmediate);
+    assert.equal(f.state.view.artist_groups, mounted);
+    assert.equal(f.renders.length, 0);
+    assert.equal(retries.length, 1);
+    retries[0]();
+    await new Promise(setImmediate);
+    assert.equal(f.pending[2].url, restartedUrl);
+    const recovered = page([{ artist: 'New', albums: [{ key: 'new1' }, { key: 'new2' }] }], {
+      gallery_page: { revision: 'r2', next_cursor: null, has_more: false },
+    });
+    f.pending[2].resolve(recovered);
+    const result = await request;
+    if (coverageRefresh) {
+      assert.deepEqual(result, recovered);
+      assert.equal(f.state.view.artist_groups, mounted);
+    } else {
+      assert.equal(result, true);
+      assert.equal(f.state.view.artist_groups[0].artist, 'New');
+      assert.equal(f.renders[0].preserveMountedGalleryChildren, true);
+    }
+  });
 }

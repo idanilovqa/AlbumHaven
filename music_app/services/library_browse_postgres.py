@@ -200,6 +200,10 @@ def _preferred_duplicate_source(
     return max(sources, key=credit_score)
 
 
+class GalleryProjectionPending(RuntimeError):
+    """Gallery awaits a valid persisted membership projection."""
+
+
 class SearchProjectionPending(RuntimeError):
     """Search awaits a valid persisted relationship projection."""
 
@@ -703,6 +707,7 @@ class PostgresLibraryBrowseRepository:
             _root_gallery_page_size(query_params or {})
         from music_app.services.gallery_projection_postgres import (
             gallery_projection_context, load_gallery_projection_page, queue_gallery_projection_snapshot,
+            schedule_gallery_projection_refresh,
         )
         projection_context = None
         prepared_snapshot = None
@@ -721,6 +726,12 @@ class PostgresLibraryBrowseRepository:
                 connection, view_state, query_params or {}, context=projection_context,
                 allow_stale=bool((library_state or {}).get("scan_in_progress")),
             ) if projection_context else None
+            if (paged and projection_context and cached_page is None
+                    and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")):
+                schedule_gallery_projection_refresh(
+                    self._config, connect=self._connect, view_state=view_state,
+                )
+                raise GalleryProjectionPending("Gallery is being prepared.")
             projection_hit = cached_page is not None
             phase_ms["projection_lookup"] = (perf_counter() - phase_started_at) * 1000
             phase_started_at = perf_counter()
@@ -865,8 +876,6 @@ class PostgresLibraryBrowseRepository:
                     close()
 
         if relation_alias_maps.get("projection_stale_reason"):
-            from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-
             schedule_gallery_projection_refresh(self._config, connect=self._connect)
         elif prepared_snapshot is not None and projection_context:
             queue_gallery_projection_snapshot(

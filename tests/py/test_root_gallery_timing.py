@@ -36,7 +36,8 @@ def test_root_gallery_phase_diagnostics_preserve_payload_and_exclude_private_dat
             calls.append("close")
 
     repository = browse.PostgresLibraryBrowseRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "private-credential", "MUSIC_DIR": "C:/Private/Music"},
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "private-credential", "MUSIC_DIR": "C:/Private/Music",
+         "SHARED_LIBRARY_BROWSE_ONLY": not ready},
         connect=lambda _: Connection(), album_ratings_service=_EmptyAlbumRatingsService(),
     )
     monkeypatch.setattr(projection, "gallery_projection_context", lambda _: {"library_id": 1})

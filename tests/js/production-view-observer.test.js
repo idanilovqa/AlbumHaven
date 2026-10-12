@@ -11,24 +11,27 @@ const observerUrl = pathToFileURL(path.join(
   'productionViewObserver.js',
 )).href;
 
-for (const code of ['search_projection_pending', 'unavailable']) {
-  test(`search recovery response ${code} never counts as a completed search`, async () => {
-    const { ProductionViewObserver } = await import(observerUrl);
-    const page = new FakePage();
-    const observer = new ProductionViewObserver(page, page);
-    const search = request('http://127.0.0.1/view-data?surface=albums&q=Artist');
-    page.emit('request', search);
-    page.emit('response', response(search, { ok: false, code }, { status: 503, ok: false }));
-    page.emit('requestfinished', search);
-    await flushPromises();
-    const result = observer.read();
-    assert.equal(result.latestFullPayload, null);
-    if (code === 'search_projection_pending') {
-      assert.equal(result.latestFullPayloadError, null);
-    } else {
-      assert.match(result.latestFullPayloadError, /HTTP 503/);
-    }
-  });
+for (const suffix of ['q=Artist', 'gallery_page_size=50']) {
+  for (const code of ['search_projection_pending', 'gallery_projection_pending', 'unavailable']) {
+    test(`recovery response ${code} never counts as completed data (${suffix})`, async () => {
+      const { ProductionViewObserver } = await import(observerUrl);
+      const page = new FakePage();
+      const observer = new ProductionViewObserver(page, page);
+      const pending = request(`http://127.0.0.1/view-data?surface=albums&${suffix}`);
+      page.emit('request', pending);
+      page.emit('response', response(pending, { ok: false, code }, { status: 503, ok: false }));
+      page.emit('requestfinished', pending);
+      await flushPromises();
+      const result = observer.read();
+      assert.equal(result.latestFullPayload, null);
+      if (code !== 'unavailable') {
+        assert.equal(result.latestFullPayloadError, null);
+        assert.equal(result.latestGalleryPageError, null);
+      } else {
+        assert.match(result.latestFullPayloadError || result.latestGalleryPageError, /HTTP 503/);
+      }
+    });
+  }
 }
 
 test('search recovery body stays pending and only a later successful response supplies results', async () => {

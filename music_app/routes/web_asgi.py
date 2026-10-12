@@ -37,7 +37,7 @@ from music_app.services.gallery_display import (
     normalize_gallery_scale_percent,
 )
 from music_app.services.gallery_scope import normalize_gallery_scope, normalize_visible_categories
-from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.library_browse_postgres import GalleryProjectionPending, PostgresLibraryBrowseRepository
 from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
     get_primary_music_root,
@@ -588,14 +588,21 @@ def _build_postgres_root_startup_view(
     library_state: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object] | None, float]:
     payload_started_at = time.perf_counter()
-    payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
-        query_params=QueryParams([
-            (key, value) for key, value in QueryParams(query_args).multi_items()
-            if key not in {"gallery_cursor", "gallery_page_size"}
-        ] + ([] if str(query_args.get("surface") or "").strip().casefold() == "home"
-             else [("gallery_page_size", "8")])),
-        library_state=library_state,
-    )
+    try:
+        payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
+            query_params=QueryParams([
+                (key, value) for key, value in QueryParams(query_args).multi_items()
+                if key not in {"gallery_cursor", "gallery_page_size"}
+            ] + ([] if str(query_args.get("surface") or "").strip().casefold() == "home"
+                 else [("gallery_page_size", "8")])),
+            library_state=library_state,
+        )
+    except GalleryProjectionPending:
+        initial_view = _build_empty_initial_view(
+            config=config, query_raw="", selected_artist="", active_surface="albums",
+        )
+        initial_view["gallery_projection_pending"] = True
+        return initial_view, None, round((time.perf_counter() - payload_started_at) * 1000, 2)
     initial_view = build_initial_view_preview(payload)
     preview_sidebar = [
         dict(item)
@@ -690,7 +697,8 @@ def _build_bootstrap_payload(
                 query_args=query_args,
                 library_state=library_state,
             )
-            if library_state.get("cold_scan_pending") and int(initial_view.get("album_count") or 0) == 0:
+            if (initial_view.get("gallery_projection_pending")
+                    or (library_state.get("cold_scan_pending") and int(initial_view.get("album_count") or 0) == 0)):
                 preview_mode = "empty_shell"
             else:
                 preview_mode = "fresh_preview" if bool(initial_view.get("initial_view_partial")) else "full_view"
@@ -951,6 +959,7 @@ async def index(request: Request) -> Response:
     if (
         _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
         and int(initial_view.get("album_count") or 0) == 0
+        and not initial_view.get("gallery_projection_pending")
         and not library_state.get("last_error")
         and not library_state.get("scan_in_progress")
     ):

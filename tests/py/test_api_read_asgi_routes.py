@@ -5100,3 +5100,21 @@ def test_status_payload_reports_each_scan_stage_elapsed_time(monkeypatch):
         "discover": 4.0,
         "metadata": 10.0,
     }
+
+def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as routes
+
+    class PendingRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_root_startup_preview_payload(self, **_kwargs):
+            raise routes.GalleryProjectionPending("not ready")
+
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", PendingRepository)
+    status, headers, body = _run_asgi_request(
+        asgi_app, "GET", "/view-data", query={"surface": "albums", "gallery_page_size": "50"})
+    assert status == 503
+    assert _decode_json(body)["code"] == "gallery_projection_pending"
+    assert headers["retry-after"] == "1"
+    assert headers["cache-control"] == "no-store"

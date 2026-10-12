@@ -77,9 +77,7 @@ async function loadNextRootGalleryPage() {
   url.searchParams.set('gallery_cursor', request.cursor);
   url.searchParams.set('omit_sidebar', '1');
   try {
-    let response = await fetch(`${url.pathname}${url.search}`, {
-      headers: { Accept: 'application/json' }, signal: request.controller.signal,
-    });
+    let response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
     let restarted = false;
     if (response.status === 409) {
       const conflict = await response.json();
@@ -88,9 +86,7 @@ async function loadNextRootGalleryPage() {
       // bounded page; keep the old cards visible until that response arrives.
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
-      response = await fetch(`${url.pathname}${url.search}`, {
-        headers: { Accept: 'application/json' }, signal: request.controller.signal,
-      });
+      response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
       restarted = true;
     }
     const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
@@ -178,10 +174,7 @@ async function loadPreviousRootGalleryPage() {
     url.searchParams.set('gallery_cursor', request.cursor);
     url.searchParams.set('gallery_page_direction', 'previous');
     url.searchParams.set('omit_sidebar', '1');
-    const response = await fetch(`${url.pathname}${url.search}`, {
-      headers: { Accept: 'application/json' },
-      signal: request.controller.signal,
-    });
+    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
     if (response.status === 409 || !ownsResponse()) return false;
     const data = await readGalleryResponse(response, ownsResponse);
     if (!ownsResponse() || !Array.isArray(data.artist_groups)
@@ -921,18 +914,23 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+async function fetchGalleryViewResponse(url, signal) {
+  const response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+  return retryPendingGalleryViewResponse(response, url, signal);
+}
+
 async function retryPendingGalleryViewResponse(response, url, signal) {
   const deadline = Date.now() + 60000;
   while (true) {
     if (response.status !== 503) return response;
     const pending = await response.clone().json().catch(() => null);
-    if (pending?.code !== 'search_projection_pending' || Date.now() >= deadline) return response;
+    if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
     await new Promise((resolve, reject) => {
       let timer;
       const abort = () => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', abort);
-        reject(Object.assign(new Error('Search cancelled'), { name: 'AbortError' }));
+        reject(Object.assign(new Error('Gallery request cancelled'), { name: 'AbortError' }));
       };
       if (signal?.aborted) return abort();
       signal?.addEventListener('abort', abort, { once: true });
@@ -991,9 +989,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     url.searchParams.set('gallery_page_size', '50');
     url.searchParams.set('gallery_cursor', cursor);
     url.searchParams.set('omit_sidebar', '1');
-    const response = await fetch(`${url.pathname}${url.search}`, {
-      headers: { Accept: 'application/json' }, signal: controller?.signal,
-    });
+    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
     if (!ownsResponse()) return null;
     const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
     if (!ownsResponse()) return null;
@@ -1004,9 +1000,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
       remainingPages = Math.ceil(coverage / 50);
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
-      const restartResponse = await fetch(`${url.pathname}${url.search}`, {
-        headers: { Accept: 'application/json' }, signal: controller?.signal,
-      });
+      const restartResponse = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
       payload = await readGalleryResponse(restartResponse, ownsResponse);
       continue;
     }

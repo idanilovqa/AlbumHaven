@@ -629,9 +629,145 @@ function attachGalleryPlaybackContextToAlbum(album) {
   };
 }
 
+// Exact response objects carry provenance. Caches, renderers and subject copies
+// cannot turn DTO fields into a fresh preference read or revive an older grant.
+const trackModalPreferenceReceipts = new WeakMap();
+const trackModalPreferenceSources = new Map(), trackModalPreferenceListeners = new Set();
+let trackModalPreferenceScope = null;
+function subscribeTrackModalPreferences(listener) {
+  trackModalPreferenceListeners.add(listener);
+  return () => trackModalPreferenceListeners.delete(listener);
+}
+function notifyTrackModalPreferences() {
+  for (const listener of [...trackModalPreferenceListeners]) {
+    try {listener();} catch { /* A display subscriber cannot undo revocation. */ }
+  }
+}
+function trimTrackModalPreferenceSources() {
+  let unretained = [...trackModalPreferenceSources.values()].filter(token => token.retained === 0).length;
+  let changed = false;
+  for (const [key, token] of trackModalPreferenceSources) {
+    if (unretained <= TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) break;
+    if (token.retained !== 0) continue;
+    token.revoked = true; trackModalPreferenceSources.delete(key); unretained--; changed = true;
+  }
+  if (changed) notifyTrackModalPreferences();
+}
+function retainTrackModalPreferenceRows(rows) {
+  const tokens = new Set((rows || []).filter(row => getTrackModalPreferenceSource(row))
+    .map(row => trackModalPreferenceReceipts.get(row).request));
+  for (const token of tokens) token.retained++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const token of tokens) token.retained--;
+    trimTrackModalPreferenceSources();
+  };
+}
+function trackModalPreferenceContainerReadable(value) {
+  return Boolean(value && typeof value === 'object' && !value.read_only_subject
+    && value.source_readable !== false && value.readable !== false
+    && (!Object.hasOwn(value.allowed_actions || {}, 'can_read') || value.allowed_actions.can_read === true));
+}
+function trackModalPreferenceFacts(row) {
+  if (!trackModalPreferenceContainerReadable(row) || row.track_preference_state !== 'available') return null;
+  const track = typeof row.track_ref === 'string' ? row.track_ref : row.path;
+  const canonical = row.canonical_track_ref, inventory = row.inventory_track_ref;
+  const overlay = TrackActionsRuntime.overlay(row.track_preference);
+  if (typeof track !== 'string' || !track.trim() || typeof canonical !== 'string' || !canonical.trim()
+    || typeof inventory !== 'string' || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(inventory) || !overlay) return null;
+  return {track_ref: track.trim(), canonical_track_ref: canonical, inventory_track_ref: inventory, track_preference: overlay};
+}
+function getTrackModalPreferenceSource(row) {
+  const receipt = row && trackModalPreferenceReceipts.get(row);
+  if (!receipt || receipt.request.revoked || receipt.scope !== TrackActionsRuntime.scope().token
+    || receipt.inventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) return null;
+  const facts = trackModalPreferenceFacts(row);
+  return facts && JSON.stringify(facts) === receipt.signature ? receipt.source : null;
+}
+
+// Capture only at a genuine read dispatch. Album and Loose share this bounded
+// exact-object owner, but a denial never crosses their source namespaces.
+function captureTrackModalPreferenceRead(namespace, sourceKey, options = {}) {
+  const preferenceRuntime = typeof TrackActionsRuntime !== 'undefined' ? TrackActionsRuntime : null;
+  const scope = preferenceRuntime?.scope(), epoch = preferenceRuntime?.readEpoch();
+  const inventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+  if (scope?.token !== trackModalPreferenceScope) {
+    trackModalPreferenceScope = scope?.token; trackModalPreferenceSources.clear();
+  }
+  const key = JSON.stringify([namespace, sourceKey]);
+  let requestReceipt = trackModalPreferenceSources.get(key);
+  if (preferenceRuntime && options.readOnlySubject !== true && options.admitPreferences !== false) {
+    if (!requestReceipt || requestReceipt.revoked) requestReceipt = {revoked: false, retained: 0};
+    trackModalPreferenceSources.delete(key);
+    trackModalPreferenceSources.set(key, requestReceipt);
+    trimTrackModalPreferenceSources();
+  }
+  const requestCurrent = () => {
+    try {return Boolean(preferenceRuntime && !options.signal?.aborted && scope.token === preferenceRuntime.scope().token
+      && inventoryRevision === Number(state?.status?.inventory_mutation_revision || 0)
+      && (options.isCurrent === undefined || typeof options.isCurrent === 'function' && options.isCurrent() === true));}
+    catch {return false;}
+  };
+  const revoke = () => {
+    if (options.readOnlySubject === true || options.admitPreferences === false
+      || !requestCurrent() || !requestReceipt || requestReceipt.revoked) return;
+    requestReceipt.revoked = true;
+    notifyTrackModalPreferences();
+  };
+  let admitted = false;
+  return Object.freeze({revoke, admit(rows) {
+    if (admitted || options.readOnlySubject === true || options.admitPreferences === false
+      || !requestReceipt || requestReceipt.revoked || !requestCurrent()) return;
+    admitted = true;
+    // A successful current Loose replacement retires its prior exact-object
+    // lineage, including rows now unavailable or absent from the population.
+    // A stale preference epoch cannot retire it.
+    // Fresh readable siblings still use this dispatch's original batch epoch.
+    const previousReceipt = requestReceipt;
+    const replacementReceipt = namespace === 'loose' && epoch === preferenceRuntime.readEpoch()
+      ? {revoked: false, retained: 0} : null;
+    const batch = preferenceRuntime.readBatch(epoch), seen = new Set();
+    for (const row of rows) {
+      if (!requestCurrent() || previousReceipt.revoked) break;
+      if (!row || typeof row !== 'object' || seen.has(row)) continue;
+      seen.add(row);
+      const source = trackModalPreferenceFacts(row);
+      if (!source || source.inventory_track_ref.split(':')[1] !== scope.library || !batch.accept(source)) continue;
+      if (!requestCurrent() || previousReceipt.revoked) break;
+      trackModalPreferenceReceipts.set(row, {scope: scope.token, request: replacementReceipt || previousReceipt, inventoryRevision,
+        signature: JSON.stringify(source), source: Object.freeze(source)});
+    }
+    if (replacementReceipt) {
+      // Batch subscribers are synchronous. Publish no replacement if they
+      // retired this request; notify receipt consumers only after siblings
+      // have their own receipts, without transferring any old object grants.
+      if (!requestCurrent() || previousReceipt.revoked) {replacementReceipt.revoked = true; return;}
+      previousReceipt.revoked = true;
+      requestReceipt = replacementReceipt;
+      trackModalPreferenceSources.delete(key);
+      trackModalPreferenceSources.set(key, replacementReceipt);
+      trimTrackModalPreferenceSources();
+      notifyTrackModalPreferences();
+    }
+  }});
+}
+
+function admitLooseTrackPreferenceRows(payload, preferenceRead) {
+  if (!preferenceRead || !payload || payload.read_only_subject
+    || String(payload.surface?.active || payload.surface_request || 'albums') !== 'albums') return;
+  if (!trackModalPreferenceContainerReadable(payload)) {
+    preferenceRead.revoke();
+    return;
+  }
+  preferenceRead.admit(Array.isArray(payload.non_album_tracks) ? payload.non_album_tracks : []);
+}
+
 async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return null;
+  const preferenceRead = captureTrackModalPreferenceRead('album', normalizedAlbumKey, options);
   const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`, {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
@@ -644,7 +780,23 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     payload = null;
   }
   if (!response.ok || !payload?.ok || !payload?.album) {
+    if (response.status === 401 || response.status === 403) preferenceRead.revoke();
     throw Object.assign(new Error(payload?.error || `Album detail request failed: ${response.status}`), {status: response.status});
+  }
+  if (payload.album.source_readable === false || payload.album.allowed_actions?.can_read === false) preferenceRead.revoke();
+  if (trackModalPreferenceContainerReadable(payload.album)
+    && String(payload.album.key || payload.album.album_ref || '') === normalizedAlbumKey
+    && !(typeof albumRequiresHydration === 'function' && albumRequiresHydration(payload.album))) {
+    const rows = [], containers = [payload.album], seen = new Set();
+    for (const container of containers) {
+      if (!trackModalPreferenceContainerReadable(container) || seen.has(container)) continue;
+      seen.add(container);
+      containers.push(...(Array.isArray(container.duplicate_sources) ? container.duplicate_sources : []));
+      rows.push(...(Array.isArray(container.tracks) ? container.tracks : []),
+        ...(Array.isArray(container.track_rows) ? container.track_rows : []),
+        ...(Array.isArray(container.gallery_list_block?.track_rows) ? container.gallery_list_block.track_rows : []));
+    }
+    preferenceRead.admit(rows);
   }
   return payload.album;
 }

@@ -175,7 +175,10 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       if (signal?.aborted || !current() || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)) throw stale();
       if (fingerprint(source(selection, context, intent)) !== key) throw error('This resource action is no longer available.');
     }
-    const album = await fetchTrackModalAlbumDetails(admitted.actions.album_ref, {signal});
+    const album = await fetchTrackModalAlbumDetails(admitted.actions.album_ref, {signal,
+      readOnlySubject: (context.origin || selection.origin)?.account_ref != null,
+      isCurrent: () => current() && token === Number(state.ui?.pendingTrackModalLoadToken || 0)
+        && fingerprint(source(selection, context, intent)) === key});
     if (signal?.aborted || !current() || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)) throw stale();
     if (fingerprint(source(selection, context, intent)) !== key) throw error('This resource action is no longer available.');
     if (!album || String(album.key || album.album_ref || '') !== admitted.actions.album_ref
@@ -195,7 +198,8 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
         || actions.album_ref !== albumKey || typeof fresh?.isCurrent !== 'function' || !fresh.isCurrent()) {
         throw error('This album page is no longer authorized by its source.');
       }
-      const album = await fetchTrackModalAlbumDetails(actions.album_ref, {signal});
+      const album = await fetchTrackModalAlbumDetails(actions.album_ref, {signal,
+        readOnlySubject: origin?.account_ref != null, isCurrent: fresh.isCurrent});
       if (signal?.aborted) throw stale();
       if (!fresh.isCurrent()) throw error('This album page is no longer authorized by its source.');
       if (!album || String(album.key || album.album_ref || '') !== actions.album_ref

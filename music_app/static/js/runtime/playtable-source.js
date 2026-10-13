@@ -103,16 +103,25 @@ function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCur
 const NativePlaytables = (() => {
   const owners = new Map();
   let serial = 0;
-  function retire(key) {
+  function retire(key, keepMount = false) {
     const owner = owners.get(key);
     if (!owner) return;
-    owners.delete(key); owner.source.dispose(); owner.mount?.dispose(); owner.observer?.disconnect();
+    owners.delete(key); owner.source.dispose(); owner.releasePreferences?.();
+    if (!keepMount) owner.mount?.dispose(); owner.observer?.disconnect();
     window.removeEventListener('popstate', owner.check);
   }
-  function prepare(key, sourceIdentity, groups, privateRows, isCurrent, retainNavigationSource) {
-    retire(key);
+  function prepare(key, sourceIdentity, groups, privateRows, isCurrent, retainNavigationSource, tableOptions) {
     const scopeKey = window.AlbumHavenPlaylistRuntime?.snapshot().scopeKey;
     const scope = TrackActionsRuntime.scope(), sourceView = state.view, identity = {}, rows = [], mapping = new Map();
+    const previous = owners.get(key);
+    const hasPresentation = (key === 'album-tracks' || key === 'loose-tracks') && Array.isArray(tableOptions?.columns);
+    const supportsOwnPreferences = (key === 'album-tracks' || key === 'loose-tracks') && !sourceIdentity?.read_only_subject;
+    const reuseMount = (key === 'album-tracks' || hasPresentation && previous?.tablePresentation)
+      && previous?.sourceIdentity === sourceIdentity
+      && previous.scopeToken === scope.token && previous.sourceView === sourceView;
+    const releasePreferences = supportsOwnPreferences
+      && typeof retainTrackModalPreferenceRows === 'function' ? retainTrackModalPreferenceRows(privateRows) : null;
+    retire(key, reuseMount);
     let offset = 0;
     for (const [sectionIndex, group] of groups.entries()) {
       group.sectionKey ||= `section-${sectionIndex + 1}`;
@@ -124,11 +133,15 @@ const NativePlaytables = (() => {
         track.canPlay = readable && source?.availability !== 'missing'
           && !(Object.hasOwn(source.playback_state || {}, 'can_start_here') && source.playback_state.can_start_here !== true);
         track.availability = source?.availability;
-        const row = {rowKey, sectionKey: group.sectionKey, readable, selectable: track.selectable};
+        const row = {rowKey, sectionKey: group.sectionKey, readable, selectable: track.selectable,
+          title: readable ? String(track.title || '') : 'Unavailable track'};
         rows.push(row); mapping.set(row, source);
       }
     }
-    const owner = {identity, sourceIdentity, mount: null, host: null};
+    const owner = {identity, sourceIdentity, scopeToken: scope.token, sourceView, releasePreferences,
+      resourceKey: reuseMount ? previous.resourceKey : Object.freeze({}),
+      mount: reuseMount ? previous.mount : null, host: reuseMount ? previous.host : null,
+      mountHost: reuseMount ? previous.mountHost : null};
     owners.set(key, owner);
     owner.source = createPrivatePlaytableSource({scopeKey, rows, instance: identity, revision: identity,
       isCurrent: () => owners.get(key) === owner && state.view === sourceView && TrackActionsRuntime.scope().token === scope.token && isCurrent(),
@@ -137,6 +150,47 @@ const NativePlaytables = (() => {
         : key === 'loose-tracks' ? {captureQueueRows: selected => captureNativeLooseQueueSources(sourceIdentity, selected.map(row => mapping.get(row)))} : {}),
       creationSource: () => sourceView?.playlist_creation_source || null,
       ...(retainNavigationSource ? {retainNavigationSource} : {})});
+    const buttons = typeof ButtonComponent !== 'undefined' ? ButtonComponent : null;
+    owner.runtime = Object.freeze({
+      ...(typeof buttons?.renderButton === 'function' ? {buttonHtml: value => buttons.renderButton(value)} : {}),
+      ...(typeof buttons?.renderActionButton === 'function' ? {actionHtml: value => buttons.renderActionButton(value)} : {}),
+      ...(typeof buttons?.renderIconSvg === 'function' ? {iconHtml: (name, value) => buttons.renderIconSvg(name, value)} : {}),
+      ...(typeof escapeHtml === 'function' ? {escapeHtml} : {}),
+      ...(typeof openUtilityChoiceDropdown === 'function' ? {openChoice: (anchor, value) => openUtilityChoiceDropdown(anchor, value)} : {}),
+    });
+    if (hasPresentation) {
+      owner.tablePresentation = {columns: tableOptions.columns, resourceKey: owner.resourceKey,
+        source: identity, isCurrent: () => Boolean(owner.source.snapshot())};
+    }
+    if (supportsOwnPreferences) {
+      const context = Object.freeze({scopeKey});
+      const resolvePreference = (row, requested) => {
+        if (requested?.scopeKey !== scopeKey || !mapping.has(row) || row.readable !== true
+          || !owner.source.snapshot() || sourceIdentity?.read_only_subject || sourceIdentity?.source_readable === false
+          || Object.hasOwn(sourceIdentity?.allowed_actions || {}, 'can_read') && sourceIdentity.allowed_actions.can_read !== true
+          || typeof getTrackModalPreferenceSource !== 'function') return null;
+        return getTrackModalPreferenceSource(mapping.get(row));
+      };
+      owner.trackPreferences = {rows, context, runtime: Object.freeze({
+        trackPreference(row, requested) {
+          const source = resolvePreference(row, requested);
+          return source ? TrackActionsRuntime.preference(source) : null;
+        },
+        setTrackLove({row, context: requested, love_tier, signal} = {}) {
+          const source = resolvePreference(row, requested);
+          if (!source || TrackActionsRuntime.preference(source)?.allowed_actions.can_set_love_tier !== true) {
+            return Promise.reject(Object.assign(new Error('Track love editing is unavailable.'), {status: 403}));
+          }
+          return TrackActionsRuntime.setLove({source, love_tier, signal,
+            isCurrent: () => resolvePreference(row, requested) === source});
+        },
+        subscribeTrackPreferences(listener) {
+          const preference = TrackActionsRuntime.subscribePreferences(listener);
+          const source = typeof subscribeTrackModalPreferences === 'function' ? subscribeTrackModalPreferences(listener) : null;
+          return () => {preference(); source?.();};
+        },
+      })};
+    }
     owner.check = () => {owner.mount?.update();};
     return owner;
   }
@@ -144,8 +198,12 @@ const NativePlaytables = (() => {
     const owner = owners.get(key), ui = window.AlbumHavenPlaytableUI;
     if (owner && host) owner.host = host;
     if (!owner || !host || !ui?.mount || !owner.source.snapshot()) return false;
-    owner.mount?.dispose(); owner.observer?.disconnect(); owner.host = host;
-    owner.mount = ui.mount(host, {sourceAdapter: owner.source, tableKey: key,
+    if (owner.mountHost !== host) {owner.mount?.dispose(); owner.mount = null;}
+    owner.observer?.disconnect(); owner.host = host;
+    const options = {sourceAdapter: owner.source, tableKey: key,
+      ...(typeof owner.runtime.buttonHtml === 'function' ? {runtime: owner.runtime} : {}),
+      ...(owner.tablePresentation ? {tablePresentation: owner.tablePresentation} : {}),
+      ...(owner.trackPreferences ? {trackPreferences: owner.trackPreferences} : {}),
       onPlay(rowKey, event, options) {
         if (!owner.source.snapshot()) return;
         const rows = [...host.querySelectorAll('[data-cdt-row-key]')].filter(row => row.getAttribute('data-cdt-row-key') === rowKey);
@@ -156,8 +214,10 @@ const NativePlaytables = (() => {
       onPlaylistAction: (packet, lifetime, anchor, options) => ui.open(packet, lifetime, owner.source, anchor, options),
       onContextAction: (packet, lifetime, anchor) => typeof ui.context === 'function'
         ? ui.context(packet, lifetime, owner.source, anchor) : ui.open(packet, lifetime, owner.source, anchor),
-      onError: () => showToast('The selected-track action is unavailable.', 'error', 3200),
-    });
+      onError: message => showToast(typeof message === 'string' ? message : 'The selected-track action is unavailable.', 'error', 3200),
+    };
+    if (owner.mount) owner.mount.update(options); else owner.mount = ui.mount(host, options);
+    owner.mountHost = host;
     if (typeof MutationObserver === 'function') {
       owner.observer = new MutationObserver(owner.check);
       const shell = document.getElementById('app-shell');
@@ -168,5 +228,10 @@ const NativePlaytables = (() => {
   window.addEventListener('albumhaven:playtable-ui-ready', () => {
     for (const [key, owner] of owners) if (owner.host) mount(key, owner.host);
   });
-  return {prepare, mount, retire};
+  function refresh(key) {
+    const owner = owners.get(key);
+    if (!owner?.mount) return false;
+    owner.mount.update(); return true;
+  }
+  return {prepare, mount, retire, refresh};
 })();

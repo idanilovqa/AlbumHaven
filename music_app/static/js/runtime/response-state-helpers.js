@@ -583,15 +583,6 @@ function compactRuntimeArtistGroupPayload(group) {
   };
 }
 
-function compactRuntimeNonAlbumTrackPayload(track) {
-  if (!isRuntimePlainObject(track)) {
-    return track;
-  }
-  return {
-    ...track,
-  };
-}
-
 function runtimeAlbumPayloadIsFull(album) {
   return isRuntimePlainObject(album)
     && !album.preview_only
@@ -631,7 +622,8 @@ function compactRuntimeViewPayload(view) {
     artist_groups: (Array.isArray(normalizedView.artist_groups) ? normalizedView.artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
     primary_artist_groups: (Array.isArray(normalizedView.primary_artist_groups) ? normalizedView.primary_artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
     family_artist_groups: (Array.isArray(normalizedView.family_artist_groups) ? normalizedView.family_artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
-    non_album_tracks: (Array.isArray(normalizedView.non_album_tracks) ? normalizedView.non_album_tracks : []).map((track) => compactRuntimeNonAlbumTrackPayload(track)),
+    // Preference receipts belong to exact response rows, never reconstructed copies.
+    non_album_tracks: cloneRuntimeArray(normalizedView.non_album_tracks),
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };

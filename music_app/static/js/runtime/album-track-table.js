@@ -51,17 +51,34 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
-      rating: {content: escapeHtml(config.subjectTaste && Number.isInteger(track.subjectRating) ? track.subjectRating : '–')},
+      rating: {content: config.subjectTaste && track.subjectTasteState === 'available'
+        && Object.hasOwn(track, 'subjectRating') && track.subjectRating === null
+        ? buildGalleryRatingHtml({value: 0, maximum: 5, label: 'Track unrated', compact: true})
+        : escapeHtml(config.subjectTaste && Number.isInteger(track.subjectRating) ? track.subjectRating : '–')},
       love: {content: config.subjectTaste && ['off', 'loved', 'obsessed'].includes(track.subjectLove)
-        ? `<span role="img" aria-label="${escapeHtml(track.subjectLove)}">${ButtonComponent.renderIconSvg(`love-${track.subjectLove}`)}</span>` : '–'},
+        ? `<span role="img" aria-label="${escapeHtml(track.subjectLove)}">${ButtonComponent.renderIconSvg(`love-${track.subjectLove}`)}</span>`
+        : config.subjectTaste ? '–' : '<span data-track-love-cell="1"><span role="img" aria-label="Love unavailable">–</span></span>'},
       duration: { content: `<span class="track-duration" ${readOnly ? '' : `data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}"`}>${escapeHtml(track.duration || '')}</span>` },
     },
   };
 }
 
+function albumTrackTableColumns(config = {}) {
+  return [
+    {key: 'number', label: '#', required: true, width: 36},
+    {key: 'title', label: 'Track', identity: true, width: 100},
+    ...(config.showPath ? [{key: 'path', label: 'File path', width: 220, autoMinWidth: 641}] : []),
+    ...(config.subjectTaste ? [{key: 'rating', label: 'Rating', width: 52, autoMinWidth: 481}] : []),
+    ...(config.showLove !== false || config.subjectTaste ? [{key: 'love', label: 'Love', required: true, width: 36}] : []),
+    ...(config.showProblem === true || (config.groups || []).some(group => (group.tracks || []).some(track => track.isProblematic))
+      ? [{key: 'problem', label: 'Problem', header: 'absent', action: true, width: 20, autoMinWidth: 641}] : []),
+    {key: 'duration', label: 'Length', action: true, required: true, width: 54},
+  ];
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
-  const showPath = Boolean(config.showPath);
+  const columnsConfig = albumTrackTableColumns(config);
   const forceGroupLabels = Boolean(config.forceGroupLabels);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
@@ -74,26 +91,16 @@ function buildAlbumTrackTableHtml(config = {}) {
       forceGroupLabels
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
-    const columnsConfig = [
-      { key: 'number', label: '#' },
-      { key: 'title', label: 'Track' },
-      ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
-      ...(config.subjectTaste ? [{key: 'rating', label: 'Rating'}, {key: 'love', label: 'Love'}] : []),
-      { key: 'problem', label: 'Problem', header: 'absent', action: true },
-      { key: 'duration', label: 'Length', action: true },
-    ];
     const table = buildCompactDataTable({
       id: `${idPrefix}-tracks-${groupIndex + 1}`,
       ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: showPath
-        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : config.subjectTaste ? '36px minmax(0,1fr) 52px 36px 20px minmax(54px,auto)' : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      columns: config.columns || columnsConfig.map(column => column.identity ? 'minmax(0,1fr)' : `${column.width}px`).join(' '),
       columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
       frame: 'outline',
-      overflow: 'none',
+      overflow: config.overflow || 'local',
       mobile: 'preserve',
       selection: config.selection,
     });

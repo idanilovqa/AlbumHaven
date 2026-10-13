@@ -24,6 +24,6 @@ function pushBrowserViewState(view, stateSnapshot = view, retainedPlaylistDraft 
   if (settingsNavigation?.pushLibraryHistory) {
     settingsNavigation.pushLibraryHistory(buildUrl(view), stateSnapshot);
   } else {
-    window.history.pushState(stateSnapshot, '', buildUrl(view));
+    window.history.pushState(window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(stateSnapshot), '', buildUrl(view));
   }
 }

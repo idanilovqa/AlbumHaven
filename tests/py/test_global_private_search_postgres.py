@@ -52,6 +52,18 @@ def isolated_urls():
         assert re.fullmatch(r'(?:album_haven_ci_|pytest_|album_haven_fake_e2e)[a-z0-9_]*', parsed.path.lstrip('/'))
         assert not parsed.query, 'Connection overrides are forbidden'
     assert (a.hostname, a.port, a.path) == (b.hostname, b.port, b.path)
+    database = a.path.lstrip('/')
+    if database.startswith('album_haven_ci_'):
+        # bootstrap-windows-postgres.ps1:Get-Names uses the same run suffix
+        # for the isolated database and its separate app/migrator login roles.
+        suffix = database.removeprefix('album_haven_ci_')
+        assert len(suffix) <= 39 and re.fullmatch(r'[a-z0-9]+(?:_[a-z0-9]+)*', suffix)
+        app_role, migrator_role = 'album_haven_app_'+suffix, 'album_haven_migrator_'+suffix
+    else:
+        # Retain the established fixed-role synthetic database convention.
+        app_role, migrator_role = 'album_haven_app', 'album_haven_migrator'
+    assert a.username == app_role, 'Runtime URL must name the isolated application role'
+    assert b.username == migrator_role, 'Setup URL must name the separate isolated migrator role'
     return runtime, setup
 
 
@@ -77,7 +89,19 @@ class SearchDatabase:
     def initialize(self):
         now = datetime.now(timezone.utc)
         with connect(self.runtime) as c:
-            assert c.execute('select current_user as role').fetchone()['role'] == 'album_haven_app'
+            identity = c.execute('''select current_user as role, session_user as login_role,
+                current_database() as database, r.rolcanlogin, r.rolsuper, r.rolcreatedb,
+                r.rolcreaterole, r.rolreplication, r.rolbypassrls,
+                pg_has_role(current_user, 'album_haven_app', 'USAGE') as app_authority,
+                pg_has_role(current_user, 'album_haven_migrator', 'MEMBER') as migrator_authority
+                from pg_roles r where r.rolname=current_user''').fetchone()
+            runtime = urlparse(self.runtime)
+            assert identity is not None, 'Runtime database role is unavailable'
+            assert identity['role'] == identity['login_role'] == runtime.username
+            assert identity['database'] == runtime.path.lstrip('/')
+            assert identity['rolcanlogin'] is True and identity['app_authority'] is True
+            assert all(identity[key] is False for key in ('rolsuper', 'rolcreatedb', 'rolcreaterole',
+                'rolreplication', 'rolbypassrls', 'migrator_authority')), 'Runtime must have only application authority'
             for name in ('app.account_sessions', 'app.track_preferences', 'library.local_tracks', 'library.local_track_files'):
                 assert c.execute('select to_regclass(%s) as name', (name,)).fetchone()['name'], name
         with connect(self.setup) as c:

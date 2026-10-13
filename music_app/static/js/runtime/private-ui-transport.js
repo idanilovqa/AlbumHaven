@@ -28,18 +28,50 @@ const PrivateUITransport = (() => {
     }
     return payload;
   }
-  async function request(path, {method = 'GET', body, signal, expected = context()} = {}) {
+  async function request(path, {method = 'GET', body, signal, expected = context(), isCurrent} = {}) {
     if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || /[\\\x00-\x20\x7f]/.test(path)) throw failure('Invalid private request.', 400);
-    if (signal?.aborted || stamp() !== expected) throw abort();
-    const response = await fetch(path, {method, credentials: 'same-origin', cache: 'no-store', signal,
+    // Undefined is the ordinary legacy path, including rejected-await behavior.
+    // Opted-in callers own their epoch; context equality cannot infer that epoch.
+    const guarded = isCurrent !== undefined;
+    const assertCurrent = () => {
+      if (signal?.aborted || stamp() !== expected) throw abort();
+      if (!guarded) return;
+      let current = false;
+      try {current = typeof isCurrent === 'function' && isCurrent() === true;} catch { /* Retired caller. */ }
+      // The caller itself can synchronously retire a signal or change context.
+      if (!current || signal?.aborted || stamp() !== expected) throw abort();
+    };
+    assertCurrent();
+    const options = {method, credentials: 'same-origin', cache: 'no-store', signal,
       headers: {Accept: 'application/json', 'X-AlbumHaven-Context': expected,
         ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
-      ...(body === undefined ? {} : {body: JSON.stringify(body)})});
-    if (signal?.aborted || stamp() !== expected) throw abort();
-    const payload = await response.json();
-    if (signal?.aborted || stamp() !== expected) throw abort();
-    if (!response.ok) throw Object.assign(failure('The request could not be completed.', response.status, payload?.error), {responseRejected: true});
-    return accept(payload, expected);
+      ...(body === undefined ? {} : {body: JSON.stringify(body)})};
+    if (guarded) assertCurrent();
+    let response;
+    try {response = await fetch(path, options);} catch (error) {
+      if (guarded) assertCurrent();
+      throw error;
+    }
+    assertCurrent();
+    let payload;
+    try {payload = await response.json();} catch (error) {
+      if (guarded) assertCurrent();
+      throw error;
+    }
+    assertCurrent();
+    if (!response.ok) {
+      const structuredCode = payload?.error_code;
+      const code = typeof structuredCode === 'string' && structuredCode.length ? structuredCode : payload?.error;
+      const error = Object.assign(failure('The request could not be completed.', response.status, code), {responseRejected: true});
+      if (guarded) assertCurrent();
+      throw error;
+    }
+    // Deliberately outside rejected-I/O catches: accept can revoke continuity,
+    // retire this caller through generation listeners, and throw stale_context.
+    // That current policy failure must remain its original 409, not AbortError.
+    const accepted = accept(payload, expected);
+    if (guarded) assertCurrent();
+    return accepted;
   }
   const query = (path, values) => {
     const params = new URLSearchParams();

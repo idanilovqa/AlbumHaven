@@ -490,7 +490,12 @@ def test_unreadable_witness_or_containing_inventory_never_qualifies_album_or_sid
     else:
         with connect(db.setup) as c:
             if change == 'stale_file':
-                c.execute('update library.local_track_files set scan_cache_stale=true where track_id=any(%s)', ([db.loved, db.obsessed],))
+                stale = c.execute('''update library.local_track_files set metadata=jsonb_set(metadata,
+                    '{scan_cache}', coalesce(metadata->'scan_cache','{}'::jsonb) || '{"stale":true}'::jsonb,true)
+                    where track_id=any(%s) returning track_id,scan_cache_stale''',
+                    ([db.loved, db.obsessed],)).fetchall()
+                assert {row['track_id'] for row in stale} == {db.loved, db.obsessed}
+                assert all(row['scan_cache_stale'] is True for row in stale), 'Stale fixture projection was not established'
             else:
                 c.execute('update library.library_roots set is_active=false where id=%s', (db.roots[db.library],))
     for presentation in ('albums', 'tracks'):

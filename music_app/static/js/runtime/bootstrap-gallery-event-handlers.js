@@ -651,6 +651,78 @@ function ensureRecentSearchState() {
   return state.ui;
 }
 
+let recentSearchTransport = null;
+let unsubscribeRecentSearchTransport = null;
+let recentSearchShell = null;
+let recentSearchObserver = null;
+
+// Shell identity and transport stamps provide continuity, not authorization.
+function getRecentSearchScope() {
+  const shell = document.getElementById('app-shell');
+  const account = shell?.dataset?.nativeAccountId;
+  const library = shell?.dataset?.nativeLibraryId;
+  if (!account || !library || !recentSearchTransport) return null;
+  try {
+    const context = recentSearchTransport.context();
+    const identity = JSON.stringify([account, library, context]);
+    return {storageKey: `${RECENT_SEARCH_STORAGE_KEY}:${identity}`,
+      continuity: JSON.stringify([identity, recentSearchTransport.generation()])};
+  } catch (_error) {
+    return null;
+  }
+}
+
+function syncRecentSearchScope(records = []) {
+  const ui = ensureRecentSearchState();
+  if (!ui) return null;
+  // Install only when the existing history owner is used: the shared transport
+  // is declared later in the production bundle.
+  const transport = window.AlbumHavenPrivateUITransport || null;
+  const shell = document.getElementById('app-shell');
+  let retired = transport !== recentSearchTransport || shell !== recentSearchShell;
+  if (transport !== recentSearchTransport) {
+    unsubscribeRecentSearchTransport?.();
+    recentSearchTransport = transport;
+    unsubscribeRecentSearchTransport = transport?.subscribe(syncRecentSearchScope) || null;
+  }
+  if (shell !== recentSearchShell) {
+    recentSearchObserver?.disconnect();
+    recentSearchShell = shell;
+    recentSearchObserver = shell && typeof MutationObserver === 'function'
+      ? new MutationObserver(syncRecentSearchScope) : null;
+    recentSearchObserver?.observe(shell, {attributes: true, attributeOldValue: true,
+      attributeFilter: ['data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
+  }
+  // Drain already-observed transitions before admitting another intent. A batched
+  // A-to-B-to-A transition must retire A even when its final stamp is unchanged.
+  const mutations = [...records, ...(recentSearchObserver?.takeRecords?.() || [])];
+  retired ||= mutations.some(record => record.oldValue !== record.target.getAttribute(record.attributeName));
+  const scope = getRecentSearchScope();
+  const continuity = scope?.continuity || null;
+  if (retired || !Object.prototype.hasOwnProperty.call(ui, 'recentSearchScope')
+      || (ui.recentSearchScope?.continuity || null) !== continuity) {
+    const previous = ui.recentSearchScope;
+    ui.recentSearchScope = scope;
+    ui.recentSearchQueries = [];
+    ui.recentSearchesLoaded = false;
+    ui.recentSearchPopoverOpen = false;
+    ui.recentSearchActiveIndex = -1;
+    const {input, popover} = getRecentSearchElements();
+    if (popover) {popover.innerHTML = ''; popover.hidden = true;}
+    input?.setAttribute('aria-expanded', 'false');
+    input?.removeAttribute('aria-activedescendant');
+    if (typeof galleryMainSurfaceController !== 'undefined'
+        && galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
+      closeGalleryMainSurface(false);
+    }
+    if (previous && ui.pendingRecentSearchCommitScope === previous) {
+      clearPendingGallerySearchCommit();
+      releasePendingGallerySearchSuspensions();
+    }
+  }
+  return ui.recentSearchScope;
+}
+
 function normalizeRecentSearchQueries(queries) {
   const normalized = [];
   const seen = new Set();
@@ -667,16 +739,17 @@ function normalizeRecentSearchQueries(queries) {
 
 function readRecentSearchQueries() {
   const ui = ensureRecentSearchState();
-  if (!ui) return [];
+  const scope = syncRecentSearchScope();
+  if (!ui || !scope) return [];
   if (!ui.recentSearchesLoaded) {
-    const storedValue = getSessionStorageItem(RECENT_SEARCH_STORAGE_KEY, '');
+    const storedValue = getSessionStorageItem(scope.storageKey, '');
     if (storedValue) {
       try {
         ui.recentSearchQueries = normalizeRecentSearchQueries(JSON.parse(storedValue));
       } catch (_error) {
         ui.recentSearchQueries = [];
         if (typeof removeSessionStorageItem === 'function') {
-          removeSessionStorageItem(RECENT_SEARCH_STORAGE_KEY);
+          removeSessionStorageItem(scope.storageKey);
         }
       }
     }
@@ -689,13 +762,14 @@ function recordRecentSearchQuery(query) {
   const value = String(query || '').trim();
   if (!value) return false;
   const ui = ensureRecentSearchState();
-  if (!ui) return false;
+  const scope = syncRecentSearchScope();
+  if (!ui || !scope) return false;
   const key = value.toLocaleLowerCase();
   ui.recentSearchQueries = [
     value,
     ...readRecentSearchQueries().filter((item) => item.toLocaleLowerCase() !== key),
   ].slice(0, RECENT_SEARCH_LIMIT);
-  setSessionStorageItem(RECENT_SEARCH_STORAGE_KEY, JSON.stringify(ui.recentSearchQueries));
+  setSessionStorageItem(scope.storageKey, JSON.stringify(ui.recentSearchQueries));
   return true;
 }
 
@@ -763,7 +837,7 @@ function closeRecentSearchPopover() {
 function selectRecentSearchQuery(query) {
   const { input } = getRecentSearchElements();
   const value = String(query || '').trim();
-  if (!input || !value) return false;
+  if (!input || !value || !readRecentSearchQueries().includes(value)) return false;
   input.value = value;
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
@@ -787,6 +861,7 @@ function handleGalleryBootstrapSearchClick(event) {
   if (option) {
     event.preventDefault();
     const queries = readRecentSearchQueries();
+    if (!getRecentSearchElements().popover?.contains(option)) return false;
     return selectRecentSearchQuery(queries[Number(option.getAttribute('data-recent-search-index'))]);
   }
   if (event.target.closest('#search-input')) {
@@ -873,6 +948,7 @@ function clearPendingGallerySearchCommit() {
   if (!state.ui || typeof state.ui !== 'object') return;
   clearBrowserTimeout(state.ui.pendingSearchCommitTimer);
   state.ui.pendingSearchCommitTimer = 0;
+  state.ui.pendingRecentSearchCommitScope = null;
 }
 
 function beginAlbumDetailPrewarmSearchSuspension() {
@@ -963,6 +1039,8 @@ function releasePendingGallerySearchSuspensions() {
 }
 
 function scheduleGallerySearchCommit(nextQuery, options = {}) {
+  const recentSearchScope = options.recordRecentSearch === true
+    ? syncRecentSearchScope() : undefined;
   const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
   let committedQuery = String(state.view?.query || '');
   const pendingQuery = state.busy
@@ -1000,8 +1078,12 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   }
   clearPendingGallerySearchCommit();
   const commitSearch = () => {
+    if (options.recordRecentSearch === true
+        && recentSearchScope !== (syncRecentSearchScope())) return;
     state.ui.pendingSearchCommitTimer = 0;
+    state.ui.pendingRecentSearchCommitScope = null;
     commitGallerySearchQuery(normalizedQuery, {
+      recentSearchScope,
       recordRecentSearch: options.recordRecentSearch === true,
       scanPageAbandonHandled: options.scanPageAbandonHandled === true,
     });
@@ -1010,6 +1092,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
     commitSearch();
     return true;
   }
+  state.ui.pendingRecentSearchCommitScope = recentSearchScope;
   state.ui.pendingSearchCommitTimer = scheduleBrowserTimeout(
     commitSearch,
     SEARCH_COMMIT_DEBOUNCE_MS,
@@ -1105,6 +1188,11 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
+  const currentRecentSearchScope = options.recordRecentSearch === true
+    ? syncRecentSearchScope() : undefined;
+  const recentSearchScope = Object.prototype.hasOwnProperty.call(options, 'recentSearchScope')
+    ? options.recentSearchScope : currentRecentSearchScope;
+  if (options.recordRecentSearch === true && recentSearchScope !== currentRecentSearchScope) return;
   const mobileLeaveConfirmed = options.mobileLeaveConfirmed === true;
   if (mobileLeaveConfirmed) {
     beginAlbumDetailPrewarmSearchSuspension();
@@ -1112,7 +1200,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     beginSearchWaveformPeakLoadSuspension();
   }
   if (typeof prepareMobileGallerySearch === 'function'
-    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
+    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, recentSearchScope, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
     releasePendingGallerySearchSuspensions();
     return;
   }

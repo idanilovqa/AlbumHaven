@@ -145,12 +145,55 @@ class PostgresOwnedAlbumTopsService:
                 "next_cursor": encode_social_cursor(rows[limit - 1]["id"] if len(rows) > limit else None,
                                                      secret=cursor_secret, scope=scope)}
 
-    def admit_inventory_album(self, context, *, album_id, constraints=None):
+    def search_inventory_albums(self, context, *, query='', cursor=None, limit=50,
+                                cursor_secret, top_ref=None, constraints=None):
+        """Bounded current-library album metadata; never a track inventory read."""
+        if (type(query) is not str or len(query) > 100 or '\0' in query
+                or any('\ud800' <= char <= '\udfff' for char in query)
+                or type(limit) is not int or not 1 <= limit <= 100):
+            raise AlbumTopError('invalid_query')
+        ref = top_uuid(top_ref) if top_ref is not None else None
+        query = query.strip()
+        with self._authorized(context, constraints) as (connection, live, _):
+            top = self._top(connection, live, ref) if ref else None
+            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            scope = ['album-top-picker-v1', live.actor.account_id, live.actor.session_id,
+                     live.library_id, query, ref]
+            after = viewers.page_position(cursor, cursor_secret, scope)
+            if not query:
+                return {'albums': [], 'next_cursor': None}
+            rows = connection.execute("""select a.id,a.title,a.release_year,ar.name as artist,
+                l.catalog_ref from library.local_albums a
+                join library.local_artists ar on ar.id=a.artist_id and ar.library_id=a.library_id
+                left join library.catalog_album_links l on l.local_album_id=a.id and l.library_id=a.library_id
+                where a.library_id=%s and a.id>%s
+                  and (strpos(lower(a.title),lower(%s))>0 or strpos(lower(ar.name),lower(%s))>0)
+                order by a.id limit %s""", (live.library_id, after, query, query, limit + 1)).fetchall()
+            from music_app.services.private_library_authority import require_private_action
+            albums = []
+            for row in rows[:limit]:
+                try:
+                    require_private_action(live, BROWSE, resource=ResourceScope('album', str(row['id'])), constraints=constraints)
+                except PrivateLibraryAuthorityError:
+                    continue
+                if any(type(row[key]) is not str or not row[key].strip() or len(row[key]) > 1000 for key in ('title', 'artist')):
+                    continue
+                albums.append({'local_album_id': row['id'],
+                    'album_ref': str(row['catalog_ref']) if row['catalog_ref'] is not None else None,
+                    'title': row['title'], 'artist': row['artist'],
+                    'year': row['release_year'] if type(row['release_year']) is int and 1 <= row['release_year'] <= 9999 else None})
+            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            return {'albums': albums, 'next_cursor': encode_social_cursor(
+                rows[limit - 1]['id'] if len(rows) > limit else None, secret=cursor_secret, scope=scope)}
+
+    def admit_inventory_album(self, context, *, album_id, top_ref=None, constraints=None):
         """Admit current inventory evidence without deduping display names or editions."""
         if type(album_id) is not int or album_id <= 0 or album_id > 9223372036854775807:
             raise AlbumTopError("invalid_command")
+        ref = top_uuid(top_ref) if top_ref is not None else None
         with self._authorized(context, constraints) as (connection, live, _):
-            self._require(live, (BROWSE, CREATE), constraints)
+            top = self._top(connection, live, ref) if ref else None
+            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
             from music_app.services.private_library_authority import require_private_action
             require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
             row = connection.execute("""select a.title,a.release_year,ar.name as artist_display
@@ -160,6 +203,8 @@ class PostgresOwnedAlbumTopsService:
                 (album_id, live.library_id)).fetchone()
             if row is None:
                 raise AlbumTopError("album_unavailable", 404)
+            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
             existing = connection.execute("""select catalog_ref from library.catalog_album_links
                 where library_id=%s and local_album_id=%s""", (live.library_id, album_id)).fetchone()
             if existing:
@@ -208,9 +253,17 @@ class PostgresOwnedAlbumTopsService:
                 c.title,c.artist_display,c.release_year from app.album_list_items i
                 join catalog.release_groups c on c.ref=i.catalog_ref
                 where i.top_ref=%s order by i.curator_position""", (ref,)).fetchall()
+            actions = self._actions(live, constraints, top)
+            edit = {}
+            if actions.get('can_edit'):
+                working = publication.working_items(connection, top)
+                link = publication.lock_link(connection, top)
+                edit['edit_draft'] = {'items': publication.as_draft(working),
+                    'publication_preview_required': top['owner_account_id'] == live.actor.account_id
+                        and link is not None and link['state'] == 'enabled'}
             return {"top_ref": ref, "title": top["title"], "description": top["description"],
                 "revision": str(top["revision"]), "visibility": top["visibility"],
-                "allowed_actions": self._actions(live, constraints, top),
+                "allowed_actions": actions, **edit,
                 "top_viewer_overlay": progress.read_overlay(connection, live, top),
                 "items": [{**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]}
 

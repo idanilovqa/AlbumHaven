@@ -9,7 +9,7 @@ from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_ob
 from music_app.services.client_surfaces import client_surface_from_request
 from music_app.services.owned_album_tops import (
     AlbumTopError, BROWSE, CREATE, ACCESS, MAX_TOP_COMMAND_BYTES, normalize_top_command,
-    require_top_authority, top_uuid,
+    require_top_authority, top_uuid, normalize_top_publication_preview,
 )
 from music_app.services.owned_album_tops_postgres import PostgresOwnedAlbumTopsService
 from music_app.services.policy import PolicyContext
@@ -205,6 +205,64 @@ async def _mutate(request, action, top_ref=None):
 @router.post("/album-tops")
 async def create_album_top(request: Request):
     return await _mutate(request, "create")
+
+
+@router.post('/album-tops/{top_ref}/publication-preview')
+async def preview_album_top_publication(request: Request, top_ref: str):
+    try:
+        if request.query_params:
+            raise AlbumTopError('invalid_command')
+        ref = top_uuid(top_ref)
+        context, constraints = _context(request, ACCESS)
+        _require_context(request)
+        payload = normalize_top_publication_preview(await read_bounded_json_object(request, max_bytes=MAX_TOP_COMMAND_BYTES))
+        value = await run_in_threadpool(_service(request).publication_preview, context,
+            top_ref=ref, payload=payload, constraints=constraints)
+        return _response(request, value)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+
+
+@router.post('/album-tops/{top_ref}/catalog/inventory')
+async def admit_album_top_edit_inventory(request: Request, top_ref: str):
+    try:
+        if request.query_params:
+            raise AlbumTopError('invalid_command')
+        ref = top_uuid(top_ref)
+        context, constraints = _context(request, BROWSE)
+        _require_context(request)
+        payload = await read_bounded_json_object(request, max_bytes=1024)
+        if type(payload) is not dict or set(payload) != {'album_id'}:
+            raise AlbumTopError('invalid_command')
+        value = await run_in_threadpool(_service(request).admit_inventory_album, context,
+            album_id=payload['album_id'], top_ref=ref, constraints=constraints)
+        return _response(request, value)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+
+
+@router.get('/album-top-catalog/search')
+def search_album_top_inventory(request: Request):
+    try:
+        params = request.query_params
+        if set(params) - {'q', 'cursor', 'limit', 'top_ref'} or len(params.multi_items()) != len(params):
+            raise AlbumTopError('invalid_query')
+        query, limit = params.get('q', ''), params.get('limit', '50')
+        if (len(query) > 100 or '\0' in query or any('\ud800' <= char <= '\udfff' for char in query)
+                or not limit.isascii() or not limit.isdecimal() or len(limit) > 3 or not 1 <= int(limit) <= 100):
+            raise AlbumTopError('invalid_query')
+        ref = top_uuid(params['top_ref']) if 'top_ref' in params else None
+        context, constraints = _context(request, BROWSE)
+        _context_ref(request)
+        return _response(request, _service(request).search_inventory_albums(context,
+            query=query.strip(), cursor=params.get('cursor'), limit=int(limit), top_ref=ref,
+            cursor_secret=request.app.state.auth_policy_config['hmac']['secret'], constraints=constraints))
+    except AlbumTopError as error:
+        return _error(error)
 
 
 @router.post("/album-tops/{top_ref}/{action}")

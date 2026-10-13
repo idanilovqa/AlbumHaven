@@ -18,7 +18,7 @@ function ArtistRow({runtime, row, selected, onSelect}) {
     selected: allowed && selected, disabled: !allowed, count: allowed ? row.listen_count ?? null : null,
     artworkHtml: allowed ? resourceArtwork(runtime, row, `${name} artwork`) : '',
     attributes: {'data-home-artist-select': row.id}});
-  const initial = useRef(html);
+  const initial = useRef({__html: html});
   useLayoutEffect(() => {
     const current = host.current.firstElementChild, holder = host.current.ownerDocument.createElement('div');
     holder.innerHTML = html;
@@ -28,7 +28,7 @@ function ArtistRow({runtime, row, selected, onSelect}) {
     for (const attribute of [...next.attributes]) if (current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
     if (current.innerHTML !== next.innerHTML) current.innerHTML = next.innerHTML;
   }, [html]);
-  return <div ref={host} className="home-artists__item" dangerouslySetInnerHTML={{__html: initial.current}} onClick={event => {
+  return <div ref={host} className="home-artists__item" dangerouslySetInnerHTML={initial.current} onClick={event => {
     const button = event.target.closest('[data-home-artist-select]');
     if (!button || !host.current.contains(button) || !allowed || button.disabled || event.defaultPrevented) return;
     event.preventDefault(); event.stopPropagation();

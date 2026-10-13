@@ -1,3 +1,4 @@
+import {SharedHeader, ListensBadge} from './shared-header.jsx';
 import {ActivityMissingAction} from './activity-missing.jsx';
 import {useNowPlaying} from './now-playing.jsx';
 import {QueuePanel, QueueHeader, useExplicitQueue, useQueueDetails} from './queue.jsx';
@@ -26,8 +27,8 @@ const comparisonKinds = kinds.slice(0, 3);
 const homeSections = [['recent', 'Recent'], ['news', 'News', {disabled: true}], ['queue', 'Queue']];
 
 export function HomeFriendsView({runtime, controller, state, shell, readDetail, readNowPlaying}) {
-  const pageRoot = useRef(null), pageHeader = useRef(null), profileFocus = useRef(null), selectedFocus = useRef(null), selectionOpener = useRef(null);
-  const root = useRef(null), recentWidget = useRef(null), friendsWidget = useRef(null), albumWidget = useRef(null), artistWidget = useRef(null), dashboard = useRef(null);
+  const pageRoot = useRef(null), profileFocus = useRef(null), selectedFocus = useRef(null), selectionOpener = useRef(null);
+  const root = useRef(null), recentWidget = useRef(null), friendsWidget = useRef(null), albumWidget = useRef(null), artistWidget = useRef(null);
   const saved = shell.presentation;
   const [{kind, kindExplicit}, setKind] = useState(() => initialHomeKind(saved,
     typeof window !== 'undefined' && (window.matchMedia?.(HOME_PHONE_QUERY).matches ?? window.innerWidth <= 900)));
@@ -160,22 +161,25 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
     return () => media.removeEventListener?.('change', resize);
   }, []);
 
+  const dashboardKeys = [section, ...(hasArtist ? ['artist'] : []), ...(hasAlbum ? ['album'] : [])];
+  const expandedKey = dashboardKeys.length > 1 && dashboardKeys.includes(expanded) ? expanded : null;
+  const widgetState = key => dashboardKeys.length === 1 ? 'fill' : expandedKey === null ? 'ordinary'
+    : expandedKey === key ? 'expanded' : 'suppressed';
+  const sizeFocus = useRef(null);
+  const resizeWidget = next => {
+    if (currentQuery.current?.owner !== owner) return;
+    sizeFocus.current = next === null ? expandedKey : next;
+    pendingScroll.current = null; setExpanded(next);
+  };
   useLayoutEffect(() => {
-    const descriptor = (key, element) => ({key, element, header: element.querySelector(':scope > header'), body: element.querySelector(':scope > .home-friends__widget-body'),
-      ...(pageHeader.current ? {backHost: pageHeader.current} : {})});
-    const widgets = [descriptor(section, sourceWidget.current),
-      ...(hasArtist ? [descriptor('artist', artistWidget.current)] : []),
-      ...(hasAlbum ? [descriptor('album', albumWidget.current)] : [])];
-    dashboard.current = runtime.mountDashboard(root.current, {widgets, onSizeIntent: (_key, next) => {
-      if (currentQuery.current?.owner !== owner) return;
-      pendingScroll.current = null; setExpanded(next);
-    }});
-    return () => {dashboard.current?.dispose(); dashboard.current = null;};
-  }, [runtime, section, hasArtist, hasAlbum, owner]);
-  useLayoutEffect(() => {
-    const available = expanded === section || expanded === 'artist' && hasArtist || expanded === 'album' && hasAlbum;
-    dashboard.current?.update({expandedKey: available ? expanded : null});
-  }, [section, expanded, hasArtist, hasAlbum, owner]);
+    if (!sizeFocus.current) return;
+    const selector = expandedKey ? '[data-dashboard-action="back"]'
+      : `[data-home-widget="${sizeFocus.current}"] [data-dashboard-action="expand"]`;
+    sizeFocus.current = null;
+    pageRoot.current?.querySelector(selector)?.focus({preventScroll: true});
+  }, [expandedKey]);
+  const fullSize = key => dashboardKeys.length > 1 && !expandedKey && <Button runtime={runtime} icon="expand"
+    attributes={{'data-dashboard-action': 'expand', 'aria-expanded': 'false'}} onClick={() => resizeWidget(key)}>Full size</Button>;
   useLayoutEffect(() => {
     const phone = typeof window !== 'undefined' && window.matchMedia?.(HOME_PHONE_QUERY).matches === true;
     if (!selectedFocus.current || phone && activePane !== 'recent') return;
@@ -236,7 +240,8 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
     const pending = profileFocus.current;
     if (!editing && pending) {
       profileFocus.current = null;
-      const control = pending.control?.isConnected ? pending.control : pageRoot.current?.querySelector('[data-home-profile-edit]');
+      let control = pending.control?.isConnected ? pending.control : pageRoot.current?.querySelector('[data-home-profile-edit]');
+      if (control?.closest('[inert]')) control = control.closest('[data-shared-header]')?.querySelector('[data-header-tools]');
       if (pending.section === section && pending.friendRef === shell.friendRef && control && !control.closest('[hidden], [inert]')) control.focus({preventScroll: true});
     }
   }, [editing, profile, section, shell.friendRef]);
@@ -427,17 +432,20 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
     onPage={page => navigateHistory('loadActivityPage', page)} onLoadMore={() => navigateHistory('loadMoreActivity')}
     onRetry={() => navigateHistory('retryActivityNavigation')}/>;
   return <div ref={pageRoot} className="home-friends" onScrollCapture={rememberScroll} data-home-section={section} data-home-pane={activePane}>
-    <header ref={pageHeader} className="gallery-bar home-friends__page-header">
-      <div className={`gallery-bar__context${comparing ? ' home-comparison__header-context' : ''}`}>{profileRoute ? <ProfileIdentity runtime={runtime} profile={memberProfile} own={false} fallbackName="Profile"/>
-        : comparing
-        ? <><Button runtime={runtime} icon="back" attributes={{'data-home-comparison-back': 'true'}} onClick={() => navigate('friends')}>Back to friends</Button>
-          <ComparisonIdentity runtime={runtime} profile={profile} friend={friend}/></>
-        : <ProfileIdentity runtime={runtime} profile={section === 'friends' && friend ? friend : profile} own={!(section === 'friends' && friend)} fallbackName={shell.accountName || 'My music'} onEdit={event => setEditing({profile, control: event.target.closest('button')})}/>}</div>
-      <div className="gallery-bar__actions">
-        {comparing ? <span ref={setComparisonViewHost} data-home-comparison-view-host="true"/>
-          : <Button runtime={runtime} icon="friends" attributes={{'data-home-open-friends': 'true'}} onClick={() => {if (section === 'recent' && window.innerWidth > 900) setDirectoryDialog(true); else navigate(section === 'friends' ? 'recent' : 'friends');}} selected={section === 'friends'}>Friends</Button>}
-      </div>
-    </header>
+    <SharedHeader runtime={runtime} id="home-page" className="home-friends__page-header"
+      leading={expandedKey ? <Button runtime={runtime} icon="back" attributes={{'data-dashboard-action': 'back'}} onClick={() => resizeWidget(null)}>Back</Button>
+        : comparing ? <Button runtime={runtime} icon="back" attributes={{'data-home-comparison-back': 'true'}} onClick={() => navigate('friends')}>Back to friends</Button> : null}
+      identity={<>{profileRoute ? <ProfileIdentity runtime={runtime} profile={memberProfile} own={false} fallbackName="Profile"/>
+        : comparing ? <div className="home-comparison__header-context"><ComparisonIdentity runtime={runtime} profile={profile} friend={friend}/></div>
+        : <ProfileIdentity runtime={runtime} profile={section === 'friends' && friend ? friend : profile} own={!(section === 'friends' && friend)} fallbackName={shell.accountName || 'My music'}/>}
+        {!profileRoute && !comparing && (section === 'recent' || friend?.allowed_actions?.can_view_activity === true) && <ListensBadge runtime={runtime}
+          total={['ready', 'empty'].includes(section === 'recent' ? currentRecent.status : friendResource.status) ? (section === 'recent' ? currentRecent.data?.total_listens : friendResource.data?.total_listens) : null}
+          range={['ready', 'empty'].includes(section === 'recent' ? currentRecent.status : friendResource.status) ? (section === 'recent' ? currentRecent.data?.range_label : friendResource.data?.range_label) : undefined}/>}</>}
+      outsideActions={comparing ? <span ref={setComparisonViewHost} data-home-comparison-view-host="true"/> : null}
+      actions={!comparing && <>
+        {!profileRoute && !(section === 'friends' && friend) && profile?.allowed_actions?.can_edit === true && <Button runtime={runtime} icon="edit" attributes={{'data-home-profile-edit': 'true'}} onClick={event => setEditing({profile, control: event.target.closest('button')})}>Edit profile</Button>}
+        <Button runtime={runtime} icon="friends" attributes={{'data-home-open-friends': 'true'}} onClick={() => {if (section === 'recent' && window.innerWidth > 900) setDirectoryDialog(true); else navigate(section === 'friends' ? 'recent' : 'friends');}} selected={section === 'friends'}>Friends</Button>
+      </>}/>
     {editing && state.friends.status !== 'denied' && <NativeDialog runtime={runtime} title="Edit profile" onClose={closeProfile}><ProfileEditor key={state.scopeKey} runtime={runtime} profile={editing.profile} controller={controller} onClose={closeProfile}/></NativeDialog>}
     {directoryDialog && <NativeDialog runtime={runtime} title="Friends" contentOwnsFooter={false} onClose={() => setDirectoryDialog(false)}><FriendsDirectory runtime={runtime} value={state.friends} selected={state.selectedFriendRef} controller={controller} onSelect={ref => navigate('friends', ref)} onProfile={openProfile} onRequest={openRequest}/></NativeDialog>}
     {requestDialog?.scopeKey === state.scopeKey && <FriendRequestDialog key={`${state.scopeKey}:${requestDialog.requestRef}`} runtime={runtime} controller={controller}
@@ -450,22 +458,16 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
         items={ [['recent', queueMode ? 'Queue' : 'Recent'], ...(hasArtist ? [['artist', 'Artist Info']] : []), ...(hasAlbum ? [['album', 'Album Info']] : [])] }
         value={activePane} onChange={showPane}/>
     </div>}
-    <div ref={root} className="home-friends__dashboard">
-      <section ref={recentWidget} className="home-friends__widget" hidden={section !== 'recent'} data-home-widget="recent" aria-label={queueMode ? 'Queued tracks' : 'Recent listening'}>
-        <header className="gallery-bar home-friends__widget-header home-friends__recent-header">
-          <div className="home-friends__control-row home-friends__section-controls">
-            <Tabs runtime={runtime} id="home-recent-sections" label="Home sections" items={section === 'recent' ? homeSections : homeSections.filter(([key]) => key !== 'queue')} value={homeSection} onChange={setHomeSection}/>
-            {homeSection === 'recent' && <Period runtime={runtime} value={period} onChange={changeView(setPeriod)} total={currentRecent.data?.total_listens} range={currentRecent.data?.range_label || (period === 'week' ? 'Last 7 days' : '')}/>}
-            {section === 'recent' && homeSection === 'queue' && <QueueHeader runtime={runtime} {...queue}/>}
-          </div>
-          {homeSection !== 'queue' && <div className="home-friends__catalog-controls">
-            <Tabs runtime={runtime} id="home-recent-kinds" label="Recent listening view" items={kinds} value={kind}
-              onChange={changeView(value => setKind({kind: value, kindExplicit: true}))}/>
-            <div className="gallery-bar__actions"><ActivityMissingAction runtime={runtime} value={currentRecent} scopeKey={state.scopeKey}
-              kind={recentKind} period={period} selectedRowIds={trackSelection?.rows.map(row => row.id)}
-              enabled={section === 'recent' && homeSection === 'recent'} onError={setActionError}/>{kind !== 'albums' && <ViewControl runtime={runtime} kind={kind} value={views[kind]} onChange={changeView(value => setViews({...views, [kind]: value}))}/>}</div>
-          </div>}
-        </header>
+    <div ref={root} className="home-friends__dashboard" data-dashboard="true" data-dashboard-layout={dashboardKeys.length === 1 ? 'single' : expandedKey ? 'expanded' : 'ordinary'} data-dashboard-expanded-key={expandedKey || undefined}>
+      <section ref={recentWidget} className="home-friends__widget" hidden={section !== 'recent'} data-home-widget="recent" data-dashboard-widget-state={widgetState('recent')} aria-label={queueMode ? 'Queued tracks' : 'Recent listening'}>
+        <SharedHeader runtime={runtime} id="home-recent" className="home-friends__widget-header home-friends__recent-header" leading={fullSize('recent')}
+          identity={<Tabs runtime={runtime} id="home-recent-sections" label="Home sections" items={section === 'recent' ? homeSections : homeSections.filter(([key]) => key !== 'queue')} value={homeSection} onChange={setHomeSection}/>}
+          actions={homeSection === 'recent' ? [<Period key="period" runtime={runtime} value={period} onChange={changeView(setPeriod)} range={currentRecent.data?.range_label || (period === 'week' ? 'Last 7 days' : '')}/>,
+            <ActivityMissingAction key="missing" runtime={runtime} value={currentRecent} scopeKey={state.scopeKey} kind={recentKind} period={period} selectedRowIds={trackSelection?.rows.map(row => row.id)} enabled={section === 'recent'} onError={setActionError}/>] : null}
+          outsideActions={homeSection === 'recent' && kind !== 'albums' ? <ViewControl runtime={runtime} kind={kind} value={views[kind]} onChange={changeView(value => setViews({...views, [kind]: value}))}/> : null}>
+          {homeSection === 'queue' ? section === 'recent' && <QueueHeader runtime={runtime} {...queue}/>
+            : <Tabs runtime={runtime} id="home-recent-kinds" label="Recent listening view" items={kinds} value={kind} onChange={changeView(value => setKind({kind: value, kindExplicit: true}))}/>}
+        </SharedHeader>
         <div className={`home-friends__widget-body ${queueMode ? 'gallery-scrollbar' : 'home-friends__recent-body'}`}>
           {homeSection === 'queue' ? section === 'recent' && <QueuePanel runtime={runtime} {...queue} scopeKey={state.scopeKey} selectedIds={queueDetails.value.selectedIds} onSelect={selectQueuedTracks}/> : kind === 'albums' && period === 'week' ? <RecentAlbums runtime={runtime} value={state.recent} retry={retryRecent} selected={selectedAlbum}
             selectionMode={customDetail ? 'details' : 'native'} onSelect={selectRecentAlbum} onError={setActionError}/>
@@ -474,14 +476,13 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
                 {historyControls(currentRecent)}</>}</div>}
         </div>
       </section>
-      <section ref={friendsWidget} className="home-friends__widget" hidden={section !== 'friends'} data-home-widget="friends" aria-label="Friends">
-        <header className="gallery-bar home-friends__widget-header" hidden={comparing && !hasSelection}><div className="gallery-bar__context"><h2 className={friend && friendMode === 'comparison' ? 'sr-only' : undefined}>{profileRoute ? 'Profile' : friend ? friendMode === 'comparison' ? 'Taste comparison' : 'Recent' : 'Friends'}</h2></div><div className="gallery-bar__actions">
-          {friend && friendMode === 'activity' && <ActivityMissingAction runtime={runtime} value={friendResource} scopeKey={state.scopeKey}
-            account_ref={friend.account_ref} kind={friendActivityKind} period={friendPeriod} selectedRowIds={trackSelection?.rows.map(row => row.id)}
-            enabled={section === 'friends'} onError={setActionError}/>}
-          {friend && friendMode === 'activity' && <ViewControl runtime={runtime} kind={friendKind} value={friendViews[friendKind]} onChange={changeView(value => setFriendViews({...friendViews, [friendKind]: value}))}/>}
-          {section === 'friends' && !comparing && <Button runtime={runtime} icon="back" onClick={() => navigate(friend || profileRoute ? 'friends' : 'recent')}>{friend || profileRoute ? 'Back to friends' : 'Back to Home'}</Button>}
-        </div></header>
+      <section ref={friendsWidget} className="home-friends__widget" hidden={section !== 'friends'} data-home-widget="friends" data-dashboard-widget-state={widgetState('friends')} aria-label="Friends">
+        <SharedHeader runtime={runtime} id="home-friends" className="home-friends__widget-header" hidden={comparing && !hasSelection} leading={fullSize('friends')}
+          identity={<h2 className={friend && friendMode === 'comparison' ? 'sr-only' : undefined}>{profileRoute ? 'Profile' : friend ? friendMode === 'comparison' ? 'Taste comparison' : 'Recent' : 'Friends'}</h2>}
+          actions={[
+            section === 'friends' && !comparing ? <Button key="back" runtime={runtime} icon="back" onClick={() => navigate(friend || profileRoute ? 'friends' : 'recent')}>{friend || profileRoute ? 'Back to friends' : 'Back to Home'}</Button> : null,
+            friend && friendMode === 'activity' ? <ActivityMissingAction key="missing" runtime={runtime} value={friendResource} scopeKey={state.scopeKey} account_ref={friend.account_ref} kind={friendActivityKind} period={friendPeriod} selectedRowIds={trackSelection?.rows.map(row => row.id)} enabled={section === 'friends'} onError={setActionError}/> : null]}
+          outsideActions={friend && friendMode === 'activity' ? <ViewControl runtime={runtime} kind={friendKind} value={friendViews[friendKind]} onChange={changeView(value => setFriendViews({...friendViews, [friendKind]: value}))}/> : null}/>
         <div className="home-friends__widget-body gallery-scrollbar">
           {invalidFriend && <Status runtime={runtime} value={{status: 'denied'}} label="This friend's activity"/>}
           {profileRoute ? <MemberProfile runtime={runtime} controller={controller} accountRef={shell.profileRef} showIdentity={false}
@@ -502,20 +503,18 @@ export function HomeFriendsView({runtime, controller, state, shell, readDetail, 
           {['loading', 'error', 'denied', 'unavailable'].includes(state.mutation.status) && <Status runtime={runtime} value={state.mutation} label="Friend changes"/>}
         </div>
       </section>
-      {hasArtist && <section ref={artistWidget} className="home-friends__widget" data-home-widget="artist" aria-label="Selected Artist Info">
-        <header className="gallery-bar home-friends__widget-header"><div className="gallery-bar__context"><h2>Artist Info</h2></div><div className="gallery-bar__actions">
-          <Button runtime={runtime} icon="close" onClick={() => closeSelection('artist')}>Close Artist Info</Button>
-        </div></header>
+      {hasArtist && <section ref={artistWidget} className="home-friends__widget" data-home-widget="artist" data-dashboard-widget-state={widgetState('artist')} aria-label="Selected Artist Info">
+        <SharedHeader runtime={runtime} id="home-artist" className="home-friends__widget-header" leading={fullSize('artist')}
+          identity={<h2>Artist Info</h2>} finalAction={<Button runtime={runtime} icon="close" onClick={() => closeSelection('artist')}>Close Artist Info</Button>}/>
         <div className="home-friends__widget-body gallery-scrollbar">{!artistTarget && (trackSelection || selectedQueue) ? <p className="home-friends__muted">Selected tracks do not share one available artist.</p> : <ResourceDetail key={`${owner.generation}:artist`}
           runtime={queueMode ? queueDetails.runtime : runtime} scopeKey={state.scopeKey} readDetail={queueMode ? queueDetails.adapter?.readAlbumProjection : readDetail} selection={artistTarget}
           listenedAlbumsHost={!queueMode && query.kind === 'artists' ? listenedAlbumsHost : undefined}
           onDetailChange={selectedArtistChanged} onSelectAlbum={queueMode ? undefined : selectListenedAlbum}
           onError={message => {if (targetCurrent()) setActionError(message);}}/>}</div>
       </section>}
-      {hasAlbum && <section ref={albumWidget} className="home-friends__widget" data-home-widget="album" aria-label="Selected Album Info">
-        <header className="gallery-bar home-friends__widget-header"><div className="gallery-bar__context"><h2>Album Info</h2></div><div className="gallery-bar__actions">
-          <Button runtime={runtime} icon="close" onClick={() => closeSelection('album')}>Close Album Info</Button>
-        </div></header>
+      {hasAlbum && <section ref={albumWidget} className="home-friends__widget" data-home-widget="album" data-dashboard-widget-state={widgetState('album')} aria-label="Selected Album Info">
+        <SharedHeader runtime={runtime} id="home-album" className="home-friends__widget-header" leading={fullSize('album')}
+          identity={<h2>Album Info</h2>} finalAction={<Button runtime={runtime} icon="close" onClick={() => closeSelection('album')}>Close Album Info</Button>}/>
         <div className="home-friends__widget-body gallery-scrollbar">
           {!albumTarget && (trackSelection || selectedQueue) ? <p className="home-friends__muted">Selected tracks do not share one available album.</p> : <ResourceDetail key={`${owner.generation}:album:${detailSelectionKey(albumTarget)}`} runtime={queueMode ? queueDetails.runtime : runtime}
             scopeKey={state.scopeKey} readDetail={queueMode ? queueDetails.adapter?.readAlbumProjection : readDetail} selection={albumTarget} onDetailChange={selectedAlbumChanged}

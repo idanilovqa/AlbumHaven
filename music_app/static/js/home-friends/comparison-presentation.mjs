@@ -79,7 +79,7 @@ export function comparisonFacts(side, kind) {
   const facts = [['listen_count', kind === 'albums' ? 'Track listens' : 'Listens', metric(side?.listen_count)]];
   if (kind === 'albums') facts.push(['full_listen_count', 'Full listens', metric(side?.full_listen_count)]);
   facts.push(['play_count', 'PC', metric(side?.play_count)]);
-  if (kind !== 'artists') facts.push(['rating', 'Rating', metric(side?.rating)],
+  if (kind !== 'artists') facts.push(['rating', 'Rating', side?.taste_state === 'available' && Object.hasOwn(side, 'rating') && side.rating === null ? 'Unrated' : metric(side?.rating)],
     ['favorite', 'Favorite', side?.favorite === true ? 'Yes' : side?.favorite === false ? 'No' : '–']);
   return facts;
 }

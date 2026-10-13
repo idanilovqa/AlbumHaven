@@ -2,13 +2,14 @@ import {trackLoveHtml} from './track-preference.mjs';
 import React, {useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Button, NativeHtml} from './components.jsx';
 import {NativeChoice} from './native-choice.jsx';
-import {metric, safeServerArtworkUrl} from './model.mjs';
+import {metric, ratingMetricHtml, safeServerArtworkUrl} from './model.mjs';
 import {ResourceDetail} from './resource-detail.jsx';
 import {ArtistSelectionRows} from './artist-selection.jsx';
 import {detailSelection} from './detail-projection.mjs';
 import {cycleTableSort, sortTableRows} from './table-order.mjs';
 import {useTrackPreferences} from './track-preference.jsx';
 import {activityTrackRow, readableActivityTrack, playableActivityTrack, paintActivityTracks} from './activity-tracks.jsx';
+import {TrackTableColumnsAction, useTrackTablePresentation} from '../playtables/track-table-presentation.jsx';
 import {PlaytableSelectionActions, usePlaytableSelection, usePlaytableSource} from '../playtables/selection.jsx';
 
 const EMPTY_ROWS = Object.freeze([]);
@@ -182,25 +183,25 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
     }
   };
   const columns = [...(tracks ? [{key: 'number', label: '#'}] : []), {key: 'title', label: kind === 'artists' ? 'Artist' : kind === 'albums' ? 'Album' : 'Track'},
-    ...(kind === 'artists' ? [] : [{key: 'artist', label: 'Artist', hideWhenNarrow: tracks}]),
-    ...(['tracks', 'listens'].includes(kind) ? [{key: 'album', label: 'Album', hideWhenNarrow: true}] : []),
+    ...(kind === 'artists' ? [] : [{key: 'artist', label: 'Artist'}]),
+    ...(['tracks', 'listens'].includes(kind) ? [{key: 'album', label: 'Album'}] : []),
     ...(kind === 'albums' ? [{key: 'favorite', label: 'Favorite'}] : []),
-    ...(tracks ? [{key: 'availability', label: 'Availability', hideWhenNarrow: true}, {key: 'love', label: 'Love'}] : []),
+    ...(tracks ? [{key: 'availability', label: 'Availability'}, {key: 'love', label: 'Love'}] : []),
     {key: 'listens', label: 'Listens', sortable: true}, ...(kind === 'artists' ? [] : [{key: 'rating', label: 'Rating'}]),
     ...(['tracks', 'listens'].includes(kind) ? [{key: 'duration', label: 'Length', sortable: true}] : []),
-    {key: 'last', label: kind === 'listens' ? 'Listened at' : 'Last listened', hideWhenNarrow: tracks}];
+    {key: 'last', label: kind === 'listens' ? 'Listened at' : 'Last listened'}];
   const width = column => column.key === 'number' ? '36px' : tracks && column.key === 'title' ? 'minmax(0,1.3fr)'
     : ['title', 'artist', 'album'].includes(column.key) ? 'minmax(0,1fr)' : column.key === 'last' ? 'minmax(96px,1fr)' : 'minmax(52px,auto)';
   // Love and current/selected state are painted into persistent native cells.
   // Neither selection nor player notifications may replace a row's click target.
   const table = useMemo(() => kind === 'artists' ? '' : runtime.tableHtml({id: `home-activity-${kind}`, ariaLabel: 'Recent listening', density: 'compact', columns: columns.map(width).join(' '),
-    narrowColumns: columns.filter(column => !column.hideWhenNarrow).map(width).join(' '), columnsConfig: columns, sort: metricSort,
+    columnsConfig: columns, sort: metricSort,
     rows: [...(tracks && nowPlaying ? [{key: `now-playing:${nowPlaying.occurrence_ref}`,
       className: 'album-track-table__row album-track-table__row--current album-track-table__row--playing',
       dataAttributes: {'now-playing': 'true'}, cells: {number: '▶',
         title: {content: `<span class="album-track-table__title">${escape(nowPlaying.row.title || 'Unknown track')}</span><span role="status">Now playing</span>`},
         artist: escape(nowPlaying.row.artist || '–'), album: escape(nowPlaying.row.album_title || '–'),
-        availability: '', love: {content: trackLoveHtml(runtime, nowPlaying.row)}, rating: escape(metric(nowPlaying.row.rating)),
+        availability: '', love: {content: trackLoveHtml(runtime, nowPlaying.row)}, rating: ratingMetricHtml(runtime, nowPlaying.row, nowPlaying.row.kind),
         listens: '–', duration: escape(duration(nowPlaying.row.duration_seconds)), last: 'Live'}}] : []), ...sorted.map(row => {
       const readable = readableResource(row) && (!tracks || readableActivityTrack(row));
       const title = readable ? row.title || 'Unknown' : `Unavailable ${row.kind === 'listen' ? 'track' : row.kind}`;
@@ -209,7 +210,7 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
           attributes: {'data-home-activity-select': row.id}})}} : {}),
         artist: escape(readable ? row.artist || '–' : '–'), album: escape(readable ? row.album_title || '–' : '–'), listens: escape(metric(readable ? row.listen_count : null)),
         favorite: readable && typeof row.favorite === 'boolean' ? row.favorite ? 'Yes' : 'No' : '–',
-        rating: escape(metric(readable ? row.rating : null)), duration: escape(duration(readable ? row.duration_seconds : null)), last: escape(activityTimestamp(readable ? row.last_listened_at : null, zone)),
+        rating: ratingMetricHtml(runtime, readable ? row : null, row.kind), duration: escape(duration(readable ? row.duration_seconds : null)), last: escape(activityTimestamp(readable ? row.last_listened_at : null, zone)),
       };
       return tracks ? activityTrackRow(runtime, row, positions.get(row), context, cells)
         : {key: row.id, ariaSelected: readable && row.id === selectedId, ariaDisabled: !readable, cells};
@@ -221,6 +222,12 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
     paint();
     return runtime.subscribeTrackPlayback?.(paint);
   }, [runtime, value, table, rows, context, tracks, love.version]);
+  const presentation = useTrackTablePresentation(trackHost, {runtime, resourceKey: context, enabled: tracks, source: value,
+    columns: columns.map(column => ({key: column.key, label: column.label, identity: column.key === 'title',
+      required: ['number', 'love', 'duration'].includes(column.key),
+      autoMinWidth: ['artist', 'album', 'availability', 'last'].includes(column.key) ? 641 : column.key === 'rating' ? 481 : 0,
+      width: ({number: 36, title: 100, love: 36, duration: 54, rating: 64, listens: 64, last: 160, availability: 88})[column.key] || 112})),
+    isCurrent: () => current()});
   return <section ref={root} className="home-activity" aria-label="Listening results" onKeyDownCapture={event => {
     if (tracks && (event.repeat || event.isComposing) && ['Enter', ' '].includes(event.key)) {event.preventDefault(); event.stopPropagation();}
   }}>
@@ -230,7 +237,8 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
       <Button runtime={runtime} icon={ascending ? 'ascending' : 'descending'} disabled={order === 'server'}
         onClick={() => {latest.current = {...latest.current, ascending: !ascending}; setAscending(!ascending);}}>{`Sort ${ascending ? 'descending' : 'ascending'} by the selected activity order`}</Button>
       {(value?.data?.next_cursor || value?.data?.pagination) && order !== 'server'
-        && <span className="home-friends__muted">{value.data.pagination ? 'Sorted within this page' : 'Sorted within loaded history'}</span>}</div>
+        && <span className="home-friends__muted">{value.data.pagination ? 'Sorted within this page' : 'Sorted within loaded history'}</span>}
+      {tracks && <TrackTableColumnsAction runtime={runtime} {...presentation}/>}</div>
     {tracks && <PlaytableSelectionActions runtime={runtime} {...selection} available={source.actionsAvailable}/>}
     {kind === 'artists' ? <><ArtistSelectionRows runtime={runtime} rows={sorted}
       view={['rows', 'list'].includes(view) ? 'list' : 'cards'} selectedId={selectedId} onSelect={selectResource}/>
@@ -256,7 +264,7 @@ export function ActivityPanel({runtime, value, kind = 'tracks', view = 'rows', s
       {tracks && typeof onResourceSelect === 'function' && ['album', 'artist'].map(resourceKind =>
         resourceTarget(selected, resourceKind)?.allowed_actions.can_view_details === true && <Button key={resourceKind} runtime={runtime}
           onClick={() => selectResource(selected, resourceKind)}>{`View ${resourceKind === 'album' ? 'Album' : 'Artist'}`}</Button>)}
-      <dl><dt>Listens</dt><dd>{metric(selected.listen_count)}</dd><dt>Rating</dt><dd>{metric(selected.rating)}</dd>
+      <dl><dt>Listens</dt><dd>{metric(selected.listen_count)}</dd><dt>Rating</dt><dd><NativeHtml html={ratingMetricHtml(runtime, selected, selected.kind)}/></dd>
         <dt>Last listened</dt><dd>{activityTimestamp(selected.last_listened_at, zone)}</dd>{selected.source_label && <><dt>Source</dt><dd>{selected.source_label}</dd></>}</dl>
     </aside>}
   </section>;

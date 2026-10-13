@@ -6,9 +6,19 @@ import {paintTrackLoveCell} from '../home-friends/track-preference.mjs';
 import {mountPlaylistReorder} from './reorder.mjs';
 import {playlistTrackMetricColumns, playlistTrackMetricCells, getPlaylistTrackMetricValue} from './track-metrics.mjs';
 import {defaultFilters, granted, hasPlaylistFilters, playlistDraft, playlistFilters, visiblePlaylistRows} from './model.mjs';
+import {TrackTableColumnsAction, useTrackTablePresentation} from '../playtables/track-table-presentation.jsx';
 import {PlaytableSelectionActions, usePlaytableSelection, usePlaytableSource} from '../playtables/selection.jsx';
 
 const METRIC_COLUMNS = playlistTrackMetricColumns();
+const playlistColumns = reorderable => [
+  ...(reorderable ? [{key: 'order', label: 'Order', action: true, width: 70}] : []),
+  {key: 'number', label: '#', required: true, width: 36},
+  {key: 'title', label: 'Track', identity: true, width: 100},
+  {key: 'artist', label: 'Artist', width: 112, autoMinWidth: 641}, {key: 'album', label: 'Album', width: 112, autoMinWidth: 641},
+  {key: 'availability', label: 'Availability', width: 88, autoMinWidth: 641},
+  ...METRIC_COLUMNS.map(({hideWhenNarrow, ...column}) => ({...column, width: parseFloat(column.width),
+    autoMinWidth: column.key === 'track_rating' ? 481 : 0, required: ['love_tier', 'duration'].includes(column.key)})),
+];
 const SORT_COLUMNS = Object.fromEntries(METRIC_COLUMNS.filter(column => column.sortable).map(column => [column.key,
   {type: column.type, getValue: row => getPlaylistTrackMetricValue(row, column.key)}]));
 const sorted = sort => Boolean(sort && Object.hasOwn(SORT_COLUMNS, sort.key) && ['asc', 'desc'].includes(sort.direction));
@@ -48,18 +58,14 @@ export function restorePlaylistSelectionFocus(root, rowKey, document) {
   target.focus({preventScroll: true}); return true;
 }
 
-export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reorderable = false, sort = null}) {
+export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reorderable = false, sort = null, preferenceFor}) {
   const escape = runtime.escapeHtml;
   const positions = new Map(sourceRows.map((row, index) => [row, index]));
   reorderable = reorderable && !sorted(sort);
-  const leadingColumns = `${reorderable ? '70px ' : ''}36px minmax(0,1.3fr) minmax(0,.7fr) minmax(0,.7fr) minmax(64px,.6fr)`;
+  const columns = playlistColumns(reorderable);
   return runtime.tableHtml({id: 'playlist-tracks', ariaLabel: `${detail.title || 'Playlist'} tracks`, density: 'compact', frame: 'outline', sort,
     selection: 'multiple', overflow: 'local',
-    columns: `${leadingColumns} ${METRIC_COLUMNS.map(column => column.width).join(' ')}`,
-    narrowColumns: `${reorderable ? '70px ' : ''}36px minmax(0,1fr) ${METRIC_COLUMNS.filter(column => !column.hideWhenNarrow).map(column => column.width).join(' ')}`,
-    columnsConfig: [...(reorderable ? [{key: 'order', label: 'Order', action: true}] : []),
-      {key: 'number', label: '#'}, {key: 'title', label: 'Track'}, {key: 'artist', label: 'Artist', hideWhenNarrow: true},
-      {key: 'album', label: 'Album', hideWhenNarrow: true}, {key: 'availability', label: 'Availability', hideWhenNarrow: true}, ...METRIC_COLUMNS],
+    columns: columns.map(column => column.identity ? 'minmax(0,1fr)' : `${column.width}px`).join(' '), columnsConfig: columns,
     rows: rows.map((track, index) => {
       const position = positions.get(track) ?? index;
       const native = typeof runtime.albumTrackRow === 'function' ? runtime.albumTrackRow({title: track.title,
@@ -75,7 +81,7 @@ export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reo
           title: {content: `<div class="home-detail__release playlists__track-identity">${artwork}<div>${native?.cells?.title?.content || escape(track.title)}</div></div>` + runtime.actionHtml({icon: 'more',
             ariaLabel: `Show details for ${track.title || 'track'}`, title: 'Show track and album information', presentation: 'bare',
             disabled: track.source_readable !== true, attributes: {'data-playlists-select': '1'}})},
-          ...playlistTrackMetricCells(runtime, track),
+          ...playlistTrackMetricCells(runtime, track, preferenceFor?.(track)),
           artist: {content: escape(track.artist || track.secondary_artist || '–')}, album: {content: escape(track.album_title || '–')},
           availability: {content: escape({local: 'Local', missing: 'Missing', unresolved: 'Needs review'}[track.availability])
             + (track.source_readable === true && ['missing', 'unresolved'].includes(track.availability) ? runtime.buttonHtml({label: 'Review', size: 'small',
@@ -108,7 +114,7 @@ export function PlaylistTracks({runtime, rows, detail, controller, state, select
   const context = useMemo(() => ({scopeKey: state.scopeKey, playlist_id: detail.playlist_id}), [state.scopeKey, detail.playlist_id]);
   latest.current = {view, selected, onSelect, onError};
   const reorderable = canReorder(playlistReorderSnapshot(controller, selected, sort));
-  const html = useMemo(() => playlistTableHtml(runtime, {rows: displayed, sourceRows: rows, detail, reorderable, sort}), [runtime, displayed, rows, detail, reorderable, sort]);
+  const html = useMemo(() => playlistTableHtml(runtime, {rows: displayed, sourceRows: rows, detail, reorderable, sort, preferenceFor: love.get}), [runtime, displayed, rows, detail, reorderable, sort]);
   const current = row => {
     const next = latest.current?.view;
     return next?.runtime === runtime && next.detail === detail && next.state === state && sameSort(next.sort, sort)
@@ -133,7 +139,11 @@ export function PlaylistTracks({runtime, rows, detail, controller, state, select
     const rowElements = new Map([...node.querySelectorAll('[data-playlist-row-key]')].map(element => [element.dataset.playlistRowKey, element]));
     for (const row of displayed) {
       const element = rowElements.get(row.row_key);
-      paintTrackLoveCell(element?.querySelector('[data-track-love-cell]'), runtime, row, love.get(row));
+      const preference = love.get(row);
+      paintTrackLoveCell(element?.querySelector('[data-track-love-cell]'), runtime, row, preference);
+      const ratingCell = element?.querySelector('[data-cdt-column="track_rating"]');
+      const ratingHtml = playlistTrackMetricCells(runtime, row, preference).track_rating.content;
+      if (ratingCell && ratingCell.innerHTML !== ratingHtml) ratingCell.innerHTML = ratingHtml;
     }
     owner.current?.update();
     if (focused && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
@@ -182,8 +192,12 @@ export function PlaylistTracks({runtime, rows, detail, controller, state, select
     onContextAction: typeof runtime.openPlaytableContext === 'function' ? (packet, lifetime, anchor) => runtime.openPlaytableContext(packet, lifetime, source.sourceAdapter, anchor) : undefined,
     onPlaylistAction: source.actionsAvailable ? (packet, lifetime, anchor, options) => runtime.openPlaylistAction(packet, lifetime, source.sourceAdapter, anchor, options) : undefined,
     onError});
+  const presentation = useTrackTablePresentation(host, {runtime, resourceKey: context,
+    source: view, columns: playlistColumns(reorderable), isCurrent: () => current()});
   return <><span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
-    <PlaytableSelectionActions runtime={runtime} {...selection} available={source.actionsAvailable}/>
+    <PlaytableSelectionActions runtime={runtime} {...selection} available={source.actionsAvailable}>
+      <TrackTableColumnsAction runtime={runtime} {...presentation}/>
+    </PlaytableSelectionActions>
     {sorted(sort) && <p className="playlists__note" role="status">Sorted view. Restore default order to reorder tracks.</p>}
     <div ref={host} className="album-track-table album-track-table--collection playlists__tracks" onClick={event => {
       if (!current() || event.defaultPrevented || !host.current.contains(event.target)) return;

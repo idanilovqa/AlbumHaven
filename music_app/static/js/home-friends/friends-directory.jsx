@@ -17,7 +17,7 @@ export function PersonNavigation({runtime, person, rowKey, subtitle, selected, d
     subtitle: [person.handle ? `@${person.handle}` : '', subtitle].filter(Boolean).join(' · '),
     variant: 'wide', action: true, selected, disabled, className: 'home-friends__person',
     attributes: {'data-home-person-ref': person.account_ref || '', 'data-home-person-row': rowKey}, artworkHtml: artwork(runtime, person)});
-  const initial = useRef(html);
+  const initial = useRef({__html: html});
   useLayoutEffect(() => {
     const root = host.current, holder = root.ownerDocument.createElement('div'); holder.innerHTML = html;
     const button = root.firstElementChild, next = holder.firstElementChild;
@@ -32,7 +32,7 @@ export function PersonNavigation({runtime, person, rowKey, subtitle, selected, d
     const view = host.current?.ownerDocument.defaultView;
     return () => {for (const id of frames.current) view?.cancelAnimationFrame(id); frames.current = [];};
   }, []);
-  return <div ref={host} className="home-friends__person-navigation" dangerouslySetInnerHTML={{__html: initial.current}} onClick={event => {
+  return <div ref={host} className="home-friends__person-navigation" dangerouslySetInnerHTML={initial.current} onClick={event => {
     const button = event.target.closest('[data-navigation-tree-item]');
     if (disabled || !button || button.disabled) return;
     onSelect?.();

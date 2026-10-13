@@ -3,7 +3,7 @@ import {createPortal} from 'react-dom';
 import {Button, NativeHtml, Status} from './components.jsx';
 import {NativeChoice} from './native-choice.jsx';
 import {ViewControl} from './view-control.jsx';
-import {metric, safeServerArtworkUrl} from './model.mjs';
+import {metric, ratingMetricHtml, safeServerArtworkUrl} from './model.mjs';
 import {cycleTableSort} from './table-order.mjs';
 import {HOME_PHONE_QUERY} from './presentation.mjs';
 import {comparisonOrders, comparisonFacts, comparisonSelection, comparisonRelation,
@@ -42,6 +42,9 @@ function relationHtml(runtime, row, key, label, friendName) {
 }
 function numericHtml(runtime, row, side, key, label, friendName) {
   const value = metric(row[side]?.[key]), person = side === 'yours' ? 'Yours' : friendName;
+  if (key === 'rating' && row[side]?.rating === null && row[side]?.taste_state === 'available') {
+    return ratingMetricHtml(runtime, row[side], row.kind);
+  }
   return `<span class="home-comparison__number" aria-label="${runtime.escapeHtml(`${person} ${label}: ${value === '–' ? 'unavailable' : value}`)}"><strong>${runtime.escapeHtml(value)}</strong></span>`;
 }
 function favoriteHtml(row, side, kind) {
@@ -117,7 +120,7 @@ export function ComparisonCards({runtime, rows, kind = 'albums', friendName = 'F
   </div>;
 }
 
-function DetailSummary({row, kind, friendName}) {
+function DetailSummary({runtime, row, kind, friendName}) {
   if (!row) return null;
   const last = side => typeof side?.last_listened_at === 'string' && Number.isFinite(Date.parse(side.last_listened_at))
     ? new Date(side.last_listened_at).toLocaleString() : '–';
@@ -125,7 +128,7 @@ function DetailSummary({row, kind, friendName}) {
     <h3>{row.title || `Untitled ${row.kind}`}</h3>{row.artist && kind !== 'artists' && <p>{row.artist}</p>}
     <div className="home-comparison__detail-pair">{['yours', 'friend'].map(side => <div key={side}>
       <h4>{side === 'yours' ? 'Yours' : friendName}</h4>
-      <dl>{comparisonFacts(row[side], kind).map(([key, name, value]) => <div key={key}><dt>{name === 'PC' ? 'Personal play count' : name}</dt><dd>{value}</dd></div>)}
+      <dl>{comparisonFacts(row[side], kind).map(([key, name, value]) => <div key={key}><dt>{name === 'PC' ? 'Personal play count' : name}</dt><dd>{key === 'rating' ? <NativeHtml html={ratingMetricHtml(runtime, row[side], row.kind)}/> : value}</dd></div>)}
         <div><dt>Last listened</dt><dd>{last(row[side])}</dd></div></dl>
     </div>)}</div>
   </section>;
@@ -236,6 +239,6 @@ export function ComparisonPanel({runtime, value, friendName = 'Friend', friendRe
       ? <p className="home-comparison__empty" role="status">{commonOnly ? 'No confirmed shared listens on this page.' : 'No listening activity on this page.'}</p>
       : <><NativeHtml className={`home-comparison__table${covers ? ' home-comparison__table--covers' : ''}`} html={html} onClick={activate}/>
         {covers && <ComparisonCards runtime={runtime} rows={rows} kind={kind} friendName={friendName} onSelect={select}/>}</>}
-    <DetailSummary row={selectedRow} kind={kind} friendName={friendName}/>
+    <DetailSummary runtime={runtime} row={selectedRow} kind={kind} friendName={friendName}/>
   </section>;
 }

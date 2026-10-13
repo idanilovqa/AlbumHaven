@@ -45,7 +45,8 @@ function showAlbumCardContextMenu(_x, _y, album, anchor = document.activeElement
       if (!action.startsWith('queue:')) return false;
       const request = new AbortController();
       try {
-        const fresh = await fetchTrackModalAlbumDetails(getAlbumPlaybackQueueRef(album), {signal: request.signal});
+        const fresh = await fetchTrackModalAlbumDetails(getAlbumPlaybackQueueRef(album), {signal: request.signal,
+          isCurrent: () => current() && canQueue()});
         if (!current() || !canQueue() || getAlbumPlaybackQueueRef(fresh) !== getAlbumPlaybackQueueRef(album)) return false;
         const rows = Array.isArray(fresh.track_rows) ? fresh.track_rows : [];
         const ordered = groupAlbumTracks(fresh.tracks || []).groups.flatMap(group => group.tracks || []);
@@ -231,7 +232,7 @@ function getNonAlbumMenuLabel() {
 
 function buildNonAlbumTrackRowsMarkup(items, startingIndex, privateRows = []) {
   return items.map((item, offset) => {
-    privateRows.push({...item, track_ref: Object.hasOwn(item, 'track_ref') ? item.track_ref : item.path});
+    privateRows.push(item);
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
@@ -292,15 +293,17 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  const tableConfig = {groups, showPath: true, showProblem: true};
   if (typeof NativePlaytables !== 'undefined') NativePlaytables.prepare('loose-tracks', sourceView, groups, privateRows, () => {
     const overlay = document.getElementById('non-album-modal');
     const retained = typeof mobilePageState !== 'undefined' && mobilePageState.pages.some(page => page.kind === 'non-album');
     return Boolean(overlay?.isConnected && (!overlay.hidden || retained) && state.view === sourceView);
-  });
+  }, undefined, {columns: albumTrackTableColumns(tableConfig)});
   return buildAlbumTrackTableHtml({
-    groups,
+    ...tableConfig,
     selection: 'multiple', sectionActions: true,
-    showPath: true,
+    // Shared presentation does not confer preference authority. Love remains
+    // unavailable until Loose browse responses have admitted scoped receipts.
     forceGroupLabels: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',

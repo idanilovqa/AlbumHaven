@@ -155,8 +155,9 @@ def _checked_selection(row: object, *, expected_track_id: int | None = None) -> 
     )}
 
 
-def _selection_ctes() -> str:
+def _selection_ctes(*, requested_refs_sql: str | None = None) -> str:
     """One bounded alias/history rule for reads, guarded DML, and observation M."""
+    requested_refs_sql = requested_refs_sql or "select distinct unnest(%(track_refs)s::text[]) as track_ref"
     return """
         with authorized_scope as (
           select a.id as account_id, l.id as library_id
@@ -167,7 +168,7 @@ def _selection_ctes() -> str:
             and a.is_active is true and a.disabled_at is null
         ),
         requested_refs as (
-          select distinct unnest(%(track_refs)s::text[]) as track_ref
+          __REQUESTED_REFS_SQL__
         ),
         matches as (
           select r.track_ref, t.id as track_id, t.track_key
@@ -264,7 +265,21 @@ def _selection_ctes() -> str:
           left join valid_aliases v on v.track_id = c.track_id
           left join preference_selection p on p.track_id = c.track_id
         )
+    """.replace("__REQUESTED_REFS_SQL__", requested_refs_sql)
+
+
+def canonical_candidate_selection_ctes(candidate_relation: str) -> str:
+    """Reuse every alias/history rule for an internal restricted inventory CTE.
+
+    The caller supplies an internal SQL identifier, never request text. Its
+    relation must contain only candidate track_key values for the live library.
+    Existing reads and writes retain their unchanged requested-ref selection.
     """
+    import re
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", candidate_relation):
+        raise ValueError("Invalid candidate relation.")
+    return _selection_ctes(requested_refs_sql=(
+        f"select distinct track_key as track_ref from {candidate_relation}"))
 
 
 def _selection_sql() -> str:

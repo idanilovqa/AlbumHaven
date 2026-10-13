@@ -754,3 +754,11 @@ def artist_search_buckets(all_albums, relation_views, query: str):
         "direct_album_keys": direct_album_keys,
         "artist_name_match_artists": artist_name_match_artists,
     }
+
+
+# Global personal Search shares this owner; the independent private-track source
+# query grammar and its exact-tier consumers are deliberately unchanged.
+from music_app.services.private_search_contract import (
+    OwnLoveCriteria, PrivateSearchError, PrivateSearchRequest,
+    is_personal_search_expression, is_private_search_request, normalize_own_love_query, normalize_private_search_request,
+)

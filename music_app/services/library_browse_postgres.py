@@ -2629,35 +2629,7 @@ class PostgresLibraryBrowseRepository:
                     row = rows[0] if rows else None
                 else:
                     row = None
-        payload = _row_mapping(row)
-        relation_views = {
-            "alias_to_canonical": _row_json_mapping(payload.get("alias_to_canonical")),
-            "canonical_to_aliases": _row_json_mapping(payload.get("canonical_to_aliases")),
-        }
-        if payload.get("projection_structure_complete") is True:
-            relation_views.update(
-                {
-                    "artists": [],
-                    "artists_sidebar": [],
-                    "family_to_artists": {},
-                    "folder_related": {},
-                    "sidebar_families": [],
-                }
-            )
-        relation_projection = _row_json_mapping(payload.get("relation_projection"))
-        scan_cache = {
-            "relation_views": relation_views,
-            "relation_projection": relation_projection,
-        }
-        return {
-            "alias_to_canonical": _row_json_mapping(
-                relation_views.get("alias_to_canonical")
-            ),
-            "canonical_to_aliases": _row_json_mapping(
-                relation_views.get("canonical_to_aliases")
-            ),
-            "projection_stale_reason": relation_projection_stale_reason(scan_cache),
-        }
+        return _relation_alias_maps_payload(row)
 
     def _load_live_relation_alias_maps(self, *, connection: Any) -> dict[str, object]:
         from music_app.services.relation_projection_postgres import (
@@ -6424,6 +6396,7 @@ def _eligible_album_tracks_cte_sql(
     candidate_albums_only: bool = False,
     include_track_override_defaults: bool = True,
     aggregate_tracks: bool = True,
+    require_active_roots: bool = False,
 ) -> str:
     materialization = "materialized" if materialized else "not materialized"
     candidate_album_join = (
@@ -6435,8 +6408,14 @@ def _eligible_album_tracks_cte_sql(
         if candidate_albums_only
         else ""
     )
+    scoped_overrides = ("and library.exception_overrides.library_id in (select library_id from bootstrap_context)"
+                        if require_active_roots else "")
+    active_root_join = ("""join library.library_roots eligible_root
+            on eligible_root.id = library.local_track_files.library_root_id
+           and eligible_root.library_id = library.local_tracks.library_id
+           and eligible_root.is_active is true""" if require_active_roots else "")
     track_override_defaults = (
-        """
+        f"""
         track_override_defaults as materialized (
           select distinct on (
             library.exception_overrides.library_id,
@@ -6447,6 +6426,7 @@ def _eligible_album_tracks_cte_sql(
             library.exception_overrides.override_payload
           from library.exception_overrides
           where library.exception_overrides.track_id is not null
+            {scoped_overrides}
           order by
             library.exception_overrides.library_id,
             library.exception_overrides.track_id,
@@ -6477,6 +6457,7 @@ def _eligible_album_tracks_cte_sql(
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
            and library.local_track_files.scan_cache_stale is false
+          {active_root_join}
           left join library.exception_overrides as path_override
             on path_override.library_id = library.local_tracks.library_id
            and path_override.track_key = library.local_track_files.private_path
@@ -8440,8 +8421,54 @@ def _mojibake_candidate_signal_sql(text_expression: str) -> str:
     """
 
 
-def _relation_alias_maps_sql() -> str:
-    return """
+def load_current_library_relation_alias_maps(connection, library_id: int) -> dict[str, object]:
+    """The native projection/readiness owner scoped to an authorized library.
+
+    This is read-only: no bootstrap owner selection, live inventory hydration,
+    relation rebuild, or persistent projection mutation is performed.
+    """
+    if type(library_id) is not int or library_id <= 0:
+        raise ValueError("Current library is unavailable.")
+    row = connection.execute(_relation_alias_maps_sql(current_library=True),
+                             {"library_id": library_id}).fetchone()
+    return _relation_alias_maps_payload(row)
+
+
+def _relation_alias_maps_payload(row):
+    from music_app.services.relation_projection_postgres import relation_projection_stale_reason
+    payload = _row_mapping(row)
+    relation_views = {
+        "alias_to_canonical": _row_json_mapping(payload.get("alias_to_canonical")),
+        "canonical_to_aliases": _row_json_mapping(payload.get("canonical_to_aliases")),
+    }
+    if payload.get("projection_structure_complete") is True:
+        relation_views.update(
+            {
+                "artists": [],
+                "artists_sidebar": [],
+                "family_to_artists": {},
+                "folder_related": {},
+                "sidebar_families": [],
+            }
+        )
+    relation_projection = _row_json_mapping(payload.get("relation_projection"))
+    scan_cache = {
+        "relation_views": relation_views,
+        "relation_projection": relation_projection,
+    }
+    return {
+        "alias_to_canonical": _row_json_mapping(
+            relation_views.get("alias_to_canonical")
+        ),
+        "canonical_to_aliases": _row_json_mapping(
+            relation_views.get("canonical_to_aliases")
+        ),
+        "projection_stale_reason": relation_projection_stale_reason(scan_cache),
+    }
+
+
+def _relation_alias_maps_sql(*, current_library: bool = False) -> str:
+    sql = """
         with bootstrap_context as (
           select library.libraries.id as library_id
           from app.bootstrap_owners
@@ -8479,6 +8506,12 @@ def _relation_alias_maps_sql() -> str:
         join bootstrap_context on bootstrap_context.library_id = library.libraries.id
         limit 1;
     """
+
+    if current_library:
+        start = sql.index("        with bootstrap_context as (")
+        end = sql.index("    select\n", start)
+        sql = sql[:start] + "        with bootstrap_context as (select %(library_id)s::bigint as library_id)\n" + sql[end:]
+    return sql
 
 
 def _mojibake_candidate_fields_sql(text_expressions: Iterable[str]) -> str:

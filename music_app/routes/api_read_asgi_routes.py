@@ -650,6 +650,10 @@ def view_data(request: Request) -> JSONResponse:
     if str(request.query_params.get("surface") or "").casefold() == "playlists":
         from music_app.routes.owned_playlists_asgi import playlist_view_response
         return playlist_view_response(request)
+    from music_app.services.view_search import is_private_search_request
+    if is_private_search_request(request.query_params):
+        from music_app.routes.private_search_asgi import private_search_view_response
+        return private_search_view_response(request)
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
     if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:

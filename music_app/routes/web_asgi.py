@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from music_app.services.private_ui_context import private_ui_context_ref
+from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
+from music_app.services.view_search import is_personal_search_expression, is_private_search_request
 
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.loops import get_loop
@@ -206,7 +207,19 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
     actor = getattr(request.state, "current_actor", None)
-    private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    try:
+        private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    except PrivateUIContextError:
+        if not is_private_search_request(request.query_params):
+            raise
+        private_context = None
+    try:
+        csrf_token = issue_session_csrf(request.cookies.get("__Host-album_haven_session"),
+                                        request.app.state.auth_policy_config)
+    except (TypeError, ValueError):
+        if not is_private_search_request(request.query_params) or private_context is not None:
+            raise
+        csrf_token = ""
     bootstrap = context.get("bootstrap_payload")
     if isinstance(bootstrap, dict) and isinstance(bootstrap.get("initial_view"), dict):
         context = {**context, "bootstrap_payload": {**bootstrap,
@@ -221,10 +234,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             "runtime_asset_version": request.app.state.runtime_asset_version,
             "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
             "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
-            "account_menu_csrf_token": issue_session_csrf(
-                request.cookies.get("__Host-album_haven_session"),
-                request.app.state.auth_policy_config,
-            ),
+            "account_menu_csrf_token": csrf_token,
             **context,
             "private_ui_context": private_context,
             "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
@@ -242,6 +252,8 @@ def _request_targets_home_root_surface(query_args: Any, query_raw: str, selected
 
 
 def _request_targets_root_albums_surface(query_args: Any, query_raw: str, selected_artist: str) -> bool:
+    if is_private_search_request(query_args):
+        return False
     if query_raw or selected_artist or str(query_args.get("playlist_id") or "").strip():
         return False
     if list(query_args.getlist("related_artist") or []):
@@ -574,6 +586,8 @@ def _build_postgres_selected_artist_startup_view(
     library_state: dict[str, object],
 ) -> tuple[dict[str, object] | None, float]:
     selected_artist = str(query_args.get("artist") or "").strip()
+    if is_private_search_request(query_args):
+        return None, 0.0
     if not selected_artist:
         return None, 0.0
     payload_started_at = time.perf_counter()
@@ -627,7 +641,16 @@ def _build_bootstrap_payload(
     )
     preview_mode = "empty_shell"
     embedded_view_patch = None
-    if library_browse_uses_postgres:
+    personal_search = is_private_search_request(query_args)
+    if personal_search:
+        # Cold HTML never reads ordinary Artist/Family rows for personal syntax,
+        # including unsupported expressions. The guarded endpoint owns errors.
+        initial_view = _build_empty_initial_view(config=config, query_raw=query_raw,
+            selected_artist=selected_artist, active_surface="albums")
+        initial_view.pop("music_dir", None)
+        initial_view["search_presentation"] = str(query_args.get("search_presentation") or "albums")
+        active_surface = "albums"
+    elif library_browse_uses_postgres:
         if active_surface == "album_tops":
             # This shell carries only a navigation identity. React reads all Top
             # content through the authenticated PostgreSQL-backed Top API.
@@ -735,6 +758,17 @@ def _build_bootstrap_payload(
         all_artists_active=str(query_args.get("all_artists", "")).strip().casefold()
         in {"1", "true", "yes", "on"},
     )
+    if personal_search:
+        # Preserve raw scalar/multivalue request data so invalid/duplicate input
+        # is rejected by the one protected request owner after hydration.
+        pairs = list(query_args.multi_items())
+        if "surface" not in query_args:
+            pairs.append(("surface", "albums"))
+        if "payload_tier" not in query_args:
+            pairs.append(("payload_tier", "full"))
+        startup_hydration = {**startup_hydration, "required": True, "trigger": "after_runtime_boot",
+            "endpoint": "/view-data?" + urlencode(pairs), "followupEndpoint": "", "tier": "full",
+            "embeddedViewPatch": None}
     bootstrap_payload = {
         "initial_view": initial_view,
         "bootstrap": {
@@ -887,7 +921,8 @@ async def index(request: Request) -> Response:
     config = _app_config(request)
     route_logger = _app_logger(request)
     library_state = _library_state(request)
-    query_raw = query_args.get("q", "").strip()
+    raw_query = query_args.get("q", "")
+    query_raw = raw_query if is_private_search_request(query_args) else raw_query.strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
     bootstrap_payload, payload_elapsed_ms, startup_preview = await run_in_threadpool(
@@ -939,8 +974,8 @@ async def index(request: Request) -> Response:
             "effective_selected_artist": resolve_effective_selected_artist(
                 bootstrap_payload.get("initial_view")
             ),
-            "music_dir": config["MUSIC_DIR"],
-            "last_error": library_state.get("last_error"),
+            "music_dir": "" if is_private_search_request(query_args) else config["MUSIC_DIR"],
+            "last_error": None if is_private_search_request(query_args) else library_state.get("last_error"),
             "app_name": config.get("APP_NAME", "Album Haven"),
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
             "bootstrap_payload": bootstrap_payload,
@@ -1056,7 +1091,8 @@ async def news_center(request: Request) -> Response:
 async def bootstrap_data(request: Request) -> JSONResponse:
     request_started_epoch_ms = int(time.time() * 1000)
     query_args = request.query_params
-    query_raw = query_args.get("q", "").strip()
+    raw_query = query_args.get("q", "")
+    query_raw = raw_query if is_private_search_request(query_args) else raw_query.strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
     bootstrap_payload, _payload_elapsed_ms, _startup_preview = await run_in_threadpool(
@@ -1071,7 +1107,12 @@ async def bootstrap_data(request: Request) -> JSONResponse:
         request_started_epoch_ms=request_started_epoch_ms,
     )
     actor = getattr(request.state, "current_actor", None)
-    private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    try:
+        private_context = private_ui_context_ref(request) if actor and actor.is_authenticated and actor.current_library_id is not None else None
+    except PrivateUIContextError:
+        if not is_private_search_request(request.query_params):
+            raise
+        private_context = None
     if isinstance(bootstrap_payload.get("initial_view"), dict):
         bootstrap_payload = {**bootstrap_payload,
             "initial_view": {**bootstrap_payload["initial_view"], "context_ref": private_context}}

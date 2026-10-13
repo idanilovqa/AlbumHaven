@@ -102,10 +102,13 @@ def _zone(value, zone_names, code="invalid_input"):
         raise GoalsDomainError(code) from error
 
 
-def _due_date(start, period, code="invalid_input"):
+def _due_date(start, period, code="invalid_input", *, legacy_year=False):
     try:
         if period == "week":
             return start + timedelta(days=7)
+        if period == "year" and not legacy_year:
+            # The captured local year's December 31 is included; January 1 is not.
+            return date(start.year + 1, 1, 1)
         months = {"month": 1, "six-months": 6, "year": 12}[period]
         year, month = divmod(start.year * 12 + start.month - 1 + months, 12)
         month += 1
@@ -134,9 +137,17 @@ def _validate_cycle(cycle, period, zone_names, cycle_ids, *, archived=False):
     if start_date.isoformat() != cycle["start_date"]:
         raise GoalsDomainError("invalid_state")
     # Captured dates survive later timezone-rule changes; only check arithmetic.
+    # Retain rolling-year dates in existing current cycles and history.
     if (
         type(cycle["due_date"]) is not str
-        or _due_date(start_date, period, "invalid_state").isoformat() != cycle["due_date"]
+        or (
+            _due_date(start_date, period, "invalid_state").isoformat() != cycle["due_date"]
+            and (
+                period != "year"
+                or _due_date(start_date, period, "invalid_state", legacy_year=True).isoformat()
+                != cycle["due_date"]
+            )
+        )
     ):
         raise GoalsDomainError("invalid_state")
     albums = _album_ids(cycle["album_refs"])

@@ -43,7 +43,8 @@ export function Status({runtime, value, label, retry}) {
 }
 export function Tabs({runtime, id, label, items, value, onChange}) {
   const root = useRef(null), html = runtime.tabsHtml({id, label,
-    tabs: items.map(([key, label, options]) => ({key, label, disabled: options?.disabled === true})), selectedKey: value});
+    tabs: items.map(([key, label, options]) => ({key, label, disabled: options?.disabled === true,
+      panelId: options?.panelId})), selectedKey: value});
   const initialHtml = useRef({__html: html});
   useLayoutEffect(() => {
     const host = root.current, active = host.contains(document.activeElement) ? document.activeElement.dataset.inPageTab : null;

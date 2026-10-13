@@ -214,3 +214,71 @@ test('request validates metadata, ordered current authority and independent deta
   assert.equal(request(subject, input, ['entry:unknown']), null);
   assert.deepEqual(request(subject, input, ['entry:b', 'entry:a']).entry_refs, ['b', 'a']);
 });
+
+for (const query of ['', ' \t\n ']) {
+  test(`ordinary builder All has no rows before a nonblank query (${JSON.stringify(query)})`, () => {
+    const subject = context('ordinary');
+    const input = response(subject, [row('a', {title: 'Find me'})]);
+    const projected = model.projectCreationState(state(subject, input, {query}));
+    assert.deepEqual(projected.entries, []);
+    assert.deepEqual(projected.groups, []);
+    assert.equal(projected.visibleSelectedCount, 0);
+  });
+}
+
+test('clearing ordinary builder query hides All without losing ordered missing or unresolved selections', () => {
+  const subject = context('ordinary');
+  const input = response(subject, [row('missing', {title: 'Needle', availability: 'missing'}),
+    row('unresolved', {title: 'Needle alternate', availability: 'unresolved'})]);
+  const selectedKeys = ['entry:unresolved', 'entry:missing'];
+  const cleared = state(subject, input, {query: '', selectedKeys});
+  assert.deepEqual(model.projectCreationState(cleared).entries, []);
+  const selected = model.projectCreationState({...cleared, tab: 'selected'});
+  assert.deepEqual(selected.entries.map(item => item.entry_ref), ['unresolved', 'missing']);
+  assert.deepEqual(selected.entries.map(item => item.availability), ['unresolved', 'missing']);
+  assert.deepEqual(request(subject, input, selectedKeys).entry_refs, ['unresolved', 'missing']);
+});
+
+// Integration guard: Tops admits this complete Missing Activity source, while
+// ordinary query-first suppression must not hide its missing originals.
+test('Tops builder integration preserves Missing Activity source identity and grouped blank-query projection', () => {
+  const subject = context('missing');
+  subject.source = {...subject.source, kind: 'activity', source_protocol: 'missing_activity_selection_v1'};
+  const input = response(subject, [row('local', {availability: 'local'}),
+    row('missing', {availability: 'missing', parent_album: parent('album:missing')}),
+    row('unresolved', {parent_album: parent('album:unresolved')})]);
+  input.data.source_protocol = 'missing_activity_selection_v1';
+  const current = state(subject, input, {query: ' \t ', selectedKeys: ['entry:unresolved', 'entry:missing']});
+  assert.equal(current.sourceResource.status, 'ready');
+  const projection = model.projectCreationState(current);
+  assert.deepEqual(projection.entries.map(item => item.entry_ref), ['missing', 'unresolved']);
+  assert.equal(projection.groups.length, 2);
+  assert.deepEqual(projection.selectedEntries.map(item => item.entry_ref), ['unresolved', 'missing']);
+  const draft = model.prepareMissingDraft(current, {draftToken: 'draft:tops-integration'});
+  assert.ok(draft);
+  assert.equal(draft.source.kind, 'activity');
+  assert.equal(draft.source.ref, subject.source.ref);
+  assert.equal(draft.source.revision, subject.source.revision);
+  assert.equal(draft.source_protocol, 'missing_activity_selection_v1');
+  assert.deepEqual(draft.entries.map(item => item.entry_ref), ['unresolved', 'missing']);
+  assert.equal(draft.canCreateAlbumTop, false);
+  assert.equal(request(subject, input, ['entry:local']), null);
+});
+
+test('Tops builder integration keeps Missing Activity protocol and grant failures closed', () => {
+  for (const protocol of [undefined, 'library_selection_v1', 'unknown_protocol']) {
+    const subject = context('missing');
+    subject.source = {...subject.source, kind: 'activity', ...(protocol ? {source_protocol: protocol} : {})};
+    const input = response(subject);
+    if (protocol) input.data.source_protocol = protocol;
+    assert.deepEqual(model.normalizeCreationResult(input, subject), {status: 'denied', data: null});
+  }
+  const subject = context('missing');
+  subject.source = {...subject.source, kind: 'activity', source_protocol: 'missing_activity_selection_v1'};
+  const input = response(subject); input.data.source_protocol = 'missing_activity_selection_v1';
+  input.data.allowed_actions.can_use_for_playlist = false;
+  assert.deepEqual(model.normalizeCreationResult(input, subject), {status: 'denied', data: null});
+  input.data.allowed_actions.can_use_for_playlist = true;
+  input.data.source_protocol = 'unexpected_protocol';
+  assert.deepEqual(model.normalizeCreationResult(input, subject), {status: 'error', data: null});
+});

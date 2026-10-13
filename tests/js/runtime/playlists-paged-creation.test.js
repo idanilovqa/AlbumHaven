@@ -150,3 +150,49 @@ test('expiry rejection after submit clears sensitive selection but keeps the exa
   assert.equal(state.sourceResource.data, null); assert.deepEqual(state.selectedKeys, []); assert.deepEqual(state.pinnedEntries, []);
   assert.equal(await controller.submit(), false); controller.dispose();
 });
+
+test('initial paged All projection hides unsolicited rows and exposes no visible bulk picks', async t => {
+  const {controller} = await setup(async () => page([row('unsolicited')]));
+  t.after(() => controller.dispose());
+  assert.deepEqual(model.projectCreationState(controller.getSnapshot()).entries, []);
+  controller.selectVisible(true);
+  assert.deepEqual(controller.getSnapshot().selectedKeys, []);
+});
+
+test('query clearing retires a pending search and keeps unavailable pinned receipts in Selected', async t => {
+  let resolveLate, lateSignal;
+  const {controller, writes} = await setup(async request => {
+    if (request.q === 'late') {
+      lateSignal = request.signal;
+      return new Promise(resolve => {resolveLate = resolve;});
+    }
+    if (request.q === 'needle') return page([
+      {...row('a', 'receipt:a', 'Needle missing'), availability: 'missing'},
+      {...row('b', 'receipt:b', 'Needle unresolved'), availability: 'unresolved'},
+    ], {query: 'needle'});
+    // An old server may return unqueried inventory. The projection must not
+    // display it or let Select visible author it into the playlist.
+    return page([row('unqueried')]);
+  });
+  t.after(() => controller.dispose());
+  controller.setQuery('needle'); await waitForPage(controller);
+  controller.toggle('selection:b'); controller.toggle('selection:a');
+  const pinned = controller.getSnapshot().pinnedEntries;
+  controller.setQuery('late');
+  controller.setQuery(' \t '); await waitForPage(controller);
+  assert.equal(lateSignal.aborted, true);
+  resolveLate(page([row('late')], {query: 'late'}));
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(model.projectCreationState(controller.getSnapshot()).entries, []);
+  controller.selectVisible(true);
+  assert.deepEqual(controller.getSnapshot().selectedKeys, ['selection:b', 'selection:a']);
+  controller.setTab('selected');
+  const selected = model.projectCreationState(controller.getSnapshot());
+  assert.deepEqual(selected.entries.map(item => item.entry_ref), ['receipt:b', 'receipt:a']);
+  assert.deepEqual(selected.entries.map(item => item.availability), ['unresolved', 'missing']);
+  assert.equal(selected.entries[0], pinned[0]);
+  assert.equal(selected.entries[1], pinned[1]);
+  assert.ok(await controller.submit());
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].entry_refs, ['receipt:b', 'receipt:a']);
+});

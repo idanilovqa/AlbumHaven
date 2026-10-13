@@ -36,9 +36,12 @@ function groupLabel(group) {
 
 export function creationResultsHtml(runtime, {id, projection, selectedKeys, disabled}) {
   const escape = runtime.escapeHtml, selected = new Set(selectedKeys);
-  return projection.groups.map((group, groupIndex) => {
-    const label = groupLabel(group);
-    const table = runtime.tableHtml({id: `${id}-group-${groupIndex}`, ariaLabel: label, density: 'compact',
+  if (!projection.entries.length) return '';
+  const flat = projection.mode === 'ordinary';
+  const groups = flat ? [{entries: projection.entries}] : projection.groups;
+  return groups.map((group, groupIndex) => {
+    const label = flat ? 'Playlist tracks' : groupLabel(group);
+    const table = runtime.tableHtml({id: flat ? `${id}-tracks` : `${id}-group-${groupIndex}`, ariaLabel: label, density: 'compact',
       frame: 'outline', selection: 'multiple', overflow: 'none', mobile: 'preserve', headers: groupIndex === 0 ? 'visible' : 'screen-reader',
       columns: '30px 32px minmax(0,1fr) minmax(48px,auto)',
       columnsConfig: [{key: 'selection', label: 'Select', header: 'screen-reader'}, {key: 'number', label: '#'},
@@ -65,7 +68,7 @@ export function creationResultsHtml(runtime, {id, projection, selectedKeys, disa
             duration: native.cells.duration,
           }};
       })});
-    return `<section class="album-track-table__disc"><h3 class="album-track-table__disc-heading">${escape(label)}</h3>${table}</section>`;
+    return flat ? table : `<section class="album-track-table__disc"><h3 class="album-track-table__disc-heading">${escape(label)}</h3>${table}</section>`;
   }).join('');
 }
 
@@ -261,6 +264,7 @@ export function CreationForm({runtime, controller, state, onCreated, onPrepareDr
             onClick={() => controller.loadMore()}>Load more tracks</Button>}
         </>}
         {!projection.entries.length && <p className="playlists__note" role="status">{state.tab === 'selected' ? 'No tracks selected.'
+          : state.mode === 'ordinary' && !state.query.trim() ? 'Search for tracks to add to this playlist.'
           : state.pageStatus === 'loading' ? '' : state.query.trim() ? 'No matching tracks.' : 'No tracks are available in this source.'}</p>}
       </div>
     </>}
@@ -284,7 +288,7 @@ export function CreationForm({runtime, controller, state, onCreated, onPrepareDr
         && controller.getSnapshot().mutation.request_key === state.mutation.request_key}
       onRecovered={async ack => {if (mounted.current) {setCompleting(true); try {await onCreated?.(ack);} finally {if (mounted.current) setCompleting(false);}}}}/>
     <div className="playlists__actions">
-      <Button runtime={runtime} type="submit" disabled={busy || !canSubmitCreation(state)
+      <Button runtime={runtime} type="submit" variant={state.mode === 'ordinary' ? 'primary' : 'secondary'} disabled={busy || !canSubmitCreation(state)
         || state.mode === 'missing' && typeof onPrepareDraft !== 'function'}>Create playlist</Button>
       <Button runtime={runtime} disabled={busy && !canDismissWhileLoading} onClick={() => onDismiss?.({reason: state.mutation.status !== 'ready' && state.dirty ? 'discard' : 'cancel'})}>
         {state.mutation.status === 'ready' ? 'Close' : state.dirty ? 'Discard' : 'Cancel'}

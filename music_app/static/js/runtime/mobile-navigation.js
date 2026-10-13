@@ -20,7 +20,8 @@ function deferAppFormPageReplacement(onConfirmed) {
   const form = currentMobileFormOwner();
   if (!form) {
     mobilePageState.formReplacement = null;
-    return !mobilePageState.restoring && (window.AlbumHavenSettingsNavigation?.instance?.deferPlaylistDraftNavigation?.(onConfirmed) || false);
+    const navigation = window.AlbumHavenSettingsNavigation?.instance;
+    return !mobilePageState.restoring && ((navigation?.deferCollectionDraftNavigation || navigation?.deferPlaylistDraftNavigation)?.(onConfirmed) || false);
   }
   if (mobilePageState.formReplacement) return Promise.resolve(false);
   const pending = {form}; mobilePageState.formReplacement = pending;

@@ -87,18 +87,29 @@
     let disposeContent = () => {};
     let destroyed = false;
     let navigationPending = false;
-    let playlistDraft = null, draftDeparture = null, retainedDraft = null;
+    let collectionDraft = null, draftDeparture = null, retainedDraft = null;
     const draftMarker = owner => owner ? {token: owner.token, scopeKey: owner.scopeKey} : null;
-    const ownsDraft = (owner, snapshot) => Boolean(owner && snapshot?.playlistDraft?.token === owner.token
-      && snapshot.playlistDraft.scopeKey === owner.scopeKey);
-    const liveDraft = () => {
-      const owner = playlistDraft;
-      if (owner && owner.isCurrent() !== true) {
-        playlistDraft = null; draftDeparture = null; owner.discard();
-      }
-      return playlistDraft;
+    const ownsDraft = (owner, snapshot) => {
+      if (!owner) return false;
+      if (owner.playlist) return snapshot?.playlistDraft?.token === owner.token && snapshot.playlistDraft.scopeKey === owner.scopeKey;
+      try {return owner.ownsHistoryEntry(snapshot, window.location.href) === true;} catch {return false;}
     };
-    const deferPlaylistDraftNavigation = callback => {
+    const liveDraft = () => {
+      const owner = collectionDraft;
+      if (owner && owner.isCurrent() !== true) {
+        collectionDraft = null; draftDeparture = null; owner.discard();
+      }
+      return collectionDraft;
+    };
+    const setDraftOwner = (owner, playlist) => {
+      if (destroyed || !owner || typeof owner.token !== 'string' || !owner.token || typeof owner.scopeKey !== 'string'
+        || typeof owner.isCurrent !== 'function' || typeof owner.confirmLeave !== 'function' || typeof owner.discard !== 'function'
+        || !playlist && typeof owner.ownsHistoryEntry !== 'function' || liveDraft()) return false;
+      const registered = {...owner, playlist};
+      collectionDraft = registered;
+      return () => {if (collectionDraft === registered) {collectionDraft = null; draftDeparture = null;}};
+    };
+    const deferCollectionDraftNavigation = callback => {
       const owner = liveDraft();
       if (!owner || retainedDraft === owner) return false;
       if (draftDeparture) return Promise.resolve(false);
@@ -109,7 +120,7 @@
         draftDeparture = null;
         if (accepted !== true || liveDraft() !== owner || position !== historyPosition(window.history.state)
           || url !== window.location.href) return false;
-        playlistDraft = null; owner.discard();
+        collectionDraft = null; owner.discard();
         return callback?.();
       });
     };
@@ -207,7 +218,7 @@
         if (deferred) return deferred;
       }
       if (historyMode !== 'none') {
-        const deferred = deferPlaylistDraftNavigation(() => navigate(value, {historyMode, method, body, leaveConfirmed, hierarchy}));
+        const deferred = deferCollectionDraftNavigation(() => navigate(value, {historyMode, method, body, leaveConfirmed, hierarchy}));
         if (deferred) return deferred;
       }
       const ownSequence = ++sequence;
@@ -307,7 +318,7 @@
         && (window.getActiveAppFormPage?.() || window.isMobileFormReturning?.() || liveDraft())) {
         event.preventDefault();
         const navigateRoot = () => window.location.assign(url.href);
-        if (!window.deferAppFormPageReplacement?.(navigateRoot)) deferPlaylistDraftNavigation(navigateRoot);
+        if (!window.deferAppFormPageReplacement?.(navigateRoot)) deferCollectionDraftNavigation(navigateRoot);
         return;
       }
       if (!url || (!isSettingsPath(url.pathname) && !(library && !host.hidden && url.pathname === '/'))) return;
@@ -361,7 +372,7 @@
           draftDeparture = null;
           if (liveDraft() !== owner || destination !== window.location.href || position !== historyPosition(window.history.state)) return;
           if (accepted !== true) {restoreHistory(); return;}
-          playlistDraft = null; owner.discard();
+          collectionDraft = null; owner.discard();
           onPopState(event);
           if (!isSettingsPath(window.location.pathname) && !window.handleMobilePagePopState?.()) window.handleGalleryBootstrapPopState?.();
         });
@@ -417,22 +428,22 @@
     if (!host.hidden) mountContent();
     return {
       navigate,
-      setPlaylistDraftOwner(owner) {
-        if (destroyed || !owner || typeof owner.token !== 'string' || !owner.token || typeof owner.scopeKey !== 'string'
-          || typeof owner.isCurrent !== 'function' || typeof owner.confirmLeave !== 'function' || typeof owner.discard !== 'function'
-          || liveDraft()) return false;
-        playlistDraft = owner;
-        return () => {if (playlistDraft === owner) {playlistDraft = null; draftDeparture = null;}};
+      setCollectionDraftOwner: owner => setDraftOwner(owner, false),
+      setPlaylistDraftOwner: owner => setDraftOwner(owner, true),
+      deferCollectionDraftNavigation,
+      deferPlaylistDraftNavigation: deferCollectionDraftNavigation,
+      isCollectionDraftDeparturePending(token) {
+        const owner = liveDraft();
+        return Boolean(owner && owner.token === token && (draftDeparture?.owner === owner || restoringPosition !== null));
       },
-      deferPlaylistDraftNavigation,
       retainPlaylistDraftNavigation(token, callback) {
         const owner = liveDraft();
-        if (!owner || owner.token !== token || typeof callback !== 'function') return false;
+        if (!owner?.playlist || owner.token !== token || typeof callback !== 'function') return false;
         const previous = retainedDraft; retainedDraft = owner;
         try {return callback();} finally {retainedDraft = previous;}
       },
-      retainedPlaylistDraft() {const owner = liveDraft(); return owner && retainedDraft === owner ? draftMarker(owner) : null;},
-      isPlaylistDraftCurrent(marker) {const owner = liveDraft(); return ownsDraft(owner, {playlistDraft: marker});},
+      retainedPlaylistDraft() {const owner = liveDraft(); return owner?.playlist && retainedDraft === owner ? draftMarker(owner) : null;},
+      isPlaylistDraftCurrent(marker) {const owner = liveDraft(); return Boolean(owner?.playlist && ownsDraft(owner, {playlistDraft: marker}));},
       writeLibraryHistory(value, stateSnapshot, { mode } = {}) {
         const url = urlFor(value);
         if (destroyed || restoringPosition !== null || !url
@@ -447,7 +458,7 @@
         destroyed = true;
         ++sequence;
         pending?.abort();
-        const owner = playlistDraft; playlistDraft = null; draftDeparture = null; owner?.discard();
+        const owner = collectionDraft; collectionDraft = null; draftDeparture = null; owner?.discard();
         disposeContent();
         disposeDismissal?.();
         document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);

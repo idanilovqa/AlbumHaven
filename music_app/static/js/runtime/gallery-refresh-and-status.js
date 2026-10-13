@@ -1054,6 +1054,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     ? galleryCoverLoadScheduler.beginFamilyPrefetchReconciliation()
     : 0;
   let viewRendered = false;
+  let requestStarted = false, settledApplied = false, settledError = null;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
@@ -1095,9 +1096,15 @@ async function fetchAndRender(url, push = true, options = {}) {
       && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
       && (!retainedPlaylistDraft
         || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true);
+    if (typeof requestOptions.onStart === 'function') {
+      if (!ownsPreferenceResponse() || controller?.signal.aborted
+        || requestOptions.onStart({requestId}) === false
+        || !ownsPreferenceResponse() || controller?.signal.aborted) return false;
+    }
     let preferenceRead = captureLooseTrackPreferenceRead(apiUrl, {
       signal: controller?.signal, isCurrent: ownsPreferenceResponse,
     });
+    requestStarted = true;
     const response = await fetch(apiUrl, {
       headers: { Accept: 'application/json' },
       signal: controller?.signal,
@@ -1282,6 +1289,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (state.ui.activeViewRequestPush) pushBrowserViewState(state.view, state.view, retainedPlaylistDraft);
     recordSuccessfulCanonicalFullViewApply(data, requestOptions);
     consumePendingScanCompletionViewRefresh(requestId, data, requestOptions);
+    settledApplied = true;
     return true;
   } catch (error) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
@@ -1313,6 +1321,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       clearPendingSidebarSelection();
       renderSidebar();
     }
+    settledError = error;
     throw error;
   } finally {
     if (
@@ -1366,7 +1375,7 @@ async function fetchAndRender(url, push = true, options = {}) {
             pendingRequest.url,
             pendingRequest.push,
             pendingRequest.options,
-          );
+          ).catch(() => {});
         }
       }
       if (pendingViewRequestDispatched) {
@@ -1409,6 +1418,12 @@ async function fetchAndRender(url, push = true, options = {}) {
       && !state.ui.forceScanPageVisible
     ) {
       resumeScanPageGalleryCoverLoads();
+    }
+    if (requestStarted && state.ui.activeViewRequestId === requestId
+      && !controller?.signal.aborted
+      && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
+      try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
+      catch (_error) { /* An observer cannot change the request outcome. */ }
     }
   }
 }

@@ -77,7 +77,7 @@ export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reo
         tabIndex: track.source_readable === true ? 0 : -1, ariaDisabled: track.source_readable !== true,
         dataAttributes: {'playlist-row-key': track.row_key}, cells: {
           number: {content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escape(position + 1)}</span>` + runtime.actionHtml({icon: 'play', className: 'album-track-table__play', ariaLabel: `Play ${track.title || 'track'}`,
-            title: 'Play track', presentation: 'bare', hidden: track.availability === 'missing', disabled: !playable(runtime, detail, track), attributes: {'data-playlists-play': '1'}}) + '</span>'},
+            title: 'Play track', presentation: 'bare', hidden: track.availability !== 'local', disabled: !playable(runtime, detail, track), attributes: {'data-playlists-play': '1'}}) + '</span>'},
           title: {content: `<div class="home-detail__release playlists__track-identity">${artwork}<div>${native?.cells?.title?.content || escape(track.title)}</div></div>` + runtime.actionHtml({icon: 'more',
             ariaLabel: `Show details for ${track.title || 'track'}`, title: 'Show track and album information', presentation: 'bare',
             disabled: track.source_readable !== true, attributes: {'data-playlists-select': '1'}})},

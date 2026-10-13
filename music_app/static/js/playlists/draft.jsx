@@ -79,7 +79,7 @@ export function missingPlaylistDraftTableHtml(runtime, {id, state, projection, d
               attributes: {'data-draft-move': direction, 'aria-label': `${label}: ${title}`}})).join('')},
           number: {content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escape(index + 1)}</span>`
             + runtime.actionHtml({icon: 'play', className: 'album-track-table__play', ariaLabel: `Playback unavailable for ${title}`,
-              title: 'Source playback is unavailable for this unsaved playlist.', presentation: 'bare', hidden: entry.availability === 'missing', disabled: true}) + '</span>'},
+              title: 'Source playback is unavailable for this unsaved playlist.', presentation: 'bare', hidden: entry.availability !== 'local', disabled: true}) + '</span>'},
           title: {content: `<div class="home-detail__release playlists-draft__identity">${artwork}<div>${native.cells.title.content}`
             + (metadata ? `<span class="album-track-table__secondary">${escape(metadata)}</span>` : '') + '</div></div>'},
           artist: {content: escape(known(entry.artist))}, album: {content: escape(known(entry.album_title))},

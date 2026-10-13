@@ -52,6 +52,16 @@ function buildGalleryBarHtml(config = {}) {
 }
 
 function buildArtistFamilyPanelHtml(config = {}) {
+  if (config.presentation === 'navigation') {
+    const title = String(config.title || 'Artist Family');
+    const rows = (Array.isArray(config.members) ? config.members : []).map(member => window.NavigationTree.renderItem({
+      variant: 'wide', action: true, key: member.artistRef, label: member.label,
+      count: member.albumCount, artworkHtml: member.artworkHtml || '',
+      selected: member.artistRef === config.currentArtist,
+      attributes: {'data-artist-page-family': member.artistRef},
+    })).join('');
+    return `<section class="artist-family-panel artist-family-panel--navigation" aria-label="${escapeHtml(title)}"><header><h2>${escapeHtml(title)}</h2></header><div class="artist-family-panel__body navigation-tree">${rows}</div></section>`;
+  }
   const combineSwitch = buildGallerySwitchHtml({
     id: 'artist-family-combine-similar',
     label: 'Combine similar artists',

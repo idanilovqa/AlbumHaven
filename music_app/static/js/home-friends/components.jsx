@@ -1,4 +1,4 @@
-import React, {useLayoutEffect, useRef} from 'react';
+import React, {useId, useLayoutEffect, useRef} from 'react';
 import {NativeChoice} from './native-choice.jsx';
 
 export function NativeHtml({html, className = '', onClick}) {
@@ -83,4 +83,65 @@ export function RecentAlbums({runtime, value, retry, selected, onSelect, onError
       selectedAlbumRef: selected, displayMode: 'cards', selectionMode});
   }, [runtime, value, selected, selectionMode]);
   return <section ref={root} className="home-friends__native-recent" aria-label="Recent albums"/>;
+}
+
+// Shared Artist content renders supplied projections through the native owners.
+export function ArtistInfo({runtime, artist, summary, metadata, imageUrl, sourceLabel}) {
+  return <NativeHtml className="artist-info" html={runtime.artistInfoHtml({
+    presentation: 'embedded', artist, summary, metadata, imageUrl, sourceLabel,
+  })}/>;
+}
+export function ArtistFamily({runtime, title, members, currentArtist, onNavigate}) {
+  return <NativeHtml className="artist-family" html={runtime.artistFamilyHtml({
+    presentation: 'navigation', title, members, currentArtist,
+  })} onClick={event => {
+    const row = event.target.closest('[data-artist-page-family]');
+    if (row && !event.defaultPrevented && event.currentTarget.contains(row) && !row.disabled && row.getAttribute('aria-disabled') !== 'true') {
+      onNavigate?.(row.getAttribute('data-artist-page-family'));
+    }
+  }}/>;
+}
+export function IntrinsicDisclosure({runtime, id, memberKey, label, count, collapsed = false, enabled = true, onToggle, actions, children}) {
+  const generatedId = useId(), panelId = `${id || `intrinsic-disclosure-${generatedId}`}-panel`;
+  const header = useRef(null), panel = useRef(null), control = useRef(null), owner = useRef(null);
+  const latest = useRef(onToggle); latest.current = onToggle;
+  // Server markup reflects the initial state. Keep visibility props fixed after
+  // that render: the native owner must move focus before changing hidden/inert.
+  const toggleHtml = runtime.actionHtml({icon: 'next', presentation: 'bare', ariaLabel: label, title: label, disabled: !enabled,
+    attributes: enabled ? {'aria-controls': panelId, 'aria-expanded': String(!collapsed)} : {}});
+  const initial = useRef({closed: Boolean(enabled && collapsed), toggleHtml: {__html: toggleHtml}});
+  useLayoutEffect(() => {
+    const toggle = control.current.firstElementChild;
+    // These are this wrapper's server-rendered attributes, not consumer DOM.
+    // Its unowned baseline is visible content with no disclosure relationship.
+    panel.current.removeAttribute('hidden'); panel.current.removeAttribute('inert');
+    toggle.removeAttribute('aria-controls'); toggle.removeAttribute('aria-expanded');
+    const instance = runtime.createIntrinsicDisclosure({members: [], enabled: false,
+      onToggle: (key, value) => latest.current?.(key, value)});
+    owner.current = instance;
+    return () => {instance.dispose(); if (owner.current === instance) owner.current = null;};
+  }, [runtime]);
+  useLayoutEffect(() => {
+    const toggle = control.current.firstElementChild;
+    // This retained native ActionButton has no copied markup/style/click logic.
+    // The wrapper owns its label and availability; the native disclosure owns
+    // controls/expanded and all panel visibility after provisional SSR markup.
+    for (const [name, value] of [['aria-label', String(label)], ['title', String(label)],
+      ['disabled', enabled ? null : ''], ['aria-disabled', enabled ? null : 'true']]) {
+      if (toggle.getAttribute(name) === value) continue;
+      if (value === null) toggle.removeAttribute(name); else toggle.setAttribute(name, value);
+    }
+    owner.current?.update({members: [{key: memberKey, panel: panel.current, header: header.current, toggle}],
+      collapsed: {[memberKey]: Boolean(collapsed)}, enabled});
+  });
+  return <section className="intrinsic-disclosure" data-disclosure-key={memberKey}>
+    <header ref={header} className="intrinsic-disclosure__header">
+      <span ref={control} className="intrinsic-disclosure__toggle" dangerouslySetInnerHTML={initial.current.toggleHtml}/>
+      <h2 className="intrinsic-disclosure__label">{label}</h2>
+      {count !== undefined && count !== null && <span className="intrinsic-disclosure__count">{count}</span>}
+      {actions && <div className="intrinsic-disclosure__actions">{actions}</div>}
+    </header>
+    <div ref={panel} id={panelId} className="intrinsic-disclosure__panel" data-disclosure-panel=""
+      hidden={initial.current.closed} inert={initial.current.closed}>{children}</div>
+  </section>;
 }

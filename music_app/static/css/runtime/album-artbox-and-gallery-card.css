@@ -162,3 +162,11 @@
   :root .gallery-card__completion.action-button { transition: none; }
   :root .gallery-card__completion.action-button:not(:disabled):not([aria-disabled="true"]) { transform: none; }
 }
+
+/* Search witnesses are independent of keyboard focus, hover and selection. */
+.album-card.album-card--search-match {
+  --album-card-search-accent: var(--appearance-player-accent, var(--appearance-waveform-edge, var(--appearance-accent, var(--accent, #55c7ff))));
+  background: color-mix(in srgb, var(--album-card-search-accent) 12%, var(--panel));
+  border-color: color-mix(in srgb, var(--album-card-search-accent) 60%, var(--border));
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--album-card-search-accent) 28%, transparent));
+}

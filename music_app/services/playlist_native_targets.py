@@ -11,7 +11,7 @@ class PlaylistNativeTargets:
 
     def resolve(self,context,*,playlist_ref,item_ref,intent,constraints=None):
         playlist_ref,item_ref=uuid_ref(playlist_ref),uuid_ref(item_ref)
-        if not isinstance(intent,str) or intent not in {'play','details'}:raise PlaylistError('invalid_command')
+        if not isinstance(intent,str) or intent not in {'play','details','metadata'}:raise PlaylistError('invalid_command')
         owner=self._playlists
         with owner._authorized(context,constraints) as (connection,live,_now):
             playlist=owner._playlist(connection,live,playlist_ref)

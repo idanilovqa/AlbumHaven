@@ -5,6 +5,8 @@ from music_app.services.private_library_authority import require_private_action,
 from music_app.services.policy import ResourceScope
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services import playlist_creation_sources_postgres as inventory
+from music_app.services.track_preferences_postgres import load_track_preferences_on_connection, TrackPreferenceScopeError
+from music_app.services.track_preferences import normalize_track_preference_overlay
 
 
 class NativeTargetError(ValueError):
@@ -27,7 +29,7 @@ class PrivateNativeTargets:
         self.media_resolver=media_resolver or resolve_configured_media_path
 
     def resolve(self,connection,context,track_id,*,intent,constraints=None):
-        if type(track_id) is not int or track_id<=0 or not isinstance(intent,str) or intent not in {'play','details'}:
+        if type(track_id) is not int or track_id<=0 or not isinstance(intent,str) or intent not in {'play','details','metadata'}:
             raise NativeTargetError('invalid_command',422)
         track=ResourceScope('track',str(track_id))
         if not allows(context,'library.browse.read',track,constraints):raise NativeTargetError('forbidden',403)
@@ -35,6 +37,8 @@ class PrivateNativeTargets:
         rows=inventory.inventory_rows(connection,context.library_id,[track_id],lock=True,config=self.config)
         if track_id not in rows:raise NativeTargetError()
         row=rows[track_id]
+        if intent=='metadata':
+            return self._metadata_target(connection,context,track_id,row,constraints)
         if intent=='details':
             album_id=row.get('original_album_id')
             if album_id is None:raise NativeTargetError()
@@ -46,6 +50,34 @@ class PrivateNativeTargets:
               and f.scan_cache_stale is false order by f.id''',(track_id,context.library_id)).fetchall()
         return {**self._play_target(row,files),
             'inventory_track_ref':f'inventory-track:{context.library_id}:{track_id}'}
+
+    def _metadata_target(self,connection,context,track_id,row,constraints):
+        # The source owner already proved the inventory ID and Browse authority.
+        # Read personal taste in this same transaction; media and subject taste
+        # are independent and cannot supply an actor preference identity.
+        identity=connection.execute('select id,track_key from library.local_tracks where id=%s and library_id=%s',
+            (track_id,context.library_id)).fetchone()
+        canonical=None
+        preference=None
+        if identity and identity['id']==track_id and identity['track_key']:
+            key=identity['track_key']
+            try:
+                selected=load_track_preferences_on_connection(connection,[key],
+                    account_id=context.actor.account_id,library_id=context.library_id).get(key)
+            except TrackPreferenceScopeError:
+                raise NativeTargetError('forbidden',403) from None
+            if selected and selected['track_id']==track_id:
+                canonical=key
+                editable=allows(context,'library.track_preferences.manage',ResourceScope('track',str(track_id)),constraints)
+                preference=normalize_track_preference_overlay({'rating':selected['rating'],'love_tier':selected['love_tier'],
+                    'allowed_actions':{'can_rate':editable,'can_set_love_tier':editable}})
+        playable=row['availability']=='local' and allows(context,'library.media.read',ResourceScope('track',str(track_id)),constraints)
+        return {'inventory_track_ref':f'inventory-track:{context.library_id}:{track_id}',
+            'track_ref':canonical,'canonical_track_ref':canonical,'source_readable':True,
+            'title':row['title'],'artist':row['artist'],'album_title':row['album_title'],
+            'duration_seconds':row['duration_seconds'],'availability':row['availability'],
+            'allowed_actions':{'can_read':True,'can_play':playable},
+            'playback_state':{'can_start_here':playable},'track_preference':preference}
 
     def _play_target(self,row,files):
         for file in files:

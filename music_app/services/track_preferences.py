@@ -183,6 +183,8 @@ def strip_private_track_rows(
             client_surface_class=client_surface_class,
         )
         sanitized_row["can_edit_preferences"] = False
+        sanitized_row["track_preference_state"] = "unavailable"
+        sanitized_row.pop("canonical_track_ref", None)
         sanitized_rows.append(sanitized_row)
     return sanitized_rows
 
@@ -225,7 +227,12 @@ def build_track_preference_overlay_lookup(
     preference_action_resolver: Callable[[int], bool] | None = None,
     expected_track_ids: Mapping[str, object] | None = None,
     require_active_paths: bool = False,
+    read_receipts: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, dict[str, object]]:
+    # Optional request-local provenance preserves the existing overlay return
+    # contract, while retaining identity from this same guarded batch selection.
+    if read_receipts is not None:
+        read_receipts.clear()
     _require_postgres_track_preferences_selection(config)
     selections = PostgresTrackPreferencesStore(config).load_track_preferences(
         track_refs, account_id=account_id, library_id=library_id,
@@ -252,6 +259,12 @@ def build_track_preference_overlay_lookup(
             },
             client_surface_class=client_surface_class,
         )
+        if read_receipts is not None and isinstance(selected.get("track_key"), str) and selected["track_key"].strip():
+            read_receipts[track_ref] = {
+                "track_preference": overlays[track_ref],
+                "canonical_track_ref": selected["track_key"],
+                "inventory_track_ref": f"inventory-track:{library_id}:{selected['track_id']}",
+            }
     return overlays
 
 

@@ -73,7 +73,7 @@ class ActivityNativeTargets:
 
     def resolve(self,context,*,origin,row_ref,intent,target_kind=None,constraints=None):
         origin,query=normalize_native_origin(origin)
-        if not isinstance(row_ref,str) or not _ROW.fullmatch(row_ref) or not isinstance(intent,str) or intent not in {'play','details'}:
+        if not isinstance(row_ref,str) or not _ROW.fullmatch(row_ref) or not isinstance(intent,str) or intent not in {'play','details','metadata'}:
             raise NativeTargetError('invalid_command',422)
         if target_kind is not None and (intent != "details" or not isinstance(target_kind,str) or target_kind not in {"album","artist"}):
             raise NativeTargetError("invalid_command",422)

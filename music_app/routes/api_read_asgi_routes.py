@@ -9,6 +9,7 @@ from music_app.services.loops import project_loop_for_client, project_loop_order
 import logging
 import time
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -41,9 +42,18 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.library_browse_postgres import (
     PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
 )
-from music_app.services.library_inventory_postgres import PostgresLibraryInventoryRepository
-from music_app.services.track_preferences import track_preference_scope
+from music_app.services.library_inventory_postgres import (
+    MAX_NON_ALBUM_CANDIDATE_LIMIT,
+    PostgresLibraryInventoryRepository,
+)
+from music_app.services.track_preferences import (
+    build_track_preference_overlay_lookup,
+    default_track_preference_overlay,
+    track_preference_can_edit,
+    track_preference_scope,
+)
 from music_app.services.track_preferences_postgres import TrackPreferenceScopeError
+from music_app.services.track_stats import normalize_track_ref
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
@@ -506,6 +516,113 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
     }
 
 
+def _loose_preference_source_readable(source: Mapping[str, object]) -> bool:
+    actions = source.get("allowed_actions")
+    return not (
+        source.get("read_only_subject")
+        or source.get("source_readable") is False
+        or source.get("readable") is False
+        or isinstance(actions, Mapping) and "can_read" in actions and actions["can_read"] is not True
+    )
+
+
+def _private_browse_response(
+    request: Request, payload: dict[str, object], *, transient: bool = False,
+) -> JSONResponse:
+    """Finalize ordinary browse data without personalizing shared producers."""
+    headers = {"Cache-Control": "private, no-store"}
+    try:
+        # The private middleware authenticates and caches this typed actor before
+        # the synchronous handler runs. No owner or subject fallback is valid.
+        account_id, library_id = track_preference_scope(getattr(request.state, "current_actor", None))
+        payload = deepcopy(payload)
+        client_surface = _client_surface_class_from_asgi(request)
+        rows = [row for row in (payload.get("non_album_tracks") or []) if isinstance(row, dict)]
+        rows_by_path: dict[str, list[dict[str, object]]] = {}
+        for row in rows:
+            row["track_preference_state"] = "unavailable"
+            row["track_preference"] = default_track_preference_overlay(client_surface_class=client_surface)
+            row["can_edit_preferences"] = False
+            row.pop("track_preference_overlay", None)
+            row.pop("inventory_track_ref", None)
+            row.pop("canonical_track_ref", None)
+            path = normalize_track_ref(row.get("path")) if isinstance(row.get("path"), str) else ""
+            if path:
+                rows_by_path.setdefault(path, []).append(row)
+
+        # This bounded slice deliberately leaves larger displayed sets unknown.
+        # Preserve every displayed row; never issue an unrestricted inventory read.
+        readable_paths = [
+            path for path, aliases in rows_by_path.items()
+            if any(_loose_preference_source_readable(row) for row in aliases)
+        ] if (_loose_preference_source_readable(payload)
+              and len(rows_by_path) <= MAX_NON_ALBUM_CANDIDATE_LIMIT) else []
+        if readable_paths:
+            repository = PostgresLibraryInventoryRepository(_app_config(request))
+            inventory_library_id = repository.load_inventory_library_id()
+            if type(inventory_library_id) is int and inventory_library_id == library_id:
+                candidates = repository.load_non_album_candidates(
+                    private_paths=readable_paths, limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+                )
+                candidate_ids: dict[str, set[int | None]] = {path: set() for path in readable_paths}
+                for candidate in candidates:
+                    if not isinstance(candidate, Mapping):
+                        continue
+                    path = normalize_track_ref(candidate.get("private_path"))
+                    if path in candidate_ids:
+                        identity = candidate.get("track_id")
+                        candidate_ids[path].add(identity if type(identity) is int and identity > 0 else None)
+                expected_track_ids = {}
+                for path, identities in candidate_ids.items():
+                    if len(identities) != 1 or None in identities:
+                        continue
+                    identity = next(iter(identities))
+                    if any(
+                        ("track_id" in row and (type(row["track_id"]) is not int or row["track_id"] != identity))
+                        or ("track_ref" in row and (
+                            not isinstance(row["track_ref"], str) or normalize_track_ref(row["track_ref"]) != path
+                        ))
+                        for row in rows_by_path[path]
+                    ):
+                        continue
+                    if allowed_actions_for_request(
+                        request, ("library.browse.read",), resource=ResourceScope("track", str(identity)),
+                    ).allows("library.browse.read"):
+                        expected_track_ids[path] = identity
+
+                if expected_track_ids:
+                    def can_manage(track_id: int) -> bool:
+                        return allowed_actions_for_request(
+                            request, ("library.track_preferences.manage",),
+                            resource=ResourceScope("track", str(track_id)),
+                        ).allows("library.track_preferences.manage")
+
+                    receipts: dict[str, dict[str, object]] = {}
+                    build_track_preference_overlay_lookup(
+                        _app_config(request), account_id=account_id, library_id=library_id,
+                        track_refs=list(expected_track_ids), expected_track_ids=expected_track_ids,
+                        require_active_paths=True, client_surface_class=client_surface,
+                        preference_action_resolver=can_manage, read_receipts=receipts,
+                    )
+                    for path, identity in expected_track_ids.items():
+                        receipt = receipts.get(path)
+                        if not receipt or receipt["inventory_track_ref"] != f"inventory-track:{library_id}:{identity}":
+                            continue
+                        for row in rows_by_path[path]:
+                            if not _loose_preference_source_readable(row):
+                                continue
+                            row.update(deepcopy(receipt))
+                            row["track_preference_state"] = "available"
+                            row["can_edit_preferences"] = track_preference_can_edit(row["track_preference"])
+    except TrackPreferenceScopeError as error:
+        return JSONResponse({"ok": False, "error": str(error)}, status_code=403, headers=headers)
+
+    if transient:
+        _apply_transient_scan_album_rating_overlays(request, _transient_view_album_payloads(payload))
+    _project_missing_album_actions_for_request(request, payload)
+    return JSONResponse(payload, headers=headers)
+
+
 def _transient_scan_view_response(
     request: Request, browse_state: Mapping[str, object], page_params: Mapping[str, object] | None = None
 ) -> JSONResponse:
@@ -521,13 +638,8 @@ def _transient_scan_view_response(
         payload = build_transient_root_gallery_page(
             payload, page_params, scan_generation=int(browse_state.get("scan_generation") or 0)
         )
-    _apply_transient_scan_album_rating_overlays(
-        request,
-        _transient_view_album_payloads(payload),
-    )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    return _private_browse_response(request, payload, transient=True)
 
 
 @router.get("/view-data")
@@ -565,8 +677,7 @@ def view_data(request: Request) -> JSONResponse:
             restart = "restart required" in str(error)
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
                                 status_code=409 if restart else 400)
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
 
     if _should_use_transient_scan_browse_state(library_state, browse_state):
         return _transient_scan_view_response(request, browse_state)
@@ -575,8 +686,7 @@ def view_data(request: Request) -> JSONResponse:
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
             query_params=request.query_params,
         )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
     if _is_postgres_selected_artist_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         payload = repository.build_selected_artist_payload(
@@ -587,8 +697,9 @@ def view_data(request: Request) -> JSONResponse:
             root_sidebar_payload = repository.build_root_sidebar_payload(
                 query_params=request.query_params,
             )
-            payload.update(
-                {
+            payload = {
+                **payload,
+                **{
                     field: root_sidebar_payload[field]
                     for field in (
                         "artists_sidebar",
@@ -596,10 +707,9 @@ def view_data(request: Request) -> JSONResponse:
                         "show_all_artists_sidebar_link",
                     )
                     if field in root_sidebar_payload
-                }
-            )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+                },
+            }
+        return _private_browse_response(request, payload)
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -615,14 +725,12 @@ def view_data(request: Request) -> JSONResponse:
             library_state=_postgres_browse_library_state(request),
         )
         _log_view_data_request_from_asgi(request, payload, request_started_at)
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
     if _is_postgres_root_album_browse_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
             query_params=request.query_params,
         )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
     unsupported_selected_artist_response = _unsupported_postgres_selected_artist_browse_response(request)
     if unsupported_selected_artist_response is not None:
         return unsupported_selected_artist_response
@@ -644,8 +752,7 @@ def view_data(request: Request) -> JSONResponse:
         client_surface_class=_client_surface_class_from_asgi(request),
     )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    return _private_browse_response(request, payload)
 
 
 def _is_postgres_root_sidebar_request(request: Request) -> bool:

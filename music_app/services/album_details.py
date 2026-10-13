@@ -66,6 +66,7 @@ def _attach_album_detail_track_rows(
             expected_track_ids[ref] = value
     viewer_opinion_preferences = resolve_viewer_opinion_preferences(viewer_opinion_preferences)
     track_preference_lookup = {}
+    preference_receipts = {}
     scrobble_count_lookup = {}
     if (
         not public_safe and config is not None
@@ -78,6 +79,7 @@ def _attach_album_detail_track_rows(
             client_surface_class=client_surface_class, track_refs=track_refs,
             preference_action_resolver=preference_action_resolver,
             expected_track_ids=expected_track_ids, require_active_paths=True,
+            read_receipts=preference_receipts,
         )
 
         scrobble_count_lookup = _safe_scrobble_count_lookup(
@@ -112,6 +114,12 @@ def _attach_album_detail_track_rows(
                 and expected_track_ids.get(ref) == identity)
             else None
         )
+        receipt = preference_receipts.get(ref)
+        available = bool(receipt and receipt["inventory_track_ref"] == track["inventory_track_ref"])
+        track["track_preference_state"] = "available" if available else "unavailable"
+        track.pop("canonical_track_ref", None)
+        if available:
+            track["canonical_track_ref"] = receipt["canonical_track_ref"]
 
     for container in containers:
         tracks = list(container.get("tracks") or [])
@@ -127,6 +135,9 @@ def _attach_album_detail_track_rows(
         )
         for track, row in zip(tracks, rows):
             row["inventory_track_ref"] = track.get("inventory_track_ref")
+            row["track_preference_state"] = track["track_preference_state"]
+            if "canonical_track_ref" in track:
+                row["canonical_track_ref"] = track["canonical_track_ref"]
         if container is album_payload or "track_rows" in container:
             container["track_rows"] = rows
         if container is album_payload or "gallery_list_block" in container:

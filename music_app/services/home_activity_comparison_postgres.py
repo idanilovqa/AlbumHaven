@@ -125,6 +125,8 @@ def finalize_comparison(connection, *, snapshot_id, scope, query, project, secre
             for side, prefix in (("yours", "own"), ("friend", "friend")):
                 values = dict(payload[side])
                 values["rating"] = facts.get(prefix + "_rating")
+                values["taste_state"] = (facts.get(prefix + "_taste_state", "unavailable")
+                    if prefix + "_rating" in facts else "unavailable")
                 tier = facts.get(prefix + "_love_tier")
                 values["favorite"] = tier in {"loved", "obsessed"} if tier in {"off", "loved", "obsessed"} else facts.get(prefix + "_favorite")
                 payload[side] = values

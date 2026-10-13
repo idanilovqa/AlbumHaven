@@ -216,3 +216,39 @@
   .compact-data-table[data-cdt-narrow="true"] :is(.compact-data-table-header, .compact-data-table-row:not(.compact-data-table-row--full-span)) { grid-template-columns: var(--cdt-narrow-columns); }
   .compact-data-table[data-cdt-narrow="true"] [data-cdt-hide-narrow] { display: none; }
 }
+
+/* React-owned track presentations share one measured grid and the native local
+   overflow owner. Opt-in replaces the legacy narrow-column projection. */
+.compact-data-table[data-cdt-responsive][data-cdt-overflow] {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+.compact-data-table[data-cdt-responsive] :is(.compact-data-table-header, .compact-data-table-row:not(.compact-data-table-row--full-span)) {
+  box-sizing: border-box;
+  grid-template-columns: var(--cdt-responsive-columns);
+  min-width: var(--cdt-responsive-min-width);
+  gap: 8px;
+  padding-inline: 10px;
+}
+.compact-data-table[data-cdt-responsive] [data-cdt-responsive-hidden] { display: none; }
+.compact-data-table[data-cdt-responsive] [data-cdt-column="title"] { min-width: 0; overflow: hidden; }
+.compact-data-table[data-cdt-responsive] :is(.track-duration, .album-track-table__metric) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.compact-data-table__columns-action { margin-inline-start: auto; flex: none; }
+
+/* Keep native title text bounded inside its artwork flex composition so the
+   title's own ellipsis runs, rather than clipping an oversized ancestor. */
+.compact-data-table[data-cdt-responsive] [data-cdt-column="title"] :has(> .album-artbox) > :not(.album-artbox) {
+  min-width: 0;
+  max-width: 100%;
+}
+/* A real, content-sized header label anchors native Choice without stretching
+   its content-width menu to the whole grid track or table. */
+.compact-data-table[data-cdt-responsive] [data-cdt-column-label] { display: inline-block; max-width: 100%; }
+.compact-data-table[data-cdt-responsive] [data-cdt-column-label]:focus-visible {
+  outline: 2px solid var(--appearance-interaction-outline, var(--appearance-selected-accent, var(--text)));
+  outline-offset: 2px;
+}

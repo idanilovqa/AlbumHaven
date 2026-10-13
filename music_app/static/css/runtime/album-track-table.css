@@ -35,6 +35,13 @@
 }
 .album-track-table .compact-data-table-header,
 :root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) .compact-data-table-header { border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--appearance-table-surface), var(--appearance-ink, var(--text)) var(--appearance-table-header-tint, 8%)); }
+
+/* A local scroller cannot let the decorative edge protrude: even one pixel
+   creates scrollbars on the final disc and shifts its grid from earlier discs. */
+.album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table[data-cdt-responsive]::after {
+  right: 0;
+  bottom: 0;
+}
 .album-track-table [role="columnheader"],
 :root[data-appearance-mode='light'] :is(.utility-detected-table, .utility-track-problem-table) [role="columnheader"] { color: var(--appearance-muted, var(--muted)); }
 .album-track-table .compact-data-table-row { position: relative; isolation: isolate; }

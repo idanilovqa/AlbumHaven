@@ -18,10 +18,6 @@
 .home-friends__native-recent { flex: 1 1 auto; min-width: 0; min-height: 0; }
 .home-friends__native-recent > .home-recent__header { display: none; }
 .home-friends__recent-body { overflow: hidden; }
-.gallery-bar.home-friends__recent-header { flex-direction: column; align-items: stretch; gap: 0; min-height: 0; margin-bottom: 8px; }
-.home-friends__recent-header .home-friends__section-controls { padding-block: 0; }
-.home-friends__catalog-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; min-height: 40px; }
-.home-friends__catalog-controls .in-page-tabs { align-items: center; min-height: 40px; gap: 16px; }
 .home-friends__scroll { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
 .home-friends__button { display: inline-flex; align-items: center; }
 .home-friends__control-row { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,auto); align-items: center; gap: 5px 12px; flex: 0 0 auto; min-width: 0; padding-block: 6px 12px; container: home-controls / inline-size; }
@@ -97,3 +93,38 @@
   .home-friends[data-home-pane="album"] .home-friends__dashboard > [data-home-widget="album"] { display: flex; }
 }
 .home-friends__widget[hidden] { display: none !important; }
+
+/* Shared React header composition. Native controls retain their own visuals. */
+.gallery-bar.home-header { position: relative; display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.home-header__leading, .home-header__identity, .home-header__content, .home-header__controls,
+.home-header__outside, .home-header__actions { display: flex; align-items: center; gap: 8px; }
+.home-header__leading:empty, .home-header__identity:empty, .home-header__content:empty,
+.home-header__outside:empty, .home-header__actions:empty { display: none; }
+.home-header__identity { min-width: 0; max-width: 100%; flex: 0 0 auto; }
+.home-header__content { min-width: 0; flex: 0 1 auto; }
+.home-header__controls { margin-inline-start: auto; flex: 0 0 auto; }
+.home-header__capsule { display: contents; }
+.home-header__actions, .home-header__outside { flex: 0 0 auto; width: max-content; }
+.home-header__outside { order: -1; }
+.home-header__tools { order: 1; }
+.home-header__tools[hidden] { display: none; }
+.home-header__listens { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; white-space: nowrap; font-size: .8rem; font-weight: 700; }
+.home-header__listens > span:first-child { display: inline-flex; }
+.home-header__listens .ui-icon { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.home-header[data-header-compact="true"] .home-header__actions { position: fixed; visibility: hidden; pointer-events: none; }
+.home-header[data-header-compact="true"][data-header-outside="false"] .home-header__outside { position: fixed; visibility: hidden; pointer-events: none; }
+.home-header[data-header-compact="true"][data-header-open="true"] .home-header__actions,
+.home-header[data-header-compact="true"][data-header-open="true"] .home-header__outside {
+  position: static; visibility: visible; pointer-events: auto; flex-wrap: wrap; width: auto; min-width: 0;
+}
+.home-header[data-header-compact="true"][data-header-open="true"] .home-header__actions { flex: 1 1 auto; max-width: 100%; }
+.home-header[data-header-compact="true"][data-header-open="true"] .home-header__floating-panel {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; position: fixed; z-index: 120;
+  width: max-content; box-sizing: border-box; overflow: auto; overscroll-behavior: contain; animation: home-header-reveal 120ms ease-out;
+}
+.home-header.home-friends__recent-header { margin-bottom: 8px; min-height: 40px; }
+.home-header.home-friends__recent-header .in-page-tabs { min-height: 34px; gap: 10px; align-items: center; }
+.home-header .home-friends__period .ui-choice__control { width: auto; max-width: none; }
+.home-header[hidden] { display: none; }
+@keyframes home-header-reveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .home-header .home-header__floating-panel { animation: none !important; } }

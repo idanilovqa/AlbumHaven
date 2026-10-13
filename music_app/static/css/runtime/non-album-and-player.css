@@ -303,6 +303,17 @@ font-size: 0.9em;
 font-weight: 700;
 white-space: nowrap;
 }
+/* Compact read-only empty ratings share the star renderer without reserving
+   numeric text or expanding beyond their existing table/detail container. */
+.rating-row.rating-row--compact-empty {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: calc(var(--rating-star-interval-count) * 1em);
+  max-width: 100%;
+  vertical-align: middle;
+}
+.rating-row.rating-row--compact-empty::after { display: none; }
+.rating-row--compact-empty .star:not(.filled) { color: var(--appearance-muted, var(--muted)); }
 .stars {
 display: flex;
 min-width: 0;

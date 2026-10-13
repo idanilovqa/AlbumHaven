@@ -85,6 +85,9 @@
   .home-comparison .compact-data-table-row [data-cdt-column="yours:favorite"] { grid-column: 1; grid-row: calc(var(--comparison-metric-count) + 2); }
   .home-comparison .compact-data-table-row [data-cdt-column="friend:favorite"] { grid-column: 2; grid-row: calc(var(--comparison-metric-count) + 2); }
   .home-comparison__table .home-comparison__metric { display: grid; grid-template-columns: minmax(0,1fr) auto 1em; }
+  .home-comparison__table .home-comparison__metric:has(> .rating-row--compact-empty) {
+    grid-template-columns: max-content minmax(0,1fr) 1em;
+  }
   .home-comparison__table .home-comparison__metric-label { display: inline; }
   .home-comparison__detail-pair { gap: 10px; }
   .home-comparison[data-comparison-view="covers"] .home-comparison__album-row > .album-card { grid-template-columns: 72px minmax(0,1fr); }

@@ -176,6 +176,7 @@ const PlaylistReactRuntime = (() => {
     if (payload.playlist_detail && !Array.isArray(payload.playlist_detail.track_rows)) return null;
     if (!payload.playlist_index && !payload.playlist_detail) return null;
     const origin = resourceOrigin(payload.playlist_detail);
+    const preferenceBatch = epoch !== undefined ? TrackActionsRuntime.readBatch(epoch) : null;
     const result = {playlist_sidebar: {active_playlist_id: payload.playlist_sidebar.active_playlist_id,
       items: payload.playlist_sidebar.items.map(item => copy(item, ['playlist_id', 'title', 'item_count', 'playlist_kind', 'allowed_actions']))}};
     result.playlist_creation_protocol = payload.playlist_creation_protocol;
@@ -183,13 +184,13 @@ const PlaylistReactRuntime = (() => {
     result.playlist_creation_source = creationSource(Object.prototype.hasOwnProperty.call(payload, 'playlist_creation_source') ? payload.playlist_creation_source : null);
     if (payload.playlist_index) result.playlist_index = {query: payload.playlist_index.query,
       playlists: payload.playlist_index.playlists.map(item => copy(item, ['playlist_id', 'title', 'description', 'visibility', 'item_count', 'playlist_kind', 'allowed_actions']))};
+    for (const row of payload.playlist_detail?.track_rows || []) if (!unreadable(row)) preferenceBatch?.accept(row);
     if (payload.playlist_detail) result.playlist_detail = {...copy(payload.playlist_detail,
       ['playlist_id', 'title', 'description', 'visibility', 'playlist_kind', 'items_complete', 'query', 'active_sort', 'saved_default_sort', 'playback_mode', 'listen_to_suggestions_after_playlist', 'allowed_actions']),
       revision: origin?.snapshot_ref ?? null,
       missing_playlist_creation_source: creationSource(Object.prototype.hasOwnProperty.call(payload.playlist_detail, 'missing_playlist_creation_source') ? payload.playlist_detail.missing_playlist_creation_source : null),
       track_rows: payload.playlist_detail.track_rows.map(row => {
         if (unreadable(row)) return {...copy(row, ['playlist_item_id']), source_readable: false};
-        if (epoch !== undefined) TrackActionsRuntime.acceptRead(row, epoch);
         const preference = TrackActionsRuntime.preference(row);
         return {...copy(row, ['playlist_item_id', 'playlist_position', 'album_title', 'title', 'artist', 'secondary_artist',
           'track_number', 'disc_number', 'duration_seconds', 'duration_display']), ...displayFacts(row),
@@ -293,7 +294,23 @@ const PlaylistReactRuntime = (() => {
         return selectedRows.map(row => {
           const original = detail.track_rows.find(item => item.playlist_item_id === row.playlist_item_id);
           if (!original || !exactGrant(original.allowed_actions, 'can_play')) return null;
+          let inventoryRef = original.inventory_track_ref || null, canonicalRef = original.canonical_track_ref || null;
+          const admit = value => {
+            if (!/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value?.inventory_track_ref || '')
+              || inventoryRef && inventoryRef !== value.inventory_track_ref
+              || canonicalRef && value.canonical_track_ref && canonicalRef !== value.canonical_track_ref)
+              throw failure('The queued Playlist identity changed.', 409);
+            inventoryRef = value.inventory_track_ref;
+            canonicalRef ||= value.canonical_track_ref || null;
+            return value;
+          };
           return {display: {title: row.title, artist: row.artist, album: row.album_title, albumTarget: row.album_target}, isCurrent: valid,
+            async resolveMetadata({signal} = {}) {
+              if (!valid() || signal?.aborted) throw aborted();
+              const value = await nativeTarget(original, detail, 'metadata', signal);
+              if (!valid() || signal?.aborted) throw aborted();
+              return admit(value);
+            },
             async resolvePlaylistItem({signal} = {}) {
               if (!valid() || signal?.aborted) throw aborted();
               const params = new URLSearchParams({surface: 'playlists', playlist_id: detail.playlist_id});
@@ -319,7 +336,7 @@ const PlaylistReactRuntime = (() => {
               if (!valid() || signal?.aborted) throw aborted();
               const value = await nativeTarget(original, detail, 'play', signal);
               if (!valid() || signal?.aborted) throw aborted();
-              return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+              return {...admit(value), source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
             }};
         });
       },

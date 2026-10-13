@@ -2,7 +2,7 @@
    facade. Source callbacks hold private authority; public snapshots never do. */
 const ExplicitQueueRuntime = (() => {
   let scopeToken=null, planner=null, serial=0, session=0, generation=0, snapshot=null;
-  let prepared=null, refreshController=null, pendingStart=null, snapshotFacts='', successorCache=null;
+  let prepared=null, refreshController=null, pendingStart=null, snapshotFacts='', successorCache=null, metadataRequest=0;
   const sources=new Map(), listeners=new Set(), trackKeys=new WeakMap(), queues=new WeakMap();
   const aborted=()=>Object.assign(new Error('Queue action was superseded.'),{name:'AbortError'});
   const notify=()=>{snapshot=null;for(const listener of [...listeners])try{listener();}catch{/* Paint cannot change playback. */}};
@@ -10,11 +10,47 @@ const ExplicitQueueRuntime = (() => {
   const permitted=()=>!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows?.('library.media.read')===true;
   const sourceCurrent=(source,media=true)=>{try{return source?.scope===scopeToken&&source.capture.isCurrent()===true&&(!media||permitted());}catch{return false;}};
   const denySource=source=>{
-    source.readable=false;source.authorityEpoch=(source.authorityEpoch||0)+1;
+    source.readable=false;source.metadataTarget=null;source.target=null;source.playFailed=true;source.authorityEpoch=(source.authorityEpoch||0)+1;
     const entry=prepared?.next?.source==='explicit'&&planner?.getSnapshot().entries.find(value=>value.id===prepared.next.entryId);
     if(entry&&sources.get(entry.trackId)===source){refreshController?.abort();generation++;prepared=null;retireContinuity('queue-source-revoked');}
   };
-  const playable=id=>{const source=sources.get(id);return Boolean(sourceCurrent(source)&&source.readable!==false&&source.target&&TrackActionsRuntime.canPlay(source.target));};
+  const playable=id=>{const source=sources.get(id),target=source?.metadataTarget;
+    return Boolean(sourceCurrent(source)&&source.readable!==false&&!source.playFailed&&target?.availability==='local'
+      &&target.allowed_actions?.can_play!==false&&target.playback_state?.can_start_here===true);};
+  const sourcePreference=source=>sourceCurrent(source,false)&&source.readable!==false&&!source.metadataTarget?.read_only_subject
+    ?TrackActionsRuntime.preference(source.metadataTarget):null;
+  function bindIdentity(source,target) {
+    if(!target||source.inventory&&target.inventory_track_ref!==source.inventory
+      ||source.canonical&&target.canonical_track_ref&&target.canonical_track_ref!==source.canonical)
+      throw Object.assign(new Error('This queued track identity changed.'),{status:409});
+    source.inventory ||= target.inventory_track_ref||null;
+    source.canonical ||= target.canonical_track_ref||null;
+  }
+  async function readMetadata(source,signal) {
+    if(signal.aborted||!sourceCurrent(source,false))throw aborted();
+    const authorityEpoch=source.authorityEpoch,target=await source.capture.resolveMetadata({signal});
+    if(signal.aborted||!sourceCurrent(source,false)||source.authorityEpoch!==authorityEpoch)throw aborted();
+    if(!target||target.source_readable===false||target.allowed_actions?.can_read===false)
+      throw Object.assign(new Error('This queued source is unreadable.'),{status:403});
+    return Object.freeze({...target});
+  }
+  function acceptMetadata(source,target,batch,freshPlayTarget=null) {
+    bindIdentity(source,target);
+    source.readable=true;source.playFailed=false;
+    source.display=Object.freeze({...source.display,title:String(target.title||''),artist:String(target.artist||target.secondary_artist||''),album:String(target.album_title||'')});
+    // Admit canonical and supported path alias together, before any denial can
+    // advance the read epoch. A rejected read cannot grant Queue preference UI.
+    const admission=freshPlayTarget?.track_ref&&freshPlayTarget.inventory_track_ref===target.inventory_track_ref
+      ?{...target,track_ref:freshPlayTarget.track_ref}:target;
+    const epoch=batch.epoch,accepted=batch.accept(admission)===true;
+    const previous=source.metadataTarget;
+    const retained=!accepted&&epoch!==TrackActionsRuntime.readEpoch()&&TrackActionsRuntime.overlay(target.track_preference)?.allowed_actions.can_set_love_tier===true&&previous
+      &&previous.track_ref===target.track_ref&&previous.inventory_track_ref===target.inventory_track_ref
+      &&previous.canonical_track_ref===target.canonical_track_ref?previous.track_preference:null;
+    source.metadataTarget=accepted?target:Object.freeze({...target,track_preference:retained});
+    if(target.availability!=='local'||target.playback_state?.can_start_here!==true)source.target=null;
+    return accepted;
+  }
   function sync() {
     const scope=TrackActionsRuntime.scope();
     if(scope.token!==scopeToken) {
@@ -106,6 +142,7 @@ const ExplicitQueueRuntime = (() => {
     if(target?.source_readable===false||target?.allowed_actions?.can_read===false)throw Object.assign(new Error('This queued source is unreadable.'),{status:403});
     if(!target||['missing','unknown','unresolved'].includes(target.availability)
       ||target.allowed_actions?.can_play===false||target.playback_state?.can_start_here!==true||!TrackActionsRuntime.canPlay(target))throw new Error('This queued track is unavailable.');
+    bindIdentity(source,target);
     return Object.freeze({...target});
   }
   async function refresh() {
@@ -123,8 +160,8 @@ const ExplicitQueueRuntime = (() => {
       // Fresh authorization is required before handing media to native preload.
       while(candidate?.source==='explicit'&&!candidate.ended) {
         const entry=planner.getSnapshot().entries.find(value=>value.id===candidate.entryId),source=sources.get(entry?.trackId);
-        try {source.target=await resolve(source,controller.signal);source.readable=true;}
-        catch(error){if(controller.signal.aborted||token!==generation)throw aborted();if(source){source.target=null;if([401,403,404].includes(error.status))denySource(source);}notify();candidate=preview();continue;}
+        try {source.target=await resolve(source,controller.signal);source.playFailed=false;}
+        catch(error){if(controller.signal.aborted||token!==generation)throw aborted();if(source){source.target=null;source.playFailed=true;}notify();candidate=preview();continue;}
         break;
       }
       if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority())return null;
@@ -159,7 +196,11 @@ const ExplicitQueueRuntime = (() => {
     snapshotFacts=facts;
     const entries=value.entries.map(entry=>{
       const source=sources.get(entry.trackId),available=playable(entry.trackId),current=entry.id===value.currentId;
-      return Object.freeze({id:entry.id,blockId:entry.blockId,...(sourceCurrent(source,false)&&source?.readable!==false?source?.display:{title:'Unavailable track',artist:'',album:''}),timing:entry.timing,ready:entry.ready,current,sourceReadable:sourceCurrent(source,false)&&source?.readable!==false,
+      const readable=sourceCurrent(source,false)&&source?.readable!==false,target=readable?source?.metadataTarget:null;
+      const duration=target?.duration_seconds;
+      return Object.freeze({duration_seconds:typeof duration==='number'&&Number.isFinite(duration)&&duration>=0?duration:null,
+        availability:readable&&['local','missing','unresolved','unknown'].includes(target?.availability)?target.availability:'unknown',
+        track_preference:readable?sourcePreference(source):null,id:entry.id,blockId:entry.blockId,...(sourceCurrent(source,false)&&source?.readable!==false?source?.display:{title:'Unavailable track',artist:'',album:''}),timing:entry.timing,ready:entry.ready,current,sourceReadable:sourceCurrent(source,false)&&source?.readable!==false,
         canPlay:available&&!stopPriority()&&planner.canStart(entry.id,playback().ended||!state.player.current?null:context),
         status:!available?'Unavailable · source or local track':current?'Current queued track':entry.invalid?`Unavailable · ${entry.invalid}`
           :!value.enabled?'Paused · queue is deactivated':value.halted?'Paused · playback stopped'
@@ -201,33 +242,82 @@ const ExplicitQueueRuntime = (() => {
       try {
         if(!active())throw aborted();
         for(const capture of captures) {
-          if(typeof capture?.resolve!=='function'||typeof capture.isCurrent!=='function')throw new Error('Queue source cannot be refreshed.');
+          if(typeof capture?.resolve!=='function'||typeof capture.resolveMetadata!=='function'||typeof capture.isCurrent!=='function')throw new Error('Queue source cannot be refreshed.');
           const targets={};
           for(const kind of ['album','artist']) {
             const projected=window.AlbumHavenResourceSelection?.projectTarget(capture.display?.[`${kind}Target`]);
             if(projected?.kind===kind) {const {native_actions,...publicTarget}=projected;targets[`${kind}Target`]=Object.freeze(publicTarget);}
           }
           const display=Object.freeze({title:String(capture.display?.title||''),artist:String(capture.display?.artist||''),album:String(capture.display?.album||''),...targets});
-          const source={scope:actor,capture,display,target:null,readable:true,authorityEpoch:0};captured.push(source);
+          const source={scope:actor,capture,display,target:null,metadataTarget:null,readable:true,playFailed:false,authorityEpoch:0,inventory:null,canonical:null};captured.push(source);
         }
-        await Promise.all(captured.map(async source=>{source.target=await resolve(source,controller.signal);}));
-        if(!active())throw aborted();editable();
+        const preferenceEpoch=TrackActionsRuntime.readEpoch();
+        const metadata=await Promise.all(captured.map(async source=>{
+          const target=await readMetadata(source,controller.signal);bindIdentity(source,target);
+          source.target=await resolve(source,controller.signal);return target;
+        }));
+        if(!active())throw aborted();
+        const batch=TrackActionsRuntime.readBatch(preferenceEpoch);
+        // These already-completed reads are admitted synchronously as one batch.
+        // Advance only after our own accepted read changes the shared epoch.
+        captured.forEach((source,index)=>{
+          if(!active()||!sourceCurrent(source))throw aborted();
+          acceptMetadata(source,metadata[index],batch,source.target);
+        });
+        // Preference subscribers may retire the request or any captured source.
+        if(!active()||captured.some(source=>!sourceCurrent(source)))throw aborted();
+        editable();
+        if(!active()||captured.some(source=>!sourceCurrent(source)))throw aborted();
         const keys=captured.map(source=>{const key=`request-${++serial}`;sources.set(key,source);return key;});
         const ids=planner.enqueue(keys,timing,before);if(!ids.length)keys.forEach(key=>sources.delete(key));changed();return ids;
       } finally {options.signal?.removeEventListener('abort',cancel);}
     },
     async refresh(options={}) {
-      sync();const actor=scopeToken,token=generation,controller=new AbortController();
+      sync();const actor=scopeToken,token=generation,read=++metadataRequest,controller=new AbortController();
+      const preferenceEpoch=TrackActionsRuntime.readEpoch();
       const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});
-      const entries=[...sources.values()];
-      if(!entries.length){options.signal?.removeEventListener('abort',cancel);return getSnapshot();}
+      const entries=[...sources.values()],eligibility=[...sources.keys()].map(playable);
       try {
         if(options.signal?.aborted)throw aborted();
-        const updates=await Promise.all(entries.map(async source=>{try{return {target:await resolve(source,controller.signal),readable:true};}
-          catch(error){if(controller.signal.aborted)throw error;return {target:null,readable:![401,403,404].includes(error.status)&&source.readable!==false};}}));
-        if(controller.signal.aborted||actor!==TrackActionsRuntime.scope().token||token!==generation)throw aborted();
-        editable();entries.forEach((source,index)=>{if(updates[index].readable===false)denySource(source);Object.assign(source,updates[index]);});changed();return getSnapshot();
+        const updates=await Promise.all(entries.map(async source=>{
+          try {return {target:await readMetadata(source,controller.signal)};}
+          catch(error){if(controller.signal.aborted||error.name==='AbortError')throw error;return {error};}
+        }));
+        const retained=new Set(sources.values());
+        if(controller.signal.aborted||actor!==TrackActionsRuntime.scope().token||token!==generation||read!==metadataRequest
+          ||entries.some(source=>!sourceCurrent(source,false)||!retained.has(source)))throw aborted();
+        const batch=TrackActionsRuntime.readBatch(preferenceEpoch);
+        entries.forEach((source,index)=>{
+          const update=updates[index];
+          try {
+            if(update.error)throw update.error;
+            acceptMetadata(source,update.target,batch);
+          } catch(error) {
+            source.metadataTarget=null;source.target=null;source.playFailed=true;
+            if([401,403,404,409].includes(error.status))denySource(source);
+          }
+        });
+        notify();const result=getSnapshot();
+        if([...sources.keys()].some((key,index)=>playable(key)!==eligibility[index]))reschedule();
+        return result;
       } finally {options.signal?.removeEventListener('abort',cancel);}
+    },
+    trackPreference(row) {
+      sync();const entry=planner.getSnapshot().entries.find(value=>value.id===row?.id);
+      return sourcePreference(sources.get(entry?.trackId));
+    },
+    subscribeTrackPreferences(listener) {return TrackActionsRuntime.subscribePreferences(listener);},
+    async setTrackLove({row,love_tier,signal,isCurrent}={}) {
+      sync();const entry=planner.getSnapshot().entries.find(value=>value.id===row?.id),source=sources.get(entry?.trackId);
+      const actor=scopeToken,authorityEpoch=source?.authorityEpoch,preference=sourcePreference(source),target=source?.metadataTarget;
+      if(!preference||!target)throw Object.assign(new Error('Track love editing is unavailable.'),{status:403});
+      return TrackActionsRuntime.setLove({source:target,love_tier,signal,isCurrent:()=>{
+        try {return actor===TrackActionsRuntime.scope().token&&sourceCurrent(source,false)&&source.readable!==false
+          &&source.authorityEpoch===authorityEpoch&&sources.get(entry.trackId)===source
+          &&planner.getSnapshot().entries.some(value=>value.id===row.id&&value.trackId===entry.trackId)
+          &&sourcePreference(source)?.identity===preference.identity&&sourcePreference(source)?.allowed_actions.can_set_love_tier===true
+          &&(!isCurrent||isCurrent()===true);}catch{return false;}
+      }});
     },
     async playlistSelection(ids,options={}) {
       sync();const actor=scopeToken;
@@ -288,7 +378,7 @@ const ExplicitQueueRuntime = (() => {
       const previousQueue=state.player.playbackQueue;let installed=null,started=false,selectedToken=null;
       const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});pendingStart=controller;
       try {
-        try {source.target=await resolve(source,controller.signal);source.readable=true;}catch(error){source.target=null;if([401,403,404].includes(error.status))denySource(source);notify();throw error;}
+        try {source.target=await resolve(source,controller.signal);source.playFailed=false;}catch(error){source.target=null;source.playFailed=true;notify();throw error;}
         if(options.signal?.aborted||controller.signal.aborted||token!==generation||actor!==TrackActionsRuntime.scope().token
           ||options.isCurrent&&options.isCurrent()!==true||planner.getSnapshot()!==value)throw aborted();
         const context=planner.start(id,current),track=payload(context);if(!context||!track)throw aborted();
@@ -307,6 +397,7 @@ const ExplicitQueueRuntime = (() => {
       }
     },
   };
+  TrackActionsRuntime.subscribePreferences(()=>notify());
   TrackActionsRuntime.subscribePlayback?.(()=>notify());
   PrivateUITransport.subscribe?.(()=>{sync();notify();});
   window.AlbumHavenExplicitQueue=Object.freeze(api);

@@ -19,15 +19,33 @@ function captureNativeAlbumQueueSources(album, rows) {
   let request=null;
   const load=signal=>{
     if(request&&request.signal===signal)return request.promise;
-    const pending={signal};pending.promise=fetchTrackModalAlbumDetails(albumRef,{signal}).finally(()=>{if(request===pending)request=null;});
+    const pending={signal};pending.promise=fetchTrackModalAlbumDetails(albumRef,{signal,
+      // Queue owns the one captured-epoch batch for these metadata/play reads.
+      admitPreferences:false,isCurrent:()=>TrackActionsRuntime.scope().token===scope.token}).finally(()=>{if(request===pending)request=null;});
     request=pending;return pending.promise;
   };
   return rows.map(row=>{
     const inventoryRef=row?.inventory_track_ref,path=String(row?.path||'');
+    let canonicalRef=row?.canonical_track_ref||null;
     if(!path||row.source_readable===false||row.availability==='missing')throw new Error('This Album track is unavailable.');
     const metadata=explicitQueueAlbumMetadata(album,row);
     return Object.freeze({display:Object.freeze({title:metadata.title,artist:metadata.artist,album:metadata.album_title}),
       isCurrent:()=>TrackActionsRuntime.scope().token===scope.token,
+      async resolveMetadata({signal}={}) {
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const fresh=await load(signal);
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const matches=(fresh?.track_rows||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(getAlbumPlaybackQueueRef(fresh)!==albumRef||fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false
+          ||!track||track.source_readable===false||track.allowed_actions?.can_read===false)
+          throw Object.assign(new Error('This Album source is unavailable.'),{status:403});
+        if(canonicalRef&&track.canonical_track_ref&&canonicalRef!==track.canonical_track_ref)
+          throw Object.assign(new Error('This Album track identity changed.'),{status:409});
+        canonicalRef ||= track.canonical_track_ref||null;
+        return {...track,...explicitQueueAlbumMetadata(fresh,track),source_readable:true,
+          availability:track.availability??(track.playback_state?.can_start_here===true?'local':'unknown')};
+      },
       async resolve({signal}={}) {
         if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
         const fresh=await load(signal);
@@ -110,9 +128,35 @@ function captureNativeLooseQueueSources(view, rows) {
   };
   return rows.map(row=>{
     const inventoryRef=row?.inventory_track_ref,path=String(row?.path||'');
+    let canonicalRef=row?.canonical_track_ref||null;
     if(!path||row.source_readable===false||row.availability==='missing')throw new Error('This Loose Track is unavailable.');
     return Object.freeze({display:Object.freeze({title:String(row.title||''),artist:String(row.artist||''),album:''}),
       isCurrent:()=>TrackActionsRuntime.scope().token===scope.token,
+      async resolveMetadata({signal}={}) {
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const {response,fresh}=await load(signal);
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        if(!response.ok)throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:response.status});
+        const matches=(fresh?.non_album_tracks||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(fresh?.ok===false||fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false
+          ||!track||track.source_readable===false||track.allowed_actions?.can_read===false)
+          throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:403});
+        if(canonicalRef&&track.canonical_track_ref&&canonicalRef!==track.canonical_track_ref)
+          throw Object.assign(new Error('This Loose Track identity changed.'),{status:409});
+        canonicalRef ||= track.canonical_track_ref||null;
+        // Unresolved personal metadata is unknown, not a read-only Off denial.
+        const preferenceInventory=typeof track.inventory_track_ref==='string'
+          ?track.inventory_track_ref.match(/^inventory-track:([1-9]\d*):[1-9]\d*$/):null;
+        const preferenceAvailable=track.track_preference_state==='available'&&preferenceInventory?.[1]===scope.library
+          &&typeof track.canonical_track_ref==='string'&&Boolean(track.canonical_track_ref.trim())
+          &&!fresh.read_only_subject&&!track.read_only_subject&&fresh.readable!==false&&track.readable!==false
+          &&(!Object.hasOwn(fresh.allowed_actions||{},'can_read')||fresh.allowed_actions.can_read===true)
+          &&(!Object.hasOwn(track.allowed_actions||{},'can_read')||track.allowed_actions.can_read===true);
+        return {...track,track_ref:Object.hasOwn(track,'track_ref')?track.track_ref:track.path,album_title:'',source_readable:true,
+          track_preference:preferenceAvailable?track.track_preference:null,
+          availability:track.availability??(track.playback_state?.can_start_here===true?'local':'unknown')};
+      },
       async resolvePlaylistItem({signal}={}) {
         const {response,fresh}=await load(signal);
         if(!response.ok)throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:response.status});

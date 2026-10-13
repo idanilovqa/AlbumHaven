@@ -16,6 +16,9 @@ const HomeFriendsRuntime = (() => {
   const friendActivityEpochs = new Map();
   function eraseActivity() {activity?.nativeRows?.clear(); activity?.resources?.clear(); activity?.rows?.clear(); activity = null;}
   const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+  const ratingTasteState = (value, maximum) => own(value, 'taste_state') && value.taste_state === 'available'
+    && own(value, 'rating') && (value.rating === null
+      || Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= maximum) ? 'available' : 'unavailable';
   const opaque = value => typeof value === 'string' && value.trim() && value.length <= 512 && !/[\\/\x00-\x20\x7f]/.test(value);
   const unreadableActivityRow = row => row.source_readable === false || own(row.allowed_actions, 'can_read') && row.allowed_actions.can_read !== true;
   const selectionApi = () => window.AlbumHavenResourceSelection;
@@ -293,9 +296,24 @@ const HomeFriendsRuntime = (() => {
         const valid = () => sync().scopeKey === scope && activityProvider === provider
           && (context.account_ref == null || friendActivityEpochs.get(context.account_ref) === friendEpoch);
         return selectedRows.map(row => {
-          let inventoryRef = null;
+          let inventoryRef = null, canonicalRef = null;
+          const admit = value => {
+            if (!/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value?.inventory_track_ref || '')
+              || inventoryRef && inventoryRef !== value.inventory_track_ref
+              || canonicalRef && value.canonical_track_ref && canonicalRef !== value.canonical_track_ref)
+              throw failure('The queued activity identity changed.', 409);
+            inventoryRef = value.inventory_track_ref;
+            canonicalRef ||= value.canonical_track_ref || null;
+            return value;
+          };
           return {display: {title: row.title, artist: row.artist, album: row.album_title,
           albumTarget: row.album_target, artistTarget: row.artist_target}, isCurrent: valid,
+          async resolveMetadata({signal} = {}) {
+            if (!valid() || signal?.aborted) throw superseded();
+            const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'metadata', signal});
+            if (!valid() || signal?.aborted) throw superseded();
+            return admit(value);
+          },
           async resolvePlaylistItem({signal} = {}) {
             // Enqueue already established this inventory identity. It is only
             // a candidate: the Browse-gated Queue source endpoint freshly
@@ -323,10 +341,8 @@ const HomeFriendsRuntime = (() => {
           async resolve({signal} = {}) {
             if (!valid() || signal?.aborted) throw superseded();
             const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'play', signal});
-            if (!valid() || signal?.aborted || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value.inventory_track_ref || '')
-              || inventoryRef && inventoryRef !== value.inventory_track_ref) throw superseded();
-            inventoryRef = value.inventory_track_ref;
-            return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+            if (!valid() || signal?.aborted) throw superseded();
+            return {...admit(value), source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
           }};
         });
       } : null,
@@ -400,7 +416,8 @@ const HomeFriendsRuntime = (() => {
           || data.rows.length && data.rows.every(row => owner.rows.has(row.id)));
         if (invalidAppend && !revocations.size) throw failure('Activity returned an invalid page.');
         if (append && !invalidAppend) owner.cursors.add(options.cursor);
-        const rows = data.rows.map(row => {
+        const preferenceBatch = TrackActionsRuntime.readBatch(epoch), preferenceSources = new Map();
+        let rows = data.rows.map(row => {
           const publicRow = {id: row.id, kind: ['album', 'artist', 'track', 'listen'].includes(row.kind) ? row.kind : null};
           for (const key of ['title', 'artist', 'secondary_artist', 'album_title', 'last_listened_at', 'source_label']) {
             if (own(row, key)) publicRow[key] = typeof row[key] === 'string' ? row[key] : '';
@@ -409,7 +426,7 @@ const HomeFriendsRuntime = (() => {
             if (own(row, key)) publicRow[key] = typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] >= 0 ? row[key] : null;
           }
           if (own(row, 'favorite')) publicRow.favorite = typeof row.favorite === 'boolean' ? row.favorite : null;
-          if (own(row, 'taste_state')) publicRow.taste_state = typeof row.taste_state === 'string' ? row.taste_state : null;
+          publicRow.taste_state = ratingTasteState(row, row.kind === 'album' ? 10 : ['track', 'listen'].includes(row.kind) ? 5 : 0);
           if (own(row, 'availability')) publicRow.availability = ['local', 'missing', 'unresolved'].includes(row.availability) ? row.availability : null;
           if (own(row, 'love_tier')) publicRow.love_tier = ['off', 'loved', 'obsessed'].includes(row.love_tier) ? row.love_tier : null;
           if (unreadableActivityRow(row)) {
@@ -436,11 +453,16 @@ const HomeFriendsRuntime = (() => {
               artist: privateResourceTarget(row.artist_target, publicRow.artist_target)}));
           }
           const source = invalidAppend ? null : currentActivityTrack(publicRow, context);
-          TrackActionsRuntime.acceptRead(source, epoch);
-          const preference = TrackActionsRuntime.preference(source);
+          preferenceSources.set(publicRow, source);
+          return publicRow;
+        });
+        for (const source of preferenceSources.values()) preferenceBatch.accept(source);
+        rows = rows.map((publicRow, index) => {
+          if (publicRow.source_readable === false) return publicRow;
+          const preference = TrackActionsRuntime.preference(preferenceSources.get(publicRow));
           if (preference) publicRow.track_preference = preference;
-          else if (own(row, 'track_preference')) {
-            const overlay = TrackActionsRuntime.overlay(row.track_preference);
+          else if (own(data.rows[index], 'track_preference')) {
+            const overlay = TrackActionsRuntime.overlay(data.rows[index].track_preference);
             if (overlay) {publicRow.love_tier = overlay.love_tier; publicRow.rating = overlay.rating;}
           }
           return Object.freeze(publicRow);
@@ -530,31 +552,41 @@ const HomeFriendsRuntime = (() => {
     const subject = selection.origin?.account_ref;
     if (selection.origin?.source !== 'activity' || subject == null) return album;
     const supplied = context.subjectTaste || sourceResource(selection, context)?.subject_taste;
-    const taste = supplied?.subject_ref === subject && supplied.read_only === true ? supplied : {tracks: [], rating: null, favorite: null};
-    const byRef = new Map((Array.isArray(taste.tracks) ? taste.tracks : []).map(row => [row.inventory_track_ref, row]));
+    const taste = own(supplied, 'subject_ref') && supplied.subject_ref === subject && own(supplied, 'read_only') && supplied.read_only === true
+      ? supplied : {tracks: [], rating: null, favorite: null};
+    const byRef = new Map(), duplicates = new Set();
+    for (const row of own(taste, 'tracks') && Array.isArray(taste.tracks) ? taste.tracks : []) {
+      if (!own(row, 'inventory_track_ref') || typeof row.inventory_track_ref !== 'string') continue;
+      if (byRef.has(row.inventory_track_ref)) duplicates.add(row.inventory_track_ref);
+      byRef.set(row.inventory_track_ref, row);
+    }
+    for (const ref of duplicates) byRef.delete(ref);
     // Clone every container before overlaying subject facts; fetched native album
     // caches and the signed-in listener's preferences must remain untouched.
-    const personal = new Set(['love_tier', 'track_rating', 'play_count', 'last_listened_at_ms', 'added_at', 'added_at_ms', 'album_rating', 'rating', 'favorite', 'is_favorite', 'listen_count', 'last_listened_at',
+    const personal = new Set(['taste_state', 'love_tier', 'track_rating', 'play_count', 'last_listened_at_ms', 'added_at', 'added_at_ms', 'album_rating', 'rating', 'favorite', 'is_favorite', 'listen_count', 'last_listened_at',
       'track_scrobble_count', 'scrobble_count', 'track_stats', 'listening_progress', 'listen_progress',
-      'album_preference', 'album_preference_overlay', 'track_preference', 'track_preference_overlay', 'tag_album_rating', 'tag_album_rating_source']);
+      'album_preference', 'album_preference_overlay', 'track_preference', 'track_preference_overlay', 'track_preference_state', 'canonical_track_ref', 'tag_album_rating', 'tag_album_rating_source']);
     const copy = value => {
       if (Array.isArray(value)) return value.map(copy);
       if (!value || typeof value !== 'object') return value;
       const result = {};
       for (const [key, child] of Object.entries(value)) result[key] = personal.has(key) ? null : copy(child);
       result.can_edit_preferences = false; result.read_only_subject = subject;
-      if (typeof value.inventory_track_ref === 'string') {
+      if (own(value, 'inventory_track_ref') && typeof value.inventory_track_ref === 'string') {
         const row = byRef.get(value.inventory_track_ref);
-        const rating = Number.isInteger(row?.rating) && row.rating >= 1 && row.rating <= 5 ? row.rating : null;
+        const rating = own(row, 'rating') && Number.isInteger(row.rating) && row.rating >= 1 && row.rating <= 5 ? row.rating : null;
+        const tasteState = ratingTasteState(row, 5);
         const tier = ['off', 'loved', 'obsessed'].includes(row?.love_tier) ? row.love_tier : null;
-        result.read_only_subject = subject; result.rating = rating; result.love_tier = tier;
-        result.track_preference = result.track_preference_overlay = {rating, love_tier: tier, allowed_actions: {can_set_love_tier: false}};
+        result.read_only_subject = subject; result.rating = rating; result.love_tier = tier; result.taste_state = tasteState;
+        result.track_preference = result.track_preference_overlay = tasteState === 'available'
+          ? {rating, love_tier: tier, allowed_actions: {can_set_love_tier: false}} : null;
       }
       return result;
     };
     const result = copy(album);
     result.read_only_subject = subject;
-    result.album_rating = Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
+    result.taste_state = ratingTasteState(taste, 10);
+    result.album_rating = own(taste, 'rating') && Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
     result.favorite = typeof taste.favorite === 'boolean' ? taste.favorite : null;
     return result;
   }
@@ -721,7 +753,12 @@ const HomeFriendsRuntime = (() => {
     const modalToken = Number(state.ui?.pendingTrackModalLoadToken || 0);
     const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
     if (typeof fetchTrackModalAlbumDetails !== 'function') throw failure('Album details are unavailable.');
-    const album = await fetchTrackModalAlbumDetails(albumRef);
+    const album = await fetchTrackModalAlbumDetails(albumRef, {isCurrent: () => {
+      requireGrant(intent, albumRef, scopeKey);
+      return sequence === actionSequence
+        && (intent !== 'open' || modalToken === Number(state.ui?.pendingTrackModalLoadToken || 0))
+        && (intent !== 'play' || playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null));
+    }});
     if (sequence !== actionSequence
       || (intent === 'open' && modalToken !== Number(state.ui?.pendingTrackModalLoadToken || 0))
       || (intent === 'play' && playerToken !== (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null))) {
@@ -783,7 +820,9 @@ const HomeFriendsRuntime = (() => {
     requireGrant('open', ref, scopeKey);
     if (signal?.aborted) throw superseded();
     if (typeof fetchTrackModalAlbumDetails !== 'function') return {status: 'unavailable'};
-    const album = await fetchTrackModalAlbumDetails(ref, {signal});
+    const album = await fetchTrackModalAlbumDetails(ref, {signal, isCurrent: () => {
+      requireGrant('open', ref, scopeKey); return true;
+    }});
     if (signal?.aborted) throw superseded();
     requireGrant('open', ref, scopeKey);
     if (!album || String(album.key || album.album_ref || '') !== ref || !Array.isArray(album.tracks)
@@ -959,10 +998,12 @@ const HomeFriendsRuntime = (() => {
     openChoice: (trigger, options) => openUtilityChoiceDropdown(trigger, options),
     buttonHtml: config => ButtonComponent.renderButton(config),
     actionHtml: config => ButtonComponent.renderActionButton(config),
+    iconHtml: name => ButtonComponent.renderIconSvg(name),
     alertHtml: config => buildOnPageAlertHtml(config),
     galleryBarHtml: config => buildGalleryBarHtml(config),
     tableHtml: config => buildCompactDataTable(config),
     galleryCardHtml: config => buildGalleryCardHtml(config),
+    ratingHtml: config => buildGalleryRatingHtml(config),
     navigationItemHtml: config => window.NavigationTree.renderItem(config),
     artboxHtml: config => buildAlbumArtboxHtml(config),
     detailHeaderHtml: config => buildAlbumDetailsHeaderHtml(config),

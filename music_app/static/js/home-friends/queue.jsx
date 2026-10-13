@@ -2,7 +2,21 @@ import {prepareQueuePlaylistSource} from './queue-playlist-source.mjs';
 import {queueSelectionIds} from './queue-selection.mjs';
 import {PlaytableSelectionActions, usePlaytableSelection} from '../playtables/selection.jsx';
 import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
-import {Button, NativeHtml} from './components.jsx';
+import {Button} from './components.jsx';
+import {useTrackPreferences} from './track-preference.jsx';
+import {paintTrackLoveCell} from './track-preference.mjs';
+import {playlistTrackMetricCells} from '../playlists/track-metrics.mjs';
+import {TrackTableColumnsAction, useTrackTablePresentation} from '../playtables/track-table-presentation.jsx';
+
+const QUEUE_COLUMNS = Object.freeze([
+  {key: 'number', label: '#', width: 36, autoMinWidth: 641},
+  {key: 'title', label: 'Track', identity: true, width: 100},
+  {key: 'album', label: 'Album', width: 112, autoMinWidth: 641},
+  {key: 'timing', label: 'Play when', width: 120, autoMinWidth: 641},
+  {key: 'love_tier', label: 'Love', required: true, width: 36},
+  {key: 'duration', label: 'Length', required: true, width: 54},
+  {key: 'actions', label: 'Actions', action: true, width: 72, autoMinWidth: 641},
+]);
 
 const EMPTY = Object.freeze({enabled: true, entries: [], revision: 0});
 export function useExplicitQueue(runtime) {
@@ -55,9 +69,25 @@ export function QueueHeader({runtime, api, value}) {
 export function QueuePanel({runtime, api, value, scopeKey, selectedIds = [], onSelect}) {
   const syncingSelection = useRef(false);
   const drag = useRef(null), menu = useRef(null), owner = useRef(null), mounted = useRef(false), playing = useRef(null), host = useRef(null);
+  const tableHost = useRef(null), renderedStructure = useRef(null), renderedRuntime = useRef(null), renderedResource = useRef(null), commandScope = useRef(null);
   const [error, setError] = useState('');
   const safe = action => {try {Promise.resolve(action()).catch(() => {if (mounted.current) setError('This Queue action is unavailable.');});} catch {if (mounted.current) setError('This Queue action is unavailable.');}};
   owner.current = {api, value, scopeKey};
+  const resourceKey = useMemo(() => ({api, scopeKey}), [api, scopeKey]);
+  // Command handles contain occurrence IDs only. Read data and permissions stay
+  // in the native owner; a snapshot repaint must not cancel the same command.
+  const commandRows = useMemo(() => {
+    const previous = new Map((commandScope.current?.resourceKey === resourceKey ? commandScope.current.rows : []).map(handle => [handle.id, handle]));
+    const rows = value.entries.map(row => previous.get(row.id) || Object.freeze({id: row.id}));
+    commandScope.current = {resourceKey, rows}; return rows;
+  }, [resourceKey, value.entries]);
+  const preferenceRuntime = useMemo(() => ({...runtime, trackPreference: api?.trackPreference,
+    setTrackLove: api?.setTrackLove, subscribeTrackPreferences: api?.subscribeTrackPreferences}), [runtime, api]);
+  const current = () => owner.current?.api === api && owner.current?.scopeKey === scopeKey;
+  const love = useTrackPreferences({runtime: preferenceRuntime, source: resourceKey, rows: commandRows, context: {scopeKey},
+    isCurrent: current, onError: message => {if (mounted.current) setError(message);}});
+  const commandsById = useMemo(() => new Map(commandRows.map(handle => [handle.id, handle])), [commandRows]);
+  const commandRow = row => commandsById.get(row.id);
   useEffect(() => {
     mounted.current = true;
     const request = new AbortController();
@@ -76,7 +106,7 @@ export function QueuePanel({runtime, api, value, scopeKey, selectedIds = [], onS
   }, [api, scopeKey]);
   const runPlay = id => {
     playing.current?.abort(); const request = new AbortController(); playing.current = request;
-    safe(() => api.play(id, {signal: request.signal, isCurrent: () => mounted.current && owner.current?.api === api && playing.current === request}));
+    safe(() => api.play(id, {signal: request.signal, isCurrent: () => mounted.current && current() && playing.current === request}));
   };
   const openPlaylist = async (packet, lifetime, anchor, options = {}) => {
     if (!api?.playlistSelection || !lifetime.isCurrent()) return false;
@@ -123,23 +153,56 @@ export function QueuePanel({runtime, api, value, scopeKey, selectedIds = [], onS
   const options = api?.timingOptions?.() || [];
   const label = timing => options.find(option => (option.value ?? option.id) === timing)?.label || timing;
   const html = runtime.tableHtml({id: 'home-explicit-queue', ariaLabel: 'Explicitly queued tracks', density: 'compact',
-    columns: '36px minmax(0,2fr) minmax(0,1fr) minmax(120px,1fr) 100px', narrowColumns: '36px minmax(0,1fr) 100px',
-    columnsConfig: [{key: 'number', label: '#'}, {key: 'title', label: 'Track'}, {key: 'album', label: 'Album', hideWhenNarrow: true},
-      {key: 'timing', label: 'Play when', hideWhenNarrow: true}, {key: 'actions', label: 'Actions'}],
-    rows: rows.map((row, index) => ({key: row.id, tabIndex: row.sourceReadable === true ? 0 : -1, ariaDisabled: row.sourceReadable !== true, dataAttributes: {'queue-row': row.id},
+    columns: QUEUE_COLUMNS.map(column => column.identity ? 'minmax(0,1fr)' : `${column.width}px`).join(' '),
+    columnsConfig: QUEUE_COLUMNS,
+    rows: rows.map((row, index) => {
+      const display = {...row, source_readable: row.sourceReadable === true}, metrics = playlistTrackMetricCells(preferenceRuntime, display, love.get(commandRow(row)));
+      return {key: row.id, tabIndex: row.sourceReadable === true ? 0 : -1, ariaDisabled: row.sourceReadable !== true, dataAttributes: {'queue-row': row.id},
       className: `album-track-table__row${row.current ? ' album-track-table__row--current' : ''}`,
-      cells: {number: escape(index + 1), title: {content: `<span class="album-track-table__title">${escape(row.title || 'Unknown track')}</span><span class="album-track-table__artist">${escape(row.artist || '')}</span><span>${escape(label(row.timing))}</span>`},
+      cells: {number: escape(index + 1), love_tier: metrics.love_tier, duration: metrics.duration,
+        title: {content: `<div class="home-detail__release">` + (row.canPlay ? runtime.actionHtml({icon: 'play', ariaLabel: `Play ${row.title || 'track'}`, presentation: 'bare',
+          attributes: {'data-queue-play': row.id}}) : '') + `<span class="album-track-table__title">${escape(row.title || 'Unknown track')}<span class="album-track-table__secondary">${escape([row.artist, label(row.timing)].filter(Boolean).join(' · '))}</span></span></div>`},
         album: escape(row.album || '–'), timing: {content: runtime.buttonHtml({label: label(row.timing), size: 'small', disabled: row.current,
           attributes: {'data-queue-timing': row.id}})}, actions: {content: [
-          runtime.actionHtml({icon: 'play', ariaLabel: `Play ${row.title || 'track'}`, presentation: 'bare', disabled: !row.canPlay,
-            hidden: row.ready === false, attributes: {'data-queue-play': row.id}}),
           runtime.actionHtml({icon: 'ascending', ariaLabel: 'Move up', presentation: 'bare', disabled: pendingRows.indexOf(row) <= 0 || row.current, attributes: {'data-queue-up': row.id}}),
           runtime.actionHtml({icon: 'descending', ariaLabel: 'Move down', presentation: 'bare', disabled: pendingRows.indexOf(row) === pendingRows.length - 1 || row.current, attributes: {'data-queue-down': row.id}}),
           runtime.actionHtml({icon: 'delete', ariaLabel: 'Remove queued track', presentation: 'bare', disabled: row.current, attributes: {'data-queue-remove': row.id}}),
-        ].join('')}}})), emptyHtml: '<p>No tracks have been queued.</p>', overflow: 'local', frame: 'outline'});
-  useEffect(() => {
-    for (const node of host.current?.querySelectorAll('[data-queue-row]') || []) node.draggable = !rows.find(row => row.id === node.dataset.queueRow)?.current;
-  }, [html]);
+        ].join('')}}};}), emptyHtml: '<p>No tracks have been queued.</p>', overflow: 'local', frame: 'outline'});
+  const structure = JSON.stringify([options.map(option => [option.value ?? option.id, option.label]),
+    rows.map(row => [row.id, row.current, row.sourceReadable, row.canPlay, row.title, row.artist, row.album, row.timing, row.duration_seconds])]);
+  useLayoutEffect(() => {
+    const node = tableHost.current;
+    if (!node) return;
+    const sameResource = renderedResource.current === resourceKey;
+    const document = node.ownerDocument, focused = sameResource && node.contains(document.activeElement) ? document.activeElement : null;
+    const focusedId = focused?.closest('[data-queue-row]')?.dataset.queueRow;
+    const attribute = ['data-track-love', 'data-queue-play', 'data-queue-timing', 'data-queue-up', 'data-queue-down', 'data-queue-remove'].find(name => focused?.hasAttribute(name));
+    const paint = (pendingOnly = false) => {
+      const elements = new Map([...node.querySelectorAll('[data-queue-row]')].map(element => [element.dataset.queueRow, element]));
+      for (const row of rows) {
+        const element = elements.get(row.id), handle = commandRow(row), state = love.get(handle);
+        if (pendingOnly && !state.pending) continue;
+        if (element) element.draggable = !row.current;
+        paintTrackLoveCell(element?.querySelector('[data-track-love-cell]'), preferenceRuntime,
+          {...row, source_readable: row.sourceReadable === true}, state, handle);
+      }
+    };
+    // Record pending focus before replacing native markup, then repaint only
+    // public cells. The stable command handle belongs to this exact occurrence.
+    const replace = !sameResource || renderedStructure.current !== structure || renderedRuntime.current !== runtime;
+    if (replace && sameResource) paint(true);
+    if (replace) {node.innerHTML = html; renderedStructure.current = structure; renderedRuntime.current = runtime;}
+    renderedResource.current = resourceKey;
+    paint();
+    selection.ownerRef.current?.update();
+    if (focused && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
+      const row = [...node.querySelectorAll('[data-queue-row]')].find(element => element.dataset.queueRow === focusedId);
+      const target = attribute ? row?.querySelector(`[${attribute}]`) : row?.tabIndex === 0 ? row : null;
+      if (target && !target.disabled) target.focus({preventScroll: true});
+    }
+  }, [html, structure, rows, love.version, preferenceRuntime, commandRows, resourceKey, runtime]);
+  const presentation = useTrackTablePresentation(tableHost, {runtime, resourceKey, source: value, columns: QUEUE_COLUMNS,
+    identityReserve: 176, enabled: Boolean(api), isCurrent: current});
   return <div ref={host} className="album-track-table album-track-table--collection" onDragStart={event => {
     const id = event.target.closest('[data-queue-row]')?.dataset.queueRow;
     if (!id || rows.find(row => row.id === id)?.current) return event.preventDefault();
@@ -151,16 +214,24 @@ export function QueuePanel({runtime, api, value, scopeKey, selectedIds = [], onS
     onDrop={event => {event.preventDefault(); const held = drag.current; drag.current = null;
       if (held?.revision === value.revision) move(held.id, event.target.closest('[data-queue-row]')?.dataset.queueRow);}}
     onDragEnd={() => {drag.current = null;}}>
-    {selection.snapshot.selectedCount > 0 && <PlaytableSelectionActions runtime={runtime} {...selection} available={Boolean(api?.playlistSelection && runtime.openPlaylistAction)}/>}
+    <PlaytableSelectionActions runtime={runtime} {...selection} available={Boolean(api?.playlistSelection && runtime.openPlaylistAction)}>
+      <TrackTableColumnsAction runtime={runtime} {...presentation}/>
+    </PlaytableSelectionActions>
     {error && <p role="alert">{error}</p>}
     {!value.enabled && <p role="status">Queue is inactive. Your queued tracks are kept.</p>}
-    <NativeHtml html={html} onClick={event => {
-      const button = event.target.closest('button'); if (!button || button.disabled || !api) return;
+    <div ref={tableHost} onClick={event => {
+      const button = event.target.closest('button'); if (!button || button.disabled || !api || !current()) return;
+      if (button.hasAttribute('data-track-love')) {
+        event.preventDefault(); event.stopPropagation();
+        const id = button.closest('[data-queue-row]')?.dataset.queueRow, row = commandsById.get(id);
+        if (row && !(event.detail > 1)) love.cycle(row);
+        return;
+      }
       const id = button.dataset.queueTiming || button.dataset.queuePlay || button.dataset.queueUp || button.dataset.queueDown || button.dataset.queueRemove;
       const row = rows.find(row => row.id === id); if (!row || api.getSnapshot().revision !== value.revision) return;
       if (button.dataset.queueTiming) menu.current = runtime.openChoice(button, {formats: options.map(option => ({...option, value: option.value ?? option.id, disabled: option.enabled !== true})),
         selected: row.timing, label: 'Queue timing', menuWidth: 'content', updateTriggerLabel: false,
-        onSelect: timing => {if (mounted.current && owner.current?.api === api && api.getSnapshot().entries.some(entry => entry.id === id)) safe(() => api.retime(id, timing));}});
+        onSelect: timing => {if (mounted.current && current() && api.getSnapshot().entries.some(entry => entry.id === id && !entry.current)) safe(() => api.retime(id, timing));}});
       else if (button.dataset.queuePlay) runPlay(id);
       else if (button.dataset.queueRemove) safe(() => api.remove(id));
       else move(id, pendingRows[pendingRows.indexOf(row) + (button.dataset.queueUp ? -1 : 1)]?.id);

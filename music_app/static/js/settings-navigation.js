@@ -8,6 +8,34 @@
   const historyPositionKey = 'albumHavenNavigationPosition';
   const historyPosition = (state) => Number.isSafeInteger(state?.[historyPositionKey])
     ? state[historyPositionKey] : null;
+  const privatePreferenceHistoryKeys = new Set([
+    'canonical_track_ref', 'inventory_track_ref', 'track_preference',
+    'track_preference_state', 'can_edit_preferences', 'track_preference_overlay',
+  ]);
+  function sanitizeHistorySnapshot(snapshot) {
+    const visit = (value, remove, seen = new Set()) => {
+      if (!value || typeof value !== 'object' || seen.has(value)) return false;
+      seen.add(value);
+      let found = false;
+      const inspect = child => { if (visit(child, remove, seen)) found = true; };
+      const type = Object.prototype.toString.call(value);
+      if (type === '[object Map]') value.forEach((entry, key) => { inspect(key); inspect(entry); });
+      else if (type === '[object Set]') value.forEach(inspect);
+      for (const key of Object.keys(value)) {
+        if (privatePreferenceHistoryKeys.has(key)) {
+          found = true;
+          if (remove) delete value[key];
+        } else inspect(value[key]);
+      }
+      return found;
+    };
+    // Keep exact live receipt rows private. Clone only contaminated snapshots;
+    // native cloning preserves aliases, cycles and ordinary history value types.
+    if (!visit(snapshot, false)) return snapshot;
+    const serialized = structuredClone(snapshot);
+    visit(serialized, true);
+    return serialized;
+  }
 
   function create({ document, window, fetch, DOMParser }) {
     const host = document.querySelector('[data-settings-host]');
@@ -48,7 +76,7 @@
     const error = document.querySelector('[data-settings-navigation-error]');
     let currentUrl = window.location.href;
     let currentPosition = historyPosition(window.history.state) ?? 0;
-    window.history.replaceState({ ...window.history.state, [historyPositionKey]: currentPosition }, '', currentUrl);
+    window.history.replaceState(sanitizeHistorySnapshot({ ...window.history.state, [historyPositionKey]: currentPosition }), '', currentUrl);
     let currentHistoryState = window.history.state;
     let restoringPosition = null;
     let libraryUrl = library ? currentUrl : null;
@@ -103,11 +131,11 @@
     };
     const updateHistory = (url, mode, stateSnapshot) => {
       const position = historyPosition(window.history.state) ?? currentPosition;
-      if (mode === 'push') window.history.pushState({ ...stateSnapshot, [historyPositionKey]: position + 1 }, '', url);
+      if (mode === 'push') window.history.pushState(sanitizeHistorySnapshot({ ...stateSnapshot, [historyPositionKey]: position + 1 }), '', url);
       else if (mode === 'replace') {
         // Settings POST omits its snapshot; public replacement supplies one.
         const snapshot = stateSnapshot === undefined ? window.history.state : stateSnapshot;
-        window.history.replaceState({ ...snapshot, [historyPositionKey]: position }, '', url);
+        window.history.replaceState(sanitizeHistorySnapshot({ ...snapshot, [historyPositionKey]: position }), '', url);
       }
       currentPosition = historyPosition(window.history.state) ?? position;
       currentHistoryState = window.history.state;
@@ -134,7 +162,7 @@
         // Legacy entries lack a position; retain the existing URL fallback and
         // the displayed view's snapshot instead of replacing its state with null.
         restoringPosition = null;
-        window.history.replaceState(currentHistoryState, '', currentUrl);
+        window.history.replaceState(sanitizeHistorySnapshot(currentHistoryState), '', currentUrl);
       }
     };
     const mountContent = () => {
@@ -341,7 +369,7 @@
       }
       if (!owner && window.history.state?.playlistDraft) {
         const snapshot = {...window.history.state}; delete snapshot.playlistDraft;
-        window.history.replaceState(snapshot, '', window.location.href);
+        window.history.replaceState(sanitizeHistorySnapshot(snapshot), '', window.location.href);
       }
       // A pop changes the address before prompting. Invalidate an older fetch
       // even when this navigation is cancelled and its entry is restored.
@@ -431,7 +459,7 @@
       },
     };
   }
-  window.AlbumHavenSettingsNavigation = { create };
+  window.AlbumHavenSettingsNavigation = { create, sanitizeHistorySnapshot };
   if (typeof document !== 'undefined') {
     window.AlbumHavenSettingsNavigation.instance = create({ document, window, fetch: window.fetch.bind(window), DOMParser: window.DOMParser });
   }

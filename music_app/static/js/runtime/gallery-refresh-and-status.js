@@ -2,6 +2,39 @@
 // of albums. Continuations never own the foreground/search request slot.
 let rootGalleryPageRequest = null;
 
+function captureLooseTrackPreferenceRead(apiUrl, options) {
+  if (typeof captureTrackModalPreferenceRead !== 'function') return null;
+  const url = new URL(apiUrl, 'http://localhost');
+  if (url.pathname !== '/view-data' || (url.searchParams.get('surface') || 'albums') !== 'albums') return null;
+  // Pagination, hydration and presentation are projections of one population.
+  // Preserve search, artist and filter scope, including unknown future filters.
+  for (const key of ['gallery_page_size', 'gallery_cursor', 'omit_sidebar', 'payload_tier', 'root_sidebar',
+    'gallery_display', 'gallery_display_mode', 'gallery_scale_percent', 'family_display', 'selected_artist_family_display_mode']) {
+    url.searchParams.delete(key);
+  }
+  // Repeated population selectors are sets; selection order is not a source.
+  for (const key of ['category', 'related_artist', 'genre', 'mood', 'style']) {
+    const values = [...new Set(url.searchParams.getAll(key))].sort();
+    url.searchParams.delete(key);
+    for (const value of values) url.searchParams.append(key, value);
+  }
+  // The server startup URL omits these verified gallery_scope.py defaults;
+  // buildApiUrl emits them from the resolved response. They are one population.
+  const scopes = url.searchParams.getAll('gallery_scope');
+  if (scopes.length <= 1 && (!scopes[0] || scopes[0] === 'all')) {
+    url.searchParams.delete('gallery_scope');
+    const categories = url.searchParams.getAll('category');
+    const defaultCategories = ['main_library', 'hoard', 'new_arrivals'];
+    if (categories.length === defaultCategories.length
+      && defaultCategories.every(category => categories.includes(category))) {
+      url.searchParams.delete('category');
+    }
+  }
+  url.searchParams.set('surface', 'albums');
+  url.searchParams.sort();
+  return captureTrackModalPreferenceRead('loose', `${url.pathname}${url.search}`, options);
+}
+
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
     ? resolveViewSurface(view)
@@ -57,11 +90,13 @@ async function loadNextRootGalleryPage() {
     url: buildRootGalleryPageUrl(view),
     cursor: page.next_cursor,
     revision: page.revision,
+    tagEditMutationRevision: Number(state.ui.tagEditOptimisticMutationRevision || 0),
   };
   rootGalleryPageRequest = request;
   const ownsResponse = () => rootGalleryPageRequest === request
     && !request.controller.signal.aborted
     && readViewStateRevision() === request.viewRevision
+    && Number(state.ui.tagEditOptimisticMutationRevision || 0) === request.tagEditMutationRevision
     && isPagedRootGallery()
     && buildRootGalleryPageUrl(state.view) === request.url
     && state.view.gallery_page.next_cursor === request.cursor
@@ -71,6 +106,9 @@ async function loadNextRootGalleryPage() {
   url.searchParams.set('gallery_cursor', request.cursor);
   url.searchParams.set('omit_sidebar', '1');
   try {
+    let preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+      signal: request.controller.signal, isCurrent: ownsResponse,
+    });
     let response = await fetch(`${url.pathname}${url.search}`, {
       headers: { Accept: 'application/json' }, signal: request.controller.signal,
     });
@@ -82,12 +120,15 @@ async function loadNextRootGalleryPage() {
       // bounded page; keep the old cards visible until that response arrives.
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
+      preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+        signal: request.controller.signal, isCurrent: ownsResponse,
+      });
       response = await fetch(`${url.pathname}${url.search}`, {
         headers: { Accept: 'application/json' }, signal: request.controller.signal,
       });
       restarted = true;
     }
-    const data = await readGalleryResponse(response, ownsResponse);
+    const data = await readGalleryResponse(response, ownsResponse, preferenceRead);
     if (!ownsResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
@@ -97,6 +138,11 @@ async function loadNextRootGalleryPage() {
     const artistGroups = restarted
       ? data.artist_groups
       : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
+    if (restarted && typeof admitLooseTrackPreferenceRows === 'function') {
+      admitLooseTrackPreferenceRows(data, preferenceRead);
+      // Admission notifies synchronous subscribers that may replace this owner.
+      if (!ownsResponse()) return false;
+    }
     applyViewPayload({
       ...state.view,
       ...(restarted ? {
@@ -811,7 +857,8 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
-async function readGalleryResponse(response, ownsResponse) {
+async function readGalleryResponse(response, ownsResponse, preferenceRead = null) {
+  if (response.status === 401 || response.status === 403) preferenceRead?.revoke();
   if (response.status === 401) {
     if (ownsResponse()) window.location.assign('/login');
     throw new Error('Sign in again to continue.');
@@ -819,6 +866,12 @@ async function readGalleryResponse(response, ownsResponse) {
   const data = await response.json();
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  if (data && !data.read_only_subject
+    && String(data.surface?.active || data.surface_request || 'albums') === 'albums'
+    && (data.source_readable === false || data.readable === false
+      || Object.hasOwn(data.allowed_actions || {}, 'can_read') && data.allowed_actions.can_read !== true)) {
+    preferenceRead?.revoke();
   }
   return data;
 }
@@ -839,7 +892,7 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse) {
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, preferenceRead) {
   let payload = data;
   let restarted = false;
   const cursors = new Set();
@@ -847,7 +900,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
   while (ownsResponse()) {
     const page = payload?.gallery_page;
     const count = (payload?.artist_groups || []).reduce((sum, group) => sum + (group.albums || []).length, 0);
-    if (!page?.has_more || count >= coverage) return payload;
+    if (!page?.has_more || count >= coverage) return {payload, preferenceRead};
     const cursor = String(page.next_cursor || '');
     if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
       throw new Error('Root gallery refresh did not advance within its loaded coverage.');
@@ -857,11 +910,14 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     url.searchParams.set('gallery_page_size', '50');
     url.searchParams.set('gallery_cursor', cursor);
     url.searchParams.set('omit_sidebar', '1');
+    const continuationRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+      signal: controller?.signal, isCurrent: ownsResponse,
+    });
     const response = await fetch(`${url.pathname}${url.search}`, {
       headers: { Accept: 'application/json' }, signal: controller?.signal,
     });
     if (!ownsResponse()) return null;
-    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
+    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse, continuationRead);
     if (!ownsResponse()) return null;
     if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
       if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
@@ -870,10 +926,13 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
       remainingPages = Math.ceil(coverage / 50);
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
+      preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+        signal: controller?.signal, isCurrent: ownsResponse,
+      });
       const restartResponse = await fetch(`${url.pathname}${url.search}`, {
         headers: { Accept: 'application/json' }, signal: controller?.signal,
       });
-      payload = await readGalleryResponse(restartResponse, ownsResponse);
+      payload = await readGalleryResponse(restartResponse, ownsResponse, preferenceRead);
       continue;
     }
     if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
@@ -1032,23 +1091,33 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
+    const ownsPreferenceResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+      && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      && (!retainedPlaylistDraft
+        || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true);
+    let preferenceRead = captureLooseTrackPreferenceRead(apiUrl, {
+      signal: controller?.signal, isCurrent: ownsPreferenceResponse,
+    });
     const response = await fetch(apiUrl, {
       headers: { Accept: 'application/json' },
       signal: controller?.signal,
     });
-    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision), preferenceRead);
     if (rootRefreshCoverage > 0) {
       const ownsRefresh = () => {
-        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
-          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
+        if (controller?.signal.aborted || !ownsPreferenceResponse()) return false;
         try {
           return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
         } catch (_error) {
           return false;
         }
       };
-      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
-      if (!data || !ownsRefresh()) return false;
+      const collected = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, preferenceRead);
+      if (!collected || !ownsRefresh()) return false;
+      // Only the initial or restart packet supplies Loose rows. Continuation
+      // metadata cannot replace its dispatch epoch with a completion-time read.
+      data = collected.payload;
+      preferenceRead = collected.preferenceRead;
     }
     markStartupFollowup('payload_received', requestOptions, {
       endpoint: apiUrl,
@@ -1121,6 +1190,18 @@ async function fetchAndRender(url, push = true, options = {}) {
         preserveMountedGalleryChildren: true,
       }
       : requestOptions;
+    if (!retainedMountedSelectedViewState && typeof admitLooseTrackPreferenceRows === 'function') {
+      admitLooseTrackPreferenceRows(payloadToApply, preferenceRead);
+      // Both preference and receipt subscribers can synchronously navigate or
+      // edit. Recheck application permission, then ownership, at the write itself.
+      try {
+        if (typeof requestOptions.shouldApplyResponse === 'function'
+          && requestOptions.shouldApplyResponse(data) !== true) return false;
+        if (controller?.signal.aborted || !ownsPreferenceResponse()) return false;
+      } catch (_error) {
+        return false;
+      }
+    }
     applyViewPayload(payloadToApply, responseApplyOptions);
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {

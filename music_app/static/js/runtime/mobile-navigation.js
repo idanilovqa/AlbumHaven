@@ -168,9 +168,9 @@ function writeMobilePageHistory(mode = 'push') {
   }
   const snapshot = { ...(window.history.state || {}), mobilePages: mobilePageState.pages.map(page => page.kind === 'form'
     ? {kind: 'form', formToken: page.formToken} : {...page}) };
-  if (mode === 'replace') window.history.replaceState(snapshot, '', url);
+  if (mode === 'replace') window.history.replaceState(window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(snapshot), '', url);
   else if (window.AlbumHavenSettingsNavigation?.instance?.pushLibraryHistory) window.AlbumHavenSettingsNavigation.instance.pushLibraryHistory(url.href, snapshot);
-  else window.history.pushState(snapshot, '', url);
+  else window.history.pushState(window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(snapshot), '', url);
 }
 // Header Back follows the retained parent, while browser Forward keeps the child.
 function resolveMobileParentPosition(descriptor, previous, snapshot = {}) {

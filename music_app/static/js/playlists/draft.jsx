@@ -1,6 +1,8 @@
 import {RetryOriginalRequest} from './mutation-status.jsx';
 import React, {useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Button, NativeHtml} from '../home-friends/components.jsx';
+import {SharedHeader} from '../home-friends/shared-header.jsx';
+import {playlistDialogFocusTarget} from './dialog-state.mjs';
 import {NativeChoice} from '../home-friends/native-choice.jsx';
 import {detailDuration} from '../home-friends/detail-projection.jsx';
 import {CreationSearch, creationReviewRow} from './creation.jsx';
@@ -27,30 +29,19 @@ const samePage = (left, right) => left.draftToken && left.draftToken === right.d
   && left.source?.ref === right.source?.ref && left.source?.revision === right.source?.revision;
 
 export function MissingPlaylistDraftHeader({runtime, title, filtersId, filtersOpen, busy, actions, onAction}) {
-  const host = useRef(null);
-  const html = runtime.galleryBarHtml({contextKind: 'recent', title: title || 'Missing tracks', actionsHtml: [
+  const controls = [
     ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'export-text'],
-    ['filters', 'Filters', !actions.filters, 'filters'], ['save', 'Save', !actions.save, 'save'], ['close', 'Close playlist preview', !actions.close, 'close'],
-  ].map(([action, label, unavailable, icon]) => {
-    const options = {disabled: busy || unavailable, title: action === 'top' && unavailable
-      ? 'Album Top creation is unavailable for these source albums.' : label,
-    attributes: {'data-playlists-draft-action': action,
-      ...(action === 'filters' ? {'aria-expanded': String(filtersOpen), 'aria-controls': filtersId} : {})}};
-    return runtime.actionHtml({...options, icon, ariaLabel: label, presentation: 'bare'});
-  }).join('')});
-  const initial = useRef(html);
-  useLayoutEffect(() => {
-    const node = host.current, document = node.ownerDocument;
-    const active = node.contains(document.activeElement) ? document.activeElement.dataset.playlistsDraftAction : null;
-    if (node.innerHTML !== html) node.innerHTML = html;
-    if (active) [...node.querySelectorAll('[data-playlists-draft-action]')]
-      .find(button => button.dataset.playlistsDraftAction === active && !button.disabled)?.focus({preventScroll: true});
-  }, [html]);
-  return <header ref={host} className="gallery-bar playlists__header" dangerouslySetInnerHTML={{__html: initial.current}}
-    onClick={event => {
-      const button = event.target.closest('[data-playlists-draft-action]');
-      if (button && !button.disabled) onAction(button.dataset.playlistsDraftAction);
-    }}/>;
+    ['filters', 'Filters', !actions.filters, 'filters'], ['save', 'Save', !actions.save, 'save'],
+  ].map(([action, label, unavailable, icon]) => <Button key={action} runtime={runtime} icon={icon} disabled={busy || unavailable}
+    title={action === 'top' && unavailable ? 'Album Top creation is unavailable for these source albums.' : label}
+    attributes={{'data-playlists-draft-action': action,
+      ...(action === 'filters' ? {'aria-expanded': String(filtersOpen), 'aria-controls': filtersId} : {})}}
+    onClick={() => onAction(action)}>{label}</Button>);
+  return <SharedHeader runtime={runtime} id={`${filtersId}-header`} className="playlists__header" actions={controls}
+    finalAction={<Button runtime={runtime} icon="close" disabled={busy || !actions.close}
+      attributes={{'data-playlists-draft-action': 'close'}} onClick={() => onAction('close')}>Close playlist preview</Button>}>
+    <div className="gallery-bar__title"><span>{title || 'Missing tracks'}</span></div>
+  </SharedHeader>;
 }
 
 export function missingPlaylistDraftTableHtml(runtime, {id, state, projection, disabled = false,
@@ -307,7 +298,8 @@ export function MissingPlaylistDraftPage({runtime, controller, state, onClose, o
     <MissingPlaylistDraftHeader runtime={runtime} title={state.title} filtersId={`${id}-filters`} filtersOpen={filtersOpen} busy={busy}
       actions={{top: canTop, export: canExport, filters: ready, save: controller.getSnapshot() === state && controller.canSave(), close: typeof onClose === 'function'}} onAction={run}/>
     {ready && filtersOpen && <PlaylistFilterSurface key={filterOwner.id} runtime={runtime} id={`${id}-filters`}
-      returnFocus={() => page.current?.querySelector('[data-playlists-draft-action="filters"]')}
+      returnFocus={() => filterSession.sourceCurrent(filterOwner)
+        ? playlistDialogFocusTarget(page.current, 'filters', {draft: true}) : null}
       onClose={() => filterSession.close(filterOwner)}>
       <PlaylistFilterControls runtime={runtime} rows={projection.authoredEntries} filters={state.filters} disabled={locked} canReset={!projection.unfiltered}
         onChange={patch => {if (renderCurrent() && filterSession.current(filterOwner)) controller.setFilters(patch);}}

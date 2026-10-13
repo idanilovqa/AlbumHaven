@@ -17,13 +17,16 @@ export function playlistDialogVisible(dialog, state) {
     || !detail && dialog.sharingGranted && state.mutation.status === 'loading'
       && ['saveSharing', 'setPlaylistEditor', 'requestEditAccess', 'decideEditRequest'].includes(state.mutation.action) && state.mutation.playlist_id === dialog.playlistId);
 }
-export function playlistDialogFocusTarget(root, action) {
+export function playlistDialogFocusTarget(root, action, {draft = false} = {}) {
   const available = node => node?.isConnected && !node.disabled && node.getAttribute('aria-disabled') !== 'true'
     && !node.closest('[hidden], [inert], [aria-hidden="true"]');
-  const target = [...(root?.querySelectorAll('[data-playlists-action],[data-playlists-create]') || [])]
-    .find(node => action === 'create' ? node.hasAttribute('data-playlists-create') : node.dataset.playlistsAction === action);
+  const selector = draft ? '[data-playlists-draft-action]' : '[data-playlists-action],[data-playlists-create]';
+  const target = [...(root?.querySelectorAll(selector) || [])]
+    .find(node => draft ? node.dataset.playlistsDraftAction === action
+      : action === 'create' ? node.hasAttribute('data-playlists-create') : node.dataset.playlistsAction === action);
   if (available(target)) return target;
-  const tools = action !== 'create' && root?.querySelector('[data-shared-header="playlists"] [data-header-tools]');
+  const tools = draft ? target?.closest('[data-shared-header]')?.querySelector('[data-header-tools]')
+    : action !== 'create' && root?.querySelector('[data-shared-header="playlists"] [data-header-tools]');
   return available(tools) ? tools : null;
 }
 export function restorePlaylistDialogFocus(root, action, document) {

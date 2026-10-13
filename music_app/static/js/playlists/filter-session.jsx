@@ -8,14 +8,15 @@ export function usePlaylistFilterSession(controller, sourceIdentity, providers) 
   if (!latest.current || latest.current.controller !== controller || latest.current.sourceIdentity !== sourceIdentity
     || latest.current.providers !== providers) latest.current = {controller, sourceIdentity, providers};
   const renderContext = latest.current;
-  const current = owner => {
+  const sourceCurrent = owner => {
     const context = latest.current;
-    if (!mounted.current || !owner || active.current !== owner || owner.controller !== context.controller
-      || owner.providers !== context.providers || owner.version !== context.controller.getLifecycleVersion?.()) return false;
+    if (!mounted.current || !owner || owner.id !== sequence.current || owner.context !== context
+      || owner.version !== context.controller.getLifecycleVersion?.()) return false;
     const identity = context.sourceIdentity(context.controller.getSnapshot());
     return Boolean(identity && identity.length === owner.identity.length
       && identity.every((value, index) => Object.is(value, owner.identity[index])));
   };
+  const current = owner => active.current === owner && sourceCurrent(owner);
   const close = owner => {
     if (!mounted.current || active.current !== owner) return;
     active.current = null; setOpening(value => value === owner ? null : value);
@@ -29,13 +30,13 @@ export function usePlaylistFilterSession(controller, sourceIdentity, providers) 
     retire();
     return controller.subscribe(retire);
   }, [controller, sourceIdentity, providers]);
-  return {opening: current(opening) ? opening : null, current, close,
+  return {opening: current(opening) ? opening : null, current, sourceCurrent, close,
     toggle() {
       if (!mounted.current || latest.current !== renderContext) return;
       if (current(active.current)) {close(active.current); return;}
       const context = latest.current, identity = context.sourceIdentity(context.controller.getSnapshot());
       if (!identity) return;
-      const owner = {controller: context.controller, providers: context.providers, identity,
+      const owner = {context, identity,
         version: context.controller.getLifecycleVersion?.(), id: ++sequence.current};
       active.current = owner; setOpening(owner);
     }};

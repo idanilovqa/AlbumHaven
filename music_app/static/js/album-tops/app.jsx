@@ -1,5 +1,6 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {Button, NativeHtml, Status} from '../home-friends/components.jsx';
+import {SharedHeader} from '../home-friends/shared-header.jsx';
 import {albumTopActionAllowed} from './model.mjs';
 import {isManualProgress} from './progress.mjs';
 import {ShareAlbumTop} from './sharing.jsx';
@@ -9,6 +10,9 @@ import {MutationNotice} from './mutation-notice.jsx';
 export function AlbumTopsView({runtime, controller, state, providers, onOpen, onFormSaved, shareRequest = null, onShareRequestHandled}) {
   const [dialog, setDialog] = useState(null);
   const header = useRef(null), restoreInlineFocus = useRef(false);
+  const returnHeaderFocus = preferred => [preferred, header.current?.querySelector('[data-header-tools]'), header.current].find(node =>
+    node?.isConnected && !node.disabled && node.getAttribute('aria-disabled') !== 'true'
+    && !node.closest('[hidden],[inert],[aria-hidden="true"]') && node.getClientRects().length > 0);
   const denied = state.directory.status === 'denied' || state.detail.status === 'denied';
   useEffect(() => {if (denied) setDialog(null);}, [denied]);
   const selected = state.selectedTopRef, resource = selected ? state.detail : state.directory;
@@ -20,7 +24,7 @@ export function AlbumTopsView({runtime, controller, state, providers, onOpen, on
     if (dialog?.top && dialog.top.top_ref !== selected) setDialog(null);
     if (!inline && restoreInlineFocus.current) {
       restoreInlineFocus.current = false;
-      (header.current?.querySelector('[aria-label="Edit Album Top"]') || header.current)?.focus({preventScroll: true});
+      returnHeaderFocus(header.current?.querySelector('[aria-label="Edit Album Top"]'))?.focus({preventScroll: true});
     }
   }, [selected, dialog, inline]);
   useEffect(() => {
@@ -28,13 +32,11 @@ export function AlbumTopsView({runtime, controller, state, providers, onOpen, on
       || !albumTopActionAllowed(state, 'view_sharing')) return;
     setDialog({kind: 'share', topRef: selected}); onShareRequestHandled?.(shareRequest);
   }, [shareRequest, selected, detail, busy, inline, onShareRequestHandled]);
-  const renderHeader = edit => <header ref={header} tabIndex={-1} aria-label="Album Tops header" className="gallery-bar album-tops__header">
-      {selected && <Button runtime={runtime} icon="back" disabled={edit?.busy === true} onClick={async () => {
+  const renderHeader = edit => <SharedHeader runtime={runtime} id="album-tops" headerRef={header} tabIndex={-1} ariaLabel="Album Tops header" className="album-tops__header"
+      leading={selected && <Button runtime={runtime} icon="back" disabled={edit?.busy === true} onClick={async () => {
         if (!edit || await edit.cancel({restoreFocus: false})) onOpen(null);
       }}>Back</Button>}
-      <div className="gallery-bar__context"><div className="gallery-bar__title">{edit ? edit.fields : <span>{selected && detail ? detail.title : 'Album Tops'}</span>}</div></div>
-      <div className="gallery-bar__actions">
-      {edit ? edit.actions : <>
+      actions={edit ? edit.actions : <>
       {!selected && createAllowed && <Button runtime={runtime} icon="add" disabled={busy} onClick={event => {
         if (albumTopActionAllowed(controller.getSnapshot(), 'create')) setDialog({kind: 'create', opener: event?.target?.closest?.('button') || null});
       }}>Create Album Top</Button>}
@@ -65,9 +67,9 @@ export function AlbumTopsView({runtime, controller, state, providers, onOpen, on
           await controller.mutate('delete');
         }}>Delete Album Top</Button>
       }
-      </>}
-      </div>
-    </header>;
+      </>}>
+      <div className="gallery-bar__context"><div className="gallery-bar__title">{edit ? edit.fields : <span>{selected && detail ? detail.title : 'Album Tops'}</span>}</div></div>
+    </SharedHeader>;
   return <section className="album-tops" aria-label="Album Tops">
     {inline ? <InlineAlbumTopEdit key={dialog.top.top_ref} runtime={runtime} controller={controller} state={state} providers={providers}
       existing={dialog.top} renderHeader={renderHeader} onRestoreFocus={() => {restoreInlineFocus.current = true;}} onClose={options => {
@@ -108,10 +110,10 @@ export function AlbumTopsView({runtime, controller, state, providers, onOpen, on
       })}
     </div>}
     <MutationNotice runtime={runtime} controller={controller} value={state.mutation}/>
-    {dialog && dialog.kind !== 'share' && !denied && <TopFields runtime={runtime} controller={controller} state={state} providers={providers} existing={dialog.top || null} onClose={() => setDialog(null)} onFormSaved={onFormSaved} returnFocus={() => dialog.opener?.isConnected ? dialog.opener : header.current}/>}
+    {dialog && dialog.kind !== 'share' && !denied && <TopFields runtime={runtime} controller={controller} state={state} providers={providers} existing={dialog.top || null} onClose={() => setDialog(null)} onFormSaved={onFormSaved} returnFocus={() => returnHeaderFocus(dialog.opener)}/>}
     {dialog?.kind === 'share' && !denied && dialog.topRef === selected && <ShareAlbumTop key={dialog.topRef}
       runtime={runtime} controller={controller} state={state} onClose={() => setDialog(null)}
-      returnFocus={() => dialog.opener?.isConnected ? dialog.opener : header.current}/>}
+      returnFocus={() => returnHeaderFocus(dialog.opener)}/>}
     </>}
   </section>;
 }

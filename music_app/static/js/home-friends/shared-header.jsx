@@ -1,4 +1,4 @@
-import React, {useLayoutEffect, useRef, useState} from 'react';
+import React, {useCallback, useLayoutEffect, useRef, useState} from 'react';
 import {Button} from './components.jsx';
 import {metric} from './model.mjs';
 import {headerActionsFit} from './header-layout.mjs';
@@ -11,8 +11,15 @@ export function ListensBadge({runtime, total, range}) {
 
 // React owns placement and disclosure. Native children retain their original
 // nodes, callbacks, menus and permission state at every measured width.
-export function SharedHeader({runtime, id, className = '', identity, children, leading, actions, outsideActions, finalAction, hidden}) {
+export function SharedHeader({runtime, id, className = '', identity, children, leading, actions, outsideActions, finalAction, hidden, headerRef, tabIndex, ariaLabel}) {
   const root = useRef(null), identityHost = useRef(null), leadingHost = useRef(null), content = useRef(null);
+  const attachRoot = useCallback(node => {
+    root.current = node;
+    if (typeof headerRef === 'function') {
+      const cleanup = headerRef(node);
+      if (typeof cleanup === 'function') return () => {root.current = null; cleanup();};
+    } else if (headerRef) headerRef.current = node;
+  }, [headerRef]);
   const actionsHost = useRef(null), outsideHost = useRef(null), triggerHost = useRef(null), lastFocus = useRef(null), inlineFocus = useRef(false), compactFocus = useRef(null);
   const [layout, setLayout] = useState({compact: false, outside: false}), [open, setOpen] = useState(false);
   const [position, setPosition] = useState({}), latest = useRef(null);
@@ -118,7 +125,7 @@ export function SharedHeader({runtime, id, className = '', identity, children, l
   const concealed = layout.compact && !open;
   const floating = layout.compact && open ? ' gallery-anchored-menu home-header__floating-panel' : '';
 
-  return <header ref={root} hidden={hidden} className={`gallery-bar home-header ${className}`} data-shared-header={id}
+  return <header ref={attachRoot} hidden={hidden} tabIndex={tabIndex} aria-label={ariaLabel} className={`gallery-bar home-header ${className}`} data-shared-header={id}
     data-header-compact={String(layout.compact)} data-header-outside={String(layout.outside)} data-header-open={String(open)}
     onFocusCapture={event => {lastFocus.current = event.target;}}>
     <span ref={leadingHost} className="home-header__leading">{leading}</span>
@@ -130,9 +137,9 @@ export function SharedHeader({runtime, id, className = '', identity, children, l
           onClick={() => open ? close(true) : setOpen(true)}>Tools</Button>
       </span>
       <div id={panelId} data-header-action-capsule="true" className={`home-header__capsule${!layout.outside ? floating : ''}`} style={!layout.outside && floating ? position : undefined}>
-        <span ref={outsideHost} className="home-header__outside" inert={concealed && !layout.outside ? '' : undefined}
+        <span ref={outsideHost} className="home-header__outside" inert={concealed && !layout.outside ? true : undefined}
           aria-hidden={concealed && !layout.outside || undefined}>{outsideActions}</span>
-        <span ref={actionsHost} className={`home-header__actions${layout.outside ? floating : ''}`} style={layout.outside && floating ? position : undefined} inert={concealed ? '' : undefined}
+        <span ref={actionsHost} className={`home-header__actions${layout.outside ? floating : ''}`} style={layout.outside && floating ? position : undefined} inert={concealed ? true : undefined}
           aria-hidden={concealed || undefined}>{actions}{finalAction}</span>
       </div>
     </div>

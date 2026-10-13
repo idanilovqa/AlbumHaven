@@ -1,5 +1,6 @@
 import React, {useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {Button, NativeHtml, Status} from '../home-friends/components.jsx';
+import {SharedHeader} from '../home-friends/shared-header.jsx';
 import {NativeChoice} from '../home-friends/native-choice.jsx';
 import {readTrackPreference} from '../home-friends/track-preference.mjs';
 import {PlaylistGroupedDirectory, PlaylistFilterControls} from './directory-filters.jsx';
@@ -18,7 +19,7 @@ import {PlaylistTracks, restorePlaylistSelectionFocus} from './track-table.jsx';
 export {playlistTableHtml, playlistReorderSnapshot, paintPlaylistCurrent, restorePlaylistSelectionFocus} from './track-table.jsx';
 import {createPlaylistIntegrations} from './integrations.mjs';
 import {PlaylistPlaybackControls, PlaylistMatchReview} from './integrations.jsx';
-import {playlistDialogVisible, playlistSharingCurrent, restorePlaylistDialogFocus} from './dialog-state.mjs';
+import {playlistDialogVisible, playlistSharingCurrent, playlistDialogFocusTarget, restorePlaylistDialogFocus} from './dialog-state.mjs';
 import {defaultFilters, draftDirty, granted, hasPlaylistFilters, playlistText, playlistDraft, playlistFilters, validMetadata, visiblePlaylistRows} from './model.mjs';
 
 export function PlaylistDirectory({runtime, state, onSelect, onCreate, canCreate}) {
@@ -33,28 +34,23 @@ export function PlaylistDirectory({runtime, state, onSelect, onCreate, canCreate
   </aside>;
 }
 export function PlaylistHeader({runtime, detail, draft, busy, actions, filtersOpen, onAction}) {
-  const host = useRef(null);
-  const html = runtime.galleryBarHtml({contextKind: 'recent', title: draft?.title || detail?.title || 'Playlists',
-    actionsHtml: [
-      ['add', 'Add tracks', !actions.add, 'add'], ['missing', 'Inspect missing tracks', !actions.missing, 'missing-playlist'],
-      ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'export-text'], ['share', 'Share', !detail || actions.share === false, 'share'],
-      ...(actions.copy ? [['copy', 'Save a copy', false, 'save']] : []),
-      ['settings', 'Playlist settings', !detail, 'more'],
-      ['filters', 'Filters', !detail, 'filters'], ['save', 'Save', !actions.save, 'save'], ['discard', 'Discard unsaved changes', !draft, 'close'],
-    ].map(([action, label, disabled, icon]) => runtime.actionHtml({icon, ariaLabel: label, presentation: 'bare', disabled: busy || disabled,
-        title: action === 'missing' && disabled ? 'Missing-track playlist creation is not available for this source yet.' : label,
-        attributes: {'data-playlists-action': action, ...(action === 'filters' ? {'aria-expanded': String(filtersOpen), 'aria-controls': 'playlists-filters'} : {})}})).join('')});
-  const initialHtml = useRef(html);
-  useLayoutEffect(() => {
-    const node = host.current, active = node.contains(document.activeElement) ? document.activeElement.dataset.playlistsAction : null;
-    if (node.innerHTML !== html) node.innerHTML = html;
-    if (active) [...node.querySelectorAll('[data-playlists-action]')].find(button => button.dataset.playlistsAction === active && !button.disabled)?.focus({preventScroll: true});
-  }, [html]);
-  return <div ref={host} className="gallery-bar playlists__header" dangerouslySetInnerHTML={{__html: initialHtml.current}} onClick={event => {
-    const button = event.target.closest('[data-playlists-action]');
-    if (button && !button.disabled) onAction(button.dataset.playlistsAction);
-  }}/>;
+  const controls = [
+    ['add', 'Add tracks', !actions.add, 'add'], ['missing', 'Inspect missing tracks', !actions.missing, 'missing-playlist'],
+    ['top', 'Create Album Top', !actions.top, 'create-top'], ['export', 'Export TXT', !actions.export, 'export-text'], ['share', 'Share', !detail || actions.share === false, 'share'],
+    ...(actions.copy ? [['copy', 'Save a copy', false, 'save']] : []),
+    ['settings', 'Playlist settings', !detail, 'more'],
+    ['filters', 'Filters', !detail, 'filters'], ['save', 'Save', !actions.save, 'save'],
+  ].map(([action, label, disabled, icon]) => <Button key={action} runtime={runtime} icon={icon} disabled={busy || disabled}
+    title={action === 'missing' && disabled ? 'Missing-track playlist creation is not available for this source yet.' : label}
+    attributes={{'data-playlists-action': action, ...(action === 'filters' ? {'aria-expanded': String(filtersOpen), 'aria-controls': 'playlists-filters'} : {})}}
+    onClick={() => onAction(action)}>{label}</Button>);
+  return <SharedHeader runtime={runtime} id="playlists" className="playlists__header" actions={controls}
+    finalAction={<Button runtime={runtime} icon="close" disabled={busy || !draft}
+      attributes={{'data-playlists-action': 'discard'}} onClick={() => onAction('discard')}>Discard unsaved changes</Button>}>
+    <div className="gallery-bar__title"><span>{draft?.title || detail?.title || 'Playlists'}</span></div>
+  </SharedHeader>;
 }
+
 export function PlaylistFilters({runtime, filters, rows = [], onChange, disabled = false}) {
   return <PlaylistFilterControls runtime={runtime} rows={rows} filters={filters} onChange={onChange} disabled={disabled}
     canReset={hasPlaylistFilters(filters)} onReset={() => onChange(defaultFilters)}>
@@ -259,7 +255,7 @@ export function PlaylistsView({shareRequest = null, onShareRequestHandled, runti
         missing: canOpenPlaylistCreation(state, integrationProviders, 'missing'), top: controller.available('createAlbumTop'),
         export: canExport && exportRows.some(row => row.source_readable !== false), save: canSave, share: granted(detail, 'can_view_sharing') || granted(detail, 'can_share'), copy: controller.available('copyPlaylist')}} onAction={run}/>
       {filtersOpen && <PlaylistFilterSurface key={filterOwner.id} runtime={runtime} id="playlists-filters"
-        returnFocus={() => page.current?.querySelector('[data-playlists-action="filters"]')}
+        returnFocus={() => filterSession.sourceCurrent(filterOwner) ? playlistDialogFocusTarget(page.current, 'filters') : null}
         onClose={() => filterSession.close(filterOwner)}>
         <PlaylistFilters runtime={runtime} filters={filters} rows={exportRows} disabled={busy} onChange={patch => {
           const current = controller.getSnapshot();

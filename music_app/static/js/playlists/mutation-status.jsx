@@ -21,11 +21,11 @@ export function RetryOriginalRequest({runtime, scopeKey, available, disabled = f
     finally {pending.current = false; if (alive.current) setBusy(false);}
   }}>Retry original request</Button>{error && <NativeHtml html={runtime.alertHtml({severity: 'error', role: 'alert', message: error})}/>}</>;
 }
-export function MutationStatus({runtime, value, controller}) {
+export function MutationStatus({runtime, value, controller, message}) {
   if (!value || value.status === 'idle') return null;
   const scopeKey = controller?.getSnapshot().scopeKey;
   return <><NativeHtml html={runtime.alertHtml({severity: ['error', 'denied'].includes(value.status) ? 'error' : 'info',
-    role: ['error', 'denied'].includes(value.status) ? 'alert' : 'status', message: messages[value.status]})}/>
+    role: ['error', 'denied'].includes(value.status) ? 'alert' : 'status', message: message || messages[value.status]})}/>
     {controller && <RetryOriginalRequest runtime={runtime} scopeKey={scopeKey} available={controller.canRetryMutation?.() === true}
       retry={controller.retryMutation} current={() => controller.getSnapshot().scopeKey === scopeKey}/>}
   </>;

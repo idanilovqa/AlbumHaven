@@ -199,7 +199,9 @@ box-shadow: none;
 .ui-button:disabled,
 .ui-button[aria-disabled='true'],
 .action-button:disabled,
-.action-button[aria-disabled='true'] {
+.action-button[aria-disabled='true'],
+button.album-card__artbox-trigger:disabled,
+button.album-card__artbox-trigger[aria-disabled='true'] {
 opacity: 0.38;
 cursor: not-allowed;
 box-shadow: none;

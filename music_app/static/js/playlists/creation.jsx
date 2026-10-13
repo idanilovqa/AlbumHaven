@@ -73,8 +73,8 @@ export function CreationSearch({runtime, id, value, disabled, onChange, classNam
   label = 'Search tracks, albums or artists', placeholder = label}) {
   const root = useRef(null);
   const initial = useRef(null);
-  if (initial.current === null) initial.current = runtime.searchHtml({id, value, disabled,
-    label, placeholder});
+  if (initial.current === null) initial.current = {__html: runtime.searchHtml({id, value, disabled,
+    label, placeholder})};
   useLayoutEffect(() => {
     const host = root.current, input = host.querySelector('input[type="search"]');
     if (!input) return;
@@ -88,7 +88,7 @@ export function CreationSearch({runtime, id, value, disabled, onChange, classNam
     const clear = host.querySelector('[data-search-clear]');
     if (clear) clear.hidden = !value || disabled;
   }, [value, disabled, maxLength]);
-  return <div ref={root} className={className} dangerouslySetInnerHTML={{__html: initial.current}}
+  return <div ref={root} className={className} dangerouslySetInnerHTML={initial.current}
     onInput={event => {if (!disabled && event.target.matches('input[type="search"]')) onChange(event.target.value);}}
     onKeyDown={event => {
       if (event.key === 'Enter' && event.target.matches('input[type="search"]')) {event.preventDefault(); event.stopPropagation();}

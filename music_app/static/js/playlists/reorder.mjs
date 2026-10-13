@@ -1,4 +1,3 @@
-const ROW = '[data-playlist-row-key]', HANDLE = '[data-playlists-drag]';
 const same = (left, right) => left.length === right.length && left.every((value, index) => value === right[index]);
 const identity = value => typeof value === 'string' && value.length > 0;
 const scopeMatches = (left, right) => left.scopeKey === right.scopeKey && left.collectionKey === right.collectionKey
@@ -11,11 +10,14 @@ const scopeMatches = (left, right) => left.scopeKey === right.scopeKey && left.c
  * identities for unsaved collections. Defaults preserve persisted Playlist IDs.
  * onReorder(itemIds) is synchronous: only an exact true accepts the draft command.
  * Call update() after replacing table markup. No transport or persistence lives here. */
-export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = () => {},
-  collectionKey = value => value.playlistId, itemKey = row => row.playlist_item_id}) {
+export function mountCollectionReorder(host, {snapshot, onReorder, onAnnounce = () => {},
+  collectionKey = value => value.playlistId, itemKey = row => row.playlist_item_id,
+  rowSelector = '[data-playlist-row-key]', handleSelector = '[data-playlists-drag]',
+  rowKeyAttribute = 'data-playlist-row-key', layout = 'vertical'}) {
   const doc = host.ownerDocument, win = doc.defaultView;
   let drag = null, frame = 0, disposed = false, blockedUntil = 0, pendingFocus = null;
-  const nodes = () => [...host.querySelectorAll(ROW)];
+  const nodes = () => [...host.querySelectorAll(rowSelector)];
+  const keyOf = row => row.getAttribute(rowKeyAttribute);
   const read = () => {
     const value = snapshot();
     const collection = value && collectionKey(value);
@@ -30,12 +32,12 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
   };
   const currentDom = state => {
     const current = nodes();
-    return current.length === state.keys.length && current.every((node, index) => node.dataset.playlistRowKey === state.keys[index]) ? current : null;
+    return current.length === state.keys.length && current.every((node, index) => keyOf(node) === state.keys[index]) ? current : null;
   };
   const ownsDom = state => {
     const current = nodes();
     return current.length === state.expected.length && current.every((node, index) => node === state.expected[index])
-      && current.every(node => node.parentElement === state.parent && state.identities.get(node) === node.dataset.playlistRowKey);
+      && current.every(node => node.parentElement === state.parent && state.identities.get(node) === keyOf(node));
   };
   const valid = state => {
     const value = read();
@@ -43,7 +45,7 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
       && state.row.contains(state.handle) && !state.handle.disabled && state.handle.getAttribute('aria-disabled') !== 'true' && ownsDom(state);
   };
   const handleFor = (event, current) => {
-    const handle = event.target.closest?.(HANDLE), row = handle?.closest(ROW);
+    const handle = event.target.closest?.(handleSelector), row = handle?.closest(rowSelector);
     return handle && host.contains(handle) && !handle.disabled && handle.getAttribute('aria-disabled') !== 'true'
       && current.includes(row) ? {handle, row} : null;
   };
@@ -57,7 +59,7 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
     pendingFocus = null;
     const active = doc.activeElement;
     if (active && active !== pending.handle && active !== doc.body && active.isConnected) return;
-    const handle = nodes().find(node => node.dataset.playlistRowKey === pending.key)?.querySelector(HANDLE);
+    const handle = nodes().find(node => keyOf(node) === pending.key)?.querySelector(handleSelector);
     if (handle && !handle.disabled && handle.getAttribute('aria-disabled') !== 'true') {
       handle.focus({preventScroll: true}); handle.scrollIntoView?.({block: 'nearest', inline: 'nearest'});
     }
@@ -113,7 +115,7 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
       state.offsetX = state.startX - box.left; state.offsetY = state.startY - box.top;
       const ghost = state.row.cloneNode(true);
       for (const node of [ghost, ...ghost.querySelectorAll('[id]')]) node.removeAttribute('id');
-      ghost.removeAttribute('data-playlist-row-key'); ghost.removeAttribute('data-cdt-row-key');
+      ghost.removeAttribute(rowKeyAttribute); ghost.removeAttribute('data-cdt-row-key');
       ghost.setAttribute('aria-hidden', 'true'); ghost.inert = true;
       for (const node of ghost.querySelectorAll('button,a,input,select,textarea,[tabindex]')) node.tabIndex = -1;
       ghost.classList.add('playlists__reorder-ghost');
@@ -123,8 +125,11 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
     }
     const box = viewport(state.scroller);
     const y = state.y + state.scroller.scrollTop - state.scrollTop + state.viewportTop - box.top;
-    let target = state.expected.indexOf(state.row), distance = Math.abs(y - (state.rects[target].top + state.rects[target].height / 2));
-    state.rects.forEach((box, index) => {const next = Math.abs(y - (box.top + box.height / 2)); if (next + 3 < distance) {target = index; distance = next;}});
+    const distanceTo = box => layout === 'grid'
+      ? Math.hypot(state.x - (box.left + box.width / 2), y - (box.top + box.height / 2))
+      : Math.abs(y - (box.top + box.height / 2));
+    let target = state.expected.indexOf(state.row), distance = distanceTo(state.rects[target]);
+    state.rects.forEach((box, index) => {const next = distanceTo(box); if (next + 3 < distance) {target = index; distance = next;}});
     const from = state.expected.indexOf(state.row);
     if (target !== from) {
       state.expected.splice(from, 1); state.expected.splice(target, 0, state.row);
@@ -156,11 +161,11 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
     event.preventDefault(); event.stopPropagation();
     if (stopped.owned) {
       const {old} = stopped;
-      const ids = old.expected.map(node => old.before.ids[old.before.keys.indexOf(node.dataset.playlistRowKey)]);
+      const ids = old.expected.map(node => old.before.ids[old.before.keys.indexOf(keyOf(node))]);
       // Restore the native presentation before asking the controller to render
       // an accepted order; a rejected command leaves no preview behind.
       for (const node of old.original) old.parent.appendChild(node);
-      commit(old.before, old.row.dataset.playlistRowKey, ids, old.handle);
+      commit(old.before, keyOf(old.row), ids, old.handle);
     }
   }
   function pointerCancel(event) {if (drag && (event.pointerId === undefined || event.pointerId === drag.pointerId)) stop({focus: true, announce: true});}
@@ -177,7 +182,7 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
     const scroller = scrollOwner(); if (!scroller) return;
     event.preventDefault(); target.handle.focus({preventScroll: true});
     drag = {...target, before, scroller, parent: target.row.parentElement, original: current, expected: [...current],
-      identities: new Map(current.map(node => [node, node.dataset.playlistRowKey])), pointerId: event.pointerId,
+      identities: new Map(current.map(node => [node, keyOf(node)])), pointerId: event.pointerId,
       startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false, time: null};
     doc.addEventListener('pointermove', pointerMove, {capture: true, passive: false}); doc.addEventListener('pointerup', pointerUp, true);
     doc.addEventListener('pointercancel', pointerCancel, true); doc.addEventListener('keydown', escape, true);
@@ -189,7 +194,7 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
           || [...(record.removedNodes || [])].some(node => node === host || node.contains?.(host)));
         if (relevant && drag && !valid(drag)) stop();
       });
-      drag.observer.observe(doc.documentElement, {childList: true, subtree: true, attributes: true, attributeFilter: ['data-playlist-row-key']});
+      drag.observer.observe(doc.documentElement, {childList: true, subtree: true, attributes: true, attributeFilter: [rowKeyAttribute]});
     }
     try {host.setPointerCapture?.(event.pointerId);} catch { /* Document listeners retain bounded pointer ownership. */ }
   };
@@ -203,10 +208,10 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
     const from = current.indexOf(target.row), to = event.key === 'Home' ? 0 : event.key === 'End' ? current.length - 1
       : Math.max(0, Math.min(current.length - 1, from + (['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 1)));
     const ids = [...before.ids]; ids.splice(to, 0, ids.splice(from, 1)[0]);
-    commit(before, target.row.dataset.playlistRowKey, ids, target.handle);
+    commit(before, keyOf(target.row), ids, target.handle);
   };
   const click = event => {if (drag?.active || Date.now() < blockedUntil) {event.preventDefault(); event.stopImmediatePropagation();}};
-  const nativeDrag = event => {if (event.target.closest?.(HANDLE)) event.preventDefault();};
+  const nativeDrag = event => {if (event.target.closest?.(handleSelector)) event.preventDefault();};
   host.addEventListener('pointerdown', down); host.addEventListener('keydown', key); host.addEventListener('lostpointercapture', pointerCancel);
   host.addEventListener('click', click, true); host.addEventListener('dblclick', click, true); host.addEventListener('dragstart', nativeDrag);
   return {
@@ -219,3 +224,4 @@ export function mountPlaylistReorder(host, {snapshot, onReorder, onAnnounce = ()
     },
   };
 }
+export {mountCollectionReorder as mountPlaylistReorder};

@@ -14,3 +14,18 @@
 .album-tops__header { flex: 0 0 auto; }
 #collection-library-navigation { order: -1; flex: 0 0 auto; }
 #collection-library-navigation[hidden] { display: none; }
+.album-top-builder, .album-top-builder__identity, .album-top-builder__picker { min-width: 0; }
+.album-top-builder__identity { display: grid; gap: 8px; }
+.album-top-builder__picker { display: flex; flex-direction: column; gap: 8px; }
+.album-top-builder__scroll { max-height: 50vh; overflow: auto; min-width: 0; padding: 4px; }
+.album-top-builder__cards { grid-template-columns: repeat(auto-fill, minmax(min(145px, 100%), 1fr)); }
+.album-top-builder__cards > div { min-width: 0; }
+.album-top-builder__cards [data-album-draft-move] { touch-action: none; }
+.album-top-inline-edit { min-width: 0; }
+.album-top-inline-edit .album-tops__header { flex-wrap: nowrap; align-items: flex-start; gap: 8px; }
+.album-top-inline-edit .gallery-bar__context { flex: 1 1 0; min-width: 0; }
+.album-top-inline-edit .gallery-bar__title { display: block; min-width: 0; width: 100%; }
+.album-top-inline-edit .album-top-builder__identity { grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 0; }
+.album-top-inline-edit .album-top-builder__identity input { width: 100%; min-width: 0; box-sizing: border-box; }
+.album-top-inline-edit .gallery-bar__actions { flex-wrap: nowrap; }
+.album-top-inline-edit__content { padding: 12px; min-width: 0; }

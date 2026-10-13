@@ -59,12 +59,20 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
     }, [enabled, shell.scopeKey, shell.active, shell.topRef, shell.viewVersion]);
     const open = async (top_ref, isCurrent = () => true, expectedViewRequestId) => {
       const scopeKey = shell.scopeKey;
+      let started = false, settled = false;
+      const complete = ({opened, error}) => {
+        settled = true;
+        if (!disposed && isCurrent() && runtime.snapshot().scopeKey === scopeKey && error?.name !== 'AbortError') {
+          setNavigationError(error || opened === false ? {topRef: top_ref} : null);
+        }
+      };
       try {
-        const opened = await runtime.navigate({top_ref, isCurrent, expectedViewRequestId});
-        if (!disposed && isCurrent() && runtime.snapshot().scopeKey === scopeKey) setNavigationError(opened === false ? {topRef: top_ref} : null);
+        const opened = await runtime.navigate({top_ref, isCurrent, expectedViewRequestId,
+          onStart: () => {started = true;}, onSettled: complete});
+        if (!settled && !started && !disposed && isCurrent() && runtime.snapshot().scopeKey === scopeKey) setNavigationError(null);
         return opened;
       } catch (error) {
-        if (error?.name !== 'AbortError' && !disposed && isCurrent() && runtime.snapshot().scopeKey === scopeKey) setNavigationError({topRef: top_ref});
+        if (!settled && !started && error?.name !== 'AbortError' && !disposed && isCurrent() && runtime.snapshot().scopeKey === scopeKey) setNavigationError({topRef: top_ref});
         return false;
       }
     };
@@ -119,7 +127,7 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
         {navigationError && <><NativeHtml html={runtime.alertHtml({severity: 'error', role: 'alert', message: 'This Album Top could not be opened. Try again.'})}/>
           <Button runtime={runtime} onClick={() => open(navigationError.topRef)}>Retry opening Album Top</Button></>}
         {state.selectedTopRef === shell.topRef || awaitingCreateClose
-          ? <AlbumTopsView key={shell.scopeKey} runtime={runtime} controller={controller} state={state} onOpen={open} onFormSaved={formSaved}
+          ? <AlbumTopsView key={shell.scopeKey} runtime={runtime} controller={controller} state={state} providers={providers} onOpen={open} onFormSaved={formSaved}
               shareRequest={shareRequest} onShareRequestHandled={request => {if (shareRequest === request) shareRequest = null;}}/>
           : !navigationError && <Status runtime={runtime} value={{status: 'loading'}} label="Album Tops"/>}
       </>}

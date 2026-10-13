@@ -1,5 +1,4 @@
 import React, {useLayoutEffect, useRef} from 'react';
-import {metric} from './model.mjs';
 import {NativeChoice} from './native-choice.jsx';
 
 export function NativeHtml({html, className = '', onClick}) {
@@ -14,7 +13,9 @@ export function Button({runtime, children, onClick, disabled = false, selected, 
     attributes: {...options.attributes, ...(selected === undefined ? {} : {'aria-pressed': String(selected)})}};
   const html = icon ? runtime.actionHtml({...config, icon, pressed: selected, ariaLabel: options.ariaLabel || label, title: options.title || label,
     presentation: 'bare'}) : runtime.buttonHtml(config);
-  const root = useRef(null), initial = useRef(html);
+  // React compares this prop by object identity. Keep the initial markup object
+  // stable so only the native reconciliation below updates the live button.
+  const root = useRef(null), initial = useRef({__html: html});
   useLayoutEffect(() => {
     const host = root.current, current = host.firstElementChild;
     const holder = host.ownerDocument.createElement('div'); holder.innerHTML = html;
@@ -25,7 +26,7 @@ export function Button({runtime, children, onClick, disabled = false, selected, 
     for (const attribute of [...next.attributes]) if (current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
     if (current.innerHTML !== next.innerHTML) current.innerHTML = next.innerHTML;
   }, [html]);
-  return <span ref={root} className="home-friends__button" dangerouslySetInnerHTML={{__html: initial.current}} onClick={event => {
+  return <span ref={root} className="home-friends__button" dangerouslySetInnerHTML={initial.current} onClick={event => {
     const button = event.target.closest('button');
     if (button && !button.disabled) onClick?.(event);
   }}/>;
@@ -43,7 +44,7 @@ export function Status({runtime, value, label, retry}) {
 export function Tabs({runtime, id, label, items, value, onChange}) {
   const root = useRef(null), html = runtime.tabsHtml({id, label,
     tabs: items.map(([key, label, options]) => ({key, label, disabled: options?.disabled === true})), selectedKey: value});
-  const initialHtml = useRef(html);
+  const initialHtml = useRef({__html: html});
   useLayoutEffect(() => {
     const host = root.current, active = host.contains(document.activeElement) ? document.activeElement.dataset.inPageTab : null;
     if (host.innerHTML !== html) host.innerHTML = html;
@@ -54,15 +55,11 @@ export function Tabs({runtime, id, label, items, value, onChange}) {
     const next = root.current.querySelector('[aria-selected="true"]')?.dataset.inPageTab;
     if (next && next !== value) onChange(next);
   };
-  return <div ref={root} className="home-friends__tabs" dangerouslySetInnerHTML={{__html: initialHtml.current}} onClick={sync} onKeyDown={sync}/>;
+  return <div ref={root} className="home-friends__tabs" dangerouslySetInnerHTML={initialHtml.current} onClick={sync} onKeyDown={sync}/>;
 }
-export function Period({runtime, value, onChange, total, range}) {
-  return <>
-    <span className="home-friends__listens">Listens: {metric(total)}</span>
-    <NativeChoice runtime={runtime} className="home-friends__period" buttonClassName="ui-choice__trigger--header" showLabel={false} label="Period" menuWidth="content" value={value} onChange={onChange}
-      options={ [['week', 'Last week'], ['month', 'Last month'], ['six', 'Last 6 months'], ['year', 'Last year'], ['all', 'All time']] }/>
-    {range && <span className="home-friends__range">{range}</span>}
-  </>;
+export function Period({runtime, value, onChange, range}) {
+  return <NativeChoice runtime={runtime} icon="calendar" className="home-friends__period" showLabel={false} label="Period" menuWidth="content" value={value} onChange={onChange}
+    title={range} options={ [['week', 'Last week'], ['month', 'Last month'], ['six', 'Last 6 months'], ['year', 'Last year'], ['all', 'All time']] }/>;
 }
 export function RecentAlbums({runtime, value, retry, selected, onSelect, onError, selectionMode = 'native'}) {
   const root = useRef(null), owner = useRef(null), latest = useRef({retry, onSelect, onError});

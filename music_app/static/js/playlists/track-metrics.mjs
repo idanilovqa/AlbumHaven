@@ -1,8 +1,8 @@
 import {normalizePlaylistFacts} from './filters.mjs';
-import {trackLoveHtml} from '../home-friends/track-preference.mjs';
+import {trackLoveHtml, normalizeTrackPreference} from '../home-friends/track-preference.mjs';
 
 // Personal plays and supplied global popularity are separate display facts.
-// Love alone can consume the native preference controller's current state;
+// The current native preference can identify an explicitly unrated track;
 // numeric display facts never grant mutation or playback authority.
 const columns = Object.freeze([
   {key: 'love_tier', label: 'Love', width: '36px'},
@@ -31,13 +31,17 @@ export function getPlaylistTrackMetricValue(row, key, preference = null) {
 export function playlistTrackMetricCells(runtime, row, preferenceState) {
   const facts = normalizePlaylistFacts(row), escape = runtime.escapeHtml;
   const countCell = (value, label) => ({content: `<span class="album-track-table__metric" title="${escape(label)}">${escape(value === null ? '–' : value)}</span>`});
-  const rating = facts.track_rating, ratingLabel = rating === null ? 'Track rating unavailable' : `Track rating: ${rating} out of 5`;
-  const ratingHtml = rating !== null && typeof runtime.ratingHtml === 'function'
-    ? runtime.ratingHtml({value: rating, maximum: 5, label: ratingLabel})
-    : `<span role="img" aria-label="${escape(ratingLabel)}">${rating === null ? '–' : `${rating}/5`}</span>`;
-  const seconds = facts.duration_seconds;
   const readable = row !== null && typeof row === 'object' && !Array.isArray(row) && row.source_readable !== false
     && !(own(row.allowed_actions, 'can_read') && row.allowed_actions.can_read === false);
+  // A current controller's null receipt revokes an older projected receipt.
+  const preference = readable ? normalizeTrackPreference(preferenceState === undefined ? facts.track_preference : preferenceState?.preference) : null;
+  const unrated = preference && own(preference, 'rating') && preference.rating === null;
+  const rating = facts.track_rating, ratingLabel = rating !== null ? `Track rating: ${rating} out of 5`
+    : unrated ? 'Track unrated' : 'Track rating unavailable';
+  const ratingHtml = (rating !== null || unrated) && typeof runtime.ratingHtml === 'function'
+    ? runtime.ratingHtml({value: rating ?? 0, maximum: 5, label: ratingLabel, ...(rating === null ? {compact: true} : {})})
+    : `<span role="img" aria-label="${escape(ratingLabel)}">${rating === null ? '–' : `${rating}/5`}</span>`;
+  const seconds = facts.duration_seconds;
   // Legacy native rows can supply a length label without numeric seconds. It
   // remains display-only and cannot become a duration or sorting authority.
   const durationDisplay = readable && own(row, 'duration_display') && typeof row.duration_display === 'string' ? row.duration_display.trim() : '';

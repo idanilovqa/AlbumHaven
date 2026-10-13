@@ -13,7 +13,7 @@ export function ViewControl({runtime, kind = 'albums', context = 'activity', val
   const comparison = kind === 'albums' && context === 'comparison';
   const items = comparison ? comparisonChoices : Object.hasOwn(choices, kind) ? choices[kind] : choices.albums;
   const html = runtime.viewChooserHtml({value, actions: items.map(([value, label]) => ({value, ariaLabel: label, title: label, presentation: 'bare'}))});
-  const initial = useRef(html);
+  const initial = useRef({__html: html});
   useLayoutEffect(() => {
     let active = true;
     const host = root.current; host.innerHTML = html;
@@ -31,5 +31,5 @@ export function ViewControl({runtime, kind = 'albums', context = 'activity', val
     return () => {active = false; media?.removeEventListener?.('change', resize); mounted?.destroy(); if (owner.current === mounted) owner.current = null;};
   }, [runtime, kind, comparison]);
   useLayoutEffect(() => {owner.current?.select(value);}, [value, runtime, kind, comparison]);
-  return <span ref={root} className="home-friends__view-control" dangerouslySetInnerHTML={{__html: initial.current}}/>;
+  return <span ref={root} className="home-friends__view-control" dangerouslySetInnerHTML={initial.current}/>;
 }

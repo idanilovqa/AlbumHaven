@@ -1,3 +1,5 @@
+import {normalizeTrackPreference} from '../home-friends/track-preference.mjs';
+
 // Display-only facts and filter choices. No identity, permission, persistence,
 // listening totals or playlist membership is inferred by this module.
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
@@ -6,7 +8,7 @@ const number = value => typeof value === 'number' && Number.isFinite(value) && v
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const DAY_MS = 86400000;
 const unknownFacts = Object.freeze({love_tier: null, styles: null, duration_seconds: null,
-  play_count: null, popularity_count: null, track_rating: null,
+  play_count: null, popularity_count: null, track_rating: null, track_preference: null,
   added_at_ms: null, listen_count: null, last_listened_at_ms: null, last_listened_known: false});
 
 function timestamp(value) {
@@ -31,6 +33,7 @@ export function normalizePlaylistFacts(source) {
   // preference defaults, filenames, genre/title guesses or borrowed album data.
   const last = own(source, 'last_listened_at') ? timestamp(source.last_listened_at) : null;
   return Object.freeze({
+    track_preference: own(source, 'track_preference') ? normalizeTrackPreference(source.track_preference) : null,
     love_tier: own(source, 'love_tier') && ['off', 'loved', 'obsessed'].includes(source.love_tier) ? source.love_tier : null,
     styles: own(source, 'styles') ? styles(source.styles) : null,
     duration_seconds: own(source, 'duration_seconds') ? number(source.duration_seconds) : null,

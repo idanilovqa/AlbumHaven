@@ -5,7 +5,7 @@ const chevron = '<svg class="ui-choice__chevron" viewBox="0 0 24 24" aria-hidden
 // React owns the stable trigger and current values. The canonical Choice owner
 // retains the menu, anchored surface, keyboard behavior and focus return.
 export function NativeChoice({runtime, label, value, options = [], onChange, disabled = false, showLabel = true,
-  className = '', buttonClassName = '', matchTriggerWidth = true, menuWidth, controlLabelPrefix = ''}) {
+  icon, title, className = '', buttonClassName = '', matchTriggerWidth = true, menuWidth, controlLabelPrefix = ''}) {
   const root = useRef(null), owner = useRef(null), latest = useRef(null);
   const choices = options.map(option => Array.isArray(option)
     ? {value: String(option[0]), label: String(option[1]), disabled: option[2] === true}
@@ -14,12 +14,14 @@ export function NativeChoice({runtime, label, value, options = [], onChange, dis
   const unavailable = disabled || typeof runtime.openChoice !== 'function' || !choices.some(option => !option.disabled);
   latest.current = {choices, selected, label, onChange, unavailable, matchTriggerWidth, menuWidth};
   const visibleLabel = controlLabelPrefix && selectedLabel ? `${controlLabelPrefix}: ${selectedLabel}` : selectedLabel;
-  const html = runtime.buttonHtml({label: visibleLabel, size: 'small', disabled: unavailable,
+  const config = {label: visibleLabel, size: 'small', disabled: unavailable,
     className: ['ui-choice__trigger', buttonClassName].filter(Boolean).join(' '),
-    ariaLabel: selectedLabel ? `${label}: ${selectedLabel}` : label, title: selectedLabel ? `${label}: ${selectedLabel}` : label,
+    ariaLabel: selectedLabel ? `${label}: ${selectedLabel}` : label, title: title || (selectedLabel ? `${label}: ${selectedLabel}` : label),
     attributes: {'aria-haspopup': 'menu', 'aria-expanded': 'false'},
-  }).replace('</button>', `${chevron}</button>`);
-  const initial = useRef(html), choicesKey = JSON.stringify(choices);
+  };
+  const html = icon ? runtime.actionHtml({...config, icon, presentation: 'bare'})
+    : runtime.buttonHtml(config).replace('</button>', `${chevron}</button>`);
+  const initial = useRef({__html: html}), choicesKey = JSON.stringify(choices);
   useLayoutEffect(() => {
     const host = root.current;
     const open = initialFocus => {
@@ -60,6 +62,6 @@ export function NativeChoice({runtime, label, value, options = [], onChange, dis
   }, [html, choicesKey, selected, runtime, matchTriggerWidth, menuWidth]);
   return <span className={['ui-choice', className].filter(Boolean).join(' ')}>
     {showLabel && <span className="ui-choice__label">{label}</span>}
-    <span ref={root} className="ui-choice__control" dangerouslySetInnerHTML={{__html: initial.current}}/>
+    <span ref={root} className="ui-choice__control" dangerouslySetInnerHTML={initial.current}/>
   </span>;
 }

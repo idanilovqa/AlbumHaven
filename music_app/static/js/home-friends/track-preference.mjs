@@ -13,7 +13,8 @@ export function normalizeTrackPreference(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !own(value, 'identity') || typeof value.identity !== 'string' || !value.identity
     || !own(value, 'love_tier') || !tiers.includes(value.love_tier)) return null;
   return Object.freeze({identity: value.identity, love_tier: value.love_tier,
-    rating: own(value, 'rating') && Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 5 ? value.rating : null,
+    ...(own(value, 'rating') && (value.rating === null || Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 5)
+      ? {rating: value.rating} : {}),
     allowed_actions: Object.freeze({can_set_love_tier: own(value.allowed_actions, 'can_set_love_tier') && value.allowed_actions.can_set_love_tier === true})});
 }
 
@@ -116,13 +117,13 @@ export function trackLoveHtml(runtime, row, state = {}) {
 
 /** Preserve the native ActionButton, and recover its row's focus after pending
  * disables it or an acknowledged sort rebuilds the row. */
-export function paintTrackLoveCell(cell, runtime, row, state) {
+export function paintTrackLoveCell(cell, runtime, row, state, focusKey = row) {
   if (!cell) return;
   const holder = cell.ownerDocument.createElement('span'); holder.innerHTML = trackLoveHtml(runtime, row, state);
   const next = holder.firstElementChild.firstElementChild;
   let current = cell.firstElementChild;
   const document = cell.ownerDocument;
-  if (state?.pending && current?.tagName === 'BUTTON' && document.activeElement === current) pendingFocus.set(row, state.preference?.identity);
+  if (state?.pending && current?.tagName === 'BUTTON' && document.activeElement === current) pendingFocus.set(focusKey, state.preference?.identity);
   if (!current || current.tagName !== next.tagName) {cell.replaceChildren(next); current = next;}
   else {
     for (const attribute of [...current.attributes]) if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
@@ -130,7 +131,7 @@ export function paintTrackLoveCell(cell, runtime, row, state) {
     if (current.innerHTML !== next.innerHTML) current.innerHTML = next.innerHTML;
   }
   if (!state?.pending) {
-    const restore = pendingFocus.get(row); pendingFocus.delete(row);
+    const restore = pendingFocus.get(focusKey); pendingFocus.delete(focusKey);
     const active = document.activeElement;
     if (restore && restore === state?.preference?.identity && current.tagName === 'BUTTON' && !current.disabled && current.isConnected
       && (!active || active === document.body || !active.isConnected)) current.focus({preventScroll: true});

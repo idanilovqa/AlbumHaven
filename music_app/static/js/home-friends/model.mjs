@@ -11,6 +11,23 @@ export function metric(value) {
   return validNumber(value) ? String(value) : '–';
 }
 
+// Unrated is an authorized nullable taste fact, not an absent display metric.
+function ratingTasteState(value, kind) {
+  const maximum = ['track', 'listen'].includes(kind) ? 5 : kind === 'album' ? 10 : 0;
+  return maximum && Object.hasOwn(value, 'taste_state') && value.taste_state === 'available'
+    && Object.hasOwn(value, 'rating') && (value.rating === null
+      || Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= maximum) ? 'available' : 'unavailable';
+}
+export function ratingMetricHtml(runtime, value, kind) {
+  const readable = value && value.source_readable !== false && value.allowed_actions?.can_read !== false;
+  if (readable && ratingTasteState(value, kind) === 'available' && value.rating === null
+    && typeof runtime.ratingHtml === 'function') {
+    return runtime.ratingHtml({value: 0, maximum: kind === 'album' ? 10 : 5,
+      label: kind === 'album' ? 'Album unrated' : 'Track unrated', compact: true});
+  }
+  return runtime.escapeHtml(metric(readable ? value.rating : null));
+}
+
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const reference = value => typeof value === 'string' && value.trim().length > 0;
 const text = value => typeof value === 'string' ? value : '';
@@ -158,7 +175,8 @@ function activityTrackPreference(value) {
   const identity = reference(value.identity) ? value.identity : null;
   return freeze({identity,
     love_tier: ['off', 'loved', 'obsessed'].includes(value.love_tier) ? value.love_tier : null,
-    rating: Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 5 ? value.rating : null,
+    ...(Object.hasOwn(value, 'rating') && (value.rating === null || Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 5)
+      ? {rating: value.rating} : {}),
     allowed_actions: actions(identity ? value.allowed_actions : null, ['can_set_love_tier'])});
 }
 function deniedActivityRow(identity) {
@@ -199,7 +217,7 @@ function activityData(data) {
         track_preference: activityTrackPreference(row.track_preference),
       } : {}),
       favorite: typeof row.favorite === 'boolean' ? row.favorite : null,
-      taste_state: text(row.taste_state),
+      taste_state: ratingTasteState(row, row.kind),
       duration_seconds: nullableNumber(row.duration_seconds),
       rating: Number.isInteger(row.rating) && row.rating >= 1
         && row.rating <= (track ? 5 : row.kind === 'album' ? 10 : 0) ? row.rating : null,
@@ -216,7 +234,7 @@ function comparisonData(data) {
   function side(value, kind) {
     if (value == null) return null;
     if (!object(value)) invalid();
-    return freeze({ listen_count: nullableNumber(value.listen_count),
+    return freeze({ listen_count: nullableNumber(value.listen_count), taste_state: ratingTasteState(value, kind),
       rating: Number.isInteger(value.rating) && value.rating >= 1
         && value.rating <= (['track', 'listen'].includes(kind) ? 5 : kind === 'album' ? 10 : 0) ? value.rating : null,
       play_count: nullableNumber(value.play_count), full_listen_count: nullableNumber(value.full_listen_count),

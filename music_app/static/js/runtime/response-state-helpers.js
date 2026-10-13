@@ -86,6 +86,10 @@ function normalizeRuntimeGalleryDisplayMode(value, fallback = 'cards') {
   return normalized === 'covers' || normalized === 'list' ? normalized : 'cards';
 }
 
+function normalizeRuntimeArtistPageMode(value) {
+  return normalizeRuntimeString(value, '').trim().toLowerCase() === 'info' ? 'info' : 'gallery';
+}
+
 function normalizeRuntimeSelectedArtistFamilyDisplayMode(value, fallback = 'grouped') {
   const normalized = normalizeRuntimeString(value, fallback).trim().toLowerCase();
   return normalized === 'chronological' ? 'chronological' : 'grouped';
@@ -711,6 +715,11 @@ function isReusableSelectedArtistBrowseViewCandidate(view) {
   return resolvedSurface === 'albums'
     && String(view?.query || '').trim()
     && String(view?.selected_artist || '').trim()
+    // Info requests and responses require a fresh selected-Artist read, even
+    // when a parsed request has no server descriptor yet.
+    && view?.private_search !== true
+    && normalizeRuntimeArtistPageMode(view?.page_mode) !== 'info'
+    && normalizeRuntimeArtistPageMode(view?.artist_page?.active_page_mode) !== 'info'
     && !(Array.isArray(view?.related_filter_artists) && view.related_filter_artists.length)
     && !Boolean(view?.primary_filter_active);
 }
@@ -958,7 +967,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
     manual_version_links: cloneRuntimeObject(source.manual_version_links, base.manual_version_links),
     query: normalizeRuntimeString(source.query, base.query),
     selected_artist: normalizeRuntimeString(
-      isCollectionSurface ? '' : source.selected_artist,
+      isCollectionSurface || explicitlyClearsSelectedArtist ? '' : source.selected_artist,
       isCollectionSurface ? '' : base.selected_artist,
     ),
     gallery_scope: normalizeRuntimeString(source.gallery_scope, base.gallery_scope),
@@ -988,6 +997,29 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
+  // Only a local non-identity patch may retain the previous descriptor. A new
+  // browse response must carry its own canonical Artist presentation, including
+  // a full response for the same Artist; request mode is not read admission.
+  const replacesArtistPage = [
+    'surface', 'surface_request', 'selected_artist', 'query', 'page_mode',
+    'artist_groups', 'primary_artist_groups', 'family_artist_groups', 'payload_tier',
+    'gallery_scope', 'visible_library_categories', 'related_filter_artists',
+    'primary_filter_active', 'search_filters', 'private_search',
+  ].some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  const artistPage = Object.prototype.hasOwnProperty.call(source, 'artist_page')
+    ? source.artist_page
+    : replacesArtistPage ? null : base.artist_page;
+  const selectedArtist = normalizedView.selected_artist.trim();
+  if (selectedArtist && (!resolvedSurface || resolvedSurface === 'albums')
+    && normalizedView.private_search !== true && isRuntimePlainObject(artistPage)
+    && typeof artistPage.artist_ref === 'string' && artistPage.artist_ref.trim() === selectedArtist) {
+    const pageMode = normalizeRuntimeArtistPageMode(artistPage.active_page_mode);
+    normalizedView.artist_page = { ...artistPage, artist_ref: selectedArtist, active_page_mode: pageMode };
+    normalizedView.page_mode = pageMode;
+  } else {
+    delete normalizedView.artist_page;
+    delete normalizedView.page_mode;
+  }
   // A replacement search/artist payload must not inherit a root page cursor.
   if (isCollectionSurface || normalizedView.query || normalizedView.selected_artist
     || (Array.isArray(source.artist_groups) && !Object.prototype.hasOwnProperty.call(source, 'gallery_page'))) {

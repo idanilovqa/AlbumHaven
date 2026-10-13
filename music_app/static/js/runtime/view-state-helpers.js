@@ -90,6 +90,25 @@ function resolveViewSurface(view = {}) {
   return 'home';
 }
 
+function resolveSelectedArtistPageMode(view = {}) {
+  const selectedArtist = String(view.selected_artist || '').trim();
+  if (!selectedArtist || resolveViewSurface(view) !== 'albums' || view.private_search === true) {
+    return 'gallery';
+  }
+  let pageMode = view.page_mode;
+  if (Object.prototype.hasOwnProperty.call(view, 'artist_page')) {
+    const artistPage = view.artist_page;
+    // A response descriptor, when present, takes precedence over request state.
+    if (!artistPage || typeof artistPage !== 'object' || Array.isArray(artistPage)
+      || typeof artistPage.artist_ref !== 'string'
+      || artistPage.artist_ref.trim() !== selectedArtist) {
+      return 'gallery';
+    }
+    pageMode = artistPage.active_page_mode;
+  }
+  return String(pageMode || '').trim().toLowerCase() === 'info' ? 'info' : 'gallery';
+}
+
 function resolvePlaylistId(view = {}) {
   const playlistId = String(
     view?.playlist_detail?.playlist_id
@@ -125,6 +144,7 @@ function buildUrl(view) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -161,6 +181,7 @@ function buildApiUrl(view, options = {}) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -196,12 +217,13 @@ function buildApiUrl(view, options = {}) {
 
 function parseUrlStateFromUrl(url, baseOrigin) {
   const u = new URL(url, baseOrigin);
-  return {
+  const view = {
     surface_request: u.searchParams.get('surface') || '',
     playlist_id: u.searchParams.get('playlist_id') || '',
     top_ref: u.searchParams.get('top_ref') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',
+    page_mode: u.searchParams.get('page_mode') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
     gallery_scope: u.searchParams.get('gallery_scope') || 'all',
     gallery_display_mode: normalizeGalleryDisplayMode(u.searchParams.get('gallery_display')),
@@ -218,6 +240,12 @@ function parseUrlStateFromUrl(url, baseOrigin) {
       }
       : {}),
   };
+  if (String(view.selected_artist || '').trim() && resolveViewSurface(view) === 'albums') {
+    view.page_mode = resolveSelectedArtistPageMode(view);
+  } else {
+    delete view.page_mode;
+  }
+  return view;
 }
 
 function parseUrlState(url) {

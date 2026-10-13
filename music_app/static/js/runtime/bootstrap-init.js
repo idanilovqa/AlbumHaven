@@ -61,6 +61,7 @@ function resolveInitialHydrationEndpoint(startupHydration, options = {}) {
     if (resolvedEndpoint && serverEndpoint) {
       const serverUrl = new URL(serverEndpoint, window.location.href);
       const resolvedUrl = new URL(resolvedEndpoint, window.location.href);
+      if (serverUrl.origin !== resolvedUrl.origin) return serverEndpoint;
       ['gallery_display', 'gallery_scale_percent'].forEach((param) => {
         if (resolvedUrl.searchParams.has(param)) {
           serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
@@ -76,6 +77,16 @@ function resolveInitialHydrationEndpoint(startupHydration, options = {}) {
           if (resolvedUrl.searchParams.has(param)) serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
           else serverUrl.searchParams.delete(param);
         });
+        if (resolvedUrl.searchParams.get('surface') === 'albums'
+          && String(resolvedUrl.searchParams.get('artist') || '').trim()
+          && String(serverUrl.searchParams.get('artist') || '').trim()) {
+          // Keep server hydration options, but use the selected Artist and mode
+          // already resolved by this same-source initial view.
+          ['artist', 'page_mode'].forEach((param) => {
+            if (resolvedUrl.searchParams.has(param)) serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
+            else serverUrl.searchParams.delete(param);
+          });
+        }
       }
       return `${serverUrl.pathname}${serverUrl.search}`;
     }

@@ -1,4 +1,4 @@
-import React, {useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore} from 'react';
+import React, {memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore} from 'react';
 import {Button, NativeHtml, Tabs} from '../home-friends/components.jsx';
 import {NativeDialog} from '../home-friends/native-dialog.jsx';
 import {CreationSearch} from '../playlists/creation.jsx';
@@ -23,6 +23,17 @@ function PickerCard({runtime, row, selected, disabled, onSelect}) {
     if (!disabled && event.target.closest('[data-gallery-card-intent="select"]')) onSelect(event);
   }}/>;
 }
+
+const PickerRow = memo(function PickerRow({runtime, row, selected, disabled, onSelect, onRemove}) {
+  return <div {...(selected ? {'data-album-draft-key': row.album_ref} : {})}>
+    <PickerCard runtime={runtime} row={row} selected={selected} disabled={disabled} onSelect={event => onSelect(event, row)}/>
+    {selected && <div className="playlists__actions">
+      <Button runtime={runtime} size="small" disabled={disabled} attributes={{'data-album-draft-move': '', 'aria-label': `Reorder ${row.title}`}}>Move</Button>
+      <Button runtime={runtime} size="small" disabled={disabled} ariaLabel={`Remove ${row.title}`} attributes={{'data-album-draft-remove': ''}}
+        onClick={event => onRemove(event, row.album_ref)}>Remove</Button>
+    </div>}
+  </div>;
+});
 
 export function AlbumPicker({runtime, draft, value, disabled}) {
   const id = `album-top-picker-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -55,11 +66,17 @@ export function AlbumPicker({runtime, draft, value, disabled}) {
       : controls[Math.min(pending.index, controls.length - 1)] || picker.current.querySelector('[role="tab"][aria-selected="true"]');
     target?.focus({preventScroll: true});
   }, [value, disabled]);
-  const rememberFocus = (event, selector) => {
+  const rememberFocus = useCallback((event, selector) => {
     const button = event.target.closest('button'), document = host.current.ownerDocument;
     if (document.activeElement !== button) return;
     pendingFocus.current = {from: button, selector, index: [...host.current.querySelectorAll(selector)].indexOf(button)};
-  };
+  }, []);
+  const select = useCallback((event, row) => {
+    rememberFocus(event, '[data-gallery-card-intent="select"]'); draft.select(row);
+  }, [draft, rememberFocus]);
+  const remove = useCallback((event, ref) => {
+    rememberFocus(event, '[data-album-draft-remove]'); draft.remove(ref);
+  }, [draft, rememberFocus]);
   const selected = value.tab === 'selected', albums = selected ? value.items : value.search.items;
   const atCapacity = value.items.length >= 5000;
   return <section ref={picker} className="album-top-builder__picker" aria-label="Choose albums">
@@ -71,17 +88,8 @@ export function AlbumPicker({runtime, draft, value, disabled}) {
     {atCapacity && <p className="playlists__note" role="status">The 5,000-album limit is reached. Remove an album before adding another.</p>}
     <div className="album-top-builder__scroll gallery-scrollbar" role="tabpanel" aria-labelledby={`${id}-tabs-${value.tab}`}>
       <div ref={host} className="home-activity__cards album-top-builder__cards playlists__tracks">
-        {albums.map(row => <div key={selected ? row.album_ref : row.local_album_id}
-          {...(selected ? {'data-album-draft-key': row.album_ref} : {})}>
-          <PickerCard runtime={runtime} row={row} selected={selected} disabled={disabled || !selected && atCapacity} onSelect={event => {
-            rememberFocus(event, '[data-gallery-card-intent="select"]'); draft.select(row);
-          }}/>
-          {selected && <div className="playlists__actions">
-            <Button runtime={runtime} size="small" disabled={disabled} attributes={{'data-album-draft-move': '', 'aria-label': `Reorder ${row.title}`}}>Move</Button>
-            <Button runtime={runtime} size="small" disabled={disabled} ariaLabel={`Remove ${row.title}`} attributes={{'data-album-draft-remove': ''}}
-              onClick={event => {rememberFocus(event, '[data-album-draft-remove]'); draft.remove(row.album_ref);}}>Remove</Button>
-          </div>}
-        </div>)}
+        {albums.map(row => <PickerRow key={selected ? row.album_ref : row.local_album_id}
+          runtime={runtime} row={row} selected={selected} disabled={disabled || !selected && atCapacity} onSelect={select} onRemove={remove}/>)}
       </div>
       {!albums.length && <p className="playlists__note" role="status">{selected ? 'No albums selected.' : value.search.status === 'loading'
         ? 'Searching albums…' : value.query.trim() ? 'No matching albums on this page.' : 'Type an album or artist to search.'}</p>}

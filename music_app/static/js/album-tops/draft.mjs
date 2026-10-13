@@ -10,7 +10,12 @@ const ITEM_ACTION = 'library.album_tops.items.manage';
 export function createAlbumTopDraft({controller, providers = {}}) {
   const parent = controller.getSnapshot(), source = parent.selectedTopRef ? parent.detail.data : null;
   const editing = Boolean(source), scopeKey = parent.scopeKey, topRef = source?.top_ref || null;
-  const initialItems = source?.items?.map(row => ({...copy(row), ...copy(source.edit_draft?.items?.find(item => item.item_ref === row.item_ref) || {})})) || [];
+  const bindings = new Map();
+  for (const item of source?.edit_draft?.items || []) {
+    const ref = item.item_ref;
+    if (!bindings.has(ref)) bindings.set(ref, item);
+  }
+  const initialItems = source?.items?.map(row => ({...copy(row), ...copy(bindings.get(row.item_ref) || {})})) || [];
   const baseline = {title: source?.title || '', description: source?.description || '', items: initialItems.map(wire)};
   let state = {scopeKey, topRef, revision: source?.revision || null, title: baseline.title, description: baseline.description,
     items: copy(initialItems), query: '', tab: editing ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
@@ -124,9 +129,11 @@ export function createAlbumTopDraft({controller, providers = {}}) {
       emit({items: state.items.filter(row => row.album_ref !== albumRef), error: null}); emit({search: {...state.search, items: visible()}}); return true;
     },
     reorder(refs) {
-      if (!allowed(true) || !Array.isArray(refs) || refs.length !== state.items.length || new Set(refs).size !== refs.length
-        || refs.some(ref => !state.items.some(row => row.album_ref === ref))) return false;
-      emit({items: refs.map(ref => state.items.find(row => row.album_ref === ref)), error: null}); return true;
+      if (!allowed(true) || !Array.isArray(refs) || refs.length !== state.items.length || new Set(refs).size !== refs.length) return false;
+      const byRef = new Map(state.items.map(row => [row.album_ref, row]));
+      const items = Array.from(refs, ref => byRef.get(ref));
+      if (items.some(row => !row)) return false;
+      emit({items, error: null}); return true;
     },
     async submit() {
       if (!allowed() || !state.title.trim() || editing && !state.dirty) return false;

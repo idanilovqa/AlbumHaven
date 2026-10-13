@@ -1822,8 +1822,11 @@ function renderTrackModalRelease(album) {
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     if (album.read_only_subject) {
-      const summary = document.createElement('p'); summary.className = 'playlists__note';
-      summary.textContent = `Rating: ${album.album_rating ?? '–'} · Favorite: ${album.favorite === true ? 'Yes' : album.favorite === false ? 'No' : '–'}`;
+      const summary = document.createElement('div'); summary.className = 'playlists__note';
+      const rating = album.taste_state === 'available' && Object.hasOwn(album, 'album_rating') && album.album_rating === null
+        ? buildGalleryRatingHtml({value: 0, maximum: 10, label: 'Album unrated', compact: true})
+        : escapeHtml(album.album_rating ?? '–');
+      summary.innerHTML = `Rating: ${rating} · Favorite: ${album.favorite === true ? 'Yes' : album.favorite === false ? 'No' : '–'}`;
       els.header.appendChild(summary);
     }
     els = getTrackModalElements();
@@ -2173,11 +2176,14 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
       const source = trackRow || track;
-      privateRows.push({...source, track_ref: Object.hasOwn(source, 'track_ref') ? source.track_ref : track.path});
+      // Keep the exact response row: a render-time clone cannot inherit a
+      // request's private preference receipt. Native playback still uses track.
+      privateRows.push(source);
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
       return {
         path: trackPath, inventory_track_ref: source.inventory_track_ref,
+        subjectTasteState: album?.read_only_subject ? source.taste_state : 'unavailable',
         subjectRating: album?.read_only_subject ? source.rating : null, subjectLove: album?.read_only_subject ? source.love_tier : null,
         src,
         title: displayTitle,
@@ -2221,7 +2227,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     const source = getTrackModalSourcePageOwner(), view = state.view;
     return source ? source.isCurrent : () => state.view === view && album.source_readable !== false
       && !(Object.hasOwn(album.allowed_actions || {}, 'can_read') && album.allowed_actions.can_read !== true);
-  });
+  }, {columns: albumTrackTableColumns({groups: componentGroups, subjectTaste: Boolean(album?.read_only_subject)})});
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -2436,6 +2442,7 @@ function refreshTrackModalPlaybackState() {
   const selection = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
   const rows = selection ? selection.dialog.querySelectorAll('[data-track-row-path]')
     : document.querySelectorAll('#track-modal [data-track-row-path]');
+  let durationGrew = false;
   rows.forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
@@ -2466,9 +2473,12 @@ function refreshTrackModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
+      durationGrew ||= displayedTime.length > (durationEl.textContent || '').length;
       durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
+  // Tabular digits need a new measurement only when the visible text grows.
+  if (durationGrew && typeof NativePlaytables !== 'undefined') NativePlaytables.refresh?.('album-tracks');
 }
 
 function refreshNonAlbumModalPlaybackState() {
@@ -2479,6 +2489,7 @@ function refreshNonAlbumModalPlaybackState() {
   const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
   const activeDuration = formatTrackDuration(playback.duration) || '0:00';
 
+  let durationGrew = false;
   document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
@@ -2509,9 +2520,11 @@ function refreshNonAlbumModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
+      durationGrew ||= displayedTime.length > (durationEl.textContent || '').length;
       durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
+  if (durationGrew && typeof NativePlaytables !== 'undefined') NativePlaytables.refresh?.('loose-tracks');
 }
 
 

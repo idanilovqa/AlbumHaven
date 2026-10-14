@@ -88,6 +88,7 @@ function readDecodedProductionCardWindow(args = {}) {
   const emptyState = {
     candidateCount: 0,
     visibleCardKeys: [],
+    visibleCardOccurrenceKeys: [],
     decodedCards: [],
     schedulerSettled: false,
     terminalCount: 0,
@@ -113,11 +114,14 @@ function readDecodedProductionCardWindow(args = {}) {
       && cardBounds.top < galleryBounds.bottom;
     const image = card.querySelector(args.coverImageSelector);
     const key = String(card.getAttribute('data-gallery-card-key') || '').trim();
+    const sectionKey = String(card.closest?.('[data-virtual-section-key]')
+      ?.getAttribute('data-virtual-section-key') || '').trim();
     const productionSrc = image instanceof HTMLImageElement
       ? String(image.getAttribute('data-production-cover-src') || '').trim()
       : '';
     return {
       key,
+      occurrenceKey: sectionKey && key ? `${sectionKey}\u0000${key}` : '',
       productionSrc,
       intersects,
       decoded: image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
@@ -132,6 +136,7 @@ function readDecodedProductionCardWindow(args = {}) {
   const coveredEntries = entries.filter((entry) => entry.productionSrc);
   const windowState = {
     visibleCardKeys,
+    visibleCardOccurrenceKeys: entries.map(({ occurrenceKey }) => occurrenceKey).filter(Boolean),
     candidateCount: coveredEntries.length,
     decodedCards: coveredEntries.filter((entry) => entry.decoded).map(({ key, productionSrc }) => ({
       key,

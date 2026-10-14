@@ -3268,10 +3268,11 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
 
     getAttribute(name) { return this.attributes.get(name) || ''; }
   }
-  const card = (key, bounds, image) => ({
+  const card = (key, bounds, image, sectionKey = 'artist:primary') => ({
     getBoundingClientRect() { return bounds; },
     getAttribute(name) { return name === 'data-gallery-card-key' ? key : ''; },
     querySelector() { return image; },
+    closest() { return { getAttribute() { return sectionKey; } }; },
   });
   const gallery = new FakeElement({ left: 0, top: 0, right: 500, bottom: 500, width: 500, height: 500 });
   const visibleImage = new FakeImageElement({
@@ -3289,6 +3290,7 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
   const cards = [
     card('visible', { left: 20, top: 20, right: 220, bottom: 320, width: 200, height: 300 }, visibleImage),
     card('no-art', { left: 240, top: 20, right: 440, bottom: 320, width: 200, height: 300 }, null),
+    card('no-art', { left: 240, top: 330, right: 440, bottom: 490, width: 200, height: 160 }, null, 'artist:featured'),
     card('near', { left: 20, top: 620, right: 220, bottom: 920, width: 200, height: 300 }, offscreenLazyImage),
   ];
   const originals = {
@@ -3318,7 +3320,8 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
     assert.equal(readDecodedProductionCardWindow(args), true);
     assert.deepEqual(readDecodedProductionCardWindow({ ...args, snapshot: true }), {
       candidateCount: 1,
-      visibleCardKeys: ['visible', 'no-art'],
+      visibleCardKeys: ['visible', 'no-art', 'no-art'],
+      visibleCardOccurrenceKeys: ['artist:primary\u0000visible', 'artist:primary\u0000no-art', 'artist:featured\u0000no-art'],
       decodedCards: [{ key: 'visible', productionSrc: '/cover?path=visible' }],
       schedulerSettled: true,
       terminalCount: 0,

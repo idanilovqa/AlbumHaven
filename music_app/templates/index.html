@@ -89,6 +89,7 @@
     {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/" data-shell-horizontal-align="gallery-body">
           {{ search_input("search-input", value=query, suggestions_id="recent-search-popover") }}
+          {{ action_button('Create a Library Mix', icon='add', title='Library Mix', disabled=not (home_actor and home_actor.is_authenticated), attributes={'data-library-mix-open': '1'}) }}
           {% if effective_selected_artist %}<input type="hidden" name="artist" value="{{ effective_selected_artist }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_scope %}<input type="hidden" name="gallery_scope" value="{{ bootstrap_payload.initial_view.gallery_scope }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_display_mode and bootstrap_payload.initial_view.gallery_display_mode != 'cards' %}<input type="hidden" name="gallery_display" value="{{ bootstrap_payload.initial_view.gallery_display_mode }}">{% endif %}

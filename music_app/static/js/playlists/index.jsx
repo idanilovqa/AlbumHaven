@@ -7,6 +7,8 @@ import {applyPlaylistShell, completeDeletedPlaylistNavigation, playlistShareInte
 import {playlistCreationContext} from './creation-session.mjs';
 import {createMissingPlaylistDraftController} from './draft.mjs';
 import {MissingPlaylistDraftPage} from './draft.jsx';
+import {createLibraryMixController} from './library-mix.mjs';
+import {LibraryMixSetup, LibraryMixPage} from './library-mix.jsx';
 
 // The existing production boot owns when/where to mount this slice. No global
 // bridge, second boot, history store, mock provider or persistent client data.
@@ -16,6 +18,45 @@ export function mountPlaylists({host, runtime, providers = {}}) {
   let configuredProviders = {...providers};
   let disposed = false, generation = 0, navigationSequence = 0, customReader = typeof providers.readPlaylists === 'function';
   let activeDraft = null, deletedNavigation = null, copiedNavigation = null, shareRequest = null, notifications = null;
+  let activeMix = null;
+  const mixCurrent = owner => !disposed && activeMix === owner && !owner.retired;
+  const clearMix = owner => {
+    if (activeMix !== owner) return;
+    activeMix = null; owner.retired = true; owner.controller.dispose();
+    if (!disposed) root.render(<Session/>);
+  };
+  const unsubscribeMix = runtime.subscribe(() => {
+    const owner = activeMix;
+    if (!owner) return;
+    const shell = runtime.snapshot();
+    if (!shell.authenticated || shell.scopeKey !== owner.scopeKey
+      || owner.phase === 'setup' && shell.entryKey !== owner.entryKey) {
+      owner.retired = true; runtime.releaseDraft?.(owner.token); clearMix(owner);
+    }
+  });
+  async function prepareMixPage(owner, close) {
+    if (!mixCurrent(owner) || !owner.controller.source()) return false;
+    owner.phase = 'transferring';
+    if (await close({force: true, restoreFocus: false}) !== true || !mixCurrent(owner)) {clearMix(owner); return false;}
+    const opened = runtime.openDraft({token: owner.token, scopeKey: owner.scopeKey, fromGlobal: true,
+      isCurrent: () => mixCurrent(owner), onDiscard: () => clearMix(owner),
+      confirmLeave: async () => {
+        const before = owner.controller.getSnapshot();
+        if (!mixCurrent(owner) || before.mutation.status === 'loading') return false;
+        if (!before.dirty) return true;
+        return await runtime.confirmDraft?.(owner.token, 'Discard this unsaved Library Mix?') === true
+          && mixCurrent(owner) && owner.controller.getSnapshot() === before;
+      }});
+    if (!opened || !mixCurrent(owner)) {clearMix(owner); return false;}
+    owner.phase = 'page'; root.render(<Session/>); return true;
+  }
+  async function openSavedMix(owner, receipt) {
+    if (!mixCurrent(owner) || owner.controller.getSnapshot().mutation.data !== receipt) return false;
+    // The server already acknowledged the one saved playlist. Retire only this
+    // temporary owner before ordinary native navigation takes over.
+    try {return await runtime.completeLibraryMixDraft({token: owner.token, scopeKey: owner.scopeKey, playlist_id: receipt.playlist_id});}
+    catch {runtime.notifyPlaytableCreation?.(); return false;}
+  }
   const mountNotifications = () => {
     if (disposed || notifications || !runtime.notificationRegistry?.()?.registerSource) return;
     notifications = createPlaylistEditNotifications({runtime, notifications: runtime.notificationRegistry(), providers: configuredProviders,
@@ -56,7 +97,7 @@ export function mountPlaylists({host, runtime, providers = {}}) {
   }
   const unsubscribeSource = controller.subscribe(syncDraftContext);
   function prepareDraft(packet, externalScopeKey = null) {
-    if (disposed || activeDraft || typeof runtime.openDraft !== 'function') return false;
+    if (disposed || activeDraft || activeMix || typeof runtime.openDraft !== 'function') return false;
     const external = externalScopeKey !== null;
     if (external && (packet?.source?.kind !== 'activity' || packet.source.source_protocol !== 'missing_activity_selection_v1')) return false;
     const shell = runtime.snapshot();
@@ -160,6 +201,13 @@ export function mountPlaylists({host, runtime, providers = {}}) {
       applyPlaylistShell(controller, shell, customReader);
     }, [shell.scopeKey, shell.visible, shell.payload, shell.playlistId, shell.retainedDraftToken, generation]);
     // A changed native scope is hidden immediately, before the effect erases it.
+    const mix = activeMix;
+    if (mix && mixCurrent(mix) && shell.scopeKey === mix.scopeKey && mix.phase === 'setup') return <LibraryMixSetup
+      runtime={mix.runtime} controller={mix.controller} onReady={close => prepareMixPage(mix, close)}
+      onClose={() => {if (mix.phase === 'setup') clearMix(mix);}}/>;
+    if (mix && mixCurrent(mix) && shell.scopeKey === mix.scopeKey && shell.draftToken === mix.token && mix.phase === 'page') return <LibraryMixPage
+      runtime={mix.runtime} controller={mix.controller} readDetail={configuredProviders.readDetail}
+      onClose={() => runtime.closeDraft(mix.token)} onSaved={receipt => openSavedMix(mix, receipt)}/>;
     if (!shell.visible || state.scopeKey !== shell.scopeKey) return null;
     const select = async playlist_id => {
       const deferred = runtime.deferFormNavigation?.(() => select(playlist_id));
@@ -185,10 +233,22 @@ export function mountPlaylists({host, runtime, providers = {}}) {
   }
   root.render(<Session/>);
   return Object.freeze({
+    openLibraryMix() {
+      const shell = runtime.snapshot();
+      if (disposed || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
+        || typeof configuredProviders.beginLibraryMix !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function') return false;
+      const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, entryKey: shell.entryKey, phase: 'setup', retired: false};
+      activeMix = owner;
+      owner.controller = createLibraryMixController({providers: configuredProviders, scopeKey: owner.scopeKey, isCurrent: () => mixCurrent(owner)});
+      owner.runtime = runtime.createLibraryMixRuntime({scopeKey: owner.scopeKey, isCurrent: () => mixCurrent(owner),
+        source: () => owner.controller.source(), order: () => owner.controller.getSnapshot().playbackOrder});
+      root.render(<Session/>); return true;
+    },
     prepareActivityDraft(packet, externalScopeKey) {
       return typeof externalScopeKey === 'string' && prepareDraft(packet, externalScopeKey);
     },
     configureProviders(next) {if (!disposed) {
+      if (activeMix) {const owner = activeMix; owner.retired = true; runtime.releaseDraft?.(owner.token); clearMix(owner);}
       if (activeDraft && Object.keys({...configuredProviders, ...next}).some(key => configuredProviders[key] !== next?.[key])) {
         const owner = activeDraft; runtime.releaseDraft?.(owner.token); clearDraft(owner);
       }
@@ -197,6 +257,8 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     refresh() {if (!disposed) return controller.load();},
     dispose() {if (!disposed) {
       disposed = true; notifications?.dispose(); unsubscribeNotifications?.();
+      unsubscribeMix();
+      if (activeMix) {const owner = activeMix; runtime.releaseDraft?.(owner.token); clearMix(owner);}
       if (activeDraft) {const owner = activeDraft; runtime.releaseDraft?.(owner.token); clearDraft(owner);}
       unsubscribeSource(); controller.dispose(); root.unmount();
     }},

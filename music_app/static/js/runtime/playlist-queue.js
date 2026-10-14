@@ -44,7 +44,7 @@ function replacePlaylistQueueModes(queue, {shuffle = queue?.shuffle === true, re
   return commitPlaylistQueue(next, queue);
 }
 function commitPlaylistQueue(next, expectedQueue) {
-  if (state.player.playbackQueue !== expectedQueue || !next?.playlistId) throw new Error('The Playlist queue changed.');
+  if (state.player.playbackQueue !== expectedQueue || !(next?.playlistId || next?.libraryMixRef)) throw new Error('The Playlist queue changed.');
   const engine = typeof streamingEngineState === 'function' ? streamingEngineState() : null;
   if (engine?.pendingPromotion || engine?.roles?.current?.boundaryNotified) throw new Error('Wait for the current track transition before changing queue mode.');
   const loopOwned = state.player.loopActive === true;
@@ -55,7 +55,8 @@ function commitPlaylistQueue(next, expectedQueue) {
   if (explicitProgression) ExplicitQueueRuntime.modeChanged(expectedQueue, next);
   if (engine && !loopOwned && !explicitProgression) {
     engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
-    const index = playlistQueueNextIndex(next, String(state.player.current?.path || '')), track = index >= 0 ? next.tracks[index] : null;
+    const index = next.playlistId ? playlistQueueNextIndex(next, String(state.player.current?.path || '')) : next.currentIndex + 1;
+    const track = index >= 0 ? next.tracks[index] : null;
     if (track && typeof scheduleStreamingContinuity === 'function') {
       const pending = scheduleStreamingContinuity(track);
       if (typeof observeStreamingFacadeCallback === 'function') observeStreamingFacadeCallback(pending, 'playlist-queue-mode-error');

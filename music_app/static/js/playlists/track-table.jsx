@@ -97,7 +97,7 @@ export function playlistTableHtml(runtime, {rows, sourceRows = rows, detail, reo
 
 /** Owns native row presentation and table gestures. Playback and author order
  * remain commands to the current runtime/controller, never local transport. */
-export function PlaylistTracks({runtime, rows, detail, controller, state, selected, currentItemId, onSelect, onError}) {
+export function PlaylistTracks({runtime, rows, detail, controller, state, selected, currentItemId, onSelect, onError, onDisplayedRowsChange}) {
   const host = useRef(null), owner = useRef(null), latest = useRef(null), renderedHtml = useRef(null), [announcement, setAnnouncement] = useState('');
   const [sortState, setSort] = useState(null);
   const sort = sortState?.scopeKey === state.scopeKey && sortState?.playlistId === detail.playlist_id ? sortState : (['love_tier', 'play_count', 'popularity_count', 'duration'].includes(detail.saved_default_sort?.key)
@@ -111,6 +111,10 @@ export function PlaylistTracks({runtime, rows, detail, controller, state, select
     love_tier: {type: 'number', getValue: row => getPlaylistTrackMetricValue(row, 'love_tier', love.get(row).preference)}}),
   [rows, sort, love.version, runtime, detail, state.scopeKey]);
   const view = useMemo(() => ({runtime, rows: displayed, detail, state, sort}), [runtime, displayed, detail, state, sort]);
+  useLayoutEffect(() => {
+    onDisplayedRowsChange?.({detail, scopeKey: state.scopeKey, rows: displayed});
+    return () => onDisplayedRowsChange?.(null);
+  }, [detail, state.scopeKey, displayed, onDisplayedRowsChange]);
   const context = useMemo(() => ({scopeKey: state.scopeKey, playlist_id: detail.playlist_id}), [state.scopeKey, detail.playlist_id]);
   latest.current = {view, selected, onSelect, onError};
   const reorderable = canReorder(playlistReorderSnapshot(controller, selected, sort));

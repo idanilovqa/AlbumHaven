@@ -12,7 +12,7 @@ function IntegrationMutation({runtime, value, matching = false}) {
     role: ['error', 'denied'].includes(value.status) ? 'alert' : 'status', message})}/>;
 }
 
-export function PlaylistPlaybackControls({runtime, controller, state, providers = {}}) {
+export function PlaylistPlaybackControls({runtime, controller, state, providers = {}, orderControl = null}) {
   const value = state.playback, playback = value.status === 'ready' ? value.data : null;
   const row = state.currentItemId && state.detail?.track_rows.find(item => item.playlist_item_id === state.currentItemId);
   const current = !playback ? null : playback.current_playlist_id === null ? 'The native player has no current playlist track.'
@@ -20,8 +20,8 @@ export function PlaylistPlaybackControls({runtime, controller, state, providers 
       : row ? `Current: ${row.title || 'Untitled track'}` : 'The current queued track is outside this playlist projection.';
   return <section className="playlists__playback" aria-label="Playlist playback">
     <div className="playlists__actions" role="toolbar" aria-label="Playlist playback controls">
-      <Button runtime={runtime} disabled={!state.available.shuffle} selected={playback ? playback.shuffle : undefined}
-        onClick={() => controller.playbackIntent('shuffle')}>{playback ? `Shuffle ${playback.shuffle ? 'on' : 'off'}` : 'Shuffle unavailable'}</Button>
+      {orderControl || <Button runtime={runtime} disabled={!state.available.shuffle} selected={playback ? playback.shuffle : undefined}
+        onClick={() => controller.playbackIntent('shuffle')}>{playback ? `Shuffle ${playback.shuffle ? 'on' : 'off'}` : 'Shuffle unavailable'}</Button>}
       <Button runtime={runtime} disabled={!state.available.repeat} selected={playback ? playback.repeat !== 'off' : undefined}
         onClick={() => controller.playbackIntent('repeat')}>{playback ? {off: 'Repeat off', all: 'Repeat playlist', one: 'Repeat one track'}[playback.repeat] : 'Repeat unavailable'}</Button>
       <Button runtime={runtime} disabled={!state.available.return_to_current}

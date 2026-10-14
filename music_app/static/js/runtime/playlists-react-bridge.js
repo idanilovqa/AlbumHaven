@@ -66,16 +66,17 @@ const PlaylistReactRuntime = (() => {
     } finally {owner.onDiscard();}
     return true;
   }
-  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null} = {}) {
+  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null, fromGlobal = false} = {}) {
     const start = sync(), navigation = window.AlbumHavenSettingsNavigation?.instance;
     const home = externalScopeKey === null ? null : window.AlbumHavenHomeRuntime?.snapshot();
     const external = home?.visible === true && home.authenticated === true && home.scopeKey === externalScopeKey;
-    if (draft || !(start.visible || external) || external && typeof syncMobileHome !== 'function' || start.scopeKey !== scopeKey || typeof token !== 'string' || !token || /[\\/\x00-\x1f]/.test(token)
+    const global = fromGlobal === true && start.authenticated === true && externalScopeKey === null;
+    if (draft || !(start.visible || external || global) || (external || global) && typeof syncMobileHome !== 'function' || start.scopeKey !== scopeKey || typeof token !== 'string' || !token || /[\\/\x00-\x1f]/.test(token)
       || typeof isCurrent !== 'function' || typeof confirmLeave !== 'function' || typeof onDiscard !== 'function'
       || !navigation?.setPlaylistDraftOwner || !navigation.writeLibraryHistory) return false;
     if (isCurrent() !== true) return false;
     const owner = {token, scopeKey, isCurrent, onDiscard, parentPosition: start.entryKey,
-      parentQuery: external ? new URL(window.location.href).search : null};
+      parentQuery: external || global ? new URL(window.location.href).search : null};
     draft = owner;
     owner.unregister = navigation.setPlaylistDraftOwner({token, scopeKey, isCurrent: () => draftCurrent(owner),
       confirmLeave: () => {interruptDraftNavigation(); return confirmLeave();}, discard: () => {releaseDraft(token); sync();}});
@@ -85,7 +86,7 @@ const PlaylistReactRuntime = (() => {
     try {navigation.writeLibraryHistory(url.href, {playlistDraft: {token, scopeKey}}, {mode: 'push'});}
     catch {releaseDraft(token); return false;}
     if (window.history.state?.playlistDraft?.token !== token) {releaseDraft(token); return false;}
-    if (external) syncMobileHome();
+    if (external || global) syncMobileHome();
     sync(); return draftCurrent(owner);
   }
   function retainDraft(token, callback) {
@@ -144,6 +145,9 @@ const PlaylistReactRuntime = (() => {
     const origin = resourceOrigin(detail);
     return immutableCopy({playlist_creation_source: creationSource(payload.playlist_creation_source), playlist_detail: {playlist_id: detail.playlist_id, origin,
       revision: detail.revision,
+      playlist_kind: detail.playlist_kind,
+      library_mix: detail.playlist_kind === 'library_mix' && ['regular', 'shuffle', 'unplayed_first'].includes(detail.library_mix?.playback_order)
+        ? {playback_order: detail.library_mix.playback_order} : null,
       allowed_actions: {can_play: exactGrant(detail.allowed_actions, 'can_play')},
       track_rows: Array.from(detail.track_rows, row => row && typeof row === 'object' ? unreadable(row)
         ? copy(row, ['playlist_item_id']) : {
@@ -186,7 +190,7 @@ const PlaylistReactRuntime = (() => {
       playlists: payload.playlist_index.playlists.map(item => copy(item, ['playlist_id', 'title', 'description', 'visibility', 'item_count', 'playlist_kind', 'allowed_actions']))};
     for (const row of payload.playlist_detail?.track_rows || []) if (!unreadable(row)) preferenceBatch?.accept(row);
     if (payload.playlist_detail) result.playlist_detail = {...copy(payload.playlist_detail,
-      ['playlist_id', 'title', 'description', 'visibility', 'playlist_kind', 'items_complete', 'query', 'active_sort', 'saved_default_sort', 'playback_mode', 'listen_to_suggestions_after_playlist', 'allowed_actions']),
+      ['playlist_id', 'title', 'description', 'visibility', 'playlist_kind', 'items_complete', 'query', 'active_sort', 'saved_default_sort', 'playback_mode', 'listen_to_suggestions_after_playlist', 'library_mix', 'popularity_refresh_status', 'popularity_refresh_error', 'allowed_actions']),
       revision: origin?.snapshot_ref ?? null,
       missing_playlist_creation_source: creationSource(Object.prototype.hasOwnProperty.call(payload.playlist_detail, 'missing_playlist_creation_source') ? payload.playlist_detail.missing_playlist_creation_source : null),
       track_rows: payload.playlist_detail.track_rows.map(row => {
@@ -374,7 +378,7 @@ const PlaylistReactRuntime = (() => {
     const source = playableRow(intent, row, options), owner = raw, detail = raw?.playlist_detail;
     if (activationToken !== (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null)) throw aborted();
     if (!source || !detail) throw failure('This track action is unavailable.', 403);
-    if (TrackActionsRuntime.canPlay(source)) {TrackActionsRuntime.play(source); return;}
+    if (!detail.library_mix && TrackActionsRuntime.canPlay(source)) {TrackActionsRuntime.play(source); return;}
     const request = ++nativeSequence, scopeKey = sync().scopeKey;
     const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
     const current = () => request === nativeSequence && raw === owner && sync().visible && sync().scopeKey === scopeKey
@@ -388,7 +392,7 @@ const PlaylistReactRuntime = (() => {
     if (rows.some(item => !item)) throw failure('Playlist order changed.', 409);
     const candidates = rows.filter(item => exactGrant(item.allowed_actions, 'can_play'));
     const previous = state.player.playbackQueue;
-    if (previous?.playlistId === detail.playlist_id && previous.playlistRevision === detail.revision
+    if (!(detail.library_mix && options.fromStart === true) && previous?.playlistId === detail.playlist_id && previous.playlistRevision === detail.revision
       && previous.contextGeneration === PrivateUITransport.generation()
       && JSON.stringify(previous.displayedItemIds) === JSON.stringify(ids)
       && typeof playlistQueueCurrentIndex === 'function'
@@ -411,7 +415,7 @@ const PlaylistReactRuntime = (() => {
     if (returned.length !== requested.length || new Set(returned).size !== returned.length || returned.some(id => !requestedSet.has(id))
       || !admitted.includes(source.playlist_item_id)
       || JSON.stringify(admitted) !== JSON.stringify(requested.filter(id => !unavailableSet.has(id)))) throw failure('Playlist queue identities changed.', 409);
-    const tracks = data.tracks.map(item => {
+    let tracks = data.tracks.map(item => {
       const target = item.native_target;
       if (typeof target?.path !== 'string' || !target.path || target.playlist_item_id !== item.playlist_item_id) throw failure('This track is unavailable.');
       const native = {...target, playback_state: {can_start_here: true}};
@@ -419,13 +423,19 @@ const PlaylistReactRuntime = (() => {
       nativeTracks.set(item.playlist_item_id, {owner, source: native});
       return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
         artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
-        playlistItemId: item.playlist_item_id, inventory_track_ref: target.inventory_track_ref, albumRef: byItem.get(item.playlist_item_id)?.album_ref || null};
+        playlistItemId: item.playlist_item_id, inventory_track_ref: target.inventory_track_ref, albumRef: byItem.get(item.playlist_item_id)?.album_ref || null,
+        ...(detail.library_mix ? {personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null} : {})};
     });
+    if (orderChoice?.mode === 'unplayed_first') tracks = [...tracks.filter(item => item.personalPlayCount === 0), ...tracks.filter(item => item.personalPlayCount !== 0)];
     const index = tracks.findIndex(track => track.playlistItemId === source.playlist_item_id);
     if (index < 0 || !current() || typeof playTrackFromPayload !== 'function') throw aborted();
-    const selected = tracks[index], previousQueue = state.player.playbackQueue;
+    let selected = tracks[index];
+    const previousQueue = state.player.playbackQueue;
     const shuffled = orderChoice?.mode === 'shuffle';
-    const ordered = typeof playlistQueueOrder === 'function' ? playlistQueueOrder(tracks, shuffled, selected.path, selected.playlistItemId) : tracks;
+    const fromStart = detail.library_mix && options.fromStart === true;
+    const ordered = typeof playlistQueueOrder === 'function' ? playlistQueueOrder(tracks, shuffled,
+      fromStart ? null : selected.path, fromStart ? null : selected.playlistItemId) : tracks;
+    if (fromStart) selected = ordered[0];
     const queue = {tracks: ordered, regularTracks: tracks, shuffle: shuffled, repeatMode: 'off',
       currentIndex: ordered.indexOf(selected), playbackContext: null, albumRef: '', albumSnapshot: null,
       playlistId: detail.playlist_id, playlistRevision: detail.revision, displayedItemIds: [...ids], contextGeneration: PrivateUITransport.generation()};
@@ -433,10 +443,18 @@ const PlaylistReactRuntime = (() => {
     if (state.player.current?.path === selected.path && (previousQueue?.playlistId !== detail.playlist_id || previousOccurrence?.playlistItemId === selected.playlistItemId)) {
       if (typeof commitPlaylistQueue !== 'function') throw failure('Playlist queue replacement is unavailable.');
       commitPlaylistQueue(queue, previousQueue); notifyPlayback();
-      TrackActionsRuntime.play(nativeTracks.get(source.playlist_item_id).source);
+      if (!current() || state.player.playbackQueue !== queue) {
+        if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+        throw aborted();
+      }
+      TrackActionsRuntime.play(nativeTracks.get(selected.playlistItemId).source);
       return;
     }
     state.player.playbackQueue = queue; notifyPlayback();
+    if (!current() || state.player.playbackQueue !== queue) {
+      if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+      throw aborted();
+    }
     try {
       const started = await playTrackFromPayload(selected);
       if (started !== true) throw failure('Playlist playback did not start.');
@@ -452,6 +470,7 @@ const PlaylistReactRuntime = (() => {
     const owned = queue?.playlistId === options.playlist_id;
     const mode = orderChoice?.scopeKey === shell.scopeKey && orderChoice.playlist_id === options.playlist_id ? orderChoice.mode : 'regular';
     return {status: 'ready', data: {scopeKey: options.scopeKey, playlist_id: options.playlist_id, revision: JSON.stringify([queueRevision, current?.playlistItemId || null]),
+      ...(detail.library_mix ? {library_mix_order: mode} : {}),
       shuffle: owned ? queue.shuffle === true : mode === 'shuffle', repeat: owned ? queue.repeatMode || 'off' : 'off',
       current_playlist_id: current ? queue.playlistId : null, current_playlist_item_id: current?.playlistItemId || null,
       allowed_actions: {can_shuffle: true, can_repeat: owned && Boolean(current),
@@ -461,10 +480,12 @@ const PlaylistReactRuntime = (() => {
     const shell = sync();
     if (shell.scopeKey !== options.scopeKey || !shell.visible) return {status: 'denied'};
     if (!orderChoice || orderChoice.scopeKey !== options.scopeKey || orderChoice.playlist_id !== options.playlist_id) {
-      const value = typeof playbackPreferences.read === 'function' ? await playbackPreferences.read(options) : null;
+      const mixMode = raw?.playlist_detail?.library_mix?.playback_order;
+      const isMix = raw?.playlist_detail?.playlist_kind === 'library_mix' && ['regular', 'shuffle', 'unplayed_first'].includes(mixMode);
+      const value = !isMix && typeof playbackPreferences.read === 'function' ? await playbackPreferences.read(options) : null;
       if (options.signal?.aborted || sync().scopeKey !== shell.scopeKey || !sync().visible || sync().playlistId !== options.playlist_id) throw aborted();
       orderChoice = {scopeKey: options.scopeKey, playlist_id: options.playlist_id,
-        mode: value?.preferences?.effective_order_mode === 'shuffle' ? 'shuffle' : 'regular', preferences: value?.preferences ?? null};
+        mode: isMix ? mixMode : value?.preferences?.effective_order_mode === 'shuffle' ? 'shuffle' : 'regular', preferences: value?.preferences ?? null};
     }
     return playbackProjection(options);
   }
@@ -662,7 +683,92 @@ const PlaylistReactRuntime = (() => {
       const home = window.AlbumHavenHomeRuntime?.snapshot?.();
       return home?.authenticated === true && home.scopeKey === scopeKey;
     },
+    createLibraryMixRuntime({scopeKey, source, order, isCurrent}) {
+      const targets = new Map();
+      let activation = 0;
+      const current = () => isCurrent() === true && sync().authenticated && sync().scopeKey === scopeKey;
+      const canPlay = row => {
+        const selected = current() ? source() : null;
+        return Boolean(selected?.detail.track_rows.includes(row) && selected.detail.allowed_actions.can_play === true
+          && exactGrant(row.allowed_actions, 'can_play') && row.availability === 'local'
+          && current() && source() === selected);
+      };
+      return {...PlaylistReactRuntime,
+        openForm: options => openReactFormDialog(options, current),
+        createPlaytableSource: undefined,
+        trackPreference: () => null, setTrackLove: undefined,
+        canResourceIntent: () => false, mountResourceSelection: undefined,
+        canTrackIntent: (intent, row) => intent === 'play' && canPlay(row),
+        trackPlayback: row => current() && targets.has(row.playlist_item_id) && state.player.playbackQueue?.libraryMixRef === source()?.source.ref
+          ? TrackActionsRuntime.playback(targets.get(row.playlist_item_id)) : {isCurrent: false, isPlaying: false},
+        async trackIntent(intent, row, options = {}) {
+          if (intent !== 'play' || !canPlay(row)) throw failure('Mix playback is unavailable.', 403);
+          const retained = source(), sequence = ++activation;
+          const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
+          const valid = () => current() && source() === retained && activation === sequence && !options.signal?.aborted
+            && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null);
+          const ids = options.displayedItemIds || retained.entry_refs;
+          if (!Array.isArray(ids) || ids.length !== retained.entry_refs.length || new Set(ids).size !== ids.length
+            || ids.some(id => !retained.entry_refs.includes(id)) || !ids.includes(row.playlist_item_id)) throw failure('Mix membership changed.', 409);
+          if (typeof readLibraryMixNativeQueue !== 'function') throw failure('Mix playback is unavailable.');
+          const data = await readLibraryMixNativeQueue({sourceRef: retained.source.ref, sourceRevision: retained.source.revision,
+            entryRefs: ids, startingEntryRef: row.playlist_item_id, signal: options.signal});
+          if (!valid()) throw aborted();
+          let tracks = data.tracks.map(item => {
+            const target = item.native_target;
+            const native = {...target, playback_state: {can_start_here: true}};
+            targets.set(item.playlist_item_id, native);
+            return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
+              artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
+              inventory_track_ref: target.inventory_track_ref, playlistItemId: item.playlist_item_id,
+              personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null};
+          });
+          const mode = order();
+          if (mode === 'unplayed_first') tracks = [...tracks.filter(item => item.personalPlayCount === 0), ...tracks.filter(item => item.personalPlayCount !== 0)];
+          const regularTracks = tracks;
+          let selected = tracks.find(item => item.playlistItemId === row.playlist_item_id);
+          if (mode === 'shuffle' && typeof playlistQueueOrder === 'function') tracks = playlistQueueOrder(tracks, true,
+            options.fromStart === true ? null : selected.path, options.fromStart === true ? null : selected.playlistItemId);
+          if (options.fromStart === true) selected = tracks[0];
+          if (!selected || !valid() || typeof playTrackFromPayload !== 'function') throw aborted();
+          const previousQueue = state.player.playbackQueue;
+          const queue = {tracks, regularTracks, shuffle: mode === 'shuffle', repeatMode: 'off', currentIndex: tracks.indexOf(selected),
+            playbackContext: null, albumRef: '', albumSnapshot: null, playlistId: null, libraryMixRef: retained.source.ref,
+            playlistRevision: retained.source.revision, sourceEntryRefs: [...retained.entry_refs],
+            displayedItemIds: [...ids], contextGeneration: PrivateUITransport.generation()};
+          if (state.player.current?.path === selected.path) {
+            if (typeof commitPlaylistQueue !== 'function') throw failure('Mix queue replacement is unavailable.');
+            commitPlaylistQueue(queue, previousQueue); notifyPlayback();
+            if (!valid() || state.player.playbackQueue !== queue) {
+              if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+              throw aborted();
+            }
+            TrackActionsRuntime.play(targets.get(selected.playlistItemId)); return;
+          }
+          state.player.playbackQueue = queue; notifyPlayback();
+          if (!valid() || state.player.playbackQueue !== queue) {
+            if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+            throw aborted();
+          }
+          try {if (await playTrackFromPayload(selected) !== true) throw failure('Mix playback did not start.');}
+          catch (error) {if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue; throw error;}
+        },
+      };
+    },
     readPlayback, playbackIntent,
+    async completeLibraryMixDraft({token, playlist_id, scopeKey}) {
+      const start = sync();
+      if (!draftCurrent(draft) || draft.token !== token || start.scopeKey !== scopeKey || !start.authenticated) return false;
+      releaseDraft(token);
+      await navigateCurrent(playlist_id, start); return true;
+    },
+    setLibraryMixOrder({scopeKey, playlist_id, mode}) {
+      const shell = sync(), detail = raw?.playlist_detail;
+      if (!shell.visible || shell.scopeKey !== scopeKey || shell.playlistId !== playlist_id
+        || detail?.playlist_id !== playlist_id || detail.playlist_kind !== 'library_mix'
+        || !detail.library_mix || !['regular', 'shuffle', 'unplayed_first'].includes(mode)) return false;
+      orderChoice = {scopeKey, playlist_id, mode, preferences: null}; notifyPlayback(); return true;
+    },
     acceptPlaylistPreferences(value) {
       if (value?.scopeKey !== sync().scopeKey || !value.preferences) return false;
       if (orderChoice?.scopeKey === value.scopeKey) orderChoice.preferences = value.preferences;

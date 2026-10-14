@@ -1,6 +1,7 @@
 import {DEFAULT_PLAYLIST_FILTERS, normalizePlaylistFacts, normalizePlaylistFilters, matchesPlaylistFilters, playlistFiltersActive} from './filters.mjs';
 import {normalizeCreationDescriptor} from './creation.mjs';
 import {detailSelection} from '../home-friends/resource-target.mjs';
+import {mixRefreshStatus, mixRefreshError, normalizeMixRecipe, normalizeMixCoverage} from './library-mix-recipe.mjs';
 
 // Transient playlist presentation. The authenticated server remains the identity,
 // permission and persistence owner; this module has no transport or storage.
@@ -74,7 +75,16 @@ export function normalizePlaylistPayload(payload) {
     if (!record(value) || !ref(value.playlist_id) || !Array.isArray(value.track_rows)) throw new TypeError('Invalid playlist detail.');
     const rows = Array.from(value.track_rows, track), ids = rows.map(row => row.playlist_item_id).filter(Boolean);
     if (new Set(ids).size !== ids.length) throw new TypeError('Duplicate playlist items.');
+    const mix = value.playlist_kind === 'library_mix' && value.library_mix?.version === 1
+        && value.library_mix.source === 'whole_library' && value.library_mix.provider === 'lastfm' && value.library_mix.metric === 'overall_scrobbles'
+        ? normalizeMixRecipe(value.library_mix) : null;
     detail = freeze({...directoryItem(value), revision: ref(value.revision), track_rows: rows,
+      ...(mix ? {library_mix: {...mix,
+          coverage: normalizeMixCoverage(value.library_mix.coverage),
+          popularity_refresh_status: mixRefreshStatus(value.popularity_refresh_status),
+          popularity_refresh_error: mixRefreshError(value.popularity_refresh_error),
+          refresh_status: ['current', 'snapshot', 'owner_refresh_required', 'unavailable', 'last_computed', 'too_large'].includes(value.library_mix.refresh_status)
+            ? value.library_mix.refresh_status : 'unavailable'}} : {}),
       items_complete: value.items_complete === true,
       saved_default_sort: record(value.saved_default_sort) && ['love_tier', 'play_count', 'popularity_count', 'duration'].includes(value.saved_default_sort.key)
         && ['asc', 'desc'].includes(value.saved_default_sort.direction)

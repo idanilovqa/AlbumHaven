@@ -97,8 +97,42 @@ function captureNativeAlbumQueueSources(album, rows) {
   });
 }
 
+// Both temporary Mix starts and explicit-queue returns revalidate the captured
+// source. A temporary source ref is never used as a saved Playlist identity.
+async function readLibraryMixNativeQueue({sourceRef, sourceRevision, entryRefs, startingEntryRef, signal}) {
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!uuid(sourceRef) || !uuid(sourceRevision) || !Array.isArray(entryRefs) || !entryRefs.length || entryRefs.length > 5000
+    || entryRefs.some(ref => !uuid(ref)) || new Set(entryRefs).size !== entryRefs.length || !entryRefs.includes(startingEntryRef))
+    throw new Error('Mix queue membership is unavailable.');
+  const reply = await PrivateUITransport.request('/playlists/creation-source/library-mix/native-queue', {
+    method: 'POST', signal, body: {source_ref: sourceRef, source_revision: sourceRevision,
+      entry_refs: entryRefs, starting_entry_ref: startingEntryRef}});
+  const data = reply?.data;
+  if (reply.status !== 'ready' || data?.source_protocol !== 'library_mix_selection_v1' || data.source?.kind !== 'library'
+    || data.source.ref !== sourceRef || data.source.revision !== sourceRevision || data.starting_item_ref !== startingEntryRef
+    || !Array.isArray(data.tracks) || !Array.isArray(data.unavailable_item_refs)) throw new Error('Mix playback was not acknowledged.');
+  const admitted = data.tracks.map(item => item?.playlist_item_id), missing = new Set(data.unavailable_item_refs);
+  const returned = [...admitted, ...data.unavailable_item_refs], requested = new Set(entryRefs);
+  if (returned.length !== entryRefs.length || new Set(returned).size !== returned.length || returned.some(ref => !requested.has(ref))
+    || !admitted.includes(startingEntryRef) || JSON.stringify(admitted) !== JSON.stringify(entryRefs.filter(ref => !missing.has(ref))))
+    throw new Error('Mix queue membership changed.');
+  for (const item of data.tracks) {
+    const target = item.native_target;
+    if (typeof target?.path !== 'string' || !target.path || target.playlist_item_id !== item.playlist_item_id
+      || !TrackActionsRuntime.canPlay({...target, playback_state: {can_start_here: true}})) throw new Error('Mix playback is unavailable.');
+  }
+  return data;
+}
+
 async function refreshExplicitQueueReturnTrack(context, track, {signal} = {}) {
   const queue=context?.nativeQueue;
+  if (queue?.libraryMixRef && !queue.playlistId && track?.playlistItemId) {
+    const data = await readLibraryMixNativeQueue({sourceRef: queue.libraryMixRef, sourceRevision: queue.playlistRevision,
+      entryRefs: queue.sourceEntryRefs, startingEntryRef: track.playlistItemId, signal});
+    const target = data.tracks.find(item => item.playlist_item_id === track.playlistItemId)?.native_target;
+    if (target?.path !== track.path) throw new Error('The temporary Mix playback context is unavailable.');
+    return {...track, title: target.title, artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds};
+  }
   if(queue?.playlistId&&track?.playlistItemId) {
     const reply=await PrivateUITransport.request(`/playlists/${encodeURIComponent(queue.playlistId)}/items/${encodeURIComponent(track.playlistItemId)}/native-target?intent=play`,{signal});
     const value=reply?.data,target=value?.native_target;

@@ -21,6 +21,7 @@ import {createPlaylistIntegrations} from './integrations.mjs';
 import {PlaylistPlaybackControls, PlaylistMatchReview} from './integrations.jsx';
 import {playlistDialogVisible, playlistSharingCurrent, playlistDialogFocusTarget, restorePlaylistDialogFocus} from './dialog-state.mjs';
 import {defaultFilters, draftDirty, granted, hasPlaylistFilters, playlistText, playlistDraft, playlistFilters, validMetadata, visiblePlaylistRows} from './model.mjs';
+import {SavedLibraryMixOrder} from './library-mix.jsx';
 
 export function PlaylistDirectory({runtime, state, onSelect, onCreate, canCreate}) {
   const items = state.resource.data?.items || [];
@@ -93,6 +94,16 @@ function MetadataFields({detail, draft, busy, onChange}) {
       readOnly={!granted(detail, 'can_edit')} disabled={busy} onChange={event => onChange({description: event.target.value})}/></label>
     <p className="playlists__note" role="status">{draftDirty(detail, draft) ? 'Unsaved draft · kept while switching playlists in this session.' : 'Saved playlist'}
       {detail.visibility && ` · ${detail.visibility}`}</p>
+    {detail.library_mix && <p className="playlists__note" role="status">Last.fm global plays · {detail.library_mix.songs_per_group} per {detail.library_mix.selection_basis === 'per_artist' ? 'artist' : 'album'}
+      {detail.library_mix.auto_update ? ' · Generated membership is locked; recalculated when the owner opens this playlist' : ' · Saved snapshot'}
+      {['unavailable', 'too_large'].includes(detail.library_mix.refresh_status) ? ' · Refresh unavailable; showing the last computed selection'
+        : detail.library_mix.refresh_status === 'owner_refresh_required' ? ' · Showing the owner’s last computed selection' : ''}
+    </p>}
+    {Number.isSafeInteger(detail.library_mix?.coverage?.excluded_count) && <p className="playlists__note">
+      {detail.library_mix.coverage.excluded_count} local tracks excluded because popularity or grouping could not be resolved.
+    </p>}
+    {['queued', 'running'].includes(detail.library_mix?.popularity_refresh_status) && <p className="playlists__note" role="status">Last.fm popularity refresh is in progress. Auto-updating mixes use newly resolved counts when the owner next opens them.</p>}
+    {(detail.library_mix?.popularity_refresh_status === 'blocked' || detail.library_mix?.popularity_refresh_error) && <p className="playlists__note" role="status">{detail.library_mix.popularity_refresh_error === 'not_configured' ? 'Last.fm popularity refresh is not configured.' : 'Last.fm popularity refresh is unavailable.'} Resolved cached counts are still used.</p>}
     {draft?.conflict && <p role="alert">This playlist changed on the server. Your draft is preserved. Discard it to reload the current values before saving.</p>}
   </div>;
 }
@@ -104,6 +115,7 @@ const EMPTY_PROVIDERS = Object.freeze({});
 const filterSourceIdentity = state => state.resource.status === 'ready' && state.resource.data?.detail
   ? [state.scopeKey, state.selectedPlaylistId, state.resource.data.detail] : null;
 export function PlaylistsView({shareRequest = null, onShareRequestHandled, runtime, controller, state, onSelect, onPrepareDraft, integrationProviders = EMPTY_PROVIDERS, readDetail, navigationError = false}) {
+  const [displayedView, setDisplayedView] = useState(null);
   const [dialog, setDialog] = useState(null), [message, setMessage] = useState('');
   const filterSession = usePlaylistFilterSession(controller, filterSourceIdentity, integrationProviders);
   const filterOwner = filterSession.opening, filtersOpen = Boolean(filterOwner);
@@ -268,13 +280,16 @@ export function PlaylistsView({shareRequest = null, onShareRequestHandled, runti
         {detail ? <>
           <MetadataFields {...{detail, draft, busy}} onChange={patch => controller.edit(patch)}/>
 
-          {currentIntegration && <PlaylistPlaybackControls runtime={runtime} controller={integrations} state={integration} providers={integrationProviders}/>}
+          {currentIntegration && <PlaylistPlaybackControls runtime={runtime} controller={integrations} state={integration} providers={integrationProviders}
+            orderControl={detail.library_mix ? <SavedLibraryMixOrder runtime={runtime} detail={detail} scopeKey={state.scopeKey}
+              rows={displayedView?.detail === detail && displayedView.scopeKey === state.scopeKey ? displayedView.rows : rows}/> : null}/>}
           {!currentIntegration && integrationDenied && <Status runtime={runtime} value={{status: 'denied'}} label="Playlist integrations"/>}
           <div className="playlists__summary"><span>{rows.length} displayed tracks</span>
-            <Button runtime={runtime} disabled={busy || !controller.available('createSamplePlaylist')} onClick={() => controller.mutate('createSamplePlaylist')}>Create sample playlist</Button>
+            <Button runtime={runtime} disabled={busy || !controller.available('createSamplePlaylist')} onClick={() => controller.mutate('createSamplePlaylist')}>Sample Playlist</Button>
             <Button runtime={runtime} disabled={!canExport || !exportRows.some(row => row.source_readable !== false && row.availability !== 'local')} onClick={() => exportText(true)}>Missing-only TXT</Button>
           </div>
           <PlaylistTracks key={`${state.scopeKey}:${detail.playlist_id}`} {...{runtime, rows, detail, controller, state}} selected={selectedRow?.row_key || null}
+            onDisplayedRowsChange={detail.library_mix ? setDisplayedView : undefined}
             currentItemId={currentIntegration ? integration.currentItemId : null} onSelect={chooseRow} onError={setMessage}/>
           {selectedRow && <div className="playlists__selection-context" onKeyDown={event => {
             if (event.key === 'Escape' && !event.defaultPrevented) {event.preventDefault(); event.stopPropagation();

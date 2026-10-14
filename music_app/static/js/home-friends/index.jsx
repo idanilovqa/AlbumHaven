@@ -214,6 +214,7 @@ async function inspectActivityMissing(options) {
 }
 window.AlbumHavenPlaylistUI = Object.freeze({
   activityMissingEligibility, inspectActivityMissing,
+  openLibraryMix() {mountPlaylistSurface(); return playlistMount?.openLibraryMix() ?? false;},
   configureProviders(next = {}) {
     if (!next || typeof next !== 'object' || Array.isArray(next)) throw new TypeError('Playlist providers must be an object.');
     playlistProviderGeneration++;
@@ -226,6 +227,11 @@ window.AlbumHavenPlaylistUI = Object.freeze({
   refresh() {return playlistMount?.refresh();},
 });
 window.addEventListener('albumhaven:playlist-runtime-ready', mountPlaylistSurface);
+document.addEventListener('click', event => {
+  const trigger = event.target.closest?.('[data-library-mix-open]');
+  if (!trigger || trigger.disabled) return;
+  event.preventDefault(); window.AlbumHavenPlaylistUI.openLibraryMix();
+});
 mountPlaylistSurface();
 
 let albumTopsMount = null, libraryNavigationMount = null;

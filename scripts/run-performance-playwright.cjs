@@ -346,6 +346,7 @@ const PERFORMANCE_TARGETS = {
       'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
       'root continuation starts eight viewports early and never reaches a hard stop during its real request',
       'long-press Scroll, album, Back restores an artist beyond the first root page',
+      'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
     ],
     measurementExpected: false,
     env: {

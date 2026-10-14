@@ -205,7 +205,7 @@ export class GalleryRegressions {
   }
 
   async captureVisibleCardAnchor() {
-    // parity-check: allow-read-only-measurement-evaluate -- retain a visible card across native scrolling
+    // parity-check: allow-read-only-measurement-evaluate -- retain a visible DOM card across native reverse scrolling
     return this.page.evaluateHandle(() => {
       const scroll = document.getElementById('albums-scroll');
       const bounds = scroll.getBoundingClientRect();
@@ -219,13 +219,150 @@ export class GalleryRegressions {
   }
 
   async readVisibleCardAnchorContinuity(anchor) {
-    // parity-check: allow-read-only-measurement-evaluate -- measure visual movement after native scrolling
+    // parity-check: allow-read-only-measurement-evaluate -- measure the retained card after native scrolling
     return anchor.evaluate(saved => ({
       connected: Boolean(saved.card?.isConnected),
       delta: saved.card?.isConnected && saved.top !== null
-        ? saved.card.getBoundingClientRect().top - saved.top
-        : null,
+        ? saved.card.getBoundingClientRect().top - saved.top : null,
     }));
+  }
+
+  async revealAlbumWithGalleryWheel(album) {
+    let previousTop = null;
+    let stableSamples = 0;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const viewport = await this.galleryScroll.boundingBox();
+      const bounds = await album.boundingBox();
+      if (!viewport || !bounds) throw new Error('Gallery or target album is not rendered');
+      const contained = bounds.y >= viewport.y && bounds.y + bounds.height <= viewport.y + viewport.height;
+      if (contained) {
+        stableSamples = bounds.y === previousTop ? stableSamples + 1 : 0;
+        if (stableSamples >= 2) return;
+      } else {
+        stableSamples = 0;
+        await this.page.mouse.move(viewport.x + viewport.width / 2, viewport.y + viewport.height / 2);
+        const distance = bounds.y - (viewport.y + viewport.height / 2 - bounds.height / 2);
+        await this.page.mouse.wheel(0, Math.max(-520, Math.min(520, distance)));
+      }
+      previousTop = bounds.y;
+      await this.page.waitForTimeout(80);
+    }
+    throw new Error('Target album did not settle inside the gallery after native scrolling');
+  }
+
+  async readFullyVisibleGalleryAlbumOutsideArtist(excludedArtist) {
+    // parity-check: allow-read-only-measurement-evaluate -- identify a different artist's visible album after native wheel input
+    return this.page.evaluate(excluded => {
+      const viewport = document.getElementById('albums-scroll').getBoundingClientRect();
+      for (const metadata of document.querySelectorAll('#artist-groups .album-meta-row')) {
+        const bounds = metadata.getBoundingClientRect();
+        if (bounds.height <= 0 || bounds.top < viewport.top || bounds.bottom > viewport.bottom) continue;
+        const card = metadata.closest('.album-card');
+        const artist = card?.closest('.artist-section')
+          ?.querySelector('.family-artist-header[data-scroll-artist]')?.getAttribute('data-scroll-artist');
+        const albumKey = card?.querySelector('[data-open-tracklist="1"][data-album-key]')?.getAttribute('data-album-key');
+        if (artist && artist !== excluded && albumKey) return { artist, albumKey };
+      }
+      return null;
+    }, excludedArtist);
+  }
+
+  async scrollToDifferentGalleryArtist(artist) {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const viewport = await this.galleryScroll.boundingBox();
+      if (!viewport) throw new Error('Gallery is not rendered');
+      await this.page.mouse.move(viewport.x + viewport.width / 2, viewport.y + viewport.height / 2);
+      await this.page.mouse.wheel(0, 320);
+      await this.page.waitForTimeout(80);
+      const target = await this.readFullyVisibleGalleryAlbumOutsideArtist(artist);
+      if (!target) continue;
+      await this.revealAlbumWithGalleryWheel(this.albumMetadataByKey(target.albumKey));
+      return target;
+    }
+    throw new Error('Native gallery scrolling did not reveal a different artist');
+  }
+
+  async captureSemanticVisibleCardAnchor(albumKey) {
+    // parity-check: allow-read-only-measurement-evaluate -- retain a visible card across native scrolling
+    return this.page.evaluate(targetKey => {
+      const scroll = document.getElementById('albums-scroll');
+      const bounds = scroll.getBoundingClientRect();
+      const card = [...document.querySelectorAll('#artist-groups .album-card')]
+        .find(item => {
+          const rect = item.getBoundingClientRect();
+          return rect.bottom > bounds.top && rect.top < bounds.bottom
+            && item.querySelector('[data-open-tracklist="1"][data-album-key]')
+              ?.getAttribute('data-album-key') === targetKey;
+        });
+      const trigger = card?.querySelector('[data-open-tracklist="1"][data-album-key]');
+      const artist = card?.closest('.artist-section')
+        ?.querySelector('.family-artist-header[data-scroll-artist]')
+        ?.getAttribute('data-scroll-artist') || '';
+      return {
+        albumKey: trigger?.getAttribute('data-album-key') || '',
+        artist,
+        top: card?.getBoundingClientRect().top ?? null,
+      };
+    }, albumKey);
+  }
+
+  async readSemanticVisibleCardAnchorContinuity(anchor) {
+    // parity-check: allow-read-only-measurement-evaluate -- resolve the same semantic card after gallery rerenders
+    return this.page.evaluate(saved => {
+      const section = [...document.querySelectorAll('#artist-groups .artist-section')]
+        .find(item => item.querySelector('.family-artist-header[data-scroll-artist]')
+          ?.getAttribute('data-scroll-artist') === saved.artist);
+      const card = [...(section?.querySelectorAll('.album-card') || [])]
+        .find(item => item.querySelector('[data-open-tracklist="1"][data-album-key]')
+          ?.getAttribute('data-album-key') === saved.albumKey);
+      return {
+        connected: Boolean(card?.isConnected),
+        delta: card?.isConnected && saved.top !== null
+          ? card.getBoundingClientRect().top - saved.top
+          : null,
+      };
+    }, anchor);
+  }
+  async startVisibleCardAnchorObservation(anchor) {
+    // parity-check: allow-read-only-measurement-evaluate -- sample the semantic card every frame across rerenders
+    const handle = await this.page.evaluateHandle(saved => {
+      const samples = [];
+      let frame;
+      const sample = () => {
+        const section = [...document.querySelectorAll('#artist-groups .artist-section')]
+          .find(item => item.querySelector('.family-artist-header[data-scroll-artist]')
+            ?.getAttribute('data-scroll-artist') === saved.artist);
+        const card = [...(section?.querySelectorAll('.album-card') || [])]
+          .find(item => item.querySelector('[data-open-tracklist="1"][data-album-key]')
+            ?.getAttribute('data-album-key') === saved.albumKey);
+        const connected = Boolean(card?.isConnected);
+        const delta = connected && saved.top !== null
+          ? card.getBoundingClientRect().top - saved.top
+          : null;
+        samples.push({ at: performance.now(), stable: connected && Math.abs(delta) <= 1 });
+        frame = requestAnimationFrame(sample);
+      };
+      frame = requestAnimationFrame(sample);
+      return {
+        finish() {
+          cancelAnimationFrame(frame);
+          return samples;
+        },
+      };
+    }, anchor);
+    let finished = false;
+    return {
+      async finish() {
+        if (finished) return [];
+        finished = true;
+        try {
+          // parity-check: allow-read-only-measurement-evaluate -- stop and collect closure-owned samples
+          return await handle.evaluate(observation => observation.finish());
+        } finally {
+          await handle.dispose();
+        }
+      },
+    };
   }
 
   async readPrecedingRenderedGroupCompleteness() {

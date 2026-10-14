@@ -42993,6 +42993,26 @@ function resolveMobileParentGalleryAnchorArtist(descriptor, previous, snapshot =
     previous?.parentGalleryAnchorArtist ?? restored?.parentGalleryAnchorArtist ?? captured,
   ).trim();
 }
+function captureMobileParentGalleryAnchorArtist() {
+ const requestedArtist = String(state.view?.gallery_page?.anchor_artist || '').trim();
+ const renderedArtist = String(
+ state.view?.gallery_page?.anchor_group_artist || requestedArtist,
+ ).trim();
+ if (!requestedArtist || !renderedArtist) return '';
+ const scroll = document.getElementById('albums-scroll');
+ const heading = [...document.querySelectorAll(
+ '#artist-groups .family-artist-header[data-scroll-artist]',
+ )].find(candidate => candidate.getAttribute('data-scroll-artist') === renderedArtist);
+ const section = heading?.closest('.artist-section');
+ const rows = section?.querySelector('.artist-rows');
+ const firstCard = section?.querySelector('.album-card');
+ if (!scroll || !rows || !firstCard) return '';
+ const scrollTop = scroll.getBoundingClientRect().top;
+ return Math.abs(rows.getBoundingClientRect().top - scrollTop) <= 1
+ && firstCard.getBoundingClientRect().top >= scrollTop - 1
+ ? requestedArtist
+ : '';
+}
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
   const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
@@ -43069,7 +43089,7 @@ function presentMobilePage(descriptor) {
     descriptor,
     previous,
     window.history.state || {},
-    mobilePageState.pages.length ? '' : state.view?.gallery_page?.anchor_artist,
+ mobilePageState.pages.length ? '' : captureMobileParentGalleryAnchorArtist(),
   );
   const active = mobilePageState.pages.at(-1);
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {

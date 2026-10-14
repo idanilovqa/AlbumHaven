@@ -2266,6 +2266,7 @@ test('artist scroll completion requires navigation, paging, and mobile Back case
     'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
     'root continuation starts eight viewports early and never reaches a hard stop during its real request',
     'long-press Scroll, album, Back restores an artist beyond the first root page',
+      'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
   ];
   const parsedTestResults = titles.map(testName => ({
     status: 'passed', testName, fullName: `FTC-GALLERY-NAV-03 > ${testName}`,

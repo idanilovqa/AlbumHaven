@@ -641,6 +641,39 @@ test('mobile parent restoration retains the transient root gallery anchor outsid
   assert.equal(calls.length, 1);
 });
 
+test('mobile album capture drops a transient jump anchor after ordinary gallery scrolling', () => {
+  let rowsTop = 96;
+  const scroll = {
+    getBoundingClientRect: () => ({ top: 96, bottom: 780 }),
+  };
+  const section = {
+    querySelector: selector => (
+      selector === '.artist-rows'
+        ? { getBoundingClientRect: () => ({ top: rowsTop }) }
+        : { getBoundingClientRect: () => ({ top: rowsTop }) }
+    ),
+  };
+  const header = { getAttribute: () => 'Battlelore', closest: () => section };
+  const context = load('mobile-navigation.js', {
+    state: {
+      view: {
+        gallery_page: {
+          anchor_artist: 'Battlelore',
+          anchor_group_artist: 'Battlelore',
+        },
+      },
+    },
+    document: {
+      getElementById: id => id === 'albums-scroll' ? scroll : null,
+      querySelectorAll: () => [header],
+    },
+  });
+
+  assert.equal(context.captureMobileParentGalleryAnchorArtist(), 'Battlelore');
+  rowsTop = 240;
+  assert.equal(context.captureMobileParentGalleryAnchorArtist(), '');
+});
+
 test('mobile Back keeps an already-mounted transient artist window without refetching it', () => {
   const calls = [];
   const context = load('mobile-navigation.js', {

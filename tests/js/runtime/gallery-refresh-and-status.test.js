@@ -6790,6 +6790,30 @@ test('bounded root refresh retains earlier groups prepended after an artist jump
   assert.equal(f.calls.showToast.length, 0);
 });
 
+test('bounded root refresh does not count leading context toward retained window coverage', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.artist_groups = anchoredRefreshGroups(['B', 'C', 'D', 'E']);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page, anchor_artist: 'C', anchor_group_artist: 'C',
+  };
+  const request = f.start();
+  // The production endpoint includes leading context before the requested B.
+  // Four returned albums therefore cover only three of the retained albums.
+  await resolveBoundedRootRefreshPage(f, 0, {
+    ...boundedRootRefreshPage(0, 4, 'fresh', true),
+    artist_groups: anchoredRefreshGroups(['A', 'B', 'C', 'D']),
+  });
+  assert.equal(f.pendingRequests.length, 2,
+    'leading context must not cause refresh to discard the retained trailing artist');
+  assertBoundedRootRefreshUnapplied(f);
+  await resolveBoundedRootRefreshPage(f, 1, {
+    ...boundedRootRefreshPage(4, 1, 'fresh', false),
+    artist_groups: anchoredRefreshGroups(['E']),
+  });
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['A', 'B', 'C', 'D', 'E']);
+});
+
 test('bounded root refresh survives rename of the original jump artist', async () => {
   const f = boundedRootRefreshFixture();
   // Optimistic reconciliation has replaced D with F; E remains visible.

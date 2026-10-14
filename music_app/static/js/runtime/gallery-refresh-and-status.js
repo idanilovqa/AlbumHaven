@@ -982,14 +982,19 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse) {
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist) {
   let payload = data;
   let restarted = false;
   const cursors = new Set();
   let remainingPages = Math.ceil(coverage / 50);
   while (ownsResponse()) {
     const page = payload?.gallery_page;
-    const count = (payload?.artist_groups || []).reduce((sum, group) => sum + (group.albums || []).length, 0);
+    const groups = payload?.artist_groups || [];
+    const retainedStart = groups.findIndex(group => String(group.artist || '').trim() === retainedStartArtist);
+    // Anchored responses include leading context, which must not displace the
+    // trailing portion of the window being refreshed.
+    const count = groups.slice(Math.max(0, retainedStart))
+      .reduce((sum, group) => sum + (group.albums || []).length, 0);
     if (!page?.has_more || count >= coverage) return payload;
     const cursor = String(page.next_cursor || '');
     if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
@@ -1197,7 +1202,7 @@ async function fetchAndRender(url, push = true, options = {}) {
           return false;
         }
       };
-      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
+      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, retainedStartArtist);
       if (!data || !ownsRefresh()) return false;
     }
     markStartupFollowup('payload_received', requestOptions, {

@@ -78,6 +78,31 @@ operate, or contribute to the application.
 - This gate supplements the search and Problematic Files gates below; it does
   not replace them or authorize relaxed budgets.
 
+## Mandatory Edit Tags regression gate
+
+- Immediately run the Edit Tags regression coverage after changing tag-editor
+  loading, selection, submission, optimistic updates, media writes, save-task
+  completion, recovery, or tag-edit reconciliation. Every agent and chat must
+  run this gate during implementation, not defer it until feature completion.
+- Run the affected Python/API tests, including `test_edit_workflows.py`,
+  `test_save_tasks.py`, `test_edit_state.py`, `test_tag_edit_recovery.py`,
+  `test_tag_edit_intents_postgres.py`, and `test_postgres_structural_tag_edit.py`
+  under `tests/py`, plus the tag-editor and optimistic-update JavaScript tests
+  and affected component tests. Real-Postgres cases require a fresh isolated
+  database; skipped database cases do not satisfy the gate.
+- Run the `metadata-mutations` functional E2E shard. Verify actual persisted
+  tags and album/track identities, terminal success or readable failure,
+  optimistic updates, and gallery position preservation; an HTTP success or
+  dismissed modal alone does not prove an edit succeeded.
+- Changes affecting post-save browse state must also run the mandatory search
+  and Problematic Files gates. Measure opening, saving, closing, and subsequent
+  search/artist navigation with the production-calibration synthetic library;
+  preserve approved budgets and compare cold and warm behavior. A fast save
+  acknowledgement does not excuse delayed persistence or later browse stalls.
+- Run Python, JavaScript, component, and browser stages sequentially. Never run
+  these tests against the shared Sandbox3 library or another active test's
+  database, and audit owned processes and ports before the next heavy run.
+
 ## Mandatory Problematic Files regression gate
 
 - Immediately run both `utility-problematic-files` and

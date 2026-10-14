@@ -4446,6 +4446,16 @@ def _persist_structural_album_tag_edit_sql(
                   select count(*) from source_album_track_files
                 )
         ),
+        retained_source_album as materialized (
+          select id, album_key
+          from validated_source_album
+          where album_key = %(destination_album_key)s
+            and not %(updates_release_year)s::boolean
+            and (select input_path_count from selection_scope) < (
+                  select count(*) from source_album_track_files
+                )
+            and not exists (select 1 from existing_destination_album)
+        ),
         marked_partial_source_album as (
           update library.local_albums
           set metadata = jsonb_set(
@@ -4553,6 +4563,7 @@ def _persist_structural_album_tag_edit_sql(
                   select count(*) from source_album_track_files
                 )
             and not exists (select 1 from existing_destination_album)
+            and not exists (select 1 from retained_source_album)
           on conflict (library_id, artist_key) do update
             set last_seen_at = now()
           returning library.local_artists.id
@@ -4586,6 +4597,7 @@ def _persist_structural_album_tag_edit_sql(
                   select count(*) from source_album_track_files
                 )
             and not exists (select 1 from existing_destination_album)
+            and not exists (select 1 from retained_source_album)
           returning library.local_albums.id, library.local_albums.album_key
         ),
         destination_album as materialized (
@@ -4604,6 +4616,9 @@ def _persist_structural_album_tag_edit_sql(
             inserted_destination_album.id,
             inserted_destination_album.album_key
           from inserted_destination_album
+          union all
+          select retained_source_album.id, retained_source_album.album_key
+          from retained_source_album
         ),
         inserted_separate_release as (
           insert into library.separate_releases (

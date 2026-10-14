@@ -844,6 +844,128 @@ def _live_restore_rows(connection, *, track_ids, track_file_ids):
     return tracks, track_files
 
 
+@pytest.mark.parametrize("selected_count", [1, 9])
+def test_live_postgres_structural_recovery_subset_already_in_destination_is_idempotent(
+    selected_count,
+):
+    database_url = _isolated_runtime_database_url_or_skip()
+    if not _ISOLATED_SETUP_DATABASE_URL:
+        pytest.skip("Isolated setup is required for the recovery identity contract.")
+    isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
+    from music_app.services.scan_cache_persistence import (
+        PostgresScanCacheAdapter,
+        _structural_destination_album_projection,
+    )
+
+    token = uuid4().hex
+    artist = f"Recovery Artist {token}"
+    title = f"Recovery Album {token}"
+    previous = {
+        f"C:/__structural_recovery__/{token}/{index}.flac": {
+            "path": f"C:/__structural_recovery__/{token}/{index}.flac",
+            "album": title,
+            "album_artist": artist,
+            "artist": artist,
+            "title": f"Track {index}",
+            "track_number": str(index),
+            "disc_number": "1",
+            "year": 2026,
+            "release_date": "2026",
+            "mtime": 1000.0,
+            "size": 2000,
+        }
+        for index in range(1, 11)
+    }
+    updated = {
+        path: {**entry, "mtime": 2000.0, "size": 2100}
+        for path, entry in list(previous.items())[:selected_count]
+    }
+    connection = psycopg.connect(database_url)
+    try:
+        adapter = PostgresScanCacheAdapter(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
+            connect=lambda _url: _CommitSuppressingConnection(connection),
+        )
+        projection = _structural_destination_album_projection(
+            adapter._build_albums, updated, frozenset({"album"}), set(),
+        )
+        library_id = connection.execute(
+            """select libraries.id from app.bootstrap_owners owners
+               join library.libraries libraries on libraries.owner_account_id=owners.account_id
+               where owners.owner_key='local-bootstrap-owner'
+                 and libraries.name='Local Library' and libraries.library_kind='local'"""
+        ).fetchone()[0]
+        artist_id = connection.execute(
+            """insert into library.local_artists(library_id,artist_key,name,metadata)
+               values(%s,%s,%s,'{}'::jsonb) returning id""",
+            (library_id, artist.casefold(), artist),
+        ).fetchone()[0]
+        album_id = connection.execute(
+            """insert into library.local_albums
+               (library_id,artist_id,album_key,title,release_year,metadata)
+               values(%s,%s,%s,%s,2026,%s::jsonb) returning id""",
+            (library_id, artist_id, projection.key, title,
+             json.dumps({"album_artist": artist, "release_date": "2026"})),
+        ).fetchone()[0]
+        track_ids, file_ids = [], []
+        for index, (path, entry) in enumerate(previous.items(), start=1):
+            track_id = connection.execute(
+                """insert into library.local_tracks
+                   (library_id,album_id,artist_id,track_key,title,track_number,metadata)
+                   values(%s,%s,%s,%s,%s,%s,%s::jsonb) returning id""",
+                (library_id, album_id, artist_id, f"recovery-{token}-{index}",
+                 entry["title"], index, json.dumps({"album": title, "preserved": token})),
+            ).fetchone()[0]
+            file_id = connection.execute(
+                """insert into library.local_track_files(track_id,private_path,metadata)
+                   values(%s,%s,jsonb_build_object('scan_cache',jsonb_build_object(
+                     'source','scan_cache','stale',false,'file_entry',%s::jsonb)))
+                   returning id""",
+                (track_id, path, json.dumps(entry)),
+            ).fetchone()[0]
+            track_ids.append(track_id)
+            file_ids.append(file_id)
+        before_tracks, before_files = _live_restore_rows(
+            connection, track_ids=track_ids, track_file_ids=file_ids,
+        )
+
+        # Recovery can resolve the original physical tags after a failed edit.
+        # Replaying that intent must not split a subset back into its own album.
+        for _attempt in range(2):
+            result = adapter.persist_structural_tag_edit(
+                changed_paths=set(updated),
+                previous_file_entries=previous,
+                updated_file_entries=updated,
+                changed_field_names={"album"},
+                commit_guard=lambda _commit: None,
+            )
+            assert result["destination_album_id"] == album_id
+            assert result["track_rows_updated"] == selected_count
+            assert result["track_file_rows_updated"] == selected_count
+            assert connection.execute(
+                """select id, album_key from library.local_albums
+                   where library_id=%s and artist_id=%s order by id""",
+                (library_id, artist_id),
+            ).fetchall() == [(album_id, projection.key)]
+            after_tracks, after_files = _live_restore_rows(
+                connection, track_ids=track_ids, track_file_ids=file_ids,
+            )
+            assert after_tracks == before_tracks
+            assert [row[:3] for row in after_files] == [row[:3] for row in before_files]
+            for before, after in zip(before_files, after_files, strict=True):
+                path = after[2]
+                assert after[3]["scan_cache"]["file_entry"] == updated.get(path, previous[path])
+                if path not in updated:
+                    assert after == before
+            assert connection.execute(
+                "select id from library.local_tracks where album_id=%s order by id",
+                (album_id,),
+            ).fetchall() == [(track_id,) for track_id in track_ids]
+    finally:
+        connection.rollback()
+        connection.close()
+
+
 def test_live_postgres_explicit_separate_release_consolidates_same_year_identity():
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:

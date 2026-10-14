@@ -1,4 +1,5 @@
 import { expect, test } from '../support/baseFixtures.js';
+import { readDecodedProductionCardWindow } from '../poms/galleryPage.js';
 import { requirePostgresRuntimeEnv, waitForPostgresBrowseWarmRoot } from '../helpers/realAppBenchmarkHelpers.js';
 
 // Diagnostic only: no new memory budget and no forced garbage collection.
@@ -105,6 +106,14 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
         await galleryActions.galleryPage.waitForGalleryScrollMovement(before.scrollTop, direction, {
           deadline, previousMaxScrollTop: before.maxScrollTop, onExtentExpanded: wheel,
         });
+        // parity-check: allow-read-only-measurement-evaluate -- observe decoded sources between settled checkpoints
+        const windowState = await page.evaluate(readDecodedProductionCardWindow, {
+          cardSelector: galleryActions.galleryPage.albumCard.cardSelector,
+          coverImageSelector: galleryActions.galleryPage.albumCard.coverImageWithinCardSelector,
+          galleryScrollSelector: galleryActions.galleryPage.galleryScrollSelector,
+          snapshot: true,
+        });
+        for (const card of windowState.decodedCards) decodedSources.add(card.productionSrc);
         if (step % 8 === 0) await checkpoint(phase, step);
       }
       await checkpoint(`${phase}-end`);

@@ -6942,7 +6942,7 @@ function transitionGalleryMain(action) {
   }
   if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
-  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: previousView === nextState.view });
   if (typeof syncMobileHome === 'function') syncMobileHome();
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
   if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
@@ -35639,7 +35639,7 @@ class VirtualArtistGrid {
       : null;
     const preservedAbsoluteScroll = preserveScroll && (
       options.preserveAbsoluteScroll === true
-      || hasPendingScrollRender
+      || (hasPendingScrollRender && options.preserveAbsoluteScroll !== false)
     )
       ? {
         renderGeneration,
@@ -36007,6 +36007,10 @@ class VirtualArtistGrid {
       this.invalidateScrollStabilization();
     }
     this.isScrollSettled = false;
+    if (this._measureRaf) {
+      cancelBrowserAnimationFrame(this._measureRaf);
+      this._measureRaf = null;
+    }
     if (this._touchScrollGestureActive) this._touchScrollGestureHadScroll = true;
     this.scheduleSettledMeasurement();
     if (this._raf) {
@@ -42868,6 +42872,7 @@ function handleGalleryBootstrapPopState(options = {}) {
 
 /* Responsive shell navigation. Existing components retain their data and event owners. */
 const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+const mobileLiveGalleryParents = new WeakMap();
 const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
 function isMobileClient() {
@@ -43027,6 +43032,11 @@ function captureMobileParentGalleryAnchorArtist() {
  ? requestedArtist
  : '';
 }
+function mobileGalleryParentIsSettled() {
+  return !state.busy && !state.ui?.pendingInventoryMutationViewRefresh
+    && !state.ui?.activeViewRequestController && !state.ui?.pendingViewRequest
+    && (typeof rootGalleryPageRequest === 'undefined' || !rootGalleryPageRequest);
+}
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
   const destinationPosition = window.history?.state?.albumHavenNavigationPosition;
@@ -43078,6 +43088,11 @@ function restoreMobileGalleryParent(descriptor) {
   ) {
     virtualGrid.restoreScrollAnchor(descriptor.parentScrollAnchor);
   }
+  const liveParent = descriptor && mobileLiveGalleryParents.get(descriptor);
+  if (atParent && position && options.absoluteScrollPositionApplied && liveParent && mobileGalleryParentIsSettled()
+    && liveParent.view === state.view && liveParent.groups === state.view?.artist_groups
+    && liveParent.revision === state.status?.inventory_mutation_revision
+    && descriptor.parentViewUrl === buildUrl(state.view)) return;
   handleGalleryBootstrapPopState(options);
 }
 function presentMobilePage(descriptor) {
@@ -43106,6 +43121,15 @@ function presentMobilePage(descriptor) {
  mobilePageState.pages.length ? '' : captureMobileParentGalleryAnchorArtist(),
   );
   const active = mobilePageState.pages.at(-1);
+  // Only a live, settled parent can be reused. History reconstruction must fetch.
+  const inheritedParent = mobileLiveGalleryParents.get(previous || mobilePageState.pages[0] || {});
+  if (!mobilePageState.restoring && inheritedParent) mobileLiveGalleryParents.set(descriptor, inheritedParent);
+  else if (!mobilePageState.restoring && !mobilePageState.pages.length && mobileGalleryParentIsSettled()
+    && Number.isSafeInteger(state.status?.inventory_mutation_revision)) {
+    mobileLiveGalleryParents.set(descriptor, {
+      view: state.view, groups: state.view?.artist_groups, revision: state.status.inventory_mutation_revision,
+    });
+  }
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     Object.assign(active, descriptor);
     syncMobilePageShell();

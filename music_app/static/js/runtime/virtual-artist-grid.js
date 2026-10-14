@@ -892,7 +892,7 @@ class VirtualArtistGrid {
       : null;
     const preservedAbsoluteScroll = preserveScroll && (
       options.preserveAbsoluteScroll === true
-      || hasPendingScrollRender
+      || (hasPendingScrollRender && options.preserveAbsoluteScroll !== false)
     )
       ? {
         renderGeneration,
@@ -1260,6 +1260,10 @@ class VirtualArtistGrid {
       this.invalidateScrollStabilization();
     }
     this.isScrollSettled = false;
+    if (this._measureRaf) {
+      cancelBrowserAnimationFrame(this._measureRaf);
+      this._measureRaf = null;
+    }
     if (this._touchScrollGestureActive) this._touchScrollGestureHadScroll = true;
     this.scheduleSettledMeasurement();
     if (this._raf) {

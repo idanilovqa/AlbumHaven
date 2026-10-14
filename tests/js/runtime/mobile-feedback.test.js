@@ -11,6 +11,65 @@ function load(name, globals = {}) {
   return context;
 }
 
+for (const scenario of [
+  { name: 'unchanged live gallery', refreshes: 0, change() {} },
+  { name: 'advanced inventory revision', refreshes: 1, change(state) { state.status.inventory_mutation_revision += 1; } },
+  { name: 'replaced gallery view', refreshes: 1, change(state) { state.view = { ...state.view }; } },
+  { name: 'replaced gallery groups', refreshes: 1, change(state) { state.view.artist_groups = [...state.view.artist_groups]; } },
+  { name: 'changed parent route', refreshes: 1, change(state, context) { context.buildUrl = () => '/?surface=home'; } },
+  { name: 'unknown inventory freshness', refreshes: 1,
+    before(state) { delete state.status.inventory_mutation_revision; }, change() {} },
+  { name: 'request active when parent was captured', refreshes: 1,
+    before(state) { state.ui.activeViewRequestController = {}; },
+    change(state) { state.ui.activeViewRequestController = null; } },
+  { name: 'pending inventory reconciliation', refreshes: 1, change(state) { state.ui.pendingInventoryMutationViewRefresh = true; } },
+  { name: 'pending view request', refreshes: 1, change(state) { state.ui.pendingViewRequest = { url: '/?surface=albums' }; } },
+  { name: 'active view request', refreshes: 1, change(state) { state.ui.activeViewRequestController = {}; } },
+  { name: 'active root gallery page request', refreshes: 1, change(_state, context) {
+    vm.runInContext('var rootGalleryPageRequest = { controller: {} };', context);
+  } },
+  { name: 'reconstructed history descriptor', refreshes: 1, change(_state, context) {
+    vm.runInContext('mobilePageState.pages = JSON.parse(JSON.stringify(mobilePageState.pages));', context);
+  } },
+]) {
+test(`Back restores the departure anchor with ${scenario.name}`, () => {
+  const anchor = { scrollTop: 1200, scrollLeft: 0, albumKey: 'b-album', sectionOccurrenceKey: 'artist:B', offsetTop: 16 };
+  const scroll = { scrollTop: 1200, scrollLeft: 0, getBoundingClientRect: () => ({ top: 0, width: 390, height: 600 }) };
+  const restored = [];
+  let refreshes = 0;
+  const outlet = { dataset: {} };
+  const context = load('mobile-navigation.js', {
+    state: { view: { surface: 'albums', artist_groups: [{ artist: 'B', albums: [{ key: 'b-album' }] }] },
+      ui: {}, status: { inventory_mutation_revision: 3 }, busy: false },
+    window: { innerWidth: 390, history: { state: { albumHavenNavigationPosition: 2 } } },
+    document: { getElementById: id => id === 'mobile-page-outlet' ? outlet : id === 'albums-scroll' ? scroll : id === 'track-modal' ? {} : null },
+    buildUrl: () => '/?surface=albums',
+    virtualGrid: {
+      scrollEl: scroll,
+      captureScrollAnchor: () => anchor,
+      restoreOwnedAbsoluteScrollPosition: position => { scroll.scrollTop = position.scrollTop; return true; },
+      render() {},
+      restoreScrollAnchor: value => restored.push(value),
+    },
+    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+    closeArtistsDrawer() {}, closeGalleryMainSurface() {}, requestAnimationFrame() {},
+  });
+  context.syncMobilePageShell = () => {};
+  context.writeMobilePageHistory = () => {};
+  context.cleanupMobilePage = () => {};
+  vm.runInContext("mobilePageState.originals.set('album', {});", context);
+  scenario.before?.(context.state);
+  assert.equal(context.presentMobilePage({ kind: 'album', albumKey: 'b-album' }), true);
+  scenario.change(context.state, context);
+  scroll.scrollTop = 0;
+  context.window.history.state = { albumHavenNavigationPosition: 2, mobilePages: [] };
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.equal(scroll.scrollTop, 1200);
+  assert.equal(restored.at(-1).albumKey, 'b-album');
+  assert.equal(refreshes, scenario.refreshes, 'reuse unchanged content without suppressing required reconciliation');
+});
+}
+
 test('Rows normalizes only the active wide presentation; 1/2/3 column cards remain distinct', () => {
   for (const width of [320, 390, 900]) assert.equal(preferences.resolveGalleryViewForWidth('list', width), 'list');
   for (const width of [901, 1180, 1440]) assert.equal(preferences.resolveGalleryViewForWidth('list', width), 'cards');

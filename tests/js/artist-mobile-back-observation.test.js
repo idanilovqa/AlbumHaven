@@ -1,6 +1,51 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('return observation excludes hidden gallery frames but catches the first visible displacement', async () => {
+  const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
+  const callbacks = new Map();
+  let sequence = 0;
+  let visible = false;
+  let top = 40;
+  let disposed = 0;
+  const previous = Object.fromEntries(['document', 'requestAnimationFrame', 'cancelAnimationFrame'].map(key => [key, global[key]]));
+  const gallery = { scrollTop: 200, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0, width: visible ? 390 : 0, height: visible ? 600 : 0 }) };
+  const card = { isConnected: true, getBoundingClientRect: () => ({ top, height: 90 }), closest: () => null,
+    querySelector: () => ({ getAttribute: () => 'album-b' }) };
+  const section = { getBoundingClientRect: () => ({ top: 0, height: 900 }),
+    querySelector: () => ({ getAttribute: () => 'Artist B' }), querySelectorAll: () => [card] };
+  global.document = { querySelector: () => gallery, querySelectorAll: () => [section] };
+  global.requestAnimationFrame = callback => { callbacks.set(++sequence, callback); return sequence; };
+  global.cancelAnimationFrame = id => callbacks.delete(id);
+  const tick = () => {
+    const [id, callback] = callbacks.entries().next().value;
+    callbacks.delete(id);
+    callback();
+  };
+  try {
+    const ui = Object.create(GalleryRegressions.prototype);
+    ui.page = { async evaluateHandle(callback, args) {
+      const value = callback(args);
+      return { evaluate: fn => fn(value), dispose: async () => { disposed += 1; } };
+    } };
+    const observation = await ui.startVisibleCardAnchorObservation({ artist: 'Artist B', albumKey: 'album-b', top: 20 }, { waitUntilGalleryVisible: true });
+    tick();
+    visible = true;
+    tick();
+    top = 20;
+    tick();
+    const samples = await observation.finish();
+    assert.deepEqual(samples.map(sample => sample.delta), [20, 0]);
+    assert.deepEqual(samples.map(sample => sample.stable), [false, true]);
+    assert.equal(callbacks.size, 0);
+    assert.equal(disposed, 1);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete global[key]; else global[key] = value;
+    }
+  }
+});
+
 test('gallery wheel preparation moves an attached offscreen album into the scroller before capture', async () => {
   const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
   const ui = Object.create(GalleryRegressions.prototype);

@@ -1644,6 +1644,13 @@ class VirtualArtistGrid {
     });
   }
 
+  releaseDetachedAlbumCardAncestors() {
+    // Retain reusable cards, not their removed section and uncached siblings.
+    for (const card of this.albumCardNodeCache.values()) {
+      if (card.isConnected === false && card.parentNode) card.remove();
+    }
+  }
+
   reuseRenderedAlbumCards(nextRoot) {
     if (!nextRoot || typeof nextRoot.querySelectorAll !== 'function') return;
     nextRoot.querySelectorAll('.album-card[data-gallery-card-key]').forEach((nextCard) => {
@@ -1810,6 +1817,7 @@ class VirtualArtistGrid {
       || typeof document?.createElement !== 'function'
     ) {
       this.containerEl.innerHTML = records.map((record) => record.html).join('');
+      this.releaseDetachedAlbumCardAncestors();
       return;
     }
     this.rememberRenderedAlbumCards(this.containerEl);
@@ -1869,6 +1877,7 @@ class VirtualArtistGrid {
     });
     if (!nextChildren.length && records.length) {
       this.containerEl.innerHTML = records.map((record) => record.html).join('');
+      this.releaseDetachedAlbumCardAncestors();
       return;
     }
     Array.from(this.containerEl.children || []).forEach((child) => {
@@ -1880,6 +1889,7 @@ class VirtualArtistGrid {
       this.containerEl.appendChild(child);
     });
     this.rememberRenderedAlbumCards(this.containerEl);
+    this.releaseDetachedAlbumCardAncestors();
   }
 
   scheduleMeasureRows(force = false) {

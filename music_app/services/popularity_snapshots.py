@@ -175,6 +175,9 @@ def select_local_popular_tracks(
     matches_filter: Callable[[LocalTrackEvidence], bool],
     read_snapshot: Callable[[LocalTrackEvidence], CachedPopularity | None],
     max_per_artist: int | None = None,
+    max_per_group: int | None = None,
+    group_identity: Callable[[LocalTrackEvidence], str | None] | None = None,
+    tie_breaker: Callable[[LocalTrackEvidence], tuple] | None = None,
     offset: int = 0,
     limit: int = 50,
 ) -> PopularitySelection:
@@ -188,6 +191,12 @@ def select_local_popular_tracks(
         raise ValueError("Offset must be nonnegative and limit positive integers")
     if max_per_artist is not None and not _integer(max_per_artist, 1):
         raise ValueError("Artist cap must be a positive integer")
+    if (max_per_group is None) != (group_identity is None):
+        raise ValueError("Group cap and identity resolver must be supplied together")
+    if max_per_group is not None and (
+        not _integer(max_per_group, 1) or max_per_artist is not None
+    ):
+        raise ValueError("Choose one positive artist or group cap")
 
     diagnostics = []
     provider_groups = defaultdict(list)
@@ -229,26 +238,48 @@ def select_local_popular_tracks(
 
     ranked = []
     for identity, rows in recordings.items():
+        group_keys = {}
+        if group_identity is not None:
+            for item, _ in rows:
+                group = group_identity(item)
+                if group is not None and not _nonblank(group):
+                    raise ValueError("Group identity must be nonblank or missing")
+                if group is not None:
+                    group_keys[item.track_id] = group
+                else:
+                    diagnostics.append((item.track_id, "missing_group_identity"))
+            if not group_keys:
+                continue
+            rows = [row for row in rows if row[0].track_id in group_keys]
         if max_per_artist is not None:
             with_artist = [row for row in rows if row[0].canonical_artist_id is not None]
             if not with_artist:
                 diagnostics.extend((item.track_id, "missing_canonical_artist") for item, _ in rows)
                 continue
             rows = with_artist
-        item, observation = min(rows, key=_evidence_order)
-        ranked.append((item, observation, identity))
-    ranked.sort(key=lambda row: (-row[1].count, row[2], row[0].track_id))
+        item, observation = min(rows, key=lambda row: (
+            (tie_breaker(row[0]), _evidence_order(row)) if tie_breaker else _evidence_order(row)
+        ))
+        ranked.append((item, observation, identity, group_keys.get(item.track_id)))
+    ranked.sort(key=lambda row: (-row[1].count,
+        tie_breaker(row[0]) if tie_breaker else (), row[2], row[0].track_id))
 
     selected = []
     artist_counts = defaultdict(int)
-    for item, _, _ in ranked:
+    group_counts = defaultdict(int)
+    for item, _, _, group in ranked:
         if max_per_artist is not None:
             if artist_counts[item.canonical_artist_id] >= max_per_artist:
                 continue
             artist_counts[item.canonical_artist_id] += 1
+        if max_per_group is not None:
+            if group_counts[group] >= max_per_group:
+                continue
+            group_counts[group] += 1
         selected.append(item)
     return PopularitySelection(
         tracks=tuple(selected[offset:offset + limit]),
         total=len(selected),
         diagnostics=tuple(sorted(diagnostics)),
     )
+

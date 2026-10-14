@@ -26,7 +26,7 @@ NON_ALBUM_EXCEPTION_TAG_NAMES = [
     "album haven exception",
     "album_haven_exception",
 ]
-FILE_METADATA_SCHEMA_VERSION = 2
+FILE_METADATA_SCHEMA_VERSION = 3
 LABEL_ORIGINS = frozenset({"tag_metadata", "filename_fallback", "unknown"})
 
 
@@ -74,6 +74,10 @@ def file_metadata_schema_is_current(entry: object) -> bool:
         and not isinstance(value, bool)
         and value == FILE_METADATA_SCHEMA_VERSION
         and "release_date" in entry
+        and all(field in entry for field in (
+            "musicbrainz_recording_id", "musicbrainz_artist_ids",
+            "musicbrainz_album_artist_ids", "musicbrainz_identity_conflict",
+        ))
     )
 
 
@@ -554,6 +558,8 @@ def read_editable_tag_values(path: Path, fields: set[str]) -> dict[str, str]:
 
 def read_metadata_for_file(path: Path) -> dict[str, object]:
     tags = read_tags(path)
+    from music_app.services.musicbrainz_tags import recording_identity_tags
+    recording_identity = recording_identity_tags(tags)
     stat = path.stat()
     album_name = first_tag(tags, ["album", "talb"]) or ""
     track_artist = first_tag(tags, ["artist", "artists", "albumartist", "tpe1", "tpe2"])
@@ -584,4 +590,5 @@ def read_metadata_for_file(path: Path) -> dict[str, object]:
         "duration_seconds": duration_seconds, "year": year, "release_date": release_date, "edition": edition, "album_rating": album_rating,
         "exception_type": exception_type or None,
         "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+        **recording_identity,
     }

@@ -553,6 +553,33 @@ def _load_scoped_scrobbled_play_count_lookup_sql() -> str:
     """
 
 
+def read_scoped_track_play_counts(connection, *, account_id, library_id, track_ids):
+    """Read exact current local IDs using the existing personal-count contract.
+
+    The caller owns current session/policy locks and the transaction. An omitted
+    unresolved/ambiguous row remains unknown; only returned SQL counts imply zero.
+    """
+    if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+        raise ValueError("Exact scrobble count account and library scope is required")
+    ids = list(track_ids)
+    if any(type(value) is not int or value <= 0 for value in ids):
+        raise ValueError("Expected positive local track identities")
+    ids = sorted(set(ids))
+    if not ids:
+        return {}
+    tracks = connection.execute("select id,track_key from library.local_tracks where library_id=%s and id=any(%s::bigint[])",
+                                (library_id, ids)).fetchall()
+    by_key = {row["track_key"]: row["id"] for row in tracks}
+    if not by_key:
+        return {}
+    rows = connection.execute(_load_scoped_scrobbled_play_count_lookup_sql(), {
+        "account_id": account_id, "library_id": library_id, "track_refs": list(by_key),
+    }).fetchall()
+    return {row["track_id"]: row["scrobble_count"] for row in rows
+            if by_key.get(row["track_key"]) == row["track_id"]
+            and type(row["scrobble_count"]) is int and row["scrobble_count"] >= 0}
+
+
 def _delete_listen_history_sql() -> str:
     return (
         _bootstrap_context_sql()
@@ -612,3 +639,4 @@ def _validated_recent_window(account_id, library_id, window_start, window_end):
 
 def _recent_track_ref(value: object) -> str:
     return " ".join(str(value or "").strip().split()).replace("/", "\\").casefold()
+

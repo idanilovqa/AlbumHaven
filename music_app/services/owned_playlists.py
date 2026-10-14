@@ -19,11 +19,13 @@ COMPLETE_INVENTORY_PROTOCOL = "complete_inventory_selection_v1"
 COMPLETE_ACTIVITY_PROTOCOL = "complete_activity_selection_v1"
 MISSING_PLAYLIST_PROTOCOL = "missing_playlist_selection_v1"
 MISSING_ACTIVITY_PROTOCOL = "missing_activity_selection_v1"
+LIBRARY_MIX_PROTOCOL = "library_mix_selection_v1"
 MISSING_SOURCE_PROTOCOLS = frozenset((MISSING_PLAYLIST_PROTOCOL, MISSING_ACTIVITY_PROTOCOL))
 SOURCE_PROTOCOL_KINDS = {
     PLAYLIST_SOURCE_PROTOCOL: "library", COMPLETE_INVENTORY_PROTOCOL: "library",
     COMPLETE_ACTIVITY_PROTOCOL: "activity", MISSING_PLAYLIST_PROTOCOL: "playlist",
     MISSING_ACTIVITY_PROTOCOL: "activity",
+    LIBRARY_MIX_PROTOCOL: "library",
 }
 BROWSE = "library.browse.read"
 CREATE = "library.playlists.create"
@@ -116,7 +118,7 @@ def _refs(value: object, *, inventory: bool = False, empty: bool = False) -> lis
 
 def normalize_playlist_command(action: str, payload: object, *, playlist_ref: object = None) -> PlaylistCommand:
     fields = {
-        "create": {"mode", "source_protocol", "source", "title", "description", "entry_refs", "request_key"},
+        "create": {"mode", "source_protocol", "source", "title", "description", "entry_refs", "request_key", "mix_playback_order"},
         "save": {"title", "description", "item_order", "revision", "request_key"},
         "add": {"track_refs", "revision", "request_key", "source_guard"},
         "remove": {"item_refs", "revision", "request_key"},
@@ -147,6 +149,10 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
                 "title": _text(payload.get("title"), maximum=MAX_PLAYLIST_TITLE_LENGTH, title=True),
                 "description": _text(payload.get("description", ""), maximum=MAX_PLAYLIST_DESCRIPTION_LENGTH),
                 "entry_refs": _refs(payload.get("entry_refs"), empty=protocol not in MISSING_SOURCE_PROTOCOLS)}
+        if "mix_playback_order" in payload:
+            if protocol != LIBRARY_MIX_PROTOCOL or payload["mix_playback_order"] not in ("regular", "shuffle", "unplayed_first"):
+                raise PlaylistError("invalid_command")
+            data["mix_playback_order"] = payload["mix_playback_order"]
         return PlaylistCommand(action, None, request_key, data)
     target = uuid_ref(playlist_ref)
     data = {"revision": playlist_revision(payload.get("revision"))}
@@ -270,3 +276,4 @@ def require_owned_playlist_authority(context: PolicyContext, *, required_actions
         raise PlaylistError("forbidden", 403)
     require_playlist_authority(context, required_actions=required_actions,
         owner_account_id=owner_account_id, constraints=constraints, owner_only=True)
+

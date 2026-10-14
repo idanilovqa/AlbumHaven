@@ -6,7 +6,6 @@ from music_app.services.policy import ResourceScope
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services import playlist_creation_sources_postgres as inventory
 from music_app.services.track_preferences_postgres import load_track_preferences_on_connection, TrackPreferenceScopeError
-from music_app.services.track_preferences import normalize_track_preference_overlay
 
 
 class NativeTargetError(ValueError):
@@ -52,6 +51,7 @@ class PrivateNativeTargets:
             'inventory_track_ref':f'inventory-track:{context.library_id}:{track_id}'}
 
     def _metadata_target(self,connection,context,track_id,row,constraints):
+        from music_app.services.track_preferences import normalize_track_preference_overlay
         # The source owner already proved the inventory ID and Browse authority.
         # Read personal taste in this same transaction; media and subject taste
         # are independent and cannot supply an actor preference identity.
@@ -127,3 +127,4 @@ class PrivateNativeTargets:
             media=bool(tracks) and all(allows(context,action,ResourceScope('track',str(item['id'])),constraints)
                 for item in tracks for action in ('library.browse.read','library.media.read'))
         return {'album_ref':album['album_key'],'allowed_actions':{'can_view_details':True,'can_play_album':media}}
+

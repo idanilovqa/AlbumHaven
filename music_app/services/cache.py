@@ -74,6 +74,10 @@ def serialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
     }
     if "metadata_schema_version" in entry:
         serialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    for field in ("musicbrainz_recording_id", "musicbrainz_artist_ids",
+                  "musicbrainz_album_artist_ids", "musicbrainz_identity_conflict"):
+        if field in entry:
+            serialized[field] = entry[field]
     return serialized
 
 def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
@@ -108,6 +112,10 @@ def deserialize_file_entry(entry: dict[str, object]) -> dict[str, object]:
         deserialized["release_date"] = entry.get("release_date")
     if "metadata_schema_version" in entry:
         deserialized["metadata_schema_version"] = entry.get("metadata_schema_version")
+    for field in ("musicbrainz_recording_id", "musicbrainz_artist_ids",
+                  "musicbrainz_album_artist_ids", "musicbrainz_identity_conflict"):
+        if field in entry:
+            deserialized[field] = entry[field]
     return deserialized
 
 

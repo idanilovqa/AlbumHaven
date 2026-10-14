@@ -52,6 +52,11 @@ class PlaylistNativeTargets:
             tracks,unavailable=[],[]
             targets=self._targets.resolve_play_queue(connection,live,
                 [items[ref]['local_track_id'] for ref in refs],constraints=constraints)
+            personal=None
+            if playlist.get('library_mix'):
+                from music_app.services.listen_history_postgres import read_scoped_track_play_counts
+                personal=read_scoped_track_play_counts(connection,account_id=live.actor.account_id,
+                    library_id=live.library_id,track_ids=list(targets))
             for ref in refs:
                 target=targets.get(items[ref]['local_track_id'])
                 if target is None:
@@ -59,7 +64,10 @@ class PlaylistNativeTargets:
                     unavailable.append(ref)
                 else:
                     tracks.append({'playlist_item_id':ref,'native_target':{**target,'playlist_item_id':ref}})
+                    if personal is not None:
+                        tracks[-1]['play_count']=personal.get(items[ref]['local_track_id'])
             lock_current_actor_session(connection,actor_account_id=live.actor.account_id,
                 actor_session_id=live.actor.session_id,clock=owner._clock)
             return {'playlist_id':playlist_ref,'revision':revision,'starting_item_ref':starting_item_ref,
                 'tracks':tracks,'unavailable_item_refs':unavailable}
+

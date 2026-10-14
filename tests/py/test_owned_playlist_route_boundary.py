@@ -282,6 +282,8 @@ def test_only_approved_playlist_methods_are_registered():
         "/playlists/destinations": {"GET"},
         "/playlists/creation-source/current": {"GET"},
         "/playlists/creation-source/entries": {"GET"},
+        "/playlists/creation-source/library-mix": {"GET", "POST"},
+        "/playlists/creation-source/library-mix/native-queue": {"POST"},
         "/playlists/operations/{request_key}": {"GET"},
         "/playlists": {"POST"},
         "/playlists/{playlist_ref}": {"PATCH", "DELETE"},

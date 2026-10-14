@@ -1,6 +1,93 @@
 # Same-server Playlist API
 
-This backend stores same-server Playlists, explicit editor grants and private/server_shared visibility in Postgres. Native adapters must be installed before the UI can use these contracts. It does not supply public links, source import/history capture, local matching, covers, playback or derived collections.
+## Whole-library Library Mix sources
+
+Library Mix reuses ordinary private Playlist ownership, save receipts, request
+keys and revisions. The additional source protocol is
+`library_mix_selection_v1`, with `mode=ordinary` and `source.kind=library`.
+It does not enable the reserved dynamic/sample route family.
+
+- `POST /playlists/creation-source/library-mix` accepts only
+  `selection_basis=per_artist|per_album`, integer `songs_per_group=1..5000`,
+  boolean `auto_update`, and optional
+  `playback_order=regular|shuffle|unplayed_first` (default `regular`). It captures
+  a temporary, session-owned complete selection without saving a Playlist.
+- `GET /playlists/creation-source/library-mix?source_ref=UUID&source_revision=UUID`
+  reopens that exact unexpired selection. It never regenerates from newer
+  inventory or popularity. Generate again to select from newer cached evidence.
+- Source entries retain ordinary immutable `entry_ref` values and include
+  separate `allowed_actions.can_play`, nullable current-actor `play_count`, and
+  cached global `popularity_count`. Unknown personal counts remain null.
+  The `library_mix` recipe includes fixed version/source/provider/metric fields.
+  `coverage` reports selected/excluded counts, exclusion-reason counts and whether
+  diagnostic examples were truncated. At most 100 examples are returned.
+  Source data also exposes `popularity_refresh_status` from durable provider
+  work: `idle`, `queued`, `running`, `complete`, `blocked`, or `cancelled`.
+- `POST /playlists/creation-source/library-mix/native-queue` accepts
+  `source_ref`, `source_revision`, every unique source `entry_ref` in requested
+  playback order as `entry_refs`, and `starting_entry_ref`. It uses the existing
+  private native-target resolver and separately checks media access. Successful
+  HTTP responses are `{status: "ready", data: RESULT, context_ref: CONTEXT}`,
+  matching the shared native-queue client. RESULT contains the source tuple,
+  `tracks`, `starting_item_ref`, and `unavailable_item_refs`; temporary
+  `playlist_item_id` values are source entry
+  receipts, never durable Playlist identities. Each admitted track carries its
+  fresh nullable current-actor `play_count`. This route does not save anything.
+- Ordinary `POST /playlists` saves the exact source `entry_refs` in captured
+  selection order. Optional `mix_playback_order` may override the captured
+  playback default without changing membership. It is allowed only for this
+  protocol and is bound into the same durable command digest.
+
+The whole current server library is the recipe source. Selection reads cached,
+versioned Last.fm overall-scrobble evidence, excludes missing/ambiguous mappings
+or counts, and never substitutes personal listens. Changing playback order does
+not change top-N membership. Requests never call Last.fm.
+Per-track Browse admission happens before metadata, provider observations or
+album-credit grouping are evaluated. Denied rows contribute no diagnostics and
+cannot fail the request through malformed cached facts or alter allowed groups.
+
+After a successful authorized capture commits, it requests a finite background
+popularity refresh for that verified library. Owner automatic-detail refreshes
+also request this work only after their transaction exits. Shared/static detail
+reads and source GETs never enqueue. The source response remains the captured
+cached selection; provider completion does not change that immutable source.
+Generate again to use newer observations. Existing active work is not restarted.
+Source GETs and saved detail reads expose current durable progress, with no job
+identifiers or inventory cursors. `complete` means the captured inventory range
+was examined; it does not mean every recording was successfully mapped.
+
+An enqueue failure does not discard an already committed source or cached
+membership. Optional `popularity_refresh_error` is `not_configured`,
+`enqueue_unavailable`, or `status_unavailable`; the response retains the last
+observed status. `queued` is reported only after a durable status read or a
+confirmed enqueue. Provider progress is separate from the recipe's membership
+`refresh_status` below.
+
+Saved detail and cards expose `playlist_kind=library_mix` and a `library_mix`
+object. `auto_update=false` keeps the saved snapshot and ordinary membership
+editing. With `auto_update=true`, an owner detail read recomputes the complete
+current result and atomically replaces membership under the Playlist lock.
+Retained tracks keep their item IDs, and revision changes only when membership
+or its order changes. This is a recomputation of top N, never append-only growth.
+Directory reads do not refresh every recipe. Other authorized readers see the
+last computed membership and do not change it using their own policy context.
+
+Recipe projection contains the last evaluation's aggregated `coverage`,
+`last_evaluated_at` and `refresh_status`: `snapshot`,
+`current`, `last_computed`, `owner_refresh_required`, `unavailable`, or
+`too_large`. An unavailable cache or a result exceeding 5000 preserves previously
+saved membership. Automatic mixes reject add, remove, reorder and an explicit
+`save.item_order` with `409 library_mix_membership_locked`; metadata, sharing and
+default-sort actions retain ordinary policy. A normal Playlist copy is a static
+copy, with no hidden automatic-update recipe.
+
+All source capture, native queue and save writes require the existing context
+header. Browse/Create authority remains separate from media playback. The
+temporary source expires under the same 30-minute source policy; saved recipes
+and committed operation receipts do not expire with it. Apply migration 0115
+and the associated cached mapping adapter migration before using these routes.
+
+This backend stores same-server Playlists, explicit editor grants and private/server_shared visibility in Postgres. Native adapters must be installed before the UI can use these contracts. The ordinary foundation does not by itself supply public links, provider imports or covers; the Library Mix source and existing native targets are separate integrations described here.
 
 All endpoints authenticate the current browser session and current library membership. The repository rechecks live account/session/member/grant authority inside its transaction, including for bootstrap owners. No JSON account, owner or library parameter supplies authority. Existing grant assignments are unchanged. Responses are private/no-store. Each successful HTTP envelope has a top-level context_ref from the shared private_ui_context_ref owner, matching the trusted shell data-private-ui-context. It is a freshness check, never authorization.
 
@@ -152,3 +239,4 @@ all friend subjects are locked with the actor before current policy is loaded.
 An unchanged, committed request-key retry returns its existing receipt; changing
 or dropping the guard with that key is a conflict. Source revocation prevents a
 new write, without retroactively undoing an already committed operation.
+

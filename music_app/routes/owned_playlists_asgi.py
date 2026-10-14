@@ -21,7 +21,6 @@ from music_app.services.private_ui_context import private_ui_context_ref, Privat
 from music_app.services.policy import PolicyContext
 from music_app.services.policy_asgi import _deployment_mode, _request_origin
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
-from music_app.services.playlist_read_seams import build_view_surface_payload
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 
 router = APIRouter()
@@ -75,6 +74,7 @@ def _error(error):
 
 def playlist_view_response(request):
     """Early synchronous /view-data branch; no global Playlist state fallback."""
+    from music_app.services.playlist_read_seams import build_view_surface_payload
     try:
         context, constraints = _context(request, BROWSE)
         payload = _service(request).read(context, playlist_ref=request.query_params.get("playlist_id") or None,
@@ -130,6 +130,56 @@ def playlist_source_entries(request: Request):
             source_ref=params.get("source_ref"), source_revision=params.get("source_revision"),
             query=params.get("q", ""), cursor=params.get("cursor"), limit=int(value),
             constraints=constraints))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post("/playlists/creation-source/library-mix")
+async def create_library_mix_source(request: Request):
+    from music_app.services import library_mix_postgres as mixes
+    try:
+        context, constraints = _context(request, CREATE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=4096)
+        result = await run_in_threadpool(mixes.capture, _service(request), context,
+                                        payload, constraints=constraints)
+        return _response(request, result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.get("/playlists/creation-source/library-mix")
+def read_library_mix_source(request: Request):
+    from music_app.services import library_mix_postgres as mixes
+    try:
+        params = request.query_params
+        if set(params) != {"source_ref", "source_revision"} or len(params.multi_items()) != len(params):
+            raise PlaylistError("invalid_source_query")
+        context, constraints = _context(request, CREATE)
+        return _response(request, mixes.read_capture(_service(request), context,
+            params["source_ref"], params["source_revision"], constraints=constraints))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post("/playlists/creation-source/library-mix/native-queue")
+async def library_mix_native_queue(request: Request):
+    from music_app.services import library_mix_postgres as mixes
+    try:
+        context, constraints = _context(request, BROWSE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
+        result = await run_in_threadpool(mixes.native_queue, _service(request), context,
+                                        payload, constraints=constraints)
+        return _response(request, {"status": "ready", "data": result})
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
     except PlaylistError as error:
         return _error(error)
 
@@ -343,3 +393,4 @@ async def decide_playlist_edit_request(request: Request, playlist_ref: str, requ
 @router.post("/playlists/{playlist_ref}/copy")
 async def copy_playlist(request: Request, playlist_ref: str):
     return await _write(request,"copy",playlist_ref)
+

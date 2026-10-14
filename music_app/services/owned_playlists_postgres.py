@@ -11,7 +11,7 @@ from music_app.services.private_album_artwork import album_artwork_url
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.private_library_authority import current_library_transaction, PrivateLibraryAuthorityError
 from music_app.services.owned_playlists import (
-    BROWSE, CREATE, MANAGE, ITEMS, ACCESS, SETTINGS, PlaylistError, PlaylistCommand,
+    BROWSE, CREATE, MANAGE, ITEMS, ACCESS, SETTINGS, LIBRARY_MIX_PROTOCOL, PlaylistError, PlaylistCommand,
     command_actions, inventory_identity, normalize_playlist_command,
     require_playlist_authority, uuid_ref,
 )
@@ -20,16 +20,18 @@ from music_app.services.policy_evaluator import PolicyEvaluationConstraints, Pol
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import decode_social_cursor, encode_social_cursor
 from music_app.services import playlist_creation_sources_postgres as sources
+from music_app.services import library_mix_postgres as library_mixes
 
 
 class PostgresOwnedPlaylistsService:
-    def __init__(self, config, *, connect=None, clock=None):
+    def __init__(self, config, *, connect=None, clock=None, library_mix_reader=None):
         self._config = dict(config)
         self._url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         if not self._url:
             raise RuntimeError("Postgres configuration is required for Playlists.")
         self._connect = connect or pooled_connection
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._library_mix_reader = library_mix_reader
 
     @contextmanager
     def _authorized(self, context, constraints, *, target_account_id=None, target_account_ids=()):
@@ -72,6 +74,8 @@ class PostgresOwnedPlaylistsService:
             playlist["editor_grant"] = grant is not None
         if not (owner or playlist["editor_grant"] or playlist["visibility"] == "server_shared"):
             raise PlaylistError("playlist_unavailable", 404)
+        playlist["library_mix"] = library_mixes.load_recipes(connection, context.library_id,
+            [str(playlist["ref"])]).get(str(playlist["ref"]))
         return playlist
 
     @staticmethod
@@ -172,7 +176,10 @@ class PostgresOwnedPlaylistsService:
                 else:
                     source = sources.load_source(connection,live,command.data["source"]["ref"],command.data["source"]["revision"],now,
                         protocol=command.data["source_protocol"], kind=command.data["source"]["kind"])
-                if queue.is_queue(source):
+                if source["protocol"] == LIBRARY_MIX_PROTOCOL:
+                    selected = library_mixes.selected(self, connection, live, source,
+                        command.data["entry_refs"], constraints=constraints)
+                elif queue.is_queue(source):
                     selected=queue.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
                 elif command.data["mode"]=="missing":
                     selected=missing.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
@@ -195,6 +202,9 @@ class PostgresOwnedPlaylistsService:
                 connection.execute("""insert into app.playlists(ref,owner_account_id,library_id,title,description)
                     values (%s,%s,%s,%s,%s)""",(ref,live.actor.account_id,live.library_id,command.data["title"],command.data["description"]))
                 self._insert_items(connection,live,ref,selected,offset=0,source=source)
+                if source["protocol"] == LIBRARY_MIX_PROTOCOL:
+                    library_mixes.save_recipe(connection, live, ref, source,
+                        playback_order=command.data.get("mix_playback_order"))
                 receipt = self._receipt(live,command,ref,1,True,added_count=len(selected))
             else:
                 guard_source=None
@@ -212,6 +222,7 @@ class PostgresOwnedPlaylistsService:
                     constraints,playlist, owner_only=command.action == "delete")
                 if str(playlist["revision"]) != command.data["revision"]:
                     raise PlaylistError("revision_conflict",409)
+                library_mixes.require_manual_membership(command, playlist)
                 rows = (connection.execute("select * from app.playlist_items where playlist_ref=%s order by position",
                     (command.playlist_ref,)).fetchall() if command.action in {"save", "add", "remove", "reorder"} else [])
                 order = [str(row["ref"]) for row in rows]
@@ -424,6 +435,8 @@ class PostgresOwnedPlaylistsService:
             playlist_ref=uuid_ref(playlist_ref)
         if not isinstance(query,str) or len(query)>200:
             raise PlaylistError("invalid_source_query")
+        mix_refresh = (library_mixes.refresh_owned(self, context, playlist_ref, constraints=constraints)
+            if playlist_ref is not None else {"refresh_status": "last_computed"})
         with self._authorized(context,constraints) as (connection,live,_now):
             playlists=connection.execute("""select p.* from app.playlists p
                 where p.library_id=%s and p.deleted_at is null and
@@ -442,7 +455,9 @@ class PostgresOwnedPlaylistsService:
             counts = {str(row["playlist_ref"]):row["item_count"] for row in connection.execute("""
                 select playlist_ref,count(*) as item_count from app.playlist_items
                 where playlist_ref=any(%s::uuid[]) group by playlist_ref""", (refs,)).fetchall()}
+            mix_recipes = library_mixes.load_recipes(connection, live.library_id, refs)
             projected = [{**row,"editor_grant":str(row["ref"]) in editors,
+                          "library_mix":mix_recipes.get(str(row["ref"])),
                           "item_count":counts.get(str(row["ref"]),0)} for row in playlists]
             projected.sort(key=lambda row:(row["updated_at"],str(row["ref"])),reverse=True)
             cards=[self._card(live,row,constraints) for row in projected
@@ -465,11 +480,23 @@ class PostgresOwnedPlaylistsService:
                 if row["local_track_id"] is not None and self._resource_allowed(live,BROWSE,ResourceScope("track",str(row["local_track_id"])),constraints)],config=self._config)
             card=self._card(live,{**playlist,"item_count":len(rows)},constraints)
             tracks=[self._track_row(live,row,current.get(row["local_track_id"]),constraints=constraints) for row in rows]
+            if playlist.get("library_mix"):
+                from music_app.services.listen_history_postgres import read_scoped_track_play_counts
+                personal = read_scoped_track_play_counts(connection, account_id=live.actor.account_id,
+                    library_id=live.library_id, track_ids=list(current))
+                for track, row in zip(tracks, rows):
+                    track["play_count"] = personal.get(row["local_track_id"])
             payload["playlist_detail"]={**card,"items_complete":True,"query":"",
+                "library_mix":library_mixes.project_recipe(playlist.get("library_mix"), refresh_status=mix_refresh["refresh_status"]),
                 "active_sort":{"key":"playlist_position","direction":"asc"},"saved_default_sort":playlist["default_sort"],
                 "allowed_actions":{**card["allowed_actions"],"can_play":any(row["allowed_actions"]["can_play"] for row in tracks),
                     "can_inspect_missing":self._allows(live,(BROWSE,CREATE),constraints) and any(row["availability"]=="missing" for row in tracks)},
                 "track_rows":tracks}
+            if playlist.get("library_mix"):
+                payload["playlist_detail"]["popularity_refresh_status"] = library_mixes.read_popularity_refresh_status(
+                    connection, live.library_id)
+                if "popularity_refresh_error" in mix_refresh:
+                    payload["playlist_detail"]["popularity_refresh_error"] = mix_refresh["popularity_refresh_error"]
             lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
                 actor_session_id=live.actor.session_id, clock=self._clock)
             return payload
@@ -595,8 +622,12 @@ class PostgresOwnedPlaylistsService:
         settings=cls._allows(context,(BROWSE,SETTINGS),constraints,row)
         access=cls._allows(context,(BROWSE,ACCESS),constraints,row,owner_only=True)
         delete=cls._allows(context,(BROWSE,MANAGE),constraints,row,owner_only=True)
+        mix = row.get("library_mix")
+        if mix and library_mixes.recipe_from_row(mix).auto_update:
+            items = False
         return {"playlist_id":str(row["ref"]),"title":row["title"],"description":row["description"],
-                "revision":str(row["revision"]),"item_count":int(row["item_count"]),"visibility":row["visibility"],"playlist_kind":"manual",
+                "revision":str(row["revision"]),"item_count":int(row["item_count"]),"visibility":row["visibility"],
+                "playlist_kind":"library_mix" if mix else "manual", "library_mix":library_mixes.project_recipe(mix),
                 "allowed_actions":{"can_open":True,"can_read":True,"can_export":True,
                     "can_edit":manage,"can_rename":manage,"can_reorder":items,"can_add":items,"can_remove":items,
                     "can_delete":delete,"can_play":False,"can_share":access,
@@ -625,3 +656,4 @@ class PostgresOwnedPlaylistsService:
                 "source_kind":row.get("source_kind","library"),"source_label":row.get("source_label"),
                 "source_ref":str(row["source_ref"]) if row["source_ref"] else None,
                 "allowed_actions":{"can_read":True,"can_play":play,"can_view_details":details}}
+

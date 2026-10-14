@@ -2720,6 +2720,7 @@ async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;
   state.utility.problematicNavigationActiveToken = navigationToken;
+  let openedCanonicalTarget = false;
   const ownsNavigation = () => (
     Number(state.utility.problematicNavigationToken || 0) === navigationToken
   );
@@ -2794,13 +2795,33 @@ async function openUtilityModalForTrack(trackPath) {
       && Number(state.utility.problematicSummaryRequestToken || 0)
         > summaryRequestTokenBeforePendingTasks
     );
+    const loadTrackSummary = async () => {
+      const complete = loadProblematicFiles(true, { render: false });
+      const initial = state.utility.initialLoadPromise || complete;
+      if (initial !== complete) {
+        complete.then((result) => {
+          if (result !== null && openedCanonicalTarget && ownsNavigation()
+              && state.utility.activeTab === 'problematic-files'
+              && state.utility.focusedTrackPath === String(trackPath || '')) {
+            renderUtilityModalContent();
+          }
+        });
+      }
+      const result = await initial;
+      if (result === null || !ownsNavigation()
+          || (initial.problematicSummaryRequestToken !== undefined
+            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      if (getProblematicAlbumForTrackPath(trackPath)) return result;
+      // Only returned canonical track membership may identify the target.
+      return complete;
+    };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
-      const loadResult = await loadProblematicFiles(true, { render: false });
+      const loadResult = await loadTrackSummary();
       if (loadResult === null || !ownsNavigation()) return;
     }
     let album = getProblematicAlbumForTrackPath(trackPath);
     if (!album && summaryWasLoaded) {
-      const refreshResult = await loadProblematicFiles(true, { render: false });
+      const refreshResult = await loadTrackSummary();
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
@@ -2816,10 +2837,21 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
     if (!album.detail_loaded) {
       await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()) return;
+      if (!ownsNavigation()
+          || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
+      // A changed complete summary may have replaced the preview detail owner.
+      const current = getProblematicAlbumForTrackPath(trackPath);
+      if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+        await state.utility.detailLoadPromises[current.key];
+        if (!ownsNavigation()
+            || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
+      }
     }
+    if (!getProblematicAlbumForTrackPath(trackPath)) return;
+    openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {
     if (Number(state.utility.problematicNavigationActiveToken || 0) === navigationToken) {

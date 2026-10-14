@@ -20774,6 +20774,7 @@ async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;
   state.utility.problematicNavigationActiveToken = navigationToken;
+  let openedCanonicalTarget = false;
   const ownsNavigation = () => (
     Number(state.utility.problematicNavigationToken || 0) === navigationToken
   );
@@ -20848,13 +20849,33 @@ async function openUtilityModalForTrack(trackPath) {
       && Number(state.utility.problematicSummaryRequestToken || 0)
         > summaryRequestTokenBeforePendingTasks
     );
+    const loadTrackSummary = async () => {
+      const complete = loadProblematicFiles(true, { render: false });
+      const initial = state.utility.initialLoadPromise || complete;
+      if (initial !== complete) {
+        complete.then((result) => {
+          if (result !== null && openedCanonicalTarget && ownsNavigation()
+              && state.utility.activeTab === 'problematic-files'
+              && state.utility.focusedTrackPath === String(trackPath || '')) {
+            renderUtilityModalContent();
+          }
+        });
+      }
+      const result = await initial;
+      if (result === null || !ownsNavigation()
+          || (initial.problematicSummaryRequestToken !== undefined
+            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      if (getProblematicAlbumForTrackPath(trackPath)) return result;
+      // Only returned canonical track membership may identify the target.
+      return complete;
+    };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
-      const loadResult = await loadProblematicFiles(true, { render: false });
+      const loadResult = await loadTrackSummary();
       if (loadResult === null || !ownsNavigation()) return;
     }
     let album = getProblematicAlbumForTrackPath(trackPath);
     if (!album && summaryWasLoaded) {
-      const refreshResult = await loadProblematicFiles(true, { render: false });
+      const refreshResult = await loadTrackSummary();
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
@@ -20870,10 +20891,21 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
     if (!album.detail_loaded) {
       await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()) return;
+      if (!ownsNavigation()
+          || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
+      // A changed complete summary may have replaced the preview detail owner.
+      const current = getProblematicAlbumForTrackPath(trackPath);
+      if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+        await state.utility.detailLoadPromises[current.key];
+        if (!ownsNavigation()
+            || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
+      }
     }
+    if (!getProblematicAlbumForTrackPath(trackPath)) return;
+    openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {
     if (Number(state.utility.problematicNavigationActiveToken || 0) === navigationToken) {
@@ -24931,6 +24963,10 @@ async function loadProblematicFiles(force = false, options = {}) {
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
   if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+  let settleInitialSummary;
+  const initialSummaryPromise = new Promise((resolve) => { settleInitialSummary = resolve; });
+  initialSummaryPromise.problematicSummaryRequestToken = requestToken;
+  state.utility.initialLoadPromise = initialSummaryPromise;
   let requestPromise = null;
   requestPromise = (async () => {
     const startedAt = getProblematicUtilityNow();
@@ -24943,6 +24979,7 @@ async function loadProblematicFiles(force = false, options = {}) {
     let loadSucceeded = false;
     let loadError = '';
     let boundedPayloadCommitted = false;
+    let previousSummaryItems = [];
     try {
       const fetchSummary = async (url) => {
         const requestStartedAt = getProblematicUtilityNow();
@@ -24961,7 +24998,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         }
         return data;
       };
-      const commitSummary = (data, preserveSelectedDetail) => {
+      const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
         initialDetailKey = String(initialDetail?.key || '').trim();
@@ -24971,25 +25008,39 @@ async function loadProblematicFiles(force = false, options = {}) {
           : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
+        const previousSummary = previousSummaryItems.find(item => item.key === selectedKey);
+        const nextSummary = summaryItems.find(item => item.key === selectedKey);
+        // Client request ownership does not prove that the server snapshot is unchanged.
+        const unchangedSelection = continuation && previousSummary && nextSummary
+          && JSON.stringify(previousSummary) === JSON.stringify(nextSummary);
+        const selectedPendingDetail = unchangedSelection && selectedKey !== initialDetailKey
+          ? state.utility.detailLoadPromises?.[selectedKey] : null;
+        const refreshChangedSelection = continuation && previousSummary && nextSummary
+          && !unchangedSelection && selectedKey !== initialDetailKey;
         initialDetailMerged = false;
         state.utility.problematicFiles = summaryItems.map((item) => {
           if (initialDetailKey && String(item?.key || '').trim() === initialDetailKey) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary ? selectedDetail : item;
+          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
         });
         state.utility.libraryWatchHealthProblems = operationalItems;
-        state.utility.detailLoadPromises = {};
+        state.utility.detailLoadPromises = selectedPendingDetail
+          ? { [selectedKey]: selectedPendingDetail } : {};
+        previousSummaryItems = summaryItems;
         state.utility.loaded = true;
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
-        return { selectedKey, selectedDetail, selectedSummary };
+        return { selectedKey, selectedDetail,
+          selectedSummary: (continuation && unchangedSelection) ? null : selectedSummary,
+          refreshChangedSelection };
       };
 
       let data = await fetchSummary('/utilities/problematic-files?limit=50');
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
       let committedSelection = commitSummary(data, options.preserveSelectedDetail === true);
       boundedPayloadCommitted = data.complete === false;
+      settleInitialSummary(state.utility.problematicFiles);
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         const completePayloadPromise = fetchSummary('/utilities/problematic-files');
@@ -25000,12 +25051,12 @@ async function loadProblematicFiles(force = false, options = {}) {
         }
         data = await completePayloadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(data, true);
+        committedSelection = commitSummary(data, true, true);
       }
       state.utility.problematicFilesComplete = true;
       loadSucceeded = true;
-      const { selectedKey, selectedDetail, selectedSummary } = committedSelection;
-      if (selectedSummary) {
+      const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
+      if (selectedSummary || refreshChangedSelection) {
         const detailRequest = loadProblematicAlbumDetail(selectedKey, true, { render: false });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
@@ -25015,7 +25066,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           // Discard retained stale detail, but never replace a newer navigation result.
           state.utility.problematicFiles = state.utility.problematicFiles.map(item => (
             item.key === selectedKey && (item === selectedDetail || stillOwnsDetail)
-              ? { ...selectedSummary, detail_load_failed: stillOwnsDetail && state.utility.selectedProblematicKey === selectedKey }
+              ? { ...(selectedSummary || item), detail_load_failed: stillOwnsDetail && state.utility.selectedProblematicKey === selectedKey }
               : item
           ));
         }
@@ -25035,6 +25086,10 @@ async function loadProblematicFiles(force = false, options = {}) {
       showToast('Unable to load problematic files.', 'error', 3200);
       return null;
     } finally {
+      settleInitialSummary(null);
+      if (state.utility.initialLoadPromise === initialSummaryPromise) {
+        state.utility.initialLoadPromise = null;
+      }
       const stillOwner = Number(state.utility.problematicSummaryRequestToken || 0) === requestToken;
       // A mutation can invalidate payload ownership while this request still
       // owns the loading slot. Release that slot without touching a newer load.

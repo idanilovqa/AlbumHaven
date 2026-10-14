@@ -6742,10 +6742,83 @@ test('bounded root refresh reconstructs loaded coverage atomically with fresh al
   assert.equal(f.context.state.view.gallery_page.next_cursor, 'fresh-150');
 });
 
+function anchoredRefreshGroups(artists) {
+  return artists.map(artist => ({
+    artist,
+    albums: [{ key: `album-${artist}`, name: `Album ${artist}` }],
+  }));
+}
+
+async function resolveAuthoritativeAnchorRefresh(fixture, artists) {
+  // Model the real endpoint's anchor contract: missing artists are errors;
+  // an anchored window cannot contain artists preceding its requested start.
+  for (let index = 0; index < 5 && fixture.pendingRequests[index]; index += 1) {
+    const url = new URL(fixture.pendingRequests[index].url, 'http://localhost');
+    const anchor = url.searchParams.get('gallery_anchor_artist');
+    if (anchor && !artists.includes(anchor)) {
+      await resolveBoundedRootRefreshPage(fixture, index, {
+        status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+      });
+    } else {
+      const groups = anchoredRefreshGroups(anchor ? artists.slice(artists.indexOf(anchor)) : artists);
+      await resolveBoundedRootRefreshPage(fixture, index, {
+        ...boundedRootRefreshPage(0, groups.length, 'fresh', false),
+        artist_groups: groups,
+        artist_count: artists.length,
+        album_count: artists.length,
+      });
+    }
+  }
+}
+
+test('bounded root refresh retains earlier groups prepended after an artist jump', async () => {
+  const f = boundedRootRefreshFixture();
+  f.context.state.view.artist_groups = anchoredRefreshGroups(['A', 'B', 'C', 'D']);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page,
+    anchor_artist: 'C', anchor_group_artist: 'C', has_previous: false,
+  };
+  // B is the visible album after scrolling upward from the original C jump.
+  const visibleAlbumKey = f.context.state.view.artist_groups[1].albums[0].key;
+  const request = f.start();
+  await resolveAuthoritativeAnchorRefresh(f, ['A', 'B', 'C', 'D']);
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['A', 'B', 'C', 'D']);
+  assert.ok(f.context.state.view.artist_groups.some(group => group.albums.some(album => album.key === visibleAlbumKey)),
+    'refresh must retain the currently visible album, not replace it with the old jump window');
+  assert.equal(f.calls.showToast.length, 0);
+});
+
+test('bounded root refresh survives rename of the original jump artist', async () => {
+  const f = boundedRootRefreshFixture();
+  // Optimistic reconciliation has replaced D with F; E remains visible.
+  // The historical jump metadata is deliberately still D.
+  f.context.state.view.artist_groups = anchoredRefreshGroups(['E', 'F']);
+  f.context.state.view.gallery_page = {
+    ...f.context.state.view.gallery_page, anchor_artist: 'D', anchor_group_artist: 'D',
+  };
+  const request = f.start();
+  await resolveAuthoritativeAnchorRefresh(f, ['E', 'F']);
+
+  assert.equal(await request, true, 'a deleted historical anchor must not fail the refreshed gallery');
+  assert.equal(f.calls.applyViewPayload.length, 1, 'the authoritative replacement must actually apply');
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['E', 'F']);
+  assert.equal(f.context.state.view.artist_groups[0].albums[0].key, 'album-E');
+  assert.equal(f.calls.showToast.length, 0);
+});
+
 test('bounded root refresh retains transient anchor metadata through continuation pages', async () => {
   const f = boundedRootRefreshFixture();
+  f.context.state.view.artist_groups[0].artist = 'Battlelore';
   f.context.state.view.gallery_page.anchor_artist = 'Battlelore';
   f.context.state.view.gallery_page.anchor_group_artist = 'Battlelore';
+  const originalStart = f.start;
+  f.start = (...args) => {
+    const pending = originalStart(...args);
+    assert.equal(new URL(f.pendingRequests[0].url, 'http://localhost').searchParams.get('gallery_anchor_artist'), 'Battlelore');
+    return pending;
+  };
 
   const request = f.start();
   await resolveBoundedRootRefreshPage(f, 0, boundedRootRefreshPage(0));

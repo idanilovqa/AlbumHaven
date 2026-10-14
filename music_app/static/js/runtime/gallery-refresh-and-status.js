@@ -1039,10 +1039,20 @@ async function fetchAndRender(url, push = true, options = {}) {
   }
   const canInterruptCurrent = requestOptions.interruptCurrent !== false;
   const restartIfSameUrl = requestOptions.restartIfSameUrl === true;
-  const apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
+  let apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
   const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
+  const retainedStartArtist = String(state.view?.artist_groups?.[0]?.artist || '').trim();
+  if (rootRefreshCoverage > 0 && state.view?.gallery_page?.anchor_artist && retainedStartArtist) {
+    const refreshUrl = new URL(apiUrl, 'http://localhost');
+    if (!refreshUrl.searchParams.has('gallery_anchor_artist')) {
+      // A jump's original target may precede a rename or follow prepended pages.
+      // Refresh the retained window, rather than navigating back to that target.
+      refreshUrl.searchParams.set('gallery_anchor_artist', retainedStartArtist);
+      apiUrl = `${refreshUrl.pathname}${refreshUrl.search}`;
+    }
+  }
   const retainedRootGalleryPage = rootRefreshCoverage > 0 ? state.view?.gallery_page : null;
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''

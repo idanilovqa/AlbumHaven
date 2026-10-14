@@ -76,15 +76,30 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
       await albumMetadata.click();
       await expect(ui.mobileAlbum).toBeVisible();
       const anchoredBackRequests = [];
+      const viewTimeline = [];
+      const responseReads = [];
+      const recordViewResponse = response => {
+        const url = new URL(response.url());
+        if (!scrollBeyondJump || !url.pathname.endsWith('/view-data')) return;
+        const entry = { kind: 'response', at: Date.now(), url: url.pathname + url.search, status: response.status() };
+        viewTimeline.push(entry);
+        responseReads.push(response.json().then(payload => {
+          const groups = payload.artist_groups || payload.view?.artist_groups;
+          entry.artists = Array.isArray(groups) ? groups.map(group => group.artist) : [];
+        }).catch(error => { entry.bodyError = error.message; }));
+      };
       const recordAnchoredBackRequest = (request) => {
         const url = new URL(request.url());
+        if (scrollBeyondJump && url.pathname.endsWith('/view-data')) viewTimeline.push({ kind: 'request', at: Date.now(), url: url.pathname + url.search });
         if (
           url.pathname.endsWith('/view-data')
           && url.searchParams.get('gallery_anchor_artist') === requestedArtist
         ) anchoredBackRequests.push(url.href);
       };
       page.on('request', recordAnchoredBackRequest);
+      page.on('response', recordViewResponse);
       let observation;
+      let samples = [];
       try {
         await ui.mobileBack.click();
         await expect(ui.mobileAlbum).toBeHidden();
@@ -99,7 +114,7 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
           ? await ui.startVisibleCardAnchorObservation(returnAnchor)
           : await ui.startArtistJumpPlacementObservation(renderedArtist);
         await page.waitForTimeout(3000);
-        const samples = await observation.finish();
+        samples = await observation.finish();
         expect(samples.length).toBeGreaterThan(30);
         expect(samples.filter(sample => !sample.stable)).toEqual([]);
         expect(await ui.readSemanticVisibleCardAnchorContinuity(returnAnchor)).toEqual({
@@ -112,6 +127,12 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         try { await observation?.finish(); }
         finally {
           page.off('request', recordAnchoredBackRequest);
+          page.off('response', recordViewResponse);
+          await Promise.allSettled(responseReads);
+          if (scrollBeyondJump) await test.info().attach('mobile-back-passive-diagnostics', {
+            body: Buffer.from(JSON.stringify({ anchor: returnAnchor, samples, viewTimeline })),
+            contentType: 'application/json',
+          });
         }
       }
     });

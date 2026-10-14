@@ -6649,6 +6649,25 @@ test('late gallery refresh does not restore an obsolete mobile return position a
   assert.equal(renders[0].absoluteScrollPositionApplied, undefined);
 });
 
+test('late mobile return refresh preserves the visible album after initial coordinates were applied', () => {
+  const { context, runtimeRenderView } = createContext();
+  const galleryScroll = { scrollTop: 800, scrollLeft: 0 };
+  const originalGetElementById = context.document.getElementById.bind(context.document);
+  context.document.getElementById = id => id === 'albums-scroll' ? galleryScroll : originalGetElementById(id);
+  const renders = [];
+  context.renderArtistGroups = options => renders.push(options);
+  runtimeRenderView({
+    preserveScroll: true, preserveAbsoluteScroll: true,
+    absoluteScrollPositionApplied: true,
+    absoluteScrollPosition: { scrollTop: 800, scrollLeft: 0 },
+  });
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].preserveScroll, true);
+  assert.equal(renders[0].preserveAbsoluteScroll, false,
+    'after immediate restoration, refreshed leading content must preserve the visible album instead of old pixels');
+  assert.equal(renders[0].absoluteScrollPosition, undefined);
+});
+
 test('unmounted gallery may apply its requested mobile return position after data arrives', () => {
   const { context, runtimeRenderView } = createContext();
   const galleryScroll = { scrollTop: 0, scrollLeft: 0 };

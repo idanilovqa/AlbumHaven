@@ -694,19 +694,14 @@ function scheduleSidebarRender() {
 
 function renderView(options = {}) {
   const renderOptions = { ...options };
-  const requestedScroll = options.absoluteScrollPosition;
   const galleryScroll = document.getElementById('albums-scroll');
   if (
     options.preserveAbsoluteScroll === true
     && options.absoluteScrollPositionApplied === true
-    && Number.isFinite(Number(requestedScroll?.scrollTop))
-    && Number.isFinite(Number(requestedScroll?.scrollLeft))
     && galleryScroll
-    && (
-      Math.abs(Number(galleryScroll.scrollTop || 0) - Number(requestedScroll.scrollTop)) > 1
-      || Math.abs(Number(galleryScroll.scrollLeft || 0) - Number(requestedScroll.scrollLeft)) > 1
-    )
   ) {
+    // The immediate mobile return already restored these coordinates. A later
+    // response can prepend content, so preserve the visible album from here.
     renderOptions.preserveAbsoluteScroll = false;
     delete renderOptions.absoluteScrollPosition;
     delete renderOptions.absoluteScrollPositionApplied;

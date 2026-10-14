@@ -328,6 +328,7 @@ export class GalleryRegressions {
     const handle = await this.page.evaluateHandle(saved => {
       const samples = [];
       let frame;
+      let originalCard;
       const sample = () => {
         const section = [...document.querySelectorAll('#artist-groups .artist-section')]
           .find(item => item.querySelector('.family-artist-header[data-scroll-artist]')
@@ -339,7 +340,23 @@ export class GalleryRegressions {
         const delta = connected && saved.top !== null
           ? card.getBoundingClientRect().top - saved.top
           : null;
-        samples.push({ at: performance.now(), stable: connected && Math.abs(delta) <= 1 });
+        if (originalCard === undefined) originalCard = card || null;
+        const scroller = document.querySelector('#albums-scroll');
+        const scrollRect = scroller?.getBoundingClientRect();
+        const cardRect = card?.getBoundingClientRect();
+        const row = card?.closest('.album-row') || card?.parentElement;
+        const rowRect = row?.getBoundingClientRect();
+        samples.push({
+          at: performance.now(), epoch: performance.timeOrigin + performance.now(),
+          connected, delta, stable: connected && Math.abs(delta) <= 1,
+          originalConnected: Boolean(originalCard?.isConnected), sameNode: card === originalCard,
+          scrollTop: scroller?.scrollTop, scrollHeight: scroller?.scrollHeight,
+          viewportTop: cardRect?.top,
+          contentTop: cardRect && scrollRect ? cardRect.top - scrollRect.top + scroller.scrollTop : null,
+          rowTop: rowRect?.top, rowHeight: rowRect?.height,
+          sectionTop: section?.getBoundingClientRect().top,
+          sectionHeight: section?.getBoundingClientRect().height,
+        });
         frame = requestAnimationFrame(sample);
       };
       frame = requestAnimationFrame(sample);

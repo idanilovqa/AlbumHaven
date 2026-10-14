@@ -41,3 +41,62 @@ test('virtual row spacers retain row positions and section extent in browser lay
   expect(measurements.tail).toEqual(measurements.full);
   expect(measurements.head).toEqual(measurements.full);
 });
+
+
+for (const bufferSections of [0, 1]) {
+ test(`prepending unmeasured groups preserves the visible album before every paint with ${bufferSections} buffered sections`, async ({ page }) => {
+  await page.setContent('<div id="albums-scroll" style="height:300px;width:320px;overflow:auto;overflow-anchor:none"><div id="albums-spacer-top"></div><div id="artist-groups"></div><div id="albums-spacer-bottom"></div></div>');
+  await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/non-album-and-player.css') });
+  await page.addScriptTag({ content: `${source.slice(0, source.indexOf('const virtualGrid ='))}; window.Grid = VirtualArtistGrid;` });
+  const result = await page.evaluate(async bufferSections => {
+    window.state = { view: {}, gallery: { mainState: { view: 'cards' } } };
+    window.escapeHtml = value => String(value);
+    window.buildDisplayGroups = groups => groups;
+    window.getAlbumIdentity = album => album.key;
+    window.getAlbumRequestKey = album => album.key;
+    window.resolveGalleryRendererMode = () => 'cards';
+    window.scheduleBrowserAnimationFrame = callback => requestAnimationFrame(callback);
+    window.cancelBrowserAnimationFrame = id => cancelAnimationFrame(id);
+    window.clearBrowserTimeout = id => clearTimeout(id);
+    window.scheduleBrowserTimeout = (callback, delay) => setTimeout(callback, delay);
+    const grid = new window.Grid();
+    for (const method of ['activateGalleryCoverImages', 'scheduleSelectedFamilyCoverPrefetch', 'primeVisibleCoverImages', 'prewarmVisibleAlbumDetails']) grid[method] = () => {};
+    grid.bufferSections = bufferSections;
+    grid.overscanPx = 0;
+    grid.sectionMarginBottom = 0;
+    grid.collapsedRowHeight = 90;
+    const layout = {
+      mode: 'cards', cardMinWidth: 300,
+      renderAlbumHtml: album => `<article class="album-card" style="height:${album.height}px"><button data-open-tracklist="1" data-album-key="${album.key}" data-album='${JSON.stringify(album)}' style="display:block;height:100%;padding:0;border:0">${album.name}</button></article>`,
+    };
+    const group = (artist, height) => ({ artist, albums: Array.from({ length: 5 }, (_, i) => ({ key: `${artist}-${i}`, name: `${artist}-${i}`, height })) });
+    const original = [group('B', 90), group('C', 90), group('D', 90)];
+    const options = { showArtistSectionHeaders: false };
+    grid.setGroups([], [], original, options, layout);
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    grid.scrollEl.scrollTop = 104;
+    grid.render(true);
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const target = () => document.querySelector('[data-album-key="B-1"]');
+    const initialTop = target().getBoundingClientRect().top;
+    const samples = [];
+    let frame;
+    const observe = () => {
+      samples.push(target()?.getBoundingClientRect().top ?? null);
+      frame = requestAnimationFrame(observe);
+    };
+    frame = requestAnimationFrame(observe);
+    const started = performance.now();
+    grid.setGroups([], [], [group('A', 210), ...original], { ...options, preserveScroll: true }, layout);
+    const renderDurationMs = performance.now() - started;
+    for (let i = 0; i < 8; i += 1) await new Promise(resolve => requestAnimationFrame(resolve));
+    cancelAnimationFrame(frame);
+    grid.destroy();
+    return { initialTop, samples, renderDurationMs };
+  }, bufferSections);
+  console.log(JSON.stringify({ bufferSections, renderDurationMs: result.renderDurationMs }));
+  expect(result.samples.length).toBeGreaterThanOrEqual(8);
+  expect(result.samples).toEqual(result.samples.map(() => result.initialTop));
+});
+
+}

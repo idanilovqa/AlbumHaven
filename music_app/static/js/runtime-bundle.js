@@ -15519,19 +15519,14 @@ function scheduleSidebarRender() {
 
 function renderView(options = {}) {
   const renderOptions = { ...options };
-  const requestedScroll = options.absoluteScrollPosition;
   const galleryScroll = document.getElementById('albums-scroll');
   if (
     options.preserveAbsoluteScroll === true
     && options.absoluteScrollPositionApplied === true
-    && Number.isFinite(Number(requestedScroll?.scrollTop))
-    && Number.isFinite(Number(requestedScroll?.scrollLeft))
     && galleryScroll
-    && (
-      Math.abs(Number(galleryScroll.scrollTop || 0) - Number(requestedScroll.scrollTop)) > 1
-      || Math.abs(Number(galleryScroll.scrollLeft || 0) - Number(requestedScroll.scrollLeft)) > 1
-    )
   ) {
+    // The immediate mobile return already restored these coordinates. A later
+    // response can prepend content, so preserve the visible album from here.
     renderOptions.preserveAbsoluteScroll = false;
     delete renderOptions.absoluteScrollPosition;
     delete renderOptions.absoluteScrollPositionApplied;
@@ -35382,7 +35377,7 @@ class VirtualArtistGrid {
     };
   }
 
-  restoreScrollAnchor(anchor) {
+  restoreScrollAnchor(anchor, options = {}) {
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
     // At the root, hydration must preserve the top rather than follow a preview card.
@@ -35438,7 +35433,7 @@ class VirtualArtistGrid {
         }) || null
         : null;
       const resolvedAnchorCardTrigger = anchorCardTrigger || renamedKeyTrigger || fallbackAlbumTrigger;
-      if (resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
+      if (!options.modelOnly && resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
         const scrollRect = this.scrollEl.getBoundingClientRect();
         const anchorRect = resolvedAnchorCardTrigger.getBoundingClientRect();
         const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
@@ -35741,6 +35736,11 @@ class VirtualArtistGrid {
       this.scrollEl.scrollLeft = preservedAbsoluteScroll.scrollLeft;
       this.scrollEl.scrollTop = preservedAbsoluteScroll.scrollTop;
     }
+    // Place the rendering window around the retained album before replacing rows.
+    // The old viewport may exclude it after content is inserted above it.
+    const restoreSemanticBeforePaint = preservedAnchor
+      && !this._albumCardPointerGestureActive && !this._albumCardPointerReleaseRaf;
+    if (restoreSemanticBeforePaint) this.restoreScrollAnchor(preservedAnchor, { modelOnly: true });
     const previousActiveRenderRafOwner = this._activeRenderRafOwner;
     if (supersededScrollRenderRafOwner) {
       this._activeRenderRafOwner = supersededScrollRenderRafOwner;
@@ -35752,6 +35752,9 @@ class VirtualArtistGrid {
       });
     } finally {
       this._activeRenderRafOwner = previousActiveRenderRafOwner;
+    }
+    if (restoreSemanticBeforePaint) {
+      this.measureRenderedRows(preservedAnchor);
     }
     const scheduleSettledScrollRestore = (restoreScroll) => {
       let scrollRestoreRafOwner = 0;
@@ -36710,11 +36713,11 @@ class VirtualArtistGrid {
     });
   }
 
-  measureRenderedRows() {
+  measureRenderedRows(anchor = null) {
     const absoluteScrollActive = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     );
-    const preservedAnchor = absoluteScrollActive ? null : this.captureScrollAnchor();
+    const preservedAnchor = absoluteScrollActive ? null : (anchor || this.captureScrollAnchor());
     let changed = false;
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');

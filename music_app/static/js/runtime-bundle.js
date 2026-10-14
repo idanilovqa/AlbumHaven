@@ -36842,9 +36842,13 @@ class VirtualArtistGrid {
     }
     firstIndex = Math.max(0, Math.min(firstIndex, blocks.length - 1));
     lastIndex = Math.max(firstIndex, Math.min(lastIndex, blocks.length - 1));
-    const topSpacerHeight = section.blockOffsets[firstIndex] || 0;
+    // The flex container supplies the gap beside each spacer itself.
+    const topSpacerHeight = Math.max(0, (section.blockOffsets[firstIndex] || 0) - (firstIndex > 0 ? this.rowGap : 0));
     const lastBlockBottom = (section.blockOffsets[lastIndex] || 0) + (section.blockHeights[lastIndex] || 0);
-    const bottomSpacerHeight = Math.max(0, (section.blocksHeight || 0) - lastBlockBottom);
+    const bottomSpacerHeight = Math.max(
+      0,
+      (section.blocksHeight || 0) - lastBlockBottom - (lastIndex < blocks.length - 1 ? this.rowGap : 0),
+    );
     return { firstIndex, lastIndex, topSpacerHeight, bottomSpacerHeight };
   }
 

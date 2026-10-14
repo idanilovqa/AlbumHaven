@@ -4884,3 +4884,28 @@ test('Featured On subheading renders singular and plural album counts', () => {
   assert.match(subsectionRule, /margin\s*:\s*2px\s+0\s+-2px\s+28px/);
   assert.match(subsectionRule, /font-size\s*:\s*0\.68rem/);
 });
+
+for (const rowGap of [14, 23]) {
+  test(`virtual row spacers preserve modeled extent with ${rowGap}px flex gaps`, () => {
+    const { context } = createRuntimeContext();
+    const grid = vm.runInContext('virtualGrid', context);
+    grid.rowGap = rowGap;
+    grid.sectionHeaderHeight = 0;
+    const height = 90;
+    const section = {
+      kind: 'artist', top: 0,
+      blocksData: Array.from({ length: 5 }, () => ({})),
+      blockHeights: Array(5).fill(height),
+      blockOffsets: Array.from({ length: 5 }, (_, i) => i * (height + rowGap)),
+      blocksHeight: 5 * height + 4 * rowGap,
+    };
+    const range = grid.getVisibleBlockRange(section, 2 * (height + rowGap), 3 * (height + rowGap) - 1);
+    assert.equal(range.firstIndex, 2);
+    assert.equal(range.lastIndex, 2);
+    assert.equal(range.topSpacerHeight + rowGap, section.blockOffsets[2]);
+    assert.equal(range.topSpacerHeight + rowGap + height + rowGap + range.bottomSpacerHeight, section.blocksHeight);
+    const full = grid.getVisibleBlockRange(section, 0, section.blocksHeight);
+    assert.equal(full.topSpacerHeight, 0);
+    assert.equal(full.bottomSpacerHeight, 0);
+  });
+}

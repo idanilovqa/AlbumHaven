@@ -3288,6 +3288,7 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
   });
   const cards = [
     card('visible', { left: 20, top: 20, right: 220, bottom: 320, width: 200, height: 300 }, visibleImage),
+    card('no-art', { left: 240, top: 20, right: 440, bottom: 320, width: 200, height: 300 }, null),
     card('near', { left: 20, top: 620, right: 220, bottom: 920, width: 200, height: 300 }, offscreenLazyImage),
   ];
   const originals = {
@@ -3317,6 +3318,7 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
     assert.equal(readDecodedProductionCardWindow(args), true);
     assert.deepEqual(readDecodedProductionCardWindow({ ...args, snapshot: true }), {
       candidateCount: 1,
+      visibleCardKeys: ['visible', 'no-art'],
       decodedCards: [{ key: 'visible', productionSrc: '/cover?path=visible' }],
       schedulerSettled: true,
       terminalCount: 0,
@@ -3354,7 +3356,7 @@ test('decoded gallery window ignores offscreen native-lazy cards until real trav
 
   const pom = read('tests/e2e/poms/galleryPage.js');
   const traversal = read('tests/e2e/actions/galleryActions.js');
-  assert.match(pom, /cardBounds\.width > 0[\s\S]*entry\.key && entry\.productionSrc && entry\.intersects/);
+  assert.match(pom, /cardBounds\.width > 0[\s\S]*entry\.key && entry\.intersects[\s\S]*entries\.filter\(\(entry\) => entry\.productionSrc\)/);
   assert.match(pom, /windowState\.candidateCount > 0/);
   assert.match(traversal, /scrollGalleryBy\(deltaY\)[\s\S]*waitForGalleryScrollMovement/);
   assert.match(traversal, /page\.mouse\.wheel\(0, deltaY\)/);

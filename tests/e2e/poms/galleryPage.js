@@ -87,6 +87,7 @@ function readDecodedProductionCardWindow(args = {}) {
   const galleryScroll = document.querySelector(args.galleryScrollSelector);
   const emptyState = {
     candidateCount: 0,
+    visibleCardKeys: [],
     decodedCards: [],
     schedulerSettled: false,
     terminalCount: 0,
@@ -126,15 +127,18 @@ function readDecodedProductionCardWindow(args = {}) {
         && image.naturalWidth < 1
         && schedulerSettled,
     };
-  }).filter((entry) => entry.key && entry.productionSrc && entry.intersects);
+  }).filter((entry) => entry.key && entry.intersects);
+  const visibleCardKeys = entries.map(({ key }) => key);
+  const coveredEntries = entries.filter((entry) => entry.productionSrc);
   const windowState = {
-    candidateCount: entries.length,
-    decodedCards: entries.filter((entry) => entry.decoded).map(({ key, productionSrc }) => ({
+    visibleCardKeys,
+    candidateCount: coveredEntries.length,
+    decodedCards: coveredEntries.filter((entry) => entry.decoded).map(({ key, productionSrc }) => ({
       key,
       productionSrc,
     })),
     schedulerSettled,
-    terminalCount: entries.filter((entry) => entry.terminal).length,
+    terminalCount: coveredEntries.filter((entry) => entry.terminal).length,
   };
   if (args.snapshot) return windowState;
   return windowState.candidateCount > 0

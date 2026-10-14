@@ -10,6 +10,7 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
   requirePostgresRuntimeEnv('the sustained gallery memory diagnostic');
   const samples = [];
   const decodedSources = new Set();
+  const encounteredCardKeys = new Set();
   const pending = new WeakSet();
   const completedPageCursors = new Set();
   const traffic = { pending: 0, started: 0, finished: 0, failed: 0, galleryPages: 0 };
@@ -54,16 +55,25 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
         const scroll = document.querySelector(scrollSelector);
         const cover = globalThis.__ALBUM_HAVEN_GALLERY_COVER_CACHE__;
         const scheduler = globalThis.__ALBUM_HAVEN_GALLERY_COVER_SCHEDULER__;
+        const previewCache = typeof galleryCoverPreviewCache === 'undefined' ? null : galleryCoverPreviewCache;
         return {
           documentNodes: document.getElementsByTagName('*').length,
           mountedCards: cards.length, mountedImages: images.length,
           decodedMountedImages: images.filter(image => image.complete && image.naturalWidth > 0).length,
+          decodedMountedImageDimensions: images.filter(image => image.complete && image.naturalWidth > 0)
+            .map(image => ({ width: image.naturalWidth, height: image.naturalHeight })),
           loadedGroups: groups.length,
           loadedAlbumOccurrences: groups.reduce((count, group) => count + (group.albums?.length || 0), 0),
           scrollTop: scroll?.scrollTop, scrollHeight: scroll?.scrollHeight,
           hasMore: Boolean(state.view?.gallery_page?.has_more),
           activeCoverObjects: cover?.activeCount ?? null,
           coverFallbacks: cover?.fallbackCount ?? null,
+          cachePersistence: {
+            pendingWriteChainKeys: previewCache?.writeChains?.size ?? null,
+            inFlightEntries: previewCache?.inFlight?.size ?? null,
+            liveFetches: previewCache?.liveFetches?.size ?? null,
+            trackedProductionUrlKeys: previewCache?.latestRequestedProductionUrls?.size ?? null,
+          },
           scheduler: scheduler ? {
             active: scheduler.active, queuedVisible: scheduler.queuedVisible,
             queuedNear: scheduler.queuedNear, queuedBackground: scheduler.queuedBackground,
@@ -74,12 +84,14 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
     ]);
     const result = { phase, step, at: Date.now(), heap, domCounters, gallery,
       traffic: { ...traffic, distinctSuccessfulGalleryPages: completedPageCursors.size },
-      distinctDecodedCoverSources: decodedSources.size };
+      distinctDecodedCoverSources: decodedSources.size,
+      distinctEncounteredCardOccurrences: encounteredCardKeys.size };
     samples.push(result);
     return result;
   };
   const checkpoint = async (phase, step = 0) => {
     const window = await galleryActions.galleryPage.waitForDecodedProductionCardWindow();
+    for (const key of window.visibleCardKeys) encounteredCardKeys.add(key);
     for (const card of window.decodedCards) decodedSources.add(card.productionSrc);
     const result = await sample(phase, step);
     stepLogger.note(`${phase} step ${step}: heap ${result.heap.usedSize} bytes, ${result.gallery.mountedCards} mounted cards, ${result.gallery.loadedAlbumOccurrences} loaded album occurrences`, 2);
@@ -89,7 +101,7 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
   };
   const traverse = async (phase, direction) => {
     await stepLogger.step(phase, async () => {
-      for (let step = 1; step <= 48; step += 1) {
+      for (let step = 1; step <= 240; step += 1) {
         let before = await galleryActions.readGalleryScrollState();
         if (direction < 0 && before.scrollTop <= 2) break;
         if (direction > 0 && before.scrollTop >= before.maxScrollTop - 2) {
@@ -113,6 +125,7 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
           galleryScrollSelector: galleryActions.galleryPage.galleryScrollSelector,
           snapshot: true,
         });
+        for (const key of windowState.visibleCardKeys) encounteredCardKeys.add(key);
         for (const card of windowState.decodedCards) decodedSources.add(card.productionSrc);
         if (step % 8 === 0) await checkpoint(phase, step);
       }
@@ -135,6 +148,9 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
     }
     expect(completedPageCursors.size, 'Traversal must receive multiple distinct continuation pages.').toBeGreaterThanOrEqual(2);
     expect(decodedSources.size, 'Traversal must exceed the existing 48-object cover cache.').toBeGreaterThan(48);
+    expect(decodedSources.size, 'Long traversal must observe over 100 distinct decoded covers.').toBeGreaterThan(100);
+    expect(encounteredCardKeys.size,
+      'Long traversal must encounter over 1000 distinct visible card occurrences, including no-art cards.').toBeGreaterThan(1000);
   } finally {
     page.off('request', onRequest);
     page.off('response', onResponse);
@@ -151,7 +167,10 @@ test('diagnostic: sustained gallery traversal retains bounded cover objects', as
           diagnosticOnly: true, forcedGarbageCollection: false,
           unavailableMetrics: ['renderer-private-bytes: no reliable page PID mapping',
             'decoded-image-bytes', 'detached-DOM-node-count', 'observer-count'],
+          cardCoverageScope: 'cumulative distinct visible data-gallery-card-key values, including no-art; repeat visits count once; retained album occurrences are separate telemetry',
           domCountersScope: 'CDP document/node/listener totals; not a detached-node count',
+          cachePersistenceScope: 'writeChains counts pending keys, not queued jobs; scheduler idle is separate',
+          imageDimensionsScope: 'natural dimensions of currently decoded mounted images, not source art or retained image memory',
           samples,
         }, null, 2)), contentType: 'application/json',
       });

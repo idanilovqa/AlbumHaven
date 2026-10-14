@@ -35377,7 +35377,7 @@ class VirtualArtistGrid {
     };
   }
 
-  restoreScrollAnchor(anchor, options = {}) {
+  restoreScrollAnchor(anchor) {
     if (!this.scrollEl || !anchor) return;
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
     // At the root, hydration must preserve the top rather than follow a preview card.
@@ -35433,7 +35433,7 @@ class VirtualArtistGrid {
         }) || null
         : null;
       const resolvedAnchorCardTrigger = anchorCardTrigger || renamedKeyTrigger || fallbackAlbumTrigger;
-      if (!options.modelOnly && resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
+      if (resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
         const scrollRect = this.scrollEl.getBoundingClientRect();
         const anchorRect = resolvedAnchorCardTrigger.getBoundingClientRect();
         const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
@@ -35736,11 +35736,6 @@ class VirtualArtistGrid {
       this.scrollEl.scrollLeft = preservedAbsoluteScroll.scrollLeft;
       this.scrollEl.scrollTop = preservedAbsoluteScroll.scrollTop;
     }
-    // Place the rendering window around the retained album before replacing rows.
-    // The old viewport may exclude it after content is inserted above it.
-    const restoreSemanticBeforePaint = preservedAnchor
-      && !this._albumCardPointerGestureActive && !this._albumCardPointerReleaseRaf;
-    if (restoreSemanticBeforePaint) this.restoreScrollAnchor(preservedAnchor, { modelOnly: true });
     const previousActiveRenderRafOwner = this._activeRenderRafOwner;
     if (supersededScrollRenderRafOwner) {
       this._activeRenderRafOwner = supersededScrollRenderRafOwner;
@@ -35752,9 +35747,6 @@ class VirtualArtistGrid {
       });
     } finally {
       this._activeRenderRafOwner = previousActiveRenderRafOwner;
-    }
-    if (restoreSemanticBeforePaint) {
-      this.measureRenderedRows(preservedAnchor);
     }
     const scheduleSettledScrollRestore = (restoreScroll) => {
       let scrollRestoreRafOwner = 0;
@@ -36713,11 +36705,11 @@ class VirtualArtistGrid {
     });
   }
 
-  measureRenderedRows(anchor = null) {
+  measureRenderedRows() {
     const absoluteScrollActive = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     );
-    const preservedAnchor = absoluteScrollActive ? null : (anchor || this.captureScrollAnchor());
+    const preservedAnchor = absoluteScrollActive ? null : this.captureScrollAnchor();
     let changed = false;
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');

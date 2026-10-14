@@ -1,4 +1,4 @@
-import { expect, test } from '../support/performanceFixtures.js';
+import { expect, test as performanceTest } from '../support/performanceFixtures.js';
 
 import {
   expectPostgresLibraryBrowseTelemetry,
@@ -12,6 +12,73 @@ import {
   requirePostgresRuntimeEnv,
   waitForPostgresBrowseWarmRoot,
 } from '../helpers/realAppBenchmarkHelpers.js';
+
+// Passive diagnostics only; the measured user flow and budgets remain unchanged.
+const test = performanceTest.extend({
+  searchRequestTimings: async ({ page }, use, testInfo) => {
+    const requests = [];
+    const records = new WeakMap();
+    const paths = new Set(['/view-data', '/home-data', '/album-details', '/cover']);
+    const queryKeys = ['q', 'artist', 'payload_tier', 'gallery_offset', 'gallery_cursor',
+      'omit_sidebar', 'surface', 'album_key', 'path', 'size'];
+    let searchSubmittedAt = null;
+    let origin = null;
+    let droppedRequests = 0;
+    const onRequest = (request) => {
+      if (searchSubmittedAt === null) return;
+      const url = new URL(request.url());
+      if (url.origin !== origin) return;
+      const pathname = paths.has(url.pathname) ? url.pathname
+        : request.resourceType() === 'image' ? '[same-origin-image]' : null;
+      if (!pathname) return;
+      if (requests.length >= 250) { droppedRequests += 1; return; }
+      const record = {
+        id: requests.length + 1, pathname, method: request.method(),
+        queryKeys: queryKeys.filter(key => url.searchParams.has(key)),
+        startedAtMs: Date.now() - searchSubmittedAt, status: null, state: 'pending',
+      };
+      records.set(request, record);
+      requests.push(record);
+    };
+    const onResponse = (response) => {
+      const record = records.get(response.request());
+      if (record) record.status = response.status();
+    };
+    const finish = (request, state) => {
+      const record = records.get(request);
+      if (!record) return;
+      const timing = request.timing();
+      Object.assign(record, {
+        state, endedAtMs: Date.now() - searchSubmittedAt,
+        networkStartEpochMs: timing.startTime, requestStartMs: timing.requestStart,
+        responseStartMs: timing.responseStart, responseEndMs: timing.responseEnd,
+      });
+      if (state === 'failed') {
+        const error = request.failure()?.errorText || '';
+        record.failure = /^net::ERR_[A-Z_]+$/u.test(error) ? error : 'requestfailed';
+      }
+      records.delete(request);
+    };
+    const onFinished = request => finish(request, 'finished');
+    const onFailed = request => finish(request, 'failed');
+    page.on('request', onRequest);
+    page.on('response', onResponse);
+    page.on('requestfinished', onFinished);
+    page.on('requestfailed', onFailed);
+    try {
+      await use({ start(at) { searchSubmittedAt = at; origin = new URL(page.url()).origin; } });
+    } finally {
+      page.off('request', onRequest);
+      page.off('response', onResponse);
+      page.off('requestfinished', onFinished);
+      page.off('requestfailed', onFailed);
+      await testInfo.attach('search-request-timings', {
+        body: Buffer.from(JSON.stringify({ searchSubmittedAt, droppedRequests, requests }, null, 2)),
+        contentType: 'application/json',
+      });
+    }
+  },
+});
 
 const CASE_ID = 'FTC-GALLERY-STARTUP-005R';
 const SEARCH_BROWSE_BUDGET = Object.freeze(
@@ -28,6 +95,7 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
     navigationPanelActions,
     page,
     searchBrowseFocusedLocalReport,
+    searchRequestTimings,
     searchToolbarActions,
     stepLogger,
   }) => {
@@ -48,6 +116,7 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
       await searchToolbarActions.search(searchQuery, {
         recordSubmissionBoundary() {
           searchSubmittedAt = Date.now();
+          searchRequestTimings.start(searchSubmittedAt);
         },
       });
       await searchToolbarActions.waitForQuery(searchQuery, { timeout: 120000 });

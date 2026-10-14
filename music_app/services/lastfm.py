@@ -10,7 +10,6 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from music_app.services.lastfm_postgres import LastfmPostgresAdapter
-from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
 _FALLBACK_IANA_TIMEZONE_PREFIXES = {
     "Africa",
@@ -87,6 +86,7 @@ def save_lastfm_settings(config: dict[str, Any], settings: dict[str, Any], *, ac
 
 
 def _lastfm_settings_adapter(config: dict[str, Any]) -> LastfmPostgresAdapter:
+    from music_app.services.persistence_selection import select_runtime_persistence_adapter
     selection = select_runtime_persistence_adapter("lastfm_settings", config)
     if selection.effective_backend != "postgres":
         raise ValueError(
@@ -250,6 +250,25 @@ def _post_lastfm(config: dict[str, Any], method: str, params: dict[str, Any]) ->
         method="POST",
     )
 
+    return _read_lastfm_response(request)
+
+
+def get_lastfm_track_info(config: dict[str, Any], recording_mbid: str) -> ET.Element:
+    """Public recording metadata; no session, user count or write API call."""
+    from music_app.services.musicbrainz_tags import canonical_mbid
+    mbid = canonical_mbid(recording_mbid)
+    api_key = str(config.get("LASTFM_API_KEY") or "").strip()
+    api_root = str(config.get("LASTFM_API_ROOT") or "").strip()
+    if mbid is None or not api_key or not api_root:
+        raise LastfmError("Last.fm recording lookup is not configured.")
+    query = urlencode({"method": "track.getInfo", "api_key": api_key,
+                       "mbid": mbid, "autocorrect": 0})
+    request = Request(api_root + ("&" if "?" in api_root else "?") + query,
+                      headers={"Accept": "application/xml"}, method="GET")
+    return _read_lastfm_response(request)
+
+
+def _read_lastfm_response(request: Request) -> ET.Element:
     try:
         with urlopen(request, timeout=12.0) as response:
             body = response.read()

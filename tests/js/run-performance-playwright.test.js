@@ -269,6 +269,20 @@ test('configured suite rejects mixed preloaded fixture profiles before setup or 
   assert.deepEqual(calls, []);
 });
 
+test('grouped suite rejects mixing immutable and derived copies of one fixture profile', () => {
+  const immutableTarget = performanceRunner.PERFORMANCE_TARGETS['artist-tree-scroll-navigation'];
+  const derivedTarget = {
+    ...immutableTarget,
+    fixtureMode: 'preloaded-derived',
+    aliasNames: ['gallery-artwork-diversity'],
+  };
+
+  assert.throws(
+    () => _private.assertSinglePreloadedFixtureProfile([immutableTarget, derivedTarget]),
+    /cannot combine fixture modes.*preloaded-release.*preloaded-derived/i,
+  );
+});
+
 test('scan database configuration preflight honors dotenv values with process env precedence', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-scan-preflight-'));
   const dotenvPath = path.join(tempRoot, '.env');
@@ -404,6 +418,7 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
       'search-browse',
       'root-album-browse',
       'artist-tree-scroll-navigation',
+      'gallery-artwork-diversity',
       'app-open-all-artists',
       'problematic-files-focused',
       'rules-focused',
@@ -417,7 +432,7 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
     'scan-error',
     ]
   );
-  assert.equal(targets.length, 23);
+  assert.equal(targets.length, 24);
 });
 test('resolveRequestedTargets rejects an unknown performance group', () => {
   assert.throws(() => _private.resolveRequestedTargets({
@@ -2691,7 +2706,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 23);
+  assert.equal(calls.length, 24);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
   assert.equal(
     calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
@@ -2703,7 +2718,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   );
   assert.deepEqual(
     calls.map((call) => call.args[1]),
-    new Array(23).fill('test'),
+    new Array(24).fill('test'),
   );
   assert.equal(calls[3].args.includes('--real-app-port=5001'), true);
   assert.equal(calls[4].args.includes('--real-app-port=5011'), true);
@@ -2721,22 +2736,24 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   }
   assert.equal(calls[6].options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
   assert.equal(calls[7].options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
-  assert.equal(calls[13].options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
-  assert.equal(calls[13].options.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP, '1');
+  const focusedProblematicCall = calls.find((call) => call.args.includes('--grep=FTC-UTIL-PROBLEMS-010'));
+  assert.ok(focusedProblematicCall);
+  assert.equal(focusedProblematicCall.options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
+  assert.equal(focusedProblematicCall.options.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP, '1');
   assert.equal(calls[3].options.env.ALBUM_HAVEN_E2E_SEED_ARTIST_FAMILY, undefined);
   assert.equal(calls[4].options.env.ALBUM_HAVEN_E2E_SEED_ARTIST_FAMILY, undefined);
   assert.equal(calls[5].options.env.ALBUM_HAVEN_E2E_SEED_ARTIST_FAMILY, undefined);
-  assert.equal(calls[15].options.env.PLAYWRIGHT_PORT, '4174');
-  assert.equal(calls[16].options.env.PLAYWRIGHT_PORT, '4175');
-  assert.equal(calls[17].options.env.PLAYWRIGHT_PORT, '4176');
-  assert.equal(calls[18].options.env.PLAYWRIGHT_PORT, '4177');
-  assert.equal(calls[19].options.env.PLAYWRIGHT_PORT, '4178');
-  assert.equal(calls[15].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cold');
-  assert.equal(calls[16].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
-  assert.equal(calls[17].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
-  assert.equal(calls[18].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'metadata');
-  assert.equal(calls[19].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
-  const scanSamplePaths = calls.slice(15, 22).map(
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-014')).options.env.PLAYWRIGHT_PORT, '4174');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-015')).options.env.PLAYWRIGHT_PORT, '4175');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-016')).options.env.PLAYWRIGHT_PORT, '4176');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-017')).options.env.PLAYWRIGHT_PORT, '4177');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-003(C|E)')).options.env.PLAYWRIGHT_PORT, '4178');
+  assert.equal(calls[16].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cold');
+  assert.equal(calls[17].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
+  assert.equal(calls[18].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
+  assert.equal(calls[19].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'metadata');
+  assert.equal(calls[20].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
+  const scanSamplePaths = calls.slice(16, 23).map(
     (call) => call.options.env.ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH,
   );
   assert.equal(new Set(scanSamplePaths).size, 7);
@@ -2746,8 +2763,8 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.match(scanSamplePaths[3], /scan-metadata-port-4177-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[4], /scan-page-port-4178-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[6], /scan-error-port-4180-attempt-1-[0-9a-f-]{36}\.jsonl$/);
-  assert.equal(calls[21].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
-  assert.equal(calls[21].args.includes('--grep=FTC-OPS-003G'), true);
+  assert.equal(calls[22].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
+  assert.equal(calls[22].args.includes('--grep=FTC-OPS-003G'), true);
   for (const samplesPath of scanSamplePaths) assert.equal(fs.existsSync(samplesPath), false);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
@@ -2771,7 +2788,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[16].args.includes('--timeout=240000'), true);
   assert.equal(calls[17].args.includes('--timeout=240000'), true);
   assert.equal(calls[18].args.includes('--timeout=240000'), true);
-  assert.equal(calls[19].args.includes('--timeout=240000'), true);
+  assert.equal(calls[20].args.includes('--timeout=240000'), true);
   assert.equal(calls[3].args.includes('--grep=FTC-GALLERY-STARTUP-005A'), true);
   assert.equal(calls[4].args.includes('--grep=FTC-SEARCH-NAV-005A'), false);
   assert.equal(calls[5].args.includes('--grep=FTC-SEARCH-NAV-003A'), true);
@@ -2781,14 +2798,15 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[9].args.includes('--grep=FTC-GALLERY-STARTUP-005R'), true);
   assert.equal(calls[10].args.includes('--grep=FTC-GALLERY-STARTUP-005S'), true);
   assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3)'), true);
-  assert.equal(calls[12].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
-  assert.equal(calls[13].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);
-  assert.equal(calls[14].args.includes('--grep=FTC-UTIL-RULES-002P'), true);
-  assert.equal(calls[15].args.includes('--grep=FTC-OPS-014'), true);
-  assert.equal(calls[16].args.includes('--grep=FTC-OPS-015'), true);
-  assert.equal(calls[17].args.includes('--grep=FTC-OPS-016'), true);
-  assert.equal(calls[18].args.includes('--grep=FTC-OPS-017'), true);
-  assert.equal(calls[19].args.includes('--grep=FTC-OPS-003(C|E)'), true);
+  assert.equal(calls[12].args.includes('--grep=FTC-GALLERY-NAV-036'), true);
+  assert.equal(calls[13].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
+  assert.equal(calls[14].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);
+  assert.equal(calls[15].args.includes('--grep=FTC-UTIL-RULES-002P'), true);
+  assert.equal(calls[16].args.includes('--grep=FTC-OPS-014'), true);
+  assert.equal(calls[17].args.includes('--grep=FTC-OPS-015'), true);
+  assert.equal(calls[18].args.includes('--grep=FTC-OPS-016'), true);
+  assert.equal(calls[19].args.includes('--grep=FTC-OPS-017'), true);
+  assert.equal(calls[20].args.includes('--grep=FTC-OPS-003(C|E)'), true);
 });
 
 test('resolvePerformanceAttemptStatus rejects a false-zero child status when Playwright reported a failed test', () => {
@@ -2950,10 +2968,10 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 23);
+  assert.equal(calls.length, 24);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
   }
-  assert.equal(calls[19].options.env.PLAYWRIGHT_PORT, '4178');
-  assert.equal(calls[19].args.includes('--timeout=240000'), true);
+  assert.equal(calls[20].options.env.PLAYWRIGHT_PORT, '4178');
+  assert.equal(calls[20].args.includes('--timeout=240000'), true);
 });

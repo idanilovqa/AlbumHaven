@@ -8510,5 +8510,117 @@
       "mobile-gallery-header-single-line-truncation"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/virtualGalleryCardRetention.spec.js",
+    "case": "cached cards release detached ancestor siblings after section-removal",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "detached-card-cache-isolation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/virtualGalleryCardRetention.spec.js",
+    "case": "cached cards release detached ancestor siblings after section-update",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "detached-card-cache-isolation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/virtualGalleryCardRetention.spec.js",
+    "case": "cache eviction cannot keep obsolete sibling cards reachable through retained ancestors",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "bounded-detached-card-cache"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/virtualGallerySpacerGeometry.spec.js",
+    "case": "virtual row spacers retain row positions and section extent in browser layout",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "virtual-gallery-spacer-geometry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/virtualGallerySpacerGeometry.spec.js",
+    "case": "prepending unmeasured groups preserves the visible album before every paint with 0 buffered sections",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "prepaint-scroll-anchor-preservation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/virtualGallerySpacerGeometry.spec.js",
+    "case": "prepending unmeasured groups preserves the visible album before every paint with 1 buffered sections",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "prepaint-scroll-anchor-preservation"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
+    "case": "FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounded cover objects",
+    "profile": "synthetic-large-library",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "large-library:long-session-gallery-memory"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-artwork-diversity-512"
+    ],
+    "expectedContracts": [
+      "multi-page-gallery-traversal",
+      "bounded-cover-object-cache",
+      "detached-card-ancestry-observation",
+      "distinct-artwork-derived-fixture"
+    ],
+    "ownerApproval": "approved"
   }
 ]

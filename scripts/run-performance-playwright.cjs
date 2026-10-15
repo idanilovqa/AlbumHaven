@@ -49,6 +49,7 @@ const SCAN_DATABASE_NAME = 'album_haven_scan_e2e';
 const SCAN_SETUP_DATABASE_ROLE = 'album_haven_migrator';
 const SCAN_RUNTIME_DATABASE_ROLE = 'album_haven_app';
 const PRELOADED_RELEASE_FIXTURE_MODE = 'preloaded-release';
+const PRELOADED_DERIVED_FIXTURE_MODE = 'preloaded-derived';
 const GENERATED_ISOLATED_FIXTURE_MODE = 'generated-isolated';
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
   'MUSIC_DIR',
@@ -109,6 +110,7 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'search-browse',
     'root-album-browse',
     'artist-tree-scroll-navigation',
+    'gallery-artwork-diversity',
     'app-open-all-artists',
     'problematic-files-focused',
     'rules-focused',
@@ -348,6 +350,21 @@ const PERFORMANCE_TARGETS = {
       'long-press Scroll, album, Back restores an artist beyond the first root page',
       'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
     ],
+    measurementExpected: false,
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    },
+  },
+  'gallery-artwork-diversity': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_DERIVED_FIXTURE_MODE,
+    coverageClass: 'real-app-gallery-memory-diagnostic',
+    coverageDescription: 'Long-session pagination, decoded-cover diversity, detached-card bounds, and retained memory diagnostics.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js',
+    grep: 'FTC-GALLERY-NAV-036',
+    aliasNames: ['gallery-artwork-diversity'],
+    casePattern: 'FTC-GALLERY-NAV-036',
     measurementExpected: false,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
@@ -669,10 +686,10 @@ function assertPerformanceTargetFixtureConfiguration(targets, env) {
 
     const fixtureRoot = String(env.ALBUM_HAVEN_FIXTURE_ROOT || '').trim();
     const mediaRoot = String(env.ALBUM_HAVEN_MEDIA_ROOT || '').trim();
-    if (target.fixtureMode === PRELOADED_RELEASE_FIXTURE_MODE) {
+    if ([PRELOADED_RELEASE_FIXTURE_MODE, PRELOADED_DERIVED_FIXTURE_MODE].includes(target.fixtureMode)) {
       if (!fixtureRoot || !mediaRoot || !path.isAbsolute(fixtureRoot) || !path.isAbsolute(mediaRoot)) {
         throw new Error(
-          `Performance target ${targetName} uses fixture mode preloaded-release and requires absolute ALBUM_HAVEN_FIXTURE_ROOT and ALBUM_HAVEN_MEDIA_ROOT.`,
+          `Performance target ${targetName} uses fixture mode ${target.fixtureMode} and requires absolute ALBUM_HAVEN_FIXTURE_ROOT and ALBUM_HAVEN_MEDIA_ROOT.`,
         );
       }
       const expectedMediaRoot = path.resolve(path.resolve(fixtureRoot), 'media');
@@ -1025,6 +1042,19 @@ function assertSinglePreloadedFixtureProfile(targets) {
     throw new Error(
       'A grouped performance run cannot combine preloaded fixture profiles '
       + `${fixtureProfiles.join(', ')} without reloading PostgreSQL between targets. `
+      + 'Run one --test target at a time or use the cloud performance matrix.',
+    );
+  }
+  const fixtureModes = [...new Set(
+    targets
+      .filter((target) => target.kind === 'synthetic')
+      .map((target) => String(target.fixtureMode || '').trim())
+      .filter(Boolean),
+  )];
+  if (fixtureModes.includes(PRELOADED_RELEASE_FIXTURE_MODE)
+      && fixtureModes.includes(PRELOADED_DERIVED_FIXTURE_MODE)) {
+    throw new Error(
+      `A grouped performance run cannot combine fixture modes ${PRELOADED_RELEASE_FIXTURE_MODE} and ${PRELOADED_DERIVED_FIXTURE_MODE}. `
       + 'Run one --test target at a time or use the cloud performance matrix.',
     );
   }

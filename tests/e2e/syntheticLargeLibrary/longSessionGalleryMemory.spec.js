@@ -3,7 +3,7 @@ import { readDecodedProductionCardWindow } from '../poms/galleryPage.js';
 import { requirePostgresRuntimeEnv, waitForPostgresBrowseWarmRoot } from '../helpers/realAppBenchmarkHelpers.js';
 
 // Diagnostic only: no new memory budget and no forced garbage collection.
-test('diagnostic: sustained gallery traversal retains bounded cover objects', async ({
+test('FTC-GALLERY-NAV-036 diagnostic: sustained gallery traversal retains bounded cover objects', async ({
   galleryActions, navigationPanelActions, page, stepLogger,
 }, testInfo) => {
   test.setTimeout(600000);

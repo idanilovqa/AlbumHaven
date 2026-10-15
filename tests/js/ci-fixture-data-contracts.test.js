@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 23) errors.push('default performance group must expose all 23 targets');
+  if (defaults.length !== 24) errors.push('default performance group must expose all 24 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -529,7 +529,7 @@ test('functional shard contract owns all 132 browser-functional cases exactly on
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 33 performance cases across 23 targets', () => {
+test('performance target contract owns all 35 performance cases across 24 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -555,6 +555,7 @@ test('performance target contract owns all 33 performance cases across 23 target
     'paired-search-calibration',
     'root-album-browse',
     'artist-tree-scroll-navigation',
+    'gallery-artwork-diversity',
     'app-open-all-artists',
     'problematic-files-focused',
     'rules-focused',
@@ -568,10 +569,10 @@ test('performance target contract owns all 33 performance cases across 23 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 33);
+  assert.equal(expectedCases.size, 35);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 23);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 23);
+  assert.equal(contract.targets.length, 24);
+  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 24);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')
@@ -729,14 +730,14 @@ test('read-only inventory command reports complete discovery and ownership total
   assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
       browserFunctional: 132,
-      component: 203,
+      component: 209,
       mobile: 76,
-      performance: 33,
-      total: 444,
+      performance: 35,
+      total: 452,
   });
   assert.deepEqual(inventory.ownership, {
-      testDataMatrix: 444,
+      testDataMatrix: 452,
       functionalShards: 132,
-      performanceTargets: 33,
+      performanceTargets: 35,
   });
 });

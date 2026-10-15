@@ -4,8 +4,8 @@ const { spawnSync } = require('node:child_process');
 const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
 const { validatePerformanceChangeImpact } = require('./performance-change-impact.cjs');
 
-const EXPECTED_TARGET_COUNT = 23;
-const EXPECTED_CASE_COUNT = 33;
+const EXPECTED_TARGET_COUNT = 24;
+const EXPECTED_CASE_COUNT = 35;
 const MATRIX_FIELDS = ['shard', 'fixtureProfile', 'fixtureMode', 'harness', 'basePort', 'targets'];
 const CALIBRATION_POLICY = Object.freeze({
   evidenceMode: 'retained-cohorts',
@@ -27,12 +27,14 @@ const SHARD_DEFINITIONS = Object.freeze([
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
+  { shard: 'gallery-artwork-diversity', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-derived', harness: 'managed-app', basePort: '4333', targets: 'gallery-artwork-diversity' },
 ]);
 const FIXTURE_DOWNLOAD_PROFILES = Object.freeze({
   'synthetic-large-library': 'synthetic-large-library',
   'utility-problematic-files': 'utility-problematic-files',
   'playback-media': 'synthetic-large-library',
   'scan-library': 'synthetic-large-library',
+  'gallery-artwork-diversity': 'synthetic-large-library',
 });
 
 function normalizeTestPath(value) {
@@ -118,7 +120,7 @@ function validateRegistry(errors, contract, runnerModule, testDataMatrix) {
 
 function validateShardRows(errors, rawRows, contract) {
   const rows = rawRows.map((row) => Object.fromEntries(MATRIX_FIELDS.map((field) => [field, row[field]])));
-  if (rows.length !== SHARD_DEFINITIONS.length) errors.push('performance matrix must contain exactly four profile runners');
+  if (rows.length !== SHARD_DEFINITIONS.length) errors.push('performance matrix must contain exactly five profile runners');
   if (JSON.stringify(rows) !== JSON.stringify(expectedRows())) errors.push('performance shard rows disagree with the reviewed compatible allocation');
   const targetsByName = new Map((contract.targets || []).map((target) => [target.name, target]));
   const owned = [];
@@ -146,7 +148,7 @@ function validateShardRows(errors, rawRows, contract) {
   const registered = (contract.targets || []).map((target) => target.name);
   if (owned.length !== registered.length || new Set(owned).size !== registered.length
     || registered.some((name) => !owned.includes(name))) {
-    errors.push('all 23 performance targets must be owned exactly once across four profile runners');
+    errors.push('all 24 performance targets must be owned exactly once across five profile runners');
   }
 }
 
@@ -283,7 +285,7 @@ if (require.main === module) {
       for (const error of errors) process.stderr.write(`${error}\n`);
       process.exitCode = 1;
     } else {
-      process.stdout.write(`performance matrix: 4 profile runners, ${EXPECTED_TARGET_COUNT} targets, ${EXPECTED_CASE_COUNT} cases\n`);
+      process.stdout.write(`performance matrix: 5 profile runners, ${EXPECTED_TARGET_COUNT} targets, ${EXPECTED_CASE_COUNT} cases\n`);
     }
   } catch (error) {
     process.stderr.write(`${error?.message || error}\n`);

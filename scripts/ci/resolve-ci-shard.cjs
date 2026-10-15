@@ -54,6 +54,18 @@ const PERFORMANCE_SHARDS = Object.freeze({
     basePort: 4293,
     targets: ['scan-cold', 'scan-cached', 'scan-add-album', 'scan-metadata', 'scan-page', 'scan-health', 'scan-error'],
   },
+  'gallery-artwork-diversity': {
+    fixtureProfile: 'synthetic-large-library',
+    fixtureDownloadProfile: 'synthetic-large-library',
+    fixtureMode: 'preloaded-derived',
+    harness: 'managed-app',
+    basePort: 4333,
+    targets: ['gallery-artwork-diversity'],
+    generatorRepository: 'idanilovqa/album-haven-test-data',
+    generatorCommit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11',
+    variantCount: 512,
+    sourceMaxEdge: 960,
+  },
 });
 
 function resolveFunctionalShard(shard) {

@@ -29,6 +29,19 @@ test('performance shard resolver preserves the existing fixture and target mappi
     targets: ['playback-start', 'gapless-playback'],
   });
   assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 12);
+  assert.deepEqual(resolvePerformanceShard('gallery-artwork-diversity'), {
+    shard: 'gallery-artwork-diversity',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureDownloadProfile: 'synthetic-large-library',
+    fixtureMode: 'preloaded-derived',
+    harness: 'managed-app',
+    basePort: 4333,
+    targets: ['gallery-artwork-diversity'],
+    generatorRepository: 'idanilovqa/album-haven-test-data',
+    generatorCommit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11',
+    variantCount: 512,
+    sourceMaxEdge: 960,
+  });
   assert.throws(() => resolvePerformanceShard('unknown'), /Unknown performance shard/);
   assert.deepEqual(
     selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'exact').targets,

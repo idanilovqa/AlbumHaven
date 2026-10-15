@@ -2362,8 +2362,11 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     'desktop Scroll, ordinary scroll, album, Close retains the departure position',
     'Mobile Cards, covers and rows retain the jumped-to release',
     'Desktop Cards and covers retain the jumped-to release',
-    'native touch swipes track the gesture without reverse movement or layout jitter',
-    'native wheel input tracks the gesture without reverse movement or layout jitter',
+    'mobile Cards > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'mobile Covers > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'mobile Rows > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'desktop Cards > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+    'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
   ];
   const parsedTestResults = titles.map(testName => ({
     status: 'passed', testName, fullName: `FTC-GALLERY-NAV-03 > ${testName}`,
@@ -2374,6 +2377,7 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     expectedCasePatterns: target.casePatterns || [target.casePattern],
     parsedTestResults,
   };
+  assert.equal(target.casePatterns.length, 13);
   assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');
   for (const incomplete of [
     parsedTestResults.slice(0, 2),

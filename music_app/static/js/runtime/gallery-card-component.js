@@ -35,9 +35,17 @@ function buildControlledGalleryCardHtml(config) {
   const play = can('play') ? ButtonComponent.renderActionButton({
     ariaLabel: `Play ${title}`, icon: 'play', presentation: 'bare', attributes: attributes('play'),
   }) : '';
+  const completion = can('complete') && typeof config.completion?.completed === 'boolean'
+    ? ButtonComponent.renderActionButton({
+      ariaLabel: config.completion.label || `${config.completion.completed ? 'Clear completion' : 'Mark completed'}: ${title}`,
+      title: config.completion.label || `${config.completion.completed ? 'Clear completion' : 'Mark completed'}: ${title}`,
+      icon: 'complete', presentation: 'bare', disabled: config.completion.disabled === true,
+      pressed: config.completion.completed,
+      attributes: {...attributes('complete'), 'aria-pressed': String(config.completion.completed)},
+    }) : '';
   const information = displayMode === 'covers' ? `<span class="gallery-card__focus-title">${escapeHtml(title)}</span>`
     : buildGalleryCardInfoHtml({ ...config, openAttributes: '' });
-  return `<section class="album-card${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${information}${open || play ? `<div class="gallery-card__actions">${open}${play}</div>` : ''}</section>`;
+  return `<section class="album-card${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${information}${open || play || completion ? `<div class="gallery-card__actions">${open}${play}${completion}</div>` : ''}</section>`;
 }
 
 let galleryCardMetadataMotion = null;

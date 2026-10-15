@@ -17,6 +17,7 @@ from music_app.services.listening_goals_commands import GoalsError, normalize_go
 from music_app.services.listening_goal_bonus_settings import normalize_bonus_settings
 from music_app.services.listening_goal_bonus import normalize_bonus_draw
 from music_app.services.listening_goal_transition import normalize_goal_transition
+from music_app.services.listening_goal_attention import normalize_goal_attention
 from music_app.services.listening_goals_postgres import PostgresListeningGoalsService, READ, WRITE
 from music_app.services.policy import PolicyContext
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
@@ -280,3 +281,26 @@ async def set_goal_completion(request: Request):
 @router.post('/account/goals/remove')
 async def remove_goal(request: Request):
     return await _execute(request, 'remove')
+
+
+@router.get('/account/goals/attention')
+async def read_goal_attention(request: Request):
+    try:
+        _query(request)
+        context, constraints = _context(request, READ)
+        value = await run_in_threadpool(_service(request).read_attention, context, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
+
+
+@router.post('/account/goals/attention/ack')
+async def acknowledge_goal_attention(request: Request):
+    try:
+        command = normalize_goal_attention(await _body(request))
+        context, constraints = _context(request, WRITE)
+        value = await run_in_threadpool(_service(request).acknowledge_attention,
+                                       context, command, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)

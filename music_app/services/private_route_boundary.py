@@ -34,6 +34,8 @@ _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/account/goals/view"): "account.self.goals.read",
     ("GET", "/account/goals"): "account.self.goals.read",
+    ("GET", "/account/goals/attention"): "account.self.goals.read",
+    ("POST", "/account/goals/attention/ack"): "account.self.goals.write",
     ("GET", "/account/goals/history"): "account.self.goals.read",
     ("GET", "/account/goals/operations/{request_key}"): "account.self.goals.read",
     ("POST", "/account/goals/remote-evidence"): "account.self.goals.write",

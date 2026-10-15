@@ -20,6 +20,9 @@ from music_app.services import listening_goal_bonus_postgres as bonus
 from music_app.services.listening_goal_transition import (
     GoalTransitionCommand, normalize_goal_transition, transition_goal_period,
 )
+from music_app.services.listening_goal_attention import (
+    ACTION as ATTENTION_ACTION, GoalAttentionCommand, normalize_goal_attention, project_goal_attention,
+)
 from music_app.services.admin_authority import lock_admin_accounts
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.current_actor import ActorState
@@ -117,6 +120,57 @@ class PostgresListeningGoalsService:
             if getattr(error, 'sqlstate', None) in {'23505', '23503', '40001', '40P01'}:
                 raise GoalsError('concurrent_change', 409) from None
             raise
+
+    @staticmethod
+    def _attention(connection, account, now):
+        aggregate = connection.execute('select ref,revision from app.listening_goals where account_id=%s',
+                                       (account,)).fetchone()
+        # The partial current-cycle index bounds this projection to four cycles.
+        # Retained item counts never hydrate archived cycles or catalog metadata.
+        rows = connection.execute("""select c.goal_ref,c.period,c.cycle_id,c.start_date,c.due_date,c.timezone_name,
+            count(i.catalog_ref)::bigint as total,
+            count(i.manual_completed_at)::bigint as completed,
+            exists(select 1 from app.listening_goal_attention_acknowledgments a
+                where a.account_id=c.account_id and a.goal_ref=c.goal_ref and a.cycle_id=c.cycle_id
+                  and a.kind='weekly_cycle_started') as acknowledged
+            from app.listening_goal_cycles c
+            left join app.listening_goal_cycle_items i on i.account_id=c.account_id
+                and i.goal_ref=c.goal_ref and i.cycle_id=c.cycle_id and i.removed_at is null
+            where c.account_id=%s and c.closed_at is null
+            group by c.account_id,c.goal_ref,c.period,c.cycle_id,c.start_date,c.due_date,c.timezone_name
+            order by c.period""", (account,)).fetchall()
+        return project_goal_attention(aggregate, rows, now)
+
+    def read_attention(self, context, *, constraints=None):
+        with self._authorized(context, READ, constraints) as (connection, live, now):
+            return self._attention(connection, live.actor.account_id, now)
+
+    def acknowledge_attention(self, context, command, *, constraints=None):
+        if not isinstance(command, GoalAttentionCommand):
+            raise GoalsError('invalid_command')
+        command = normalize_goal_attention(command.payload())
+        with self._authorized(context, WRITE, constraints) as (connection, live, now):
+            account = live.actor.account_id
+            prior = bonus.replay(connection, account, live.actor.session_id, command)
+            if prior is not None:
+                return prior
+            attention = self._attention(connection, account, now)
+            if attention['weekly_event'] != command.event():
+                raise GoalsError('attention_event_changed', 409)
+            changed = not attention['weekly_acknowledged']
+            if changed:
+                connection.execute("""insert into app.listening_goal_attention_acknowledgments
+                    (account_id,goal_ref,cycle_id,kind,acknowledged_at)
+                    values(%s,%s,%s,'weekly_cycle_started',%s)""",
+                    (account, command.goal_ref, command.cycle_id, now))
+            receipt = {'ok': True, 'action': ATTENTION_ACTION, 'request_key': command.request_key,
+                       'event': command.event(), 'changed': changed}
+            connection.execute("""insert into app.listening_goal_operations
+                (account_id,request_key,original_session_id,action,command_digest,receipt,committed_at)
+                values(%s,%s,%s,%s,%s,%s::jsonb,%s)""",
+                (account, command.request_key, live.actor.session_id, ATTENTION_ACTION,
+                 command.digest, json.dumps(receipt), now))
+            return receipt
 
     def transition(self, context, command, *, constraints=None):
         if not isinstance(command, GoalTransitionCommand):

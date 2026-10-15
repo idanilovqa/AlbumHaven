@@ -21,9 +21,17 @@ function acceptReceipt(value, pending) {
   if (action !== 'reset') keys.push('catalog_ref');
   if (!exactKeys(value, keys) || value.ok !== true || value.action !== action
     || value.request_key !== command.request_key || value.period !== command.period
-    || value.goal_ref !== goalRef || !revision(value.revision)
+    || (action !== 'add' && value.goal_ref !== goalRef) || !revision(value.revision)
     || !(value.goal_ref === null || uuid(value.goal_ref)) || typeof value.changed !== 'boolean') malformed();
-  if (action === 'reset') {
+  if (action === 'add') {
+    if (!uuid(value.goal_ref) || (goalRef !== null && value.goal_ref !== goalRef)
+      || !uuid(value.catalog_ref) || !uuid(value.cycle_id)
+      || (pending.selectedCycle !== null && value.cycle_id !== pending.selectedCycle)
+      || (pending.selectedCycle === null && pending.existingCycles.includes(value.cycle_id))
+      || value.reason !== (value.changed ? '' : 'already_added')
+      || BigInt(value.revision) !== BigInt(command.revision) + (value.changed ? 1n : 0n)
+      || (!value.changed && (goalRef === null || !pending.members.includes(value.catalog_ref)))) malformed();
+  } else if (action === 'reset') {
     if (value.changed) {
       if (total === 0 || !uuid(command.expected_cycle_id) || !uuid(value.cycle_id)
         || value.cycle_id === command.expected_cycle_id || value.reason !== ''
@@ -38,15 +46,18 @@ function acceptReceipt(value, pending) {
       || value.changed !== expectedChanged || value.reason !== (value.changed ? '' : 'unchanged')
       || BigInt(value.revision) !== BigInt(command.revision) + (value.changed ? 1n : 0n)) malformed();
   }
-  return Object.freeze({revision: value.revision, cycle_id: value.cycle_id});
+  return Object.freeze({revision: value.revision, cycle_id: value.cycle_id, goal_ref: value.goal_ref,
+    ...(action === 'add' ? {catalog_ref: value.catalog_ref, changed: value.changed} : {})});
 }
 
 function receiptMatchesRead(data, intent) {
   const {receipt, command, action} = intent;
-  if (data.goal_ref !== intent.goalRef || BigInt(data.revision) < BigInt(receipt.revision)) return false;
+  if (data.goal_ref !== receipt.goal_ref || BigInt(data.revision) < BigInt(receipt.revision)) return false;
   if (data.revision !== receipt.revision) return true; // A newer authorized mutation may supersede this result.
   const selected = data.periods[command.period];
   if ((selected.cycle?.cycle_id ?? null) !== receipt.cycle_id) return false;
+  if (action === 'add') return (receipt.changed ? GOAL_PERIODS.slice(GOAL_PERIODS.indexOf(command.period)) : [command.period])
+    .every(period => data.periods[period].album_refs.includes(receipt.catalog_ref));
   if (action === 'remove') return !selected.album_refs.includes(command.catalog_ref);
   if (action !== 'completion') return true;
   if (!selected.album_refs.includes(command.catalog_ref)) return false;
@@ -61,7 +72,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   timezone = Intl.DateTimeFormat().resolvedOptions().timeZone}) {
   let disposed = false, epoch = 0, sequence = 0, active = null, pending = null;
   let snapshot = Object.freeze({status: 'idle', data: null, period: 'week', mutation: 'idle', error: null});
-  const listeners = new Set(), issuedKeys = new Set();
+  const listeners = new Set(), issuedKeys = new Set(), usedEvidence = new WeakSet();
 
   function publish(patch) {
     if (disposed) return;
@@ -90,7 +101,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     publish({status: 'denied', data: null, mutation: 'idle',
       error: failure('denied', 'Goals are not available for this account.')});
   }
-  const actionLabel = intent => ({reset: 'Reset', completion: 'Completion', remove: 'Removal'})[intent?.action] || 'Goal change';
+  const actionLabel = intent => ({add: 'Add', reset: 'Reset', completion: 'Completion', remove: 'Removal'})[intent?.action] || 'Goal change';
   function uncertain() {
     publish({status: snapshot.data ? 'ready' : 'unavailable', mutation: 'uncertain',
       error: failure('uncertain', `The ${actionLabel(pending)} outcome is unknown. Retry checks its saved result first.`)});
@@ -132,9 +143,14 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
         // A rejection is definitive for this command. Fresh state is required
         // before another explicitly requested mutation can obtain a new key.
         const label = actionLabel(intent);
+        const message = intent.action === 'add' && error.code === 'weekly_capacity'
+          ? 'The weekly goal is full. Reload Goals and choose another period or remove a weekly album.'
+          : intent.action === 'add' && error.code === 'evidence_unavailable'
+            ? 'This album preview has expired or is unavailable. Reload Goals, select the album again and review a new preview.'
+            : `${label} was rejected. Reload Goals before trying again.`;
         pending = null;
         publish({status: 'unavailable', data: null, mutation: 'conflict',
-          error: failure('conflict', `${label} was rejected. Reload Goals before trying again.`)});
+          error: failure('conflict', message)});
       } else uncertain();
     }
     return snapshot;
@@ -149,25 +165,25 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     return snapshot;
   }
   function ready(action) {
-    const capability = {reset: 'can_reset', completion: 'can_complete', remove: 'can_remove'}[action];
+    const capability = {add: 'can_add', reset: 'can_reset', completion: 'can_complete', remove: 'can_remove'}[action];
     return !disposed && !pending && snapshot.status === 'ready' && snapshot.mutation === 'idle'
       && snapshot.data?.allowed_actions[capability] === true;
   }
-  function startIntent(action, data, period, selected, fields = {}) {
+  function startIntent(action, data, period, selected, fields = {}, evidence = null) {
     let command;
     try {
       const key = requestKey(), cycle = selected.cycle?.cycle_id ?? null;
       if (!uuid(key) || issuedKeys.has(key) || !revision(data.revision)
         || !(cycle === null || uuid(cycle))) throw new Error();
       let calendar = {};
-      if (action === 'reset') {
+      if (action === 'reset' || action === 'add') {
         if (typeof timezone !== 'string' || !timezone) throw new Error();
         // Only validate the selected zone. Calendar boundaries remain server-owned.
         new Intl.DateTimeFormat('en', {timeZone: timezone});
         calendar = {timezone_name: timezone};
       }
       command = Object.freeze({revision: data.revision, period, ...calendar,
-        expected_cycle_id: cycle, request_key: key, ...fields});
+        ...(action === 'add' ? {} : {expected_cycle_id: cycle}), request_key: key, ...fields});
       issuedKeys.add(key);
     } catch {
       if (!disposed && snapshot.data === data && snapshot.period === period) {
@@ -177,12 +193,16 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     }
     // Even key creation can reenter application code. Never dispatch against a
     // different captured owner, revision, period or capability after that seam.
-    if (!ready(action) || snapshot.data !== data || snapshot.period !== period) return Promise.resolve(snapshot);
+    if (!ready(action) || snapshot.data !== data || snapshot.period !== period
+      || (action === 'add' && (!provider.isEvidenceCurrent(evidence) || usedEvidence.has(evidence)))) return Promise.resolve(snapshot);
+    if (action === 'add') usedEvidence.add(evidence);
     const expectedChanged = action === 'remove' || (action === 'completion' && (command.completed
       ? GOAL_PERIODS.some(name => data.periods[name].album_refs.includes(command.catalog_ref)
         && data.periods[name].manual_completed_at[command.catalog_ref] === null)
       : selected.manual_completed_at[command.catalog_ref] !== null));
-    pending = {action, command, goalRef: data.goal_ref, total: selected.total, expectedChanged, acknowledged: false};
+    pending = {action, command, goalRef: data.goal_ref, total: selected.total, expectedChanged, acknowledged: false,
+      ...(action === 'add' ? {selectedCycle: selected.cycle?.cycle_id ?? null, members: selected.album_refs,
+        existingCycles: GOAL_PERIODS.map(name => data.periods[name].cycle?.cycle_id).filter(Boolean)} : {})};
     return write(begin(), pending);
   }
   function reset(expected) {
@@ -192,6 +212,14 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     if (expected !== undefined && (!object(expected) || expected.period !== period
       || expected.revision !== data.revision || expected.cycle_id !== cycle)) return Promise.resolve(snapshot);
     return startIntent('reset', data, period, selected);
+  }
+  function add(evidence, expected) {
+    if (!ready('add') || !object(expected) || !object(evidence) || usedEvidence.has(evidence)
+      || !provider.isEvidenceCurrent(evidence)) return Promise.resolve(snapshot);
+    const data = snapshot.data, period = snapshot.period;
+    if (!ready('add') || expected.data !== data || expected.period !== period || expected.revision !== data.revision) return Promise.resolve(snapshot);
+    return startIntent('add', data, period, data.periods[period],
+      {evidence_ref: evidence.evidence_ref, evidence_version: evidence.evidence_version}, evidence);
   }
   function memberIntent(action, catalogRef, completed, expected) {
     if (!ready(action) || !uuid(catalogRef) || !object(expected)) return Promise.resolve(snapshot);
@@ -244,7 +272,8 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    load, selectPeriod, reset, setCompletion, remove, retry,
+    load, selectPeriod, reset, setCompletion, remove, add, retry,
+    admissionFailed(error) {if (!disposed && denied(error)) clearDenied(); return snapshot;},
     dispose() {
       if (disposed) return;
       disposed = true;

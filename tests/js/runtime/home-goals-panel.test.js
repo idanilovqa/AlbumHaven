@@ -32,12 +32,15 @@ async function mounted(t, data) {
   await settle(); h.drain(); return {...h, header, wire, owner};
 }
 
-test('Goals empty copy has no empty progress or misleading admission/play/share action', async t => {
+test('Goals empty copy has one real central Start action and no empty progress or duplicate header action', async t => {
   const h = await mounted(t, value());
   assert.match(h.host.textContent, /The goals were not set/);
   assert.equal(h.header.content.querySelector('.album-progress').hidden, true);
   assert.equal(h.header.content.querySelector('[role="progressbar"]'), null);
-  for (const label of ['Start','Add','Play Top','Share','Reset']) assert.equal(h.named(label), undefined);
+  for (const label of ['Add','Play Top','Share','Reset']) assert.equal(h.named(label), undefined);
+  assert.ok(h.named('Start'));
+  assert.ok(h.host.querySelector('.home-goals__empty-state').contains(h.named('Start')));
+  assert.equal(h.header.actions.contains(h.named('Start')), false);
   assert.deepEqual(h.wire.requests.map(row => row.path), ['/account/goals']);
 });
 

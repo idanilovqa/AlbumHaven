@@ -2,14 +2,15 @@ import {createGoalsProvider} from './goals-provider.mjs';
 import {createGoalsController} from './goals-model.mjs';
 import {mountChoice, mountButton} from './native-controls.mjs';
 import {mountAlbumProgress} from './album-progress.mjs';
+import {mountGoalAdmission} from './goals-admission.mjs';
 import {openNativeDialog} from './native-dialog.mjs';
 
 const periodIcons = {week: 'calendar-week', month: 'calendar-month', 'six-months': 'calendar-six-months', year: 'calendar-year'};
 const periods = [['week', '1 week'], ['month', '1 month'], ['six-months', '6 months'], ['year', 'This year']];
 export function mountGoalsPanel(host, runtime, initial) {
   const doc = host.ownerDocument;
-  let provider, controller, resetHost, periodHost, progressHost, body, status, error, retryHost, list;
-  let disposed = false, dialog = null, dialogGuard = null, unsubscribe, choice, progress, reset, retry;
+  let provider, controller, resetHost, periodHost, progressHost, body, status, error, retryHost, list, emptyHost, startHost, addHost;
+  let disposed = false, dialog = null, dialogGuard = null, unsubscribe, choice, progress, reset, retry, start, add;
   let rendering = false, queuedRender = false, frameSnapshot = null;
   let menu = null, menuGuard = null, menuGeneration = 0;
   const nodes = [], rows = new Map();
@@ -53,6 +54,27 @@ export function mountGoalsPanel(host, runtime, initial) {
   function disposeRow(row) {
     row.removeEventListener('contextmenu', row.goalContextMenu);
     try {retireRowAction(row);} finally {row.goalActionHost = null; row.remove();}
+  }
+  function openAdmission() {
+    const captured = controller.getSnapshot(), data = captured.data, period = captured.period;
+    const valid = () => current() && controller.getSnapshot().status === 'ready'
+      && controller.getSnapshot().mutation === 'idle' && controller.getSnapshot().data === data
+      && controller.getSnapshot().period === period && data?.allowed_actions.can_add === true;
+    if (!valid()) return;
+    closeMenu(); closeDialog(); if (!valid()) return;
+    const expected = Object.freeze({data, period, revision: data.revision});
+    const opened = openNativeDialog(runtime, {title: 'Add albums to Goals',
+      returnFocus: () => (data.periods[period].total ? addHost : startHost).querySelector('button')}, {
+      fallbackHost: body,
+      mount(content, close) {return mountGoalAdmission(content, runtime, {provider, controller, expected, isCurrent: valid,
+        onClose: () => close(), onConfirm: (evidence, capturedExpected) => {
+          if (!valid() || capturedExpected !== expected) return;
+          close({restoreFocus: false});
+          if (valid()) void controller.add(evidence, expected);
+        }});},
+      onClose() {dialog = null; dialogGuard = null;},
+    });
+    if (!valid() || opened.closed) opened.dispose(); else {dialog = opened; dialogGuard = valid;}
   }
   function confirmReset() {
     const captured = controller.getSnapshot(), period = captured.period, data = captured.data;
@@ -102,6 +124,14 @@ export function mountGoalsPanel(host, runtime, initial) {
       onClick: confirmReset});
     if (!checkpoint()) return;
     resetHost.hidden = snapshot.status !== 'ready' || !selected?.cycle || selected.total === 0;
+    const canAdd = snapshot.status === 'ready' && data?.allowed_actions.can_add === true;
+    startHost.hidden = !canAdd || selected.total !== 0;
+    addHost.hidden = !canAdd || selected.total === 0;
+    start.update({label: 'Start', variant: 'primary', disabled: !canAdd || snapshot.mutation !== 'idle', onClick: openAdmission});
+    if (!checkpoint()) return;
+    add.update({label: 'Add', icon: 'add', disabled: !canAdd || snapshot.mutation !== 'idle', onClick: openAdmission});
+    if (!checkpoint()) return;
+    emptyHost.hidden = snapshot.status === 'ready' && selected.total > 0;
     status.setAttribute('role', 'status');
     status.textContent = snapshot.status === 'ready' ? selected.total ? '' : 'The goals were not set'
       : snapshot.status === 'loading' || snapshot.status === 'idle' ? 'Loading Goals…'
@@ -158,22 +188,25 @@ export function mountGoalsPanel(host, runtime, initial) {
   }
   function dispose() {
     if (disposed) return; disposed = true; unsubscribe?.(); closeMenu(); closeDialog(); controller?.dispose(); provider?.dispose();
-    retry?.dispose(); reset?.dispose(); progress?.dispose(); choice?.dispose();
+    retry?.dispose(); start?.dispose(); add?.dispose(); reset?.dispose(); progress?.dispose(); choice?.dispose();
     for (const row of rows.values()) disposeRow(row);
     nodes.reverse().forEach(value => value.remove()); rows.clear();
   }
   try {
     provider = createGoalsProvider(initial.transport); controller = createGoalsController({provider});
     const firstAction = initial.header.actions.firstChild;
-    resetHost = node(initial.header.actions, 'span'); periodHost = node(initial.header.actions, 'span');
-    initial.header.actions.insertBefore(resetHost, firstAction); initial.header.actions.insertBefore(periodHost, firstAction);
-    progressHost = node(initial.header.content, 'span'); body = node(host); status = node(body); error = node(body);
+    resetHost = node(initial.header.actions, 'span'); addHost = node(initial.header.actions, 'span'); periodHost = node(initial.header.actions, 'span');
+    initial.header.actions.insertBefore(resetHost, firstAction); initial.header.actions.insertBefore(addHost, firstAction); initial.header.actions.insertBefore(periodHost, firstAction);
+    progressHost = node(initial.header.content, 'span'); body = node(host);
+    emptyHost = node(body); emptyHost.className = 'home-goals__empty-state'; status = node(emptyHost); startHost = node(emptyHost, 'span'); error = node(body);
     retryHost = node(body, 'span'); body.className = 'home-recent__body gallery-scrollbar';
     list = node(body); list.className = 'home-recent__rows'; list.dataset.homeDisplay = 'cards';
     list.setAttribute('aria-label', 'Goal albums');
     choice = mountChoice(periodHost, runtime, {label: 'Period', options: periods, value: 'week'});
     progress = mountAlbumProgress(progressHost);
     reset = mountButton(resetHost, runtime, {label: 'Reset', icon: 'undo', disabled: true});
+    start = mountButton(startHost, runtime, {label: 'Start', variant: 'primary', disabled: true});
+    add = mountButton(addHost, runtime, {label: 'Add', icon: 'add', disabled: true});
     retry = mountButton(retryHost, runtime, {label: 'Retry', disabled: true});
     unsubscribe = controller.subscribe(render); render(); void controller.load();
   } catch (error) {dispose(); throw error;}

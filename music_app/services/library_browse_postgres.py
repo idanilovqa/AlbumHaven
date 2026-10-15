@@ -755,8 +755,12 @@ class PostgresLibraryBrowseRepository:
             )
             phase_ms["aliases"] = (perf_counter() - phase_started_at) * 1000
             phase_started_at = perf_counter()
-            support_state = self._inventory_repository.load_support_state(
-                connection=connection,
+            support_state = (
+                {}
+                if sidebar_only
+                else self._inventory_repository.load_support_state(
+                    connection=connection,
+                )
             )
             phase_ms["support"] = (perf_counter() - phase_started_at) * 1000
             phase_started_at = perf_counter()

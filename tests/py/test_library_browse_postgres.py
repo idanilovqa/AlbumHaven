@@ -1966,9 +1966,7 @@ def test_root_sidebar_does_not_queue_settings_work_and_closes_database(monkeypat
     monkeypatch.setattr(
         repository._inventory_repository,
         "load_support_state",
-        lambda **_kwargs: pytest.fail(
-            "sidebar-only startup must not load unrelated support state"
-        ),
+        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}},
     )
     monkeypatch.setattr(
         repository,
@@ -4079,7 +4077,9 @@ def test_root_startup_preview_sidebar_only_skips_album_preview_work(monkeypatch)
     monkeypatch.setattr(
         repository._inventory_repository,
         "load_support_state",
-        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}},
+        lambda **_kwargs: pytest.fail(
+            "sidebar-only startup must not load unrelated support state"
+        ),
     )
     monkeypatch.setattr(
         repository,

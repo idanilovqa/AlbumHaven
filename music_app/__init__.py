@@ -239,7 +239,7 @@ def _create_asgi_runtime_state():
 
 
 def _configure_asgi_app(app, runtime) -> None:
-    from fastapi.staticfiles import StaticFiles
+    from music_app.services.static_assets import NativeModuleStaticFiles
     from fastapi.templating import Jinja2Templates
 
     from music_app.routes.api_read_asgi_routes import router as api_read_asgi_router
@@ -362,7 +362,7 @@ def _configure_asgi_app(app, runtime) -> None:
             response.headers["Expires"] = "0"
         return response
 
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.mount("/static", NativeModuleStaticFiles(directory=str(static_dir)), name="static")
     app.include_router(auth_asgi_router)
     from music_app.routes.friends_asgi import router as friends_asgi_router
 

@@ -1,29 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const vm = require('node:vm');
-const Module = require('node:module');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime, readRepo} = require('./native-home-harness.cjs');
+const {readRepo} = require('./native-home-harness.cjs');
+const {fixture} = require('./playlist-native-review-fixture.cjs');
 
-// Pure DTO/SSR/native component contracts. No browser, transport, DB, geometry,
-// or E2E acceptance is claimed by this independently owned fixture.
-const root = path.resolve(__dirname, '../../..');
-function component(file) {
-  const built = buildSync({entryPoints: [path.join(root, file)], bundle: true,
-    platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']});
-  const loaded = new Module(`${__filename}.${path.basename(file)}.cjs`, module);
-  loaded.filename = `${__filename}.${path.basename(file)}.cjs`; loaded.paths = module.paths;
-  loaded._compile(built.outputFiles[0].text, loaded.filename);
-  return loaded.exports;
-}
-const {ActivityPanel} = component('music_app/static/js/home-friends/activity.jsx');
-const {ComparisonPanel, ComparisonCards, comparisonTableHtml, projectComparisonRows} = component('music_app/static/js/home-friends/comparison.jsx');
-const {playlistTableHtml} = component('music_app/static/js/playlists/track-table.jsx');
-const {missingPlaylistDraftTableHtml} = component('music_app/static/js/playlists/draft.jsx');
-const env = createNativeHomeRuntime();
+// Real native owner/DTO contracts. No browser geometry acceptance is claimed.
+const env = fixture();
+env.host.remove();
+let ActivityPanel, ComparisonPanel, ComparisonCards, comparisonTableHtml,
+  projectComparisonRows, playlistTableHtml, missingPlaylistDraftTableHtml;
 for (const name of ['compact-data-table.js', 'album-track-table.js', 'trigger-anchor.js', 'library-settings.js']) {
   vm.runInContext(readRepo(`music_app/static/js/runtime/${name}`), env.context);
 }
@@ -37,12 +22,37 @@ const runtime = {
   galleryCardHtml: env.context.buildGalleryCardHtml, artboxHtml: env.context.buildAlbumArtboxHtml,
   alertHtml: env.context.buildOnPageAlertHtml, openChoice: env.context.openUtilityChoiceDropdown,
   viewChooserHtml: options => env.context.UnfoldingActionButton.render(options),
+  mountViewChooser: (element, options) => env.context.UnfoldingActionButton.mount(element, options),
+  viewIconHtml: value => {
+    if (!['list', 'cards', 'covers'].includes(value)) return '';
+    const holder = env.document.createElement('div');
+    holder.innerHTML = env.context.buildGalleryBarHtml({});
+    return holder.querySelector(`[data-gallery-view-choice="${value}"] svg`)?.outerHTML || '';
+  },
   albumTrackRow: (row, index) => env.context.buildAlbumTrackTableRow(row, index, {readOnly: true}),
   preferredTimeZone: () => 'UTC',
 };
 const host = html => {const element = env.document.createElement('div'); element.innerHTML = html; return element;};
 const ready = rows => ({status: 'ready', data: {rows}});
-const render = (Component, props) => host(renderToStaticMarkup(React.createElement(Component, {runtime, ...props})));
+const mounted = [];
+const render = (mount, props) => {
+  const element = env.document.createElement('section'); env.document.body.append(element);
+  try {
+    const owner = mount(element, runtime, {view: 'rows', ...props});
+    mounted.push({owner, element});
+    return element;
+  } catch (error) {element.remove(); throw error;}
+};
+const baselineListeners = env.listeners().length;
+test.afterEach(() => {
+  let failure;
+  for (const {owner, element} of mounted.splice(0).reverse()) {
+    try {owner.dispose(); assert.equal(element.childNodes.length, 0);}
+    catch (error) {failure ??= error;} finally {element.remove();}
+  }
+  assert.equal(env.listeners().length, baselineListeners, 'native owner listeners retire');
+  if (failure) throw failure;
+});
 const ratingCell = (element, key = 'rating') => element.querySelector(`[role="cell"][data-cdt-column="${key}"]`);
 function unrated(element, kind) {
   assert.ok(element, 'rating surface exists');
@@ -60,6 +70,11 @@ const preference = (rating = null) => ({identity: 'native-preference:known-unrat
 const friend = {account_ref: 'friend:known-unrated', relationship: 'accepted', display_name: 'Friend', allowed_actions: {can_compare: true}};
 let model, metrics, playlists, facts, preferences;
 test.before(async () => {
+  ({mountActivityPanel: ActivityPanel} = await import('../../../music_app/static/js/home-friends/activity.mjs'));
+  ({mountComparisonPanel: ComparisonPanel, mountComparisonCards: ComparisonCards,
+    comparisonTableHtml, projectComparisonRows} = await import('../../../music_app/static/js/home-friends/comparison.mjs'));
+  ({playlistTableHtml} = await import('../../../music_app/static/js/playlists/native-track-table.mjs'));
+  ({missingPlaylistDraftTableHtml} = await import('../../../music_app/static/js/playlists/native-draft.mjs'));
   model = await import('../../../music_app/static/js/home-friends/model.mjs');
   metrics = await import('../../../music_app/static/js/playlists/track-metrics.mjs');
   playlists = await import('../../../music_app/static/js/playlists/model.mjs');

@@ -5434,3 +5434,47 @@ test('pagination regrouping flushes before coalesced Artist Tree settlement', ()
   assert.deepEqual(captures, ['none', 'Updated Artist']);
   assert.deepEqual(resizedArtists, ['Updated Artist']);
 });
+
+test('window resize waits for an active touch gesture final position', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const reflows = [];
+  virtualGrid.recalculate = options => {
+    reflows.push({ phase: 'recalculate', scrollTop: scrollEl.scrollTop, options });
+  };
+  virtualGrid.render = () => {
+    reflows.push({ phase: 'render', scrollTop: scrollEl.scrollTop });
+  };
+  virtualGrid.scheduleMeasureRows = () => {
+    reflows.push({ phase: 'measure', scrollTop: scrollEl.scrollTop });
+  };
+
+  scrollEl.scrollTop = 4100;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 4172;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  virtualGrid.onResize();
+
+  assert.deepEqual(reflows, []);
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  context.__scheduledBrowserTimeouts.at(-1).callback();
+
+  assert.deepEqual(reflows.map(reflow => reflow.phase), ['recalculate', 'render', 'measure']);
+  assert.deepEqual(reflows.map(reflow => reflow.scrollTop), [4172, 4172, 4172]);
+});
+
+test('an immediate gallery render supersedes deferred window resize', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  virtualGrid.onResize();
+  assert.notEqual(virtualGrid._deferredResizeOptions, null);
+
+  virtualGrid.setGroups([], [], [], { preserveScroll: false });
+
+  assert.equal(virtualGrid._deferredResizeOptions, null);
+});

@@ -35332,6 +35332,7 @@ class VirtualArtistGrid {
     this._touchScrollGestureHadScroll = false;
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
+    this._deferredResizeOptions = null;
     this._resetScrollAfterMeasure = false;
     this.isScrollSettled = true;
     this._diagnosticSequence = 0;
@@ -35439,6 +35440,7 @@ class VirtualArtistGrid {
     this._touchScrollGestureHadScroll = false;
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
+    this._deferredResizeOptions = null;
     if (this._measureRaf) {
       cancelBrowserAnimationFrame(this._measureRaf);
       this._measureRaf = null;
@@ -35871,6 +35873,7 @@ class VirtualArtistGrid {
     }
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
+    this._deferredResizeOptions = null;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
     const hasPendingScrollRender = Boolean(supersededScrollRenderRafOwner);
     this._renderGeneration += 1;
@@ -36377,6 +36380,7 @@ class VirtualArtistGrid {
       hadScroll
       || this._deferredSetGroups
       || this._deferredArtistTreeSettlement
+      || this._deferredResizeOptions
     ) {
       this.scheduleSettledMeasurement();
     }
@@ -36390,7 +36394,9 @@ class VirtualArtistGrid {
       this.isScrollSettled = true;
       const deferredSetGroups = this._deferredSetGroups;
       const deferredArtistTreeSettlement = this._deferredArtistTreeSettlement;
+      const deferredResizeOptions = this._deferredResizeOptions;
       this._deferredArtistTreeSettlement = false;
+      this._deferredResizeOptions = null;
       if (deferredSetGroups) {
         this._deferredSetGroups = null;
         this.setGroups(
@@ -36401,11 +36407,12 @@ class VirtualArtistGrid {
           deferredSetGroups.layoutConfig,
         );
       }
+      if (deferredResizeOptions) this.onResize(deferredResizeOptions);
       if (deferredArtistTreeSettlement) {
         this.onArtistTreeSettled();
         return;
       }
-      if (deferredSetGroups) return;
+      if (deferredSetGroups || deferredResizeOptions) return;
       this.scheduleMeasureRows(true);
     }, 96);
   }
@@ -36431,6 +36438,14 @@ class VirtualArtistGrid {
   }
 
   onResize(options = {}) {
+    if (this._touchScrollGestureActive || !this.isScrollSettled) {
+      this._deferredResizeOptions = { ...options };
+      this.recordDiagnosticEvent('resize-deferred', {
+        touchGestureActive: this._touchScrollGestureActive,
+      });
+      return;
+    }
+    this._deferredResizeOptions = null;
     const artistTreeTransitioning = document.getElementById('shell-navigation-rail')
       ?.classList?.contains?.('is-transitioning');
     if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;

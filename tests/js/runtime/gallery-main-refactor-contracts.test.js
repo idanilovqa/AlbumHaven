@@ -5,6 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const runtimeRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime');
+// Production appearance-bootstrap loads this canonical primitive before deferred runtime.
+const ButtonComponent = require(path.join(runtimeRoot, '..', 'button-component.js'));
 const proposedRuntimeFiles = [
   'album-artbox.js',
   'gallery-main-components.js',
@@ -123,6 +125,7 @@ test('app-bar dropdown surfaces use Settings panel text and hover tokens after p
 
 function loadRuntime(overrides = {}) {
   const context = {
+    ButtonComponent,
     escapeHtml: (value) => String(value ?? '')
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -241,7 +244,19 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   assert.match(bar, /Neal Morse family/);
   assert.match(bar, /3 artists/);
   assert.match(bar, /12 albums/);
-  assert.equal((bar.match(/data-gallery-bar-action=/g) || []).length, 3);
+  const actions = [...bar.matchAll(/data-gallery-bar-action="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(actions.length, 4);
+  const originalActions = actions.filter(action => action !== 'popular-tracks');
+  assert.equal(originalActions.length, 3);
+  assert.deepEqual(originalActions, ['artist-family', 'view', 'album-types']);
+  assert.equal(actions[0], 'popular-tracks');
+  const popularButton = bar.match(/<button\b[^>]*data-gallery-bar-action="popular-tracks"[^>]*>[\s\S]*?<\/button>/)?.[0];
+  assert.equal(popularButton, ButtonComponent.renderActionButton({
+    icon: 'play', ariaLabel: 'Play most popular tracks', presentation: 'bare',
+    className: 'gallery-action-button',
+    attributes: {'data-gallery-bar-action': 'popular-tracks', hidden: ''},
+  }));
+  assert.match(popularButton, /<button\b[^>]*\shidden(?:="")?(?=\s|>)/);
   assert.match(bar, /data-gallery-bar-action="artist-family"/);
   assert.match(bar, /data-gallery-bar-action="view"/);
   assert.match(bar, /data-gallery-bar-action="album-types"/);

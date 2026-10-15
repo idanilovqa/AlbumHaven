@@ -152,15 +152,16 @@ class PostgresListeningGoalsService:
         if aggregate is None:
             return aggregate, state, []
         albums = connection.execute('''select * from app.listening_goal_albums where account_id=%s
-            order by original_position''', (account,)).fetchall()
+            order by current_position nulls last,original_position''', (account,)).fetchall()
+        albums = [row for row in albums if row['current_position'] is not None]
         state['album_refs'] = [str(row['catalog_ref']) for row in albums]
-        rows = connection.execute('''select * from app.listening_goal_assignments where account_id=%s
+        rows = connection.execute('''select * from app.listening_goal_assignments where account_id=%s and removed_at is null
             order by position''', (account,)).fetchall()
         state['assignments'] = [{'assignment_id': str(row['assignment_id']), 'album_ref': str(row['catalog_ref']),
             'period': row['period'], 'assigned_at': _iso(row['assigned_at'])} for row in rows]
         cycles = connection.execute('''select * from app.listening_goal_cycles where account_id=%s
             order by period,position''', (account,)).fetchall()
-        items = connection.execute('''select * from app.listening_goal_cycle_items where account_id=%s
+        items = connection.execute('''select * from app.listening_goal_cycle_items where account_id=%s and removed_at is null
             order by cycle_id,position''', (account,)).fetchall()
         by_cycle = {}
         for row in items:
@@ -202,7 +203,8 @@ class PostgresListeningGoalsService:
             return {'goal_ref': str(aggregate['ref']) if aggregate else None,
                     'revision': str(aggregate['revision']) if aggregate else '1',
                     'periods': periods,
-                    'allowed_actions': {'can_read': True, 'can_add': can_write, 'can_reset': can_write},
+                    'allowed_actions': {'can_read': True, 'can_add': can_write, 'can_reset': can_write,
+                                        'can_complete': can_write, 'can_remove': can_write},
                     'albums': [{'catalog_ref': str(row['catalog_ref']), 'title': row['title'],
                         'artist_display': row['artist_display'], 'first_release_date': row['first_release_date'],
                         'primary_type': row['primary_type']} for row in albums]}
@@ -243,26 +245,58 @@ class PostgresListeningGoalsService:
         else:
             connection.execute('''update app.listening_goals set revision=%s,updated_at=%s
                 where account_id=%s''', (revision, now, account))
+        retained = connection.execute('''select catalog_ref,original_position,current_position
+            from app.listening_goal_albums where account_id=%s and goal_ref=%s''', (account, ref)).fetchall()
+        by_album = {str(row['catalog_ref']): row for row in retained}
+        original_position = max((row['original_position'] for row in retained), default=0)
+        current_position = max((row['current_position'] or 0 for row in retained), default=0)
         previous_albums = set(before['album_refs'])
-        for position, album in enumerate(after['album_refs'], 1):
+        for album in previous_albums - set(after['album_refs']):
+            connection.execute('''update app.listening_goal_albums set current_position=null
+                where account_id=%s and goal_ref=%s and catalog_ref=%s''', (account, ref, album))
+        for album in after['album_refs']:
             if album in previous_albums:
+                continue
+            current_position += 1
+            if current_position > BIGINT_MAX:
+                raise GoalsError('order_exhausted', 409)
+            if album in by_album:
+                if by_album[album]['current_position'] is not None:
+                    raise RuntimeError('Retained Goal active order is inconsistent.')
+                connection.execute('''update app.listening_goal_albums set current_position=%s
+                    where account_id=%s and goal_ref=%s and catalog_ref=%s''',
+                    (current_position, account, ref, album))
                 continue
             if evidence is None:
                 raise RuntimeError('Goal album admission evidence is missing.')
+            original_position += 1
+            if original_position > BIGINT_MAX:
+                raise GoalsError('order_exhausted', 409)
             connection.execute('''insert into app.listening_goal_albums
-                (account_id,goal_ref,catalog_ref,original_position,title,artist_display,
+                (account_id,goal_ref,catalog_ref,original_position,current_position,title,artist_display,
                  first_release_date,primary_type,evidence_ref,evidence_version,admitted_at)
-                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-                (account, ref, album, position, evidence['title'], evidence['artist_display'],
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                (account, ref, album, original_position, current_position, evidence['title'], evidence['artist_display'],
                  evidence['first_release_date'], evidence['primary_type'], evidence['ref'],
                  evidence['evidence_version'], now))
         previous_assignments = {row['assignment_id'] for row in before['assignments']}
-        for position, row in enumerate(after['assignments'], 1):
+        next_assignments = {row['assignment_id'] for row in after['assignments']}
+        for assignment in previous_assignments - next_assignments:
+            connection.execute('''update app.listening_goal_assignments set removed_at=%s
+                where account_id=%s and goal_ref=%s and assignment_id=%s and removed_at is null''',
+                (now, account, ref, assignment))
+        assignment_position = connection.execute('''select coalesce(max(position),0) as position
+            from app.listening_goal_assignments where account_id=%s and goal_ref=%s''',
+            (account, ref)).fetchone()['position']
+        for row in after['assignments']:
             if row['assignment_id'] not in previous_assignments:
+                assignment_position += 1
+                if assignment_position > BIGINT_MAX:
+                    raise GoalsError('order_exhausted', 409)
                 connection.execute('''insert into app.listening_goal_assignments
                     (assignment_id,account_id,goal_ref,catalog_ref,period,assigned_at,position)
                     values(%s,%s,%s,%s,%s,%s,%s)''', (row['assignment_id'], account, ref,
-                        row['album_ref'], row['period'], row['assigned_at'], position))
+                        row['album_ref'], row['period'], row['assigned_at'], assignment_position))
         for period, value in after['periods'].items():
             old = before['periods'].get(period)
             previous = {cycle['cycle_id']: cycle for cycle in
@@ -285,13 +319,47 @@ class PostgresListeningGoalsService:
                         values(%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
                         (cycle['cycle_id'], account, ref, period, position, cycle['started_at'],
                          cycle['start_date'], cycle['due_date'], cycle['timezone_name']))
+                # Closed-cycle rows are immutable. Domain transitions may close
+                # the former current cycle but never edit its members or marks.
+                if 'closed_at' in cycle:
+                    continue
                 old_members = set(prior['album_refs']) if prior else set()
-                for member_position, album in enumerate(cycle['album_refs'], 1):
+                members = set(cycle['album_refs'])
+                for album in old_members - members:
+                    connection.execute('''update app.listening_goal_cycle_items
+                        set removed_at=%s,manual_completed_at=null
+                        where account_id=%s and goal_ref=%s and cycle_id=%s and catalog_ref=%s
+                          and removed_at is null''', (now, account, ref, cycle['cycle_id'], album))
+                stored = connection.execute('''select catalog_ref,position,removed_at
+                    from app.listening_goal_cycle_items
+                    where account_id=%s and goal_ref=%s and cycle_id=%s''',
+                    (account, ref, cycle['cycle_id'])).fetchall()
+                by_member = {str(row['catalog_ref']): row for row in stored}
+                member_position = max((row['position'] for row in stored), default=0)
+                marks = cycle['completion'].get(str(account), {})
+                old_marks = prior['completion'].get(str(account), {}) if prior else {}
+                for album in cycle['album_refs']:
                     if album not in old_members:
-                        connection.execute('''insert into app.listening_goal_cycle_items
-                            (account_id,goal_ref,cycle_id,catalog_ref,position,manual_completed_at)
-                            values(%s,%s,%s,%s,%s,%s)''', (account, ref, cycle['cycle_id'], album,
-                                member_position, cycle['completion'].get(str(account), {}).get(album)))
+                        member_position += 1
+                        if member_position > BIGINT_MAX:
+                            raise GoalsError('order_exhausted', 409)
+                        if album in by_member:
+                            if by_member[album]['removed_at'] is None:
+                                raise RuntimeError('Retained Goal membership is inconsistent.')
+                            connection.execute('''update app.listening_goal_cycle_items
+                                set removed_at=null,position=%s,manual_completed_at=%s
+                                where account_id=%s and goal_ref=%s and cycle_id=%s and catalog_ref=%s''',
+                                (member_position, marks.get(album), account, ref, cycle['cycle_id'], album))
+                        else:
+                            connection.execute('''insert into app.listening_goal_cycle_items
+                                (account_id,goal_ref,cycle_id,catalog_ref,position,manual_completed_at)
+                                values(%s,%s,%s,%s,%s,%s)''',
+                                (account, ref, cycle['cycle_id'], album, member_position, marks.get(album)))
+                    elif marks.get(album) != old_marks.get(album):
+                        connection.execute('''update app.listening_goal_cycle_items set manual_completed_at=%s
+                            where account_id=%s and goal_ref=%s and cycle_id=%s and catalog_ref=%s
+                              and removed_at is null''',
+                            (marks.get(album), account, ref, cycle['cycle_id'], album))
 
     def execute(self, context, command, *, constraints=None):
         # Revalidate a command at the write boundary; construction alone is not
@@ -334,10 +402,21 @@ class PostgresListeningGoalsService:
                     assignment_id=str(uuid4()), occurred_at=now, timezone_name=command.data['timezone_name'],
                     cycle_ids={name: str(uuid4()) for name in domain.GOAL_PERIODS[
                         domain.GOAL_PERIODS.index(command.data['period']):]})
-            else:
+            elif command.action == 'reset':
                 result = domain.reset_goal_period(before, period=command.data['period'],
                     expected_cycle_id=command.data['expected_cycle_id'], new_cycle_id=str(uuid4()),
                     occurred_at=now, timezone_name=command.data['timezone_name'])
+            elif command.action == 'completion':
+                album = command.data['catalog_ref']
+                result = domain.set_goal_completion(before, period=command.data['period'],
+                    expected_cycle_id=command.data['expected_cycle_id'], album_ref=album,
+                    viewer_ref=str(account), completed=command.data['completed'], occurred_at=now)
+            elif command.action == 'remove':
+                album = command.data['catalog_ref']
+                result = domain.remove_goal_album(before, period=command.data['period'],
+                    expected_cycle_id=command.data['expected_cycle_id'], album_ref=album)
+            else:
+                raise GoalsError('invalid_command', 400)
             if result['changed']:
                 if revision == BIGINT_MAX:
                     raise GoalsError('revision_exhausted', 409)
@@ -389,7 +468,7 @@ class PostgresListeningGoalsService:
                     a.first_release_date,a.primary_type from app.listening_goal_cycle_items i
                     join app.listening_goal_albums a on (a.account_id,a.goal_ref,a.catalog_ref)=
                         (i.account_id,i.goal_ref,i.catalog_ref)
-                    where i.account_id=%s and i.cycle_id=%s order by i.position''',
+                    where i.account_id=%s and i.cycle_id=%s and i.removed_at is null order by i.position''',
                     (account, cycle['cycle_id'])).fetchall()
                 records.append({'cycle_id': str(cycle['cycle_id']), 'period': period,
                     'started_at': _iso(cycle['started_at']), 'closed_at': _iso(cycle['closed_at']),

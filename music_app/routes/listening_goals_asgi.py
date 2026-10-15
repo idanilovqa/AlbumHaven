@@ -175,3 +175,13 @@ async def add_goal(request: Request):
 @router.post('/account/goals/reset')
 async def reset_goal(request: Request):
     return await _execute(request, 'reset')
+
+
+@router.post('/account/goals/completion')
+async def set_goal_completion(request: Request):
+    return await _execute(request, 'completion')
+
+
+@router.post('/account/goals/remove')
+async def remove_goal(request: Request):
+    return await _execute(request, 'remove')

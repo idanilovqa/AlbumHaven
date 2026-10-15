@@ -38,6 +38,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/goals/remote-evidence"): "account.self.goals.write",
     ("POST", "/account/goals/add"): "account.self.goals.write",
     ("POST", "/account/goals/reset"): "account.self.goals.write",
+    ("POST", "/account/goals/completion"): "account.self.goals.write",
+    ("POST", "/account/goals/remove"): "account.self.goals.write",
     ("GET", "/home/activity/now-playing"): "library.browse.read",
     ("POST", "/playback/session/presence-source"): "library.media.read",
     ("POST", "/playback/session/presence"): "library.browse.read",

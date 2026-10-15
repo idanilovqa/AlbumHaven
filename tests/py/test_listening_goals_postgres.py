@@ -264,7 +264,8 @@ def test_empty_reads_are_stable_private_and_do_not_materialize_goals(db):
     second = db.service.read(db.context())
     assert first == second
     assert first["goal_ref"] is None and first["revision"] == "1" and first["albums"] == []
-    assert first["allowed_actions"] == {"can_read": True, "can_add": True, "can_reset": True}
+    assert first["allowed_actions"] == {"can_read": True, "can_add": True, "can_reset": True,
+                                        "can_complete": True, "can_remove": True}
     assert set(first["periods"]) == set(PERIODS)
     for view in first["periods"].values():
         assert view["top_ref"] is None

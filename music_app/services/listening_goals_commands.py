@@ -23,9 +23,12 @@ MAX_REVISION = 9_223_372_036_854_775_807
 _REVISION = re.compile(r"[1-9][0-9]{0,18}")
 _EVIDENCE_VERSION = re.compile(r"[0-9a-f]{64}")
 _COMMON_FIELDS = frozenset({"request_key", "revision", "period", "timezone_name"})
+_SELECTION_FIELDS = frozenset({"request_key", "revision", "period", "expected_cycle_id", "catalog_ref"})
 _COMMAND_FIELDS = {
     "add": _COMMON_FIELDS | {"evidence_ref", "evidence_version"},
     "reset": _COMMON_FIELDS | {"expected_cycle_id"},
+    "completion": _SELECTION_FIELDS | {"completed"},
+    "remove": _SELECTION_FIELDS,
 }
 
 
@@ -70,7 +73,7 @@ class GoalsCommand:
 
     action: str
     request_key: str
-    data: Mapping[str, str | None]
+    data: Mapping[str, str | bool | None]
 
     def __post_init__(self):
         # A frozen dataclass alone would still expose a mutable payload dict.
@@ -93,7 +96,7 @@ class GoalsCommand:
 
 
 def normalize_goal_command(action, payload) -> GoalsCommand:
-    """Validate Add or Reset without trusting any browser-supplied authority.
+    """Validate a Goals mutation without trusting any browser-supplied authority.
 
     The route bounds and decodes the request body before calling this function.
     A nullable Reset cycle is syntactically valid; only the repository can check
@@ -110,18 +113,14 @@ def normalize_goal_command(action, payload) -> GoalsCommand:
     if type(period) is not str or period not in GOAL_PERIODS:
         raise GoalsError("invalid_command")
 
-    timezone_name = payload["timezone_name"]
-    try:
-        # Keep the domain's timezone allowlist and path-safety semantics intact.
-        _zone(timezone_name, available_timezones(), "invalid_command")
-    except GoalsDomainError as error:
-        raise GoalsError(error.code) from error
-
-    data = {
-        "revision": command_revision,
-        "period": period,
-        "timezone_name": timezone_name,
-    }
+    data = {"revision": command_revision, "period": period}
+    if action in {"add", "reset"}:
+        timezone_name = payload["timezone_name"]
+        try:
+            _zone(timezone_name, available_timezones(), "invalid_command")
+        except GoalsDomainError as error:
+            raise GoalsError(error.code) from error
+        data["timezone_name"] = timezone_name
     if action == "add":
         data["evidence_ref"] = uuid_ref(payload["evidence_ref"])
         version = payload["evidence_version"]
@@ -133,4 +132,10 @@ def normalize_goal_command(action, payload) -> GoalsCommand:
         data["expected_cycle_id"] = (
             None if expected_cycle_id is None else uuid_ref(expected_cycle_id)
         )
+    if action in {"completion", "remove"}:
+        data["catalog_ref"] = uuid_ref(payload["catalog_ref"])
+    if action == "completion":
+        if type(payload["completed"]) is not bool:
+            raise GoalsError("invalid_command")
+        data["completed"] = payload["completed"]
     return GoalsCommand(action, request_key, data)

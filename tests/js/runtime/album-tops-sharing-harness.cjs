@@ -1,100 +1,83 @@
+'use strict';
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const vm = require('node:vm');
-const Module = require('node:module');
-const React = require('react');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
-const {installNativeSearch} = require('./native-search-harness.cjs');
-const bundles = new Map();
-const elements = node => React.isValidElement(node)
-  ? [node, ...React.Children.toArray(node.props.children).flatMap(elements)] : [];
-const component = (tree, name) => elements(tree).find(node => node.type?.name === name);
-const buttons = tree => elements(tree).filter(node => node.type?.name === 'Button');
-const button = (tree, label) => buttons(tree).find(node => {
-  const text = React.Children.toArray(node.props.children).join('');
-  return typeof label === 'string' ? text === label : label.test(text);
-});
+const {actualChoiceEnvironment, settle} = require('./album-tops-native-fixtures/actual-choice-runtime.cjs');
+const {load} = require('./album-tops-native-fixtures/actual-native-runtime.cjs');
 const plain = value => JSON.parse(JSON.stringify(value));
 const deferred = () => {let resolve, reject; const promise = new Promise((yes, no) => {resolve = yes; reject = no;}); return {promise, resolve, reject};};
-const settle = () => new Promise(resolve => setImmediate(resolve));
-
-// Bounded handler/effect execution of the real component tree with distinct hook
-// lifetimes. This is not React reconciliation, browser event propagation, native
-// layout/focus/geometry verification or owner acceptance. NativeDialog itself runs.
-function bundle(entry) {
-  const source = path.resolve(__dirname, '../../../music_app/static/js', entry);
-  if (!bundles.has(source)) bundles.set(source, buildSync({entryPoints: [source], bundle: true,
-    platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text);
-  return bundles.get(source);
+let mountAlbumTopsView, mountSharePlaylist, mountAlbumTops;
+async function loadOwners() {
+  if (!globalThis.crypto) globalThis.crypto = require('node:crypto').webcrypto;
+  ({mountAlbumTopsView} = await load('album-tops/app.mjs'));
+  ({mountSharePlaylist} = await load('playlists/native-sharing.mjs'));
+  ({mountAlbumTops} = await load('album-tops/index.mjs'));
 }
-function componentExports(entry) {
-  const loaded = new Module(`${__filename}.${entry.replace(/\W/g, '-')}.fixture.cjs`, module);
-  loaded.filename = loaded.id; loaded.paths = module.paths; loaded._compile(bundle(entry), loaded.filename);
-  return loaded.exports;
+const visible = node => Boolean(node?.isConnected && !node.closest('[hidden],[inert]'));
+const button = (root, label) => [...root.querySelectorAll('button')].find(node => {
+  const text = node.getAttribute('aria-label') || node.textContent.trim();
+  return visible(node) && (typeof label === 'string' ? text === label : label.test(text));
+});
+const buttons = root => [...root.querySelectorAll('button')].filter(visible);
+const click = node => {assert.ok(node, 'actual DOM control exists'); return node.dispatchEvent(new node.ownerDocument.defaultView.Event('click'));};
+const textContent = node => node?.textContent || '';
+const choice = (root, label) => [...root.querySelectorAll('.ui-choice')].find(node => node.querySelector('.ui-choice__label')?.textContent === label)?.querySelector('button');
+function choiceValue(node) {
+  assert.ok(node, 'actual native Choice exists');
+  const label = node.getAttribute('aria-label').split(': ').at(-1);
+  return ({Viewer: 'viewer', Editor: 'editor', Private: 'private', 'Shared with this server': 'server_shared', 'Public link unavailable': 'link'})[label] ?? label;
 }
-function hookDriver(entry) {
-  const fibers = new Map(); let current, rootTree, lateUpdates = 0;
-  const changed = (previous, deps) => !previous || !deps || !previous.deps
-    || deps.length !== previous.deps.length || deps.some((value, index) => !Object.is(value, previous.deps[index]));
-  function effect(callback, deps) {
-    const fiber = current, index = fiber.cursor++, previous = fiber.slots[index];
-    if (changed(previous, deps)) fiber.pending.push(() => {previous?.cleanup?.(); fiber.slots[index] = {deps, cleanup: callback()};});
-  }
-  const hooks = {...React,
-    useRef(value) {const fiber = current, index = fiber.cursor++; return fiber.slots[index] ||= {current: value};},
-    useState(value) {
-      const fiber = current, index = fiber.cursor++, slot = fiber.slots[index] ||= {value: typeof value === 'function' ? value() : value};
-      return [slot.value, next => {if (fiber.disposed) {lateUpdates++; return;}
-        slot.value = typeof next === 'function' ? next(slot.value) : next;}];
-    },
-    useEffect: effect, useLayoutEffect: effect,
-    useSyncExternalStore(subscribe, getSnapshot) {effect(() => subscribe(() => {}), [subscribe, getSnapshot]); return getSnapshot();},
+function menuRows(node) {click(node); return [...node.ownerDocument.querySelectorAll('[role="menu"] [data-foobar-format]')];}
+function closeMenu(node) {
+  const menu = node.ownerDocument.querySelector('[role="menu"]');
+  assert.ok(menu, 'canonical menu is current');
+  menu.dispatchEvent(new node.ownerDocument.defaultView.Event('keydown', {key: 'Tab'}));
+  assert.equal(node.ownerDocument.querySelector('[role="menu"]'), null, 'canonical Tab handler retires the menu');
+}
+function choiceOptions(node) {
+  const rows = menuRows(node); assert.ok(rows.length, 'canonical native Choice menu opens');
+  const result = rows.map(row => [row.getAttribute('data-foobar-format'), row.textContent.trim(), ...(row.disabled ? [true] : [])]);
+  closeMenu(node); return result;
+}
+function selectChoice(node, value) {
+  const rows = menuRows(node);
+  if (!visible(node) || node.disabled) {assert.equal(rows.length, 0, 'retired/disabled Choice does not acquire a menu'); return false;}
+  const row = rows.find(row => row.getAttribute('data-foobar-format') === value);
+  assert.ok(row, `actual native Choice option ${value}`); click(row); return !row.disabled;
+}
+function search(root, value) {
+  const input = root.querySelector('input[type="search"]') || root.querySelector('.search-input input');
+  assert.ok(input, 'canonical SearchInput exists'); input.value = value;
+  input.dispatchEvent(new input.ownerDocument.defaultView.Event('input'));
+}
+function nativeRuntime(t) {
+  const native = actualChoiceEnvironment(), calls = {owners: [], closes: [], confirms: []};
+  const open = native.runtime.openForm;
+  native.runtime.openForm = options => {
+    const owner = open({...options, onMount(host, close) {
+      return options.onMount?.(host, (value, closeOptions) => {calls.closes.push(closeOptions); return close(value, closeOptions);});
+    }}), record = {owner: null, options, dismissDisabled: options.dismissDisabled};
+    const observed = {...owner,
+      setDismissDisabled(value) {record.dismissDisabled = value; return owner.setDismissDisabled(value);},
+      close(value, closeOptions) {calls.closes.push(closeOptions); return owner.close(value, closeOptions);}
+    };
+    record.owner = observed; calls.owners.push(record); return observed;
   };
-  const loaded = {exports: {}};
-  const driver = {exports: loaded.exports,
-    render(name, Component, props) {
-      const fiber = fibers.get(name) || {slots: [], disposed: false}; fibers.set(name, fiber);
-      assert.equal(fiber.disposed, false, 'disposed hook owner must never remount under the old identity');
-      current = fiber; fiber.cursor = 0; fiber.pending = [];
-      let tree; try {tree = Component(props);} finally {current = null;}
-      for (const run of fiber.pending) run();
-      return tree;
-    },
-    renderMounted() {return driver.render('session', rootTree.type, rootTree.props);},
-    dispose(name) {
-      for (const [key, fiber] of [...fibers.entries()].reverse()) {
-        if (fiber.disposed || name && key !== name) continue;
-        fiber.disposed = true; for (const slot of fiber.slots) slot?.cleanup?.();
-      }
-    }, lateUpdates: () => lateUpdates,
-  };
-  vm.runInNewContext(bundle(entry), {module: loaded, exports: loaded.exports, console, AbortController,
-    URL, URLSearchParams, TextEncoder, crypto: {randomUUID: require('node:crypto').randomUUID},
-    require(name) {
-      if (name === 'react') return hooks;
-      if (name === 'react-dom') return {createPortal: (children, host) => React.createElement('native-portal', {host}, children)};
-      if (name === 'react-dom/client') return {createRoot: () => ({render(tree) {rootTree = tree;}, unmount() {driver.dispose();}})};
-      assert.fail(`Unexpected Top sharing dependency ${name}`);
-    }});
-  driver.exports = loaded.exports; return driver;
+  native.runtime.confirm = async (...args) => {calls.confirms.push(args); return false;};
+  native.runtime.confirmRetryOriginal = async () => false;
+  const owners = [];
+  if (t) t.after(() => {
+    let failure;
+    try {
+      for (const owner of owners.reverse()) {try {owner.dispose();} catch (error) {failure ??= error;}}
+      native.assertClean(); if (failure) throw failure;
+    } finally {native.host.remove();}
+  });
+  return {...native, native, calls, own(owner) {owners.push(owner); return owner;}};
 }
-
-function nativeRuntime() {
-  const native = createNativeHomeRuntime(), search = installNativeSearch(native);
-  const calls = {owners: [], closes: [], confirms: []};
-  const runtime = {buttonHtml: value => native.context.ButtonComponent.renderButton(value),
-    actionHtml: value => native.context.ButtonComponent.renderActionButton(value),
-    alertHtml: value => native.context.buildOnPageAlertHtml(value),
-    galleryCardHtml: value => native.context.buildGalleryCardHtml(value), artboxHtml: value => native.context.buildAlbumArtboxHtml(value),
-    searchHtml: search.render, openChoice: () => ({close() {}}),
-    confirm: async (...args) => {calls.confirms.push(args); return false;}, confirmRetryOriginal: async () => false,
-    openForm(options) {
-      const owner = {options, dismissDisabled: options.dismissDisabled,
-        setDismissDisabled(value) {this.dismissDisabled = value;},
-        close(_value, closeOptions) {calls.closes.push(closeOptions); options.onClose(null, closeOptions); return true;}};
-      calls.owners.push(owner); options.onMount({id: 'native-top-share-host'}); return owner;
-    }};
-  return {native, runtime, calls};
+function acquire(env, mount) {
+  let owner; env.own({dispose() {owner?.dispose();}}); owner = mount(); return owner;
 }
-module.exports = {React, elements, component, button, buttons, plain, deferred, settle, hookDriver, componentExports, nativeRuntime};
+function viewOwner(env, props) {return acquire(env, () => mountAlbumTopsView(env.host, env.runtime, props));}
+function playlistShareOwner(env, props) {return acquire(env, () => mountSharePlaylist(env.host, env.runtime, props));}
+function sessionOwner(env, props) {return acquire(env, () => mountAlbumTops({host: env.host, runtime: env.runtime, ...props}));}
+module.exports = {plain, deferred, settle, loadOwners, nativeRuntime, viewOwner, playlistShareOwner, sessionOwner,
+  button, buttons, click, textContent, choice, choiceValue, choiceOptions, selectChoice, search, visible};

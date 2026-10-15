@@ -39,6 +39,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/account/goals/remote-search"): "account.self.goals.write",
     ("GET", "/account/goals/bonus-settings"): "account.self.goals.read",
     ("POST", "/account/goals/bonus-settings"): "account.self.goals.write",
+    ("GET", "/account/goals/bonus"): "account.self.goals.read",
+    ("POST", "/account/goals/bonus/draw"): "account.self.goals.write",
     ("POST", "/account/goals/add"): "account.self.goals.write",
     ("POST", "/account/goals/reset"): "account.self.goals.write",
     ("POST", "/account/goals/completion"): "account.self.goals.write",

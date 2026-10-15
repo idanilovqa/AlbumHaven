@@ -8,12 +8,15 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import secrets
 from uuid import uuid4
 
 from music_app.services import listening_goals as domain
 from music_app.services.listening_goal_bonus_settings import (
     BonusSettingsCommand, normalize_bonus_settings, project_bonus_settings,
 )
+from music_app.services.listening_goal_bonus import BonusDrawCommand, normalize_bonus_draw
+from music_app.services import listening_goal_bonus_postgres as bonus
 from music_app.services.admin_authority import lock_admin_accounts
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.current_actor import ActorState
@@ -46,7 +49,7 @@ def _facts_version(row):
 
 
 class PostgresListeningGoalsService:
-    def __init__(self, config, *, connect=None, clock=None, provider=None, user_agent=None, searcher=None):
+    def __init__(self, config, *, connect=None, clock=None, provider=None, user_agent=None, searcher=None, bonus_randbelow=None):
         self._url = str(config.get('ALBUM_HAVEN_APP_DATABASE_URL') or '').strip()
         if not self._url:
             raise RuntimeError('Postgres configuration is required for Goals.')
@@ -54,6 +57,7 @@ class PostgresListeningGoalsService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._provider = provider or fetch_release_group_evidence
         self._searcher = searcher or search_release_group_candidates
+        self._bonus_randbelow = bonus_randbelow or secrets.randbelow
         # Deployment composition supplies the same public product identifier as
         # existing MusicBrainz consumers. It is never copied from a request.
         self._user_agent = user_agent
@@ -110,6 +114,29 @@ class PostgresListeningGoalsService:
             if getattr(error, 'sqlstate', None) in {'23505', '23503', '40001', '40P01'}:
                 raise GoalsError('concurrent_change', 409) from None
             raise
+
+    def read_current_bonus(self, context, *, constraints=None):
+        with self._authorized(context, READ, constraints) as (connection, live, _):
+            _, state, _ = self._load(connection, live.actor.account_id)
+            week = state['periods'].get('week')
+            captured = bonus.cycle_bonus(connection, live.actor.account_id, state)
+            ref = str(captured['catalog_ref']) if captured else None
+            members = week['current']['album_refs'] if week else []
+            return {'cycle_id': week['current']['cycle_id'] if week else None,
+                    'bonus': {'catalog_ref': ref, 'present': ref in members} if captured else None,
+                    'manual_count': len(members) - int(ref in members)}
+
+    def draw_bonus(self, context, command, *, constraints=None):
+        if not isinstance(command, BonusDrawCommand):
+            raise GoalsError('invalid_command')
+        command = normalize_bonus_draw(command.payload())
+        # Receipt recovery is account-owned and survives loss of source library.
+        # Close this transaction BEFORE opening the live-source transaction.
+        with self._authorized(context, WRITE, constraints) as (connection, live, _):
+            prior = bonus.replay(connection, live.actor.account_id, live.actor.session_id, command)
+            if prior is not None:
+                return prior
+        return bonus.draw(self, context, command, constraints=constraints)
 
     def read_bonus_settings(self, context, *, constraints=None):
         with self._authorized(context, READ, constraints) as (connection, live, _):
@@ -324,7 +351,7 @@ class PostgresListeningGoalsService:
             return str(row['catalog_ref'])
 
     @staticmethod
-    def _persist(connection, account, before, after, *, evidence, now, revision, exists):
+    def _persist(connection, account, before, after, *, evidence, now, revision, exists, top_admission=None):
         ref = after['top_ref']
         if not exists:
             connection.execute('''insert into app.listening_goals(account_id,ref,revision,created_at,updated_at)
@@ -354,18 +381,25 @@ class PostgresListeningGoalsService:
                     where account_id=%s and goal_ref=%s and catalog_ref=%s''',
                     (current_position, account, ref, album))
                 continue
-            if evidence is None:
+            if evidence is None and top_admission is None:
                 raise RuntimeError('Goal album admission evidence is missing.')
+            if top_admission is not None and (not isinstance(top_admission, bonus.TopAdmission)
+                    or top_admission.catalog_ref != album or evidence is not None):
+                raise RuntimeError('Invalid typed Top admission.')
             original_position += 1
             if original_position > BIGINT_MAX:
                 raise GoalsError('order_exhausted', 409)
             connection.execute('''insert into app.listening_goal_albums
                 (account_id,goal_ref,catalog_ref,original_position,current_position,title,artist_display,
-                 first_release_date,primary_type,evidence_ref,evidence_version,admitted_at)
-                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-                (account, ref, album, original_position, current_position, evidence['title'], evidence['artist_display'],
-                 evidence['first_release_date'], evidence['primary_type'], evidence['ref'],
-                 evidence['evidence_version'], now))
+                 first_release_date,primary_type,evidence_ref,evidence_version,admitted_at,admission_kind,top_admission_ref)
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                (account, ref, album, original_position, current_position,
+                 top_admission.title if top_admission else evidence['title'],
+                 top_admission.artist_display if top_admission else evidence['artist_display'],
+                 top_admission.first_release_date if top_admission else evidence['first_release_date'],
+                 top_admission.primary_type if top_admission else evidence['primary_type'],
+                 None if top_admission else evidence['ref'], None if top_admission else evidence['evidence_version'], now,
+                 'album_top' if top_admission else 'musicbrainz', top_admission.ref if top_admission else None))
         previous_assignments = {row['assignment_id'] for row in before['assignments']}
         next_assignments = {row['assignment_id'] for row in after['assignments']}
         for assignment in previous_assignments - next_assignments:
@@ -482,13 +516,24 @@ class PostgresListeningGoalsService:
                 duplicate = any(row['album_ref'] == album and row['period'] == command.data['period']
                                 for row in before['assignments'])
                 weekly = before['periods'].get('week')
+                captured_bonus = bonus.cycle_bonus(connection, account, before)
+                bonus_ref = str(captured_bonus['catalog_ref']) if captured_bonus else None
+                manual_count = (len(weekly['current']['album_refs'])
+                    - int(bonus_ref in weekly['current']['album_refs'])) if weekly else 0
                 if (command.data['period'] == 'week' and not duplicate and weekly is not None
-                        and len(weekly['current']['album_refs']) >= 5):
+                        and album != bonus_ref and manual_count >= 5):
                     raise GoalsError('weekly_capacity', 409)
-                result = domain.add_goal(before, album_ref=album, period=command.data['period'],
-                    assignment_id=str(uuid4()), occurred_at=now, timezone_name=command.data['timezone_name'],
-                    cycle_ids={name: str(uuid4()) for name in domain.GOAL_PERIODS[
-                        domain.GOAL_PERIODS.index(command.data['period']):]})
+                selected_period = before['periods'].get(command.data['period'])
+                if (album == bonus_ref and selected_period is not None
+                        and album in selected_period['current']['album_refs']):
+                    # A captured bonus already present in the selection is not
+                    # silently converted to another direct/manual assignment.
+                    result = {'state': before, 'changed': False, 'reason': 'already_added'}
+                else:
+                    result = domain.add_goal(before, album_ref=album, period=command.data['period'],
+                        assignment_id=str(uuid4()), occurred_at=now, timezone_name=command.data['timezone_name'],
+                        cycle_ids={name: str(uuid4()) for name in domain.GOAL_PERIODS[
+                            domain.GOAL_PERIODS.index(command.data['period']):]})
             elif command.action == 'reset':
                 result = domain.reset_goal_period(before, period=command.data['period'],
                     expected_cycle_id=command.data['expected_cycle_id'], new_cycle_id=str(uuid4()),
@@ -510,6 +555,7 @@ class PostgresListeningGoalsService:
                 revision += 1
                 self._persist(connection, account, before, result['state'], evidence=evidence,
                               now=now, revision=revision, exists=aggregate is not None)
+            bonus.sync_after_command(connection, account, before, result['state'], command, now)
             receipt = {'ok': True, 'action': command.action, 'request_key': command.request_key,
                        'changed': result['changed'], 'reason': result['reason'],
                        'goal_ref': result['state']['top_ref'] if aggregate or result['changed'] else None,

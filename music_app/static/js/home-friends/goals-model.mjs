@@ -1,4 +1,4 @@
-import {GOAL_PERIODS} from './goals-provider.mjs';
+import {GOAL_PERIODS, normalizeBonusSettings, normalizeBonusValues} from './goals-provider.mjs';
 
 const MAX_REVISION = 9223372036854775807n;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -14,8 +14,67 @@ const rejected = error => error?.responseRejected === true && Number.isInteger(e
   && error.status >= 400 && error.status < 500 && ![408, 425, 429].includes(error.status);
 const failure = (kind, message) => Object.freeze({kind, message});
 const malformed = () => {throw new Error('Invalid Goals operation receipt.');};
+const bonusAction = action => ['bonus_settings', 'bonus_draw', 'transition'].includes(action);
+const settingsValues = value => normalizeBonusValues(Object.fromEntries(
+  ['enabled', 'source_mode', 'selected_top_refs', 'preferred_top_refs', 'album_mode', 'unfinished_policy'].map(key => [key, value[key]])));
+const sameValues = (left, right) => JSON.stringify(settingsValues(left)) === JSON.stringify(settingsValues(right));
+function acceptBonusReceipt(value, pending) {
+  const {action, command, goalRef} = pending;
+  if (action === 'bonus_settings') {
+    if (!exactKeys(value, ['ok', 'action', 'request_key', 'changed', 'settings']) || value.ok !== true
+      || value.action !== action || value.request_key !== command.request_key || typeof value.changed !== 'boolean') malformed();
+    const settings = normalizeBonusSettings(value.settings);
+    if (!sameValues(settings, command) || value.changed !== !sameValues(pending.settings, command)
+      || BigInt(settings.settings_revision) !== BigInt(command.settings_revision) + (value.changed ? 1n : 0n)) malformed();
+    return Object.freeze({settings, changed: value.changed});
+  }
+  const keys = ['ok', 'action', 'request_key', 'changed', 'reason', 'goal_ref', 'revision', 'period', 'cycle_id'];
+  if (action === 'bonus_draw') keys.push('catalog_ref');
+  else keys.push('previous_cycle_id', 'settings_revision', 'retained_count', 'bonus_carried',
+    ...(command.period === 'week' ? ['manual_count', 'manual_slots_available', 'bonus_slot_available'] : []));
+  const period = action === 'bonus_draw' ? 'week' : command.period;
+  if (!exactKeys(value, keys) || value.ok !== true || value.action !== action || value.request_key !== command.request_key
+    || value.period !== period || typeof value.changed !== 'boolean' || !revision(value.revision)
+    || !(value.goal_ref === null || uuid(value.goal_ref)) || (goalRef !== null && value.goal_ref !== goalRef)
+    || BigInt(value.revision) !== BigInt(command.revision) + (value.changed ? 1n : 0n)) malformed();
+  if (action === 'bonus_draw') {
+    if (value.changed) {
+      if (!uuid(value.goal_ref) || !uuid(value.catalog_ref) || pending.allMembers.includes(value.catalog_ref)
+        || !uuid(value.cycle_id) || value.reason !== ''
+        || (command.expected_cycle_id !== null && value.cycle_id !== command.expected_cycle_id)
+        || (command.expected_cycle_id === null && pending.existingCycles.includes(value.cycle_id))) malformed();
+    } else if (value.reason !== 'no_eligible_source' || value.catalog_ref !== null
+      || value.goal_ref !== goalRef || value.cycle_id !== command.expected_cycle_id) malformed();
+  } else {
+    if (!value.changed || value.reason !== '' || value.goal_ref !== goalRef || !uuid(value.cycle_id)
+      || pending.existingCycles.includes(value.cycle_id) || value.previous_cycle_id !== command.expected_cycle_id
+      || value.settings_revision !== command.settings_revision || !Number.isSafeInteger(value.retained_count)
+      || value.retained_count < 0 || value.retained_count > pending.unfinishedCount || typeof value.bonus_carried !== 'boolean') malformed();
+    if ((period === 'year' || pending.settings.unfinished_policy === 'carry')
+      && value.retained_count !== pending.unfinishedCount) malformed();
+    if (period !== 'week' && value.bonus_carried) malformed();
+    if (period === 'week') {
+      const expectedCarry = pending.bonus?.bonus?.present === true
+        && pending.selected.manual_completed_at[pending.bonus.bonus.catalog_ref] === null
+        && pending.settings.unfinished_policy === 'carry';
+      if (value.bonus_carried !== expectedCarry || !Number.isSafeInteger(value.manual_count)
+        || value.manual_count < 0 || value.manual_count > 5
+        || value.manual_count + Number(value.bonus_carried) !== value.retained_count
+        || value.manual_slots_available !== 5 - value.manual_count || value.bonus_slot_available !== !value.bonus_carried) malformed();
+    }
+  }
+  return Object.freeze({...value});
+}
+
+function bonusCoherent(data, bonus) {
+  const week = data.periods.week;
+  return bonus.cycle_id === (week.cycle?.cycle_id ?? null)
+    && (bonus.bonus === null || bonus.bonus.present === week.album_refs.includes(bonus.bonus.catalog_ref))
+    && bonus.manual_count === week.total - Number(bonus.bonus?.present === true);
+}
 
 function acceptReceipt(value, pending) {
+  if (bonusAction(pending.action)) return acceptBonusReceipt(value, pending);
   const {action, command, goalRef, total, expectedChanged} = pending;
   const keys = ['ok', 'action', 'request_key', 'changed', 'reason', 'goal_ref', 'revision', 'period', 'cycle_id'];
   if (action !== 'reset') keys.push('catalog_ref');
@@ -50,12 +109,29 @@ function acceptReceipt(value, pending) {
     ...(action === 'add' ? {catalog_ref: value.catalog_ref, changed: value.changed} : {})});
 }
 
-function receiptMatchesRead(data, intent) {
+function receiptMatchesRead(data, intent, settings, bonus) {
   const {receipt, command, action} = intent;
+  if (action === 'bonus_settings') return settings && BigInt(settings.settings_revision) >= BigInt(receipt.settings.settings_revision)
+    && (settings.settings_revision !== receipt.settings.settings_revision || sameValues(settings, receipt.settings));
+  if (['bonus_draw', 'transition'].includes(action)
+      && (!settings || BigInt(settings.settings_revision) < BigInt(command.settings_revision))) return false;
   if (data.goal_ref !== receipt.goal_ref || BigInt(data.revision) < BigInt(receipt.revision)) return false;
   if (data.revision !== receipt.revision) return true; // A newer authorized mutation may supersede this result.
-  const selected = data.periods[command.period];
+  const selected = data.periods[action === 'bonus_draw' ? 'week' : command.period];
   if ((selected.cycle?.cycle_id ?? null) !== receipt.cycle_id) return false;
+  if (action === 'bonus_draw') return !receipt.changed ? bonus?.bonus === null : selected.album_refs.includes(receipt.catalog_ref)
+    && bonus?.bonus?.catalog_ref === receipt.catalog_ref && bonus.bonus.present;
+  if (action === 'transition') {
+    const retained = intent.unfinishedRefs.filter(ref => selected.album_refs.includes(ref));
+    const validOrder = retained.length === selected.album_refs.length
+      && retained.every((ref, index) => ref === selected.album_refs[index]);
+    const allCarried = command.period === 'year' || intent.settings.unfinished_policy === 'carry';
+    return selected.total === receipt.retained_count && selected.completed === 0 && validOrder
+      && (!allCarried || selected.album_refs.length === intent.unfinishedRefs.length)
+      && (command.period !== 'week' || bonus.manual_count === receipt.manual_count
+        && (bonus.bonus?.present === true) === receipt.bonus_carried
+        && (!receipt.bonus_carried || bonus.bonus.catalog_ref === intent.bonus.bonus.catalog_ref));
+  }
   if (action === 'add') return (receipt.changed ? GOAL_PERIODS.slice(GOAL_PERIODS.indexOf(command.period)) : [command.period])
     .every(period => data.periods[period].album_refs.includes(receipt.catalog_ref));
   if (action === 'remove') return !selected.album_refs.includes(command.catalog_ref);
@@ -69,9 +145,11 @@ function receiptMatchesRead(data, intent) {
 // This owner remembers a single exact mutation intent until its outcome is known.
 // Neither UI continuity nor a failed refresh grants permission for a new write.
 export function createGoalsController({provider, requestKey = () => globalThis.crypto.randomUUID(),
-  timezone = Intl.DateTimeFormat().resolvedOptions().timeZone}) {
+  timezone = Intl.DateTimeFormat().resolvedOptions().timeZone, canDrawBonus = () => false}) {
   let disposed = false, epoch = 0, sequence = 0, active = null, pending = null;
-  let snapshot = Object.freeze({status: 'idle', data: null, period: 'week', mutation: 'idle', error: null});
+  let bonusRequested = false;
+  let snapshot = Object.freeze({status: 'idle', data: null, period: 'week', mutation: 'idle', error: null,
+    bonusStatus: 'idle', settings: null, bonus: null, outcome: null});
   const listeners = new Set(), issuedKeys = new Set(), usedEvidence = new WeakSet();
 
   function publish(patch) {
@@ -98,29 +176,51 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   function clearDenied() {
     pending = null;
     retire();
-    publish({status: 'denied', data: null, mutation: 'idle',
+    publish({status: 'denied', data: null, mutation: 'idle', settings: null, bonus: null, bonusStatus: 'idle', outcome: null,
       error: failure('denied', 'Goals are not available for this account.')});
   }
-  const actionLabel = intent => ({add: 'Add', reset: 'Reset', completion: 'Completion', remove: 'Removal'})[intent?.action] || 'Goal change';
+  const actionLabel = intent => ({add: 'Add', reset: 'Reset', completion: 'Completion', remove: 'Removal',
+    bonus_settings: 'Bonus settings', bonus_draw: 'Bonus draw', transition: 'Next period'})[intent?.action] || 'Goal change';
   function uncertain() {
     publish({status: snapshot.data ? 'ready' : 'unavailable', mutation: 'uncertain',
       error: failure('uncertain', `The ${actionLabel(pending)} outcome is unknown. Retry checks its saved result first.`)});
   }
   async function read(task, acknowledged = false) {
-    publish({status: 'loading', data: null, mutation: acknowledged ? 'refreshing' : 'idle', error: null});
+    publish({status: 'loading', data: null, mutation: acknowledged ? 'refreshing' : 'idle', error: null,
+      ...(!acknowledged ? {outcome: null} : {}),
+      ...(bonusRequested ? {bonusStatus: 'loading', settings: null, bonus: null} : {})});
     try {
       if (!task.current()) return snapshot;
-      const data = await provider.read(task.options);
+      let data = await provider.read(task.options), settings = null, bonus = null;
+      if (bonusRequested) {
+        let coherent = false;
+        for (let attempt = 0; attempt < 2 && !coherent; attempt++) {
+          if (!task.current()) return snapshot;
+          settings = await provider.readBonusSettings(task.options);
+          if (!task.current()) return snapshot;
+          bonus = await provider.readCurrentBonus(task.options);
+          if (!task.current()) return snapshot;
+          const checked = await provider.read(task.options);
+          coherent = checked.goal_ref === data.goal_ref && checked.revision === data.revision && bonusCoherent(checked, bonus);
+          data = checked;
+        }
+        if (!coherent) throw new Error('Goals changed while bonus state was read.');
+      }
       if (!task.current()) return snapshot;
+      let outcome = null;
       if (acknowledged) {
-        if (!receiptMatchesRead(data, pending)) throw new Error('Goals refresh does not include the saved change.');
+        if (!receiptMatchesRead(data, pending, settings, bonus)) throw new Error('Goals refresh does not include the saved change.');
+        if (bonusAction(pending.action)) outcome = Object.freeze({action: pending.action,
+          changed: pending.receipt.changed, reason: pending.receipt.reason || ''});
         pending = null;
       }
-      publish({status: 'ready', data, mutation: 'idle', error: null});
+      publish({status: 'ready', data, mutation: 'idle', error: null, outcome,
+        ...(bonusRequested ? {bonusStatus: 'ready', settings, bonus} : {})});
     } catch (error) {
       if (!task.current()) return snapshot;
       if (denied(error)) clearDenied();
       else publish({status: 'unavailable', data: null, mutation: 'idle',
+        ...(bonusRequested ? {bonusStatus: 'unavailable', settings: null, bonus: null} : {}),
         error: acknowledged
           ? failure('acknowledged-refresh', `${actionLabel(pending)} was saved, but Goals could not be refreshed. Retry refreshes only.`)
           : failure('read', 'Goals could not be loaded. Try again.')});
@@ -128,8 +228,15 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     return snapshot;
   }
   async function write(task, intent) {
-    publish({mutation: 'submitting', error: null});
+    if (!task.current() || pending !== intent) return snapshot;
+    publish({mutation: 'submitting', error: null, outcome: null});
     try {
+      if (!task.current() || pending !== intent) return snapshot;
+      if (intent.action === 'bonus_draw' && !sourceAvailable()) {
+        if (task.current() && pending === intent) publish({mutation: 'uncertain',
+          error: failure('source-unavailable', 'Album Top sources are unavailable. Retry checks the saved outcome before continuing this same draw.')});
+        return snapshot;
+      }
       if (!task.current() || pending !== intent) return snapshot;
       const receipt = await provider[intent.action](intent.command, task.options);
       if (!task.current() || pending !== intent) return snapshot;
@@ -138,7 +245,16 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       return await read(task, true);
     } catch (error) {
       if (!task.current() || pending !== intent) return snapshot;
-      if (denied(error)) clearDenied();
+      if (intent.action === 'bonus_draw' && error?.responseRejected === true
+        && error.status === 403 && error.code === 'source_context_unavailable') {
+        // This definitive source rejection is not account authority. Verify
+        // retained account state before showing it again; a real account403
+        // during that read still follows clearDenied(). Never auto-redraw.
+        pending = null;
+        await read(task);
+        if (task.current() && snapshot.status === 'ready') publish({error: failure('source-unavailable',
+          'Album Top sources are unavailable. Saved Goals and settings are kept. Refresh sources before another draw.')});
+      } else if (denied(error)) clearDenied();
       else if (rejected(error)) {
         // A rejection is definitive for this command. Fresh state is required
         // before another explicitly requested mutation can obtain a new key.
@@ -159,13 +275,19 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     if (disposed || pending) return Promise.resolve(snapshot);
     return read(begin());
   }
+  function loadBonus() {
+    if (disposed || pending) return Promise.resolve(snapshot);
+    bonusRequested = true;
+    return read(begin());
+  }
   function selectPeriod(period) {
     if (!disposed && snapshot.mutation === 'idle' && GOAL_PERIODS.includes(period)
       && period !== snapshot.period) publish({period});
     return snapshot;
   }
   function ready(action) {
-    const capability = {add: 'can_add', reset: 'can_reset', completion: 'can_complete', remove: 'can_remove'}[action];
+    const capability = {add: 'can_add', reset: 'can_reset', completion: 'can_complete', remove: 'can_remove',
+      bonus_settings: 'can_add', bonus_draw: 'can_add', transition: 'can_reset'}[action];
     return !disposed && !pending && snapshot.status === 'ready' && snapshot.mutation === 'idle'
       && snapshot.data?.allowed_actions[capability] === true;
   }
@@ -233,6 +355,50 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   }
   const setCompletion = (catalogRef, completed, expected) => memberIntent('completion', catalogRef, completed, expected);
   const remove = (catalogRef, expected) => memberIntent('remove', catalogRef, undefined, expected);
+  const sourceAvailable = () => {try {return canDrawBonus() === true;} catch {return false;}};
+  function bonusReady(action, expected) {
+    return ready(action) && snapshot.bonusStatus === 'ready' && object(expected)
+      && expected.data === snapshot.data && expected.settings === snapshot.settings && expected.bonus === snapshot.bonus
+      && expected.period === snapshot.period;
+  }
+  function startBonusIntent(action, expected, values) {
+    if (!bonusReady(action, expected)) return Promise.resolve(snapshot);
+    const {data, settings, bonus, period: selectedPeriod} = snapshot;
+    const period = action === 'bonus_draw' ? 'week' : selectedPeriod;
+    const selected = data.periods[period];
+    if (action === 'bonus_draw' && (!sourceAvailable() || !settings.enabled || bonus.bonus !== null)) return Promise.resolve(snapshot);
+    if (action === 'transition' && !uuid(selected.cycle?.cycle_id)) return Promise.resolve(snapshot);
+    let command;
+    try {
+      const key = requestKey();
+      if (!uuid(key) || issuedKeys.has(key)) throw new Error();
+      if (action === 'bonus_settings') command = Object.freeze({request_key: key,
+        settings_revision: settings.settings_revision, ...normalizeBonusValues(values)});
+      else {
+        if (typeof timezone !== 'string' || !timezone) throw new Error();
+        new Intl.DateTimeFormat('en', {timeZone: timezone});
+        command = Object.freeze({request_key: key, revision: data.revision,
+          settings_revision: settings.settings_revision, expected_cycle_id: selected.cycle?.cycle_id ?? null,
+          timezone_name: timezone, ...(action === 'transition' ? {period} : {})});
+      }
+      issuedKeys.add(key);
+    } catch {
+      if (bonusReady(action, expected)) publish({error: failure('invalid-command', 'The change could not be prepared. Reload Goals and try again.')});
+      return Promise.resolve(snapshot);
+    }
+    // Key generation and source-context checks can reenter application code.
+    if (!bonusReady(action, expected) || action === 'bonus_draw' && !sourceAvailable()
+      || !bonusReady(action, expected)) return Promise.resolve(snapshot);
+    pending = {action, command, goalRef: data.goal_ref, settings, bonus, selected,
+      unfinishedCount: selected.total - selected.completed, acknowledged: false,
+      unfinishedRefs: selected.album_refs.filter(ref => selected.manual_completed_at[ref] === null),
+      allMembers: data.albums.map(row => row.catalog_ref),
+      existingCycles: GOAL_PERIODS.map(name => data.periods[name].cycle?.cycle_id).filter(Boolean)};
+    return write(begin(), pending);
+  }
+  const saveBonusSettings = (values, expected) => startBonusIntent('bonus_settings', expected, values);
+  const drawBonus = expected => startBonusIntent('bonus_draw', expected);
+  const transition = expected => startBonusIntent('transition', expected);
   async function retry() {
     if (disposed || ['submitting', 'recovering', 'refreshing'].includes(snapshot.mutation)) return snapshot;
     if (!pending) return load();
@@ -262,7 +428,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     epoch++;
     retire();
     pending = null;
-    publish({status: 'unavailable', data: null, period: 'week', mutation: 'idle',
+    publish({status: 'unavailable', data: null, period: 'week', mutation: 'idle', settings: null, bonus: null, bonusStatus: 'idle', outcome: null,
       error: failure('context', 'Your session changed. Reload Goals to continue.')});
   });
   return Object.freeze({
@@ -272,7 +438,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    load, selectPeriod, reset, setCompletion, remove, add, retry,
+    load, loadBonus, selectPeriod, reset, setCompletion, remove, add, retry, saveBonusSettings, drawBonus, transition,
     admissionFailed(error) {if (!disposed && denied(error)) clearDenied(); return snapshot;},
     dispose() {
       if (disposed) return;
@@ -280,7 +446,8 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       epoch++;
       retire();
       pending = null;
-      snapshot = Object.freeze({status: 'idle', data: null, period: 'week', mutation: 'idle', error: null});
+      snapshot = Object.freeze({status: 'idle', data: null, period: 'week', mutation: 'idle', error: null,
+        settings: null, bonus: null, bonusStatus: 'idle', outcome: null});
       unsubscribe?.();
       listeners.clear();
       issuedKeys.clear();

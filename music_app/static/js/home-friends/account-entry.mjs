@@ -69,6 +69,7 @@ export function accountGoalsRuntime(target) {
   return {buttonHtml:value=>target.ButtonComponent.renderButton(value),actionHtml:value=>target.ButtonComponent.renderActionButton(value),
     iconHtml:name=>target.ButtonComponent.renderIconSvg(name),alertHtml:value=>target.buildOnPageAlertHtml(value),
     artboxHtml:value=>target.buildAlbumArtboxHtml(value),galleryCardHtml:value=>target.buildGalleryCardHtml(value),
+    switchHtml:value=>target.buildGallerySwitchHtml(value),
     tabsHtml:value=>target.buildInPageTabsHtml(value),mountTabs:element=>target.mountInPageTabs(element),
     openChoice:(anchor,options)=>target.openUtilityChoiceDropdown(anchor,options),
     openForm:options=>target.openReactFormDialog(options,()=>Boolean(target.document.getElementById('account-home')?.dataset.accountGoalsContext)),

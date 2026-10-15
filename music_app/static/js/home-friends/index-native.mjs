@@ -60,7 +60,7 @@ function createHomeOwner(host, runtime) {
         const current = session, entryKey = shell.entryKey ?? 'initial';
         const props = {runtime, controller: current.controller, state: current.controller.getSnapshot(), shell,
           readDetail: providers.readDetail, readNowPlaying: providers.readNowPlaying,
-          goalsTransport: window.AlbumHavenPrivateUITransport};
+          goalsTransport: window.AlbumHavenPrivateUITransport, goalsSourceTransport: window.AlbumHavenPrivateUITransport};
         const stillCurrent = () => {
           const latest = runtime.snapshot();
           return session === current && current.generation === providerGeneration && latest.visible

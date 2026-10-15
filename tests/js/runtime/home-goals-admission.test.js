@@ -1,3 +1,4 @@
+const {bonusReadFixture}=require('./goals-bonus-read-fixture.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture, load, deferred, settle} = require('./home-friends-native-app-fixture.cjs');
@@ -23,8 +24,9 @@ async function mounted(t,{populated=false,allowed=true,script=[]}={}) {
   const h=fixture(t), {mountGoalsPanel}=await load('goals.mjs'), requests=[],listeners=new Set();
   let context='a'.repeat(64), data=value(populated), owner;
   data.allowed_actions.can_add=allowed;
+  const bonusReads=bonusReadFixture(t,()=>data);
   const wire={context:()=>context,subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);},
-    async request(path,options){requests.push({path,options});
+    async request(path,options){const bonus=bonusReads.dispatch(path,options);if(bonus.handled)return {status:"ready",context_ref:context,data:bonus.data};requests.push({path,options});
       const next=path==='/account/goals'?data:script.shift();
       assert.notEqual(next,undefined,`Unexpected request ${path}`);
       const answer=await(typeof next==='function'?next(path,options):next);
@@ -33,8 +35,8 @@ async function mounted(t,{populated=false,allowed=true,script=[]}={}) {
     change(){context='b'.repeat(64);for(const fn of [...listeners])fn();},set(next){data=next;}};
   const header={actions:h.add('goals-actions'),content:h.add('goals-content')};
   t.after(()=>owner?.dispose());
-  owner=h.own(mountGoalsPanel(h.host,h.runtime,{transport:wire,header,isCurrent:()=>true}));await settle();h.drain();
-  return {...h,owner,wire,header,requests,listeners,script};
+  owner=h.own(mountGoalsPanel(h.host,h.runtime,{transport:wire,header,isCurrent:()=>true}));await bonusReads.ready;await settle();h.drain();bonusReads.assertInitial();
+  return {...h,owner,wire,header,requests,listeners,script,bonusReads};
 }
 function gate(t,h){const wait=deferred();t.after(async()=>{try{h.owner.dispose();}finally{wait.resolve(undefined);}await wait.promise;await settle();});return wait;}
 function open(h){h.click(h.named('Start')||h.named('Add'));h.drain();}
@@ -73,7 +75,7 @@ test('Confirmed first Add uses evidence and captured command then refreshes auth
   const h=await mounted(t,{script:[results(),preview,(path,options)=>{
     assert.equal(path,'/account/goals/add');h.wire.set(value(true));
     return {ok:true,action:'add',request_key:options.body.request_key,changed:true,reason:'',goal_ref:goal,revision:'2',period:'week',catalog_ref:album,cycle_id:cycle};
-  }]});open(h);await verify(h);h.click(h.named('Add',h.form));await settle();
+  }]});open(h);await verify(h);const coherentRefresh=h.bonusReads.nextCycle();h.click(h.named('Add',h.form));await coherentRefresh;await settle();
   const post=h.requests.find(row=>row.path==='/account/goals/add');assert.ok(post);
   assert.deepEqual(Object.keys(post.options.body).sort(),['request_key','revision','period','timezone_name','evidence_ref','evidence_version'].sort());
   assert.equal(post.options.body.revision,'1');assert.equal(post.options.body.period,'week');

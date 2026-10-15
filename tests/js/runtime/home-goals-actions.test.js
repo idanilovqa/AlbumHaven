@@ -1,4 +1,5 @@
 'use strict';
+const {bonusReadFixture}=require('./goals-bonus-read-fixture.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture, load, deferred, settle, plain} = require('./home-friends-native-app-fixture.cjs');
@@ -13,12 +14,12 @@ function value(populated = false) {
     title: 'Remote Album', artist_display: 'Artist', first_release_date: null, primary_type: null}] : [],
     allowed_actions: {can_read: true, can_add: true, can_reset: true}};
 }
-function transport(initial) {
+function transport(initial,t) {
   let context = 'a'.repeat(64), data = initial, pending = null;
-  const listeners = new Set(), requests = [];
-  return {requests, listeners, context: () => context,
+  const listeners = new Set(), requests = [], bonusReads=bonusReadFixture(t,()=>data);
+  return {requests, bonusReads, listeners, context: () => context,
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);},
-    async request(path, options) {requests.push({path, options}); const result = pending ? await pending.promise : data;
+    async request(path, options) {const bonus=bonusReads.dispatch(path,options);if(bonus.handled)return {status:"ready",context_ref:context,data:bonus.data};requests.push({path, options}); const result = pending ? await pending.promise : data;
       if (options.isCurrent && !options.isCurrent()) throw Object.assign(new Error('retired'), {name: 'AbortError'});
       return {status: 'ready', context_ref: context, data: result};},
     change() {context = 'b'.repeat(64); for (const fn of [...listeners]) fn();},
@@ -27,9 +28,9 @@ function transport(initial) {
 }
 async function mounted(t, data) {
   const h = fixture(t), {mountGoalsPanel} = await load('goals.mjs');
-  const header = {actions: h.add('goals-actions'), content: h.add('goals-content')}, wire = transport(data);
+  const header = {actions: h.add('goals-actions'), content: h.add('goals-content')}, wire = transport(data,t);
   const owner = h.own(mountGoalsPanel(h.host, h.runtime, {transport: wire, header, isCurrent: () => true}));
-  await settle(); h.drain(); return {...h, header, wire, owner};
+  await wire.bonusReads.ready;await settle(); h.drain();wire.bonusReads.assertInitial(); return {...h, header, wire, owner};
 }
 
 function actionable(completed = false) {
@@ -127,11 +128,11 @@ test('Canonical menu acquisition cannot survive reentrant authority replacement'
 });
 
 test('Canonical row-control acquisition cannot revive private state after authority replacement', async t => {
-  const h=fixture(t), {mountGoalsPanel}=await load('goals.mjs'), wire=transport(actionable());
+  const h=fixture(t), {mountGoalsPanel}=await load('goals.mjs'), wire=transport(actionable(),t);
   const header={actions:h.add('goals-actions'),content:h.add('goals-content')}, render=h.runtime.actionHtml;
   let changed=false;
   h.runtime.actionHtml=options=>{if(options.label==='Goal album actions'&&!changed){changed=true;wire.change();}return render(options);};
-  h.own(mountGoalsPanel(h.host,h.runtime,{transport:wire,header,isCurrent:()=>true})); await settle(); h.drain();
+  h.own(mountGoalsPanel(h.host,h.runtime,{transport:wire,header,isCurrent:()=>true})); await wire.bonusReads.ready;await settle(); h.drain();
   assert.equal(changed,true); assert.equal(h.host.querySelector('[data-goal-album-ref]'),null);
   assert.equal(h.named('Goal album actions'),undefined); assert.equal(header.content.querySelector('[role="progressbar"]'),null);
   assert.equal(wire.requests.length,1);

@@ -62,7 +62,7 @@ function fixture(t) {
   const runtime = {
     buttonHtml: value => c.ButtonComponent.renderButton(value), actionHtml: value => c.ButtonComponent.renderActionButton(value), iconHtml: name => c.ButtonComponent.renderIconSvg(name),
     alertHtml: value => c.buildOnPageAlertHtml(value), artboxHtml: value => c.buildAlbumArtboxHtml(value), escapeHtml: c.escapeHtml,
-    tableHtml: value => c.buildCompactDataTable(value), galleryCardHtml: value => c.buildGalleryCardHtml(value), ratingHtml: value => c.buildGalleryRatingHtml(value),
+    tableHtml: value => c.buildCompactDataTable(value), galleryCardHtml: value => c.buildGalleryCardHtml(value), switchHtml: value => c.buildGallerySwitchHtml(value), ratingHtml: value => c.buildGalleryRatingHtml(value),
     navigationItemHtml: value => c.NavigationTree.renderItem(value), tabsHtml: value => c.buildInPageTabsHtml(value), mountTabs: element => c.mountInPageTabs(element),
     openChoice: (trigger, options) => c.openUtilityChoiceDropdown(trigger, options), openForm: options => c.openReactFormDialog(options, () => true),
     albumTrackRow: (track,index) => c.buildAlbumTrackTableRow(track,index,{readOnly:true}),

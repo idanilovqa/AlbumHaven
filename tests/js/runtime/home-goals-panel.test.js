@@ -1,4 +1,5 @@
 'use strict';
+const {bonusReadFixture}=require('./goals-bonus-read-fixture.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture, load, deferred, settle, plain} = require('./home-friends-native-app-fixture.cjs');
@@ -13,12 +14,12 @@ function value(populated = false) {
     title: 'Remote Album', artist_display: 'Artist', first_release_date: null, primary_type: null}] : [],
     allowed_actions: {can_read: true, can_add: true, can_reset: true}};
 }
-function transport(initial) {
+function transport(initial,t) {
   let context = 'a'.repeat(64), data = initial, pending = null;
-  const listeners = new Set(), requests = [];
-  return {requests, listeners, context: () => context,
+  const listeners = new Set(), requests = [], bonusReads=bonusReadFixture(t,()=>data);
+  return {requests, bonusReads, listeners, context: () => context,
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);},
-    async request(path, options) {requests.push({path, options}); const result = pending ? await pending.promise : data;
+    async request(path, options) {const bonus=bonusReads.dispatch(path,options);if(bonus.handled)return {status:"ready",context_ref:context,data:bonus.data};requests.push({path, options}); const result = pending ? await pending.promise : data;
       if (options.isCurrent && !options.isCurrent()) throw Object.assign(new Error('retired'), {name: 'AbortError'});
       return {status: 'ready', context_ref: context, data: result};},
     change() {context = 'b'.repeat(64); for (const fn of [...listeners]) fn();},
@@ -27,9 +28,9 @@ function transport(initial) {
 }
 async function mounted(t, data) {
   const h = fixture(t), {mountGoalsPanel} = await load('goals.mjs');
-  const header = {actions: h.add('goals-actions'), content: h.add('goals-content')}, wire = transport(data);
+  const header = {actions: h.add('goals-actions'), content: h.add('goals-content')}, wire = transport(data,t);
   const owner = h.own(mountGoalsPanel(h.host, h.runtime, {transport: wire, header, isCurrent: () => true}));
-  await settle(); h.drain(); return {...h, header, wire, owner};
+  await wire.bonusReads.ready;await settle(); h.drain();wire.bonusReads.assertInitial(); return {...h, header, wire, owner};
 }
 
 test('Goals empty copy has one real central Start action and no empty progress or duplicate header action', async t => {
@@ -85,7 +86,7 @@ test('Changed continuity clears private rows and saved Reset cannot submit', asy
 });
 
 test('Disposal during pending read prevents rows and releases canonical controls and transport subscription', async t => {
-  const h = fixture(t), {mountGoalsPanel} = await load('goals.mjs'), wire = transport(value(true)), wait = deferred(); wire.defer(wait);
+  const h = fixture(t), {mountGoalsPanel} = await load('goals.mjs'), wire = transport(value(true),t), wait = deferred(); wire.defer(wait);
   const header = {actions: h.add('goals-actions'), content: h.add('goals-content')};
   const owner = h.own(mountGoalsPanel(h.host,h.runtime,{transport:wire,header,isCurrent:()=>true}));
   assert.equal(wire.listeners.size, 1); owner.dispose(); owner.dispose(); wait.resolve(value(true)); await settle();
@@ -113,13 +114,13 @@ test('Actual Home mounts Goals only for own section and restores Recent and Queu
     providers: {readFriends: async () => ({profile: {display_name: 'Me', handle: 'me', bio: '', allowed_actions: {}},
       friends: [], requests: [], allowed_actions: {}})}});
   controller.setScope('home:one'); await controller.loadFriends(); await controller.loadRecent();
-  const wire = transport(value(true));
+  const wire = transport(value(true),t);
   Object.assign(h.runtime, {snapshot: () => ({scopeKey: 'home:one'}), savePresentation() {}, navigate() {}});
   let props = {runtime: h.runtime, controller, state: controller.getSnapshot(), goalsTransport: wire,
     shell: {section: 'recent', friendRef: '', profileRef: '', accountName: 'Me', presentation: {homeSection: 'goals'}}}, owner;
   const unsubscribe = controller.subscribe(() => {props = {...props, state: controller.getSnapshot()}; owner?.update(props);});
   t.after(() => {unsubscribe(); controller.dispose();});
-  owner = h.own(mountHomeFriendsView(h.host, props)); await settle(); h.drain();
+  owner = h.own(mountHomeFriendsView(h.host, props)); await wire.bonusReads.ready;await settle(); h.drain();wire.bonusReads.assertInitial();
   assert.match(h.host.textContent, /Remote Album/); assert.ok(h.named('Period: 1 week'));
   assert.equal(wire.listeners.size, 1);
   const page = h.host.querySelector('.home-friends__page-header'), recent = h.host.querySelector('.home-friends__recent-header');
@@ -163,12 +164,12 @@ test('Actual private transport rejects stale and foreign-marker Goals responses 
 });
 
 for (const boundary of ['artboxHtml', 'galleryCardHtml']) test(`Actual Goals renderer cannot revive private data after reentrant ${boundary} authority change`, async t => {
-  const h = fixture(t), {mountGoalsPanel} = await load('goals.mjs'), wire = transport(value(true));
+  const h = fixture(t), {mountGoalsPanel} = await load('goals.mjs'), wire = transport(value(true),t);
   const header = {actions: h.add('goals-actions'), content: h.add('goals-content')};
   const render = h.runtime[boundary]; let invalidations = 0;
   h.runtime[boundary] = options => {if (invalidations++ === 0) wire.change(); return render(options);};
   const owner = h.own(mountGoalsPanel(h.host, h.runtime, {transport: wire, header, isCurrent: () => true}));
-  await settle(); h.drain();
+  await wire.bonusReads.ready;await settle(); h.drain();
   assert.equal(invalidations, 1); assert.equal(h.host.querySelector('[data-goal-album-ref]'), null);
   assert.doesNotMatch(h.host.textContent, /Remote Album/);
   assert.equal(header.content.querySelector('[role="progressbar"]'), null);

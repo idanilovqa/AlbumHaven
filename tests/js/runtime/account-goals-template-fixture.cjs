@@ -1,4 +1,5 @@
 'use strict';
+const {bonusReadFixture}=require('./goals-bonus-read-fixture.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -87,6 +88,7 @@ async function fixture(t, {full = false} = {}) {
   let env, c, owner, data = value({full});
   const frames = new Map(), timers = new Map(), gates = [], tasks = [], observers = [];
   const calls = [], script = [], loaded = [];
+  const bonusReads=bonusReadFixture(t,()=>data);
   let sequence = 0;
   function drain() {
     let turns = 0;
@@ -160,6 +162,7 @@ async function fixture(t, {full = false} = {}) {
   c.Element.prototype.getClientRects = function() {return this.isConnected && !this.closest('[hidden]') ? [{width: 100, height: 32}] : [];};
   c.addEventListener = document.addEventListener.bind(document); c.removeEventListener = document.removeEventListener.bind(document);
   c.fetch = (route, options = {}) => {
+    const bonus=bonusReads.dispatch(route,options);if(bonus.handled)return Promise.resolve({ok:true,status:200,json:async()=>({status:"ready",context_ref:STAMP,context_scope:"account-goals-v1",data:bonus.data})});
     calls.push({route, options});
     const task = (async () => {
       let next;
@@ -191,7 +194,7 @@ async function fixture(t, {full = false} = {}) {
   }
   const entry = await import(pathToFileURL(path.join(repo, assets.module)).href);
   owner = entry.mountAccountGoalsEntry(host, entry.accountGoalsRuntime(c), c.createAlbumHavenPrivateUITransport);
-  await settle(); drain();
+  await bonusReads.ready;await settle(); drain();bonusReads.assertInitial();
   const named = (label, root = document) => root.querySelectorAll('button').find(node => !node.closest('[hidden], [inert]')
     && (node.getAttribute('aria-label') || node.textContent.trim()) === label);
   const input = (element, text) => {element.value = text; element.dispatchEvent(new c.Event('input', {bubbles: true}));};
@@ -200,7 +203,7 @@ async function fixture(t, {full = false} = {}) {
     let resolve; const promise = new Promise(yes => {resolve = yes;}); const gate = {promise, resolve};
     gates.push(gate); enqueue(route, () => promise); return gate;
   }
-  return {...env, lookup: env.owner, c, host, form, owner, calls, loaded, assets, named, input, enqueue, deferred, scrollCalls,
+  return {...env, lookup: env.owner, c, host, form, owner, calls, loaded, assets, bonusReads, named, input, enqueue, deferred, scrollCalls,
     setData: next => {data = next;}, async flush() {await settle(); drain(); await settle();},
     submit(element) {element.dispatchEvent(new c.Event('submit', {bubbles: true, cancelable: true}));}};
 }

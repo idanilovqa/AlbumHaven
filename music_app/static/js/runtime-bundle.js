@@ -46922,6 +46922,7 @@ const HomeFriendsRuntime = (() => {
     galleryBarHtml: config => buildGalleryBarHtml(config),
     tableHtml: config => buildCompactDataTable(config),
     galleryCardHtml: config => buildGalleryCardHtml(config),
+    switchHtml: config => buildGallerySwitchHtml(config),
     ratingHtml: config => buildGalleryRatingHtml(config),
     navigationItemHtml: config => window.NavigationTree.renderItem(config),
     artboxHtml: config => buildAlbumArtboxHtml(config),

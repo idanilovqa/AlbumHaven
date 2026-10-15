@@ -1,3 +1,4 @@
+const {bonusReadFixture}=require('./goals-bonus-read-fixture.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -15,8 +16,9 @@ function value(full=false) {
 async function mounted(t,{full=false}={}) {
   const h=fixture(t),entry=await load('account-entry.mjs');let owner,restores=0;
   const calls=[],script=[];let data=value(full);
+  const bonusReads=bonusReadFixture(t,()=>data);
   h.c.URLSearchParams=URLSearchParams;
-  h.c.fetch=async(route,options)=>{calls.push({route,options});const next=script.length?script.shift():data;
+  h.c.fetch=async(route,options)=>{const bonus=bonusReads.dispatch(route,options);if(bonus.handled)return {ok:true,status:200,json:async()=>({status:"ready",context_ref:stamp,context_scope:"account-goals-v1",data:bonus.data})};calls.push({route,options});const next=script.length?script.shift():data;
     const result=await(typeof next==='function'?next(route,options):next);if(result instanceof Error)throw result;
     return result?.response||{ok:true,status:200,json:async()=>({status:'ready',context_ref:stamp,context_scope:'account-goals-v1',data:result})};};
   vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/js/runtime/private-ui-transport.js'),'utf8'),h.c);
@@ -24,8 +26,8 @@ async function mounted(t,{full=false}={}) {
   Object.defineProperty(h.document,'visibilityState',{value:'visible',writable:true,configurable:true});
   t.after(()=>owner?.dispose());
   owner=h.own(entry.mountAccountGoalsEntry(h.host,entry.accountGoalsRuntime(h.c),h.c.createAlbumHavenPrivateUITransport,{onRestore:()=>restores++}));
-  await settle();h.drain();
-  return {...h,owner,calls,script,setData:next=>{data=next;},restores:()=>restores,
+  await bonusReads.ready;await settle();h.drain();bonusReads.assertInitial();
+  return {...h,owner,calls,script,bonusReads,setData:next=>{data=next;},restores:()=>restores,
     visibility(value){h.document.visibilityState=value;h.document.dispatchEvent(new h.c.Event('visibilitychange'));},
     page(name,persisted=false){const event=new h.c.Event(name);event.persisted=persisted;h.document.dispatchEvent(event);}};
 }
@@ -93,7 +95,7 @@ test('visibility validation preserves an uncertain Reset intent and never issues
     refreshDecoded.resolve();
     return {status:'ready',context_ref:stamp,context_scope:'account-goals-v1',data:updated};
   }}});
-  h.click(h.named('Retry'));await retryWrite.promise;await refreshDecoded.promise;await settle();
+  const coherentRefresh=h.bonusReads.nextCycle();h.click(h.named('Retry'));await retryWrite.promise;await refreshDecoded.promise;await coherentRefresh;await settle();
   const writes=h.calls.filter(row=>row.route==='/account/goals/reset');assert.equal(writes.length,2);assert.equal(writes[1].options.body,original.options.body);
   assert.ok(h.calls.some(row=>row.route.startsWith('/account/goals/operations/')));assert.equal(h.named('Retry'),undefined);
 });

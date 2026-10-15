@@ -98,6 +98,38 @@ export function normalizeGoals(value) {
       can_reset: value.allowed_actions.can_reset === true,
       can_complete: value.allowed_actions.can_complete === true, can_remove: value.allowed_actions.can_remove === true}});
 }
+const SETTINGS_FIELDS = ['enabled', 'source_mode', 'selected_top_refs', 'preferred_top_refs', 'album_mode', 'unfinished_policy'];
+export function normalizeBonusValues(value) {
+  if (!exactKeys(value, SETTINGS_FIELDS) || typeof value.enabled !== 'boolean'
+    || !['all_active', 'selected'].includes(value.source_mode) || !['next', 'random'].includes(value.album_mode)
+    || !['carry', 'larger_period'].includes(value.unfinished_policy)) fail();
+  const refs = key => {
+    const rows = value[key];
+    if (!Array.isArray(rows) || rows.length > 100 || rows.some(ref => !uuid(ref)) || new Set(rows).size !== rows.length) fail();
+    return [...rows].sort();
+  };
+  const selected = refs('selected_top_refs'), preferred = refs('preferred_top_refs');
+  if (value.source_mode === 'all_active' && selected.length
+    || value.source_mode === 'selected' && preferred.some(ref => !selected.includes(ref))) fail();
+  return freeze({enabled: value.enabled, source_mode: value.source_mode, selected_top_refs: selected,
+    preferred_top_refs: preferred, album_mode: value.album_mode, unfinished_policy: value.unfinished_policy});
+}
+export function normalizeBonusSettings(value) {
+  if (!exactKeys(value, [...SETTINGS_FIELDS, 'settings_revision', 'selection_algorithm', 'normal_top_weight', 'preferred_top_weight'])
+    || !revision(value.settings_revision) || value.selection_algorithm !== 'active-top-weighted-v1'
+    || value.normal_top_weight !== 1 || value.preferred_top_weight !== 3) fail();
+  return freeze({settings_revision: value.settings_revision,
+    ...normalizeBonusValues(Object.fromEntries(SETTINGS_FIELDS.map(key => [key, value[key]]))),
+    selection_algorithm: value.selection_algorithm, normal_top_weight: 1, preferred_top_weight: 3});
+}
+export function normalizeCurrentBonus(value) {
+  if (!exactKeys(value, ['cycle_id', 'bonus', 'manual_count']) || !(value.cycle_id === null || uuid(value.cycle_id))
+    || !Number.isSafeInteger(value.manual_count) || value.manual_count < 0 || value.manual_count > 5) fail();
+  if (value.bonus !== null && (!exactKeys(value.bonus, ['catalog_ref', 'present'])
+    || !uuid(value.bonus.catalog_ref) || typeof value.bonus.present !== 'boolean' || value.cycle_id === null)) fail();
+  if (value.cycle_id === null && (value.bonus !== null || value.manual_count !== 0)) fail();
+  return freeze({cycle_id: value.cycle_id, bonus: value.bonus === null ? null : {...value.bonus}, manual_count: value.manual_count});
+}
 export function createGoalsProvider(transport) {
   let disposed = false, generation = 0;
   const listeners = new Set(), evidenceOwners = new WeakMap();
@@ -116,6 +148,11 @@ export function createGoalsProvider(transport) {
   return Object.freeze({
     subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     async read(options) {return normalizeGoals(await request('/account/goals', options));},
+    async readBonusSettings(options) {return normalizeBonusSettings(await request('/account/goals/bonus-settings', options));},
+    async readCurrentBonus(options) {return normalizeCurrentBonus(await request('/account/goals/bonus', options));},
+    async bonus_settings(command, options) {return request('/account/goals/bonus-settings', {...options, method: 'POST', body: command});},
+    async bonus_draw(command, options) {return request('/account/goals/bonus/draw', {...options, method: 'POST', body: command});},
+    async transition(command, options) {return request('/account/goals/transition', {...options, method: 'POST', body: command});},
     async search(query, options) {
       const body = normalizeGoalSearchQuery(query);
       return normalizeGoalSearch(await request('/account/goals/remote-search', {...options, method: 'POST', body}));

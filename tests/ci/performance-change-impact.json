@@ -21,6 +21,10 @@
     "music_app/static/js/runtime/discovery-center-navigation.js",
     "music_app/static/js/runtime/gallery-main-components.js",
     "music_app/static/js/runtime/gallery-main-state.js",
+    "music_app/static/js/runtime/gallery-main-interactions.js",
+    "music_app/static/js/runtime/gallery-card-component.js",
+    "music_app/static/js/runtime/gallery-cover-preview-cache.js",
+    "music_app/static/js/runtime/gallery-cover-load-scheduler.js",
     "music_app/static/js/runtime/gallery-refresh-and-status.js",
     "music_app/static/js/runtime/loader-status-helpers.js",
     "music_app/static/js/runtime/mobile-navigation.js",
@@ -56,7 +60,8 @@
     "tests/e2e/helpers/problematicPayloadEvidence.js",
     "tests/e2e/actions/utilityProblematicFilesActions.js",
     "tests/e2e/poms/utilityProblematicFilesTab.js",
-    "music_app/services/album_local_membership.py"
+    "music_app/services/album_local_membership.py",
+    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
   ],
   "rules": [
     {
@@ -200,6 +205,22 @@
       "targets": [
         "utility-problematic-files",
         "problematic-files-focused"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/static/js/runtime/gallery-main-components.js",
+        "music_app/static/js/runtime/gallery-main-state.js",
+        "music_app/static/js/runtime/gallery-main-interactions.js",
+        "music_app/static/js/runtime/gallery-card-component.js",
+        "music_app/static/js/runtime/gallery-cover-preview-cache.js",
+        "music_app/static/js/runtime/gallery-cover-load-scheduler.js",
+        "music_app/static/js/runtime/render-markup-helpers.js",
+        "music_app/static/js/runtime/virtual-artist-grid.js",
+        "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
+      ],
+      "targets": [
+        "gallery-artwork-diversity"
       ]
     }
   ]

@@ -1709,6 +1709,40 @@ function preparePerformanceTargetArtifactRoot(targetRoot) {
   fs.mkdirSync(targetRoot, { recursive: true });
 }
 
+function retainArtworkDiversityProvenance(target, env = process.env) {
+  if (target?.fixtureMode !== PRELOADED_DERIVED_FIXTURE_MODE) return null;
+
+  const sourcePath = String(env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE || '').trim();
+  if (!sourcePath) {
+    throw new Error(
+      'ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE is required for the derived artwork target.',
+    );
+  }
+
+  let sourceBytes;
+  try {
+    sourceBytes = fs.readFileSync(sourcePath);
+  } catch (error) {
+    throw new Error(
+      `ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE must name a readable file: ${error?.message || error}`,
+    );
+  }
+  try {
+    JSON.parse(sourceBytes.toString('utf8'));
+  } catch (error) {
+    throw new Error(
+      `ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE must contain valid JSON: ${error?.message || error}`,
+    );
+  }
+
+  const retainedPath = path.join(
+    resolvePerformanceTargetArtifactRoot(target),
+    'artwork-diversity-provenance.json',
+  );
+  fs.writeFileSync(retainedPath, sourceBytes);
+  return retainedPath;
+}
+
 function assertFixtureDatabaseUrlSafe(databaseUrl) {
   const scheme = String(databaseUrl).match(/^([^:]+):/)?.[1] || '';
   if (!['postgresql', 'postgres'].includes(scheme)) {
@@ -2217,6 +2251,7 @@ function runTargetWithPolicy(target, options, targetPorts) {
   const totalPlannedAttempts = forcedAttempts ? verificationGroup.maxAttempts : 1;
   const displayedAttemptTotal = formatDisplayedAttemptTotal(verificationGroup);
   preparePerformanceTargetArtifactRoot(resolvePerformanceTargetArtifactRoot(target));
+  retainArtworkDiversityProvenance(target);
 
   for (let attemptNumber = 1; attemptNumber <= totalPlannedAttempts; attemptNumber += 1) {
     console.log(`=== Performance run ${attemptNumber}/${displayedAttemptTotal} for ${targetName} ===`);
@@ -2548,6 +2583,8 @@ module.exports = {
     normalizeRelativeSpecPath,
     parseCliArgs,
     printUsage,
+    preparePerformanceTargetArtifactRoot,
+    retainArtworkDiversityProvenance,
     loadDotEnvFile,
     assertScanPerformanceDatabaseConfiguration,
     runScanPerformanceDatabasePreflight,

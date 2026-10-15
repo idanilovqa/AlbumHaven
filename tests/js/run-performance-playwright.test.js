@@ -61,6 +61,19 @@ function usePreloadedFixtureEnv(t, targetName) {
   return target;
 }
 
+function useArtworkDiversityProvenanceEnv(t) {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-runner-artwork-provenance-'));
+  const sourcePath = path.join(sourceRoot, 'artwork-diversity-provenance.json');
+  const original = process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE;
+  fs.writeFileSync(sourcePath, '{}\n', 'utf8');
+  process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = sourcePath;
+  t.after(() => {
+    if (original === undefined) delete process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE;
+    else process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = original;
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+  });
+}
+
 function selectNextPreloadedProfileAfter(targetName) {
   const targets = _private.listDefaultPerformanceTargets();
   const currentIndex = targets.findIndex((target) => target.aliasNames[0] === targetName);
@@ -2567,6 +2580,70 @@ test('resolveManagedRealAppPortForSequence assigns a dedicated base port block p
   assert.equal(_private.resolveManagedRealAppPortForSequence(1, 4333), 4343);
 });
 
+test('derived artwork target retains exact validated provenance in its target artifact', (t) => {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-artwork-provenance-'));
+  const sourcePath = path.join(sourceRoot, 'artwork-diversity-provenance.json');
+  const provenance = {
+    schemaVersion: 1,
+    profile: 'synthetic-large-library',
+    base: { release: 'fixtures-v1.0.25', manifestSha256: 'a'.repeat(64) },
+    generator: { commit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11' },
+    derivative: { release: 'fixtures-v1.0.25-distinct-artwork-diagnostic' },
+    diversity: { variantCount: 512, sourceMaxEdge: 960 },
+  };
+  const exactBytes = `${JSON.stringify(provenance, null, 2)}\n`;
+  fs.writeFileSync(sourcePath, exactBytes, 'utf8');
+  const target = {
+    ...performanceRunner.PERFORMANCE_TARGETS['gallery-artwork-diversity'],
+    aliasNames: ['gallery-artwork-diversity-provenance-unit'],
+  };
+  const targetRoot = _private.resolvePerformanceTargetArtifactRoot(target);
+  t.after(() => {
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+  });
+
+  _private.preparePerformanceTargetArtifactRoot(targetRoot);
+  const retainedPath = _private.retainArtworkDiversityProvenance(target, {
+    ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE: sourcePath,
+  });
+
+  assert.equal(retainedPath, path.join(targetRoot, 'artwork-diversity-provenance.json'));
+  assert.equal(fs.readFileSync(retainedPath, 'utf8'), exactBytes);
+  assert.equal(JSON.parse(fs.readFileSync(retainedPath, 'utf8')).base.release, 'fixtures-v1.0.25');
+  const runnerSource = _private.runTargetWithPolicy.toString();
+  const resetIndex = runnerSource.indexOf('preparePerformanceTargetArtifactRoot(');
+  const retainIndex = runnerSource.indexOf('retainArtworkDiversityProvenance(');
+  const attemptsIndex = runnerSource.indexOf('for (let attemptNumber');
+  assert.ok(
+    resetIndex >= 0 && retainIndex > resetIndex && attemptsIndex > retainIndex,
+    'provenance must be retained after target-root reset and before attempts',
+  );
+});
+
+test('derived artwork target refuses to run without retained provenance', () => {
+  const target = performanceRunner.PERFORMANCE_TARGETS['gallery-artwork-diversity'];
+  assert.throws(
+    () => _private.retainArtworkDiversityProvenance(target, {}),
+    /ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE/,
+  );
+});
+
+test('derived artwork target rejects malformed retained provenance', (t) => {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-invalid-artwork-provenance-'));
+  const sourcePath = path.join(sourceRoot, 'artwork-diversity-provenance.json');
+  fs.writeFileSync(sourcePath, '{', 'utf8');
+  t.after(() => fs.rmSync(sourceRoot, { recursive: true, force: true }));
+
+  assert.throws(
+    () => _private.retainArtworkDiversityProvenance(
+      performanceRunner.PERFORMANCE_TARGETS['gallery-artwork-diversity'],
+      { ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE: sourcePath },
+    ),
+    /valid JSON/,
+  );
+});
+
 test('runTargetWithPolicy does not treat stale metrics from an earlier attempt as later rerun passes', (t) => {
   usePreloadedFixtureEnv(t, 'artist-family');
   const originalSpawnSync = childProcess.spawnSync;
@@ -2668,6 +2745,7 @@ test('runTargetWithPolicy does not treat stale metrics from an earlier attempt a
 
 test('runSequentialPerformanceSuite executes the default approved performance targets when no target is provided', (t) => {
   usePreloadedFixtureEnv(t, 'idle-memory');
+  useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
   const originalDateNow = Date.now;
   const calls = [];
@@ -2928,6 +3006,7 @@ test('buildAttemptEnv prevents report auto-open while preserving headed mode', (
 
 test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even after earlier batches consume wall clock time', (t) => {
   usePreloadedFixtureEnv(t, 'idle-memory');
+  useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
   const originalDateNow = Date.now;
   const calls = [];

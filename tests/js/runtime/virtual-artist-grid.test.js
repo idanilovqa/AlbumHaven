@@ -5326,3 +5326,111 @@ test('an explicit absolute return bypasses pagination deferral', () => {
   assert.equal(virtualGrid.sections[0]?.group?.artist, 'Returned Artist');
   assert.equal(scrollEl.scrollTop, 4321);
 });
+
+test('Artist Tree settlement waits for an active touch gesture final position', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const captured = [];
+  const resized = [];
+  virtualGrid.captureScrollAnchor = () => {
+    captured.push(scrollEl.scrollTop);
+    return { scrollTop: scrollEl.scrollTop };
+  };
+  virtualGrid.onResize = options => {
+    resized.push(options);
+  };
+  virtualGrid.stabilizeScrollAfterMeasurement = () => {};
+  virtualGrid.render = () => {};
+
+  scrollEl.scrollTop = 2100;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 2164;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  virtualGrid.onArtistTreeSettled();
+
+  assert.deepEqual(captured, []);
+  assert.deepEqual(resized, []);
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  context.__scheduledBrowserTimeouts.at(-1).callback();
+
+  assert.deepEqual(captured, [2164]);
+  assert.equal(resized.length, 1);
+  assert.equal(resized[0]?.preserveCardTrackWidth, true);
+});
+
+test('Artist Tree settlement waits for wheel scrolling to settle', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const captured = [];
+  virtualGrid.captureScrollAnchor = () => {
+    captured.push(scrollEl.scrollTop);
+    return null;
+  };
+  virtualGrid.onResize = () => {};
+  virtualGrid.render = () => {};
+
+  scrollEl.scrollTop = 3100;
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  scrollEl.scrollTop = 3132;
+  virtualGrid.onArtistTreeSettled();
+
+  assert.deepEqual(captured, []);
+
+  context.__scheduledBrowserTimeouts.at(-1).callback();
+
+  assert.deepEqual(captured, [3132]);
+});
+
+test('an immediate gallery render supersedes deferred Artist Tree settlement', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const captured = [];
+  virtualGrid.captureScrollAnchor = () => {
+    captured.push(scrollEl.scrollTop);
+    return null;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  virtualGrid.onArtistTreeSettled();
+  assert.equal(virtualGrid._deferredArtistTreeSettlement, true);
+
+  virtualGrid.setGroups([], [], [], { preserveScroll: false });
+  assert.equal(virtualGrid._deferredArtistTreeSettlement, false);
+
+  context.__scheduledBrowserTimeouts.at(-1).callback();
+  assert.deepEqual(captured, []);
+});
+
+test('pagination regrouping flushes before coalesced Artist Tree settlement', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const captures = [];
+  const resizedArtists = [];
+  virtualGrid.captureScrollAnchor = () => {
+    captures.push(virtualGrid.sections[0]?.group?.artist || 'none');
+    return null;
+  };
+  virtualGrid.onResize = () => {
+    resizedArtists.push(virtualGrid.sections[0]?.group?.artist || 'none');
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Updated Artist', artist_display: 'Updated Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+  virtualGrid.onArtistTreeSettled();
+  virtualGrid.onArtistTreeSettled();
+
+  context.__scheduledBrowserTimeouts.at(-1).callback();
+
+  assert.deepEqual(captures, ['none', 'Updated Artist']);
+  assert.deepEqual(resizedArtists, ['Updated Artist']);
+});

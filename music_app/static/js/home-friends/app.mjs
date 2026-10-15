@@ -1,3 +1,4 @@
+import {mountGoalsPanel} from './goals.mjs';
 import {createNativeLifetime} from './native-lifetime.mjs';
 import {mountSharedHeader, mountListensBadge} from './shared-header.mjs';
 import {mountActivityMissingAction} from './activity-missing.mjs';
@@ -30,7 +31,7 @@ const homeSections = [['recent','Recent'],['news','News',{disabled:true}],['queu
 export function mountHomeFriendsView(host, initial) {
   const {runtime, controller} = initial, document = host.ownerDocument, window = document.defaultView, saved = initial.shell.presentation;
   const initialKind = initialHomeKind(saved, window?.matchMedia?.(HOME_PHONE_QUERY).matches ?? window?.innerWidth <= 900);
-  let props = initial, kind = initialKind.kind, kindExplicit = initialKind.kindExplicit, homeSection = saved?.homeSection === 'queue' ? 'queue' : 'recent', period = saved?.period || 'week',
+  let props = initial, kind = initialKind.kind, kindExplicit = initialKind.kindExplicit, homeSection = ['queue','goals'].includes(saved?.homeSection) ? saved.homeSection : 'recent', period = saved?.period || 'week',
     views = {tracks:'grouped',artists:'list',...saved?.views,albums:'cards'}, friendViews = saved?.friendViews || {albums:'cards',tracks:'grouped',artists:'list'},
     friendKind = saved?.friendKind || 'tracks', friendPeriod = saved?.friendPeriod || 'week', friendMode = saved?.friendMode || 'activity', selectedAlbum = saved?.selectedAlbum || null,
     selections = selectionPresentation(saved?.selectionPresentation), recentListenedAlbumsHost = null, friendListenedAlbumsHost = null, artistDetail = null, albumDetail = null, editing = null, actionError = '', directoryDialog = false, requestDialog = null, comparison = saved?.comparison || null,
@@ -44,7 +45,7 @@ export function mountHomeFriendsView(host, initial) {
   const homeCurrent=()=>!disposed&&(!rendering||frameRevision===ownershipRevision);
   function sameOwnership(left,right) {
     const a=left.shell,b=right.shell,as=left.state,bs=right.state;
-    if(left.readDetail!==right.readDetail||left.readNowPlaying!==right.readNowPlaying||as.scopeKey!==bs.scopeKey||a.section!==b.section||a.friendRef!==b.friendRef||a.profileRef!==b.profileRef||as.selectedFriendRef!==bs.selectedFriendRef||as.selectedProfileRef!==bs.selectedProfileRef)return false;
+    if(left.goalsTransport!==right.goalsTransport||left.readDetail!==right.readDetail||left.readNowPlaying!==right.readNowPlaying||as.scopeKey!==bs.scopeKey||a.section!==b.section||a.friendRef!==b.friendRef||a.profileRef!==b.profileRef||as.selectedFriendRef!==bs.selectedFriendRef||as.selectedProfileRef!==bs.selectedProfileRef)return false;
     if(as.friends?.status!==bs.friends?.status||as.friends?.data!==bs.friends?.data)return false;
     if(latest?.query){const x=selectionSource(as,latest.query),y=selectionSource(bs,latest.query);if(x?.status!==y?.status||x?.data!==y?.data)return false;}
     return true;
@@ -117,7 +118,7 @@ export function mountHomeFriendsView(host, initial) {
     if (!editing&&!directoryDialog&&!requestDialog) {remove('dialog-fallback');slot('dialogs').replaceChildren();}
   }
   function selectResource(row,targetKind) {
-    const x=latest;if(!sourceCurrent())return;
+    const x=latest;if(!sourceCurrent()||!x.selectionEnabled)return;
     if(row===null){currentQuery=null;updateEntry({selected:null,tracks:null,childAlbumRef:null,pane:'recent',expanded:null});return;}
     if(x.source.status!=='ready'||!x.source.data?.rows?.includes(row))return;
     const target=activitySelectionTarget(row,targetKind,x.query,x.source);if(!target)return;
@@ -162,14 +163,14 @@ export function mountHomeFriendsView(host, initial) {
     const friendResource=friendMode==='comparison'?state.comparison:friend?.allowed_actions?.can_view_activity===true?activityFor(shell.friendRef,friendActivityKind,friendPeriod):deniedResource;
     const historyKey=JSON.stringify([state.scopeKey,section,section==='friends'?shell.friendRef:null,section==='friends'?friendActivityKind:recentKind,section==='friends'?friendPeriod:period,section==='friends'?friendMode:'activity']);
     const query={section,account_ref:section==='friends'?shell.friendRef:null,kind:section==='friends'?friendActivityKind:recentKind,period:section==='friends'?friendPeriod:period,...(queueMode?{homeSection:'queue',kind:'tracks',period:'week'}:{})};
-    const queryKey=selectionQueryKey(query),selectionEnabled=section==='recent'||Boolean(friend&&!profileRoute&&friendMode==='activity'&&friend.allowed_actions?.can_view_activity===true);
+    const queryKey=selectionQueryKey(query),selectionEnabled=section==='recent'&&homeSection!=='goals'||Boolean(friend&&!profileRoute&&friendMode==='activity'&&friend.allowed_actions?.can_view_activity===true);
     const source=section==='recent'||!profileRoute&&friendMode==='activity'?selectionSource(state,query):{status:'unavailable',data:null};
     const entry=selectionEntry(selections,query),expanded=entry.expanded,queue=explicitQueue.getSnapshot();
     const detailsOptions={runtime,api:queue.api,scopeKey:state.scopeKey,enabled:queueMode,selectedIds:entry.tracks?.rowIds};
     if(queueDetailsOwner)queueDetailsOwner.update(detailsOptions);else queueDetailsOwner=accept(createQueueDetails(detailsOptions,value=>{if(!disposed){queueDetails=value;render();}}));
     checkpoint();
     queueDetails=queueDetailsOwner.getSnapshot();
-    const ownRecent=!queueMode&&section==='recent'&&kind==='albums'&&period==='week',customDetail=typeof readDetail==='function';
+    const ownRecent=!queueMode&&homeSection!=='goals'&&section==='recent'&&kind==='albums'&&period==='week',customDetail=typeof readDetail==='function';
     const selectedRow=ownRecent&&selectionEnabled&&!queueMode?recentSelectionRow(source,selectedAlbum,{customDetail}):null,recentOrigin={source:'recent',account_ref:null,kind:'albums',period:'week'};
     const recentTarget=selectedRow&&(customDetail?{kind:'album',ref:selectedRow.album_ref,allowed_actions:selectedRow.allowed_actions,origin:recentOrigin}:detailSelection({...runtime.albumDetailSelection?.(selectedRow.album_ref,state.scopeKey),origin:recentOrigin}));
     const candidate=selectionEnabled&&!ownRecent&&!queueMode?resolveActivitySelection(state,query,entry.selected):null,trackCandidate=selectionEnabled&&!queueMode?resolveActivityTrackSelection(state,query,entry.tracks):null;
@@ -213,7 +214,7 @@ export function mountHomeFriendsView(host, initial) {
       host.dataset.homeSection=section;host.dataset.homePane=x.activePane;
       dashboard.dataset.dashboardLayout=x.dashboardKeys.length===1?'single':expandedKey?'expanded':'ordinary';if(expandedKey)dashboard.dataset.dashboardExpandedKey=expandedKey;else delete dashboard.dataset.dashboardExpandedKey;
       for(const [key,widget] of Object.entries(widgets)){widget.hidden=key==='recent'?section!=='recent':key==='friends'?section!=='friends':key==='artist'?!hasArtist:!hasAlbum;widget.dataset.dashboardWidgetState=x.dashboardKeys.length===1?'fill':expandedKey===null?'ordinary':expandedKey===key?'expanded':'suppressed';}
-      widgets.recent.setAttribute('aria-label',queueMode?'Queued tracks':'Recent listening');
+      widgets.recent.setAttribute('aria-label',queueMode?'Queued tracks':section==='recent'&&homeSection==='goals'?'Goals':'Recent listening');
       const leading=expandedKey?{label:'Back',icon:'back',attributes:{'data-dashboard-action':'back'},onClick:()=>resizeWidget(null)}:comparing?{label:'Back to friends',icon:'back',attributes:{'data-home-comparison-back':'true'},onClick:()=>navigate('friends')}:null;
       show('page-leading',Boolean(leading),pageHeader.slots.leading,mountButton,leading);
       show('page-comparison-identity',comparing,pageHeader.slots.identity,mountComparisonIdentity,{profile,friend});
@@ -227,17 +228,18 @@ export function mountHomeFriendsView(host, initial) {
       show('pane-back',hasSelection,slot('pane-back'),mountButton,{label:x.activePane==='album'&&hasArtist?'Back to Artist Info':queueMode?'Back to Queue':'Back to Recent',icon:'back',disabled:x.activePane==='recent',onClick:()=>showPane(latest.activePane==='album'&&latest.hasArtist?'artist':'recent')});
       show('pane-tabs',hasSelection,slot('pane-tabs'),mountTabs,{id:'home-selected-sections',label:'Selected resource sections',items:[['recent',queueMode?'Queue':'Recent'],...(hasArtist?[['artist','Artist Info']]:[]),...(hasAlbum?[['album','Album Info']]:[])],value:x.activePane,onChange:showPane});
       for(const [key,header] of [['recent',recentHeader],['friends',friendsHeader],['artist',artistHeader],['album',albumHeader]])show(`expand-${key}`,x.dashboardKeys.length>1&&expandedKey!==key&&x.dashboardKeys.includes(key),header.slots.leading,mountButton,{label:'Full size',icon:'expand',attributes:{'data-dashboard-action':'expand','aria-expanded':'false'},onClick:()=>resizeWidget(key)});
-      mount('home-sections',recentHeader.slots.identity,mountTabs,{id:'home-recent-sections',label:'Home sections',items:section==='recent'?homeSections:homeSections.filter(([key])=>key!=='queue'),value:homeSection,onChange:value=>change(()=>{homeSection=value;})});
+      mount('home-sections',recentHeader.slots.identity,mountTabs,{id:'home-recent-sections',label:'Home sections',items:section==='recent'&&props.goalsTransport?[...homeSections,['goals','Goals']]:section==='recent'?homeSections:homeSections.filter(([key])=>key!=='queue'),value:homeSection,onChange:value=>change(()=>{homeSection=value;})});
       show('recent-period',homeSection==='recent',recentHeader.slots.actions,mountPeriod,{value:period,onChange:value=>change(()=>{period=value;}),range:currentRecent.data?.range_label||(period==='week'?'Last 7 days':'')});
       show('recent-missing',homeSection==='recent',recentHeader.slots.actions,mountActivityMissingAction,{value:currentRecent,scopeKey:state.scopeKey,kind:x.recentKind,period,selectedRowIds:x.trackSelection?.rows.map(row=>row.id),enabled:section==='recent',onError:setError});
       show('recent-view',homeSection==='recent'&&kind!=='albums',recentHeader.slots.outsideActions,mountViewControl,{kind,value:views[kind],onChange:value=>change(()=>{views={...views,[kind]:value};})});
-      show('recent-kinds',homeSection!=='queue',recentHeader.slots.content,mountTabs,{id:'home-recent-kinds',label:'Recent listening view',items:kinds,value:kind,onChange:value=>change(()=>{kind=value;kindExplicit=true;})});
+      show('recent-kinds',homeSection!=='queue'&&homeSection!=='goals',recentHeader.slots.content,mountTabs,{id:'home-recent-kinds',label:'Recent listening view',items:kinds,value:kind,onChange:value=>change(()=>{kind=value;kindExplicit=true;})});
       show('queue-header',homeSection==='queue'&&section==='recent',recentHeader.slots.content,mountQueueHeader,x.queue);
       slot('recent-body').className=`home-friends__widget-body ${queueMode?'gallery-scrollbar':'home-friends__recent-body'}`;
       const retryRecent=()=>kind==='albums'&&period==='week'?controller.loadRecent():controller.loadActivity({kind:latest.recentKind,period});
       show('queue-panel',queueMode,recentContent,mountQueuePanel,{...x.queue,scopeKey:state.scopeKey,selectedIds:queueDetails.value.selectedIds,onSelect:selectQueuedTracks});
-      show('recent-albums',!queueMode&&homeSection!=='queue'&&kind==='albums'&&period==='week',recentContent,mountRecentAlbums,{value:state.recent,retry:retryRecent,selected:selectedAlbum,selectionMode:x.customDetail?'details':'native',onSelect:selectRecentAlbum,onError:setError});
-      const activityVisible=homeSection!=='queue'&&!(kind==='albums'&&period==='week');recentActivityHost.hidden=!activityVisible;
+      show('goals-panel',section==='recent'&&homeSection==='goals'&&Boolean(props.goalsTransport),recentContent,mountGoalsPanel,{transport:props.goalsTransport,header:{actions:pageHeader.slots.actions,content:recentHeader.slots.content},isCurrent:()=>homeCurrent()&&props.shell.section!=='friends'&&homeSection==='goals'},runtime,props.goalsTransport);
+      show('recent-albums',!queueMode&&homeSection!=='queue'&&homeSection!=='goals'&&kind==='albums'&&period==='week',recentContent,mountRecentAlbums,{value:state.recent,retry:retryRecent,selected:selectedAlbum,selectionMode:x.customDetail?'details':'native',onSelect:selectRecentAlbum,onError:setError});
+      const activityVisible=homeSection!=='queue'&&homeSection!=='goals'&&!(kind==='albums'&&period==='week');recentActivityHost.hidden=!activityVisible;
       show('recent-status',activityVisible,recentActivity,mountStatus,{value:currentRecent,label:'Listening activity',retry:retryRecent});
       show('recent-activity',activityVisible&&['ready','empty'].includes(currentRecent.status)&&Boolean(currentRecent.data),recentActivity,mountActivityPanel,{scopeKey:state.scopeKey,readDetail:props.readDetail,account_ref:null,period,value:currentRecent,kind:x.recentKind,selectedResourceId:x.resolved?.row.id??null,onResourceSelect:selectResource,onTracksSelect:ownedTracksSelect,selectedTrackIds:x.trackSelection?.rows.map(row=>row.id),listenedAlbumsRef:value=>{if(recentListenedAlbumsHost!==value){recentListenedAlbumsHost=value;pendingRender=true;}},view:views[kind]==='list'?'rows':views[kind]});
       if(activityVisible&&['ready','empty'].includes(currentRecent.status)&&currentRecent.data)history(currentRecent,recentHistory,'recent-history');else remove('recent-history');

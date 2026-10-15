@@ -285,3 +285,22 @@ test('pressed text choices expose native selection semantics and shared selectio
   assert.match(css, /\.ui-button\[aria-pressed="true"\]:not\(\.action-button\):not\(:disabled\):not\(\[aria-disabled="true"\]\)\s*\{[^}]*color:\s*var\(--appearance-selected-accent[^}]*font-weight:\s*700/s);
   assert.match(css, /\[aria-pressed="true"\][^{]+:not\(:hover\):not\(:active\)\s*\{[^}]*background:\s*var\(--selection-body-background/s);
 });
+
+
+test('Goals periods reuse distinct mirrored decorative calendar icons without changing calendar', () => {
+  const button = require(componentPath);
+  const template = fs.readFileSync(path.join(repoRoot, 'music_app/templates/partials/button.html'), 'utf8');
+  const names = ['calendar-week', 'calendar-month', 'calendar-six-months', 'calendar-year'];
+  const rendered = names.map(name => button.renderIconSvg(name));
+  assert.equal(new Set(rendered).size, 4);
+  for (let index = 0; index < names.length; index++) {
+    const name = names[index], html = rendered[index];
+    assert.match(html, /aria-hidden="true" focusable="false"/);
+    assert.doesNotMatch(html, /<button|<text|tabindex|data-.*action/);
+    const fragment = html.slice(html.indexOf('>') + 1, html.lastIndexOf('</svg>'));
+    assert.ok(template.includes(`'${name}': '${fragment}'`), `${name} must match Jinja exactly`);
+    const control = button.renderActionButton({icon: name, ariaLabel: 'Period', presentation: 'bare'});
+    assert.match(control, /aria-label="Period"/);
+  }
+  assert.match(button.renderIconSvg('calendar'), /<path d="M4 5h16v15H4V5ZM8 3v4M16 3v4M4 10h16"\/><\/svg>$/);
+});

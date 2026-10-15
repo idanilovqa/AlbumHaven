@@ -445,8 +445,11 @@ class PostgresOwnedAlbumTopsService:
         with self._authorized(context, constraints) as (connection, live, _):
             top = self._top(connection, live, ref)
             self._require(live, (BROWSE,), constraints, top)
-            return viewers.sharing(self, connection, live, top, constraints,
-                                   cursor_secret=cursor_secret, cursor=cursor)
+            result = viewers.sharing(self, connection, live, top, constraints,
+                                     cursor_secret=cursor_secret, cursor=cursor)
+            if self._allows(live, (BROWSE, ACCESS), constraints, top, owner_only=True):
+                result["publication"] = publication.saved_projection(self, connection, live, top, constraints)
+            return result
 
     def read_edit_requests(self, context, *, cursor_secret, cursor=None, limit=50, constraints=None):
         if type(limit) is not int or not 1 <= limit <= 100:

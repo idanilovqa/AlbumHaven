@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
+from music_app.services.auth_config import build_public_sharing_config
 from music_app.services.owned_album_tops import AlbumTopError, BROWSE, MANAGE, ITEMS, ACCESS
 from music_app.services import album_top_publication_evidence as evidence
 from music_app.services.album_top_publication_authority import (
@@ -16,6 +17,58 @@ def lock_link(connection, top, *, write=False):
     return connection.execute("""select ref,top_ref,library_id,state,active_publication_ref,
         link_revision from app.shared_links where top_ref=%s and library_id=%s for """
         + ("update" if write else "share"), (top["ref"], top["library_id"])).fetchone()
+
+
+def saved_projection(service, connection, live, top, constraints):
+    """Owner-only saved publication facts; deployment consent never changes state.
+
+    The caller already owns the current account/library/Top locks. Link locking
+    follows the same order as save/revoke. Sealed publication rows are immutable.
+    Eligibility flags do not replace publication-preview/source validation.
+    """
+    service._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
+    link = lock_link(connection, top)
+    result = {"state": "unpublished", "share_ref": None, "link_revision": None,
+              "publication_ref": None, "publication_revision": None}
+    if link is not None:
+        if link["state"] not in {"enabled", "revoked"}:
+            raise AlbumTopError("publication_unavailable", 503)
+        result = _publication_receipt(link)
+        if link["state"] == "enabled":
+            row = connection.execute("""select p.ref,p.publication_revision
+                from app.album_list_publications p join app.album_list_publication_seals s
+                  on s.publication_ref=p.ref and s.sealed_at is not null
+                    and s.seal_contract_version=1 and s.content_digest ~ '^[0-9a-f]{64}$'
+                where p.ref=%s and p.top_ref=%s and p.library_id=%s
+                  and p.approved_by_account_id=%s and p.contract_version=1""",
+                (link["active_publication_ref"], top["ref"], top["library_id"],
+                 top["owner_account_id"])).fetchone()
+            if row is None:
+                raise AlbumTopError("publication_unavailable", 503)
+            result = _publication_receipt(link, str(row["ref"]), row["publication_revision"])
+        elif link["active_publication_ref"] is not None:
+            raise AlbumTopError("publication_unavailable", 503)
+    origin = None
+    if service._config.get("ALBUM_HAVEN_PUBLIC_SHARING_ENABLED") is True:
+        configured = service._config.get("ALBUM_HAVEN_PUBLIC_SHARING_ORIGIN")
+        try:
+            admitted = build_public_sharing_config({"ALBUM_HAVEN_PUBLIC_SHARING_ENABLED": "true",
+                "ALBUM_HAVEN_PUBLIC_BASE_URL": service._config.get("ALBUM_HAVEN_PUBLIC_BASE_URL", configured)})
+            if type(configured) is str and admitted["origin"] == configured:
+                origin = configured
+        except ValueError:
+            pass
+    can_enable = origin is not None and service._allows(
+        live, (BROWSE, MANAGE, ITEMS, ACCESS), constraints, top, owner_only=True)
+    # A resolver can change while the link read waits. Recheck before emitting
+    # owner-only identifiers, even though database grants/session are locked.
+    service._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
+    path = "/public/album-tops/" + result["share_ref"] if result["state"] == "enabled" else None
+    return {**result, "public_path": path,
+            "public_url": origin + path if origin is not None and path is not None else None,
+            "deployment_available": origin is not None,
+            "can_enable_external": can_enable,
+            "can_revoke_external": result["state"] == "enabled"}
 
 
 def working_items(connection, top):

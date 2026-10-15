@@ -267,7 +267,7 @@ def search_album_top_inventory(request: Request):
 
 @router.post("/album-tops/{top_ref}/{action}")
 async def mutate_album_top(request: Request, top_ref: str, action: str):
-    if action not in {"save", "add", "remove", "reorder", "delete", "visibility", "grant_editor", "grant_viewer",
+    if action not in {"save", "enable_external", "revoke_external", "add", "remove", "reorder", "delete", "visibility", "grant_editor", "grant_viewer",
                       "revoke_editor", "request_edit", "decide_edit_request", "copy", "set_manual_completion", "set_activity"}:
         return _error(AlbumTopError("invalid_command"))
     return await _mutate(request, action, top_ref)

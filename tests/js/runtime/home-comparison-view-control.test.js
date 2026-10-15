@@ -1,30 +1,23 @@
-const {installPrivateContext} = require('./private-context-harness.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
-
+const {fixture: nativeFixture} = require('./home-friends-native-app-fixture.cjs');
+const {installPrivateContext} = require('./private-context-harness.cjs');
 const source = path.resolve(__dirname, '../../../music_app/static/js');
-const built = buildSync({entryPoints: [path.join(source, 'home-friends/view-control.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
+let mountViewControl;
+test.before(async () => {({mountViewControl} = await import(pathToFileURL(path.join(source, 'home-friends/view-control.mjs'))));});
 
-// Drive only ViewControl's hooks. Its markup, controller, glyphs and surface
-// cleanup come from the published native owners, not a replacement chooser.
-function fixture({width = 1200} = {}) {
-  const native = createNativeHomeRuntime(), {context, document} = native;
-  const windowEvents = document.createElement('window');
-  context.addEventListener = windowEvents.addEventListener.bind(windowEvents);
-  context.removeEventListener = windowEvents.removeEventListener.bind(windowEvents);
-  context.dispatchEvent = windowEvents.dispatchEvent.bind(windowEvents);
+// Actual native chooser ownership; existing native bridge and events remain.
+function fixture(t, {width = 1200} = {}) {
+  const native = nativeFixture(t), {context, document} = native;
+  // Production owns both the canonical chooser and its trigger-surface adapter.
+  // Load the actual bridge rather than substituting the fixture's raw chooser.
+  context.dispatchEvent = document.dispatchEvent.bind(document);
   installPrivateContext(context);
-  for (const filename of ['unfolding-action-button.js', 'runtime/trigger-anchor.js', 'runtime/home-friends-bridge.js']) {
-    vm.runInContext(fs.readFileSync(path.join(source, filename), 'utf8'), context, {filename});
-  }
+  vm.runInContext(fs.readFileSync(path.join(source,'runtime/home-friends-bridge.js'),'utf8'),context,{filename:'home-friends-bridge.js'});
   const bridge = context.AlbumHavenHomeRuntime, mediaQueries = [], mounts = [], focusCalls = [];
   context.matchMedia = query => {
     const record = {query, matches: width <= Number(query.match(/\d+/)[0]), listeners: new Set(),
@@ -43,24 +36,11 @@ function fixture({width = 1200} = {}) {
     return {select: value => owner.select(value), configure(value) {record.configurations++; owner.configure(value);},
       destroy() {record.destroyed++; owner.destroy();}};
   }};
-  const slots = []; let cursor = 0, effects = [], disposed = false;
-  const hooks = {...React,
-    useRef(value) {const index = cursor++; return slots[index] ||= {current: value};},
-    useLayoutEffect(callback, deps) {
-      const index = cursor++, previous = slots[index];
-      if (!previous || deps.some((value, i) => !Object.is(value, previous.deps[i]))) {
-        effects.push(() => {previous?.cleanup?.(); slots[index] = {deps, cleanup: callback()};});
-      }
-    },
-  };
-  const loaded = {exports: {}};
-  vm.runInNewContext(built, {module: loaded, exports: loaded.exports, window: context,
-    require: name => name === 'react' ? hooks : require(name)});
+  let owner, disposed = false;
   const host = document.createElement('span'); document.body.appendChild(host);
   const render = props => {
-    assert.equal(disposed, false); cursor = 0; effects = [];
-    const tree = loaded.exports.ViewControl({runtime, ...props}); tree.props.ref.current = host;
-    for (const effect of effects) effect();
+    assert.equal(disposed, false);
+    if (owner) owner.update(props); else owner = native.own(mountViewControl(host, runtime, props));
     return host.firstElementChild;
   };
   const emit = (target, type, details = {}) => {
@@ -71,15 +51,15 @@ function fixture({width = 1200} = {}) {
     resize(next) {width = next; for (const media of mediaQueries) {
       media.matches = next <= Number(media.query.match(/\d+/)[0]); for (const callback of [...media.listeners]) callback();
     }},
-    dispose() {for (const slot of slots) slot?.cleanup?.(); disposed = true; host.remove();},
+    dispose() {owner?.dispose(); disposed = true; host.remove();},
   };
 }
 const actions = root => root.querySelectorAll('[data-action-value]');
 const active = root => actions(root).find(button => button.getAttribute('aria-pressed') === 'true');
 const props = extra => ({kind: 'albums', context: 'comparison', value: 'rows', ...extra});
 
-test('comparison owns exactly Rows and Small covers with the native list and cards glyphs', () => {
-  const h = fixture(), changes = [], root = h.render(props({onChange: value => changes.push(value)}));
+test('comparison owns exactly Rows and Small covers with the native list and cards glyphs', t => {
+  const h = fixture(t), changes = [], root = h.render(props({onChange: value => changes.push(value)}));
   assert.deepEqual(actions(root).map(button => [button.dataset.actionValue, button.getAttribute('aria-label')]),
     [['rows', 'Rows'], ['covers', 'Small covers']]);
   assert.equal(root.getAttribute('aria-label'), 'Comparison album view');
@@ -101,9 +81,9 @@ test('comparison owns exactly Rows and Small covers with the native list and car
   h.dispose(); assert.deepEqual(h.forbiddenCalls, []);
 });
 
-test('comparison uses the Home 900px boundary and native keyboard focus in both unfolding directions', () => {
+test('comparison uses the Home 900px boundary and native keyboard focus in both unfolding directions', t => {
   for (const [width, direction, forward] of [[900, 'down', 'ArrowDown'], [901, 'left', 'ArrowRight']]) {
-    const h = fixture({width}), changes = [], root = h.render(props({onChange: value => changes.push(value)}));
+    const h = fixture(t, {width}), changes = [], root = h.render(props({onChange: value => changes.push(value)}));
     assert.equal(h.mediaQueries[0].query, '(max-width: 900px)'); assert.equal(root.dataset.unfoldDirection, direction);
     actions(root)[0].focus(); const event = h.emit(root, 'keydown', {key: forward});
     assert.equal(event.defaultPrevented, true); assert.strictEqual(h.document.activeElement, actions(root)[1]);
@@ -117,8 +97,8 @@ test('comparison uses the Home 900px boundary and native keyboard focus in both 
   }
 });
 
-test('same-kind context changes retire the old owner, callback, media listener and open surface', () => {
-  const h = fixture({width: 800}), changes = [];
+test('same-kind context changes retire the old owner, callback, media listener and open surface', t => {
+  const h = fixture(t, {width: 800}), changes = [];
   const ordinary = h.render({kind: 'albums', value: 'cards', onChange: value => changes.push(`old:${value}`)});
   h.emit(actions(ordinary)[1], 'click', {detail: 1});
   assert.equal(ordinary.classList.contains('is-open'), true);
@@ -140,14 +120,14 @@ test('same-kind context changes retire the old owner, callback, media listener a
   assert.equal(vm.runInContext('activeTriggerSurface', h.context), null);
 });
 
-test('ordinary Album, Artist and Track families retain their native choices, labels, glyphs and breakpoint', async () => {
+test('ordinary Album, Artist and Track families retain their native choices, labels, glyphs and breakpoint', async t => {
   const {buildRecentViewIcon} = await import(pathToFileURL(path.join(source, 'home-friends/recent-view-icons.mjs')));
   for (const [kind, choices, icons, label] of [
     ['albums', [['list', 'Rows'], ['cards', 'Cards'], ['covers', 'No info']], ['list', 'cards', 'covers'], 'View'],
     ['artists', [['list', 'Rows'], ['cards', 'Circles']], ['list', 'covers'], 'View'],
     ['tracks', [['grouped', 'Grouped tracks'], ['history', 'Listening history']], null, 'Track grouping'],
   ]) {
-    const h = fixture({width: 800}), changes = [], value = choices[0][0];
+    const h = fixture(t, {width: 800}), changes = [], value = choices[0][0];
     const root = h.render({kind, value, onChange: next => changes.push(next)});
     assert.deepEqual(actions(root).map(button => [button.dataset.actionValue, button.getAttribute('aria-label')]), choices);
     assert.equal(root.getAttribute('aria-label'), label); assert.equal(h.mediaQueries[0].query, '(max-width: 600px)');

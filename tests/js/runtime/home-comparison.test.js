@@ -3,58 +3,30 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const Module = require('node:module');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
-
+const {fixture, load} = require('./home-friends-native-app-fixture.cjs');
 const repo = path.resolve(__dirname, '../../..');
-// Source-level SSR/pure contract tests only. This is not a browser, provider,
-// production transport, geometry, playback, or release-acceptance fixture.
-const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/home-friends/comparison.jsx')],
-  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']});
-const loaded = new Module(`${__filename}.fixture.cjs`, module);
-loaded.filename = `${__filename}.fixture.cjs`; loaded.paths = module.paths;
-loaded._compile(built.outputFiles[0].text, loaded.filename);
-const {ComparisonPanel, ComparisonControls, ComparisonCards, comparisonTableHtml,
-  comparisonFacts, comparisonSelection, projectComparisonRows, restoreComparisonPresentation, reconcileComparisonSelection} = loaded.exports;
-const model = import(pathToFileURL(path.join(repo, 'music_app/static/js/home-friends/model.mjs')));
-const native = createNativeHomeRuntime();
-for (const file of ['compact-data-table.js', 'trigger-anchor.js', 'library-settings.js']) {
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime', file), 'utf8'), native.context);
-}
-for (const file of ['unfolding-action-button.js', 'navigation-tree.js']) {
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js', file), 'utf8'), native.context);
-}
-const artistTemplate = native.document.createElement('script');
-artistTemplate.id = 'navigation-tree-item-template';
-artistTemplate.textContent = fs.readFileSync(path.join(repo, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
-native.document.body.appendChild(artistTemplate);
-const runtime = {
-  openChoice: native.context.openUtilityChoiceDropdown,
-  viewChooserHtml: config => native.context.UnfoldingActionButton.render(config),
-  navigationItemHtml: config => native.context.NavigationTree.renderItem(config),
-  buttonHtml: config => native.context.ButtonComponent.renderButton(config),
-  actionHtml: config => native.context.ButtonComponent.renderActionButton(config),
-  alertHtml: config => native.context.buildOnPageAlertHtml(config),
-  tableHtml: config => native.context.buildCompactDataTable(config),
-  galleryCardHtml: config => native.context.buildGalleryCardHtml(config),
-  artboxHtml: config => native.context.buildAlbumArtboxHtml(config),
-  escapeHtml: native.context.escapeHtml,
-};
+let ComparisonPanel, ComparisonControls, ComparisonCards, comparisonTableHtml, comparisonFacts,
+  comparisonSelection, projectComparisonRows, restoreComparisonPresentation, reconcileComparisonSelection;
+let native, runtime;
+test.before(async () => {
+  ({mountComparisonPanel: ComparisonPanel, mountComparisonControls: ComparisonControls,
+    mountComparisonCards: ComparisonCards, comparisonTableHtml, comparisonFacts, comparisonSelection,
+    projectComparisonRows, restoreComparisonPresentation, reconcileComparisonSelection} = await load('comparison.mjs'));
+});
+test.beforeEach(t => {native = fixture(t); runtime = native.runtime;});
+const model = load('model.mjs');
 const side = (count, extra = {}) => ({listen_count: count, play_count: null, full_listen_count: null,
   favorite: null, rating: null, last_listened_at: null, ...extra});
 const row = (id, yours, friend, extra = {}) => ({id, kind: 'track', title: `Title ${id}`, artist: 'An artist',
   yours: yours === null ? null : side(yours), friend: friend === null ? null : side(friend), ...extra});
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, {runtime, ...props}));
+const mount = (Component, props) => {
+  const host = native.document.createElement('div'); native.document.body.append(host);
+  const owner = Component(host, runtime, props); return {host, dispose() {owner.dispose(); host.remove();}};
+};
+const render = (Component, props) => {const h = mount(Component, props); try {return h.host.innerHTML;} finally {h.dispose();}};
 const documentOf = html => {const element = native.document.createElement('div'); element.innerHTML = html; return element;};
 const ids = rows => rows.map(item => item.id);
-function allElements(node) {
-  if (!React.isValidElement(node)) return [];
-  return [node, ...React.Children.toArray(node.props.children).flatMap(allElements)];
-}
 
 test('default Common only requires known positive listens on both authorized sides', () => {
   const rows = Object.freeze([row('shared', 3, 2), row('own-only', 3, null), row('friend-only', null, 2),
@@ -98,16 +70,19 @@ test('native comparison controls keep Common only and one native order Choice', 
   const changes = [];
   const props = {runtime, commonOnly: true, order: 'general',
     onCommonOnly: value => changes.push(['common', value]), onOrder: value => changes.push(['order', value])};
-  const html = render(ComparisonControls, props), elements = allElements(ComparisonControls(props));
-  const host = documentOf(html), choice = elements.find(element => element.type?.name === 'NativeChoice');
-  assert.match(html, /type="checkbox" checked=""/);
-  assert.equal(host.querySelector('button[aria-label="Comparison order: General"]').getAttribute('aria-haspopup'), 'menu');
-  assert.deepEqual(choice.props.options, [['general', 'General'], ['yours', 'Yours first'], ['friend', 'Friend first']]);
-  elements.find(element => element.type === 'input').props.onChange({target: {checked: false}});
-  choice.props.onChange('friend');
+  const h = mount(ComparisonControls, props), host = h.host, html = host.innerHTML;
+  assert.equal(host.querySelector('input').checked, true);
+  const trigger = host.querySelector('button[aria-label="Comparison order: General"]');
+  assert.equal(trigger.getAttribute('aria-haspopup'), 'menu');
+  const input = host.querySelector('input'); input.checked = false;
+  input.dispatchEvent(new native.c.Event('change', {bubbles:true}));
+  trigger.dispatchEvent(new native.c.Event('click', {bubbles:true}));
+  const choices = native.document.querySelectorAll('[role="menuitemradio"]');
+  assert.deepEqual(choices.map(item => item.textContent.trim()), ['General', 'Yours first', 'Friend first']);
+  choices[2].dispatchEvent(new native.c.Event('click', {bubbles:true}));
   assert.deepEqual(changes, [['common', false], ['order', 'friend']]);
   assert.equal(host.querySelectorAll('button').length, 1, 'direction and view are owned by headings and the header chooser');
-  assert.doesNotMatch(html, /Sort ascending|Sort descending|Small covers/);
+  assert.doesNotMatch(html, /Sort ascending|Sort descending|Small covers/); h.dispose();
 });
 
 test('native paired tables share one union row order and stable identity across both halves', () => {
@@ -167,7 +142,7 @@ test('all identity/name strings are escaped and comparisons never invent native 
 
 test('panel keeps page scope and one native sticky header for filters and supplied kind/Period', () => {
   const html = render(ComparisonPanel, {kind: 'tracks', friendName: 'Maya', value: {status: 'ready', data: {rows: [row('shared', 3, 2), row('not-common', 1, null)], next_cursor: 'more'}},
-    headerControls: React.createElement('div', {className: 'header-proof'}, 'Tabs and Period')});
+    headerControls: Object.assign(native.document.createElement('div'), {className: 'header-proof', textContent: 'Tabs and Period'})});
   assert.match(html, /Filtering and ordering this page only/);
   assert.match(html, /data-comparison-id="shared"/);
   assert.doesNotMatch(html, /data-comparison-id="not-common"/);
@@ -282,7 +257,8 @@ test('restored comparison controls, cover view and selected summary use fresh au
   const html = render(ComparisonPanel, {...comparisonContext, presentation: savedComparison(), friendName: 'Maya',
     value: {status: 'ready', data: {rows: [row('album:selected', 8, null, {kind: 'album', title: 'Fresh title'})]}}});
   assert.match(html, /data-comparison-view="covers"/);
-  assert.doesNotMatch(html, /type="checkbox" checked=""/);
+  const check = mount(ComparisonPanel, {...comparisonContext, presentation: savedComparison(), value: {status:'ready',data:{rows:[]}}});
+  assert.equal(check.host.querySelector('input').checked, false); check.dispose();
   const host = documentOf(html);
   assert.equal(host.querySelector('button[aria-label="Comparison order: Friend first"]').getAttribute('aria-haspopup'), 'menu');
   assert.equal(host.querySelector('[role="columnheader"][data-cdt-column="friend"]').getAttribute('aria-sort'), 'ascending');
@@ -301,15 +277,20 @@ test('a previous friend comparison cannot restore its filters, cover view or sel
   const html = render(ComparisonPanel, {...comparisonContext, friendRef: 'friend:2', presentation: savedComparison(),
     value: {status: 'ready', data: {rows: [row('album:selected', 4, 3, {kind: 'album'})]}}});
   assert.match(html, /data-comparison-view="rows"/);
-  assert.match(html, /type="checkbox" checked=""/);
-  assert.doesNotMatch(html, /aria-label="Selected comparison details"|home-comparison__cards/);
+  const check = mount(ComparisonPanel, {...comparisonContext, friendRef:'friend:2', presentation:savedComparison(), value:{status:'ready',data:{rows:[]}}});
+  assert.equal(check.host.querySelector('input').checked, true); check.dispose();
+  assert.doesNotMatch(html, /home-comparison__cards/);
+  const details = documentOf(html).querySelector('[aria-label="Selected comparison details"]');
+  assert.equal(details.hidden, true); assert.equal(details.textContent, '');
 });
 
 test('restored selection never exposes old details while a comparison projection is unreadable', () => {
   for (const status of ['loading', 'denied', 'unavailable', 'error', 'empty']) {
     const html = render(ComparisonPanel, {...comparisonContext, presentation: savedComparison(),
       value: {status, data: {rows: [row('album:selected', 9, 3, {kind: 'album', title: 'Private stale title'})]}}});
-    assert.doesNotMatch(html, /Private stale title|album:selected|aria-label="Selected comparison details"/);
+    assert.doesNotMatch(html, /Private stale title|album:selected/);
+    const details = documentOf(html).querySelector('[aria-label="Selected comparison details"]');
+    assert.equal(details.hidden, true); assert.equal(details.textContent, '');
   }
 });
 

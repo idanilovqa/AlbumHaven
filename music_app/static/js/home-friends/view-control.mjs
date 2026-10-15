@@ -4,10 +4,11 @@ const choices = {albums: [['list', 'Rows'], ['cards', 'Cards'], ['covers', 'No i
   tracks: [['grouped', 'Grouped tracks'], ['history', 'Listening history']], artists: [['list', 'Rows'], ['cards', 'Circles']]};
 const comparisonChoices = [['rows', 'Rows'], ['covers', 'Small covers']];
 export function mountViewControl(host, runtime, initial) {
-  let props, owner, media, resize, signature, disposed = false, revision = 0;
+  let props, owner, media, resize, signature, activeLease = null, disposed = false, revision = 0;
   host.classList.add('home-friends__view-control');
   function release() {
-    const previous = owner, previousMedia = media, previousResize = resize; owner = media = resize = null;
+    const previous = owner, previousMedia = media, previousResize = resize;
+    activeLease = null; owner = media = resize = null;
     try {previousMedia?.removeEventListener?.('change', previousResize);} finally {previous?.destroy();}
   }
   function dispose() {if (!disposed) {disposed = true; revision++; try {release();} finally {host.replaceChildren();}}}
@@ -28,11 +29,17 @@ export function mountViewControl(host, runtime, initial) {
           : runtime.viewIconHtml(comparison ? mode === 'rows' ? 'list' : 'cards' : kind === 'artists' && mode === 'cards' ? 'covers' : mode); if (!current()) return; icon.innerHTML = html;}
       }
       media = host.ownerDocument.defaultView?.matchMedia?.(comparison ? HOME_PHONE_QUERY : '(max-width: 600px)');
-      const options = () => ({label: comparison ? 'Comparison album view' : kind === 'tracks' ? 'Track grouping' : 'View', direction: media?.matches ? 'down' : 'left',
-        onSelect: value => {if (!disposed && signature === key && items.some(([choice]) => choice === value)) props.onChange?.(value);}});
+      const lease = {owner: null, media}; activeLease = lease;
+      const ownsLease = () => {
+        if (disposed || activeLease !== lease || lease.owner === null || owner !== lease.owner) return false;
+        const allowed = props.isCurrent?.() !== false;
+        return allowed && !disposed && activeLease === lease && owner === lease.owner;
+      };
+      const options = () => ({label: comparison ? 'Comparison album view' : kind === 'tracks' ? 'Track grouping' : 'View', direction: lease.media?.matches ? 'down' : 'left',
+        onSelect: value => {if (ownsLease() && items.some(([choice]) => choice === value)) props.onChange?.(value);}});
       const nextOwner = runtime.mountViewChooser(element, options());
-      if (!current()) {nextOwner?.destroy(); return;} owner = nextOwner;
-      resize = () => {if (!disposed && props.isCurrent?.() !== false) owner?.configure(options());}; media?.addEventListener?.('change', resize);
+      if (!current() || activeLease !== lease) {nextOwner?.destroy(); return;} owner = nextOwner; lease.owner = nextOwner;
+      resize = () => {if (ownsLease()) lease.owner.configure(options());}; lease.media?.addEventListener?.('change', resize);
     }
     if (current()) owner?.select(props.value);
     } catch (error) {try {dispose();} catch {} throw error;}

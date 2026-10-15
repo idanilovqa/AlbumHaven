@@ -186,6 +186,7 @@ export function mountComparisonPanel(host, runtime, initial) {
   const normalize = value => ({friendName: 'Friend', friendRef: '', kind: 'tracks', period: 'week', ...value});
   let props = normalize(initial), disposed = false, epoch = 0, rendering = false, pending = false;
   let settings = restoreComparisonPresentation(props.presentation, props), published = null, publishedEpoch = -1, projected = null, rows = EMPTY_ROWS;
+  let tableMarkup = null;
   let controls = null, controlsEpoch = -1, viewControl = null, viewEpoch = -1, viewHost = null, cards = null, sortFocus = null, headerNode = null;
   const root = node(host, 'section', 'home-comparison'), header = node(root, 'header', 'gallery-bar home-comparison__header'); header.setAttribute('aria-label', 'Comparison controls');
   const controlsHost = node(header, 'div'), localViewHost = node(header, 'div', 'home-comparison__view'), headerControlsHost = node(header, 'div');
@@ -265,7 +266,10 @@ export function mountComparisonPanel(host, runtime, initial) {
       status.update({value: props.value, label: 'Taste comparisons', retry: props.retry}); check(token); statusHost.hidden = ready; empty.hidden = !ready || rows.length !== 0; empty.textContent = commonOnly ? 'No confirmed shared listens on this page.' : 'No listening activity on this page.';
       tableHost.hidden = !ready || !rows.length; tableHost.className = `home-comparison__table${covers ? ' home-comparison__table--covers' : ''}`;
       const html = tableHost.hidden ? '' : comparisonTableHtml(runtime, covers ? EMPTY_ROWS : rows, kind, friendName, {order, ascending, metricSort, phone});
-      check(token); if (tableHost.innerHTML !== html) tableHost.innerHTML = html;
+      // Compare generated markup, not the live DOM subsequently painted with
+      // selection and accessible heading state. Selection-only updates retain
+      // native row/button identity; empty/hidden transitions still clear rows.
+      check(token); if (tableMarkup !== html) {tableHost.innerHTML = html; tableMarkup = html;}
       if (ready && rows.length && covers) {
         const cardProps = {rows, kind, friendName, onSelect: row => select(row, token)}; if (!cards) cards = acquire(mountComparisonCards(cardsHost, runtime, cardProps), token); else cards.update(cardProps); check(token);
       } else {release(cards); cards = null;}

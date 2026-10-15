@@ -338,6 +338,42 @@
           "project": "synthetic-large-library",
           "test": "tests/e2e/syntheticLargeLibrary/artistTreeMobileBack.spec.js",
           "case": "FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery restoration › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/artistTreeDesktopBack.spec.js",
+          "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration › desktop Scroll, album, Close retains the jumped-to position"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/artistTreeDesktopBack.spec.js",
+          "case": "FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration › desktop Scroll, ordinary scroll, album, Close retains the departure position"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/galleryPresentationAnchor.spec.js",
+          "case": "FTC-GALLERY-NAV-034 synthetic-large mobile presentation anchoring › Mobile Cards, covers and rows retain the jumped-to release"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/galleryPresentationAnchor.spec.js",
+          "case": "FTC-GALLERY-NAV-034 synthetic-large desktop presentation anchoring › Desktop Cards and covers retain the jumped-to release"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
+          "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile › native touch swipes track the gesture without reverse movement or layout jitter"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/galleryNativeScrollStability.spec.js",
+          "case": "FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop › native wheel input tracks the gesture without reverse movement or layout jitter"
         }
       ]
     },

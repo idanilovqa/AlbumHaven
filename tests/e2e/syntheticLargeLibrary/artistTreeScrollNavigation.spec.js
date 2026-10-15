@@ -138,7 +138,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     galleryActions,
     navigationPanelActions,
     page,
-  }) => {
+  }, testInfo) => {
     const ui = new GalleryRegressions(page);
     const htmlTiming = await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
     const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
@@ -175,6 +175,12 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       await before.dispose();
       if (continuity.connected && continuity.delta !== null) {
         stableAnchorComparisons += 1;
+        if (continuity.delta < -2 || continuity.delta > 220) {
+          await testInfo.attach('reverse-scroll-displacement', {
+            body: JSON.stringify({ step, wheelDeltaY: -160, continuity }),
+            contentType: 'application/json',
+          });
+        }
         expect(continuity.delta).toBeGreaterThanOrEqual(-2);
         expect(continuity.delta).toBeLessThanOrEqual(220);
       }

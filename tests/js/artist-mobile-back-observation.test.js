@@ -8,12 +8,13 @@ test('return observation excludes hidden gallery frames but catches the first vi
   let visible = false;
   let top = 40;
   let disposed = 0;
-  const previous = Object.fromEntries(['document', 'requestAnimationFrame', 'cancelAnimationFrame'].map(key => [key, global[key]]));
+  const previous = Object.fromEntries(['window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'].map(key => [key, global[key]]));
   const gallery = { scrollTop: 200, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0, width: visible ? 390 : 0, height: visible ? 600 : 0 }) };
   const card = { isConnected: true, getBoundingClientRect: () => ({ top, height: 90 }), closest: () => null,
-    querySelector: () => ({ getAttribute: () => 'album-b' }) };
+    querySelector: () => ({ getAttribute: () => 'album-b' }), querySelectorAll: () => [] };
   const section = { getBoundingClientRect: () => ({ top: 0, height: 900 }),
     querySelector: () => ({ getAttribute: () => 'Artist B' }), querySelectorAll: () => [card] };
+  global.window = {};
   global.document = { querySelector: () => gallery, querySelectorAll: () => [section] };
   global.requestAnimationFrame = callback => { callbacks.set(++sequence, callback); return sequence; };
   global.cancelAnimationFrame = id => callbacks.delete(id);

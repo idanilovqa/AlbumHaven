@@ -863,6 +863,42 @@ function extractFirstGridTemplate(markup) {
   );
 }
 
+test('scroll anchoring selects the visible card when its title is above the viewport', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const visible = context.createAlbumTitleButton('visible-card', { top: -80, bottom: -60 },
+    'artist:all:Visible Artist:0', 'Visible Album', '2026');
+  const next = context.createAlbumTitleButton('next-card', { top: 220, bottom: 240 },
+    'artist:all:Next Artist:0', 'Next Album', '2026');
+  const originalClosest = visible.closest?.bind(visible);
+  const card = { getBoundingClientRect: () => ({ top: -100, bottom: 200 }) };
+  visible.closest = selector => selector === '.album-card' ? card : originalClosest?.(selector);
+  context.__albumTitleButtons = [visible, next];
+  scrollEl.scrollTop = 1000;
+  const anchor = virtualGrid.captureScrollAnchor();
+  assert.equal(anchor.albumKey, 'visible-card');
+  assert.equal(anchor.offsetTop, -100);
+});
+
+test('scroll anchoring retains the card box when its title moves within the card', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const trigger = context.createAlbumTitleButton('same-album', { top: 52, bottom: 72 },
+    'artist:all:Anchor Artist:0', 'Same Album', '2026');
+  const originalClosest = trigger.closest?.bind(trigger);
+  let cardTop = 12;
+  const card = { getBoundingClientRect: () => ({ top: cardTop, bottom: cardTop + 100 }) };
+  trigger.closest = selector => selector === '.album-card' ? card : originalClosest?.(selector);
+  context.__albumTitleButtons = [trigger];
+  scrollEl.scrollTop = 1000;
+  const anchor = virtualGrid.captureScrollAnchor();
+  assert.equal(anchor.anchorBox, 'card');
+  assert.equal(anchor.offsetTop, 12);
+  cardTop = 42;
+  virtualGrid.restoreScrollAnchor(anchor);
+  assert.equal(scrollEl.scrollTop, 1030, 'restoration follows the card, not the unchanged title coordinate');
+});
+
 for (const scenario of ['visible title', 'visible artwork', 'renamed key', 'removed occurrence']) {
 test(`scroll anchoring restores the captured trigger for ${scenario}`, () => {
   const { context, scrollEl } = createRuntimeContext();
@@ -1493,6 +1529,38 @@ test('a newer user wheel cancels a pending relative setGroups restoration', () =
   assert.equal(scrollEl.scrollTop, 1400);
 });
 
+test('touch scrolling cancels relative restoration scheduled after touchstart', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 940;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  context.cancelBrowserAnimationFrame = (frameId) => {
+    context.canceledBrowserAnimationFrames.push(frameId);
+    scheduledFrames.delete(frameId);
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.restoreScrollAnchor = () => { scrollEl.scrollTop = 900; };
+  scrollEl.scrollTop = 900;
+  scrollEl.dispatchEvent({ type: 'touchstart' });
+  virtualGrid.setGroups([], [], [], { preserveScroll: true });
+  const staleRestoreFrameId = virtualGrid._scrollRestoreRaf;
+  const staleRestoreFrame = scheduledFrames.get(staleRestoreFrameId);
+  assert.equal(typeof staleRestoreFrame, 'function');
+
+  scrollEl.scrollTop = 908;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  staleRestoreFrame();
+
+  assert.ok(context.canceledBrowserAnimationFrames.includes(staleRestoreFrameId));
+  assert.equal(scrollEl.scrollTop, 908);
+});
+
 test('explicit semantic preservation survives a pending scroll render during a presentation change', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -1643,6 +1711,30 @@ test('resumed wheel scrolling defers an already queued row measurement until set
   settleTimer.callback();
   scheduledFrames.get(virtualGrid._measureRaf)();
   assert.equal(measurementCount, 1, 'deferred measurement must run after the quiet period');
+});
+
+test('wheel intent at a scroll boundary cancels and later resumes pending row measurement', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  context.scheduleBrowserAnimationFrame = callback => {
+    const id = scheduledFrames.size + 1;
+    scheduledFrames.set(id, callback);
+    return id;
+  };
+  let measurementCount = 0;
+  virtualGrid.measureRenderedRows = () => { measurementCount += 1; };
+  virtualGrid.scheduleMeasureRows(true);
+  const staleMeasurement = scheduledFrames.get(virtualGrid._measureRaf);
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  staleMeasurement();
+  assert.equal(measurementCount, 0, 'wheel intent must invalidate the queued measurement before scrolling');
+  const settleTimer = context.__scheduledBrowserTimeouts
+    .filter(({ delay }) => delay === 96).at(-1);
+  assert.ok(settleTimer, 'measurement must resume even when the boundary prevents a scroll event');
+  settleTimer.callback();
+  scheduledFrames.get(virtualGrid._measureRaf)();
+  assert.equal(measurementCount, 1);
 });
 
 test('mobile touch scrolling defers row measurement until the gesture ends', () => {
@@ -2031,6 +2123,7 @@ test('scroll render timer completes a pending frame when animation frames are st
     { preserveScroll: true },
   );
   const pendingMeasurementFrameId = virtualGrid._measureRaf;
+  const pendingScrollRestoreFrameId = virtualGrid._scrollRestoreRaf;
   scrollEl.scrollTop = 510;
   virtualGrid.onScroll();
   const scrollRenderFrameId = virtualGrid._raf;
@@ -2044,7 +2137,11 @@ test('scroll render timer completes a pending frame when animation frames are st
   assert.equal(diagnostics.latestRender.viewportTop, 510);
   assert.equal(diagnostics.latestRender.renderRafOwner, scrollRenderFrameId);
   assert.equal(virtualGrid._raf, null);
-  assert.deepEqual(context.canceledBrowserAnimationFrames, [pendingMeasurementFrameId, scrollRenderFrameId]);
+  assert.deepEqual(context.canceledBrowserAnimationFrames, [
+    pendingScrollRestoreFrameId,
+    pendingMeasurementFrameId,
+    scrollRenderFrameId,
+  ]);
 
   scheduledFrames.get(scrollRenderFrameId)();
   assert.equal(diagnostics.latestRender.renderRafOwner, scrollRenderFrameId);
@@ -2280,7 +2377,15 @@ test('scroll render timer completes a pending frame when animation frames are st
   assert.equal(scrollEl.scrollTop, 6190);
   assert.equal(restoreCount, 1);
 
+  virtualGrid.scheduleMeasureRows(true);
+  const measureFrameId = virtualGrid._measureRaf;
   scrollEl.dispatchEvent({ type: 'scroll' });
+  assert.equal(
+    virtualGrid._measureRaf,
+    measureFrameId,
+    'an owned restoration scroll must retain the measurement that reconciles its layout',
+  );
+  assert.equal(context.canceledBrowserAnimationFrames.includes(measureFrameId), false);
   stabilizeFrame();
 
   assert.equal(
@@ -2293,6 +2398,13 @@ test('scroll render timer completes a pending frame when animation frames are st
     context.canceledBrowserAnimationFrames.includes(stabilizeFrameId),
     false,
     'a matching programmatic anchor-restore event must not cancel its own stabilization frame',
+  );
+
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  assert.equal(virtualGrid._measureRaf, null);
+  assert.ok(
+    context.canceledBrowserAnimationFrames.includes(measureFrameId),
+    'real wheel intent must still cancel measurement even before the scroll coordinate changes',
   );
 }
 

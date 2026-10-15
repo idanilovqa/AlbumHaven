@@ -150,7 +150,26 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       [0.1, 0.72, 0.24, 0.9, 0.16],
     );
     expect(farTargets).toHaveLength(5);
-    for (const artist of farTargets) await jumpToArtist(ui, artist);
+    for (const [index, artist] of farTargets.entries()) {
+      await jumpToArtist(ui, artist);
+      if (index !== 0) continue;
+      const ownership = await ui.readArtistJumpOwnership(artist);
+      const renderedArtist = ownership.anchorGroupArtist || artist;
+      const observation = await ui.startArtistJumpPlacementObservation(renderedArtist);
+      let samples;
+      try {
+        // Observe delayed refresh and layout work; this delay is not a readiness condition.
+        await page.waitForTimeout(15000);
+      } finally {
+        samples = await observation.finish();
+        await testInfo.attach('first-artist-jump-delayed-stability', {
+          body: JSON.stringify({ requestedArtist: artist, renderedArtist, samples }),
+          contentType: 'application/json',
+        });
+      }
+      expect(samples.length).toBeGreaterThan(30);
+      expect(samples.filter(sample => !sample.stable)).toEqual([]);
+    }
 
     const consecutiveTargets = [farTargets[1], farTargets[2]];
     await jumpToArtist(ui, consecutiveTargets[0]);

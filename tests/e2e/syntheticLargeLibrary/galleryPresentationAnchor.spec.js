@@ -50,7 +50,7 @@ for (const mobile of [true, false]) {
         try {
           await layout.selectView(view);
           // Observe late layout work; this delay is not a readiness condition.
-          await page.waitForTimeout(1000);
+          await page.waitForTimeout(5000);
         } finally {
           samples = await observation.finish();
           await testInfo.attach(`presentation-${view}-anchor`, {

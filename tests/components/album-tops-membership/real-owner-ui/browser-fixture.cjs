@@ -5,7 +5,12 @@ const components=['button-component.js','navigation-tree.js','runtime/markup-for
 const owners=['settings-navigation.js','runtime/mobile-navigation.js','runtime/private-ui-transport.js','runtime/browser-dialog-helpers.js','runtime/browser-navigation-helpers.js','runtime/track-actions.js','runtime/track-modal-lightbox-helpers.js','runtime/gallery-refresh-and-status.js','runtime/album-tops-react-bridge.js'];
 const template=fs.readFileSync(path.join(root,'music_app/templates/index.html'),'utf8');
 const styles=[...new Set(['button-component.css',...[...template.matchAll(/css\/([a-zA-Z0-9_/-]+\.css)/g)].map(row=>row[1])])];
-const dialogTemplate=fs.readFileSync(path.join(root,'music_app/templates/partials/confirm-modals.html'),'utf8');
+const dialogSource=fs.readFileSync(path.join(root,'music_app/templates/partials/confirm-modals.html'),'utf8');
+const formInclude='{% include "partials/app-form-modal.html" %}';
+const formImport="{% from 'partials/button.html' import action_button %}";
+const formSource=fs.readFileSync(path.join(root,'music_app/templates/partials/app-form-modal.html'),'utf8');
+if(dialogSource.split(formInclude).length!==2||formSource.split(formImport).length!==2)throw new Error('Canonical form include needs an explicit fixture update');
+const dialogTemplate=dialogSource.replace(formInclude,formSource.replace(formImport,''));
 const dialogStart=dialogTemplate.indexOf('<div class="confirm-modal" id="app-confirm-modal"');
 if(dialogStart<0)throw new Error('Canonical native confirmation/form template is unavailable');
 // Only this server-rendered macro needs a normal synthetic host equivalent;

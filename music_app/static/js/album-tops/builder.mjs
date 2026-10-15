@@ -48,6 +48,7 @@ export function mountAlbumPicker(host, runtime, {draft, value, disabled}) {
       canReorder: !latest.disabled && current.tab === 'selected', unfiltered: true, defaultOrder: true, busy: current.busy};},
     onReorder: refs => draft.reorder(refs), onAnnounce: text => {live.textContent = text;},
   }));
+  const sameInputs = (before, next) => before?.length === next.length && next.every((value, index) => Object.is(value, before[index]));
   function update(next) {
     if (disposed) return; latest = next; const {value, disabled} = latest;
     search.update(searchProps()); tabs.update(tabsProps());
@@ -67,15 +68,26 @@ export function mountAlbumPicker(host, runtime, {draft, value, disabled}) {
         card.addEventListener('click', item.click); rows.set(key, item);
       }
       item.row = row;
-      const html = runtime.galleryCardHtml({identity: selected ? row.album_ref : String(row.local_album_id), actionRef: String(row.local_album_id || row.album_ref),
-        interaction: selected ? 'none' : 'controlled', actions: {select: !selected}, title: row.title, artist: row.artist, year: row.year, displayMode: 'cards',
-        artboxHtml: runtime.artboxHtml({state: 'empty', label: `${row.title} artwork`})});
-      if (html !== item.html) {item.card.innerHTML = html; item.html = html;}
+      // Cache renderer inputs, never the current action row or authority. A row
+      // can be replaced under its key while its display facts stay unchanged.
+      const identity = selected ? row.album_ref : String(row.local_album_id), actionRef = String(row.local_album_id || row.album_ref);
+      const cardInputs = [runtime.galleryCardHtml, runtime.artboxHtml, identity, actionRef, selected, row.title, row.artist, row.year];
+      if (!sameInputs(item.cardInputs, cardInputs)) {
+        const html = runtime.galleryCardHtml({identity, actionRef,
+          interaction: selected ? 'none' : 'controlled', actions: {select: !selected}, title: row.title, artist: row.artist, year: row.year, displayMode: 'cards',
+          artboxHtml: runtime.artboxHtml({state: 'empty', label: `${row.title} artwork`})});
+        if (html !== item.html) {item.card.innerHTML = html; item.html = html;}
+        item.cardInputs = cardInputs;
+      }
       const control = item.card.querySelector('[data-gallery-card-intent="select"]');
       if (control) {control.disabled = disabled || atCapacity; control.setAttribute('aria-disabled', String(control.disabled));}
       if (selected) {
-        item.move.update({label: 'Move', size: 'small', disabled, attributes: {'data-album-draft-move': '', 'aria-label': `Reorder ${row.title}`}});
-        item.remove.update({label: 'Remove', size: 'small', disabled, ariaLabel: `Remove ${row.title}`, attributes: {'data-album-draft-remove': ''}, onClick: event => {remember(event, '[data-album-draft-remove]'); draft.remove(item.row.album_ref);}});
+        const controlInputs = [runtime.buttonHtml, disabled, row.title];
+        if (!sameInputs(item.controlInputs, controlInputs)) {
+          item.move.update({label: 'Move', size: 'small', disabled, attributes: {'data-album-draft-move': '', 'aria-label': `Reorder ${row.title}`}});
+          item.remove.update({label: 'Remove', size: 'small', disabled, ariaLabel: `Remove ${row.title}`, attributes: {'data-album-draft-remove': ''}, onClick: event => {remember(event, '[data-album-draft-remove]'); draft.remove(item.row.album_ref);}});
+          item.controlInputs = controlInputs;
+        }
       }
       if (cards.children[index] !== item.root) cards.insertBefore(item.root, cards.children[index] || null);
     });

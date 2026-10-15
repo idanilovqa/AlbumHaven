@@ -42,7 +42,13 @@ function nativeEnvironment() {
   const navigationTemplate = document.createElement('script'); navigationTemplate.id = 'navigation-tree-item-template';
   navigationTemplate.textContent = readRepo('music_app/templates/components/navigation-tree-item.html'); document.body.append(navigationTemplate);
   const buttons = context.ButtonComponent;
-  const modals = readRepo('music_app/templates/partials/confirm-modals.html');
+  const modalSource = readRepo('music_app/templates/partials/confirm-modals.html');
+  const formInclude = '{% include "partials/app-form-modal.html" %}';
+  const formImport = "{% from 'partials/button.html' import action_button %}";
+  const formSource = readRepo('music_app/templates/partials/app-form-modal.html');
+  assert.equal(modalSource.split(formInclude).length, 2, 'one canonical form partial include');
+  assert.equal(formSource.split(formImport).length, 2, 'one canonical form macro import');
+  const modals = modalSource.replace(formInclude, formSource.replace(formImport, ''));
   const marker = '<div class="confirm-modal" id="app-confirm-modal" hidden>';
   assert.ok(modals.includes(marker));
   const modalHtml = modals.slice(modals.indexOf(marker)).replace("{{ action_button('Close dialog', id='app-form-close', icon='close', hidden=true) }}",

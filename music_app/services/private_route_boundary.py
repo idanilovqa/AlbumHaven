@@ -32,6 +32,7 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
+    ("GET", "/account/goals/view"): "account.self.goals.read",
     ("GET", "/account/goals"): "account.self.goals.read",
     ("GET", "/account/goals/history"): "account.self.goals.read",
     ("GET", "/account/goals/operations/{request_key}"): "account.self.goals.read",

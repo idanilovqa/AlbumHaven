@@ -33,6 +33,7 @@
     <div class="settings-outlet" data-settings-outlet>
     <section class="account-main">
       {{ page_gallery_bar('Password', profile.username, settings_navigation=true) }}
+      <p><a href="/account/goals/view">Home · Goals</a></p>
 
       {% if changed %}
       {{ on_page_alert('Your password was changed. Other sessions have been signed out.', role='status', class_name='account-notice') }}

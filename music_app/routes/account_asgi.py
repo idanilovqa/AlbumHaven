@@ -176,3 +176,36 @@ async def post_dismiss_password_suggestion(request: Request) -> Response:
     except Exception:
         return await _page(request, status_code=503, error="unavailable")
     return RedirectResponse("/account", status_code=303)
+
+
+@router.get("/account/goals/view", response_class=HTMLResponse)
+async def get_account_goals_home(request: Request) -> Response:
+    """Account-safe Home subsection; no library bootstrap or media authority."""
+    from music_app.routes.listening_goals_asgi import _context as goals_context, _service as goals_service
+    from music_app.services.listening_goals_commands import GoalsError
+    from music_app.services.listening_goals_postgres import READ
+    from music_app.services.account_goals_context import account_goals_context_ref
+
+    try:
+        appearance = await load_appearance_context(request)
+        context, constraints = goals_context(request, READ)
+        # Use the existing service's current session and final authorization
+        # checks after appearance IO. The read is not embedded in the document.
+        await run_in_threadpool(goals_service(request).read, context, constraints=constraints)
+        marker = account_goals_context_ref(request)
+        if marker is None:
+            raise GoalsError("forbidden", 403)
+        csrf_token = issue_session_csrf(request.cookies.get(_SESSION_COOKIE), _policy_config(request))
+        templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+        response = templates.TemplateResponse(request, "account-goals.html", {
+            "request": request, "runtime_asset_version": getattr(request.app.state, "runtime_asset_version", ""),
+            **appearance, "account_goals_context": marker,
+            "account_name": request.state.current_actor.username_display,
+            "csrf_token": csrf_token,
+        })
+    except GoalsError as error:
+        response = HTMLResponse("Home is unavailable for this session.", status_code=error.status)
+    except Exception:
+        response = HTMLResponse("Home is temporarily unavailable. Please try again.", status_code=503)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response

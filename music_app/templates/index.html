@@ -54,7 +54,7 @@
   <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}
-  <script src="{{ url_for('static', filename='js/home-friends-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>
+  <script type="module" src="{{ url_for('static', filename='js/home-friends/index-native.mjs') }}?v={{ runtime_asset_version }}"></script>
   {% include "partials/appearance-bootstrap.html" %}
   <style>
     html[data-client-layout-pending="true"] body { visibility: hidden; }

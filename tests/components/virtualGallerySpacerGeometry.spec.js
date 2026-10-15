@@ -133,7 +133,6 @@ test(`deep presentation changes retain the visible release through every layout 
     grid.destroy();
     return { key, initialTop, capturedAnchor, samples, geometry };
   }, showArtistSectionHeaders);
-  console.log(JSON.stringify(result));
   expect(Number(result.key.split('-')[0])).toBeGreaterThan(50);
   expect(result.samples).toHaveLength(12);
   expect(result.samples).toEqual(result.samples.map(() => result.initialTop));

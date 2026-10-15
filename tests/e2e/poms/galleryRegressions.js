@@ -323,13 +323,21 @@ export class GalleryRegressions {
       };
     }, anchor);
   }
-  async startVisibleCardAnchorObservation(anchor) {
+  async startVisibleCardAnchorObservation(anchor, options = {}) {
     // parity-check: allow-read-only-measurement-evaluate -- sample the semantic card every frame across rerenders
     const handle = await this.page.evaluateHandle(saved => {
       const samples = [];
       let frame;
       let originalCard;
+      let observing = !saved.waitUntilGalleryVisible;
       const sample = () => {
+        const gallery = document.querySelector('#albums-scroll');
+        const galleryRect = gallery?.getBoundingClientRect();
+        if (!observing && !(galleryRect?.width > 0 && galleryRect?.height > 0)) {
+          frame = requestAnimationFrame(sample);
+          return;
+        }
+        observing = true;
         const section = [...document.querySelectorAll('#artist-groups .artist-section')]
           .find(item => item.querySelector('.family-artist-header[data-scroll-artist]')
             ?.getAttribute('data-scroll-artist') === saved.artist);
@@ -366,7 +374,7 @@ export class GalleryRegressions {
           return samples;
         },
       };
-    }, anchor);
+    }, { ...anchor, waitUntilGalleryVisible: options.waitUntilGalleryVisible === true });
     let finished = false;
     return {
       async finish() {

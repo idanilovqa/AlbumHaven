@@ -600,6 +600,13 @@ function createDrawerHarness(overrides = {}) {
   const overlay = { hidden: true };
   const saveButton = new TestButton();
   const fetchCalls = [];
+  const returnedGallery = {
+    local_covers: [],
+    possible_matches: [{ id: 'flaming-row-primary' }],
+  };
+  let taskReloads = 0;
+  let galleryReloads = 0;
+  let appliedGallery = null;
   const context = loadHelper({
     HTMLButtonElement: TestButton,
     mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
@@ -614,6 +621,7 @@ function createDrawerHarness(overrides = {}) {
             id: 'flaming-row-lookup',
             progress_label: 'Searching...',
           },
+          gallery: returnedGallery,
         }),
       };
     },
@@ -639,13 +647,19 @@ function createDrawerHarness(overrides = {}) {
   };
   context.renderCoverLookupModal = () => {};
   context.ensureCoverLookupPolling = () => {};
-  context.loadCoverLookupTasks = async () => {};
-  context.refreshCoverLookupGallery = async () => {};
+  context.loadCoverLookupTasks = async () => { taskReloads += 1; };
+  context.refreshCoverLookupGallery = async () => { galleryReloads += 1; };
+  context.applyCoverLookupGalleryPayload = (gallery) => { appliedGallery = gallery; };
 
   await context.openCoverLookupModal(secondAlbum, { taskId: 'flaming-row-lookup' });
+  taskReloads = 0;
+  galleryReloads = 0;
   await context.startCoverLookupForAlbum(secondAlbum);
 
   assert.equal(fetchCalls.length, 1);
+  assert.equal(taskReloads, 0, 'start response already contains the queued task');
+  assert.equal(galleryReloads, 0, 'start response gallery must replace the immediate refetch');
+  assert.deepEqual(appliedGallery, returnedGallery);
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album: secondAlbum,
     manual_urls: [],

@@ -657,8 +657,9 @@ def _build_postgres_selected_artist_startup_view(
     )
     root_sidebar: list[object] | None = None
     if not str(query_args.get("q") or "").strip():
-        root_sidebar_payload = repository.build_root_sidebar_payload(
+        root_sidebar_payload = repository.build_root_startup_preview_payload(
             query_params=query_args,
+            library_state=library_state,
         )
         root_sidebar = list(
             root_sidebar_payload.get("artists_sidebar") or []

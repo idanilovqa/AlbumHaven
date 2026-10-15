@@ -2127,3 +2127,78 @@ def test_cancelled_queued_finalizer_releases_intent_session_and_structural_reser
     assert releases == []
     assert future.cancel()
     assert releases == ["intent", "structural"]
+
+
+@pytest.mark.parametrize("structural", [False, True])
+def test_successful_tag_save_queues_settings_projection_prewarm_after_invalidations(
+    tmp_path,
+    monkeypatch,
+    structural,
+):
+    events: list[str] = []
+    expected_config: dict[str, object] | None = None
+
+    class RecordingBrowseRepository:
+        def __init__(self, config):
+            assert config is expected_config
+
+        def queue_settings_projection_prewarm(self):
+            events.append("prewarm-queued")
+
+    monkeypatch.setattr(
+        "music_app.services.problematic_albums.invalidate_problematic_albums_payload_cache",
+        lambda _state: events.append("problematic-invalidated"),
+    )
+    monkeypatch.setattr(
+        "music_app.services.utility_rules.invalidate_utility_rules_payload_cache",
+        lambda _state: events.append("rules-invalidated"),
+    )
+    monkeypatch.setattr(
+        "music_app.services.library_browse_postgres.PostgresLibraryBrowseRepository",
+        RecordingBrowseRepository,
+    )
+
+    task_id = create_save_task("edit-tags")
+    if not structural:
+        durable_write: Future[None] = Future()
+        durable_write.set_result(None)
+        finalize_kwargs = _durable_save_finalize_kwargs(
+            tmp_path,
+            schedule_cache_updates_save=lambda *_args: durable_write,
+        )
+        expected_config = finalize_kwargs["config"]
+        finalize_save_task(task_id, **finalize_kwargs)
+    else:
+        state = {"albums": [], "file_cache": {}}
+        expected_config = _explicit_config(tmp_path)
+        finalize_structural_tag_edit_save_task(
+            task_id,
+            config=expected_config,
+            logger=_logger_stub(),
+            get_state=lambda: state,
+            rebuild_affected_albums_in_state=lambda *_args: None,
+            persist_structural_tag_edit=lambda **_kwargs: {"album_rows_updated": 1},
+            append_log_history=lambda *_args, **_kwargs: None,
+            log_app_event=lambda *_args, **_kwargs: None,
+            find_albums_by_track_paths=lambda _paths: [],
+            find_problematic_album_by_track_paths=lambda _paths: None,
+            updated_file_cache={
+                "track-1.mp3": {"path": "track-1.mp3", "album": "New Album"}
+            },
+            previous_file_cache={
+                "track-1.mp3": {"path": "track-1.mp3", "album": "Old Album"}
+            },
+            changed_paths={"track-1.mp3"},
+            requested_track_paths={"track-1.mp3"},
+            separate_release_keys=set(),
+            changed_field_names={"album"},
+            structural_edit_fields={"album"},
+            log_entry={"action": "Album name tag changed"},
+        )
+
+    assert save_task_result(task_id)["status"] == "completed"
+    assert events == [
+        "problematic-invalidated",
+        "rules-invalidated",
+        "prewarm-queued",
+    ]

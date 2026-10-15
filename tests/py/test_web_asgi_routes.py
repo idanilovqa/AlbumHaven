@@ -431,8 +431,18 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
             captured.append(query_params)
             return {"selected_artist": "Broadcast", "artist_groups": []}
 
-        def build_root_sidebar_payload(self, *, query_params):
+        def build_root_startup_preview_payload(
+            self,
+            *,
+            query_params,
+            library_state,
+        ):
+            captured.append(query_params)
+            assert library_state == {}
             return {}
+
+        def build_root_sidebar_payload(self, *, query_params):
+            raise AssertionError("selected startup must not build the full root payload")
 
     monkeypatch.setattr(web_asgi, "PostgresLibraryBrowseRepository", SummaryRepository)
     params = [("artist", "Broadcast"), ("category", "hoard"), ("category", "main_library")]
@@ -443,6 +453,7 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
     )
     assert captured[0].get("payload_tier") == expected_tier
     assert captured[0].getlist("category") == ["hoard", "main_library"]
+    assert captured[1].getlist("category") == ["hoard", "main_library"]
 
 
 def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_distinct(
@@ -465,7 +476,12 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
         def __init__(self, config):
             self.config = config
 
-        def build_root_sidebar_payload(self, *, query_params=None):
+        def build_root_startup_preview_payload(
+            self,
+            *,
+            query_params=None,
+            library_state=None,
+        ):
             payload = web_asgi._build_empty_initial_view(
                 config=self.config,
                 query_raw="",

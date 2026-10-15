@@ -432,6 +432,14 @@ def _committed_values_from_cache_changes(
     return committed
 
 
+def _queue_settings_projection_prewarm(config: dict[str, object]) -> None:
+    from music_app.services.library_browse_postgres import (
+        PostgresLibraryBrowseRepository,
+    )
+
+    PostgresLibraryBrowseRepository(config).queue_settings_projection_prewarm()
+
+
 def _finalize_save_task(
     task_id: str,
     *,
@@ -622,6 +630,10 @@ def _finalize_save_task(
             (
                 "Utility rule invalidation",
                 lambda: invalidate_utility_rules_payload_cache(st),
+            ),
+            (
+                "Settings projection prewarm",
+                lambda: _queue_settings_projection_prewarm(config),
             ),
         ):
             try:
@@ -873,6 +885,10 @@ def finalize_structural_tag_edit_save_task(
                     "Utility rule invalidation",
                     lambda: invalidate_utility_rules_payload_cache(st),
                 ),
+            (
+                "Settings projection prewarm",
+                lambda: _queue_settings_projection_prewarm(config),
+            ),
             ):
                 try:
                     callback()

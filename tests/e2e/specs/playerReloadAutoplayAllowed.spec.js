@@ -1,19 +1,26 @@
 import { expect, test } from '../support/baseFixtures.js';
+import {
+  PLAYBACK_START_TIMING_BUDGET,
+  assertSustainedPlaybackContract,
+  measureSustainedPlaybackWindow,
+} from '../helpers/index.js';
 
 const CASE_ID = 'FTC-PLAYER-015';
 const PLAYING_ALBUM = 'Length And Repetition';
 const PLAYING_TRACK_ARTIST = 'Playback Start Signals';
+const SUSTAINED_PLAYBACK_SECONDS = 12;
+const LONG_SUSTAINED_PLAYBACK_SECONDS = 60;
 
 test(`${CASE_ID} allowed Chrome policy automatically continues playback after reload`, { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
+  page,
   playbackEvidence,
   searchToolbarActions,
   stepLogger,
   trackModalActions,
 }) => {
   let playedTrack;
-  let savedOffset;
 
   await stepLogger.step('Start real playback from the generated featured collection', async () => {
     await galleryActions.goto('/?surface=albums');
@@ -36,8 +43,10 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
     });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
-    savedOffset = (await globalPlayerActions.waitForFullTrackTiming()).currentTime;
-    expect(savedOffset).toBeGreaterThanOrEqual(2);
+    const sustained = await measureSustainedPlaybackWindow(page, playbackEvidence, {
+      seconds: SUSTAINED_PLAYBACK_SECONDS,
+    });
+    assertSustainedPlaybackContract(expect, sustained);
     await trackModalActions.close();
   });
 
@@ -64,9 +73,41 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
     });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
-    await globalPlayerActions.waitForPlaybackState({
-      paused: false,
-      minimumCurrentTime: restored.initialRestore.currentTime + 0.01,
+    const sustained = await measureSustainedPlaybackWindow(page, playbackEvidence, {
+      seconds: SUSTAINED_PLAYBACK_SECONDS,
     });
+    assertSustainedPlaybackContract(expect, sustained);
+  });
+
+  await stepLogger.step('Reload a paused snapshot and sustain playback after explicit Play', async () => {
+    await globalPlayerActions.pauseIfPlaying();
+    const pausedOffset = (await globalPlayerActions.waitForFullTrackTiming()).currentTime;
+    const pausedRestore = await globalPlayerActions.reloadAndWaitForRestoredTrack({
+      path: playedTrack.path,
+      trackTitle: playedTrack.title,
+    }, { paused: true });
+
+    expect(pausedRestore.paused).toBe(true);
+    expect(pausedRestore.playbackControl).toBe('Play');
+    const restoredTiming = await globalPlayerActions.waitForFullTrackTiming();
+    expect(Math.abs(restoredTiming.currentTime - pausedOffset)).toBeLessThan(1);
+
+    const explicitPlayMark = await playbackEvidence.playbackMark();
+    const explicitPlayStartedAtMs = await page.evaluate(() => performance.now());
+    await globalPlayerActions.resumeIfPaused();
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({
+      after: explicitPlayMark,
+      path: playedTrack.path,
+    });
+    const explicitPlayStartupMs = evidence.observedAtMs - explicitPlayStartedAtMs;
+    expect(
+      explicitPlayStartupMs,
+      `Explicit Play took ${Math.round(explicitPlayStartupMs)} ms to render audible PCM.`,
+    ).toBeLessThanOrEqual(PLAYBACK_START_TIMING_BUDGET.hardCeiling);
+    const sustained = await measureSustainedPlaybackWindow(page, playbackEvidence, {
+      seconds: LONG_SUSTAINED_PLAYBACK_SECONDS,
+      timeout: (LONG_SUSTAINED_PLAYBACK_SECONDS * 1_000) + 10_000,
+    });
+    assertSustainedPlaybackContract(expect, sustained);
   });
 });

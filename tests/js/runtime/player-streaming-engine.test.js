@@ -1604,13 +1604,20 @@ test('playing seek keeps current audible until a buffered continuity head commit
   );
   assert.equal(harness.api.snapshot().mode, 'playing');
   assert.equal(harness.portMessages('eos').at(-1).role, 'current');
+  const openCountBeforePromotionAck = harness.sent('open').length;
+  harness.sockets[0].receive({
+    type: 'promoted', generation: current.generation, streamId: target.streamId, role: 'current',
+  });
+  await harness.settle();
+  assert.equal(
+    harness.sent('open').length,
+    openCountBeforePromotionAck,
+    'queued-next must wait until the promoted seek target renders its first frame',
+  );
+
   harness.nodes[0].port.dispatch({
     type: 'first-frame', generation: current.generation, streamId: target.streamId,
     renderedFrame: 128, contextTime: 2,
-  });
-
-  harness.sockets[0].receive({
-    type: 'promoted', generation: current.generation, streamId: target.streamId, role: 'current',
   });
   await harness.settle();
   assert.equal(harness.sent('open').at(-1).path, 'C:/Music/Album/queued.flac');
@@ -1877,6 +1884,10 @@ test('swapped physical rings keep promoted and replacement roles within their in
     );
   }
 
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: seekTarget.generation, streamId: seekTarget.streamId,
+    renderedFrame: 128, contextTime: 12.5,
+  });
   harness.engine.diagnostics.bufferedFrames.current = 48_000;
   harness.sockets[0].receive({
     type: 'promoted', generation: current.generation, streamId: seekTarget.streamId, role: 'current',

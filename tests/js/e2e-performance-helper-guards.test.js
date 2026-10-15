@@ -1007,6 +1007,55 @@ test('playback-start approved budget separates target, grace, hard failure, and 
   assert.equal(missingDegradation.passed, false);
 });
 
+test('sustained playback timing rejects wall-clock stalls even when audible time eventually catches up', async () => {
+  const moduleUrl = pathToFileURL(path.join(
+    repoRoot,
+    'tests/e2e/helpers/gaplessPlaybackHelpers.js',
+  )).href;
+  const {
+    MAX_SUSTAINED_PLAYBACK_WALL_OVERHEAD_MS,
+    evaluateSustainedPlaybackTiming,
+  } = await import(moduleUrl);
+
+  assert.equal(MAX_SUSTAINED_PLAYBACK_WALL_OVERHEAD_MS, 1_000);
+  assert.deepEqual(evaluateSustainedPlaybackTiming({
+    elapsedMs: 60_500,
+    currentTimeDelta: 60,
+    requiredSeconds: 60,
+  }), {
+    audibleDurationPassed: true,
+    wallClockOverheadMs: 500,
+    wallClockPassed: true,
+    passed: true,
+  });
+  assert.deepEqual(evaluateSustainedPlaybackTiming({
+    elapsedMs: 63_001,
+    currentTimeDelta: 60,
+    requiredSeconds: 60,
+  }), {
+    audibleDurationPassed: true,
+    wallClockOverheadMs: 3_001,
+    wallClockPassed: false,
+    passed: false,
+  });
+  assert.equal(evaluateSustainedPlaybackTiming({
+    elapsedMs: 60_000,
+    currentTimeDelta: 59.5,
+    requiredSeconds: 60,
+  }).passed, false);
+});
+
+test('reload continuity E2E measures explicit Play startup and a long uninterrupted window', () => {
+  const spec = readRepoFile('tests/e2e/specs/playerReloadAutoplayAllowed.spec.js');
+
+  assert.match(spec, /LONG_SUSTAINED_PLAYBACK_SECONDS = 60/);
+  assert.match(spec, /PLAYBACK_START_TIMING_BUDGET\.hardCeiling/);
+  assert.match(spec, /const explicitPlayMark = await playbackEvidence\.playbackMark\(\)/);
+  assert.match(spec, /const explicitPlayStartedAtMs = await page\.evaluate/);
+  assert.match(spec, /evidence\.observedAtMs - explicitPlayStartedAtMs/);
+  assert.match(spec, /seconds: LONG_SUSTAINED_PLAYBACK_SECONDS/);
+});
+
 test('playback-start spec and report retain the owner-approved budget without the intentional gate', () => {
   const spec = readRepoFile('tests/e2e/performance/playbackStart.spec.js');
   const fixtures = readRepoFile('tests/e2e/support/performanceFixtures.js');

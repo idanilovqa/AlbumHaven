@@ -433,8 +433,10 @@ function deferStreamingContinuity(track, options, generation, currentStreamId) {
 
 function protectedQueuedContinuityReady(engine, current, options) {
   if (options?.kind !== 'queued-next') return true;
+  const currentAudible = current?.firstFrameNotified === true
+    || (current?.seekTarget !== true && current?.boundaryNotified === true);
   return (current?.replacementPromotion !== true || !engine.pendingPromotion)
-    && (current.firstFrameNotified === true || current.boundaryNotified === true)
+    && currentAudible
     && !engine.snapshot.paused
     && !engine.roles.continuity
     && (current.eosReceived === true

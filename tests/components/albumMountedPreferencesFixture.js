@@ -7,19 +7,23 @@ const {createRequire} = require('node:module');
 const root = process.env.ALBUM_RESPONSIVE_REPOSITORY_ROOT || path.resolve(__dirname, '../..');
 const fromRoot = createRequire(path.join(root, 'package.json'));
 const {test, expect} = fromRoot('@playwright/test');
-const bundle = fromRoot('esbuild').buildSync({stdin: {contents: `
-  import {mountPlaytableSelection} from './music_app/static/js/playtables/selection.jsx';
-  window.mountPreferenceFixture = mountPlaytableSelection;
-`, resolveDir: root, loader: 'jsx'}, bundle: true, write: false, platform: 'browser', format: 'iife'}).outputFiles[0].text;
+const {nativeDelivery}=require('./albumPlaytableNativeDelivery.cjs');
 const errors = new WeakMap();
-test.afterEach(async ({page}) => expect(errors.get(page) || []).toEqual([]));
+test.afterEach(async ({page}) => {
+  try {if (!page.isClosed()) await page.evaluate(async () => {
+    try {window.fixtureMount?.dispose();}
+    finally {window.resolveFixtureWrite?.(null); await Promise.resolve();}
+  });}
+  finally {expect(errors.get(page) || []).toEqual([]);}
+});
 async function mount(page) {
   const seen = []; errors.set(page, seen); page.on('pageerror', error => seen.push(String(error)));
-  await page.setContent('<!doctype html><html><body><main id="tracks"></main></body></html>');
+  await page.route('https://albumhaven.test/**',nativeDelivery(root,'<!doctype html><html><body><main id="tracks"></main></body></html>',['albumPlaytableNativeEntry.mjs']));
+  await page.goto('https://albumhaven.test/');
   for (const file of ['button-component.js', 'runtime/markup-format-helpers.js', 'runtime/compact-data-table.js', 'runtime/album-track-table.js']) {
     await page.addScriptTag({content: fs.readFileSync(path.join(root, 'music_app/static/js', file), 'utf8')});
   }
-  await page.addScriptTag({content: bundle});
+  await page.evaluate(()=>import('/__album_playtable_fixture__/albumPlaytableNativeEntry.mjs').then(()=>undefined));
   await page.evaluate(() => {
     window.fixtureCalls = {writes: [], plays: 0, errors: []};
     window.fixtureHost = document.querySelector('#tracks');

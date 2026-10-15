@@ -1,4 +1,4 @@
-// Native Album renderer + existing production React mount, isolated component
+// Native Album renderer + existing production native mount, isolated component
 // DTOs only. This is not mobile navigation, production authority or app E2E.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -6,18 +6,21 @@ const {createRequire} = require('node:module');
 const root = process.env.ALBUM_RESPONSIVE_REPOSITORY_ROOT || path.resolve(__dirname, '../..');
 const fromRoot = createRequire(path.join(root, 'package.json'));
 const {test, expect} = fromRoot('@playwright/test');
-const {buildSync} = fromRoot('esbuild');
-const bundle = buildSync({stdin: {contents: `
-  import {mountPlaytableSelection} from './music_app/static/js/playtables/selection.jsx';
-  window.mountAlbumSelectionFixture = mountPlaytableSelection;
-`, resolveDir: root, loader: 'jsx'}, bundle: true, write: false, platform: 'browser', format: 'iife'}).outputFiles[0].text;
+const {nativeDelivery}=require('./albumPlaytableNativeDelivery.cjs');
 const errors = new WeakMap();
-test.afterEach(async ({page}) => expect(errors.get(page) || []).toEqual([]));
+test.afterEach(async ({page}) => {
+  try {if (!page.isClosed()) await page.evaluate(async () => {
+    try {window.fixtureMount?.dispose();}
+    finally {window.resolveFixtureWrite?.(null); await Promise.resolve();}
+  });}
+  finally {expect(errors.get(page) || []).toEqual([]);}
+});
 
 async function mount(page, width = 390, subject = true) {
   await page.setViewportSize({width, height: 844});
   const seen = []; errors.set(page, seen); page.on('pageerror', error => seen.push(String(error)));
-  await page.setContent('<!doctype html><html><head></head><body><main><div id="table-host"></div></main></body></html>');
+  await page.route('https://albumhaven.test/**',nativeDelivery(root,'<!doctype html><html><head></head><body><main><div id="table-host"></div></main></body></html>',['albumPlaytableNativeEntry.mjs']));
+  await page.goto('https://albumhaven.test/');
   for (const file of ['button-component.js', 'runtime/markup-format-helpers.js', 'runtime/loader-status-helpers.js',
     'runtime/alert-components.js', 'runtime/album-artbox.js', 'runtime/gallery-main-components.js',
     'runtime/gallery-card-component.js', 'runtime/album-details-components.js', 'runtime/compact-data-table.js',
@@ -28,7 +31,7 @@ async function mount(page, width = 390, subject = true) {
   const styles = new Set(['button-component.css', ...[...template.matchAll(/css\/([a-zA-Z0-9_\/-]+\.css)/g)].map(match => match[1])]);
   for (const file of styles) await page.addStyleTag({content: fs.readFileSync(path.join(root, 'music_app/static/css', file), 'utf8')});
   await page.addStyleTag({content: 'body{margin:0;height:auto;overflow:auto}main{width:100%;min-width:0}'});
-  await page.addScriptTag({content: bundle});
+  await page.evaluate(()=>import('/__album_playtable_fixture__/albumPlaytableNativeEntry.mjs').then(()=>undefined));
   await page.evaluate(subjectTaste => {
     window.fixtureCalls = {choices: [], closed: 0, played: 0, selected: 0};
     window.fixtureCurrent = true;

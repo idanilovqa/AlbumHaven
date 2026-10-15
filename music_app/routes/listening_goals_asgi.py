@@ -1,5 +1,6 @@
 """Private account Goals API. Local-library selection is not admission proof."""
 import asyncio
+import hmac
 from contextlib import suppress
 from threading import Event
 
@@ -13,6 +14,7 @@ from music_app.services.listening_goals_commands import GoalsError, normalize_go
 from music_app.services.listening_goals_postgres import PostgresListeningGoalsService, READ, WRITE
 from music_app.services.musicbrainz_http import default_user_agent
 from music_app.services.policy import PolicyContext
+from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
 from music_app.services.policy_asgi import _deployment_mode, _request_origin
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
 
@@ -31,6 +33,22 @@ def _context(request, action):
             request_origin=_request_origin(request), client_surface_class=client_surface_from_request(request))
     except ValueError:
         raise GoalsError('forbidden', 403) from None
+    # Home continuity is an optional UI fence, never Goals ownership. A
+    # library-less account still uses these same account-authorized endpoints.
+    library_id = actor.current_library_id
+    marker = None
+    if type(library_id) is int and library_id > 0:
+        try:
+            marker = private_ui_context_ref(request)
+        except PrivateUIContextError as error:
+            raise GoalsError(error.code, error.status_code) from None
+    request.state.goals_ui_context_ref = marker
+    if action == WRITE:
+        supplied = request.headers.getlist('x-albumhaven-context')
+        if supplied and (len(supplied) != 1 or marker is None
+                or len(supplied[0]) != 64 or not supplied[0].isascii()
+                or not hmac.compare_digest(supplied[0], marker)):
+            raise GoalsError('stale_context', 409)
     resolver = getattr(request.app.state, 'policy_constraint_resolver', None)
     return context, resolver if callable(resolver) else PolicyEvaluationConstraints()
 
@@ -43,8 +61,12 @@ def _service(request):
         user_agent=default_user_agent('AlbumHaven', '0.0.0', ''))
 
 
-def _response(value):
-    return JSONResponse({'status': 'ready', 'data': value}, headers=NO_STORE)
+def _response(request, value):
+    payload = {'status': 'ready', 'data': value}
+    marker = getattr(request.state, 'goals_ui_context_ref', None)
+    if marker is not None:
+        payload['context_ref'] = marker
+    return JSONResponse(payload, headers=NO_STORE)
 
 
 def _error(error):
@@ -73,7 +95,7 @@ def read_goals(request: Request):
     try:
         _query(request)
         context, constraints = _context(request, READ)
-        return _response(_service(request).read(context, constraints=constraints))
+        return _response(request, _service(request).read(context, constraints=constraints))
     except GoalsError as error:
         return _error(error)
 
@@ -89,7 +111,7 @@ def read_goal_history(request: Request):
         value = _service(request).history(context, period=params.get('period'), cursor=params.get('cursor'),
             limit=int(limit), cursor_secret=request.app.state.auth_policy_config['hmac']['secret'],
             constraints=constraints)
-        return _response(value)
+        return _response(request, value)
     except GoalsError as error:
         return _error(error)
 
@@ -99,7 +121,7 @@ def read_goal_operation(request: Request, request_key: str):
     try:
         _query(request)
         context, constraints = _context(request, READ)
-        return _response(_service(request).read_operation(context, request_key, constraints=constraints))
+        return _response(request, _service(request).read_operation(context, request_key, constraints=constraints))
     except GoalsError as error:
         return _error(error)
 
@@ -124,7 +146,7 @@ async def acquire_goal_evidence(request: Request):
         watcher = asyncio.create_task(_watch_disconnect(request, cancelled))
         value = await run_in_threadpool(_service(request).acquire_evidence, context,
             payload['release_group_id'], constraints=constraints, should_cancel=cancelled.is_set)
-        return _response(value)
+        return _response(request, value)
     except GoalsError as error:
         return _error(error)
     finally:
@@ -140,7 +162,7 @@ async def _execute(request, action):
         command = normalize_goal_command(action, await _body(request))
         context, constraints = _context(request, WRITE)
         value = await run_in_threadpool(_service(request).execute, context, command, constraints=constraints)
-        return _response(value)
+        return _response(request, value)
     except GoalsError as error:
         return _error(error)
 

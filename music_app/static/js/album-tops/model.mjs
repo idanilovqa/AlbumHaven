@@ -1,11 +1,11 @@
 // Volatile, actor-scoped presentation state. PostgreSQL remains authoritative.
-import {isManualProgress} from './progress.mjs';
+import {isManualProgress, isTopActivity} from './progress.mjs';
 
 const BROWSE = 'library.browse.read', CREATE = 'library.album_tops.create';
 const actionPermissions = Object.freeze({create: 'can_create', save: 'can_edit', delete: 'can_delete',
   add: 'can_add', remove: 'can_remove', reorder: 'can_reorder', view_sharing: 'can_view_sharing',
   visibility: 'can_share', grant_editor: 'can_share', grant_viewer: 'can_share', revoke_editor: 'can_share', decide_edit_request: 'can_share',
-  request_edit: 'can_request_edit', copy: 'can_copy', set_manual_completion: 'can_manage_own_progress'});
+  request_edit: 'can_request_edit', copy: 'can_copy', set_manual_completion: 'can_manage_own_progress', set_activity: 'can_set_activity'});
 const sharingPermissions = ['can_share', 'can_copy', 'can_request_edit'];
 const empty = () => ({status: 'unavailable', data: null, error: null});
 const idle = () => ({status: 'idle', action: null, command: null, error: null});
@@ -29,6 +29,8 @@ export function albumTopActionAllowed(state, action, topRef = state?.selectedTop
   const sharingActions = sharingPermissions.includes(permission) ? resource.sharing_actions || {} : {};
   const allowed = Object.hasOwn(sharingActions, permission) ? sharingActions[permission] === true : permitted(resource.data, permission);
   return permitted(resource.data, BROWSE) && allowed
+    && (action !== 'set_activity' || isTopActivity(resource.data?.top_viewer_overlay?.activity))
+    && (action !== 'set_manual_completion' || resource.data?.top_viewer_overlay?.activity?.active !== false)
     && (action !== 'create' || permitted(resource.data, CREATE));
 }
 
@@ -53,7 +55,8 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     const hasMembers = Array.isArray(data?.items);
     const member = hasMembers && data.items.some(item => item.album_ref === pending.command.album_ref);
     const allowed = !denied && permissions.every(action => permitted(data, action))
-      && (!progress || member && ownProgress(data, pending.command.album_ref));
+      && (!progress || member && ownProgress(data, pending.command.album_ref))
+      && (pending.action !== 'set_activity' || isTopActivity(data?.top_viewer_overlay?.activity));
     const refused = denied || permissions.some(action => Object.hasOwn(grants, action) && grants[action] === false)
       || progress && hasMembers && !member;
     if (refused) {pending.retryVersion = readVersion; pending.denialVersion = readVersion; pending.retryDenied = true; return;}
@@ -116,7 +119,7 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     } catch (error) {
       if (current(token) && version === detailVersion) {
         const denied = error?.status === 401 || pending?.command.top_ref === topRef
-          && (error?.status === 403 || pending.action === 'set_manual_completion' && error?.status === 404);
+          && (error?.status === 403 || ['set_manual_completion', 'set_activity'].includes(pending.action) && error?.status === 404);
         recordRetryAuthority(null, topRef, authorityVersion, denied);
         if (error?.status === 401) listVersion++;
         emit({detail: {status: failure(error), data: null, error},
@@ -155,9 +158,9 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
   }
   async function send(owner) {
     const token = begin(), denialVersion = owner.denialVersion || 0;
-    const progress = owner.action === 'set_manual_completion';
-    // A recovered progress attempt owns only the Top selected when it starts.
-    const navigationVersion = progress
+    const progress = owner.action === 'set_manual_completion', privateSelf = progress || owner.action === 'set_activity';
+    // A recovered private attempt owns only the Top selected when it starts.
+    const navigationVersion = privateSelf
       ? (state.selectedTopRef === owner.command.top_ref ? detailVersion : null) : owner.navigationVersion;
     emit({mutation: {status: 'loading', action: owner.action, command: clone(owner.command), error: null}});
     try {
@@ -165,13 +168,13 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
       if (!current(token) || pending !== owner) return false;
       // Restoration may authorize a new retry, never an attempt that began
       // before a consumed denial. Keep its exact recovery identity unpublished.
-      if (progress && (token.abort.signal.aborted
-        || (owner.denialVersion || 0) !== denialVersion)) throw new Error('Album Top progress authority changed.');
+      if (privateSelf && (token.abort.signal.aborted
+        || (owner.denialVersion || 0) !== denialVersion)) throw new Error('Album Top private action authority changed.');
       pending = null;
       emit({mutation: {status: 'ready', refreshing: true, action: owner.action, command: clone(owner.command), error: null, data: receipt}});
       // Acknowledged writes remain acknowledged even if the following read fails.
       await Promise.all([load(), ...(owner.action !== 'copy' && navigationVersion === detailVersion
-        && (!progress || state.selectedTopRef === owner.command.top_ref)
+        && (!privateSelf || state.selectedTopRef === owner.command.top_ref)
         ? [open(owner.action === 'delete' ? null : receipt.top_ref,
           progress ? owner.command.album_ref : null)] : [])]);
       return current(token);
@@ -180,20 +183,25 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
       const definitive = Number.isInteger(error?.status) && error.status >= 400 && error.status < 500;
       if (definitive) pending = null;
       const denied = definitive && failure(error) === 'denied';
+      const activityConflict = definitive && error.status === 409
+        && (owner.action === 'set_activity' && error.code === 'activity_revision_conflict'
+          || progress && error.code === 'top_inactive');
       if (denied) {
         listVersion++; detailVersion++;
         for (const request of requests) if (request !== token.abort) request.abort();
       }
       emit({...(denied ? {directory: {status: 'denied', data: null, error},
         detail: {status: 'denied', data: null, error}} : {}),
-        mutation: {status: definitive ? failure(error) : 'uncertain', action: owner.action,
+        mutation: {status: definitive ? failure(error) : 'uncertain', refreshing: activityConflict, action: owner.action,
         command: clone(owner.command), error}});
+      if (activityConflict) await Promise.all([load(), ...(navigationVersion === detailVersion
+        && state.selectedTopRef === owner.command.top_ref ? [open(owner.command.top_ref)] : [])]);
       return false;
     } finally {
       requests.delete(token.abort);
       if (current(token)) {
         inFlight = null;
-        if (state.mutation.status === 'ready' && state.mutation.command?.request_key === owner.command.request_key) {
+        if (state.mutation.refreshing === true && state.mutation.command?.request_key === owner.command.request_key) {
           emit({mutation: {...state.mutation, refreshing: false}});
         }
       }
@@ -204,7 +212,12 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     const detail = state.detail.data;
     if (action === 'view_sharing' || !albumTopActionAllowed(state, action)) return Promise.resolve(false);
     let command;
-    if (action === 'set_manual_completion') {
+    if (action === 'set_activity') {
+      const activity = detail?.top_viewer_overlay?.activity;
+      if (!isTopActivity(activity) || typeof data.active !== 'boolean') return Promise.resolve(false);
+      command = {top_ref: state.selectedTopRef, request_key: requestKey(),
+        activity_revision: activity.activity_revision, active: data.active};
+    } else if (action === 'set_manual_completion') {
       const row = ownProgress(detail, data.album_ref);
       if (typeof data.completed !== 'boolean' || !row || !detail.items?.some(item => item.album_ref === data.album_ref)) return Promise.resolve(false);
       command = {top_ref: state.selectedTopRef, request_key: requestKey(), album_ref: data.album_ref,

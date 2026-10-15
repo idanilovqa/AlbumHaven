@@ -1,6 +1,10 @@
-// Shared validation for the private progress projection; no listening inference.
+// Shared validation for private progress and activity; no listening inference.
 export const isProgressRevision = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,18})$/.test(value)
   && (value.length < 19 || value <= '9223372036854775807');
+
+export const isTopActivity = value => Boolean(value && typeof value === 'object' && !Array.isArray(value)
+  && Object.hasOwn(value, 'active') && typeof value.active === 'boolean'
+  && Object.hasOwn(value, 'activity_revision') && isProgressRevision(value.activity_revision));
 
 function isCompletionTime(value) {
   if (value === null) return true;

@@ -1,5 +1,5 @@
 // All network replies are bound to the authenticated native context and caller scope.
-import {isProgressRevision, isManualProgress} from './progress.mjs';
+import {isProgressRevision, isManualProgress, isTopActivity} from './progress.mjs';
 
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const revision = value => typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value);
@@ -9,16 +9,24 @@ const abort = () => Object.assign(new Error('Album Top request was superseded.')
 const MAX_TOP_COMMAND_BYTES = 512 * 1024;
 const actionNames = new Set(['library.browse.read', 'library.album_tops.create', 'library.album_tops.manage',
   'library.album_tops.items.manage', 'can_create', 'can_read', 'can_edit', 'can_rename', 'can_add', 'can_remove',
-  'can_reorder', 'can_delete', 'can_share', 'can_view_sharing', 'can_request_edit', 'can_copy', 'can_manage_own_progress']);
+  'can_reorder', 'can_delete', 'can_share', 'can_view_sharing', 'can_request_edit', 'can_copy', 'can_manage_own_progress', 'can_set_activity']);
 const actions = value => Object.fromEntries(Object.entries(value && typeof value === 'object' && !Array.isArray(value) ? value : {})
   .filter(([key, allowed]) => typeof allowed === 'boolean' && actionNames.has(key)));
+function activityOverlay(value) {
+  if (!Object.hasOwn(value, 'top_viewer_overlay')) return {};
+  const overlay = value.top_viewer_overlay;
+  if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay)) throw fail('Invalid Album Top overlay.');
+  if (!Object.hasOwn(overlay, 'activity')) return {};
+  if (!isTopActivity(overlay.activity)) throw fail('Invalid Album Top activity.');
+  return {top_viewer_overlay: {activity: {active: overlay.activity.active, activity_revision: overlay.activity.activity_revision}}};
+}
 function top(value) {
   if (!uuid(value?.top_ref) || !revision(value.revision) || typeof value.title !== 'string' || typeof value.description !== 'string'
     || !['private', 'server_shared'].includes(value.visibility)) throw fail('Invalid Album Top response.');
   if (Object.hasOwn(value, 'type') && (typeof value.type !== 'string' || !/^[a-z][a-z0-9_]{0,99}$/.test(value.type))
     || Object.hasOwn(value, 'source_locked') && typeof value.source_locked !== 'boolean') throw fail('Invalid Album Top editing eligibility.');
   return {top_ref: value.top_ref, title: value.title, description: value.description,
-    revision: value.revision, visibility: value.visibility, allowed_actions: actions(value.allowed_actions),
+    revision: value.revision, visibility: value.visibility, allowed_actions: actions(value.allowed_actions), ...activityOverlay(value),
     ...(Object.hasOwn(value, 'type') ? {type: value.type} : {}),
     ...(Object.hasOwn(value, 'source_locked') ? {source_locked: value.source_locked} : {})};
 }
@@ -192,7 +200,7 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
           || !Object.hasOwn(overlay, 'item_progress') || !progress || typeof progress !== 'object' || Array.isArray(progress)
           || Object.keys(progress).length !== result.items.length
           || new Set(result.items.map(item => item.album_ref)).size !== result.items.length) throw fail('Invalid Album Top progress.');
-        result.top_viewer_overlay = {item_progress: Object.fromEntries(result.items.map(item => {
+        result.top_viewer_overlay = {...result.top_viewer_overlay, item_progress: Object.fromEntries(result.items.map(item => {
           const row = Object.hasOwn(progress, item.album_ref) ? progress[item.album_ref] : null;
           if (!isManualProgress(row)) throw fail('Invalid Album Top progress.');
           return [item.album_ref, {progress_revision: row.progress_revision, manual_completed_at: row.manual_completed_at}];
@@ -202,10 +210,19 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
     },
     async execute(action, command, options) {
       const {top_ref, ...body} = command;
-      if (!uuid(body.request_key) || !['create', 'save', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
+      if (!uuid(body.request_key) || !['create', 'save', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion', 'set_activity'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
       if (action === 'set_manual_completion' && (!uuid(body.album_ref) || !isProgressRevision(body.progress_revision)
         || typeof body.completed !== 'boolean' || Object.keys(body).length !== 4)) throw fail('Invalid Album Top progress command.');
+      if (action === 'set_activity' && (!isTopActivity(body) || Object.keys(body).length !== 3)) throw fail('Invalid Album Top activity command.');
       const data = await request(action === 'create' ? '/album-tops' : '/album-tops/' + top_ref + '/' + action, options, body);
+      if (action === 'set_activity') {
+        if (data.top_ref !== top_ref || data.action !== action || data.request_key !== body.request_key
+          || !isTopActivity(data) || typeof data.changed !== 'boolean' || data.active !== body.active
+          || Object.hasOwn(data, 'revision')
+          || BigInt(data.activity_revision) !== BigInt(body.activity_revision) + (data.changed ? 1n : 0n)) throw fail('Album Top activity was not acknowledged.', 502);
+        return {top_ref, action, request_key: data.request_key, active: data.active,
+          activity_revision: data.activity_revision, changed: data.changed};
+      }
       if (action === 'set_manual_completion') {
         if (data.top_ref !== top_ref || data.album_ref !== body.album_ref || data.action !== action
           || data.request_key !== body.request_key || !isManualProgress(data) || typeof data.changed !== 'boolean'

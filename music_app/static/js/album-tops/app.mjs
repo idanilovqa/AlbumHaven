@@ -1,7 +1,7 @@
 import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
 import {mountSharedHeader} from '../home-friends/shared-header.mjs';
 import {albumTopActionAllowed} from './model.mjs';
-import {isManualProgress} from './progress.mjs';
+import {isManualProgress, isTopActivity} from './progress.mjs';
 import {openShareAlbumTop} from './sharing.mjs';
 import {openAlbumTopBuilder, mountInlineAlbumTopEdit} from './builder.mjs';
 import {mountMutationNotice} from './mutation-notice.mjs';
@@ -36,6 +36,11 @@ export function mountAlbumTopsView(host, runtime, props) {
         titleText.textContent = selected && detail ? detail.title : 'Album Tops';
         if (!selected && albumTopActionAllowed(state, 'create')) control('create', 'Create Album Top', {icon: 'add', disabled: busy, onClick: event => {if (albumTopActionAllowed(controller.getSnapshot(), 'create')) show('create', null, event.target.closest('button'));}});
         const guarded = action => {const current = controller.getSnapshot(); return current.detail.data === detail && albumTopActionAllowed(current, action, detail?.top_ref);};
+        if (selected && albumTopActionAllowed(state, 'set_activity')) {
+          const active = detail.top_viewer_overlay.activity.active;
+          control('activity', active ? 'Deactivate Album Top' : 'Activate Album Top', {icon: active ? 'pause' : 'bolt', disabled: busy,
+            onClick: () => {if (guarded('set_activity')) controller.mutate('set_activity', {active: !active});}});
+        }
         if (selected && albumTopActionAllowed(state, 'save')) control('edit', 'Edit Album Top', {icon: 'edit', disabled: busy, onClick: event => {if (guarded('save')) show('edit', detail, event.target.closest('button'));}});
         if (selected && albumTopActionAllowed(state, 'view_sharing')) control('share', 'Share', {icon: 'share', disabled: busy, onClick: event => {if (guarded('view_sharing')) show('share', detail, event.target.closest('button'));}});
         if (selected && albumTopActionAllowed(state, 'copy')) control('copy', 'Save a copy', {icon: 'save', disabled: busy, onClick: () => {if (guarded('copy')) controller.mutate('copy');}});
@@ -66,19 +71,22 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (restoreFocus) {restoreFocus = false; returnHeaderFocus(headerHost.querySelector('[aria-label="Edit Album Top"]'))?.focus({preventScroll: true});}
     const resource = selected ? state.detail : state.directory, ready = resource.status === 'ready' || resource.status === 'empty';
     const busy = state.mutation.refreshing === true || ['loading', 'uncertain'].includes(state.mutation.status);
-    description.hidden = !selected || !detail?.description; description.textContent = selected ? detail?.description || '' : '';
+    const paused = isTopActivity(detail?.top_viewer_overlay?.activity) && !detail.top_viewer_overlay.activity.active;
+    description.hidden = !selected || !detail?.description && !paused;
+    description.textContent = selected ? [detail?.description, paused ? 'Inactive for you. Progress is paused.' : ''].filter(Boolean).join(' ') : '';
     status.update({value: resource, label: selected ? 'this Album Top' : 'Album Tops', retry: () => selected ? controller.open(selected) : controller.load()});
     empty.hidden = !(selected && ready && detail.items.length === 0); if (!empty.hidden) empty.innerHTML = runtime.alertHtml({severity: 'info', role: 'status', message: 'No albums in this Top'});
     const wanted = new Set();
     for (const [index, row] of (ready ? selected ? detail.items : state.directory.data.tops : []).entries()) {
       const ref = selected ? row.item_ref : row.top_ref, key = `${selected || 'directory'}:${ref}`; wanted.add(key);
       const progressRows = detail?.top_viewer_overlay?.item_progress, progress = selected && progressRows && Object.hasOwn(progressRows, row.album_ref) ? progressRows[row.album_ref] : null;
-      const complete = selected && albumTopActionAllowed(state, 'set_manual_completion') && isManualProgress(progress), completed = complete && progress.manual_completed_at !== null;
+      const canChangeProgress = selected && albumTopActionAllowed(state, 'set_manual_completion') && isManualProgress(progress);
+      const complete = selected && isManualProgress(progress) && (canChangeProgress || paused), completed = complete && progress.manual_completed_at !== null;
       let item = cardOwners.get(key);
       if (!item) {const host = node(cards); item = {host, html: null, click: null}; const listener = event => item.click?.(event); item.listener = listener; host.addEventListener('click', listener); cardOwners.set(key, item);}
       const html = runtime.galleryCardHtml({identity: ref, interaction: !selected || complete ? 'controlled' : 'none', actionRef: selected ? row.album_ref : ref,
-        actions: {open: !selected, complete}, completion: complete ? {completed, disabled: busy, label: `${completed ? 'Clear completion' : 'Mark completed'} in this Top: ${row.title}`} : undefined,
-        title: row.title, artist: selected ? row.artist : row.description, year: row.year, displayMode: 'cards', artboxHtml: runtime.artboxHtml({state: 'empty', label: `${row.title} artwork`})});
+        actions: {open: !selected, complete}, completion: complete ? {completed, disabled: busy || !canChangeProgress, label: `${completed ? 'Clear completion' : 'Mark completed'} in this Top: ${row.title}`} : undefined,
+        title: row.title, artist: selected ? row.artist : [row.description, isTopActivity(row.top_viewer_overlay?.activity) && !row.top_viewer_overlay.activity.active ? 'Inactive for you' : ''].filter(Boolean).join(' · '), year: row.year, displayMode: 'cards', artboxHtml: runtime.artboxHtml({state: 'empty', label: `${row.title} artwork`})});
       if (item.html !== html) {const active = item.host.ownerDocument.activeElement, preserve = complete && item.host.contains(active) && active?.matches('[data-gallery-card-intent="complete"]'); item.host.innerHTML = html; item.html = html; if (preserve) item.host.querySelector('[data-gallery-card-intent="complete"]:not(:disabled)')?.focus({preventScroll: true});}
       item.click = event => {if (!selected && event.target.closest('[data-gallery-card-intent="open"]')) {latest.onOpen(ref); return;}
         const button = event.target.closest('[data-gallery-card-intent="complete"]'), current = controller.getSnapshot();

@@ -8,10 +8,7 @@ import {
   mountStatus
 }
 from '../home-friends/native-controls.mjs';
-import {
-  mountSharedHeader
-}
-from '../home-friends/shared-header.mjs';
+import {mountPlaylistHeader} from './native-headers.mjs';
 import {
   readTrackPreference
 }
@@ -322,25 +319,7 @@ export function mountPlaylistsView(host,runtime,initial) {
     resourceHost=node(scroll),
     content=node(scroll),
     dialogHost=node(host);
-    const header=scope.own(mountSharedHeader(headerHost,runtime, {
-      id:'playlists',
-      className:'playlists__header'
-    })),
-    headerTitle=node(header.slots.content,'div','gallery-bar__title');
-    const actionButtons=new Map();
-    for(const [key,label,icon] of [['add','Add tracks','add'],['missing','Inspect missing tracks','missing-playlist'],['top','Create Album Top','create-top'],['export','Export TXT','export-text'],['share','Share','share'],['copy','Save a copy','save'],['settings','Playlist settings','more'],['filters','Filters','filters'],['save','Save','save'],['discard','Discard unsaved changes','close']]) {
-      const slot=node(key==='discard'?header.slots.finalAction:header.slots.actions,'span');
-      actionButtons.set(key, {
-        slot,
-        label,
-        icon,
-        owner:scope.own(mountButton(slot,runtime, {
-          label,
-          icon,
-          onClick:()=>run(key)
-        }))
-      });
-    }
+    const header=scope.own(mountPlaylistHeader(headerHost,runtime,{actions:{},onAction:run}));
     const directory=scope.own(mountPlaylistDirectory(directoryHost,runtime, {
       state:props.state,
       onSelect:selectPlaylist,
@@ -721,7 +700,6 @@ export function mountPlaylistsView(host,runtime,initial) {
           canCreate:!busy&&!creationOpening&&canOpenPlaylistCreation(state,providers)
         });
         if(!live())return;
-        headerTitle.textContent=draft?.title||detail?.title||'Playlists';
         const enabled= {
           add:!picker&&controller.available('addTracks')&&typeof runtime.pickTracks==='function',
           missing:canOpenPlaylistCreation(state,providers,'missing'),
@@ -734,30 +712,7 @@ export function mountPlaylistsView(host,runtime,initial) {
           save:canSave,
           discard:Boolean(draft)
         };
-        for(const [key,button]of actionButtons) {
-          button.slot.hidden=key==='copy'&&!enabled.copy;
-          button.owner.update({
-            label:button.label,
-            icon:button.icon,
-            disabled:busy||Boolean(discardRequest)||!enabled[key],
-            title:key==='missing'&&!enabled[key]?'Missing-track playlist creation is not available for this source yet.':button.label,
-            attributes: {
-              'data-playlists-action':key,
-              ...(key==='filters'? {
-                'aria-expanded':String(Boolean(filterOwner)),
-                'aria-controls':'playlists-filters'
-              }
-              : {
-              })
-            },
-            onClick:()=>run(key)
-          });
-          if(!live())return;
-        }
-        header.update({
-          id:'playlists',
-          className:'playlists__header'
-        });
+        header.update({isCurrent:live,detail,draft,actions:enabled,busy:busy||Boolean(discardRequest),filtersOpen:Boolean(filterOwner),onAction:run});
         if(!live())return;
         if(filterOwner) {
           const childProps= {

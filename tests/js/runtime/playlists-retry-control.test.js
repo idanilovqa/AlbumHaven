@@ -1,31 +1,20 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const path = require('node:path');
-const vm = require('node:vm');
-const React = require('react');
-const {buildSync} = require('esbuild');
-const code = buildSync({entryPoints: [path.resolve(__dirname, '../../../music_app/static/js/playlists/mutation-status.jsx')],
-  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', '../home-friends/components.jsx']}).outputFiles[0].text;
-function render(props) {
-  const hooks = {...React, useState: initial => [initial, () => {}], useRef: value => ({current: value}), useEffect: effect => effect()};
-  const module = {exports: {}};
-  vm.runInNewContext(code, {module, exports: module.exports, require: name => name === 'react' ? hooks : {Button() {}, NativeHtml() {}}});
-  return module.exports.RetryOriginalRequest(props).props.children[0];
-}
-test('original-request retry requires native confirmation and current source afterward', async () => {
-  for (const allowed of [false, true]) {
-    let retries = 0, current = true;
-    const button = render({available: true, scopeKey: 'scope', runtime: {confirmRetryOriginal: async scope => {
-      assert.equal(scope, 'scope'); if (allowed) current = false; return allowed;}},
-      current: () => current, retry: () => {retries++;}});
-    await button.props.onClick(); assert.equal(retries, 0);
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {fixture}=require('./playlist-header-migration-fixture.cjs');
+let mountRetryOriginalRequest;
+test.before(async()=>({mountRetryOriginalRequest}=await import('../../../music_app/static/js/playlists/native-mutation-status.mjs')));
+test('original-request retry requires native confirmation and current source afterward',async t=>{
+  for(const allowed of [false,true]){
+    const h=fixture(t);let retries=0,current=true;
+    h.runtime.confirmRetryOriginal=async scope=>{assert.equal(scope,'scope');if(allowed)current=false;return allowed;};
+    const owner=mountRetryOriginalRequest(h.host,h.runtime,{available:true,scopeKey:'scope',current:()=>current,retry:()=>{retries++;}});
+    t.after(()=>owner.dispose());h.click(h.host.querySelector('button'));await h.settle();assert.equal(retries,0);
   }
 });
-test('duplicate activation opens one confirmation and dispatches one explicit retry', async () => {
-  let resolve, confirms = 0, retries = 0;
-  const button = render({available: true, scopeKey: 'scope', runtime: {confirmRetryOriginal: () => {
-    confirms++; return new Promise(done => {resolve = done;});}}, current: () => true,
-    retry: async () => {retries++; return true;}});
-  const first = button.props.onClick(), second = button.props.onClick();
-  assert.equal(confirms, 1); resolve(true); await first; await second; assert.equal(retries, 1);
+test('duplicate activation opens one confirmation and dispatches one explicit retry',async t=>{
+  const h=fixture(t);let resolve,confirms=0,retries=0;
+  h.runtime.confirmRetryOriginal=()=>{confirms++;return new Promise(done=>{resolve=done;});};
+  const owner=mountRetryOriginalRequest(h.host,h.runtime,{available:true,scopeKey:'scope',current:()=>true,retry:async()=>{retries++;return true;}});
+  t.after(()=>owner.dispose());const button=h.host.querySelector('button');h.click(button);h.click(button);
+  assert.equal(confirms,1);resolve(true);await h.settle();assert.equal(retries,1);
 });

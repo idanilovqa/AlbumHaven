@@ -18,6 +18,80 @@ LIBRARY_MIX_METRIC = "overall_scrobbles"
 
 
 @dataclass(frozen=True, slots=True)
+class ArtistMixScope:
+    """Exact local identities and membership operators, not display labels."""
+    memberships: tuple[tuple[int, str], ...]
+    album_order: tuple[int, ...]
+    categories: tuple[str, ...]
+    album_types: tuple[str, ...]
+
+    def as_dict(self):
+        return {"kind": "selected_artists",
+                "artist_ids": [str(identity) for identity, _ in self.memberships],
+                "memberships": [{"artist_id": str(identity), "basis": basis}
+                                for identity, basis in self.memberships],
+                "album_order": [str(identity) for identity in self.album_order],
+                "categories": list(self.categories), "album_types": list(self.album_types)}
+
+
+def _local_identity(value):
+    if (not isinstance(value, str) or not value.isascii() or not value.isdecimal()
+            or value.startswith("0") or len(value) > 19):
+        raise ValueError("Expected a positive local identity")
+    identity = int(value)
+    if not 0 < identity < 2**63:
+        raise ValueError("Expected a positive local identity")
+    return identity
+
+
+def normalize_artist_mix_scope(value):
+    if (not isinstance(value, dict) or set(value) != {
+            "kind", "artist_ids", "memberships", "album_order", "categories", "album_types"}
+            or value["kind"] != "selected_artists"
+            or not isinstance(value["artist_ids"], list)
+            or not 1 <= len(value["artist_ids"]) <= MAX_LIBRARY_MIX_ITEMS
+            or not isinstance(value["memberships"], list)
+            or len(value["memberships"]) != len(value["artist_ids"])
+            or not isinstance(value["album_order"], list)
+            or len(value["album_order"]) > MAX_LIBRARY_MIX_ITEMS):
+        raise ValueError("Invalid Artist selection scope")
+    artists = tuple(_local_identity(identity) for identity in value["artist_ids"])
+    albums = tuple(_local_identity(identity) for identity in value["album_order"])
+    if len(set(artists)) != len(artists) or len(set(albums)) != len(albums):
+        raise ValueError("Duplicate local identity")
+    memberships = {}
+    for item in value["memberships"]:
+        if (not isinstance(item, dict) or set(item) != {"artist_id", "basis"}
+                or item["basis"] not in ("primary_credit", "family_credit")):
+            raise ValueError("Invalid Artist membership operator")
+        identity = _local_identity(item["artist_id"])
+        if identity in memberships:
+            raise ValueError("Duplicate Artist membership operator")
+        memberships[identity] = item["basis"]
+    if set(memberships) != set(artists):
+        raise ValueError("Artist scope and membership operators differ")
+    filters = []
+    for key, allowed in (("categories", ("main_library", "new_arrivals", "hoard")),
+                         ("album_types", ("studio", "ep", "live", "demo", "compilation", "single"))):
+        values = value[key]
+        if (not isinstance(values, list) or any(not isinstance(item, str) or item not in allowed for item in values)
+                or len(set(values)) != len(values)):
+            raise ValueError("Invalid Artist selection filter")
+        filters.append(tuple(item for item in allowed if item in values))
+    return ArtistMixScope(tuple(sorted(memberships.items())), albums, *filters)
+
+
+def artist_recipe_payload(recipe, scope):
+    if not isinstance(scope, ArtistMixScope):
+        raise ValueError("Expected a normalized Artist scope")
+    normalized = normalize_artist_mix_scope(scope.as_dict())
+    if normalized != scope:
+        raise ValueError("Artist scope is not canonical")
+    return {**recipe_payload(recipe), "version": 2, "source": "artist_selection",
+            "scope": scope.as_dict()}
+
+
+@dataclass(frozen=True, slots=True)
 class LibraryMixRecipe:
     selection_basis: str
     songs_per_group: int

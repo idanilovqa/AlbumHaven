@@ -11,7 +11,7 @@ from music_app.services.private_album_artwork import album_artwork_url
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.private_library_authority import current_library_transaction, PrivateLibraryAuthorityError
 from music_app.services.owned_playlists import (
-    BROWSE, CREATE, MANAGE, ITEMS, ACCESS, SETTINGS, LIBRARY_MIX_PROTOCOL, PlaylistError, PlaylistCommand,
+    BROWSE, CREATE, MANAGE, ITEMS, ACCESS, SETTINGS, LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL, PlaylistError, PlaylistCommand,
     command_actions, inventory_identity, normalize_playlist_command,
     require_playlist_authority, uuid_ref,
 )
@@ -176,7 +176,7 @@ class PostgresOwnedPlaylistsService:
                 else:
                     source = sources.load_source(connection,live,command.data["source"]["ref"],command.data["source"]["revision"],now,
                         protocol=command.data["source_protocol"], kind=command.data["source"]["kind"])
-                if source["protocol"] == LIBRARY_MIX_PROTOCOL:
+                if source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
                     selected = library_mixes.selected(self, connection, live, source,
                         command.data["entry_refs"], constraints=constraints)
                 elif queue.is_queue(source):
@@ -202,7 +202,7 @@ class PostgresOwnedPlaylistsService:
                 connection.execute("""insert into app.playlists(ref,owner_account_id,library_id,title,description)
                     values (%s,%s,%s,%s,%s)""",(ref,live.actor.account_id,live.library_id,command.data["title"],command.data["description"]))
                 self._insert_items(connection,live,ref,selected,offset=0,source=source)
-                if source["protocol"] == LIBRARY_MIX_PROTOCOL:
+                if source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
                     library_mixes.save_recipe(connection, live, ref, source,
                         playback_order=command.data.get("mix_playback_order"))
                 receipt = self._receipt(live,command,ref,1,True,added_count=len(selected))

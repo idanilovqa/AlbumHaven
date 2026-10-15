@@ -20,12 +20,14 @@ COMPLETE_ACTIVITY_PROTOCOL = "complete_activity_selection_v1"
 MISSING_PLAYLIST_PROTOCOL = "missing_playlist_selection_v1"
 MISSING_ACTIVITY_PROTOCOL = "missing_activity_selection_v1"
 LIBRARY_MIX_PROTOCOL = "library_mix_selection_v1"
+ARTIST_MIX_PROTOCOL = "artist_popular_selection_v1"
 MISSING_SOURCE_PROTOCOLS = frozenset((MISSING_PLAYLIST_PROTOCOL, MISSING_ACTIVITY_PROTOCOL))
 SOURCE_PROTOCOL_KINDS = {
     PLAYLIST_SOURCE_PROTOCOL: "library", COMPLETE_INVENTORY_PROTOCOL: "library",
     COMPLETE_ACTIVITY_PROTOCOL: "activity", MISSING_PLAYLIST_PROTOCOL: "playlist",
     MISSING_ACTIVITY_PROTOCOL: "activity",
     LIBRARY_MIX_PROTOCOL: "library",
+    ARTIST_MIX_PROTOCOL: "library",
 }
 BROWSE = "library.browse.read"
 CREATE = "library.playlists.create"
@@ -150,7 +152,7 @@ def normalize_playlist_command(action: str, payload: object, *, playlist_ref: ob
                 "description": _text(payload.get("description", ""), maximum=MAX_PLAYLIST_DESCRIPTION_LENGTH),
                 "entry_refs": _refs(payload.get("entry_refs"), empty=protocol not in MISSING_SOURCE_PROTOCOLS)}
         if "mix_playback_order" in payload:
-            if protocol != LIBRARY_MIX_PROTOCOL or payload["mix_playback_order"] not in ("regular", "shuffle", "unplayed_first"):
+            if protocol not in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL) or payload["mix_playback_order"] not in ("regular", "shuffle", "unplayed_first"):
                 raise PlaylistError("invalid_command")
             data["mix_playback_order"] = payload["mix_playback_order"]
         return PlaylistCommand(action, None, request_key, data)

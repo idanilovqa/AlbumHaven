@@ -11,9 +11,10 @@ from music_app.services.admin_member_mutation_postgres import lock_current_actor
 from music_app.services.library_mix import (
     LibraryMixCandidate, LibraryMixTooLarge, build_library_mix,
     normalize_library_mix_recipe, recipe_payload,
+    normalize_artist_mix_scope, artist_recipe_payload,
 )
 from music_app.services.owned_playlists import (
-    BROWSE, CREATE, LIBRARY_MIX_PROTOCOL, PlaylistError, uuid_ref,
+    BROWSE, CREATE, LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL, PlaylistError, uuid_ref,
     inventory_identity,
 )
 from music_app.services.policy import ResourceScope
@@ -87,14 +88,45 @@ def _recipe(value):
         raise PlaylistError("invalid_library_mix_recipe") from None
 
 
+def _scope(value):
+    try:
+        return normalize_artist_mix_scope(value)
+    except (TypeError, ValueError):
+        raise PlaylistError("invalid_artist_mix_scope") from None
+
+
+def _stored_scope(value):
+    if isinstance(value, dict) and value.get("source") == "artist_selection":
+        try:
+            return _scope(value.get("scope"))
+        except PlaylistError:
+            raise PlaylistError("source_changed", 409) from None
+    return None
+
+
+def _payload(recipe, scope=None):
+    return artist_recipe_payload(recipe, scope) if scope is not None else recipe_payload(recipe)
+
+
 def _stored_recipe(value):
     if not isinstance(value, dict) or type(value.get("version")) is not int:
         raise PlaylistError("source_changed", 409)
     recipe = _recipe({key: value.get(key) for key in
                       ("selection_basis", "songs_per_group", "auto_update", "playback_order")})
-    if value != recipe_payload(recipe):
+    scope = _stored_scope(value)
+    if value != _payload(recipe, scope):
         raise PlaylistError("source_changed", 409)
     return recipe
+
+
+def _source_mix(source):
+    value = source["origin_descriptor"].get("library_mix")
+    recipe = _stored_recipe(value)
+    scope = _stored_scope(value)
+    expected = ARTIST_MIX_PROTOCOL if scope is not None else LIBRARY_MIX_PROTOCOL
+    if source["protocol"] != expected:
+        raise PlaylistError("source_changed", 409)
+    return recipe, scope
 
 
 def load_recipes(connection, library_id, playlist_refs):
@@ -103,7 +135,24 @@ def load_recipes(connection, library_id, playlist_refs):
     rows = connection.execute("""select * from app.playlist_library_mixes
         where library_id=%s and playlist_ref=any(%s::uuid[])""",
         (library_id, playlist_refs)).fetchall()
-    return {str(row["playlist_ref"]): dict(row) for row in rows}
+    result = {str(row["playlist_ref"]): dict(row) for row in rows}
+    scoped = [ref for ref, row in result.items() if row["source"] == "artist_selection"]
+    if scoped:
+        members = connection.execute("""select playlist_ref,original_artist_id,membership_basis
+            from app.playlist_library_mix_artists where library_id=%s and playlist_ref=any(%s::uuid[])
+            order by original_artist_id""", (library_id, scoped)).fetchall()
+        albums = connection.execute("""select playlist_ref,original_album_id
+            from app.playlist_library_mix_albums where library_id=%s and playlist_ref=any(%s::uuid[])
+            order by source_position""", (library_id, scoped)).fetchall()
+        for ref in scoped:
+            selected = [row for row in members if str(row["playlist_ref"]) == ref]
+            result[ref]["artist_scope"] = {"kind": "selected_artists",
+                "categories": result[ref]["artist_categories"], "album_types": result[ref]["artist_album_types"],
+                "artist_ids": [str(row["original_artist_id"]) for row in selected],
+                "memberships": [{"artist_id": str(row["original_artist_id"]), "basis": row["membership_basis"]}
+                                for row in selected],
+                "album_order": [str(row["original_album_id"]) for row in albums if str(row["playlist_ref"]) == ref]}
+    return result
 
 
 def recipe_from_row(row):
@@ -113,6 +162,7 @@ def recipe_from_row(row):
         "selection_basis": row["selection_basis"],
         "songs_per_group": row["songs_per_group"], "auto_update": row["auto_update"],
         "playback_order": row["playback_order"],
+        **({"scope": row.get("artist_scope")} if row["source"] == "artist_selection" else {}),
     })
 
 
@@ -128,12 +178,13 @@ def require_manual_membership(command, playlist):
 def project_recipe(row, *, refresh_status="last_computed"):
     if row is None:
         return None
-    return {**recipe_payload(recipe_from_row(row)), "refresh_status": refresh_status,
+    scope = _scope(row["artist_scope"]) if row["source"] == "artist_selection" else None
+    return {**_payload(recipe_from_row(row), scope), "refresh_status": refresh_status,
             "last_evaluated_at": row["last_evaluated_at"].isoformat(),
             "coverage": row["coverage"]}
 
 
-def _evaluate(owner, connection, context, recipe, constraints):
+def _evaluate(owner, connection, context, recipe, constraints, *, scope=None, dynamic=False):
     def can_read_track(track_id):
         return owner._resource_allowed(context, BROWSE,
             ResourceScope("track", str(track_id)), constraints)
@@ -142,7 +193,29 @@ def _evaluate(owner, connection, context, recipe, constraints):
     if reader is None:
         from music_app.services.library_mix_inventory_postgres import read_snapshot
         reader = read_snapshot
-    snapshot = reader(connection, context, is_readable=can_read_track)
+    if scope is None:
+        snapshot = reader(connection, context, is_readable=can_read_track)
+    else:
+        from music_app.services.library_mix_inventory_postgres import scoped_album_order, scoped_track_ids
+        album_order = scoped_album_order(connection, context, scope,
+            is_readable=lambda album_id: owner._resource_allowed(context, BROWSE,
+                ResourceScope("album", str(album_id)), constraints),
+            is_artist_readable=lambda artist_id: owner._resource_allowed(context, BROWSE,
+                ResourceScope("artist", str(artist_id)), constraints), dynamic=dynamic)
+        track_ids = [identity for identity in scoped_track_ids(connection, context.library_id, album_order)
+                     if can_read_track(identity)]
+        snapshot = reader(connection, context, is_readable=can_read_track,
+                          track_ids=track_ids, album_order=album_order)
+        confirmed_order = scoped_album_order(connection, context, scope,
+            is_readable=lambda album_id: owner._resource_allowed(context, BROWSE,
+                ResourceScope("album", str(album_id)), constraints),
+            is_artist_readable=lambda artist_id: owner._resource_allowed(context, BROWSE,
+                ResourceScope("artist", str(artist_id)), constraints),
+            dynamic=dynamic, lock_albums=album_order)
+        confirmed_tracks = [identity for identity in scoped_track_ids(connection, context.library_id, album_order)
+                            if can_read_track(identity)]
+        if confirmed_order != album_order or confirmed_tracks != track_ids:
+            raise PlaylistError("library_mix_unavailable", 503)
     if (not isinstance(snapshot, LibraryMixSnapshot) or snapshot.library_id != context.library_id
             or not isinstance(snapshot.refresh_status, str)
             or snapshot.refresh_status not in POPULARITY_REFRESH_STATUSES):
@@ -184,7 +257,7 @@ def _coverage(rows, diagnostics):
 def _source_payload(owner, connection, context, source, selected, constraints):
     from music_app.services.listen_history_postgres import read_scoped_track_play_counts
     origin = source["origin_descriptor"]
-    recipe = _stored_recipe(origin.get("library_mix"))
+    recipe, scope = _source_mix(source)
     personal = read_scoped_track_play_counts(connection, account_id=context.actor.account_id,
         library_id=context.library_id, track_ids=[row["original_local_track_id"] for row in selected])
     popularity_status = read_popularity_refresh_status(connection, context.library_id)
@@ -213,35 +286,71 @@ def _source_payload(owner, connection, context, source, selected, constraints):
         "allowed_actions": {"can_read": True, "can_use_for_playlist": True,
                             "can_play": any(entry["allowed_actions"]["can_play"] for entry in entries)},
         "entries": entries, "retained_parent_albums": [],
-        "library_mix": recipe_payload(recipe), "diagnostics": diagnostics,
+        "library_mix": _payload(recipe, scope), "diagnostics": diagnostics,
         "coverage": origin.get("coverage", {}),
         "popularity_refresh_status": popularity_status,
         "actor_scope": owner._scope(context),
     }}
 
 
-def capture(owner, context, payload, *, constraints=None):
+def _capture_in_transaction(owner, connection, live, recipe, scope, protocol, constraints, *, predecessor_deadline=None):
     from music_app.services.playlist_complete_sources import _header
     from psycopg.types.json import Jsonb
-    recipe = _recipe(payload)
+    rows, diagnostics, snapshot = _evaluate(owner, connection, live, recipe, constraints, scope=scope)
+    now = lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
+        actor_session_id=live.actor.session_id, clock=owner._clock)
+    if predecessor_deadline is not None and predecessor_deadline <= now:
+        raise PlaylistError("source_expired", 410)
+    source = _header(connection, live, now, protocol=protocol, kind="library")
+    observed = sources._observe_page(connection, source, rows)
+    origin = {"library_mix": _payload(recipe, scope),
+              "entry_order": [str(row["ref"]) for row in observed],
+              "diagnostics": _diagnostics(live, diagnostics[:100]),
+              "coverage": _coverage(rows, diagnostics),
+              "popularity_counts": {str(row["original_local_track_id"]):
+                  snapshot.snapshots[row["original_local_track_id"]].observation.count for row in rows},
+              "evaluated_at": now.isoformat()}
+    connection.execute("update app.playlist_creation_sources set origin_descriptor=%s where ref=%s",
+        (Jsonb(origin), source["ref"]))
+    source["origin_descriptor"] = origin
+    result = _source_payload(owner, connection, live, source, observed, constraints)
+    return result
+
+
+def capture(owner, context, payload, *, constraints=None, protocol=LIBRARY_MIX_PROTOCOL):
+    scope = None
+    if protocol == ARTIST_MIX_PROTOCOL:
+        if not isinstance(payload, dict) or set(payload) != {"scope", "recipe"}:
+            raise PlaylistError("invalid_command")
+        scope, recipe = _scope(payload["scope"]), _recipe(payload["recipe"])
+    elif protocol == LIBRARY_MIX_PROTOCOL:
+        recipe = _recipe(payload)
+    else:
+        raise PlaylistError("invalid_command")
     with owner._authorized(context, constraints) as (connection, live, _now):
         owner._require(live, (BROWSE, CREATE), constraints)
-        rows, diagnostics, snapshot = _evaluate(owner, connection, live, recipe, constraints)
-        now = lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
-            actor_session_id=live.actor.session_id, clock=owner._clock)
-        source = _header(connection, live, now, protocol=LIBRARY_MIX_PROTOCOL, kind="library")
-        observed = sources._observe_page(connection, source, rows)
-        origin = {"library_mix": recipe_payload(recipe),
-                  "entry_order": [str(row["ref"]) for row in observed],
-                  "diagnostics": _diagnostics(live, diagnostics[:100]),
-                  "coverage": _coverage(rows, diagnostics),
-                  "popularity_counts": {str(row["original_local_track_id"]):
-                      snapshot.snapshots[row["original_local_track_id"]].observation.count for row in rows},
-                  "evaluated_at": now.isoformat()}
-        connection.execute("update app.playlist_creation_sources set origin_descriptor=%s where ref=%s",
-            (Jsonb(origin), source["ref"]))
-        source["origin_descriptor"] = origin
-        result = _source_payload(owner, connection, live, source, observed, constraints)
+        result = _capture_in_transaction(owner, connection, live, recipe, scope, protocol, constraints)
+        verified_library_id = live.library_id
+    result["data"].update(_request_popularity_refresh(owner, verified_library_id,
+        result["data"]["popularity_refresh_status"]))
+    return result
+
+
+def regenerate(owner, context, payload, *, constraints=None):
+    if not isinstance(payload, dict) or set(payload) != {"source_ref", "source_revision", "recipe"}:
+        raise PlaylistError("invalid_command")
+    ref, revision = uuid_ref(payload["source_ref"]), uuid_ref(payload["source_revision"])
+    recipe = _recipe(payload["recipe"])
+    with owner._authorized(context, constraints) as (connection, live, now):
+        owner._require(live, (BROWSE, CREATE), constraints)
+        source = sources.load_source(connection, live, ref, revision, now,
+            protocol=ARTIST_MIX_PROTOCOL, kind="library")
+        _previous, scope = _source_mix(source)
+        # Scope and album order are owned by the predecessor receipt, never by
+        # an updated Gallery or a browser-authored replacement descriptor.
+        result = _capture_in_transaction(owner, connection, live, recipe, scope,
+                                         ARTIST_MIX_PROTOCOL, constraints,
+                                         predecessor_deadline=source["expires_at"])
         verified_library_id = live.library_id
     result["data"].update(_request_popularity_refresh(owner, verified_library_id,
         result["data"]["popularity_refresh_status"]))
@@ -252,7 +361,13 @@ def selected(owner, connection, context, source, entry_refs, *, constraints=None
     origin = source.get("origin_descriptor")
     if not isinstance(origin, dict) or entry_refs != origin.get("entry_order"):
         raise PlaylistError("source_changed", 409)
-    _stored_recipe(origin.get("library_mix"))
+    _recipe_value, scope = _source_mix(source)
+    if scope is not None:
+        for kind, identities in (("artist", [identity for identity, _basis in scope.memberships]),
+                                 ("album", scope.album_order)):
+            if any(not owner._resource_allowed(context, BROWSE,
+                    ResourceScope(kind, str(identity)), constraints) for identity in identities):
+                raise PlaylistError("source_unavailable", 404)
     rows = sources.selected_entries(connection, context, source, entry_refs, config=owner._config)
     if any(not owner._resource_allowed(context, BROWSE,
             ResourceScope("track", str(row["original_local_track_id"])), constraints) for row in rows):
@@ -260,12 +375,12 @@ def selected(owner, connection, context, source, entry_refs, *, constraints=None
     return rows
 
 
-def read_capture(owner, context, source_ref, source_revision, *, constraints=None):
+def read_capture(owner, context, source_ref, source_revision, *, constraints=None, protocol=LIBRARY_MIX_PROTOCOL):
     ref, revision = uuid_ref(source_ref), uuid_ref(source_revision)
     with owner._authorized(context, constraints) as (connection, live, now):
         owner._require(live, (BROWSE, CREATE), constraints)
         source = sources.load_source(connection, live, ref, revision, now,
-                                     protocol=LIBRARY_MIX_PROTOCOL, kind="library")
+                                     protocol=protocol, kind="library")
         refs = (source.get("origin_descriptor") or {}).get("entry_order")
         if not isinstance(refs, list):
             raise PlaylistError("source_changed", 409)
@@ -277,7 +392,7 @@ def read_capture(owner, context, source_ref, source_revision, *, constraints=Non
         return _source_payload(owner, connection, live, source, rows, constraints)
 
 
-def native_queue(owner, context, payload, *, constraints=None, media_resolver=None):
+def native_queue(owner, context, payload, *, constraints=None, media_resolver=None, protocol=LIBRARY_MIX_PROTOCOL):
     from music_app.services.listen_history_postgres import read_scoped_track_play_counts
     from music_app.services.private_native_targets import PrivateNativeTargets
     if (not isinstance(payload, dict) or set(payload) != {
@@ -293,7 +408,7 @@ def native_queue(owner, context, payload, *, constraints=None, media_resolver=No
     with owner._authorized(context, constraints) as (connection, live, now):
         owner._require(live, (BROWSE, CREATE), constraints)
         source = sources.load_source(connection, live, ref, revision, now,
-                                     protocol=LIBRARY_MIX_PROTOCOL, kind="library")
+                                     protocol=protocol, kind="library")
         order = (source.get("origin_descriptor") or {}).get("entry_order")
         if not isinstance(order, list) or set(order) != set(refs):
             raise PlaylistError("source_changed", 409)
@@ -318,22 +433,36 @@ def native_queue(owner, context, payload, *, constraints=None, media_resolver=No
         if source["expires_at"] <= now:
             raise PlaylistError("source_expired", 410)
         return {"source": {"kind": "library", "ref": ref, "revision": revision},
-                "source_protocol": LIBRARY_MIX_PROTOCOL, "starting_item_ref": starting,
+                "source_protocol": protocol, "starting_item_ref": starting,
                 "tracks": tracks, "unavailable_item_refs": unavailable}
 
 
 def save_recipe(connection, context, playlist_ref, source, *, playback_order=None):
     from psycopg.types.json import Jsonb
     origin = source["origin_descriptor"]
-    recipe = _stored_recipe(origin.get("library_mix"))
+    recipe, scope = _source_mix(source)
     evaluated_at = datetime.fromisoformat(origin["evaluated_at"])
     connection.execute("""insert into app.playlist_library_mixes
         (playlist_ref, library_id, recipe_version, source, provider, metric,
-         selection_basis, songs_per_group, auto_update, playback_order, last_evaluated_at, coverage)
-        values (%s,%s,1,'whole_library','lastfm','overall_scrobbles',%s,%s,%s,%s,%s,%s)""",
-        (playlist_ref, context.library_id, recipe.selection_basis,
+         selection_basis, songs_per_group, auto_update, playback_order, last_evaluated_at, coverage,
+         artist_categories, artist_album_types)
+        values (%s,%s,%s,%s,'lastfm','overall_scrobbles',%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (playlist_ref, context.library_id, 2 if scope is not None else 1,
+         "artist_selection" if scope is not None else "whole_library", recipe.selection_basis,
          recipe.songs_per_group, recipe.auto_update, playback_order or recipe.playback_order,
-         evaluated_at, Jsonb(origin["coverage"])))
+         evaluated_at, Jsonb(origin["coverage"]), list(scope.categories) if scope else None,
+         list(scope.album_types) if scope else None))
+    if scope is not None:
+        for identity, basis in scope.memberships:
+            connection.execute("""insert into app.playlist_library_mix_artists
+                (playlist_ref,library_id,source,original_artist_id,membership_basis)
+                values(%s,%s,'artist_selection',%s,%s)""",
+                (playlist_ref, context.library_id, identity, basis))
+        for position, identity in enumerate(scope.album_order):
+            connection.execute("""insert into app.playlist_library_mix_albums
+                (playlist_ref,library_id,source,original_album_id,source_position)
+                values(%s,%s,'artist_selection',%s,%s)""",
+                (playlist_ref, context.library_id, identity, position))
 
 
 def refresh_owned(owner, context, playlist_ref, *, constraints=None):
@@ -361,7 +490,9 @@ def refresh_owned(owner, context, playlist_ref, *, constraints=None):
             verified_library_id = live.library_id
             popularity_status = read_popularity_refresh_status(connection, live.library_id)
             recipe = recipe_from_row(stored)
-            desired, diagnostics, _snapshot = _evaluate(owner, connection, live, recipe, constraints)
+            scope = _scope(stored["artist_scope"]) if stored["source"] == "artist_selection" else None
+            desired, diagnostics, _snapshot = _evaluate(owner, connection, live, recipe, constraints,
+                                                        scope=scope, dynamic=scope is not None)
             old = connection.execute("""select * from app.playlist_items
                 where playlist_ref=%s order by position""", (playlist_ref,)).fetchall()
             desired_ids = [row["original_local_track_id"] for row in desired]

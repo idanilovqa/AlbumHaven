@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+
 from music_app.services.artist_alias_views import artist_casefold_key, prefer_group_artist_name
 from music_app.services.artist_sidebar import artist_display_dedupe_key
 from music_app.services.artist_sidebar import (
@@ -10,6 +11,48 @@ from music_app.services.artist_sidebar import (
     is_various_album,
 )
 from music_app.services.library import album_preview_to_dict, album_sort_key, shared_album_display_artist
+
+def project_local_artist_scope(albums, rows, *, selected_names, membership_basis="primary_credit"):
+    """Project persisted IDs from admitted membership rows, never invent IDs.
+
+    The browse owner supplies its resolved alias names and already grouped
+    albums. Names select those existing row facts only; they are not returned
+    as source authority. The generated-source owner must re-admit all IDs in
+    the actor's current library. Missing/ambiguous row facts fail closed.
+    """
+    if membership_basis not in ("primary_credit", "family_credit"):
+        raise ValueError("Unknown Artist membership basis")
+    names = frozenset(selected_names)
+    album_ids = []
+    for album in albums:
+        album_id = album.get("album_id")
+        if type(album_id) is not int or not 0 < album_id < 2**63:
+            return None
+        if album_id not in album_ids:
+            album_ids.append(album_id)
+    artist_ids = set()
+    admitted_albums = set()
+    for row in rows:
+        album_id = row.get("album_id")
+        if album_id not in album_ids:
+            continue
+        # Canonicalization retains the original row identity and name.
+        name = row.get("source_artist_name", row.get("artist_name"))
+        if name not in names:
+            continue
+        artist_id = row.get("source_artist_id", row.get("artist_id"))
+        if type(artist_id) is not int or not 0 < artist_id < 2**63:
+            return None
+        artist_ids.add(artist_id)
+        admitted_albums.add(album_id)
+    if not artist_ids or admitted_albums != set(album_ids):
+        return None
+    return {"kind": "selected_artists",
+            "artist_ids": [str(value) for value in sorted(artist_ids)],
+            "album_order": [str(value) for value in album_ids],
+            "memberships": [{"artist_id": str(value), "basis": membership_basis}
+                            for value in sorted(artist_ids)]}
+
 
 _WORD_COLLAB_MARKER_RE = re.compile(r"\b(?:feat|featuring|with|vs|x)\b", re.IGNORECASE)
 _FEATURED_ALIAS_SUFFIX_RE = re.compile(
@@ -491,3 +534,4 @@ def merge_duplicate_artist_groups(groups: list[dict[str, object]]) -> list[dict[
         )
 
     return merged
+

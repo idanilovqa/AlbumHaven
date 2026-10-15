@@ -206,6 +206,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/playlists/creation-source/library-mix"): "library.playlists.create",
     ("GET", "/playlists/creation-source/library-mix"): "library.playlists.create",
     ("POST", "/playlists/creation-source/library-mix/native-queue"): "library.browse.read",
+    ("POST", "/playlists/creation-source/artist-popular"): "library.playlists.create",
+    ("GET", "/playlists/creation-source/artist-popular"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/artist-popular/regenerate"): "library.playlists.create",
+    ("POST", "/playlists/creation-source/artist-popular/native-queue"): "library.browse.read",
     ("POST", "/playlists/creation-source/match-candidates"): "library.playlists.create",
     ("POST", "/playlists/creation-source/accept-match"): "library.playlists.create",
     ("POST", "/playlists/creation-source/activity"): "library.playlists.create",
@@ -273,7 +277,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
         private_top_view = route_path == "/view-data" and str(request.query_params.get("surface") or "").strip().casefold() == "album_tops"
         preference_headers = (
             {"Cache-Control": "private, no-store"}
-            if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")) else
+            if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue", "/playlists/creation-source/artist-popular", "/playlists/creation-source/artist-popular/regenerate", "/playlists/creation-source/artist-popular/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")) else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -324,7 +328,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 headers=preference_headers,
             )
         response = await call_next(request)
-        if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")):
+        if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue", "/playlists/creation-source/artist-popular", "/playlists/creation-source/artist-popular/regenerate", "/playlists/creation-source/artist-popular/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")):
             response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)

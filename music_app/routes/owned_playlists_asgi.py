@@ -134,6 +134,12 @@ def playlist_source_entries(request: Request):
         return _error(error)
 
 
+def _generated_mix_options(request):
+    from music_app.services.owned_playlists import ARTIST_MIX_PROTOCOL
+    return ({"protocol": ARTIST_MIX_PROTOCOL} if "/creation-source/artist-popular" in request.url.path else {})
+
+
+@router.post("/playlists/creation-source/artist-popular")
 @router.post("/playlists/creation-source/library-mix")
 async def create_library_mix_source(request: Request):
     from music_app.services import library_mix_postgres as mixes
@@ -142,9 +148,10 @@ async def create_library_mix_source(request: Request):
         _require_context_header(request)
         if request.query_params:
             raise PlaylistError("invalid_command")
-        payload = await read_bounded_json_object(request, max_bytes=4096)
+        payload = await read_bounded_json_object(request, max_bytes=(
+            MAX_PLAYLIST_COMMAND_BYTES if "/creation-source/artist-popular" in request.url.path else 4096))
         result = await run_in_threadpool(mixes.capture, _service(request), context,
-                                        payload, constraints=constraints)
+                                        payload, constraints=constraints, **_generated_mix_options(request))
         return _response(request, result)
     except JSONBodyTooLarge:
         return _error(PlaylistError("command_too_large", 413))
@@ -152,6 +159,7 @@ async def create_library_mix_source(request: Request):
         return _error(error)
 
 
+@router.get("/playlists/creation-source/artist-popular")
 @router.get("/playlists/creation-source/library-mix")
 def read_library_mix_source(request: Request):
     from music_app.services import library_mix_postgres as mixes
@@ -161,11 +169,13 @@ def read_library_mix_source(request: Request):
             raise PlaylistError("invalid_source_query")
         context, constraints = _context(request, CREATE)
         return _response(request, mixes.read_capture(_service(request), context,
-            params["source_ref"], params["source_revision"], constraints=constraints))
+            params["source_ref"], params["source_revision"], constraints=constraints,
+            **_generated_mix_options(request)))
     except PlaylistError as error:
         return _error(error)
 
 
+@router.post("/playlists/creation-source/artist-popular/native-queue")
 @router.post("/playlists/creation-source/library-mix/native-queue")
 async def library_mix_native_queue(request: Request):
     from music_app.services import library_mix_postgres as mixes
@@ -176,8 +186,26 @@ async def library_mix_native_queue(request: Request):
             raise PlaylistError("invalid_command")
         payload = await read_bounded_json_object(request, max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
         result = await run_in_threadpool(mixes.native_queue, _service(request), context,
-                                        payload, constraints=constraints)
+                                        payload, constraints=constraints, **_generated_mix_options(request))
         return _response(request, {"status": "ready", "data": result})
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post("/playlists/creation-source/artist-popular/regenerate")
+async def regenerate_artist_mix_source(request: Request):
+    from music_app.services import library_mix_postgres as mixes
+    try:
+        context, constraints = _context(request, CREATE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=4096)
+        result = await run_in_threadpool(mixes.regenerate, _service(request), context,
+                                        payload, constraints=constraints)
+        return _response(request, result)
     except JSONBodyTooLarge:
         return _error(PlaylistError("command_too_large", 413))
     except PlaylistError as error:

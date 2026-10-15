@@ -119,16 +119,24 @@ def inventory_revision(row):
         "is_compilation", "file_tags")})
 
 
-def read_snapshot(connection, live_context, *, is_readable):
+def read_snapshot(connection, live_context, *, is_readable, track_ids=None, album_order=None):
     """Admit real IDs before metadata, cache validation or group composition."""
     library_id = live_context.library_id
     if type(library_id) is not int or library_id < 1 or connection.autocommit or not callable(is_readable):
         raise ValueError("Mix inventory requires current-library admission")
-    identities = connection.execute(
-        "select id from library.local_tracks where library_id=%s order by id",
-        (library_id,)).fetchall()
+    if track_ids is None:
+        identities = connection.execute(
+            "select id from library.local_tracks where library_id=%s order by id",
+            (library_id,)).fetchall()
+    else:
+        identities = connection.execute(
+            "select id from library.local_tracks where library_id=%s and id=any(%s::bigint[]) order by id",
+            (library_id, list(track_ids))).fetchall()
     admitted = [row["id"] for row in identities if is_readable(row["id"]) is True]
     rows = read_inventory(connection, library_id, track_ids=admitted, lock=True) if admitted else []
+    if album_order is not None and any(row["original_album_id"] not in album_order for row in rows):
+        from music_app.services.owned_playlists import PlaylistError
+        raise PlaylistError("library_mix_unavailable", 503)
     candidates, snapshots, diagnostics = [], {}, []
     album_artists = {}
     for row in rows:
@@ -160,7 +168,8 @@ def read_snapshot(connection, live_context, *, is_readable):
         candidates.append(LibraryMixCandidate(track,
             f"inventory-album:{library_id}:{album_id}" if album_id is not None else None,
             f"musicbrainz-artist:{primary}" if primary else None,
-            album_id if album_id is not None else 2**63 - 1,
+            (album_order.index(album_id) if album_order is not None
+             else album_id if album_id is not None else 2**63 - 1),
             row["disc_number"], row["track_number"]))
         if row["source_revision"] is not None:
             if any(value.utcoffset() is None for value in (row["observed_at"], row["imported_at"])):
@@ -175,3 +184,129 @@ def read_snapshot(connection, live_context, *, is_readable):
     job = read_job(connection, library_id)
     return LibraryMixSnapshot(library_id, tuple(candidates), snapshots, tuple(diagnostics),
                               refresh_status=job["status"] if job else "idle")
+
+
+def scoped_album_order(connection, live_context, scope, *, is_readable, is_artist_readable, dynamic=False, lock_albums=None):
+    """Resolve selected persisted IDs using the existing strict membership owner.
+
+    Scope is intent, not authority. All joins bind the current library. Credit
+    identities are admitted before reading album metadata. No request labels,
+    media permission, bootstrap library, or whole-library empty-set fallback.
+    """
+    from types import SimpleNamespace
+    from music_app.services.library_mix import ArtistMixScope
+    from music_app.services.owned_playlists import PlaylistError
+    from music_app.services.library_browse_postgres import (
+        _relation_alias_maps_sql, _relation_alias_maps_payload,
+        _root_album_browse_album_payloads, _canonical_artist_name,
+        _selected_artist_family_groups_from_preview_rows, _popular_album_category_sql,
+    )
+    from music_app.services.selected_artist_membership import (
+        album_matches_group_artist, collaboration_alias_of,
+    )
+    if not isinstance(scope, ArtistMixScope) or connection.autocommit:
+        raise ValueError("Expected a transaction and normalized Artist scope")
+    library_id = live_context.library_id
+    requested_ids = [identity for identity, _basis in scope.memberships]
+    identities = [identity for identity in requested_ids if is_artist_readable(identity) is True]
+    if not dynamic and identities != requested_ids:
+        raise PlaylistError("source_unavailable", 404)
+    # First resolve without parent locks. The evaluator locks track inventory
+    # through its existing owner, then calls back with the admitted album set.
+    # Parent membership locks are final revalidation after inventory locks,
+    # rather than an initial parent-before-track acquisition.
+    if lock_albums is not None:
+        connection.execute("""select id from library.local_albums where library_id=%s
+            and id=any(%s::bigint[]) order by id for share""", (library_id, list(lock_albums))).fetchall()
+        connection.execute("""select id from library.local_artists where library_id=%s
+            and id=any(%s::bigint[]) order by id for share""", (library_id, identities)).fetchall()
+        connection.execute("""select id from library.local_album_featured_artists
+            where library_id=%s and artist_id=any(%s::bigint[])
+            order by id for share""", (library_id, identities)).fetchall()
+    artists = connection.execute("""select id,name from library.local_artists
+        where library_id=%s and id=any(%s::bigint[]) order by id""",
+        (library_id, identities)).fetchall()
+    by_artist = {row["id"]: row["name"] for row in artists}
+    if not dynamic and set(by_artist) != set(identities):
+        raise PlaylistError("source_changed", 409)
+    alias_row = connection.execute(_relation_alias_maps_sql(current_library=True),
+                                   {"library_id": library_id}).fetchone()
+    alias_state = _relation_alias_maps_payload(alias_row)
+    if alias_state.get("projection_stale_reason"):
+        raise PlaylistError("library_mix_unavailable", 503)
+    aliases = alias_state["alias_to_canonical"]
+    # A missing/deleted saved identity contributes nothing; never rebind by name.
+    links = connection.execute("""select artist_id,album_id,featured_kind
+        from library.local_album_featured_artists
+        where library_id=%s and artist_id=any(%s::bigint[])
+        order by album_id,artist_id,featured_kind""",
+        (library_id, list(by_artist))).fetchall()
+    operators = dict(scope.memberships)
+    admitted = [row for row in links
+        if (dynamic or row["album_id"] in scope.album_order)
+        and is_readable(row["album_id"]) is True
+        and (operators[row["artist_id"]] == "primary_credit"
+             or row["featured_kind"] in ("owner", "featured_member"))]
+    albums = connection.execute(f"""select album.id as album_id,album_key,title as album_title,
+        release_year as album_release_year,metadata as album_metadata,
+        {_popular_album_category_sql("album.library_id", "album.id")} as file_library_root_category
+        from library.local_albums album where library_id=%s and id=any(%s::bigint[])
+        order by id""", (library_id, sorted({row["album_id"] for row in admitted}))).fetchall()
+    projected = _root_album_browse_album_payloads(albums, "", include_artist_members=True)
+    visible_ids = {album["album_id"] for album in projected if scoped_gallery_album_matches(album, scope)}
+    facts = {row["album_id"]: row for row in albums}
+    accepted = {link["album_id"] for link in admitted
+                if link["album_id"] in facts and operators[link["artist_id"]] == "primary_credit"}
+    family_links = [link for link in admitted if link["album_id"] in facts
+                    and operators[link["artist_id"]] == "family_credit"]
+    family_names = []
+    for link in family_links:
+        name = by_artist[link["artist_id"]]
+        canonical = _canonical_artist_name(name, aliases)
+        target = name if collaboration_alias_of(name, canonical) else canonical
+        if target not in family_names:
+            family_names.append(target)
+    family_groups = _selected_artist_family_groups_from_preview_rows(
+        family_names, [{**facts[link["album_id"]], "artist_name": by_artist[link["artist_id"]]}
+                       for link in family_links], alias_to_canonical=aliases,
+        canonical_to_aliases=alias_state["canonical_to_aliases"])
+    accepted.update(album["album_id"] for group in family_groups for album in group["albums"])
+    if not dynamic:
+        if accepted != set(scope.album_order):
+            raise PlaylistError("source_changed", 409)
+        return tuple(identity for identity in scope.album_order if identity in visible_ids)
+    # Same display sort owner as the Gallery, with identity remaining numeric.
+    return tuple(row["album_id"] for row in _root_album_browse_album_payloads(
+        [row for identity, row in facts.items() if identity in accepted and identity in visible_ids], ""))
+
+
+
+def scoped_track_ids(connection, library_id, album_order):
+    """Use the Artist browse owner for exception/local-file eligibility."""
+    from music_app.services.library_browse_postgres import _eligible_album_tracks_cte_sql
+    eligibility = _eligible_album_tracks_cte_sql(aggregate_tracks=False, require_active_roots=True)
+    return tuple(row["track_id"] for row in connection.execute(
+        "with bootstrap_context as (select %s::bigint as library_id), " + eligibility +
+        " select distinct track_id from eligible_album_tracks where library_id=%s"
+        " and album_id=any(%s::bigint[]) order by track_id",
+        (library_id, library_id, list(album_order))).fetchall())
+
+
+def scoped_gallery_album_matches(album, scope):
+    """Parity with Gallery resolveGalleryAlbumSources/classifyGalleryReleaseType.
+
+    Input is the actual browse album projection, never unprojected metadata.
+    Empty retained filter arrays intentionally match no album.
+    """
+    allowed = ("main_library", "new_arrivals", "hoard")
+    provenance = album.get("root_provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    categories = provenance.get("categories")
+    candidates = categories if isinstance(categories, list) and categories else [
+        album.get("library_root_category") or album.get("source") or "main_library"]
+    sources = [str(value or "").strip().lower() for value in candidates]
+    sources = [value for value in sources if value in allowed] or ["main_library"]
+    explicit = str(album.get("release_type") or album.get("releaseType") or "").strip().lower()
+    release_type = "compilation" if album.get("is_compilation") is True or explicit in (
+        "compilation", "compilations") else "studio"
+    return any(value in scope.categories for value in sources) and release_type in scope.album_types

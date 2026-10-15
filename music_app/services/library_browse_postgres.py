@@ -971,6 +971,20 @@ class PostgresLibraryBrowseRepository:
             alias_to_canonical=family_context["alias_to_canonical"],
             canonical_to_aliases=family_context["canonical_to_aliases"],
         )
+        # Attach persisted identities before family filters change visible groups.
+        # Display aliases are resolved only here, by the existing server owner;
+        # consumers receive numeric identity facts, never name-derived IDs.
+        _attach_selected_artist_identity_scopes(
+            primary_artist_groups, rows,
+            alias_to_canonical=selected_artist_alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
+        )
+        _attach_selected_artist_identity_scopes(
+            family_artist_groups, family_preview_rows,
+            alias_to_canonical=family_context["alias_to_canonical"],
+            canonical_to_aliases=family_context["canonical_to_aliases"],
+            membership_basis="family_credit",
+        )
         sidebar_family_artist_groups = list(family_artist_groups)
         requested_related_artists = _query_param_list(query_params, "related_artist")
         primary_filter_requested = _request_flag(
@@ -1705,6 +1719,17 @@ class PostgresLibraryBrowseRepository:
             )
             if selected_artist and not requested_all_artists
             else []
+        )
+        _attach_selected_artist_identity_scopes(
+            primary_artist_groups, rows,
+            alias_to_canonical=family_context["alias_to_canonical"],
+            canonical_to_aliases=family_context["canonical_to_aliases"],
+        )
+        _attach_selected_artist_identity_scopes(
+            family_artist_groups, family_preview_rows,
+            alias_to_canonical=family_context["alias_to_canonical"],
+            canonical_to_aliases=family_context["canonical_to_aliases"],
+            membership_basis="family_credit",
         )
         selected_artist_family_filters = (
             _selected_artist_family_filter_payloads(
@@ -5211,7 +5236,14 @@ def _canonicalize_artist_rows(
                 normalized_alias_to_canonical=normalized_alias_to_canonical or {},
             )
             next_payload = dict(credited_payload)
-            next_payload["source_artist_id"] = credited_payload.get("artist_id")
+            next_payload["source_artist_id"] = (
+                credited_payload.get("artist_id") if expanded_featured_artists
+                else credited_payload.get("source_artist_id", credited_payload.get("artist_id"))
+            )
+            next_payload["source_artist_name"] = (
+                credited_payload.get("artist_name") if expanded_featured_artists
+                else credited_payload.get("source_artist_name", credited_payload.get("artist_name"))
+            )
             next_payload["artist_name"] = canonical_name
             if expanded_featured_artists and canonical_name == artist_name:
                 next_payload["sort_name"] = str(
@@ -5447,6 +5479,29 @@ def _queue_display_cover_variants_for_groups(
             except Exception:
                 continue
             remaining -= 1
+
+
+def _attach_selected_artist_identity_scopes(
+    groups, rows, *, alias_to_canonical, canonical_to_aliases,
+    membership_basis="primary_credit",
+):
+    from music_app.services.selected_artist_membership import project_local_artist_scope
+
+    for group in groups:
+        artist = str(group.get("artist") or "").strip()
+        canonical = _canonical_artist_name(artist, alias_to_canonical)
+        from music_app.services.selected_artist_membership import collaboration_alias_of
+        # Family grouping can deliberately restore a collaboration as its own
+        # group. Do not canonicalize that group back into the solo Artist.
+        names = ([artist] if membership_basis == "family_credit"
+                 and collaboration_alias_of(artist, canonical)
+                 else _expanded_primary_artist_names(
+                     artist, alias_to_canonical, canonical_to_aliases,
+                 ))
+        group["popular_selection_scope"] = project_local_artist_scope(
+            group.get("albums", []), rows, selected_names=names,
+            membership_basis=membership_basis,
+        )
 
 
 def _selected_artist_primary_groups(
@@ -5918,6 +5973,8 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
             if not isinstance(artists, list):
                 artists = [artist_display] if artist_display else []
             album = {
+                "album_id": persisted_album_id,
+                "popular_album_id": str(persisted_album_id) if type(persisted_album_id) is int and persisted_album_id > 0 else None,
                 "key": album_key,
                 "album_ref": album_key,
                 "name": str(row_payload.get("album_title") or "").strip(),
@@ -5943,7 +6000,7 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
                 "year": album_year,
                 "release_date": metadata.get("release_date"),
                 "edition": metadata.get("edition"),
-                "root_provenance": dict(root_provenance),
+                "root_provenance": {**root_provenance, "categories": _popular_preview_categories(metadata, row_payload.get("file_library_root_category"))},
                 "library_root_id": row_payload.get("file_library_root_id"),
                 "library_root_category": row_payload.get("file_library_root_category"),
                 "track_count_preview": 0,
@@ -6024,6 +6081,17 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
     )
 
 
+def _popular_preview_categories(metadata, fallback_category=None):
+    # Only bounded filter facts may enter the preview DTO. Root/path metadata
+    # is deliberately not copied alongside this additive selection projection.
+    categories = _row_json_mapping(metadata.get("root_provenance")).get("categories")
+    if not isinstance(categories, list) or not categories:
+        categories = [fallback_category or "main_library"]
+    values = [str(value or "").strip().lower() for value in categories]
+    return list(dict.fromkeys(value for value in values
+                if value in ("main_library", "new_arrivals", "hoard"))) or ["main_library"]
+
+
 def _root_album_browse_album_payloads(
     rows: list[object],
     artist_display: str,
@@ -6074,6 +6142,8 @@ def _root_album_browse_album_payloads(
         duration_seconds = _coerce_duration_seconds(row_payload.get("total_duration_seconds"))
         album_payload = {
             "album_id": album_id,
+            "root_provenance": {"categories": _popular_preview_categories(metadata, row_payload.get("file_library_root_category"))},
+            "popular_album_id": str(album_id) if type(album_id) is int and album_id > 0 else None,
             "key": album_key,
             "name": str(row_payload.get("album_title") or "").strip(),
             "album_artist": album_artist,
@@ -6397,7 +6467,15 @@ def _eligible_album_tracks_cte_sql(
     include_track_override_defaults: bool = True,
     aggregate_tracks: bool = True,
     require_active_roots: bool = False,
+    include_filter_facts: bool = False,
 ) -> str:
+    if include_filter_facts:
+        aggregate_tracks = False
+    filter_columns = (""", library.local_track_files.id as file_id,
+        library.local_track_files.metadata ->> 'library_root_category' as file_library_root_category,
+        library.local_tracks.disc_number, library.local_tracks.track_number,
+        library.local_tracks.title as track_title, library.local_tracks.track_key"""
+        if include_filter_facts else "")
     materialization = "materialized" if materialized else "not materialized"
     candidate_album_join = (
         """
@@ -6409,7 +6487,7 @@ def _eligible_album_tracks_cte_sql(
         else ""
     )
     scoped_overrides = ("and library.exception_overrides.library_id in (select library_id from bootstrap_context)"
-                        if require_active_roots else "")
+                        if require_active_roots or include_filter_facts else "")
     active_root_join = ("""join library.library_roots eligible_root
             on eligible_root.id = library.local_track_files.library_root_id
            and eligible_root.library_id = library.local_tracks.library_id
@@ -6449,7 +6527,7 @@ def _eligible_album_tracks_cte_sql(
           select
             library.local_tracks.library_id,
             library.local_tracks.album_id,
-            library.local_tracks.id as track_id{duration_column}
+            library.local_tracks.id as track_id{duration_column}{filter_columns}
           from library.local_tracks
           join bootstrap_context
             on bootstrap_context.library_id = library.local_tracks.library_id
@@ -6480,6 +6558,21 @@ def _eligible_album_tracks_cte_sql(
         )
     """.strip()
 
+
+
+def _popular_album_category_sql(library_ref: str, album_ref: str) -> str:
+    """Bounded category fact using the same effective exception owner as albums.
+
+    References are internal SQL identifiers, never request text. A nested CTE
+    binds the passed current library instead of resolving bootstrap ownership.
+    """
+    return f"""(with bootstrap_context as (select {library_ref} as library_id),
+        search_candidate_album_ids as (select {library_ref} as library_id, {album_ref} as album_id),
+        {_eligible_album_tracks_cte_sql(include_filter_facts=True, candidate_albums_only=True)}
+        select file_library_root_category from eligible_album_tracks
+        where album_id={album_ref}
+        order by disc_number nulls last, track_number nulls last,
+                 track_title,track_key,file_id limit 1)"""
 
 
 def _root_gallery_membership_sql() -> str:
@@ -6664,7 +6757,8 @@ def _selected_artist_sql() -> str:
           library.local_tracks.disc_number nulls last,
           library.local_tracks.track_number nulls last,
           library.local_tracks.title,
-          library.local_tracks.track_key;
+          library.local_tracks.track_key,
+          library.local_track_files.id;
     """
 
 
@@ -6867,6 +6961,7 @@ def _root_album_browse_sql() -> str:
           album_rows.album_release_year,
           album_rows.album_cover_path,
           album_rows.album_metadata,
+          {_popular_album_category_sql("album_rows.library_id", "album_rows.album_id")} as file_library_root_category,
           case
             when cover_candidate_snapshots.album_id is null then null
             else jsonb_build_object(
@@ -7549,6 +7644,7 @@ def _selected_artist_preview_sql(
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
           matched_album_rows.album_metadata,
+          {_popular_album_category_sql("matched_album_rows.library_id", "matched_album_rows.album_id")} as file_library_root_category,
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
         from matched_album_rows
@@ -7649,6 +7745,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
           matched_album_rows.album_release_year,
           matched_album_rows.album_cover_path,
           matched_album_rows.album_metadata,
+          {_popular_album_category_sql("matched_album_rows.library_id", "matched_album_rows.album_id")} as file_library_root_category,
           coalesce(track_rollups.track_count, 0) as track_count,
           coalesce(track_rollups.total_duration_seconds, 0) as total_duration_seconds
         from matched_album_rows
@@ -9346,3 +9443,4 @@ def _utility_rules_sql() -> str:
         select * from repair_rows
         order by row_kind, ignored_version_key nulls last, ignored_repair_key nulls last;
     """
+

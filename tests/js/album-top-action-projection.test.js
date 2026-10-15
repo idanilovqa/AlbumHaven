@@ -1,26 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const Module = require('node:module');
-const vm = require('node:vm');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime, buttonNamed} = require('./runtime/native-home-harness.cjs');
-
-let createAlbumTopController, createAlbumTopBackendProviders, AlbumTopsView, componentBundle;
+const {buttonNamed} = require('./runtime/native-home-harness.cjs');
+const {nativeEnvironment} = require('./runtime/album-tops-native-fixtures/actual-native-runtime.cjs');
+let createAlbumTopController, createAlbumTopBackendProviders, mountAlbumTopsView;
 test.before(async () => {
   ({createAlbumTopController} = await import('../../music_app/static/js/album-tops/model.mjs'));
   ({createAlbumTopBackendProviders} = await import('../../music_app/static/js/album-tops/backend-providers.mjs'));
-  componentBundle = buildSync({entryPoints: [path.resolve(__dirname, '../../music_app/static/js/album-tops/app.jsx')],
-    bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
-  const loaded = new Module(`${__filename}.fixture.cjs`, module);
-  loaded.filename = `${__filename}.fixture.cjs`; loaded.paths = module.paths;
-  loaded._compile(componentBundle, loaded.filename); ({AlbumTopsView} = loaded.exports);
+  ({mountAlbumTopsView} = await import('../../music_app/static/js/album-tops/app.mjs'));
 });
+const retirements = new WeakMap();
 
 // Synthetic wire replies exercise the actual private provider, controller and
-// native SSR components. They prove neither backend authorization nor browser
+// native mounted components. They prove neither backend authorization nor browser
 // reconciliation, painted geometry, native focus or manual acceptance.
 const BROWSE = 'library.browse.read', CREATE = 'library.album_tops.create';
 const MANAGE = 'library.album_tops.manage', ITEMS = 'library.album_tops.items.manage';
@@ -74,30 +65,36 @@ function fixture(t, {top = resource(), list, read, write} = {}) {
     const key = id(100 + calls.keys.length); calls.keys.push(key); return key;
   }});
   controller.setScope(SCOPE);
-  t.after(() => {controller.dispose(); providers.dispose();});
+  const owners = []; retirements.set(controller, owners);
+  t.after(() => {
+    let failure;
+    for (const dispose of owners.reverse()) {try {dispose();} catch (error) {failure ??= error;}}
+    try {controller.dispose();} finally {providers.dispose();}
+    if (failure) throw failure;
+  });
   return {controller, calls, providers, replace(top) {currentTop = top;},
     async open() {await controller.load(); await controller.open(TOP);},
   };
 }
-function nativeRuntime() {
-  const native = createNativeHomeRuntime(), runtime = {
-    buttonHtml: value => native.context.ButtonComponent.renderButton(value),
-    actionHtml: value => native.context.ButtonComponent.renderActionButton(value),
-    alertHtml: value => native.context.buildOnPageAlertHtml(value),
-    galleryCardHtml: value => native.context.buildGalleryCardHtml(value),
-    artboxHtml: value => native.context.buildAlbumArtboxHtml(value),
-    confirmRetryOriginal: async () => false,
-  };
-  return {native, runtime};
+function mountedView(controller) {
+  const env = nativeEnvironment(), {host, runtime} = env;
+  runtime.confirmRetryOriginal = async () => false;
+  runtime.confirm = async () => false;
+  let owner;
+  const props = () => ({controller, state: controller.getSnapshot(), onOpen() {}});
+  const unsubscribe = controller.subscribe(() => owner?.update(props()));
+  retirements.get(controller).push(() => {
+    try {unsubscribe(); owner?.dispose(); env.assertClean();} finally {host.remove();}
+  });
+  owner = mountAlbumTopsView(host, runtime, props());
+  assert.deepEqual(env.forbiddenCalls, []);
+  return {...env, owner};
 }
-function nativeView(controller) {
-  const {native, runtime} = nativeRuntime(), host = native.document.createElement('div');
-  host.innerHTML = renderToStaticMarkup(React.createElement(AlbumTopsView,
-    {runtime, controller, state: controller.getSnapshot(), onOpen: () => {}}));
-  assert.deepEqual(native.forbiddenCalls, []);
-  return host;
-}
-const hasButton = (host, label) => Boolean(buttonNamed(host, new RegExp(`^${label}$`), false));
+function nativeView(controller) {return mountedView(controller).host;}
+const hasButton = (host, label) => {
+  const control = buttonNamed(host, new RegExp(`^${label}$`), false);
+  return Boolean(control && control.isConnected && !control.closest('[hidden],[inert],[aria-hidden="true"]'));
+};
 const assertNoManagement = controller => {
   const host = nativeView(controller);
   assert.equal(hasButton(host, 'Edit Album Top'), false);
@@ -129,9 +126,8 @@ test('native management controls distinguish Owner, Editor and source Viewer fro
     assert.equal(hasButton(host, 'Delete Album Top'), role === 'owner', `${role}: delete`);
     if (role !== 'viewer') assert.equal(buttonNamed(host, /^Edit Album Top$/).disabled, false);
     if (role === 'owner') assert.equal(buttonNamed(host, /^Delete Album Top$/).disabled, false);
-    // This bounded slice has no Share or playback UI. Server sharing authority
-    // is preserved above without inventing a new client control or media grant.
-    assert.equal(hasButton(host, 'Share'), false);
+    // Sharing is now delivered: exact can_view_sharing admits the native header action.
+    assert.equal(hasButton(host, 'Share'), true);
   }
 });
 
@@ -357,81 +353,41 @@ test('scope replacement retires a blocked uncertain operation instead of replayi
   assert.equal(h.calls.writes.length, 1);
 });
 
-const elements = node => React.isValidElement(node)
-  ? [node, ...React.Children.toArray(node.props.children).flatMap(elements)] : [];
-const component = (tree, name) => elements(tree).find(node => node.type?.name === name);
-const button = (tree, label) => elements(tree).find(node => node.type?.name === 'Button' && node.props.children === label);
-const input = (tree, name) => elements(tree).find(node => node.type === 'input' && node.props.name === name);
-// Match the existing Top hook-lifecycle fixture: separate component lifetimes,
-// actual component handlers/effects, without claiming React DOM reconciliation.
-function componentDriver(t) {
-  const fibers = new Map(); let current;
-  const effect = (callback, deps) => {
-    const fiber = current, index = fiber.cursor++, old = fiber.slots[index];
-    if (!old || !deps || deps.some((value, at) => !Object.is(value, old.deps[at]))) {
-      fiber.effects.push(() => {old?.cleanup?.(); fiber.slots[index] = {deps, cleanup: callback()};});
-    }
-  };
-  const hooks = {...React,
-    useState(value) {
-      const fiber = current, index = fiber.cursor++;
-      const slot = fiber.slots[index] ||= {value: typeof value === 'function' ? value() : value};
-      return [slot.value, next => {slot.value = typeof next === 'function' ? next(slot.value) : next;}];
-    },
-    useRef(value) {return current.slots[current.cursor++] ||= {current: value};},
-    useEffect: effect, useLayoutEffect: effect,
-  };
-  const module = {exports: {}};
-  vm.runInNewContext(componentBundle, {module, exports: module.exports, console, require(name) {
-    if (name === 'react') return hooks;
-    if (name === 'react-dom') return {createPortal: children => children};
-    assert.fail(`Unexpected component dependency: ${name}`);
-  }});
-  t.after(() => {for (const fiber of fibers.values()) for (const slot of fiber.slots) slot?.cleanup?.();});
-  return {View: module.exports.AlbumTopsView, render(key, Component, props) {
-    const fiber = fibers.get(key) || {slots: []}; fibers.set(key, fiber);
-    fiber.cursor = 0; fiber.effects = []; current = fiber;
-    let tree;
-    try {tree = Component(props);} finally {current = null;}
-    for (const run of fiber.effects) run();
-    return tree;
-  }};
-}
-
+const input = (host, name) => host.querySelector(`input[name="${name}"]`);
+const button = (host, label) => buttonNamed(host, new RegExp(`^${label}$`));
 test('same-revision Editor revocation disables the retained draft and stale submit callback without discarding text', async t => {
   for (const permission of ['can_edit', BROWSE]) {
     const h = fixture(t, {top: resource('editor', 'server_shared')}); await h.open();
     let attempted = 0;
     const mutate = h.controller.mutate;
     h.controller.mutate = (...args) => {attempted++; return mutate(...args);};
-    const driver = componentDriver(t), {runtime} = nativeRuntime(); runtime.confirm = async () => false;
-    const view = () => driver.render('view', driver.View,
-      {runtime, controller: h.controller, state: h.controller.getSnapshot(), onOpen: () => {}});
-    button(view(), 'Edit Album Top').props.onClick();
+    const env = mountedView(h.controller);
+    env.click(button(env.host, 'Edit Album Top'));
     const form = () => {
-      const fields = component(view(), 'TopFields'); assert.ok(fields, 'the draft remains mounted');
-      return driver.render('fields', fields.type, fields.props).props.children(() => false);
+      const fields = env.content().querySelector('form'); assert.ok(fields, 'the draft remains mounted');
+      return fields;
     };
-    input(form(), 'top-name').props.onChange({target: {value: 'My unsaved title'}});
-    input(form(), 'top-subtitle').props.onChange({target: {value: 'My unsaved subtitle'}});
-    const prior = form(); assert.equal(button(prior, 'Save').props.disabled, false);
+    env.input(input(form(), 'top-name'), 'My unsaved title');
+    env.input(input(form(), 'top-subtitle'), 'My unsaved subtitle');
+    const prior = form(); assert.equal(button(prior, 'Save').disabled, false);
+    const priorSubmit = prior.listeners.find(listener => listener.type === 'submit').callback;
     h.replace(resource('editor', 'server_shared', {allowed_actions: {...grants('editor'), [permission]: false}}));
     await h.controller.open(TOP);
-    await prior.props.onSubmit({preventDefault() {}});
+    await priorSubmit({preventDefault() {}});
     assert.equal(attempted, 0, 'the component rechecks authority before asking the controller to write');
     assert.equal(h.calls.writes.length, 0, 'a retained callback must not submit with stale authority');
     const revoked = form();
-    assert.equal(input(revoked, 'top-name').props.value, 'My unsaved title');
-    assert.equal(input(revoked, 'top-subtitle').props.value, 'My unsaved subtitle');
-    assert.equal(input(revoked, 'top-name').props.disabled, true);
-    assert.equal(input(revoked, 'top-subtitle').props.disabled, true);
-    assert.equal(button(revoked, 'Save').props.disabled, true);
-    assert.equal(button(revoked, 'Cancel').props.disabled, false);
-    await revoked.props.onSubmit({preventDefault() {}}); assert.equal(h.calls.writes.length, 0);
+    assert.equal(input(revoked, 'top-name').value, 'My unsaved title');
+    assert.equal(input(revoked, 'top-subtitle').value, 'My unsaved subtitle');
+    assert.equal(input(revoked, 'top-name').disabled, true);
+    assert.equal(input(revoked, 'top-subtitle').disabled, true);
+    assert.equal(button(revoked, 'Save').disabled, true);
+    assert.equal(button(revoked, 'Cancel').disabled, false);
+    revoked.dispatchEvent(new env.context.Event('submit')); await Promise.resolve(); assert.equal(h.calls.writes.length, 0);
     assert.equal(attempted, 0);
     h.replace(resource('editor', 'server_shared')); await h.controller.open(TOP);
-    const restored = form(); assert.equal(input(restored, 'top-name').props.value, 'My unsaved title');
-    assert.equal(button(restored, 'Save').props.disabled, false);
+    const restored = form(); assert.equal(input(restored, 'top-name').value, 'My unsaved title');
+    assert.equal(button(restored, 'Save').disabled, false);
   }
 });
 

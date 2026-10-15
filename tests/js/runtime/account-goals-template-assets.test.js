@@ -14,7 +14,7 @@ function required(h, name, root) {const button = h.named(name, root); assert.ok(
 function menu(h, name) {const result = h.document.querySelector(`[role="menu"][aria-label="${name}"]`); assert.ok(result); return result;}
 
 test('account template composition has the exact protected DOM extraction and ordered standalone classic assets', () => {
-  const original = read('tests/js/runtime/native-home-harness.cjs');
+  const original = read('tests/js/runtime/native-home-harness.cjs').replace(/\r\n/g, '\n');
   assert.equal(createHash('sha256').update(original).digest('hex'), 'a3a6902dc55ea75f3e45048a952a4e1b0633717427d7892966a03cc76214e264');
   const sentinels = "    openTrackModal: forbidden('openTrackModal'), playAlbum: forbidden('playAlbum'),\n"
     + "    scheduleBrowserAnimationFrame: forbidden('scheduleBrowserAnimationFrame'), scheduleBrowserTimeout: forbidden('scheduleBrowserTimeout'),\n";
@@ -22,7 +22,7 @@ test('account template composition has the exact protected DOM extraction and or
   const end = original.indexOf('  const event = ', begin);
   assert.ok(begin >= 0 && end > begin); assert.equal(original.split(sentinels).length, 2);
   const copied = original.replace(sentinels, '').replace(original.slice(begin, end), '');
-  assert.equal(read('tests/js/runtime/account-goals-dom-platform.cjs'), copied,
+  assert.equal(read('tests/js/runtime/account-goals-dom-platform.cjs').replace(/\r\n/g, '\n'), copied,
     'Only the four application sentinels and eager loading block are omitted; protected source stays byte-identical.');
   assert.deepEqual(templateAssets().classic, CLASSIC);
 });

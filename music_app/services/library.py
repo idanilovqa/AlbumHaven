@@ -1155,11 +1155,20 @@ def _link_duplicate_album_sources(
     """Link physical copies across edition records without changing their queues."""
     containers: dict[str, dict[str, Track]] = {}
     folder_paths: dict[str, str] = {}
+    containers_by_literal_parent: dict[tuple[bool, str], str] = {}
     album_folder_keys: list[list[str]] = []
     for album in albums:
         folder_keys: list[str] = []
         for track in album.tracks:
-            folder = _track_album_container(track.path)
+            raw_path = str(track.path)
+            separator_index = max(raw_path.rfind("/"), raw_path.rfind("\\"))
+            literal_parent = (
+                separator_index >= 0,
+                raw_path[:separator_index] if separator_index >= 0 else raw_path,
+            )
+            if literal_parent not in containers_by_literal_parent:
+                containers_by_literal_parent[literal_parent] = _track_album_container(track.path)
+            folder = containers_by_literal_parent[literal_parent]
             key = os.path.normcase(folder)
             folder_keys.append(key)
             folder_paths.setdefault(key, folder)

@@ -1684,7 +1684,7 @@ def test_track_album_container_preserves_path_normalization_contract(raw, as_pat
     assert str(value) == (str(Path(raw)) if as_path else raw)
 
 
-def test_link_duplicate_album_sources_resolves_each_track_container_once(monkeypatch, tmp_path):
+def test_link_duplicate_album_sources_resolves_each_sibling_container_once(monkeypatch, tmp_path):
     from music_app.services import library
 
     tracks = [
@@ -1710,7 +1710,33 @@ def test_link_duplicate_album_sources_resolves_each_track_container_once(monkeyp
     assert [source["folder_name"] for source in albums[0]._cached_duplicate_sources] == ["Copy A", "Copy B"]
     assert albums[0]._cached_duplicate_sources == albums[1]._cached_duplicate_sources
     assert albums[2]._cached_duplicate_sources == []
-    assert resolved == [track.path for track in tracks]
+    assert resolved == [tracks[0].path, tracks[2].path]
+
+
+def test_link_duplicate_album_sources_keeps_separatorless_path_kinds_distinct(monkeypatch):
+    from music_app.services import library
+
+    album = Album(
+        key="album",
+        name="Album",
+        album_artist="Artist",
+        tracks=[
+            Track(path=Path("01.flac"), title="One", album_artist="Artist", album="Album", year=2001),
+            Track(path=Path("C:02.flac"), title="Two", album_artist="Artist", album="Album", year=2001),
+        ],
+    )
+    resolved = []
+    original = library._track_album_container
+
+    def count_container(path):
+        resolved.append(path)
+        return original(path)
+
+    monkeypatch.setattr(library, "_track_album_container", count_container)
+
+    library._link_duplicate_album_sources([album])
+
+    assert resolved == [track.path for track in album.tracks]
 
 
 def test_link_duplicate_album_sources_keeps_last_path_record_and_mixed_folder_identity(tmp_path):

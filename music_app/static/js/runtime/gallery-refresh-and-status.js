@@ -90,18 +90,48 @@ async function loadNextRootGalleryPage() {
   try {
     let response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
     let restarted = false;
+    let recoveryCoverage = 0;
+    let recoveryStartArtist = '';
+    let recoveryEndArtist = '';
+    let recoveryArtists = [];
     if (response.status === 409) {
       const conflict = await response.json();
       if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
-      // Catalog changes invalidate the cursor. Replace atomically with one fresh
-      // bounded page; keep the old cards visible until that response arrives.
+      // Catalog changes invalidate the cursor. Recover the retained window
+      // atomically; keep its cards visible until all required pages arrive.
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
+      const retainedGroups = state.view.artist_groups || [];
+      recoveryArtists = retainedGroups.map(group => String(group.artist || '').trim()).filter(Boolean);
+      recoveryCoverage = retainedGroups.reduce((count, group) => count + (group.albums || []).length, 0);
+      recoveryStartArtist = String(retainedGroups[0]?.artist || '').trim();
+      recoveryEndArtist = String(retainedGroups.at(-1)?.artist || '').trim();
+      if (recoveryStartArtist && (scroll.scrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
+        url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
+      }
       response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      for (let index = 1; response.status === 400 && url.searchParams.has('gallery_anchor_artist'); index += 1) {
+        const failure = await response.json();
+        if (!ownsRootBrowseIdentity()) return false;
+        const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
+        if (message !== 'Gallery artist anchor is unavailable.' || index >= retainedGroups.length) {
+          throw new Error(message);
+        }
+        recoveryStartArtist = String(retainedGroups[index]?.artist || '').trim();
+        if (!recoveryStartArtist) throw new Error(message);
+        url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
+        response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      }
       restarted = true;
     }
     const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
-    const data = await readGalleryResponse(response, ownsDataResponse);
+    let data = await readGalleryResponse(response, ownsDataResponse);
+    if (restarted && ownsDataResponse()) {
+      data = await collectRootGalleryRefresh(
+        data, `${url.pathname}${url.search}`, recoveryCoverage,
+        request.controller, ownsDataResponse, recoveryStartArtist, recoveryEndArtist, recoveryArtists,
+      );
+    }
     if (!ownsDataResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
@@ -977,11 +1007,60 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist) {
+async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse) {
+  for (const artist of [...new Set(retainedArtists)].reverse()) {
+    const url = new URL(apiUrl, 'http://localhost');
+    url.searchParams.delete('gallery_cursor');
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.set('gallery_anchor_artist', artist);
+    url.searchParams.set('omit_sidebar', '1');
+    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
+    if (!ownsResponse()) return null;
+    if (response.status === 409) return { restart: true };
+    if (response.status === 400) {
+      const failure = await response.json();
+      if (!ownsResponse()) return null;
+      const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
+      if (message === 'Gallery artist anchor is unavailable.') continue;
+      throw new Error(message);
+    }
+    const payload = await readGalleryResponse(response, ownsResponse);
+    if (!ownsResponse()) return null;
+    const page = payload?.gallery_page;
+    const canonicalArtist = String(page?.anchor_group_artist || '').trim();
+    const group = payload?.artist_groups?.find(item => String(item.artist || '').trim() === canonicalArtist);
+    if (!canonicalArtist || !Number.isInteger(page?.anchor_offset) || page.anchor_offset < 0 || !group?.albums?.length) {
+      throw new Error('Root gallery refresh endpoint metadata is unavailable.');
+    }
+    return { artist: canonicalArtist, offset: page.anchor_offset, length: group.albums.length, revision: page.revision };
+  }
+  throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+}
+
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist, retainedEndArtist = '', retainedArtists = [retainedEndArtist]) {
+  const completeArtistPages = Boolean(new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist'));
   let payload = data;
   let restarted = false;
+  let endpointArtist = retainedEndArtist;
+  let endpointResolved = false;
+  let endpointLength = 0;
   const cursors = new Set();
   let remainingPages = Math.ceil(coverage / 50);
+  const restartRefresh = async () => {
+    if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+    restarted = true;
+    endpointArtist = retainedEndArtist;
+    endpointResolved = false;
+    endpointLength = 0;
+    cursors.clear();
+    remainingPages = Math.ceil(coverage / 50);
+    const url = new URL(apiUrl, 'http://localhost');
+    url.searchParams.set('gallery_page_size', '50');
+    url.searchParams.delete('gallery_cursor');
+    url.searchParams.delete('omit_sidebar');
+    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
+    payload = await readGalleryResponse(response, ownsResponse);
+  };
   while (ownsResponse()) {
     const page = payload?.gallery_page;
     const groups = payload?.artist_groups || [];
@@ -990,7 +1069,44 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     // trailing portion of the window being refreshed.
     const count = groups.slice(Math.max(0, retainedStart))
       .reduce((sum, group) => sum + (group.albums || []).length, 0);
-    if (!page?.has_more || count >= coverage) return payload;
+    // Anchored pages contain complete artist groups, including album removals.
+    const retainedEndPresent = !endpointArtist || groups.some(group => (
+      String(group.artist || '').trim() === endpointArtist
+    ));
+    const endpointGroup = groups.find(group => String(group.artist || '').trim() === endpointArtist);
+    const endpointComplete = endpointResolved
+      ? (endpointGroup?.albums?.length || 0) >= endpointLength
+      : completeArtistPages || Boolean(page?.anchor_artist) || !endpointArtist;
+    if (!page?.has_more || (count >= coverage && retainedEndPresent && endpointComplete)) return payload;
+    if (!endpointResolved && ((!retainedEndPresent && remainingPages <= 0)
+      || (count >= coverage && !endpointComplete))) {
+      const endpoint = await resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse);
+      if (!ownsResponse()) return null;
+      if (endpoint.restart || String(endpoint.revision || '') !== String(page?.revision || '')) {
+        await restartRefresh();
+        continue;
+      }
+      endpointArtist = endpoint.artist;
+      endpointResolved = true;
+      endpointLength = endpoint.length;
+      if ((groups.find(group => String(group.artist || '').trim() === endpointArtist)?.albums?.length || 0) < endpointLength) {
+        const startArtist = String(page?.anchor_group_artist || retainedStartArtist).trim();
+        const startIndex = groups.findIndex(group => String(group.artist || '').trim() === startArtist);
+        let startOffset = 0;
+        if (page?.anchor_artist) {
+          const leadingCount = groups.slice(0, startIndex).reduce((sum, group) => sum + (group.albums || []).length, 0);
+          if (startIndex < 0 || !Number.isInteger(page.anchor_offset) || page.anchor_offset < leadingCount) {
+            throw new Error('Root gallery refresh start metadata is unavailable.');
+          }
+          // An alias can resolve inside its rendered group. Use the earliest
+          // possible start, so that uncertainty cannot undercount needed pages.
+          startOffset = Math.max(0, page.anchor_offset - leadingCount - ((groups[startIndex].albums || []).length - 1));
+        }
+        const loaded = groups.reduce((sum, group) => sum + (group.albums || []).length, 0);
+        remainingPages = Math.ceil((endpoint.offset + endpoint.length - startOffset - loaded) / 50);
+      }
+      continue;
+    }
     const cursor = String(page.next_cursor || '');
     if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
       throw new Error('Root gallery refresh did not advance within its loaded coverage.');
@@ -1005,14 +1121,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
     if (!ownsResponse()) return null;
     if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
-      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
-      restarted = true;
-      cursors.clear();
-      remainingPages = Math.ceil(coverage / 50);
-      url.searchParams.delete('gallery_cursor');
-      url.searchParams.delete('omit_sidebar');
-      const restartResponse = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
-      payload = await readGalleryResponse(restartResponse, ownsResponse);
+      await restartRefresh();
       continue;
     }
     if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
@@ -1043,7 +1152,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
   const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
-  const retainedStartArtist = String(state.view?.artist_groups?.[0]?.artist || '').trim();
+  const retainedArtists = (state.view?.artist_groups || []).map(group => String(group.artist || '').trim()).filter(Boolean);
+  const retainedStartArtist = retainedArtists[0] || '';
+  const retainedEndArtist = retainedArtists.at(-1) || '';
   if (rootRefreshCoverage > 0 && state.view?.gallery_page?.anchor_artist && retainedStartArtist) {
     const refreshUrl = new URL(apiUrl, 'http://localhost');
     if (!refreshUrl.searchParams.has('gallery_anchor_artist')) {
@@ -1197,7 +1308,7 @@ async function fetchAndRender(url, push = true, options = {}) {
           return false;
         }
       };
-      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, retainedStartArtist);
+      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, retainedStartArtist, retainedEndArtist, retainedArtists);
       if (!data || !ownsRefresh()) return false;
     }
     markStartupFollowup('payload_received', requestOptions, {

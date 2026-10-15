@@ -113,6 +113,9 @@ export class GalleryRegressions {
     }, { artist, headingSelector: this.artistHeadingSelector });
   }
   albumMetadataByKey(key) { return this.albumCardByKey(key).locator('.album-meta-row'); }
+  albumDetailsByKey(key) {
+    return this.albumCardByKey(key).locator('.album-title-button[data-open-tracklist="1"]');
+  }
   get mobileAlbum() { return this.page.locator('#mobile-page-outlet #track-modal'); }
   get mobileBack() { return this.page.locator('#mobile-back-button'); }
   async longPressArtist(row) {
@@ -214,17 +217,27 @@ export class GalleryRegressions {
           const rect = item.getBoundingClientRect();
           return rect.top >= bounds.top && rect.top < bounds.bottom;
         });
-      return { card, top: card?.getBoundingClientRect().top ?? null };
+      return {
+        card, top: card?.getBoundingClientRect().top ?? null,
+        scrollTop: scroll.scrollTop, scrollerTop: bounds.top,
+      };
     });
   }
 
   async readVisibleCardAnchorContinuity(anchor) {
     // parity-check: allow-read-only-measurement-evaluate -- measure the retained card after native scrolling
-    return anchor.evaluate(saved => ({
-      connected: Boolean(saved.card?.isConnected),
-      delta: saved.card?.isConnected && saved.top !== null
-        ? saved.card.getBoundingClientRect().top - saved.top : null,
-    }));
+    return anchor.evaluate(saved => {
+      const scroll = document.getElementById('albums-scroll');
+      const delta = saved.card?.isConnected && saved.top !== null
+        ? saved.card.getBoundingClientRect().top - saved.top : null;
+      const scrollDelta = scroll.scrollTop - saved.scrollTop;
+      const scrollerDelta = scroll.getBoundingClientRect().top - saved.scrollerTop;
+      return {
+        connected: Boolean(saved.card?.isConnected), delta,
+        scrollDelta, scrollerDelta,
+        contentDelta: delta === null ? null : delta + scrollDelta - scrollerDelta,
+      };
+    });
   }
 
   async revealAlbumWithGalleryWheel(album) {
@@ -329,6 +342,7 @@ export class GalleryRegressions {
       const samples = [];
       let frame;
       let originalCard;
+      let lastGridEventSequence = 0;
       let observing = !saved.waitUntilGalleryVisible;
       const sample = () => {
         const gallery = document.querySelector('#albums-scroll');
@@ -354,12 +368,30 @@ export class GalleryRegressions {
         const cardRect = card?.getBoundingClientRect();
         const row = card?.closest('.album-row') || card?.parentElement;
         const rowRect = row?.getBoundingClientRect();
+        const gridEvents = (window.__ALBUM_HAVEN_VIRTUAL_GRID__?.events || [])
+          .filter(event => event.sequence > lastGridEventSequence);
+        if (gridEvents.length) lastGridEventSequence = gridEvents[gridEvents.length - 1].sequence;
         samples.push({
           at: performance.now(), epoch: performance.timeOrigin + performance.now(),
+          gridEvents,
           connected, delta, stable: connected && Math.abs(delta) <= 1,
           originalConnected: Boolean(originalCard?.isConnected), sameNode: card === originalCard,
           scrollTop: scroller?.scrollTop, scrollHeight: scroller?.scrollHeight,
           viewportTop: cardRect?.top,
+          scrollerTop: scrollRect?.top,
+          scrollerHeight: scrollRect?.height,
+          triggerGeometry: [...(card?.querySelectorAll('[data-open-tracklist="1"][data-album-key]') || [])]
+            .map(trigger => {
+              const rect = trigger.getBoundingClientRect();
+              return {
+                kind: trigger.matches('.album-card__artbox-trigger') ? 'artbox' : 'title',
+                top: rect.top,
+                bottom: rect.bottom,
+                height: rect.height,
+                offsetInCard: cardRect ? rect.top - cardRect.top : null,
+                offsetInScroller: scrollRect ? rect.top - scrollRect.top : null,
+              };
+            }),
           contentTop: cardRect && scrollRect ? cardRect.top - scrollRect.top + scroller.scrollTop : null,
           rowTop: rowRect?.top, rowHeight: rowRect?.height,
           sectionTop: section?.getBoundingClientRect().top,

@@ -1,4 +1,4 @@
-// Isolated component inputs, actual Loose consumer/NativePlaytables/React owner.
+// Isolated component inputs, actual Loose consumer/NativePlaytables/native owner.
 // These fixtures do not claim production navigation or Postgres authority.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -6,15 +6,12 @@ const {createRequire} = require('node:module');
 const root = process.env.ALBUM_RESPONSIVE_REPOSITORY_ROOT || path.resolve(__dirname, '../..');
 const fromRoot = createRequire(path.join(root, 'package.json'));
 const {test: base, expect} = fromRoot('@playwright/test');
-const bundle = fromRoot('esbuild').buildSync({stdin: {contents: `
-  import {mountPlaytableSelection} from './music_app/static/js/playtables/selection.jsx';
-  window.AlbumHavenPlaytableUI = {mount: mountPlaytableSelection};
-`, resolveDir: root, loader: 'jsx'}, bundle: true, write: false, platform: 'browser', format: 'iife'}).outputFiles[0].text;
+const {nativeDelivery}=require('./albumPlaytableNativeDelivery.cjs');
 
 const test = base.extend({
   loose: async ({page}, use) => {
     const errors = []; page.on('pageerror', error => errors.push(String(error)));
-    await use({
+    try {await use({
       async mount(width = 390, {choiceAvailable = true, canonicalShell = false, livePlayback = false} = {}) {
         await page.setViewportSize({width, height: 844});
         // A supplied static shell state tests CSS containment only. It neither
@@ -23,7 +20,8 @@ const test = base.extend({
         const body = canonicalShell
           ? `<div class="shell-layout" id="app-shell"><main class="shell-main-surface has-mobile-page"><div class="mobile-page-outlet">${modal}</div></main></div>`
           : '<main id="non-album-modal"><div id="table-host"></div></main>';
-        await page.setContent(`<!doctype html><html><head></head><body>${body}</body></html>`);
+        await page.route('https://albumhaven.test/**',nativeDelivery(root,`<!doctype html><html><head></head><body>${body}</body></html>`,['albumPlaytableNativeEntry.mjs']));
+        await page.goto('https://albumhaven.test/');
         await page.evaluate(({available, livePlayback}) => {
           window.fixtureScope = 'scope-A';
           window.fixtureCalls = {choices: [], closed: 0, played: 0, queueReads: 0, preferenceCalls: 0};
@@ -70,7 +68,7 @@ const test = base.extend({
         const styles = new Set(['button-component.css', ...[...template.matchAll(/css\/([a-zA-Z0-9_\/-]+\.css)/g)].map(match => match[1])]);
         for (const file of styles) await page.addStyleTag({content: fs.readFileSync(path.join(root, 'music_app/static/css', file), 'utf8')});
         await page.addStyleTag({content: 'body{margin:0;height:auto;overflow:auto}main{width:100%;min-width:0}'});
-        await page.addScriptTag({content: bundle});
+        await page.evaluate(()=>import('/__album_playtable_fixture__/albumPlaytableNativeEntry.mjs').then(()=>undefined));
         await page.evaluate(() => {
           window.fixtureHost = document.querySelector('#table-host');
           window.renderLooseFixture = () => {
@@ -132,9 +130,10 @@ const test = base.extend({
           bubbles: true, pointerType: 'touch', pointerId: 1, isPrimary: true, button: 0, clientX: 40, clientY: 20});
       },
       async waitForPress() {await page.waitForTimeout(650);},
-    });
-    await page.evaluate(() => {if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('loose-tracks');});
-    expect(errors).toEqual([]);
+    });} finally {
+      try {if (!page.isClosed()) await page.evaluate(() => {if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('loose-tracks');});}
+      finally {expect(errors).toEqual([]);}
+    }
   },
 });
 

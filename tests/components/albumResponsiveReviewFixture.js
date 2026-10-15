@@ -1,23 +1,29 @@
-// Additive review regressions using the real native owner and React mount.
+// Additive review regressions using the real native owner and native selection mount.
 const fs = require('node:fs');
 const path = require('node:path');
 const {createRequire} = require('node:module');
 const root = process.env.ALBUM_RESPONSIVE_REPOSITORY_ROOT || path.resolve(__dirname, '../..');
 const fromRoot = createRequire(path.join(root, 'package.json'));
 const {test, expect} = fromRoot('@playwright/test');
-const bundle = fromRoot('esbuild').buildSync({stdin: {contents: `
-  import {mountPlaytableSelection} from './music_app/static/js/playtables/selection.jsx';
-  window.AlbumHavenPlaytableUI = {mount: mountPlaytableSelection};
-`, resolveDir: root, loader: 'jsx'}, bundle: true, write: false, platform: 'browser', format: 'iife'}).outputFiles[0].text;
+const {nativeDelivery}=require('./albumPlaytableNativeDelivery.cjs');
 const read = file => fs.readFileSync(path.join(root, 'music_app/static/js', file), 'utf8');
+const pageErrors = new WeakMap();
+test.afterEach(async ({page}) => {
+  try {if (!page.isClosed()) await page.evaluate(() => {
+    try {window.mount?.dispose?.();}
+    finally {if (typeof NativePlaytables !== 'undefined') NativePlaytables.retire('album-tracks');}
+  });}
+  finally {expect(pageErrors.get(page) || []).toEqual([]);}
+});
 async function setup(page) {
-  const errors = []; page.on('pageerror', error => errors.push(String(error)));
+  const errors = []; pageErrors.set(page, errors); page.on('pageerror', error => errors.push(String(error)));
   await page.setViewportSize({width: 390, height: 844});
-  await page.setContent('<!doctype html><html><body><main><div id="track-modal"><div id="tracks"></div></div></main></body></html>');
+  await page.route('https://albumhaven.test/**',nativeDelivery(root,'<!doctype html><html><body><main><div id="track-modal"><div id="tracks"></div></div></main></body></html>',['albumPlaytableNativeEntry.mjs']));
+  await page.goto('https://albumhaven.test/');
   for (const file of ['button-component.js', 'runtime/markup-format-helpers.js', 'runtime/compact-data-table.js', 'runtime/album-track-table.js']) await page.addScriptTag({content: read(file)});
   for (const file of ['button-component.css', 'runtime/compact-data-table.css', 'runtime/album-track-table.css']) await page.addStyleTag({content: fs.readFileSync(path.join(root, 'music_app/static/css', file), 'utf8')});
   await page.addStyleTag({content: 'body{margin:0;font:14px Arial}main{width:100%;min-width:0}*{box-sizing:border-box}'});
-  await page.addScriptTag({content: bundle});
+  await page.evaluate(()=>import('/__album_playtable_fixture__/albumPlaytableNativeEntry.mjs').then(()=>undefined));
   return errors;
 }
 

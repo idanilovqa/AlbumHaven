@@ -7,9 +7,17 @@ const wire = row => ({item_ref: row.item_ref ?? null, album_ref: row.album_ref,
 const busyMutation = value => value?.refreshing === true || ['loading', 'uncertain'].includes(value?.status);
 const ITEM_ACTION = 'library.album_tops.items.manage';
 
-export function createAlbumTopDraft({controller, providers = {}}) {
+// Add follows its own server projection; metadata/remove/reorder are independent.
+export function albumTopAddAllowed(state) {
+  const source = state?.detail?.data;
+  return Boolean(source) && (!Object.hasOwn(source, 'type') || source.type === 'manual')
+    && (!Object.hasOwn(source, 'source_locked') || source.source_locked === false)
+    && albumTopActionAllowed(state, 'add');
+}
+
+export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'}) {
   const parent = controller.getSnapshot(), source = parent.selectedTopRef ? parent.detail.data : null;
-  const editing = Boolean(source), scopeKey = parent.scopeKey, topRef = source?.top_ref || null;
+  const adding = mode === 'add', editing = Boolean(source), scopeKey = parent.scopeKey, topRef = source?.top_ref || null;
   const bindings = new Map();
   for (const item of source?.edit_draft?.items || []) {
     const ref = item.item_ref;
@@ -18,34 +26,45 @@ export function createAlbumTopDraft({controller, providers = {}}) {
   const initialItems = source?.items?.map(row => ({...copy(row), ...copy(bindings.get(row.item_ref) || {})})) || [];
   const baseline = {title: source?.title || '', description: source?.description || '', items: initialItems.map(wire)};
   let state = {scopeKey, topRef, revision: source?.revision || null, title: baseline.title, description: baseline.description,
-    items: copy(initialItems), query: '', tab: editing ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
+    items: adding ? [] : copy(initialItems), ...(adding ? {capacity: Math.max(0, 5000 - initialItems.length), submittedRequestKey: null} : {}), query: '', tab: editing && !adding ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
     busy: false, stale: false, denied: false, dirty: false, error: null};
   const listeners = new Set(), requests = new Set(), cursors = new Set();
   let disposed = false, retired = false, sequence = 0, searchAbort = null, working = false, results = [];
   const supported = data => !data || (!Object.hasOwn(data, 'type') || data.type === 'manual')
     && (!Object.hasOwn(data, 'source_locked') || data.source_locked === false);
   const metadataAllowed = current => supported(source) && supported(editing ? current.detail.data : null)
-    && albumTopActionAllowed(current, editing ? 'save' : 'create', topRef);
-  const membersAllowed = current => metadataAllowed(current) && (!editing || Boolean(source.edit_draft)
+    && (adding ? editing && albumTopAddAllowed(current) : albumTopActionAllowed(current, editing ? 'save' : 'create', topRef));
+  const membersAllowed = current => metadataAllowed(current) && (adding || !editing || Boolean(source.edit_draft)
     && current.detail.data?.allowed_actions?.[ITEM_ACTION] === true
     && ['add', 'remove', 'reorder'].every(action => albumTopActionAllowed(current, action, topRef)));
   const emit = patch => {
     state = {...state, ...patch};
-    state.dirty = state.title !== baseline.title || state.description !== baseline.description || !equal(state.items.map(wire), baseline.items);
+    state.dirty = adding ? state.items.length > 0 : state.title !== baseline.title || state.description !== baseline.description || !equal(state.items.map(wire), baseline.items);
     for (const fn of [...listeners]) fn();
   };
   const abortAll = () => {sequence++; for (const request of requests) request.abort(); requests.clear();};
   let memberAuthority = membersAllowed(parent);
   function refresh() {
-    if (disposed || retired) return false;
+    if (disposed || retired && !adding) return false;
     const current = controller.getSnapshot();
     if (current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef
       || current.directory.status === 'denied' || current.detail.status === 'denied') {
-      retired = true; abortAll(); results = []; emit({denied: true, busy: false, search: {status: 'denied', items: [], next_cursor: null}}); return false;
+      if (retired && state.denied) return false;
+      retired = true; abortAll(); results = []; emit({denied: true, busy: false, ...(adding ? {title: '', description: '', items: [], query: '', submittedRequestKey: null} : {}), search: {status: 'denied', items: [], next_cursor: null}}); return false;
     }
+    if (retired) return false;
+    if (adding && state.submittedRequestKey && current.mutation.command?.request_key === state.submittedRequestKey
+      && ['error', 'denied'].includes(current.mutation.status)) emit({submittedRequestKey: null});
     const stale = editing && current.detail.data?.revision !== state.revision;
     const denied = !metadataAllowed(current) && ['ready', 'empty'].includes(editing ? current.detail.status : current.directory.status);
     const busy = working || busyMutation(current.mutation);
+    // Add is a captured destination revision, not a reusable authoring session.
+    // Once authority/revision is lost, an ABA restoration cannot revive it.
+    if (adding && (stale || denied)) {
+      retired = true; abortAll(); results = []; cursors.clear();
+      emit({stale: Boolean(stale), denied, busy: false, query: '', ...(denied ? {title: '', description: '', items: [], submittedRequestKey: null} : {}),
+        search: {status: denied ? 'denied' : 'unavailable', items: [], next_cursor: null}}); return false;
+    }
     const canManageMembers = membersAllowed(current);
     if (memberAuthority && !canManageMembers) {
       sequence++; searchAbort?.abort(); results = []; cursors.clear();
@@ -62,7 +81,7 @@ export function createAlbumTopDraft({controller, providers = {}}) {
   const excluded = () => new Set([...baseline.items, ...state.items].map(row => row.album_ref));
   const visible = () => {const omit = excluded(); return results.filter(row => !row.album_ref || !omit.has(row.album_ref));};
   const deny = error => {
-    if ([401, 403].includes(error?.status)) {controller.observeDenial?.(scopeKey, error); retired = true; abortAll(); emit({denied: true, error, search: {status: 'denied', items: [], next_cursor: null}});}
+    if ([401, 403].includes(error?.status)) {controller.observeDenial?.(scopeKey, error); retired = true; abortAll(); if (adding) results = []; emit({denied: true, error, ...(adding ? {busy: false, title: '', description: '', items: [], query: '', submittedRequestKey: null} : {}), search: {status: 'denied', items: [], next_cursor: null}});}
     else emit({error});
   };
   async function search(query, cursor = null) {
@@ -95,7 +114,7 @@ export function createAlbumTopDraft({controller, providers = {}}) {
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);}, refresh,
     canEdit: () => allowed(), canEditMembership: () => allowed(true),
     edit(patch) {
-      if (!allowed()) return false;
+      if (adding || !allowed()) return false;
       const changes = {};
       for (const [key, maximum] of [['title', 100], ['description', 200]]) {
         if (Object.hasOwn(patch, key)) {if (typeof patch[key] !== 'string' || patch[key].length > maximum || patch[key].includes('\0')) return false; changes[key] = patch[key];}
@@ -112,7 +131,7 @@ export function createAlbumTopDraft({controller, providers = {}}) {
     loadMore() {return state.query.trim() && state.search.next_cursor && state.search.status !== 'loading' ? search(state.query.trim(), state.search.next_cursor) : Promise.resolve(false);},
     async select(row) {
       if (!allowed(true) || typeof providers.admitAlbum !== 'function' || !results.some(item => item.local_album_id === row.local_album_id)
-        || !Number.isSafeInteger(row.local_album_id) || row.local_album_id < 1 || state.items.length >= 5000) return false;
+        || !Number.isSafeInteger(row.local_album_id) || row.local_album_id < 1 || state.items.length >= (state.capacity ?? 5000)) return false;
       const candidate = results.find(item => item.local_album_id === row.local_album_id), abort = begin();
       working = true; emit({busy: true, error: null});
       try {
@@ -136,14 +155,14 @@ export function createAlbumTopDraft({controller, providers = {}}) {
       emit({items, error: null}); return true;
     },
     async submit() {
-      if (!allowed() || !state.title.trim() || editing && !state.dirty) return false;
+      if (!allowed() || (adding ? !state.items.length : !state.title.trim() || editing && !state.dirty)) return false;
       const items = state.items.map(wire), membershipChanged = !equal(items, baseline.items);
       if (membershipChanged && !membersAllowed(controller.getSnapshot())) return false;
-      const payload = {title: state.title, description: state.description,
+      const payload = adding ? {album_refs: state.items.map(row => row.album_ref)} : {title: state.title, description: state.description,
         ...(editing ? membershipChanged ? {items} : {} : {album_refs: state.items.map(row => row.album_ref)})};
       const abort = begin(); working = true; emit({busy: true, error: null});
       try {
-        if (editing && source.edit_draft?.publication_preview_required) {
+        if (!adding && editing && source.edit_draft?.publication_preview_required) {
           if (typeof providers.preview !== 'function' || items.some(row => !row.selected_source_ref)) {
             throw new Error('This published Top needs an explicitly selected metadata source for every album. Remove the newly added albums to save these edits; publication source selection is not available here yet. Your draft is preserved.');
           }
@@ -153,7 +172,20 @@ export function createAlbumTopDraft({controller, providers = {}}) {
         }
         if (disposed || retired || abort.signal.aborted || !refresh()
           || membershipChanged && !membersAllowed(controller.getSnapshot())) return false;
-        return await controller.mutate(editing ? 'save' : 'create', payload);
+        const beforeMutation = controller.getSnapshot().mutation;
+        const attempt = controller.mutate(adding ? 'add' : editing ? 'save' : 'create', payload);
+        if (adding) {
+          // mutate synchronously acquires its existing request owner before
+          // invoking transport. Bind only this invocation's exact add command;
+          // another shared-controller write cannot close an unsent selection.
+          const mutation = controller.getSnapshot().mutation, command = mutation.command;
+          if (mutation !== beforeMutation && ['loading', 'uncertain'].includes(mutation.status)
+            && mutation.action === 'add' && command?.top_ref === topRef
+            && command.revision === state.revision && equal(command.album_refs, payload.album_refs)) {
+            emit({submittedRequestKey: command.request_key});
+          }
+        }
+        return await attempt;
       } catch (error) {if (!disposed && !retired && !abort.signal.aborted) deny(error); return false;}
       finally {requests.delete(abort); working = false; if (!disposed && !retired) refresh();}
     },

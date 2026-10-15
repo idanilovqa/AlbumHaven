@@ -52,7 +52,7 @@ export function mountAlbumPicker(host, runtime, {draft, value, disabled}) {
   function update(next) {
     if (disposed) return; latest = next; const {value, disabled} = latest;
     search.update(searchProps()); tabs.update(tabsProps());
-    const selected = value.tab === 'selected', albums = selected ? value.items : value.search.items, atCapacity = value.items.length >= 5000;
+    const selected = value.tab === 'selected', albums = selected ? value.items : value.search.items, atCapacity = value.items.length >= (value.capacity ?? 5000);
     capacity.hidden = !atCapacity; scroll.setAttribute('aria-labelledby', `${id}-tabs-${value.tab}`); live.textContent = `${value.items.length} albums selected`;
     const wanted = new Set();
     albums.forEach((row, index) => {
@@ -64,7 +64,7 @@ export function mountAlbumPicker(host, runtime, {draft, value, disabled}) {
           root.setAttribute('data-album-draft-key', row.album_ref); const actions = element(root, 'div', 'playlists__actions');
           item.move = acquire(mountButton(element(actions), runtime, {label: 'Move'})); item.remove = acquire(mountButton(element(actions), runtime, {label: 'Remove'})); item.controls.push(item.move, item.remove);
         }
-        item.click = event => {if (!latest.disabled && !item.selected && latest.value.items.length < 5000 && event.target.closest('[data-gallery-card-intent="select"]')) {remember(event, '[data-gallery-card-intent="select"]'); draft.select(item.row);}};
+        item.click = event => {if (!latest.disabled && !item.selected && latest.value.items.length < (latest.value.capacity ?? 5000) && event.target.closest('[data-gallery-card-intent="select"]')) {remember(event, '[data-gallery-card-intent="select"]'); draft.select(item.row);}};
         card.addEventListener('click', item.click); rows.set(key, item);
       }
       item.row = row;
@@ -204,5 +204,80 @@ export function openAlbumTopBuilder({runtime, ...options}) {
   const dialogOptions = () => ({title: options.existing ? 'Edit Album Top' : 'Create Album Top', pageId: options.existing ? 'album-top-edit' : 'album-top-create',
     returnFocus: options.returnFocus, showCloseButton: true, dismissDisabled: busy, beforeDismiss: () => editor?.beforeDismiss() ?? false});
   dialog = openNativeDialog(runtime, dialogOptions(), {fallbackHost: options.fallbackHost, mount(host, close) {editor = mountEditor(host, runtime, {...options, onAccess: access => {busy = access.busy; dialog?.update(dialogOptions());}}, false, close); return editor;}, onClose: options.onClose});
+  return {update(next) {editor?.update(next); dialog.update(dialogOptions());}, dispose() {dialog.dispose();}};
+}
+
+// AT-R10: the same picker in an add-only native dialog. No metadata editor,
+// second membership store, fake capability, or navigation owner is introduced.
+export function openAddAlbumTop({runtime, ...options}) {
+  let editor = null, dialog = null;
+  const dialogOptions = () => ({title: 'Add albums', pageId: 'album-top-add', showCloseButton: true,
+    returnFocus: options.returnFocus, beforeDismiss: () => editor?.beforeDismiss() ?? false,
+    dismissDisabled: editor?.busy() ?? false});
+  dialog = openNativeDialog(runtime, dialogOptions(), {fallbackHost: options.fallbackHost,
+    mount(host, close) {
+      let disposed = false, state = options.state, closingKey = null, closeError = false, rendering = false, queued = false;
+      const {controller, providers = {}} = options, source = state.detail.data, initialMutation = state.mutation;
+      const draft = createAlbumTopDraft({controller, providers, mode: 'add'}), acquired = [];
+      let form, unsubscribe;
+      const own = owner => {acquired.push(owner); return owner;};
+      const busy = () => draft.getSnapshot().busy || state.mutation.refreshing === true || ['loading', 'uncertain'].includes(state.mutation.status);
+      const dispose = () => {if (disposed) return; disposed = true; unsubscribe?.(); draft.dispose();
+        form?.removeEventListener('submit', submit); let failure;
+        for (const owner of acquired.reverse()) {try {owner.dispose();} catch (error) {failure ??= error;}}
+        form?.remove(); if (failure) throw failure;};
+      const submit = event => {event.preventDefault(); if (!disposed && pickerAvailable(runtime, providers)) draft.submit();};
+      try {
+        form = element(host, 'form', 'album-top-builder album-top-add'); form.setAttribute('aria-label', 'Add albums');
+        const subtitle = element(form, 'p', 'playlists__note', source.title);
+        const pickerHost = element(form), statusHost = element(form), noticeHost = element(form), actions = element(form, 'div', 'playlists__actions');
+        const available = pickerAvailable(runtime, providers);
+        const picker = available ? own(mountAlbumPicker(pickerHost, runtime, {draft, value: draft.getSnapshot(), disabled: false})) : null;
+        const notice = own(mountMutationNotice(noticeHost, runtime, {controller, value: state.mutation}));
+        const add = own(mountButton(element(actions), runtime, {label: 'Add albums', type: 'submit', variant: 'primary'}));
+        const cancel = own(mountButton(element(actions), runtime, {label: 'Cancel', onClick: () => close()}));
+        function render() {
+          if (disposed) return; queued = true; if (rendering) return; rendering = true;
+          try {while (queued && !disposed) {
+            queued = false; const value = draft.getSnapshot(), mutation = state.mutation, locked = busy();
+            const invalid = value.stale || value.denied || state.scopeKey !== value.scopeKey || state.selectedTopRef !== value.topRef;
+            const acknowledged = mutation !== initialMutation && mutation.status === 'ready' && mutation.action === 'add'
+              && value.submittedRequestKey && mutation.command?.request_key === value.submittedRequestKey
+              && mutation.command?.top_ref === source.top_ref && mutation.command?.revision === source.revision
+              && mutation.data?.top_ref === source.top_ref && mutation.data?.request_key === mutation.command?.request_key;
+            subtitle.textContent = value.denied ? '' : source.title;
+            form.setAttribute('aria-busy', String(locked));
+            picker?.update({value, disabled: locked || invalid || acknowledged});
+            add.update({label: 'Add albums', type: 'submit', variant: 'primary', disabled: !available || locked || invalid || acknowledged || !value.items.length});
+            cancel.update({label: 'Cancel', disabled: locked, onClick: () => close()});
+            notice.update({controller, value: mutation});
+            const message = closeError ? 'The albums were added, but this form could not return to its parent. Close it to continue.'
+              : value.denied ? 'This Album Top is no longer available.'
+                : value.stale ? 'This Top changed. Close and reopen Add albums before submitting.'
+                  : !available ? 'Album selection is unavailable from this provider.'
+                    : value.error ? albumTopDraftErrorMessage(value.error) || 'These albums could not be prepared. Your selection is preserved.' : '';
+            statusHost.innerHTML = message ? runtime.alertHtml({severity: closeError || value.error ? 'error' : 'info', role: closeError || value.error ? 'alert' : 'status', message}) : '';
+            dialog?.update(dialogOptions());
+            if (acknowledged && !locked && !mutation.refreshing && closingKey !== mutation.command.request_key) {
+              closingKey = mutation.command.request_key;
+              Promise.resolve(close({force: true, restoreFocus: true})).then(result => {if (result === false && !disposed) {closeError = true; render();}},
+                () => {if (!disposed) {closeError = true; render();}});
+            }
+          }} finally {rendering = false;}
+        }
+        unsubscribe = draft.subscribe(render); form.addEventListener('submit', submit); render();
+        editor = {update(next) {if (!disposed) {state = next.state; render();}}, busy,
+          async beforeDismiss() {
+            if (disposed || busy()) return false;
+            if (draft.getSnapshot().dirty && !closingKey) {
+              const accepted = await runtime.confirm('Discard these selected albums?', {title: 'Discard Album Top changes', acceptLabel: 'Discard', danger: true});
+              return accepted === true && !disposed && !busy();
+            }
+            return true;
+          },
+          dispose};
+        return editor;
+      } catch (error) {dispose(); throw error;}
+    }, onClose: options.onClose});
   return {update(next) {editor?.update(next); dialog.update(dialogOptions());}, dispose() {dialog.dispose();}};
 }

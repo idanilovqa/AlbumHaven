@@ -4,7 +4,8 @@ import {mountSharedHeader} from '../home-friends/shared-header.mjs';
 import {albumTopActionAllowed} from './model.mjs';
 import {isManualProgress, isTopActivity} from './progress.mjs';
 import {openShareAlbumTop} from './sharing.mjs';
-import {openAlbumTopBuilder, mountInlineAlbumTopEdit} from './builder.mjs';
+import {openAlbumTopBuilder, openAddAlbumTop, mountInlineAlbumTopEdit} from './builder.mjs';
+import {albumTopAddAllowed} from './draft.mjs';
 import {mountMutationNotice} from './mutation-notice.mjs';
 function node(parent, tag = 'div', className = '') {const result = parent.ownerDocument.createElement(tag); result.className = className; parent.append(result); return result;}
 export function mountAlbumTopsView(host, runtime, props) {
@@ -19,7 +20,7 @@ export function mountAlbumTopsView(host, runtime, props) {
   function retireDialog() {const previous = dialog; dialog = null; dialogToken = null; previous?.dispose();}
   function returnHeaderFocus(preferred) {return [preferred, headerHost.querySelector('[data-header-tools]'), headerHost.querySelector('[data-shared-header]')].find(item => item?.isConnected && !item.disabled && item.getAttribute('aria-disabled') !== 'true' && !item.closest('[hidden],[inert],[aria-hidden="true"]') && item.getClientRects().length > 0);}
   function closeDialog(options) {dialogIntent = null; retireDialog(); if (inline) {const previousInline = inline; inline = null; previousInline.dispose();} restoreFocus ||= options?.restoreFocus === true; update(latest);}
-  function show(kind, top, opener) {if (disposed) return; dialogIntent = {kind, top, topRef: top?.top_ref || latest.state.selectedTopRef, opener}; update(latest);}
+  function show(kind, top, opener) {if (disposed) return; dialogIntent = {kind, top, topRef: top?.top_ref || latest.state.selectedTopRef, opener, providers: latest.providers, scopeKey: latest.state.scopeKey}; update(latest);}
   function createHeader(parent, edit = null) {
     const target = parent === headerHost ? parent : node(parent);
     const owner = mountSharedHeader(target, runtime, {id: 'album-tops', tabIndex: -1, ariaLabel: 'Album Tops header', className: 'album-tops__header'});
@@ -47,6 +48,7 @@ export function mountAlbumTopsView(host, runtime, props) {
           control('activity', active ? 'Deactivate Album Top' : 'Activate Album Top', {icon: active ? 'pause' : 'bolt', disabled: busy,
             onClick: () => {if (guarded('set_activity')) controller.mutate('set_activity', {active: !active});}});
         }
+        if (selected && albumTopAddAllowed(state)) control('add', 'Add albums', {icon: 'add', disabled: busy, onClick: event => {if (guarded('add') && albumTopAddAllowed(controller.getSnapshot())) show('add', detail, event.target.closest('button'));}});
         if (selected && albumTopActionAllowed(state, 'save')) control('edit', 'Edit Album Top', {icon: 'edit', disabled: busy, onClick: event => {if (guarded('save')) show('edit', detail, event.target.closest('button'));}});
         if (selected && albumTopActionAllowed(state, 'view_sharing')) control('share', 'Share', {icon: 'share', disabled: busy, onClick: event => {if (guarded('view_sharing')) show('share', detail, event.target.closest('button'));}});
         if (selected && albumTopActionAllowed(state, 'copy')) control('copy', 'Save a copy', {icon: 'save', disabled: busy, onClick: () => {if (guarded('copy')) controller.mutate('copy');}});
@@ -61,7 +63,7 @@ export function mountAlbumTopsView(host, runtime, props) {
   function render(next) {
     if (disposed) return; latest = next; const {state} = latest, selected = state.selectedTopRef, detail = state.detail.data;
     const denied = state.directory.status === 'denied' || state.detail.status === 'denied';
-    if (dialogIntent && (denied || dialogIntent.topRef && dialogIntent.topRef !== selected)) {dialogIntent = null; retireDialog(); inline?.dispose(); inline = null;}
+    if (dialogIntent && (dialogIntent.kind === 'add' && (dialogIntent.providers !== latest.providers || dialogIntent.scopeKey !== state.scopeKey) || denied || dialogIntent.topRef && dialogIntent.topRef !== selected)) {dialogIntent = null; retireDialog(); inline?.dispose(); inline = null;}
     const inlineWanted = dialogIntent?.kind === 'edit' && dialogIntent.top?.edit_draft && !denied;
     normal.hidden = Boolean(inlineWanted); editHost.hidden = !inlineWanted;
     if (inlineWanted) {
@@ -114,10 +116,10 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (dialogToken && dialogToken.key !== key) retireDialog();
     if (dialogIntent && !dialogToken) {
       const intent = dialogIntent, opener = intent.opener, token = {key}; dialogToken = token;
-      const options = {runtime, controller, state, providers, existing: intent.top || null, fallbackHost: failureHost,
+      const options = {runtime, controller, state, providers: intent.kind === 'add' ? intent.providers : providers, existing: intent.top || null, fallbackHost: failureHost,
         onClose: options => {if (!disposed && dialogToken === token) closeDialog(options);},
         onFormSaved: latest.onFormSaved, returnFocus: () => returnHeaderFocus(opener)};
-      const opened = intent.kind === 'share' ? openShareAlbumTop(options) : openAlbumTopBuilder(options);
+      const opened = intent.kind === 'share' ? openShareAlbumTop(options) : intent.kind === 'add' ? openAddAlbumTop(options) : openAlbumTopBuilder(options);
       if (!disposed && dialogToken === token) dialog = opened; else opened?.dispose();
     } else dialog?.update({state});
   }

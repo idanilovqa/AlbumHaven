@@ -1,7 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {load, id, ALBUM, ACTIONS, labels, fixture, measure, navigation, drain, nativeEnvironment} = require('./album-tops-native-fixtures/shared-header-driver.cjs');
+const {load, id, ALBUM, ACTIONS: EXISTING_ACTIONS, labels, fixture, measure, navigation, drain, nativeEnvironment} = require('./album-tops-native-fixtures/shared-header-driver.cjs');
+
+// Add is independently authorized and precedes the retained management actions.
+const ACTIONS = ['Add albums', ...EXISTING_ACTIONS];
 
 test('directory delegates its one Create action to the shared Tools capsule', async t => {
   const h = await fixture(t, {selected: false}), header = h.header();
@@ -12,7 +15,7 @@ test('directory delegates its one Create action to the shared Tools capsule', as
   assert.equal(header.querySelectorAll('[data-header-tools]').length, 1);
 });
 
-test('detail delegates original ordered actions once and Back remains leading', async t => {
+test('detail delegates current ordered actions once and Back remains leading', async t => {
   const h = await fixture(t), header = h.header(), capsule = header.querySelector('[data-header-action-capsule]');
   assert.deepEqual(labels(header.querySelector('.home-header__leading')), ['Back']);
   assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), ACTIONS);
@@ -24,15 +27,29 @@ test('detail delegates original ordered actions once and Back remains leading', 
 
 test('shared capsule retains strict current action projections and busy state', async t => {
   for (const grants of [{can_edit: false, can_view_sharing: false, can_copy: false, can_delete: false}, {can_edit: 'true', can_view_sharing: 1, can_copy: 'true', can_delete: 1}]) {
-    const h = await fixture(t, {grants}); assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), []);
+    const h = await fixture(t, {grants}); assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), ['Add albums']);
   }
   for (const mutation of [{status: 'loading'}, {status: 'uncertain'}, {status: 'idle', refreshing: true}]) {
     const h = await fixture(t); h.replace({...h.state(), mutation});
     const actions = h.header().querySelector('.home-header__primary-actions').querySelectorAll('button');
-    assert.equal(actions.length, 4); for (const action of actions) assert.equal(action.disabled, true);
+    assert.equal(actions.length, ACTIONS.length); for (const action of actions) assert.equal(action.disabled, true);
   }
   const h = await fixture(t); h.replace({...h.state(), detail: {status: 'denied', data: null}});
   assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), []);
+});
+
+test('Add projection is independent, exact and own while existing header actions remain ordered', async t => {
+  for (const can_add of [false, undefined, 'true', 1]) {
+    const h = await fixture(t, {grants: {can_add}});
+    assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), EXISTING_ACTIONS);
+    assert.equal(h.header().querySelector('[aria-label="Add albums"]'), null);
+  }
+  const h = await fixture(t), previous = h.state(), allowed_actions = {...previous.detail.data.allowed_actions};
+  delete allowed_actions.can_add; Object.setPrototypeOf(allowed_actions, {can_add: true});
+  h.replace({...previous, detail: {...previous.detail, data: {...previous.detail.data, allowed_actions}}});
+  assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), EXISTING_ACTIONS);
+  const denied = await fixture(t, {grants: {can_add: false, can_edit: false, can_view_sharing: false, can_copy: false, can_delete: false}});
+  assert.deepEqual(labels(denied.header().querySelector('.home-header__primary-actions')), []);
 });
 
 test('retired capsule handlers cannot act on another detail object or revoked grants', async t => {

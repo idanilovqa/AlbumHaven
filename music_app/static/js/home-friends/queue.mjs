@@ -57,14 +57,15 @@ export function createQueueDetails(initial, onChange) {
 }
 export function mountQueueHeader(host, runtime, initial) {
   let props = initial, disposed = false, generation = 0, toggle, clear;
-  host.classList.add('gallery-bar__actions'); const toggleHost = host.ownerDocument.createElement('span'), clearHost = host.ownerDocument.createElement('span'), error = host.ownerDocument.createElement('span'); error.setAttribute('role', 'alert'); host.append(toggleHost, clearHost, error);
+  host.classList.add('gallery-bar__actions'); const toggleHost = host.ownerDocument.createElement('span'), clearHost = host.ownerDocument.createElement('span'), error = host.ownerDocument.createElement('span'); error.setAttribute('role', 'alert'); error.hidden = true; host.append(toggleHost, clearHost, error);
   function dispose() {
     if (disposed) return; disposed = true; generation++;
     let failure; for (const cleanup of [() => toggle?.dispose(), () => clear?.dispose(), () => host.replaceChildren()]) {try {cleanup();} catch (error) {failure ??= error;}} if (failure) throw failure;
   }
-  function safe(action) {if (disposed) return; const owner = generation; try {Promise.resolve(action()).catch(() => {if (!disposed && generation === owner) error.textContent = 'Queue could not be changed.';});} catch {if (!disposed && generation === owner) error.textContent = 'Queue could not be changed.';}}
+  function showError(message) {if (!disposed) {error.textContent = message; error.hidden = !message;}}
+  function safe(action) {if (disposed) return; const owner = generation; try {Promise.resolve(action()).catch(() => {if (!disposed && generation === owner) showError('Queue could not be changed.');});} catch {if (!disposed && generation === owner) showError('Queue could not be changed.');}}
   function update(next) {
-    if (disposed) return; if (props.api !== next.api) {generation++; error.textContent = '';} props = next; const {api, value} = props;
+    if (disposed) return; if (props.api !== next.api) {generation++; showError('');} props = next; const {api, value} = props;
     try {
       toggle.update({label: value.enabled ? 'Deactivate queue' : 'Activate queue', icon: value.enabled ? 'pause' : 'play', disabled: !api, onClick: () => safe(() => props.api?.setEnabled(!props.value.enabled))});
       if (disposed) return;
@@ -84,13 +85,13 @@ export function mountQueuePanel(host, runtime, initial) {
     disposed = false, generation = 0, drag, structure, syncing = false, rendering = false, pendingProps, updateRevision = 0;
   const node = (tag, className) => {const element = host.ownerDocument.createElement(tag); if (className) element.className = className; host.append(element); return element;};
   host.className = 'album-track-table album-track-table--collection';
-  const actions = node('div'), columnHost = node('span'), error = node('p'), inactive = node('p'), table = node('div'); error.setAttribute('role', 'alert'); inactive.setAttribute('role', 'status'); inactive.textContent = 'Queue is inactive. Your queued tracks are kept.';
+  const actions = node('div'), columnHost = node('span'), error = node('p'), inactive = node('p'), table = node('div'); error.setAttribute('role', 'alert'); error.hidden = true; inactive.setAttribute('role', 'status'); inactive.textContent = 'Queue is inactive. Your queued tracks are kept.';
   const acquired = new Set(), retired = Symbol('retired queue');
   const check = () => {if (disposed) throw retired;};
   function acquire(owner) {if (disposed) {try {owner?.dispose();} finally {throw retired;}} acquired.add(owner); return owner;}
   function release(owner) {if (owner && acquired.delete(owner)) owner.dispose();}
   const current = owner => !disposed && (owner === undefined || generation === owner);
-  const showError = message => {if (!disposed) error.textContent = message;};
+  const showError = message => {if (!disposed) {error.textContent = message; error.hidden = !message;}};
   const safe = action => {if (disposed) return; const owner = generation; try {Promise.resolve(action()).catch(() => {if (current(owner)) showError('This Queue action is unavailable.');});} catch {if (current(owner)) showError('This Queue action is unavailable.');}};
   function paint() {
     if (disposed || !love || !props) return;
@@ -128,7 +129,7 @@ export function mountQueuePanel(host, runtime, initial) {
     let failure; const clean = callback => {try {callback();} catch (error) {failure ??= error;}};
     clean(() => refresh?.abort()); clean(() => play?.abort()); clean(() => previousMenu?.close({restoreFocus: false}));
     for (const owner of [...acquired].reverse()) clean(() => release(owner));
-    selection = presentation = columns = love = null; commands = new Map(); cached = snapshot = structure = null; error.textContent = '';
+    selection = presentation = columns = love = null; commands = new Map(); cached = snapshot = structure = null; error.textContent = ''; error.hidden = true;
     if (failure) throw failure;
   }
   function dispose() {

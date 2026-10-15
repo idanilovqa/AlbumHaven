@@ -261,6 +261,8 @@ gap: 8px;
 align-items: start;
 }
 .artist-subsection-label {
+  /* Match the virtual block height so mounting a divider does not move later rows. */
+  min-height: 26px;
   margin: 2px 0 -2px 28px;
   color: #d6c8ab;
   display: grid;

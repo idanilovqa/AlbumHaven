@@ -124,6 +124,166 @@ test('stale cursor restarts one bounded page without clearing mounted cards', as
   assert.equal(await first, true); assert.equal(f.state.view.artist_groups[0].artist, 'New'); assert.equal(f.state.view.artist_count, 1);
 });
 
+test('stale cursor recovery retains the mounted artist window instead of returning to the root', async () => {
+  const f = fixture();
+  f.scroll.scrollTop = 300;
+  f.state.view.artist_groups = [{ artist: 'Hamster Theater', albums: [{ key: 'public-execution' }] }];
+  f.state.view.gallery_page.anchor_artist = 'Earlier jump target';
+  f.context.fetch = (url, options) => new Promise(resolve => f.pending.push({ url, options, resolve }));
+  f.context.renderView = options => f.renders.push(options);
+  const request = f.context.loadNextRootGalleryPage();
+  f.pending[0].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.pending.length, 2);
+  const recoveryUrl = new URL(f.pending[1].url, 'https://localhost');
+  f.pending[1].resolve({
+    status: 200, ok: true,
+    json: async () => page(f.state.view.artist_groups, {
+      gallery_page: { revision: 'r2', has_more: false, next_cursor: null },
+    }),
+  });
+  assert.equal(await request, true);
+  assert.equal(recoveryUrl.searchParams.get('gallery_anchor_artist'), 'Hamster Theater');
+  assert.equal(recoveryUrl.searchParams.has('gallery_cursor'), false);
+});
+
+test('stale cursor recovery reloads the retained window before replacing mounted groups', async () => {
+  const f = fixture();
+  const groups = Array.from({ length: 75 }, (_, index) => ({
+    artist: `Retained ${index}`, albums: [{ key: `retained-${index}` }],
+  }));
+  f.state.view.artist_groups = groups;
+  f.scroll.scrollTop = 300;
+  f.context.fetch = (url, options) => new Promise(resolve => f.pending.push({ url, options, resolve }));
+  f.context.renderView = options => f.renders.push(options);
+  const request = f.context.loadNextRootGalleryPage();
+  f.pending[0].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
+  await new Promise(resolve => setImmediate(resolve));
+  f.pending[1].resolve({
+    status: 200, ok: true,
+    json: async () => page(groups.slice(0, 50), {
+      gallery_page: { revision: 'r2', has_more: true, next_cursor: 'fresh-50' },
+    }),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.pending.length, 3, 'recovery must cover the retained window, not just its first page');
+  assert.equal(f.state.view.artist_groups, groups, 'keep the existing window mounted until recovery is complete');
+  f.pending[2].resolve({
+    status: 200, ok: true,
+    json: async () => page(groups.slice(50), {
+      gallery_page: { revision: 'r2', has_more: false, next_cursor: null },
+    }),
+  });
+  assert.equal(await request, true);
+  assert.equal(f.state.view.artist_groups.length, 75);
+  assert.equal(f.state.view.artist_groups[74].artist, 'Retained 74');
+});
+
+test('stale cursor recovery survives deletion of the first retained artist', async () => {
+  const f = fixture();
+  f.scroll.scrollTop = 300;
+  const surviving = { artist: 'Survivor', albums: [{ key: 'surviving-release' }] };
+  f.state.view.artist_groups = [
+    { artist: 'Deleted artist', albums: [{ key: 'deleted-release' }] }, surviving,
+  ];
+  const requests = [];
+  f.context.renderView = options => f.renders.push(options);
+  f.context.fetch = async url => {
+    requests.push(url);
+    const params = new URL(url, 'https://localhost').searchParams;
+    if (params.has('gallery_cursor')) {
+      return { status: 409, ok: false, json: async () => ({ restart_required: true }) };
+    }
+    if (params.get('gallery_anchor_artist') === 'Deleted artist') {
+      return { status: 400, ok: false, json: async () => ({ error: 'Gallery artist anchor is unavailable.' }) };
+    }
+    return { status: 200, ok: true, json: async () => page([surviving], {
+      gallery_page: { revision: 'r2', has_more: false, next_cursor: null },
+    }) };
+  };
+  assert.equal(await f.context.loadNextRootGalleryPage(), true);
+  assert.equal(f.state.view.artist_groups[0].artist, 'Survivor');
+  assert.ok(requests.length <= 4, 'missing-anchor recovery must remain bounded');
+});
+
+test('stale cursor recovery retains trailing releases after insertions enlarge the window', async () => {
+  const f = fixture();
+  f.scroll.scrollTop = 300;
+  const retained = Array.from({ length: 75 }, (_, index) => ({
+    artist: `Retained ${index}`, albums: [{ key: `old-${index}` }],
+  }));
+  const inserted = Array.from({ length: 50 }, (_, index) => ({
+    artist: `Inserted ${index}`, albums: [{ key: `new-${index}` }],
+  }));
+  const refreshed = [retained[0], ...inserted, ...retained.slice(1)];
+  f.state.view.artist_groups = retained;
+  f.context.renderView = options => f.renders.push(options);
+  let requests = 0;
+  f.context.fetch = async url => {
+    requests += 1;
+    const cursor = new URL(url, 'https://localhost').searchParams.get('gallery_cursor');
+    if (cursor === 'page-1') {
+      return { status: 409, ok: false, json: async () => ({ restart_required: true }) };
+    }
+    const offset = cursor ? Number(cursor.slice('fresh-'.length)) : 0;
+    const hasMore = offset + 50 < refreshed.length;
+    return { status: 200, ok: true, json: async () => page(
+      refreshed.slice(offset, offset + 50),
+      { gallery_page: { revision: 'r2', has_more: hasMore, next_cursor: hasMore ? `fresh-${offset + 50}` : null } },
+    ) };
+  };
+  assert.equal(await f.context.loadNextRootGalleryPage(), true);
+  assert.ok(f.state.view.artist_groups.some(group => group.albums.some(album => album.key === 'old-74')),
+    'the retained trailing release must survive inserts before it');
+  assert.ok(requests <= 5, 'coverage recovery must remain bounded');
+});
+
+test('stale cursor recovery recognizes the trailing release after its rating changes', async () => {
+  const f = fixture();
+  f.scroll.scrollTop = 300;
+  f.state.view.artist_groups = [{ artist: 'Retained artist', albums: [{ key: 'tail', rating: 1 }] }];
+  // A render fingerprint changes with presentation metadata; identity does not.
+  f.context.getAlbumCardRenderKey = album => JSON.stringify([album.key, album.rating]);
+  f.context.getAlbumCardNodeIdentity = album => album.key;
+  f.context.renderView = options => f.renders.push(options);
+  let requests = 0;
+  f.context.fetch = async url => {
+    requests += 1;
+    if (new URL(url, 'https://localhost').searchParams.get('gallery_cursor') === 'page-1') {
+      return { status: 409, ok: false, json: async () => ({ restart_required: true }) };
+    }
+    return { status: 200, ok: true, json: async () => page([
+      { artist: 'Retained artist', albums: [{ key: 'tail', rating: 5 }] },
+    ], { gallery_page: { revision: 'r2', has_more: true, next_cursor: `fresh-${requests}` } }) };
+  };
+  assert.equal(await f.context.loadNextRootGalleryPage(), true);
+  assert.equal(requests, 2, 'a metadata edit must not force pagination past the retained release');
+  assert.equal(f.state.view.artist_groups[0].albums[0].rating, 5);
+});
+
+test('stale cursor recovery accepts a complete trailing artist after its final album is deleted', async () => {
+  const f = fixture();
+  f.scroll.scrollTop = 300;
+  f.state.view.artist_groups = [{
+    artist: 'Retained artist', albums: [{ key: 'survivor' }, { key: 'deleted-tail' }],
+  }];
+  f.context.renderView = options => f.renders.push(options);
+  let requests = 0;
+  f.context.fetch = async url => {
+    requests += 1;
+    if (new URL(url, 'https://localhost').searchParams.get('gallery_cursor') === 'page-1') {
+      return { status: 409, ok: false, json: async () => ({ restart_required: true }) };
+    }
+    return { status: 200, ok: true, json: async () => page([
+      { artist: 'Retained artist', albums: [{ key: 'survivor' }] },
+      { artist: 'Subsequent artist', albums: [{ key: 'subsequent' }] },
+    ], { gallery_page: { revision: 'r2', has_more: true, next_cursor: `fresh-${requests}` } }) };
+  };
+  assert.equal(await f.context.loadNextRootGalleryPage(), true);
+  assert.equal(requests, 2, 'complete anchored artist groups establish that the tail was removed');
+  assert.equal(f.state.view.artist_groups[0].albums[0].key, 'survivor');
+});
+
 test('stale cursor restarts when same-view background refresh advances view revision', async () => {
   const f = fixture();
   f.context.fetch = (url, options) => new Promise(resolve => f.pending.push({ url, options, resolve }));

@@ -591,9 +591,12 @@ class VirtualArtistGrid {
       return { scrollLeft, scrollTop };
     }
     const cardTriggers = Array.from(this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'));
-    const anchorCardTrigger = cardTriggers.find((element) => element.getBoundingClientRect().bottom >= scrollRect.top + 1) || cardTriggers[0] || null;
+    const anchorCardTrigger = cardTriggers.find((element) => (
+      (element.closest?.('.album-card') || element).getBoundingClientRect().bottom >= scrollRect.top + 1
+    )) || cardTriggers[0] || null;
     if (anchorCardTrigger instanceof HTMLElement) {
-      const anchorRect = anchorCardTrigger.getBoundingClientRect();
+      const anchorCard = anchorCardTrigger.closest?.('.album-card');
+      const anchorRect = (anchorCard || anchorCardTrigger).getBoundingClientRect();
       let albumName = '';
       let albumYear = '';
       try {
@@ -611,6 +614,7 @@ class VirtualArtistGrid {
         albumName,
         albumYear,
         triggerKind: anchorCardTrigger.matches?.('.album-card__artbox-trigger') ? 'artbox' : 'title',
+        anchorBox: anchorCard ? 'card' : 'trigger',
         sectionOccurrenceKey: this.getRenderedSectionOccurrenceKey(anchorCardTrigger, this.containerEl),
         offsetTop: anchorRect.top - scrollRect.top,
       };
@@ -688,7 +692,10 @@ class VirtualArtistGrid {
       const resolvedAnchorCardTrigger = anchorCardTrigger || renamedKeyTrigger || fallbackAlbumTrigger;
       if (resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
         const scrollRect = this.scrollEl.getBoundingClientRect();
-        const anchorRect = resolvedAnchorCardTrigger.getBoundingClientRect();
+        const anchorElement = anchor.anchorBox === 'card'
+          ? resolvedAnchorCardTrigger.closest?.('.album-card') || resolvedAnchorCardTrigger
+          : resolvedAnchorCardTrigger;
+        const anchorRect = anchorElement.getBoundingClientRect();
         const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
         this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
         return;
@@ -1051,7 +1058,17 @@ class VirtualArtistGrid {
             scrollTop: preservedAbsoluteScroll.scrollTop,
           };
         } else {
+          const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
           this.restoreScrollAnchor(preservedAnchor);
+          if (preservedAnchor?.albumKey && Math.abs(Number(this.scrollEl.scrollTop || 0) - previousScrollTop) > 1) {
+            this.render(true);
+            this.restoreScrollAnchor(preservedAnchor);
+          }
+          this._pendingStabilizationScroll = {
+            generation: this._stabilizeGeneration,
+            scrollLeft: Number(this.scrollEl.scrollLeft || 0),
+            scrollTop: Number(this.scrollEl.scrollTop || 0),
+          };
         }
         this.primeVisibleCoverImages();
       };
@@ -1257,12 +1274,14 @@ class VirtualArtistGrid {
         scrollTop: this._absoluteScrollRestore.scrollTop,
       };
     } else if (!isOwnedStabilizationScroll) {
-      this.invalidateScrollStabilization();
+      this.invalidateScrollStabilization({ cancelScrollRestore: true });
     }
-    this.isScrollSettled = false;
-    if (this._measureRaf) {
-      cancelBrowserAnimationFrame(this._measureRaf);
-      this._measureRaf = null;
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore) {
+      this.isScrollSettled = false;
+      if (this._measureRaf) {
+        cancelBrowserAnimationFrame(this._measureRaf);
+        this._measureRaf = null;
+      }
     }
     if (this._touchScrollGestureActive) this._touchScrollGestureHadScroll = true;
     this.scheduleSettledMeasurement();
@@ -1298,6 +1317,14 @@ class VirtualArtistGrid {
 
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
+    if (event?.type === 'wheel') {
+      if (this._measureRaf) {
+        cancelBrowserAnimationFrame(this._measureRaf);
+        this._measureRaf = null;
+      }
+      this.isScrollSettled = false;
+      this.scheduleSettledMeasurement();
+    }
     if (event?.type === 'touchstart') {
       const pendingMeasurement = Boolean(this._measureRaf || this._measureTimeout);
       if (this._measureRaf) {

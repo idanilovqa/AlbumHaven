@@ -1,159 +1,88 @@
+'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const vm = require('node:vm');
-const React = require('react');
-const {buildSync} = require('esbuild');
+const {entryEnvironment,load,drain} = require('./native-entry-fixtures/actual-native-runtime.cjs');
+const vm=require('node:vm');
+const {readRepo}=require('./native-home-harness.cjs');
+const plain = value => JSON.parse(JSON.stringify(value));
+const selected = host => host.querySelector('#home-recent-kinds [aria-selected="true"]').dataset.inPageTab;
 
-const source = path.resolve(__dirname, '../../../music_app/static/js/home-friends/app.jsx');
-const bundle = buildSync({entryPoints: [source], bundle: true, platform: 'node', format: 'cjs',
-  write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
-const elements = node => React.isValidElement(node)
-  ? [node, ...React.Children.toArray(node.props.children).flatMap(elements)] : [];
-const find = (tree, predicate) => elements(tree).find(predicate);
-const kinds = tree => find(tree, node => node.props.id === 'home-recent-kinds');
-
-// Exercise the real view's state and child contracts, without claiming DOM
-// reconciliation, native dashboard geometry, or browser/player verification.
-function viewFixture({width = 1200, presentation, section = 'recent', friend = null, activity} = {}) {
-  const slots = [], saved = [], listeners = new Set(); let cursor = 0, effects = [];
-  const window = {innerWidth: width, matchMedia: () => media};
-  const media = {matches: width <= 900, addEventListener: (_event, handler) => listeners.add(handler),
-    removeEventListener: (_event, handler) => listeners.delete(handler)};
-  const hooks = {...React,
-    useRef(value) {const index = cursor++; return slots[index] ||= {current: value};},
-    useState(initial) {
-      const index = cursor++;
-      if (!slots[index]) slots[index] = {value: typeof initial === 'function' ? initial() : initial};
-      return [slots[index].value, value => {slots[index].value = typeof value === 'function' ? value(slots[index].value) : value;}];
-    },
-    useEffect(effect, deps) {
-      const index = cursor++, previous = slots[index];
-      if (!previous || deps.some((value, i) => !Object.is(value, previous.deps[i]))) {
-        effects.push(() => {previous?.cleanup?.(); slots[index] = {deps, cleanup: effect()};});
-      }
-    },
-    useMemo(factory, deps) {
-      const index = cursor++, previous = slots[index];
-      if (!previous || deps.some((value, i) => !Object.is(value, previous.deps[i]))) slots[index] = {deps, value: factory()};
-      return slots[index].value;
-    },
-    useLayoutEffect() {cursor++;},
-  };
-  const fixtureModule = {exports: {}};
-  vm.runInNewContext(bundle, {module: fixtureModule, exports: fixtureModule.exports, window,
-    require: name => name === 'react' ? hooks : require(name), clearTimeout, setTimeout, console});
-  const state = {scopeKey: 'viewer/library', selectedFriendRef: friend?.account_ref || null,
-    recent: {status: 'ready', data: {recent_local_albums: [], recent_not_local_albums: []}},
-    friends: friend ? {status: 'ready', data: {friends: [friend]}} : {status: 'unavailable', data: null},
-    activity: activity ? {status: 'ready', data: {rows: [], total_listens: 0, range_label: 'Supplied date range'}} : {status: 'unavailable', data: null},
-    activityNavigation: {query: activity, status: 'idle'}, comparison: {status: 'unavailable', data: null}, mutation: {status: 'idle'}};
-  const shell = {section, friendRef: friend?.account_ref || '', presentation};
-  const runtime = {savePresentation: value => saved.push(value)};
-  const controller = {selectFriend() {return true;}, loadActivity() {}, getSnapshot: () => state};
-  return {
-    saved,
-    render() {
-      cursor = 0; effects = [];
-      const tree = fixtureModule.exports.HomeFriendsView({runtime, controller, state, shell});
-      for (const effect of effects) effect();
-      return tree;
-    },
-    resize(nextWidth) {window.innerWidth = nextWidth; media.matches = nextWidth <= 900; for (const handler of listeners) handler();},
-    dispose() {for (const slot of slots) slot?.cleanup?.(); assert.equal(listeners.size, 0);},
+// Actual controller, view, controls and native Recent renderer. Only platform
+// viewport and externally supplied DTOs are controlled; no component surrogate.
+async function viewFixture(t,{width=1200,presentation,section='recent',friend=null,activity}={}) {
+  const h=entryEnvironment(t),saved=[],reads=[],contexts=[],mediaListeners=new Set(),queries=new Map();
+  const media={matches:width<=900,addEventListener(_type,fn){mediaListeners.add(fn);},removeEventListener(_type,fn){mediaListeners.delete(fn);}};
+  h.context.innerWidth=width;h.context.matchMedia=query=>{if(!queries.has(query)){const limit=Number(query.match(/max-width:\s*(\d+)px/)?.[1]||900);queries.set(query,{...media,matches:width<=limit,limit});}return queries.get(query);};
+  vm.runInContext(readRepo('music_app/static/js/unfolding-action-button.js'),h.context);
+  Object.assign(h.runtime,{viewChooserHtml:options=>h.context.UnfoldingActionButton.render(options),mountViewChooser:(node,options)=>h.context.UnfoldingActionButton.mount(node,options),viewIconHtml:value=>{const node=h.document.createElement('div');node.innerHTML=h.owner('buildGalleryBarHtml')({});return node.querySelector(`[data-gallery-view-choice="${value}"] svg`)?.outerHTML||'';}});
+  const {createHomeFriendsController}=await load('home-friends/model.mjs');
+  const {mountHomeFriendsView}=await load('home-friends/app.mjs');
+  const controller=createHomeFriendsController({readRecent:()=>({recent_local_albums:[],recent_not_local_albums:[]}),providers:{
+    readFriends:()=>({friends:friend?[friend]:[],requests:[],profile:null}),
+    readActivity:request=>{reads.push(request);return {rows:request.kind==='albums'?[{id:'album:one',kind:'album',title:'Current album',artist:'Artist',listen_count:2}]:request.kind==='tracks'?[{id:'track:one',kind:'track',title:'Current track',availability:'local'}]:[],total_listens:0,range_label:'Supplied date range'};},
+  }});
+  controller.setScope('viewer/library');await controller.loadFriends();await controller.loadRecent();
+  if(friend)controller.selectFriend(friend.account_ref);
+  if(activity)await controller.loadActivity({kind:activity.kind,period:activity.period});
+  const runtime={...h.runtime,savePresentation:value=>saved.push(plain(value)),trackPlayback:(_row,context)=>{contexts.push(context);return null;}};
+  const shell={section,friendRef:friend?.account_ref||'',profileRef:'',presentation};
+  let owner,closed=false;
+  const props=()=>({runtime,controller,state:controller.getSnapshot(),shell});
+  const unsubscribe=controller.subscribe(()=>owner?.update(props()));
+  owner=mountHomeFriendsView(h.host,props());owner.update(props());await drain();
+  const dispose=()=>{if(closed)return;closed=true;owner.dispose();unsubscribe();controller.dispose();assert.equal(mediaListeners.size,0);assert.equal(h.host.childNodes.length,0);};
+  t.after(dispose);
+  return {...h,saved,reads,contexts,controller,owner,dispose,
+    resize(next){h.context.innerWidth=next;for(const query of queries.values())query.matches=next<=query.limit;for(const fn of [...mediaListeners])fn();},
+    choose(kind){const button=h.host.querySelector(`#home-recent-kinds [data-in-page-tab="${kind}"]`);assert.ok(button);h.click(button);},
   };
 }
 
-test('fresh Home defaults to Tracks at phone widths and Albums on desktop', () => {
-  for (const [width, expected] of [[320, 'tracks'], [390, 'tracks'], [900, 'tracks'], [901, 'albums'], [1440, 'albums']]) {
-    const fixture = viewFixture({width}), tree = fixture.render();
-    assert.equal(kinds(tree).props.value, expected);
-    assert.equal(fixture.saved.at(-1).kindExplicit, false);
-    fixture.dispose();
+test('fresh Home defaults to Tracks at phone widths and Albums on desktop',async t=>{
+  for(const [width,expected] of [[320,'tracks'],[390,'tracks'],[900,'tracks'],[901,'albums'],[1440,'albums']]) {
+    const h=await viewFixture(t,{width});assert.equal(selected(h.host),expected);assert.equal(h.saved.at(-1).kindExplicit,false);h.dispose();
   }
 });
-
-test('implicit defaults follow the viewport until a deliberate tab choice is saved', () => {
-  const fixture = viewFixture(), first = fixture.render();
-  assert.equal(kinds(first).props.value, 'albums');
-  fixture.resize(390); const phone = fixture.render();
-  assert.equal(kinds(phone).props.value, 'tracks');
-  kinds(phone).props.onChange('artists'); fixture.render();
-  assert.equal(fixture.saved.at(-1).kindExplicit, true);
-  fixture.resize(1440); assert.equal(kinds(fixture.render()).props.value, 'artists');
-  const restored = viewFixture({width: 320, presentation: fixture.saved.at(-1)});
-  assert.equal(kinds(restored.render()).props.value, 'artists');
-  restored.dispose(); fixture.dispose();
+test('implicit defaults follow the viewport until a deliberate tab choice is saved',async t=>{
+  const h=await viewFixture(t);assert.equal(selected(h.host),'albums');h.resize(390);assert.equal(selected(h.host),'tracks');
+  h.choose('artists');assert.equal(h.saved.at(-1).kindExplicit,true);h.resize(1440);assert.equal(selected(h.host),'artists');
+  const restored=await viewFixture(t,{width:320,presentation:h.saved.at(-1)});assert.equal(selected(restored.host),'artists');restored.dispose();h.dispose();
 });
-
-test('history preserves legacy explicit choices but re-evaluates saved automatic defaults', () => {
-  for (const [presentation, width, expected, explicit] of [
-    [{kind: 'albums'}, 320, 'albums', true],
-    [{kind: 'tracks', kindExplicit: true}, 1440, 'tracks', true],
-    [{kind: 'albums', kindExplicit: false}, 320, 'tracks', false],
-    [{kind: 'tracks', kindExplicit: false}, 1440, 'albums', false],
-    [{kind: 'unknown', kindExplicit: true}, 390, 'tracks', false],
-  ]) {
-    const fixture = viewFixture({presentation, width});
-    assert.equal(kinds(fixture.render()).props.value, expected);
-    assert.equal(fixture.saved.at(-1).kindExplicit, explicit);
-    fixture.dispose();
+test('history preserves legacy explicit choices but re-evaluates saved automatic defaults',async t=>{
+  for(const [presentation,width,expected,explicit] of [
+    [{kind:'albums'},320,'albums',true],[{kind:'tracks',kindExplicit:true},1440,'tracks',true],
+    [{kind:'albums',kindExplicit:false},320,'tracks',false],[{kind:'tracks',kindExplicit:false},1440,'albums',false],
+    [{kind:'unknown',kindExplicit:true},390,'tracks',false],
+  ]) {const h=await viewFixture(t,{presentation,width});assert.equal(selected(h.host),expected);assert.equal(h.saved.at(-1).kindExplicit,explicit);h.dispose();}
+});
+test('Home places native Recent and disabled News with Period above one content scroll owner',async t=>{
+  const h=await viewFixture(t,{width:320}),widget=h.host.querySelector('[data-home-widget="recent"]');
+  const header=widget.querySelector('header'),body=widget.querySelector('.home-friends__widget-body');assert.ok(header);assert.ok(body);
+  const sections=header.querySelector('[aria-label="Home sections"]');assert.ok(sections);
+  assert.deepEqual(sections.querySelectorAll('[data-in-page-tab]').map(node=>[node.dataset.inPageTab,node.textContent.trim(),node.disabled]),[['recent','Recent',false],['news','News',true],['queue','Queue',false]]);
+  assert.equal(sections.querySelector('[aria-selected="true"]').dataset.inPageTab,'recent');
+  assert.ok(header.querySelector('[aria-label="Period: Last week"]'));assert.ok(header.querySelector('#home-recent-kinds'));
+  assert.equal(body.querySelector('[role="tablist"]'),null);assert.equal(h.host.querySelectorAll('[aria-label="Home sections"]').length,1);h.dispose();
+});
+test('a changed responsive default clears only the unrelated Recent scroll position',async t=>{
+  const h=await viewFixture(t,{width:390,presentation:{kind:'albums',kindExplicit:false,scroll:{recent:440,friends:120,page:30}}});
+  assert.deepEqual(h.saved.at(-1).scroll,{recent:0,friends:120,page:30});h.dispose();
+});
+test('Recent Albums ignores saved rows and no-info choices for every period',async t=>{
+  for(const view of ['list','covers'])for(const period of ['week','month']) {
+    const h=await viewFixture(t,{presentation:{kind:'albums',period,views:{albums:view}},activity:{account_ref:null,kind:'albums',period}});
+    const recent=h.host.querySelector('[data-home-widget="recent"]');
+    assert.equal(recent.querySelector('.home-friends__view-control'),null);assert.equal(h.saved.at(-1).views.albums,'cards');
+    if(period==='week')assert.ok(recent.querySelector('.home-recent'));
+    else {assert.ok(recent.querySelector('.home-activity'));assert.ok(recent.querySelector('[data-gallery-display="cards"]'),'month album result uses canonical cards');assert.equal(h.controller.getSnapshot().activityNavigation.query.account_ref,null);assert.equal(h.controller.getSnapshot().activityNavigation.query.period,period);}
+    h.dispose();
   }
 });
-
-test('Home places native Recent and disabled News with Period above one content scroll owner', () => {
-  const fixture = viewFixture({width: 320}), tree = fixture.render();
-  const widget = find(tree, node => node.props['data-home-widget'] === 'recent');
-  const children = React.Children.toArray(widget.props.children);
-  const header = children.find(node => node.type === 'header');
-  const body = children.find(node => node.props.className?.includes('home-friends__widget-body'));
-  assert.ok(header); assert.ok(body);
-  const sections = find(header, node => node.props.label === 'Home sections');
-  assert.deepEqual(JSON.parse(JSON.stringify(sections.props.items)), [['recent', 'Recent'], ['news', 'News', {disabled: true}], ['queue', 'Queue']]);
-  assert.equal(sections.props.value, 'recent');
-  assert.ok(find(header, node => node.type?.name === 'Period'));
-  assert.ok(find(header, node => node.props.id === 'home-recent-kinds'));
-  assert.equal(find(body, node => node.type?.name === 'Tabs'), undefined);
-  assert.equal(elements(tree).filter(node => node.props.label === 'Home sections').length, 1);
-  fixture.dispose();
-});
-
-test('a changed responsive default clears only the unrelated Recent scroll position', () => {
-  const fixture = viewFixture({width: 390, presentation: {kind: 'albums', kindExplicit: false,
-    scroll: {recent: 440, friends: 120, page: 30}}});
-  fixture.render();
-  assert.deepEqual(JSON.parse(JSON.stringify(fixture.saved.at(-1).scroll)), {recent: 0, friends: 120, page: 30});
-  fixture.dispose();
-});
-
-test('Recent Albums ignores saved rows and no-info choices for every period', () => {
-  for (const view of ['list', 'covers']) for (const period of ['week', 'month']) {
-    const fixture = viewFixture({presentation: {kind: 'albums', period, views: {albums: view}},
-      activity: {account_ref: null, kind: 'albums', period}});
-    const tree = fixture.render(), recent = find(tree, node => node.props['data-home-widget'] === 'recent');
-    assert.equal(find(recent, node => node.type?.name === 'ViewControl'), undefined);
-    assert.equal(fixture.saved.at(-1).views.albums, 'cards');
-    if (period === 'week') {
-      assert.ok(find(recent, node => node.type?.name === 'RecentAlbums'));
-    } else {
-      const activity = find(recent, node => node.type?.name === 'ActivityPanel');
-      assert.equal(activity.props.view, 'cards');
-      assert.equal(activity.props.account_ref, null); assert.equal(activity.props.period, period);
-    }
-    fixture.dispose();
-  }
-});
-
-test('Home and Friends activity receive the complete current account and period query', () => {
-  const friend = {account_ref: 'friend:one', display_name: 'Friend', allowed_actions: {can_view_activity: true}};
-  for (const own of [true, false]) {
-    const account_ref = own ? null : friend.account_ref, period = own ? 'month' : 'six';
-    const fixture = viewFixture({section: own ? 'recent' : 'friends', friend: own ? null : friend,
-      presentation: {kind: 'tracks', period, friendKind: 'tracks', friendPeriod: period},
-      activity: {account_ref, kind: 'tracks', period}});
-    const tree = fixture.render(), activity = find(tree, node => node.type?.name === 'ActivityPanel');
-    assert.equal(activity.props.scopeKey, 'viewer/library');
-    assert.equal(activity.props.account_ref, account_ref); assert.equal(activity.props.period, period);
-    fixture.dispose();
+test('Home and Friends activity receive the complete current account and period query',async t=>{
+  const friend={account_ref:'friend:one',display_name:'Friend',relationship:'accepted',allowed_actions:{can_view_activity:true}};
+  for(const own of [true,false]) {
+    const account_ref=own?null:friend.account_ref,period=own?'month':'six';
+    const h=await viewFixture(t,{section:own?'recent':'friends',friend:own?null:friend,presentation:{kind:'tracks',period,friendKind:'tracks',friendPeriod:period},activity:{account_ref,kind:'tracks',period}});
+    assert.ok(h.host.querySelector('.home-activity'));assert.equal(h.reads.at(-1).scopeKey,'viewer/library');assert.equal(h.reads.at(-1).account_ref,account_ref);assert.equal(h.reads.at(-1).period,period);assert.ok(h.contexts.length>0,'actual activity table requests playback projection with current context');assert.deepEqual(plain(h.contexts.at(-1)),{scopeKey:'viewer/library',account_ref,kind:'tracks',period});h.dispose();
   }
 });

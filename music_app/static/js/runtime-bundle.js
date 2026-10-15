@@ -427,6 +427,10 @@ function normalizeRuntimeGalleryDisplayMode(value, fallback = 'cards') {
   return normalized === 'covers' || normalized === 'list' ? normalized : 'cards';
 }
 
+function normalizeRuntimeArtistPageMode(value) {
+  return normalizeRuntimeString(value, '').trim().toLowerCase() === 'info' ? 'info' : 'gallery';
+}
+
 function normalizeRuntimeSelectedArtistFamilyDisplayMode(value, fallback = 'grouped') {
   const normalized = normalizeRuntimeString(value, fallback).trim().toLowerCase();
   return normalized === 'chronological' ? 'chronological' : 'grouped';
@@ -924,15 +928,6 @@ function compactRuntimeArtistGroupPayload(group) {
   };
 }
 
-function compactRuntimeNonAlbumTrackPayload(track) {
-  if (!isRuntimePlainObject(track)) {
-    return track;
-  }
-  return {
-    ...track,
-  };
-}
-
 function runtimeAlbumPayloadIsFull(album) {
   return isRuntimePlainObject(album)
     && !album.preview_only
@@ -972,7 +967,8 @@ function compactRuntimeViewPayload(view) {
     artist_groups: (Array.isArray(normalizedView.artist_groups) ? normalizedView.artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
     primary_artist_groups: (Array.isArray(normalizedView.primary_artist_groups) ? normalizedView.primary_artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
     family_artist_groups: (Array.isArray(normalizedView.family_artist_groups) ? normalizedView.family_artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
-    non_album_tracks: (Array.isArray(normalizedView.non_album_tracks) ? normalizedView.non_album_tracks : []).map((track) => compactRuntimeNonAlbumTrackPayload(track)),
+    // Preference receipts belong to exact response rows, never reconstructed copies.
+    non_album_tracks: cloneRuntimeArray(normalizedView.non_album_tracks),
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
@@ -1060,6 +1056,11 @@ function isReusableSelectedArtistBrowseViewCandidate(view) {
   return resolvedSurface === 'albums'
     && String(view?.query || '').trim()
     && String(view?.selected_artist || '').trim()
+    // Info requests and responses require a fresh selected-Artist read, even
+    // when a parsed request has no server descriptor yet.
+    && view?.private_search !== true
+    && normalizeRuntimeArtistPageMode(view?.page_mode) !== 'info'
+    && normalizeRuntimeArtistPageMode(view?.artist_page?.active_page_mode) !== 'info'
     && !(Array.isArray(view?.related_filter_artists) && view.related_filter_artists.length)
     && !Boolean(view?.primary_filter_active);
 }
@@ -1307,7 +1308,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
     manual_version_links: cloneRuntimeObject(source.manual_version_links, base.manual_version_links),
     query: normalizeRuntimeString(source.query, base.query),
     selected_artist: normalizeRuntimeString(
-      isCollectionSurface ? '' : source.selected_artist,
+      isCollectionSurface || explicitlyClearsSelectedArtist ? '' : source.selected_artist,
       isCollectionSurface ? '' : base.selected_artist,
     ),
     gallery_scope: normalizeRuntimeString(source.gallery_scope, base.gallery_scope),
@@ -1337,6 +1338,29 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
+  // Only a local non-identity patch may retain the previous descriptor. A new
+  // browse response must carry its own canonical Artist presentation, including
+  // a full response for the same Artist; request mode is not read admission.
+  const replacesArtistPage = [
+    'surface', 'surface_request', 'selected_artist', 'query', 'page_mode',
+    'artist_groups', 'primary_artist_groups', 'family_artist_groups', 'payload_tier',
+    'gallery_scope', 'visible_library_categories', 'related_filter_artists',
+    'primary_filter_active', 'search_filters', 'private_search',
+  ].some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  const artistPage = Object.prototype.hasOwnProperty.call(source, 'artist_page')
+    ? source.artist_page
+    : replacesArtistPage ? null : base.artist_page;
+  const selectedArtist = normalizedView.selected_artist.trim();
+  if (selectedArtist && (!resolvedSurface || resolvedSurface === 'albums')
+    && normalizedView.private_search !== true && isRuntimePlainObject(artistPage)
+    && typeof artistPage.artist_ref === 'string' && artistPage.artist_ref.trim() === selectedArtist) {
+    const pageMode = normalizeRuntimeArtistPageMode(artistPage.active_page_mode);
+    normalizedView.artist_page = { ...artistPage, artist_ref: selectedArtist, active_page_mode: pageMode };
+    normalizedView.page_mode = pageMode;
+  } else {
+    delete normalizedView.artist_page;
+    delete normalizedView.page_mode;
+  }
   // A replacement search/artist payload must not inherit a root page cursor.
   if (isCollectionSurface || normalizedView.query || normalizedView.selected_artist
     || (Array.isArray(source.artist_groups) && !Object.prototype.hasOwnProperty.call(source, 'gallery_page'))) {
@@ -2006,6 +2030,25 @@ function resolveViewSurface(view = {}) {
   return 'home';
 }
 
+function resolveSelectedArtistPageMode(view = {}) {
+  const selectedArtist = String(view.selected_artist || '').trim();
+  if (!selectedArtist || resolveViewSurface(view) !== 'albums' || view.private_search === true) {
+    return 'gallery';
+  }
+  let pageMode = view.page_mode;
+  if (Object.prototype.hasOwnProperty.call(view, 'artist_page')) {
+    const artistPage = view.artist_page;
+    // A response descriptor, when present, takes precedence over request state.
+    if (!artistPage || typeof artistPage !== 'object' || Array.isArray(artistPage)
+      || typeof artistPage.artist_ref !== 'string'
+      || artistPage.artist_ref.trim() !== selectedArtist) {
+      return 'gallery';
+    }
+    pageMode = artistPage.active_page_mode;
+  }
+  return String(pageMode || '').trim().toLowerCase() === 'info' ? 'info' : 'gallery';
+}
+
 function resolvePlaylistId(view = {}) {
   const playlistId = String(
     view?.playlist_detail?.playlist_id
@@ -2041,6 +2084,7 @@ function buildUrl(view) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -2077,6 +2121,7 @@ function buildApiUrl(view, options = {}) {
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -2112,12 +2157,13 @@ function buildApiUrl(view, options = {}) {
 
 function parseUrlStateFromUrl(url, baseOrigin) {
   const u = new URL(url, baseOrigin);
-  return {
+  const view = {
     surface_request: u.searchParams.get('surface') || '',
     playlist_id: u.searchParams.get('playlist_id') || '',
     top_ref: u.searchParams.get('top_ref') || '',
     query: u.searchParams.get('q') || '',
     selected_artist: u.searchParams.get('artist') || '',
+    page_mode: u.searchParams.get('page_mode') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
     gallery_scope: u.searchParams.get('gallery_scope') || 'all',
     gallery_display_mode: normalizeGalleryDisplayMode(u.searchParams.get('gallery_display')),
@@ -2134,6 +2180,12 @@ function parseUrlStateFromUrl(url, baseOrigin) {
       }
       : {}),
   };
+  if (String(view.selected_artist || '').trim() && resolveViewSurface(view) === 'albums') {
+    view.page_mode = resolveSelectedArtistPageMode(view);
+  } else {
+    delete view.page_mode;
+  }
+  return view;
 }
 
 function parseUrlState(url) {
@@ -2170,7 +2222,7 @@ function pushBrowserViewState(view, stateSnapshot = view, retainedPlaylistDraft 
   if (settingsNavigation?.pushLibraryHistory) {
     settingsNavigation.pushLibraryHistory(buildUrl(view), stateSnapshot);
   } else {
-    window.history.pushState(stateSnapshot, '', buildUrl(view));
+    window.history.pushState(window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(stateSnapshot), '', buildUrl(view));
   }
 }
 
@@ -4213,6 +4265,16 @@ function buildGalleryBarHtml(config = {}) {
 }
 
 function buildArtistFamilyPanelHtml(config = {}) {
+  if (config.presentation === 'navigation') {
+    const title = String(config.title || 'Artist Family');
+    const rows = (Array.isArray(config.members) ? config.members : []).map(member => window.NavigationTree.renderItem({
+      variant: 'wide', action: true, key: member.artistRef, label: member.label,
+      count: member.albumCount, artworkHtml: member.artworkHtml || '',
+      selected: member.artistRef === config.currentArtist,
+      attributes: {'data-artist-page-family': member.artistRef},
+    })).join('');
+    return `<section class="artist-family-panel artist-family-panel--navigation" aria-label="${escapeHtml(title)}"><header><h2>${escapeHtml(title)}</h2></header><div class="artist-family-panel__body navigation-tree">${rows}</div></section>`;
+  }
   const combineSwitch = buildGallerySwitchHtml({
     id: 'artist-family-combine-similar',
     label: 'Combine similar artists',
@@ -4251,7 +4313,8 @@ function buildGalleryRatingHtml(config = {}) {
   const points = Array.from({ length: maximum }, (_unused, index) => (index < value
     ? '<span class="star filled">&#9733;</span>'
     : '<span class="star">&#9734;</span>')).join('');
-  return `<div class="rating-row" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+  const compactEmpty = config.compact === true && value === 0;
+  return `<div class="rating-row${compactEmpty ? ' rating-row--compact-empty' : ''}" data-rating-value="${value}"${compactEmpty ? ` style="--rating-star-interval-count: ${maximum}"` : ''}><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
 }
 
 function buildGalleryCardInfoHtml(config = {}) {
@@ -4516,7 +4579,7 @@ function buildGalleryCardHtml(config = {}) {
   const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
   return `
-    <section class="album-card" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
+    <section class="album-card${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
       </button>
@@ -4545,9 +4608,17 @@ function buildControlledGalleryCardHtml(config) {
   const play = can('play') ? ButtonComponent.renderActionButton({
     ariaLabel: `Play ${title}`, icon: 'play', presentation: 'bare', attributes: attributes('play'),
   }) : '';
+  const completion = can('complete') && typeof config.completion?.completed === 'boolean'
+    ? ButtonComponent.renderActionButton({
+      ariaLabel: config.completion.label || `${config.completion.completed ? 'Clear completion' : 'Mark completed'}: ${title}`,
+      title: config.completion.label || `${config.completion.completed ? 'Clear completion' : 'Mark completed'}: ${title}`,
+      icon: 'complete', presentation: 'bare', disabled: config.completion.disabled === true,
+      pressed: config.completion.completed,
+      attributes: {...attributes('complete'), 'aria-pressed': String(config.completion.completed)},
+    }) : '';
   const information = displayMode === 'covers' ? `<span class="gallery-card__focus-title">${escapeHtml(title)}</span>`
     : buildGalleryCardInfoHtml({ ...config, openAttributes: '' });
-  return `<section class="album-card" data-gallery-display="${displayMode}" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${information}${open || play ? `<div class="gallery-card__actions">${open}${play}</div>` : ''}</section>`;
+  return `<section class="album-card${config.isSearchMatch === true ? ' album-card--search-match' : ''}" data-gallery-display="${displayMode}" data-gallery-card-interaction="${config.interaction}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">${artwork}${information}${open || play || completion ? `<div class="gallery-card__actions">${open}${play}${completion}</div>` : ''}</section>`;
 }
 
 let galleryCardMetadataMotion = null;
@@ -10888,7 +10959,8 @@ function showAlbumCardContextMenu(_x, _y, album, anchor = document.activeElement
       if (!action.startsWith('queue:')) return false;
       const request = new AbortController();
       try {
-        const fresh = await fetchTrackModalAlbumDetails(getAlbumPlaybackQueueRef(album), {signal: request.signal});
+        const fresh = await fetchTrackModalAlbumDetails(getAlbumPlaybackQueueRef(album), {signal: request.signal,
+          isCurrent: () => current() && canQueue()});
         if (!current() || !canQueue() || getAlbumPlaybackQueueRef(fresh) !== getAlbumPlaybackQueueRef(album)) return false;
         const rows = Array.isArray(fresh.track_rows) ? fresh.track_rows : [];
         const ordered = groupAlbumTracks(fresh.tracks || []).groups.flatMap(group => group.tracks || []);
@@ -11074,7 +11146,7 @@ function getNonAlbumMenuLabel() {
 
 function buildNonAlbumTrackRowsMarkup(items, startingIndex, privateRows = []) {
   return items.map((item, offset) => {
-    privateRows.push({...item, track_ref: Object.hasOwn(item, 'track_ref') ? item.track_ref : item.path});
+    privateRows.push(item);
     const rowIndex = startingIndex + offset + 1;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
@@ -11135,15 +11207,17 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     return { discLabel: section.title, sectionKey: section.key, tracks };
   }).filter(Boolean);
   const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  const tableConfig = {groups, showPath: true, showProblem: true};
   if (typeof NativePlaytables !== 'undefined') NativePlaytables.prepare('loose-tracks', sourceView, groups, privateRows, () => {
     const overlay = document.getElementById('non-album-modal');
     const retained = typeof mobilePageState !== 'undefined' && mobilePageState.pages.some(page => page.kind === 'non-album');
     return Boolean(overlay?.isConnected && (!overlay.hidden || retained) && state.view === sourceView);
-  });
+  }, undefined, {columns: albumTrackTableColumns(tableConfig)});
   return buildAlbumTrackTableHtml({
-    groups,
+    ...tableConfig,
     selection: 'multiple', sectionActions: true,
-    showPath: true,
+    // Shared presentation does not confer preference authority. Love remains
+    // unavailable until Loose browse responses have admitted scoped receipts.
     forceGroupLabels: true,
     ariaLabel: 'Loose tracks',
     idPrefix: 'loose-track-table',
@@ -12750,9 +12824,145 @@ function attachGalleryPlaybackContextToAlbum(album) {
   };
 }
 
+// Exact response objects carry provenance. Caches, renderers and subject copies
+// cannot turn DTO fields into a fresh preference read or revive an older grant.
+const trackModalPreferenceReceipts = new WeakMap();
+const trackModalPreferenceSources = new Map(), trackModalPreferenceListeners = new Set();
+let trackModalPreferenceScope = null;
+function subscribeTrackModalPreferences(listener) {
+  trackModalPreferenceListeners.add(listener);
+  return () => trackModalPreferenceListeners.delete(listener);
+}
+function notifyTrackModalPreferences() {
+  for (const listener of [...trackModalPreferenceListeners]) {
+    try {listener();} catch { /* A display subscriber cannot undo revocation. */ }
+  }
+}
+function trimTrackModalPreferenceSources() {
+  let unretained = [...trackModalPreferenceSources.values()].filter(token => token.retained === 0).length;
+  let changed = false;
+  for (const [key, token] of trackModalPreferenceSources) {
+    if (unretained <= TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) break;
+    if (token.retained !== 0) continue;
+    token.revoked = true; trackModalPreferenceSources.delete(key); unretained--; changed = true;
+  }
+  if (changed) notifyTrackModalPreferences();
+}
+function retainTrackModalPreferenceRows(rows) {
+  const tokens = new Set((rows || []).filter(row => getTrackModalPreferenceSource(row))
+    .map(row => trackModalPreferenceReceipts.get(row).request));
+  for (const token of tokens) token.retained++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const token of tokens) token.retained--;
+    trimTrackModalPreferenceSources();
+  };
+}
+function trackModalPreferenceContainerReadable(value) {
+  return Boolean(value && typeof value === 'object' && !value.read_only_subject
+    && value.source_readable !== false && value.readable !== false
+    && (!Object.hasOwn(value.allowed_actions || {}, 'can_read') || value.allowed_actions.can_read === true));
+}
+function trackModalPreferenceFacts(row) {
+  if (!trackModalPreferenceContainerReadable(row) || row.track_preference_state !== 'available') return null;
+  const track = typeof row.track_ref === 'string' ? row.track_ref : row.path;
+  const canonical = row.canonical_track_ref, inventory = row.inventory_track_ref;
+  const overlay = TrackActionsRuntime.overlay(row.track_preference);
+  if (typeof track !== 'string' || !track.trim() || typeof canonical !== 'string' || !canonical.trim()
+    || typeof inventory !== 'string' || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(inventory) || !overlay) return null;
+  return {track_ref: track.trim(), canonical_track_ref: canonical, inventory_track_ref: inventory, track_preference: overlay};
+}
+function getTrackModalPreferenceSource(row) {
+  const receipt = row && trackModalPreferenceReceipts.get(row);
+  if (!receipt || receipt.request.revoked || receipt.scope !== TrackActionsRuntime.scope().token
+    || receipt.inventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) return null;
+  const facts = trackModalPreferenceFacts(row);
+  return facts && JSON.stringify(facts) === receipt.signature ? receipt.source : null;
+}
+
+// Capture only at a genuine read dispatch. Album and Loose share this bounded
+// exact-object owner, but a denial never crosses their source namespaces.
+function captureTrackModalPreferenceRead(namespace, sourceKey, options = {}) {
+  const preferenceRuntime = typeof TrackActionsRuntime !== 'undefined' ? TrackActionsRuntime : null;
+  const scope = preferenceRuntime?.scope(), epoch = preferenceRuntime?.readEpoch();
+  const inventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+  if (scope?.token !== trackModalPreferenceScope) {
+    trackModalPreferenceScope = scope?.token; trackModalPreferenceSources.clear();
+  }
+  const key = JSON.stringify([namespace, sourceKey]);
+  let requestReceipt = trackModalPreferenceSources.get(key);
+  if (preferenceRuntime && options.readOnlySubject !== true && options.admitPreferences !== false) {
+    if (!requestReceipt || requestReceipt.revoked) requestReceipt = {revoked: false, retained: 0};
+    trackModalPreferenceSources.delete(key);
+    trackModalPreferenceSources.set(key, requestReceipt);
+    trimTrackModalPreferenceSources();
+  }
+  const requestCurrent = () => {
+    try {return Boolean(preferenceRuntime && !options.signal?.aborted && scope.token === preferenceRuntime.scope().token
+      && inventoryRevision === Number(state?.status?.inventory_mutation_revision || 0)
+      && (options.isCurrent === undefined || typeof options.isCurrent === 'function' && options.isCurrent() === true));}
+    catch {return false;}
+  };
+  const revoke = () => {
+    if (options.readOnlySubject === true || options.admitPreferences === false
+      || !requestCurrent() || !requestReceipt || requestReceipt.revoked) return;
+    requestReceipt.revoked = true;
+    notifyTrackModalPreferences();
+  };
+  let admitted = false;
+  return Object.freeze({revoke, admit(rows) {
+    if (admitted || options.readOnlySubject === true || options.admitPreferences === false
+      || !requestReceipt || requestReceipt.revoked || !requestCurrent()) return;
+    admitted = true;
+    // A successful current Loose replacement retires its prior exact-object
+    // lineage, including rows now unavailable or absent from the population.
+    // A stale preference epoch cannot retire it.
+    // Fresh readable siblings still use this dispatch's original batch epoch.
+    const previousReceipt = requestReceipt;
+    const replacementReceipt = namespace === 'loose' && epoch === preferenceRuntime.readEpoch()
+      ? {revoked: false, retained: 0} : null;
+    const batch = preferenceRuntime.readBatch(epoch), seen = new Set();
+    for (const row of rows) {
+      if (!requestCurrent() || previousReceipt.revoked) break;
+      if (!row || typeof row !== 'object' || seen.has(row)) continue;
+      seen.add(row);
+      const source = trackModalPreferenceFacts(row);
+      if (!source || source.inventory_track_ref.split(':')[1] !== scope.library || !batch.accept(source)) continue;
+      if (!requestCurrent() || previousReceipt.revoked) break;
+      trackModalPreferenceReceipts.set(row, {scope: scope.token, request: replacementReceipt || previousReceipt, inventoryRevision,
+        signature: JSON.stringify(source), source: Object.freeze(source)});
+    }
+    if (replacementReceipt) {
+      // Batch subscribers are synchronous. Publish no replacement if they
+      // retired this request; notify receipt consumers only after siblings
+      // have their own receipts, without transferring any old object grants.
+      if (!requestCurrent() || previousReceipt.revoked) {replacementReceipt.revoked = true; return;}
+      previousReceipt.revoked = true;
+      requestReceipt = replacementReceipt;
+      trackModalPreferenceSources.delete(key);
+      trackModalPreferenceSources.set(key, replacementReceipt);
+      trimTrackModalPreferenceSources();
+      notifyTrackModalPreferences();
+    }
+  }});
+}
+
+function admitLooseTrackPreferenceRows(payload, preferenceRead) {
+  if (!preferenceRead || !payload || payload.read_only_subject
+    || String(payload.surface?.active || payload.surface_request || 'albums') !== 'albums') return;
+  if (!trackModalPreferenceContainerReadable(payload)) {
+    preferenceRead.revoke();
+    return;
+  }
+  preferenceRead.admit(Array.isArray(payload.non_album_tracks) ? payload.non_album_tracks : []);
+}
+
 async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return null;
+  const preferenceRead = captureTrackModalPreferenceRead('album', normalizedAlbumKey, options);
   const response = await fetch(`/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`, {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
@@ -12765,7 +12975,23 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     payload = null;
   }
   if (!response.ok || !payload?.ok || !payload?.album) {
+    if (response.status === 401 || response.status === 403) preferenceRead.revoke();
     throw Object.assign(new Error(payload?.error || `Album detail request failed: ${response.status}`), {status: response.status});
+  }
+  if (payload.album.source_readable === false || payload.album.allowed_actions?.can_read === false) preferenceRead.revoke();
+  if (trackModalPreferenceContainerReadable(payload.album)
+    && String(payload.album.key || payload.album.album_ref || '') === normalizedAlbumKey
+    && !(typeof albumRequiresHydration === 'function' && albumRequiresHydration(payload.album))) {
+    const rows = [], containers = [payload.album], seen = new Set();
+    for (const container of containers) {
+      if (!trackModalPreferenceContainerReadable(container) || seen.has(container)) continue;
+      seen.add(container);
+      containers.push(...(Array.isArray(container.duplicate_sources) ? container.duplicate_sources : []));
+      rows.push(...(Array.isArray(container.tracks) ? container.tracks : []),
+        ...(Array.isArray(container.track_rows) ? container.track_rows : []),
+        ...(Array.isArray(container.gallery_list_block?.track_rows) ? container.gallery_list_block.track_rows : []));
+    }
+    preferenceRead.admit(rows);
   }
   return payload.album;
 }
@@ -14865,6 +15091,39 @@ function formatLogHistoryTimestamp(value) {
 // of albums. Continuations never own the foreground/search request slot.
 let rootGalleryPageRequest = null;
 
+function captureLooseTrackPreferenceRead(apiUrl, options) {
+  if (typeof captureTrackModalPreferenceRead !== 'function') return null;
+  const url = new URL(apiUrl, 'http://localhost');
+  if (url.pathname !== '/view-data' || (url.searchParams.get('surface') || 'albums') !== 'albums') return null;
+  // Pagination, hydration and presentation are projections of one population.
+  // Preserve search, artist and filter scope, including unknown future filters.
+  for (const key of ['gallery_page_size', 'gallery_cursor', 'omit_sidebar', 'payload_tier', 'root_sidebar',
+    'gallery_display', 'gallery_display_mode', 'gallery_scale_percent', 'family_display', 'selected_artist_family_display_mode']) {
+    url.searchParams.delete(key);
+  }
+  // Repeated population selectors are sets; selection order is not a source.
+  for (const key of ['category', 'related_artist', 'genre', 'mood', 'style']) {
+    const values = [...new Set(url.searchParams.getAll(key))].sort();
+    url.searchParams.delete(key);
+    for (const value of values) url.searchParams.append(key, value);
+  }
+  // The server startup URL omits these verified gallery_scope.py defaults;
+  // buildApiUrl emits them from the resolved response. They are one population.
+  const scopes = url.searchParams.getAll('gallery_scope');
+  if (scopes.length <= 1 && (!scopes[0] || scopes[0] === 'all')) {
+    url.searchParams.delete('gallery_scope');
+    const categories = url.searchParams.getAll('category');
+    const defaultCategories = ['main_library', 'hoard', 'new_arrivals'];
+    if (categories.length === defaultCategories.length
+      && defaultCategories.every(category => categories.includes(category))) {
+      url.searchParams.delete('category');
+    }
+  }
+  url.searchParams.set('surface', 'albums');
+  url.searchParams.sort();
+  return captureTrackModalPreferenceRead('loose', `${url.pathname}${url.search}`, options);
+}
+
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
     ? resolveViewSurface(view)
@@ -14920,11 +15179,13 @@ async function loadNextRootGalleryPage() {
     url: buildRootGalleryPageUrl(view),
     cursor: page.next_cursor,
     revision: page.revision,
+    tagEditMutationRevision: Number(state.ui.tagEditOptimisticMutationRevision || 0),
   };
   rootGalleryPageRequest = request;
   const ownsResponse = () => rootGalleryPageRequest === request
     && !request.controller.signal.aborted
     && readViewStateRevision() === request.viewRevision
+    && Number(state.ui.tagEditOptimisticMutationRevision || 0) === request.tagEditMutationRevision
     && isPagedRootGallery()
     && buildRootGalleryPageUrl(state.view) === request.url
     && state.view.gallery_page.next_cursor === request.cursor
@@ -14934,6 +15195,9 @@ async function loadNextRootGalleryPage() {
   url.searchParams.set('gallery_cursor', request.cursor);
   url.searchParams.set('omit_sidebar', '1');
   try {
+    let preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+      signal: request.controller.signal, isCurrent: ownsResponse,
+    });
     let response = await fetch(`${url.pathname}${url.search}`, {
       headers: { Accept: 'application/json' }, signal: request.controller.signal,
     });
@@ -14945,12 +15209,15 @@ async function loadNextRootGalleryPage() {
       // bounded page; keep the old cards visible until that response arrives.
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
+      preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+        signal: request.controller.signal, isCurrent: ownsResponse,
+      });
       response = await fetch(`${url.pathname}${url.search}`, {
         headers: { Accept: 'application/json' }, signal: request.controller.signal,
       });
       restarted = true;
     }
-    const data = await readGalleryResponse(response, ownsResponse);
+    const data = await readGalleryResponse(response, ownsResponse, preferenceRead);
     if (!ownsResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
@@ -14960,6 +15227,11 @@ async function loadNextRootGalleryPage() {
     const artistGroups = restarted
       ? data.artist_groups
       : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
+    if (restarted && typeof admitLooseTrackPreferenceRows === 'function') {
+      admitLooseTrackPreferenceRows(data, preferenceRead);
+      // Admission notifies synchronous subscribers that may replace this owner.
+      if (!ownsResponse()) return false;
+    }
     applyViewPayload({
       ...state.view,
       ...(restarted ? {
@@ -15674,7 +15946,8 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
-async function readGalleryResponse(response, ownsResponse) {
+async function readGalleryResponse(response, ownsResponse, preferenceRead = null) {
+  if (response.status === 401 || response.status === 403) preferenceRead?.revoke();
   if (response.status === 401) {
     if (ownsResponse()) window.location.assign('/login');
     throw new Error('Sign in again to continue.');
@@ -15682,6 +15955,12 @@ async function readGalleryResponse(response, ownsResponse) {
   const data = await response.json();
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
+  }
+  if (data && !data.read_only_subject
+    && String(data.surface?.active || data.surface_request || 'albums') === 'albums'
+    && (data.source_readable === false || data.readable === false
+      || Object.hasOwn(data.allowed_actions || {}, 'can_read') && data.allowed_actions.can_read !== true)) {
+    preferenceRead?.revoke();
   }
   return data;
 }
@@ -15702,7 +15981,7 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse) {
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, preferenceRead) {
   let payload = data;
   let restarted = false;
   const cursors = new Set();
@@ -15710,7 +15989,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
   while (ownsResponse()) {
     const page = payload?.gallery_page;
     const count = (payload?.artist_groups || []).reduce((sum, group) => sum + (group.albums || []).length, 0);
-    if (!page?.has_more || count >= coverage) return payload;
+    if (!page?.has_more || count >= coverage) return {payload, preferenceRead};
     const cursor = String(page.next_cursor || '');
     if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
       throw new Error('Root gallery refresh did not advance within its loaded coverage.');
@@ -15720,11 +15999,14 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     url.searchParams.set('gallery_page_size', '50');
     url.searchParams.set('gallery_cursor', cursor);
     url.searchParams.set('omit_sidebar', '1');
+    const continuationRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+      signal: controller?.signal, isCurrent: ownsResponse,
+    });
     const response = await fetch(`${url.pathname}${url.search}`, {
       headers: { Accept: 'application/json' }, signal: controller?.signal,
     });
     if (!ownsResponse()) return null;
-    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
+    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse, continuationRead);
     if (!ownsResponse()) return null;
     if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
       if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
@@ -15733,10 +16015,13 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
       remainingPages = Math.ceil(coverage / 50);
       url.searchParams.delete('gallery_cursor');
       url.searchParams.delete('omit_sidebar');
+      preferenceRead = captureLooseTrackPreferenceRead(`${url.pathname}${url.search}`, {
+        signal: controller?.signal, isCurrent: ownsResponse,
+      });
       const restartResponse = await fetch(`${url.pathname}${url.search}`, {
         headers: { Accept: 'application/json' }, signal: controller?.signal,
       });
-      payload = await readGalleryResponse(restartResponse, ownsResponse);
+      payload = await readGalleryResponse(restartResponse, ownsResponse, preferenceRead);
       continue;
     }
     if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
@@ -15858,6 +16143,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     ? galleryCoverLoadScheduler.beginFamilyPrefetchReconciliation()
     : 0;
   let viewRendered = false;
+  let requestStarted = false, settledApplied = false, settledError = null;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
@@ -15895,23 +16181,39 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
+    const ownsPreferenceResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+      && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+      && (!retainedPlaylistDraft
+        || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true);
+    if (typeof requestOptions.onStart === 'function') {
+      if (!ownsPreferenceResponse() || controller?.signal.aborted
+        || requestOptions.onStart({requestId}) === false
+        || !ownsPreferenceResponse() || controller?.signal.aborted) return false;
+    }
+    let preferenceRead = captureLooseTrackPreferenceRead(apiUrl, {
+      signal: controller?.signal, isCurrent: ownsPreferenceResponse,
+    });
+    requestStarted = true;
     const response = await fetch(apiUrl, {
       headers: { Accept: 'application/json' },
       signal: controller?.signal,
     });
-    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision), preferenceRead);
     if (rootRefreshCoverage > 0) {
       const ownsRefresh = () => {
-        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
-          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
+        if (controller?.signal.aborted || !ownsPreferenceResponse()) return false;
         try {
           return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
         } catch (_error) {
           return false;
         }
       };
-      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh);
-      if (!data || !ownsRefresh()) return false;
+      const collected = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, preferenceRead);
+      if (!collected || !ownsRefresh()) return false;
+      // Only the initial or restart packet supplies Loose rows. Continuation
+      // metadata cannot replace its dispatch epoch with a completion-time read.
+      data = collected.payload;
+      preferenceRead = collected.preferenceRead;
     }
     markStartupFollowup('payload_received', requestOptions, {
       endpoint: apiUrl,
@@ -15984,6 +16286,18 @@ async function fetchAndRender(url, push = true, options = {}) {
         preserveMountedGalleryChildren: true,
       }
       : requestOptions;
+    if (!retainedMountedSelectedViewState && typeof admitLooseTrackPreferenceRows === 'function') {
+      admitLooseTrackPreferenceRows(payloadToApply, preferenceRead);
+      // Both preference and receipt subscribers can synchronously navigate or
+      // edit. Recheck application permission, then ownership, at the write itself.
+      try {
+        if (typeof requestOptions.shouldApplyResponse === 'function'
+          && requestOptions.shouldApplyResponse(data) !== true) return false;
+        if (controller?.signal.aborted || !ownsPreferenceResponse()) return false;
+      } catch (_error) {
+        return false;
+      }
+    }
     applyViewPayload(payloadToApply, responseApplyOptions);
     finishPendingViewTransition(requestId);
     markStartupFollowup('apply_complete', requestOptions, {
@@ -16064,6 +16378,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (state.ui.activeViewRequestPush) pushBrowserViewState(state.view, state.view, retainedPlaylistDraft);
     recordSuccessfulCanonicalFullViewApply(data, requestOptions);
     consumePendingScanCompletionViewRefresh(requestId, data, requestOptions);
+    settledApplied = true;
     return true;
   } catch (error) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
@@ -16095,6 +16410,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       clearPendingSidebarSelection();
       renderSidebar();
     }
+    settledError = error;
     throw error;
   } finally {
     if (
@@ -16148,7 +16464,7 @@ async function fetchAndRender(url, push = true, options = {}) {
             pendingRequest.url,
             pendingRequest.push,
             pendingRequest.options,
-          );
+          ).catch(() => {});
         }
       }
       if (pendingViewRequestDispatched) {
@@ -16191,6 +16507,12 @@ async function fetchAndRender(url, push = true, options = {}) {
       && !state.ui.forceScanPageVisible
     ) {
       resumeScanPageGalleryCoverLoads();
+    }
+    if (requestStarted && state.ui.activeViewRequestId === requestId
+      && !controller?.signal.aborted
+      && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
+      try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
+      catch (_error) { /* An observer cannot change the request outcome. */ }
     }
   }
 }
@@ -17818,17 +18140,34 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
-      rating: {content: escapeHtml(config.subjectTaste && Number.isInteger(track.subjectRating) ? track.subjectRating : '–')},
+      rating: {content: config.subjectTaste && track.subjectTasteState === 'available'
+        && Object.hasOwn(track, 'subjectRating') && track.subjectRating === null
+        ? buildGalleryRatingHtml({value: 0, maximum: 5, label: 'Track unrated', compact: true})
+        : escapeHtml(config.subjectTaste && Number.isInteger(track.subjectRating) ? track.subjectRating : '–')},
       love: {content: config.subjectTaste && ['off', 'loved', 'obsessed'].includes(track.subjectLove)
-        ? `<span role="img" aria-label="${escapeHtml(track.subjectLove)}">${ButtonComponent.renderIconSvg(`love-${track.subjectLove}`)}</span>` : '–'},
+        ? `<span role="img" aria-label="${escapeHtml(track.subjectLove)}">${ButtonComponent.renderIconSvg(`love-${track.subjectLove}`)}</span>`
+        : config.subjectTaste ? '–' : '<span data-track-love-cell="1"><span role="img" aria-label="Love unavailable">–</span></span>'},
       duration: { content: `<span class="track-duration" ${readOnly ? '' : `data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}"`}>${escapeHtml(track.duration || '')}</span>` },
     },
   };
 }
 
+function albumTrackTableColumns(config = {}) {
+  return [
+    {key: 'number', label: '#', required: true, width: 36},
+    {key: 'title', label: 'Track', identity: true, width: 100},
+    ...(config.showPath ? [{key: 'path', label: 'File path', width: 220, autoMinWidth: 641}] : []),
+    ...(config.subjectTaste ? [{key: 'rating', label: 'Rating', width: 52, autoMinWidth: 481}] : []),
+    ...(config.showLove !== false || config.subjectTaste ? [{key: 'love', label: 'Love', required: true, width: 36}] : []),
+    ...(config.showProblem === true || (config.groups || []).some(group => (group.tracks || []).some(track => track.isProblematic))
+      ? [{key: 'problem', label: 'Problem', header: 'absent', action: true, width: 20, autoMinWidth: 641}] : []),
+    {key: 'duration', label: 'Length', action: true, required: true, width: 54},
+  ];
+}
+
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
-  const showPath = Boolean(config.showPath);
+  const columnsConfig = albumTrackTableColumns(config);
   const forceGroupLabels = Boolean(config.forceGroupLabels);
   const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
   const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
@@ -17841,26 +18180,16 @@ function buildAlbumTrackTableHtml(config = {}) {
       forceGroupLabels
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
-    const columnsConfig = [
-      { key: 'number', label: '#' },
-      { key: 'title', label: 'Track' },
-      ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
-      ...(config.subjectTaste ? [{key: 'rating', label: 'Rating'}, {key: 'love', label: 'Love'}] : []),
-      { key: 'problem', label: 'Problem', header: 'absent', action: true },
-      { key: 'duration', label: 'Length', action: true },
-    ];
     const table = buildCompactDataTable({
       id: `${idPrefix}-tracks-${groupIndex + 1}`,
       ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: showPath
-        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : config.subjectTaste ? '36px minmax(0,1fr) 52px 36px 20px minmax(54px,auto)' : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      columns: config.columns || columnsConfig.map(column => column.identity ? 'minmax(0,1fr)' : `${column.width}px`).join(' '),
       columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
       frame: 'outline',
-      overflow: 'none',
+      overflow: config.overflow || 'local',
       mobile: 'preserve',
       selection: config.selection,
     });
@@ -20045,7 +20374,8 @@ async function watchSaveTask(taskId, context = {}) {
               );
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
                 window.history.replaceState(
-                  { ...window.history.state, ...state.view }, '', buildUrl(state.view),
+                  window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot({ ...window.history.state, ...state.view }),
+                  '', buildUrl(state.view),
                 );
               }
               if (viewRefreshed && finalizedAlbums.length) {
@@ -31583,8 +31913,11 @@ function renderTrackModalRelease(album) {
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });
     if (album.read_only_subject) {
-      const summary = document.createElement('p'); summary.className = 'playlists__note';
-      summary.textContent = `Rating: ${album.album_rating ?? '–'} · Favorite: ${album.favorite === true ? 'Yes' : album.favorite === false ? 'No' : '–'}`;
+      const summary = document.createElement('div'); summary.className = 'playlists__note';
+      const rating = album.taste_state === 'available' && Object.hasOwn(album, 'album_rating') && album.album_rating === null
+        ? buildGalleryRatingHtml({value: 0, maximum: 10, label: 'Album unrated', compact: true})
+        : escapeHtml(album.album_rating ?? '–');
+      summary.innerHTML = `Rating: ${rating} · Favorite: ${album.favorite === true ? 'Yes' : album.favorite === false ? 'No' : '–'}`;
       els.header.appendChild(summary);
     }
     els = getTrackModalElements();
@@ -31934,11 +32267,14 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       const trackValue = getAlbumTrackDisplayNumber(track, index);
       const trackRow = trackRowByPath.get(trackPath) || null;
       const source = trackRow || track;
-      privateRows.push({...source, track_ref: Object.hasOwn(source, 'track_ref') ? source.track_ref : track.path});
+      // Keep the exact response row: a render-time clone cannot inherit a
+      // request's private preference receipt. Native playback still uses track.
+      privateRows.push(source);
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
       return {
         path: trackPath, inventory_track_ref: source.inventory_track_ref,
+        subjectTasteState: album?.read_only_subject ? source.taste_state : 'unavailable',
         subjectRating: album?.read_only_subject ? source.rating : null, subjectLove: album?.read_only_subject ? source.love_tier : null,
         src,
         title: displayTitle,
@@ -31982,7 +32318,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     const source = getTrackModalSourcePageOwner(), view = state.view;
     return source ? source.isCurrent : () => state.view === view && album.source_readable !== false
       && !(Object.hasOwn(album.allowed_actions || {}, 'can_read') && album.allowed_actions.can_read !== true);
-  });
+  }, {columns: albumTrackTableColumns({groups: componentGroups, subjectTaste: Boolean(album?.read_only_subject)})});
   const durationForGroups = (isBonus) => componentGroups
     .filter((group) => group.isBonus === isBonus)
     .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
@@ -32197,6 +32533,7 @@ function refreshTrackModalPlaybackState() {
   const selection = typeof getTrackModalSelectionLease === 'function' ? getTrackModalSelectionLease() : null;
   const rows = selection ? selection.dialog.querySelectorAll('[data-track-row-path]')
     : document.querySelectorAll('#track-modal [data-track-row-path]');
+  let durationGrew = false;
   rows.forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
@@ -32227,9 +32564,12 @@ function refreshTrackModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
+      durationGrew ||= displayedTime.length > (durationEl.textContent || '').length;
       durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
+  // Tabular digits need a new measurement only when the visible text grows.
+  if (durationGrew && typeof NativePlaytables !== 'undefined') NativePlaytables.refresh?.('album-tracks');
 }
 
 function refreshNonAlbumModalPlaybackState() {
@@ -32240,6 +32580,7 @@ function refreshNonAlbumModalPlaybackState() {
   const activeCurrent = formatTrackDuration(Math.floor(playback.currentTime || 0)) || '0:00';
   const activeDuration = formatTrackDuration(playback.duration) || '0:00';
 
+  let durationGrew = false;
   document.querySelectorAll('#non-album-modal [data-track-row-path]').forEach((row) => {
     const rowPath = String(row.getAttribute('data-track-row-path') || '');
     const isCurrentTrack = currentTrackPath && currentTrackPath === rowPath;
@@ -32270,9 +32611,11 @@ function refreshNonAlbumModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
+      durationGrew ||= displayedTime.length > (durationEl.textContent || '').length;
       durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
+  if (durationGrew && typeof NativePlaytables !== 'undefined') NativePlaytables.refresh?.('loose-tracks');
 }
 
 
@@ -40778,6 +41121,78 @@ function ensureRecentSearchState() {
   return state.ui;
 }
 
+let recentSearchTransport = null;
+let unsubscribeRecentSearchTransport = null;
+let recentSearchShell = null;
+let recentSearchObserver = null;
+
+// Shell identity and transport stamps provide continuity, not authorization.
+function getRecentSearchScope() {
+  const shell = document.getElementById('app-shell');
+  const account = shell?.dataset?.nativeAccountId;
+  const library = shell?.dataset?.nativeLibraryId;
+  if (!account || !library || !recentSearchTransport) return null;
+  try {
+    const context = recentSearchTransport.context();
+    const identity = JSON.stringify([account, library, context]);
+    return {storageKey: `${RECENT_SEARCH_STORAGE_KEY}:${identity}`,
+      continuity: JSON.stringify([identity, recentSearchTransport.generation()])};
+  } catch (_error) {
+    return null;
+  }
+}
+
+function syncRecentSearchScope(records = []) {
+  const ui = ensureRecentSearchState();
+  if (!ui) return null;
+  // Install only when the existing history owner is used: the shared transport
+  // is declared later in the production bundle.
+  const transport = window.AlbumHavenPrivateUITransport || null;
+  const shell = document.getElementById('app-shell');
+  let retired = transport !== recentSearchTransport || shell !== recentSearchShell;
+  if (transport !== recentSearchTransport) {
+    unsubscribeRecentSearchTransport?.();
+    recentSearchTransport = transport;
+    unsubscribeRecentSearchTransport = transport?.subscribe(syncRecentSearchScope) || null;
+  }
+  if (shell !== recentSearchShell) {
+    recentSearchObserver?.disconnect();
+    recentSearchShell = shell;
+    recentSearchObserver = shell && typeof MutationObserver === 'function'
+      ? new MutationObserver(syncRecentSearchScope) : null;
+    recentSearchObserver?.observe(shell, {attributes: true, attributeOldValue: true,
+      attributeFilter: ['data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
+  }
+  // Drain already-observed transitions before admitting another intent. A batched
+  // A-to-B-to-A transition must retire A even when its final stamp is unchanged.
+  const mutations = [...records, ...(recentSearchObserver?.takeRecords?.() || [])];
+  retired ||= mutations.some(record => record.oldValue !== record.target.getAttribute(record.attributeName));
+  const scope = getRecentSearchScope();
+  const continuity = scope?.continuity || null;
+  if (retired || !Object.prototype.hasOwnProperty.call(ui, 'recentSearchScope')
+      || (ui.recentSearchScope?.continuity || null) !== continuity) {
+    const previous = ui.recentSearchScope;
+    ui.recentSearchScope = scope;
+    ui.recentSearchQueries = [];
+    ui.recentSearchesLoaded = false;
+    ui.recentSearchPopoverOpen = false;
+    ui.recentSearchActiveIndex = -1;
+    const {input, popover} = getRecentSearchElements();
+    if (popover) {popover.innerHTML = ''; popover.hidden = true;}
+    input?.setAttribute('aria-expanded', 'false');
+    input?.removeAttribute('aria-activedescendant');
+    if (typeof galleryMainSurfaceController !== 'undefined'
+        && galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
+      closeGalleryMainSurface(false);
+    }
+    if (previous && ui.pendingRecentSearchCommitScope === previous) {
+      clearPendingGallerySearchCommit();
+      releasePendingGallerySearchSuspensions();
+    }
+  }
+  return ui.recentSearchScope;
+}
+
 function normalizeRecentSearchQueries(queries) {
   const normalized = [];
   const seen = new Set();
@@ -40794,16 +41209,17 @@ function normalizeRecentSearchQueries(queries) {
 
 function readRecentSearchQueries() {
   const ui = ensureRecentSearchState();
-  if (!ui) return [];
+  const scope = syncRecentSearchScope();
+  if (!ui || !scope) return [];
   if (!ui.recentSearchesLoaded) {
-    const storedValue = getSessionStorageItem(RECENT_SEARCH_STORAGE_KEY, '');
+    const storedValue = getSessionStorageItem(scope.storageKey, '');
     if (storedValue) {
       try {
         ui.recentSearchQueries = normalizeRecentSearchQueries(JSON.parse(storedValue));
       } catch (_error) {
         ui.recentSearchQueries = [];
         if (typeof removeSessionStorageItem === 'function') {
-          removeSessionStorageItem(RECENT_SEARCH_STORAGE_KEY);
+          removeSessionStorageItem(scope.storageKey);
         }
       }
     }
@@ -40816,13 +41232,14 @@ function recordRecentSearchQuery(query) {
   const value = String(query || '').trim();
   if (!value) return false;
   const ui = ensureRecentSearchState();
-  if (!ui) return false;
+  const scope = syncRecentSearchScope();
+  if (!ui || !scope) return false;
   const key = value.toLocaleLowerCase();
   ui.recentSearchQueries = [
     value,
     ...readRecentSearchQueries().filter((item) => item.toLocaleLowerCase() !== key),
   ].slice(0, RECENT_SEARCH_LIMIT);
-  setSessionStorageItem(RECENT_SEARCH_STORAGE_KEY, JSON.stringify(ui.recentSearchQueries));
+  setSessionStorageItem(scope.storageKey, JSON.stringify(ui.recentSearchQueries));
   return true;
 }
 
@@ -40890,7 +41307,7 @@ function closeRecentSearchPopover() {
 function selectRecentSearchQuery(query) {
   const { input } = getRecentSearchElements();
   const value = String(query || '').trim();
-  if (!input || !value) return false;
+  if (!input || !value || !readRecentSearchQueries().includes(value)) return false;
   input.value = value;
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
@@ -40914,6 +41331,7 @@ function handleGalleryBootstrapSearchClick(event) {
   if (option) {
     event.preventDefault();
     const queries = readRecentSearchQueries();
+    if (!getRecentSearchElements().popover?.contains(option)) return false;
     return selectRecentSearchQuery(queries[Number(option.getAttribute('data-recent-search-index'))]);
   }
   if (event.target.closest('#search-input')) {
@@ -41000,6 +41418,7 @@ function clearPendingGallerySearchCommit() {
   if (!state.ui || typeof state.ui !== 'object') return;
   clearBrowserTimeout(state.ui.pendingSearchCommitTimer);
   state.ui.pendingSearchCommitTimer = 0;
+  state.ui.pendingRecentSearchCommitScope = null;
 }
 
 function beginAlbumDetailPrewarmSearchSuspension() {
@@ -41090,6 +41509,8 @@ function releasePendingGallerySearchSuspensions() {
 }
 
 function scheduleGallerySearchCommit(nextQuery, options = {}) {
+  const recentSearchScope = options.recordRecentSearch === true
+    ? syncRecentSearchScope() : undefined;
   const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
   let committedQuery = String(state.view?.query || '');
   const pendingQuery = state.busy
@@ -41127,8 +41548,12 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   }
   clearPendingGallerySearchCommit();
   const commitSearch = () => {
+    if (options.recordRecentSearch === true
+        && recentSearchScope !== (syncRecentSearchScope())) return;
     state.ui.pendingSearchCommitTimer = 0;
+    state.ui.pendingRecentSearchCommitScope = null;
     commitGallerySearchQuery(normalizedQuery, {
+      recentSearchScope,
       recordRecentSearch: options.recordRecentSearch === true,
       scanPageAbandonHandled: options.scanPageAbandonHandled === true,
     });
@@ -41137,6 +41562,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
     commitSearch();
     return true;
   }
+  state.ui.pendingRecentSearchCommitScope = recentSearchScope;
   state.ui.pendingSearchCommitTimer = scheduleBrowserTimeout(
     commitSearch,
     SEARCH_COMMIT_DEBOUNCE_MS,
@@ -41232,6 +41658,11 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
+  const currentRecentSearchScope = options.recordRecentSearch === true
+    ? syncRecentSearchScope() : undefined;
+  const recentSearchScope = Object.prototype.hasOwnProperty.call(options, 'recentSearchScope')
+    ? options.recentSearchScope : currentRecentSearchScope;
+  if (options.recordRecentSearch === true && recentSearchScope !== currentRecentSearchScope) return;
   const mobileLeaveConfirmed = options.mobileLeaveConfirmed === true;
   if (mobileLeaveConfirmed) {
     beginAlbumDetailPrewarmSearchSuspension();
@@ -41239,7 +41670,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     beginSearchWaveformPeakLoadSuspension();
   }
   if (typeof prepareMobileGallerySearch === 'function'
-    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
+    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, recentSearchScope, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
     releasePendingGallerySearchSuspensions();
     return;
   }
@@ -42209,7 +42640,8 @@ function deferAppFormPageReplacement(onConfirmed) {
   const form = currentMobileFormOwner();
   if (!form) {
     mobilePageState.formReplacement = null;
-    return !mobilePageState.restoring && (window.AlbumHavenSettingsNavigation?.instance?.deferPlaylistDraftNavigation?.(onConfirmed) || false);
+    const navigation = window.AlbumHavenSettingsNavigation?.instance;
+    return !mobilePageState.restoring && ((navigation?.deferCollectionDraftNavigation || navigation?.deferPlaylistDraftNavigation)?.(onConfirmed) || false);
   }
   if (mobilePageState.formReplacement) return Promise.resolve(false);
   const pending = {form}; mobilePageState.formReplacement = pending;
@@ -42357,9 +42789,9 @@ function writeMobilePageHistory(mode = 'push') {
   }
   const snapshot = { ...(window.history.state || {}), mobilePages: mobilePageState.pages.map(page => page.kind === 'form'
     ? {kind: 'form', formToken: page.formToken} : {...page}) };
-  if (mode === 'replace') window.history.replaceState(snapshot, '', url);
+  if (mode === 'replace') window.history.replaceState(window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(snapshot), '', url);
   else if (window.AlbumHavenSettingsNavigation?.instance?.pushLibraryHistory) window.AlbumHavenSettingsNavigation.instance.pushLibraryHistory(url.href, snapshot);
-  else window.history.pushState(snapshot, '', url);
+  else window.history.pushState(window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot(snapshot), '', url);
 }
 // Header Back follows the retained parent, while browser Forward keeps the child.
 function resolveMobileParentPosition(descriptor, previous, snapshot = {}) {
@@ -43276,13 +43708,14 @@ function buildInPageTabsHtml({ id, label, tabs = [], selectedKey } = {}) {
     return `<button type="button" role="tab" id="${escapeHtml(id)}-${escapeHtml(tab.key)}" data-in-page-tab="${escapeHtml(tab.key)}" aria-selected="${active}" tabindex="${active ? 0 : -1}"${tab.panelId ? ` aria-controls="${escapeHtml(tab.panelId)}"` : ''}${tab.disabled ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(tab.label)}</button>`;
   }).join('')}</div>`;
 }
-const mountedInPageTabs = new WeakSet();
+const mountedInPageTabs = new WeakMap();
 function mountInPageTabs(tablist) {
-  if (!tablist || mountedInPageTabs.has(tablist)) return;
-  mountedInPageTabs.add(tablist);
+  if (!tablist) return;
+  if (mountedInPageTabs.has(tablist)) return mountedInPageTabs.get(tablist);
+  let disposed = false;
   const buttons = () => [...tablist.querySelectorAll('[data-in-page-tab]')];
   const select = target => {
-    if (!target || target.disabled || !buttons().includes(target)) return;
+    if (disposed || !target || target.disabled || !buttons().includes(target)) return;
     for (const button of buttons()) {
       const active = button === target;
       button.setAttribute('aria-selected', String(active));
@@ -43292,8 +43725,9 @@ function mountInPageTabs(tablist) {
       if (panel) panel.hidden = !active;
     }
   };
-  tablist.addEventListener('click', event => select(event.target.closest('[data-in-page-tab]')));
-  tablist.addEventListener('keydown', event => {
+  const click = event => select(event.target.closest('[data-in-page-tab]'));
+  const keydown = event => {
+    if (disposed) return;
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const enabled = buttons().filter(button => !button.disabled);
     const index = enabled.indexOf(event.target);
@@ -43303,10 +43737,180 @@ function mountInPageTabs(tablist) {
       : (index + (event.key === 'ArrowRight' ? 1 : -1) + enabled.length) % enabled.length;
     select(enabled[next]);
     enabled[next].focus();
-  });
+  };
+  const owner = {dispose() {
+    if (disposed) return;
+    disposed = true;
+    tablist.removeEventListener('click', click);
+    tablist.removeEventListener('keydown', keydown);
+    if (mountedInPageTabs.get(tablist) === owner) mountedInPageTabs.delete(tablist);
+  }};
+  tablist.addEventListener('click', click);
+  tablist.addEventListener('keydown', keydown);
+  mountedInPageTabs.set(tablist, owner);
+  return owner;
 }
 
 // END js/runtime/in-page-tabs.js
+
+// BEGIN js/runtime/intrinsic-disclosure.js
+
+/* Intrinsic disclosure owns only visibility, toggle semantics and its listeners.
+   Consumers retain the member DOM, semantic state and independent header actions. */
+let intrinsicDisclosurePanelSequence = 0;
+function createIntrinsicDisclosure({members = [], collapsed = {}, enabled = true, onToggle} = {}) {
+  let disposed = false, active = Boolean(enabled), records = new Map(), generation = 0;
+  const current = operation => operation === generation;
+  let choices = new Map(Object.entries(collapsed || {}).map(([key, value]) => [key, Boolean(value)]));
+
+  function own(record, element, name, value) {
+    let attributes = record.attributes.get(element);
+    if (!attributes) {attributes = new Map(); record.attributes.set(element, attributes);}
+    const current = element.getAttribute(name);
+    let attribute = attributes.get(name);
+    if (!attribute) {
+      attribute = {original: current, written: current};
+      attributes.set(name, attribute);
+    } else if (current !== attribute.written) {
+      // A consumer changed this attribute since our last write. Preserve that
+      // new baseline too, rather than overwriting it during eventual release.
+      attribute.original = current;
+    }
+    if (current !== value) {
+      if (value === null) element.removeAttribute(name);
+      else element.setAttribute(name, value);
+    }
+    attribute.written = value;
+  }
+
+  function release(record, operation) {
+    if (!current(operation)) return false;
+    if (record.listening) record.toggle.removeEventListener('click', record.click);
+    record.listening = false;
+    const visibility = record.attributes.get(record.panel);
+    const willConceal = ['hidden', 'inert'].some(name => {
+      const attribute = visibility?.get(name);
+      return attribute && attribute.original !== null && record.panel.getAttribute(name) === attribute.written;
+    });
+    if (willConceal && record.panel.contains(record.panel.ownerDocument.activeElement)) {
+      record.toggle.focus({preventScroll: true});
+      // Focus listeners may renew this exact record or install a replacement.
+      // Never restore/clear leases or remove handlers owned by that successor.
+      if (!current(operation)) return false;
+    }
+    for (const [element, attributes] of record.attributes) {
+      for (const [name, attribute] of attributes) {
+        if (element.getAttribute(name) !== attribute.written) continue;
+        if (attribute.original === null) element.removeAttribute(name);
+        else element.setAttribute(name, attribute.original);
+      }
+    }
+    record.attributes.clear();
+    return true;
+  }
+
+  function panelId(record) {
+    if (record.panel.id) return record.panel.id;
+    const document = record.panel.ownerDocument;
+    if (!record.generatedId || document.getElementById(record.generatedId)) {
+      do {record.generatedId = `intrinsic-disclosure-panel-${++intrinsicDisclosurePanelSequence}`;}
+      while (document.getElementById(record.generatedId));
+    }
+    own(record, record.panel, 'id', record.generatedId);
+    return record.generatedId;
+  }
+
+  function apply(operation) {
+    if (!current(operation) || !active || disposed) return false;
+    // Choose the outermost collapsing member first, regardless of input order.
+    // Its own toggle stays outside the panel that is about to conceal focus.
+    const focusTargets = new Map();
+    for (const record of records.values()) {
+      const document = record.panel.ownerDocument;
+      if (!choices.get(record.key) || !record.panel.contains(document.activeElement)) continue;
+      const previous = focusTargets.get(document);
+      if (!previous || record.panel.contains(previous.panel)) focusTargets.set(document, record);
+    }
+    for (const record of focusTargets.values()) {
+      record.toggle.focus({preventScroll: true});
+      if (!current(operation) || !active || disposed) return false;
+    }
+    for (const record of records.values()) {
+      const closed = Boolean(choices.get(record.key));
+      own(record, record.toggle, 'aria-controls', panelId(record));
+      own(record, record.toggle, 'aria-expanded', String(!closed));
+      own(record, record.panel, 'hidden', closed ? '' : null);
+      own(record, record.panel, 'inert', closed ? '' : null);
+      if (!record.listening) {
+        record.toggle.addEventListener('click', record.click);
+        record.listening = true;
+      }
+    }
+    return true;
+  }
+
+  function reconcile(nextMembers, operation) {
+    const next = new Map(), panels = new Set(), toggles = new Set();
+    for (const member of nextMembers || []) {
+      if (!member || typeof member.key !== 'string' || !member.key || !member.panel || !member.toggle) continue;
+      if (next.has(member.key) || panels.has(member.panel) || toggles.has(member.toggle)) continue;
+      panels.add(member.panel); toggles.add(member.toggle);
+      let record = records.get(member.key);
+      if (record && (record.panel !== member.panel || record.toggle !== member.toggle)) {
+        if (!release(record, operation)) return false;
+        record = null;
+      }
+      if (!record) {
+        record = {key: member.key, panel: member.panel, toggle: member.toggle, header: member.header,
+          attributes: new Map(), listening: false, generatedId: null};
+        record.click = event => {
+          if (disposed || !active || records.get(record.key) !== record || event.defaultPrevented
+              || record.toggle.disabled || record.toggle.getAttribute('aria-disabled') === 'true'
+              || record.toggle.closest('[hidden],[inert]')) return;
+          const operation = ++generation, closed = !choices.get(record.key);
+          choices.set(record.key, closed);
+          if (!apply(operation) || !current(operation) || !active || disposed || records.get(record.key) !== record) return;
+          onToggle?.(record.key, closed);
+        };
+      }
+      record.header = member.header;
+      next.set(member.key, record);
+    }
+    for (const [key, record] of records) {
+      if (!next.has(key) && !release(record, operation)) return false;
+    }
+    // A release may synchronously focus and reenter update. Its successor's
+    // membership is already authoritative; an older reconcile cannot publish.
+    if (!current(operation)) return false;
+    records = next;
+    return true;
+  }
+
+  function update(next = {}) {
+    if (disposed) return;
+    const operation = ++generation;
+    if (Object.prototype.hasOwnProperty.call(next, 'collapsed')) {
+      choices = new Map(Object.entries(next.collapsed || {}).map(([key, value]) => [key, Boolean(value)]));
+    }
+    if (Object.prototype.hasOwnProperty.call(next, 'enabled')) active = Boolean(next.enabled);
+    if (Object.prototype.hasOwnProperty.call(next, 'members') && !reconcile(next.members, operation)) return;
+    if (active) apply(operation);
+    else for (const record of records.values()) if (!release(record, operation)) return;
+  }
+
+  const initialOperation = ++generation;
+  reconcile(members, initialOperation);
+  if (active) apply(initialOperation);
+  return {update, dispose() {
+    if (disposed) return;
+    disposed = true;
+    const operation = ++generation;
+    for (const record of records.values()) release(record, operation);
+    records.clear(); choices.clear();
+  }};
+}
+
+// END js/runtime/intrinsic-disclosure.js
 
 // BEGIN js/runtime/mobile-home.js
 
@@ -43364,18 +43968,50 @@ const PrivateUITransport = (() => {
     }
     return payload;
   }
-  async function request(path, {method = 'GET', body, signal, expected = context()} = {}) {
+  async function request(path, {method = 'GET', body, signal, expected = context(), isCurrent} = {}) {
     if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || /[\\\x00-\x20\x7f]/.test(path)) throw failure('Invalid private request.', 400);
-    if (signal?.aborted || stamp() !== expected) throw abort();
-    const response = await fetch(path, {method, credentials: 'same-origin', cache: 'no-store', signal,
+    // Undefined is the ordinary legacy path, including rejected-await behavior.
+    // Opted-in callers own their epoch; context equality cannot infer that epoch.
+    const guarded = isCurrent !== undefined;
+    const assertCurrent = () => {
+      if (signal?.aborted || stamp() !== expected) throw abort();
+      if (!guarded) return;
+      let current = false;
+      try {current = typeof isCurrent === 'function' && isCurrent() === true;} catch { /* Retired caller. */ }
+      // The caller itself can synchronously retire a signal or change context.
+      if (!current || signal?.aborted || stamp() !== expected) throw abort();
+    };
+    assertCurrent();
+    const options = {method, credentials: 'same-origin', cache: 'no-store', signal,
       headers: {Accept: 'application/json', 'X-AlbumHaven-Context': expected,
         ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
-      ...(body === undefined ? {} : {body: JSON.stringify(body)})});
-    if (signal?.aborted || stamp() !== expected) throw abort();
-    const payload = await response.json();
-    if (signal?.aborted || stamp() !== expected) throw abort();
-    if (!response.ok) throw Object.assign(failure('The request could not be completed.', response.status, payload?.error), {responseRejected: true});
-    return accept(payload, expected);
+      ...(body === undefined ? {} : {body: JSON.stringify(body)})};
+    if (guarded) assertCurrent();
+    let response;
+    try {response = await fetch(path, options);} catch (error) {
+      if (guarded) assertCurrent();
+      throw error;
+    }
+    assertCurrent();
+    let payload;
+    try {payload = await response.json();} catch (error) {
+      if (guarded) assertCurrent();
+      throw error;
+    }
+    assertCurrent();
+    if (!response.ok) {
+      const structuredCode = payload?.error_code;
+      const code = typeof structuredCode === 'string' && structuredCode.length ? structuredCode : payload?.error;
+      const error = Object.assign(failure('The request could not be completed.', response.status, code), {responseRejected: true});
+      if (guarded) assertCurrent();
+      throw error;
+    }
+    // Deliberately outside rejected-I/O catches: accept can revoke continuity,
+    // retire this caller through generation listeners, and throw stale_context.
+    // That current policy failure must remain its original 409, not AbortError.
+    const accepted = accept(payload, expected);
+    if (guarded) assertCurrent();
+    return accepted;
   }
   const query = (path, values) => {
     const params = new URLSearchParams();
@@ -43436,7 +44072,7 @@ function replacePlaylistQueueModes(queue, {shuffle = queue?.shuffle === true, re
   return commitPlaylistQueue(next, queue);
 }
 function commitPlaylistQueue(next, expectedQueue) {
-  if (state.player.playbackQueue !== expectedQueue || !next?.playlistId) throw new Error('The Playlist queue changed.');
+  if (state.player.playbackQueue !== expectedQueue || !(next?.playlistId || next?.libraryMixRef)) throw new Error('The Playlist queue changed.');
   const engine = typeof streamingEngineState === 'function' ? streamingEngineState() : null;
   if (engine?.pendingPromotion || engine?.roles?.current?.boundaryNotified) throw new Error('Wait for the current track transition before changing queue mode.');
   const loopOwned = state.player.loopActive === true;
@@ -43447,7 +44083,8 @@ function commitPlaylistQueue(next, expectedQueue) {
   if (explicitProgression) ExplicitQueueRuntime.modeChanged(expectedQueue, next);
   if (engine && !loopOwned && !explicitProgression) {
     engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
-    const index = playlistQueueNextIndex(next, String(state.player.current?.path || '')), track = index >= 0 ? next.tracks[index] : null;
+    const index = next.playlistId ? playlistQueueNextIndex(next, String(state.player.current?.path || '')) : next.currentIndex + 1;
+    const track = index >= 0 ? next.tracks[index] : null;
     if (track && typeof scheduleStreamingContinuity === 'function') {
       const pending = scheduleStreamingContinuity(track);
       if (typeof observeStreamingFacadeCallback === 'function') observeStreamingFacadeCallback(pending, 'playlist-queue-mode-error');
@@ -43464,7 +44101,7 @@ function commitPlaylistQueue(next, expectedQueue) {
 /* Private native track refs stay here; React receives only public preferences
    and opaque identities. Persistence and playback retain their existing owners. */
 const TrackActionsRuntime = (() => {
-  const identities = new Map(), pending = new Map(), confirmed = new Map(), denied = new Set();
+  const identities = new Map(), inventoryIdentities = new Map(), pending = new Map(), confirmed = new Map(), denied = new Set();
   const preferenceListeners = new Set(), playbackListeners = new Set();
   let owner = null, ownerToken = null, serial = 0, preferenceEpoch = 0, lastPlayback = null;
   const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
@@ -43478,7 +44115,7 @@ const TrackActionsRuntime = (() => {
     const actor = String(shell?.dataset?.nativeAccountId ?? home?.dataset?.homeAccountId ?? '');
     const library = String(shell?.dataset?.nativeLibraryId ?? home?.dataset?.homeLibraryId ?? '');
     const key = JSON.stringify([actor, library, PrivateUITransport.generation()]);
-    if (key !== owner) {owner = key; ownerToken = {}; identities.clear(); confirmed.clear(); denied.clear(); preferenceEpoch++;}
+    if (key !== owner) {owner = key; ownerToken = {}; identities.clear(); inventoryIdentities.clear(); confirmed.clear(); denied.clear(); preferenceEpoch++;}
     return {actor, library, key, token: ownerToken};
   }
   function overlay(value) {
@@ -43492,68 +44129,141 @@ const TrackActionsRuntime = (() => {
     return own(source, 'track_ref') && typeof source.track_ref === 'string' && source.track_ref.trim()
       ? source.track_ref.trim() : null;
   }
+  function recordFor(track) {
+    if (!identities.has(track)) identities.set(track, {identity: `native-track:${++serial}`, serial,
+      refs: new Set([track]), inventory: null, canonical: null, version: 0, invalid: false, refreshRequired: false});
+    return identities.get(track);
+  }
+  function pendingFor(record, current) {
+    return [...pending.values()].filter(operation => operation.actor === current.actor && operation.library === current.library
+      && (operation.record === record || record.inventory && operation.inventory === record.inventory
+        || record.refs.has(operation.writeRef) || [...operation.record.refs].some(value => record.refs.has(value))));
+  }
+  function admit(source, current, deniedInBatch) {
+    const track = ref(source), canonical = typeof source.canonical_track_ref === 'string' && source.canonical_track_ref.trim() || null;
+    const inventory = typeof source.inventory_track_ref === 'string' ? source.inventory_track_ref : null;
+    const match = inventory?.match(/^inventory-track:([1-9]\d*):([1-9]\d*)$/);
+    const original = recordFor(track);
+    if (!inventory && !canonical) return original;
+    if (!match || match[1] !== current.library) {original.invalid = true; original.version++; return original;}
+    const refs = [...new Set([track, canonical].filter(Boolean))];
+    const records = [...new Set([original, inventoryIdentities.get(inventory), ...refs.map(value => identities.get(value))].filter(Boolean))];
+    const conflict = records.some(record => record.invalid || record.inventory && record.inventory !== inventory
+      || canonical && record.canonical && record.canonical !== canonical);
+    const survivor = records.sort((a, b) => a.serial - b.serial)[0];
+    const transports = records.flatMap(record => pendingFor(record, current));
+    if (conflict || records.length > 1) {
+      for (const record of records) record.version++;
+      survivor.refreshRequired ||= transports.length > 0;
+    }
+    const wasDenied = records.some(record => denied.has(record));
+    const deniedValue = records.filter(record => denied.has(record)).map(record => confirmed.get(record)).find(Boolean);
+    if (records.some(record => deniedInBatch?.has(record))) deniedInBatch.add(survivor);
+    for (const record of records) {
+      for (const alias of record.refs) {survivor.refs.add(alias); identities.set(alias, survivor);}
+      if (record !== survivor) {confirmed.delete(record); denied.delete(record);}
+    }
+    if (wasDenied) {denied.add(survivor); if (deniedValue) confirmed.set(survivor, deniedValue);}
+    for (const alias of refs) {survivor.refs.add(alias); identities.set(alias, survivor);}
+    for (const operation of transports) operation.record = survivor;
+    survivor.inventory = inventory;
+    survivor.canonical ||= canonical;
+    survivor.invalid ||= conflict;
+    inventoryIdentities.set(inventory, survivor);
+    return survivor;
+  }
   function preference(source) {
     const value = own(source, 'track_preference') ? overlay(source.track_preference) : null, track = ref(source), current = scope();
     if (!value || !track || !current.actor || !current.library) return null;
-    if (!identities.has(track)) identities.set(track, `native-track:${++serial}`);
     if (source.read_only_subject) return Object.freeze({identity: `subject:${source.read_only_subject}:${source.inventory_track_ref || track}`,
       love_tier: value.love_tier, rating: value.rating, allowed_actions: Object.freeze({can_set_love_tier: false})});
-    const saved = confirmed.get(track);
-    return Object.freeze({identity: identities.get(track), love_tier: saved?.love_tier ?? value.love_tier,
+    const record = recordFor(track);
+    if (record.invalid || record.refreshRequired && !denied.has(record) || record.inventory && source.inventory_track_ref && record.inventory !== source.inventory_track_ref
+      || record.canonical && source.canonical_track_ref && record.canonical !== source.canonical_track_ref) return null;
+    const saved = confirmed.get(record);
+    return Object.freeze({identity: record.identity, love_tier: saved?.love_tier ?? value.love_tier,
       rating: saved ? saved.rating : value.rating,
-      allowed_actions: Object.freeze({can_set_love_tier: value.allowed_actions.can_set_love_tier && !denied.has(track)})});
+      allowed_actions: Object.freeze({can_set_love_tier: value.allowed_actions.can_set_love_tier && (!saved || saved.allowed_actions.can_set_love_tier) && !record.refreshRequired && !denied.has(record)})});
   }
   function readEpoch() {scope(); return preferenceEpoch;}
-  function acceptRead(source, epoch) {
-    if (source?.read_only_subject) return;
-    const track = ref(source);
-    const value = own(source, 'track_preference') ? overlay(source.track_preference) : null;
-    if (epoch === readEpoch() && track && value) {
-      const previous = confirmed.get(track), wasDenied = denied.delete(track);
-      confirmed.set(track, value);
-      if (wasDenied || previous && (previous.love_tier !== value.love_tier || previous.rating !== value.rating)) notify(preferenceListeners);
+  function acceptRead(source, epoch, deniedInBatch, onAccepted) {
+    if (source?.read_only_subject || epoch !== readEpoch()) return false;
+    const track = ref(source), value = own(source, 'track_preference') ? overlay(source.track_preference) : null;
+    if (!track || !value) return false;
+    const current = scope();
+    if (!current.actor || !current.library) return false;
+    const record = admit(source, current, deniedInBatch);
+    if (!value.allowed_actions.can_set_love_tier) {
+      if (!denied.has(record)) {record.version++; preferenceEpoch++;}
+      denied.add(record); deniedInBatch?.add(record);
+      if (!record.invalid) confirmed.set(record, value);
+    } else if (!record.invalid && !deniedInBatch?.has(record) && !pendingFor(record, current).length) {
+      if (denied.delete(record) || record.refreshRequired) preferenceEpoch++;
+      record.refreshRequired = false; confirmed.set(record, value);
     }
+    const accepted = !record.invalid;
+    if (accepted) onAccepted?.(preferenceEpoch);
+    notify(preferenceListeners); return accepted;
   }
+
+  // One completed native response can contain unrelated tracks and duplicate
+  // aliases. Its own denials advance the epoch without discarding other rows;
+  // a denial cannot be undone by a sibling read from that same response.
+  function readBatch(epoch) {
+    const deniedInBatch = new Set(), owner = scope().token;
+    let admittedEpoch = epoch;
+    return Object.freeze({get epoch() {return admittedEpoch;}, accept(source) {
+      if (owner !== scope().token) return false;
+      // Advance only this admission's epoch before synchronous subscribers run.
+      return acceptRead(source, admittedEpoch, deniedInBatch, next => {admittedEpoch = next;});
+    }});
+  }
+
   async function setLove({source, love_tier, signal, isCurrent} = {}) {
-    const current = scope(), track = ref(source), value = preference(source);
+    const current = scope(), track = ref(source), value = preference(source), record = track && recordFor(track);
+    const version = record?.version, writeRef = record?.canonical || track;
     const active = () => {
-      try {return !signal?.aborted && current.token === scope().token && typeof isCurrent === 'function' && isCurrent() === true;}
+      try {return !signal?.aborted && current.token === scope().token && record?.version === version && !record.invalid && !record.refreshRequired
+        && identities.get(track) === record && !denied.has(record) && typeof isCurrent === 'function' && isCurrent() === true;}
       catch {return false;}
     };
     if (!active()) throw aborted();
     if (!tiers.includes(love_tier)) throw failure('Invalid track love tier.');
     if (!value || value.allowed_actions.can_set_love_tier !== true) throw failure('Track love editing is unavailable.', 403);
-    const pendingKey = JSON.stringify([current.actor, current.library, track]);
-    if (pending.has(pendingKey)) throw failure('A track love change is already pending.', 409);
-    const request = {};
-    pending.set(pendingKey, request);
+    if (pendingFor(record, current).length) throw failure('A track love change is already pending.', 409);
+    const request = {actor: current.actor, library: current.library, record, inventory: record.inventory, writeRef};
+    pending.set(request, request);
     try {
-      // session-csrf-fetch owns CSRF, credentials, and the underlying fetch.
-      // The live route has neither a revision nor an idempotency-key contract.
-      // UI cancellation suppresses publication, but cannot undo a dispatched
-      // write. Keep its guard until transport finishes, including scope changes.
+      // Cancellation cannot undo a dispatched write. Retain its transport lock
+      // through alias admission, owner changes, and caller cancellation.
       const response = await fetch('/track-preferences', {method: 'POST', credentials: 'same-origin', cache: 'no-store',
         headers: {Accept: 'application/json', 'Content-Type': 'application/json'},
-        body: JSON.stringify({track_ref: track, track_preference: {love_tier}})});
+        body: JSON.stringify({track_ref: writeRef, track_preference: {love_tier}})});
       if (!active()) throw aborted();
       if (!response.ok) throw failure('Track love could not be saved.', response.status);
       const result = await response.json();
       if (!active()) throw aborted();
       const acknowledged = overlay(result?.track_preference);
       if (result?.ok !== true || result.actor_id !== current.actor || String(result.library_id) !== current.library
-        || result.track_ref !== track || !acknowledged || acknowledged.love_tier !== love_tier
+        || result.track_ref !== writeRef || !acknowledged || acknowledged.love_tier !== love_tier
         || acknowledged.allowed_actions.can_set_love_tier !== true) throw failure('Track love returned an invalid acknowledgement.');
-      confirmed.set(track, acknowledged); denied.delete(track); preferenceEpoch++;
+      confirmed.set(record, acknowledged); denied.delete(record); preferenceEpoch++;
       notify(preferenceListeners);
       return Object.freeze({identity: value.identity, ...acknowledged});
     } catch (error) {
-      if (!active()) throw aborted();
-      if (active() && (error.status === 401 || error.status === 403)) {
-        denied.add(track); preferenceEpoch++; notify(preferenceListeners);
+      if (!active()) {request.record.refreshRequired = true; request.stale = true; throw aborted();}
+      if (error.status === 401 || error.status === 403) {
+        denied.add(record); preferenceEpoch++; notify(preferenceListeners);
       }
       throw error;
     } finally {
-      if (pending.get(pendingKey) === request) pending.delete(pendingKey);
+      pending.delete(request);
+      // Only a read begun after an unpublishable transport settled may restore
+      // authority; an earlier read could precede the dispatched server write.
+      if (request.stale) {
+        const live = scope();
+        if (live.actor === request.actor && live.library === request.library) {preferenceEpoch++; notify(preferenceListeners);}
+      }
     }
   }
   function canPlay(source) {
@@ -43593,7 +44303,7 @@ const TrackActionsRuntime = (() => {
     lastPlayback = next; notify(playbackListeners);
   }
   const subscribe = (listeners, listener) => {listeners.add(listener); return () => listeners.delete(listener);};
-  return Object.freeze({scope, overlay, preference, setLove, canPlay, play, readEpoch, acceptRead, playback, syncPlayback,
+  return Object.freeze({scope, overlay, preference, setLove, canPlay, play, readEpoch, acceptRead, readBatch, playback, syncPlayback,
     subscribePreferences: listener => subscribe(preferenceListeners, listener),
     subscribePlayback: listener => subscribe(playbackListeners, listener)});
 })();
@@ -43731,7 +44441,7 @@ function createExplicitQueuePlanner({canPlay = () => false} = {}) {
    facade. Source callbacks hold private authority; public snapshots never do. */
 const ExplicitQueueRuntime = (() => {
   let scopeToken=null, planner=null, serial=0, session=0, generation=0, snapshot=null;
-  let prepared=null, refreshController=null, pendingStart=null, snapshotFacts='', successorCache=null;
+  let prepared=null, refreshController=null, pendingStart=null, snapshotFacts='', successorCache=null, metadataRequest=0;
   const sources=new Map(), listeners=new Set(), trackKeys=new WeakMap(), queues=new WeakMap();
   const aborted=()=>Object.assign(new Error('Queue action was superseded.'),{name:'AbortError'});
   const notify=()=>{snapshot=null;for(const listener of [...listeners])try{listener();}catch{/* Paint cannot change playback. */}};
@@ -43739,11 +44449,47 @@ const ExplicitQueueRuntime = (() => {
   const permitted=()=>!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows?.('library.media.read')===true;
   const sourceCurrent=(source,media=true)=>{try{return source?.scope===scopeToken&&source.capture.isCurrent()===true&&(!media||permitted());}catch{return false;}};
   const denySource=source=>{
-    source.readable=false;source.authorityEpoch=(source.authorityEpoch||0)+1;
+    source.readable=false;source.metadataTarget=null;source.target=null;source.playFailed=true;source.authorityEpoch=(source.authorityEpoch||0)+1;
     const entry=prepared?.next?.source==='explicit'&&planner?.getSnapshot().entries.find(value=>value.id===prepared.next.entryId);
     if(entry&&sources.get(entry.trackId)===source){refreshController?.abort();generation++;prepared=null;retireContinuity('queue-source-revoked');}
   };
-  const playable=id=>{const source=sources.get(id);return Boolean(sourceCurrent(source)&&source.readable!==false&&source.target&&TrackActionsRuntime.canPlay(source.target));};
+  const playable=id=>{const source=sources.get(id),target=source?.metadataTarget;
+    return Boolean(sourceCurrent(source)&&source.readable!==false&&!source.playFailed&&target?.availability==='local'
+      &&target.allowed_actions?.can_play!==false&&target.playback_state?.can_start_here===true);};
+  const sourcePreference=source=>sourceCurrent(source,false)&&source.readable!==false&&!source.metadataTarget?.read_only_subject
+    ?TrackActionsRuntime.preference(source.metadataTarget):null;
+  function bindIdentity(source,target) {
+    if(!target||source.inventory&&target.inventory_track_ref!==source.inventory
+      ||source.canonical&&target.canonical_track_ref&&target.canonical_track_ref!==source.canonical)
+      throw Object.assign(new Error('This queued track identity changed.'),{status:409});
+    source.inventory ||= target.inventory_track_ref||null;
+    source.canonical ||= target.canonical_track_ref||null;
+  }
+  async function readMetadata(source,signal) {
+    if(signal.aborted||!sourceCurrent(source,false))throw aborted();
+    const authorityEpoch=source.authorityEpoch,target=await source.capture.resolveMetadata({signal});
+    if(signal.aborted||!sourceCurrent(source,false)||source.authorityEpoch!==authorityEpoch)throw aborted();
+    if(!target||target.source_readable===false||target.allowed_actions?.can_read===false)
+      throw Object.assign(new Error('This queued source is unreadable.'),{status:403});
+    return Object.freeze({...target});
+  }
+  function acceptMetadata(source,target,batch,freshPlayTarget=null) {
+    bindIdentity(source,target);
+    source.readable=true;source.playFailed=false;
+    source.display=Object.freeze({...source.display,title:String(target.title||''),artist:String(target.artist||target.secondary_artist||''),album:String(target.album_title||'')});
+    // Admit canonical and supported path alias together, before any denial can
+    // advance the read epoch. A rejected read cannot grant Queue preference UI.
+    const admission=freshPlayTarget?.track_ref&&freshPlayTarget.inventory_track_ref===target.inventory_track_ref
+      ?{...target,track_ref:freshPlayTarget.track_ref}:target;
+    const epoch=batch.epoch,accepted=batch.accept(admission)===true;
+    const previous=source.metadataTarget;
+    const retained=!accepted&&epoch!==TrackActionsRuntime.readEpoch()&&TrackActionsRuntime.overlay(target.track_preference)?.allowed_actions.can_set_love_tier===true&&previous
+      &&previous.track_ref===target.track_ref&&previous.inventory_track_ref===target.inventory_track_ref
+      &&previous.canonical_track_ref===target.canonical_track_ref?previous.track_preference:null;
+    source.metadataTarget=accepted?target:Object.freeze({...target,track_preference:retained});
+    if(target.availability!=='local'||target.playback_state?.can_start_here!==true)source.target=null;
+    return accepted;
+  }
   function sync() {
     const scope=TrackActionsRuntime.scope();
     if(scope.token!==scopeToken) {
@@ -43835,6 +44581,7 @@ const ExplicitQueueRuntime = (() => {
     if(target?.source_readable===false||target?.allowed_actions?.can_read===false)throw Object.assign(new Error('This queued source is unreadable.'),{status:403});
     if(!target||['missing','unknown','unresolved'].includes(target.availability)
       ||target.allowed_actions?.can_play===false||target.playback_state?.can_start_here!==true||!TrackActionsRuntime.canPlay(target))throw new Error('This queued track is unavailable.');
+    bindIdentity(source,target);
     return Object.freeze({...target});
   }
   async function refresh() {
@@ -43852,8 +44599,8 @@ const ExplicitQueueRuntime = (() => {
       // Fresh authorization is required before handing media to native preload.
       while(candidate?.source==='explicit'&&!candidate.ended) {
         const entry=planner.getSnapshot().entries.find(value=>value.id===candidate.entryId),source=sources.get(entry?.trackId);
-        try {source.target=await resolve(source,controller.signal);source.readable=true;}
-        catch(error){if(controller.signal.aborted||token!==generation)throw aborted();if(source){source.target=null;if([401,403,404].includes(error.status))denySource(source);}notify();candidate=preview();continue;}
+        try {source.target=await resolve(source,controller.signal);source.playFailed=false;}
+        catch(error){if(controller.signal.aborted||token!==generation)throw aborted();if(source){source.target=null;source.playFailed=true;}notify();candidate=preview();continue;}
         break;
       }
       if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority())return null;
@@ -43888,7 +44635,11 @@ const ExplicitQueueRuntime = (() => {
     snapshotFacts=facts;
     const entries=value.entries.map(entry=>{
       const source=sources.get(entry.trackId),available=playable(entry.trackId),current=entry.id===value.currentId;
-      return Object.freeze({id:entry.id,blockId:entry.blockId,...(sourceCurrent(source,false)&&source?.readable!==false?source?.display:{title:'Unavailable track',artist:'',album:''}),timing:entry.timing,ready:entry.ready,current,sourceReadable:sourceCurrent(source,false)&&source?.readable!==false,
+      const readable=sourceCurrent(source,false)&&source?.readable!==false,target=readable?source?.metadataTarget:null;
+      const duration=target?.duration_seconds;
+      return Object.freeze({duration_seconds:typeof duration==='number'&&Number.isFinite(duration)&&duration>=0?duration:null,
+        availability:readable&&['local','missing','unresolved','unknown'].includes(target?.availability)?target.availability:'unknown',
+        track_preference:readable?sourcePreference(source):null,id:entry.id,blockId:entry.blockId,...(sourceCurrent(source,false)&&source?.readable!==false?source?.display:{title:'Unavailable track',artist:'',album:''}),timing:entry.timing,ready:entry.ready,current,sourceReadable:sourceCurrent(source,false)&&source?.readable!==false,
         canPlay:available&&!stopPriority()&&planner.canStart(entry.id,playback().ended||!state.player.current?null:context),
         status:!available?'Unavailable · source or local track':current?'Current queued track':entry.invalid?`Unavailable · ${entry.invalid}`
           :!value.enabled?'Paused · queue is deactivated':value.halted?'Paused · playback stopped'
@@ -43930,33 +44681,82 @@ const ExplicitQueueRuntime = (() => {
       try {
         if(!active())throw aborted();
         for(const capture of captures) {
-          if(typeof capture?.resolve!=='function'||typeof capture.isCurrent!=='function')throw new Error('Queue source cannot be refreshed.');
+          if(typeof capture?.resolve!=='function'||typeof capture.resolveMetadata!=='function'||typeof capture.isCurrent!=='function')throw new Error('Queue source cannot be refreshed.');
           const targets={};
           for(const kind of ['album','artist']) {
             const projected=window.AlbumHavenResourceSelection?.projectTarget(capture.display?.[`${kind}Target`]);
             if(projected?.kind===kind) {const {native_actions,...publicTarget}=projected;targets[`${kind}Target`]=Object.freeze(publicTarget);}
           }
           const display=Object.freeze({title:String(capture.display?.title||''),artist:String(capture.display?.artist||''),album:String(capture.display?.album||''),...targets});
-          const source={scope:actor,capture,display,target:null,readable:true,authorityEpoch:0};captured.push(source);
+          const source={scope:actor,capture,display,target:null,metadataTarget:null,readable:true,playFailed:false,authorityEpoch:0,inventory:null,canonical:null};captured.push(source);
         }
-        await Promise.all(captured.map(async source=>{source.target=await resolve(source,controller.signal);}));
-        if(!active())throw aborted();editable();
+        const preferenceEpoch=TrackActionsRuntime.readEpoch();
+        const metadata=await Promise.all(captured.map(async source=>{
+          const target=await readMetadata(source,controller.signal);bindIdentity(source,target);
+          source.target=await resolve(source,controller.signal);return target;
+        }));
+        if(!active())throw aborted();
+        const batch=TrackActionsRuntime.readBatch(preferenceEpoch);
+        // These already-completed reads are admitted synchronously as one batch.
+        // Advance only after our own accepted read changes the shared epoch.
+        captured.forEach((source,index)=>{
+          if(!active()||!sourceCurrent(source))throw aborted();
+          acceptMetadata(source,metadata[index],batch,source.target);
+        });
+        // Preference subscribers may retire the request or any captured source.
+        if(!active()||captured.some(source=>!sourceCurrent(source)))throw aborted();
+        editable();
+        if(!active()||captured.some(source=>!sourceCurrent(source)))throw aborted();
         const keys=captured.map(source=>{const key=`request-${++serial}`;sources.set(key,source);return key;});
         const ids=planner.enqueue(keys,timing,before);if(!ids.length)keys.forEach(key=>sources.delete(key));changed();return ids;
       } finally {options.signal?.removeEventListener('abort',cancel);}
     },
     async refresh(options={}) {
-      sync();const actor=scopeToken,token=generation,controller=new AbortController();
+      sync();const actor=scopeToken,token=generation,read=++metadataRequest,controller=new AbortController();
+      const preferenceEpoch=TrackActionsRuntime.readEpoch();
       const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});
-      const entries=[...sources.values()];
-      if(!entries.length){options.signal?.removeEventListener('abort',cancel);return getSnapshot();}
+      const entries=[...sources.values()],eligibility=[...sources.keys()].map(playable);
       try {
         if(options.signal?.aborted)throw aborted();
-        const updates=await Promise.all(entries.map(async source=>{try{return {target:await resolve(source,controller.signal),readable:true};}
-          catch(error){if(controller.signal.aborted)throw error;return {target:null,readable:![401,403,404].includes(error.status)&&source.readable!==false};}}));
-        if(controller.signal.aborted||actor!==TrackActionsRuntime.scope().token||token!==generation)throw aborted();
-        editable();entries.forEach((source,index)=>{if(updates[index].readable===false)denySource(source);Object.assign(source,updates[index]);});changed();return getSnapshot();
+        const updates=await Promise.all(entries.map(async source=>{
+          try {return {target:await readMetadata(source,controller.signal)};}
+          catch(error){if(controller.signal.aborted||error.name==='AbortError')throw error;return {error};}
+        }));
+        const retained=new Set(sources.values());
+        if(controller.signal.aborted||actor!==TrackActionsRuntime.scope().token||token!==generation||read!==metadataRequest
+          ||entries.some(source=>!sourceCurrent(source,false)||!retained.has(source)))throw aborted();
+        const batch=TrackActionsRuntime.readBatch(preferenceEpoch);
+        entries.forEach((source,index)=>{
+          const update=updates[index];
+          try {
+            if(update.error)throw update.error;
+            acceptMetadata(source,update.target,batch);
+          } catch(error) {
+            source.metadataTarget=null;source.target=null;source.playFailed=true;
+            if([401,403,404,409].includes(error.status))denySource(source);
+          }
+        });
+        notify();const result=getSnapshot();
+        if([...sources.keys()].some((key,index)=>playable(key)!==eligibility[index]))reschedule();
+        return result;
       } finally {options.signal?.removeEventListener('abort',cancel);}
+    },
+    trackPreference(row) {
+      sync();const entry=planner.getSnapshot().entries.find(value=>value.id===row?.id);
+      return sourcePreference(sources.get(entry?.trackId));
+    },
+    subscribeTrackPreferences(listener) {return TrackActionsRuntime.subscribePreferences(listener);},
+    async setTrackLove({row,love_tier,signal,isCurrent}={}) {
+      sync();const entry=planner.getSnapshot().entries.find(value=>value.id===row?.id),source=sources.get(entry?.trackId);
+      const actor=scopeToken,authorityEpoch=source?.authorityEpoch,preference=sourcePreference(source),target=source?.metadataTarget;
+      if(!preference||!target)throw Object.assign(new Error('Track love editing is unavailable.'),{status:403});
+      return TrackActionsRuntime.setLove({source:target,love_tier,signal,isCurrent:()=>{
+        try {return actor===TrackActionsRuntime.scope().token&&sourceCurrent(source,false)&&source.readable!==false
+          &&source.authorityEpoch===authorityEpoch&&sources.get(entry.trackId)===source
+          &&planner.getSnapshot().entries.some(value=>value.id===row.id&&value.trackId===entry.trackId)
+          &&sourcePreference(source)?.identity===preference.identity&&sourcePreference(source)?.allowed_actions.can_set_love_tier===true
+          &&(!isCurrent||isCurrent()===true);}catch{return false;}
+      }});
     },
     async playlistSelection(ids,options={}) {
       sync();const actor=scopeToken;
@@ -44017,7 +44817,7 @@ const ExplicitQueueRuntime = (() => {
       const previousQueue=state.player.playbackQueue;let installed=null,started=false,selectedToken=null;
       const cancel=()=>controller.abort();options.signal?.addEventListener('abort',cancel,{once:true});pendingStart=controller;
       try {
-        try {source.target=await resolve(source,controller.signal);source.readable=true;}catch(error){source.target=null;if([401,403,404].includes(error.status))denySource(source);notify();throw error;}
+        try {source.target=await resolve(source,controller.signal);source.playFailed=false;}catch(error){source.target=null;source.playFailed=true;notify();throw error;}
         if(options.signal?.aborted||controller.signal.aborted||token!==generation||actor!==TrackActionsRuntime.scope().token
           ||options.isCurrent&&options.isCurrent()!==true||planner.getSnapshot()!==value)throw aborted();
         const context=planner.start(id,current),track=payload(context);if(!context||!track)throw aborted();
@@ -44036,6 +44836,7 @@ const ExplicitQueueRuntime = (() => {
       }
     },
   };
+  TrackActionsRuntime.subscribePreferences(()=>notify());
   TrackActionsRuntime.subscribePlayback?.(()=>notify());
   PrivateUITransport.subscribe?.(()=>{sync();notify();});
   window.AlbumHavenExplicitQueue=Object.freeze(api);
@@ -44111,15 +44912,33 @@ function captureNativeAlbumQueueSources(album, rows) {
   let request=null;
   const load=signal=>{
     if(request&&request.signal===signal)return request.promise;
-    const pending={signal};pending.promise=fetchTrackModalAlbumDetails(albumRef,{signal}).finally(()=>{if(request===pending)request=null;});
+    const pending={signal};pending.promise=fetchTrackModalAlbumDetails(albumRef,{signal,
+      // Queue owns the one captured-epoch batch for these metadata/play reads.
+      admitPreferences:false,isCurrent:()=>TrackActionsRuntime.scope().token===scope.token}).finally(()=>{if(request===pending)request=null;});
     request=pending;return pending.promise;
   };
   return rows.map(row=>{
     const inventoryRef=row?.inventory_track_ref,path=String(row?.path||'');
+    let canonicalRef=row?.canonical_track_ref||null;
     if(!path||row.source_readable===false||row.availability==='missing')throw new Error('This Album track is unavailable.');
     const metadata=explicitQueueAlbumMetadata(album,row);
     return Object.freeze({display:Object.freeze({title:metadata.title,artist:metadata.artist,album:metadata.album_title}),
       isCurrent:()=>TrackActionsRuntime.scope().token===scope.token,
+      async resolveMetadata({signal}={}) {
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const fresh=await load(signal);
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const matches=(fresh?.track_rows||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(getAlbumPlaybackQueueRef(fresh)!==albumRef||fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false
+          ||!track||track.source_readable===false||track.allowed_actions?.can_read===false)
+          throw Object.assign(new Error('This Album source is unavailable.'),{status:403});
+        if(canonicalRef&&track.canonical_track_ref&&canonicalRef!==track.canonical_track_ref)
+          throw Object.assign(new Error('This Album track identity changed.'),{status:409});
+        canonicalRef ||= track.canonical_track_ref||null;
+        return {...track,...explicitQueueAlbumMetadata(fresh,track),source_readable:true,
+          availability:track.availability??(track.playback_state?.can_start_here===true?'local':'unknown')};
+      },
       async resolve({signal}={}) {
         if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
         const fresh=await load(signal);
@@ -44171,8 +44990,42 @@ function captureNativeAlbumQueueSources(album, rows) {
   });
 }
 
+// Both temporary Mix starts and explicit-queue returns revalidate the captured
+// source. A temporary source ref is never used as a saved Playlist identity.
+async function readLibraryMixNativeQueue({sourceRef, sourceRevision, entryRefs, startingEntryRef, signal}) {
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!uuid(sourceRef) || !uuid(sourceRevision) || !Array.isArray(entryRefs) || !entryRefs.length || entryRefs.length > 5000
+    || entryRefs.some(ref => !uuid(ref)) || new Set(entryRefs).size !== entryRefs.length || !entryRefs.includes(startingEntryRef))
+    throw new Error('Mix queue membership is unavailable.');
+  const reply = await PrivateUITransport.request('/playlists/creation-source/library-mix/native-queue', {
+    method: 'POST', signal, body: {source_ref: sourceRef, source_revision: sourceRevision,
+      entry_refs: entryRefs, starting_entry_ref: startingEntryRef}});
+  const data = reply?.data;
+  if (reply.status !== 'ready' || data?.source_protocol !== 'library_mix_selection_v1' || data.source?.kind !== 'library'
+    || data.source.ref !== sourceRef || data.source.revision !== sourceRevision || data.starting_item_ref !== startingEntryRef
+    || !Array.isArray(data.tracks) || !Array.isArray(data.unavailable_item_refs)) throw new Error('Mix playback was not acknowledged.');
+  const admitted = data.tracks.map(item => item?.playlist_item_id), missing = new Set(data.unavailable_item_refs);
+  const returned = [...admitted, ...data.unavailable_item_refs], requested = new Set(entryRefs);
+  if (returned.length !== entryRefs.length || new Set(returned).size !== returned.length || returned.some(ref => !requested.has(ref))
+    || !admitted.includes(startingEntryRef) || JSON.stringify(admitted) !== JSON.stringify(entryRefs.filter(ref => !missing.has(ref))))
+    throw new Error('Mix queue membership changed.');
+  for (const item of data.tracks) {
+    const target = item.native_target;
+    if (typeof target?.path !== 'string' || !target.path || target.playlist_item_id !== item.playlist_item_id
+      || !TrackActionsRuntime.canPlay({...target, playback_state: {can_start_here: true}})) throw new Error('Mix playback is unavailable.');
+  }
+  return data;
+}
+
 async function refreshExplicitQueueReturnTrack(context, track, {signal} = {}) {
   const queue=context?.nativeQueue;
+  if (queue?.libraryMixRef && !queue.playlistId && track?.playlistItemId) {
+    const data = await readLibraryMixNativeQueue({sourceRef: queue.libraryMixRef, sourceRevision: queue.playlistRevision,
+      entryRefs: queue.sourceEntryRefs, startingEntryRef: track.playlistItemId, signal});
+    const target = data.tracks.find(item => item.playlist_item_id === track.playlistItemId)?.native_target;
+    if (target?.path !== track.path) throw new Error('The temporary Mix playback context is unavailable.');
+    return {...track, title: target.title, artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds};
+  }
   if(queue?.playlistId&&track?.playlistItemId) {
     const reply=await PrivateUITransport.request(`/playlists/${encodeURIComponent(queue.playlistId)}/items/${encodeURIComponent(track.playlistItemId)}/native-target?intent=play`,{signal});
     const value=reply?.data,target=value?.native_target;
@@ -44202,9 +45055,35 @@ function captureNativeLooseQueueSources(view, rows) {
   };
   return rows.map(row=>{
     const inventoryRef=row?.inventory_track_ref,path=String(row?.path||'');
+    let canonicalRef=row?.canonical_track_ref||null;
     if(!path||row.source_readable===false||row.availability==='missing')throw new Error('This Loose Track is unavailable.');
     return Object.freeze({display:Object.freeze({title:String(row.title||''),artist:String(row.artist||''),album:''}),
       isCurrent:()=>TrackActionsRuntime.scope().token===scope.token,
+      async resolveMetadata({signal}={}) {
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        const {response,fresh}=await load(signal);
+        if(signal?.aborted||TrackActionsRuntime.scope().token!==scope.token)throw Object.assign(new Error('Queue source was superseded.'),{name:'AbortError'});
+        if(!response.ok)throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:response.status});
+        const matches=(fresh?.non_album_tracks||[]).filter(track=>inventoryRef?track.inventory_track_ref===inventoryRef:track.path===path);
+        const track=matches.length===1?matches[0]:null;
+        if(fresh?.ok===false||fresh?.source_readable===false||fresh?.allowed_actions?.can_read===false
+          ||!track||track.source_readable===false||track.allowed_actions?.can_read===false)
+          throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:403});
+        if(canonicalRef&&track.canonical_track_ref&&canonicalRef!==track.canonical_track_ref)
+          throw Object.assign(new Error('This Loose Track identity changed.'),{status:409});
+        canonicalRef ||= track.canonical_track_ref||null;
+        // Unresolved personal metadata is unknown, not a read-only Off denial.
+        const preferenceInventory=typeof track.inventory_track_ref==='string'
+          ?track.inventory_track_ref.match(/^inventory-track:([1-9]\d*):[1-9]\d*$/):null;
+        const preferenceAvailable=track.track_preference_state==='available'&&preferenceInventory?.[1]===scope.library
+          &&typeof track.canonical_track_ref==='string'&&Boolean(track.canonical_track_ref.trim())
+          &&!fresh.read_only_subject&&!track.read_only_subject&&fresh.readable!==false&&track.readable!==false
+          &&(!Object.hasOwn(fresh.allowed_actions||{},'can_read')||fresh.allowed_actions.can_read===true)
+          &&(!Object.hasOwn(track.allowed_actions||{},'can_read')||track.allowed_actions.can_read===true);
+        return {...track,track_ref:Object.hasOwn(track,'track_ref')?track.track_ref:track.path,album_title:'',source_readable:true,
+          track_preference:preferenceAvailable?track.track_preference:null,
+          availability:track.availability??(track.playback_state?.can_start_here===true?'local':'unknown')};
+      },
       async resolvePlaylistItem({signal}={}) {
         const {response,fresh}=await load(signal);
         if(!response.ok)throw Object.assign(new Error('The Loose Tracks source is unavailable.'),{status:response.status});
@@ -44412,7 +45291,10 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       if (signal?.aborted || !current() || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)) throw stale();
       if (fingerprint(source(selection, context, intent)) !== key) throw error('This resource action is no longer available.');
     }
-    const album = await fetchTrackModalAlbumDetails(admitted.actions.album_ref, {signal});
+    const album = await fetchTrackModalAlbumDetails(admitted.actions.album_ref, {signal,
+      readOnlySubject: (context.origin || selection.origin)?.account_ref != null,
+      isCurrent: () => current() && token === Number(state.ui?.pendingTrackModalLoadToken || 0)
+        && fingerprint(source(selection, context, intent)) === key});
     if (signal?.aborted || !current() || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)) throw stale();
     if (fingerprint(source(selection, context, intent)) !== key) throw error('This resource action is no longer available.');
     if (!album || String(album.key || album.album_ref || '') !== admitted.actions.album_ref
@@ -44432,7 +45314,8 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
         || actions.album_ref !== albumKey || typeof fresh?.isCurrent !== 'function' || !fresh.isCurrent()) {
         throw error('This album page is no longer authorized by its source.');
       }
-      const album = await fetchTrackModalAlbumDetails(actions.album_ref, {signal});
+      const album = await fetchTrackModalAlbumDetails(actions.album_ref, {signal,
+        readOnlySubject: origin?.account_ref != null, isCurrent: fresh.isCurrent});
       if (signal?.aborted) throw stale();
       if (!fresh.isCurrent()) throw error('This album page is no longer authorized by its source.');
       if (!album || String(album.key || album.album_ref || '') !== actions.album_ref
@@ -44852,16 +45735,25 @@ function createPrivatePlaytableSource({scopeKey, rows, instance, revision, isCur
 const NativePlaytables = (() => {
   const owners = new Map();
   let serial = 0;
-  function retire(key) {
+  function retire(key, keepMount = false) {
     const owner = owners.get(key);
     if (!owner) return;
-    owners.delete(key); owner.source.dispose(); owner.mount?.dispose(); owner.observer?.disconnect();
+    owners.delete(key); owner.source.dispose(); owner.releasePreferences?.();
+    if (!keepMount) owner.mount?.dispose(); owner.observer?.disconnect();
     window.removeEventListener('popstate', owner.check);
   }
-  function prepare(key, sourceIdentity, groups, privateRows, isCurrent, retainNavigationSource) {
-    retire(key);
+  function prepare(key, sourceIdentity, groups, privateRows, isCurrent, retainNavigationSource, tableOptions) {
     const scopeKey = window.AlbumHavenPlaylistRuntime?.snapshot().scopeKey;
     const scope = TrackActionsRuntime.scope(), sourceView = state.view, identity = {}, rows = [], mapping = new Map();
+    const previous = owners.get(key);
+    const hasPresentation = (key === 'album-tracks' || key === 'loose-tracks') && Array.isArray(tableOptions?.columns);
+    const supportsOwnPreferences = (key === 'album-tracks' || key === 'loose-tracks') && !sourceIdentity?.read_only_subject;
+    const reuseMount = (key === 'album-tracks' || hasPresentation && previous?.tablePresentation)
+      && previous?.sourceIdentity === sourceIdentity
+      && previous.scopeToken === scope.token && previous.sourceView === sourceView;
+    const releasePreferences = supportsOwnPreferences
+      && typeof retainTrackModalPreferenceRows === 'function' ? retainTrackModalPreferenceRows(privateRows) : null;
+    retire(key, reuseMount);
     let offset = 0;
     for (const [sectionIndex, group] of groups.entries()) {
       group.sectionKey ||= `section-${sectionIndex + 1}`;
@@ -44873,11 +45765,15 @@ const NativePlaytables = (() => {
         track.canPlay = readable && source?.availability !== 'missing'
           && !(Object.hasOwn(source.playback_state || {}, 'can_start_here') && source.playback_state.can_start_here !== true);
         track.availability = source?.availability;
-        const row = {rowKey, sectionKey: group.sectionKey, readable, selectable: track.selectable};
+        const row = {rowKey, sectionKey: group.sectionKey, readable, selectable: track.selectable,
+          title: readable ? String(track.title || '') : 'Unavailable track'};
         rows.push(row); mapping.set(row, source);
       }
     }
-    const owner = {identity, sourceIdentity, mount: null, host: null};
+    const owner = {identity, sourceIdentity, scopeToken: scope.token, sourceView, releasePreferences,
+      resourceKey: reuseMount ? previous.resourceKey : Object.freeze({}),
+      mount: reuseMount ? previous.mount : null, host: reuseMount ? previous.host : null,
+      mountHost: reuseMount ? previous.mountHost : null};
     owners.set(key, owner);
     owner.source = createPrivatePlaytableSource({scopeKey, rows, instance: identity, revision: identity,
       isCurrent: () => owners.get(key) === owner && state.view === sourceView && TrackActionsRuntime.scope().token === scope.token && isCurrent(),
@@ -44886,6 +45782,47 @@ const NativePlaytables = (() => {
         : key === 'loose-tracks' ? {captureQueueRows: selected => captureNativeLooseQueueSources(sourceIdentity, selected.map(row => mapping.get(row)))} : {}),
       creationSource: () => sourceView?.playlist_creation_source || null,
       ...(retainNavigationSource ? {retainNavigationSource} : {})});
+    const buttons = typeof ButtonComponent !== 'undefined' ? ButtonComponent : null;
+    owner.runtime = Object.freeze({
+      ...(typeof buttons?.renderButton === 'function' ? {buttonHtml: value => buttons.renderButton(value)} : {}),
+      ...(typeof buttons?.renderActionButton === 'function' ? {actionHtml: value => buttons.renderActionButton(value)} : {}),
+      ...(typeof buttons?.renderIconSvg === 'function' ? {iconHtml: (name, value) => buttons.renderIconSvg(name, value)} : {}),
+      ...(typeof escapeHtml === 'function' ? {escapeHtml} : {}),
+      ...(typeof openUtilityChoiceDropdown === 'function' ? {openChoice: (anchor, value) => openUtilityChoiceDropdown(anchor, value)} : {}),
+    });
+    if (hasPresentation) {
+      owner.tablePresentation = {columns: tableOptions.columns, resourceKey: owner.resourceKey,
+        source: identity, isCurrent: () => Boolean(owner.source.snapshot())};
+    }
+    if (supportsOwnPreferences) {
+      const context = Object.freeze({scopeKey});
+      const resolvePreference = (row, requested) => {
+        if (requested?.scopeKey !== scopeKey || !mapping.has(row) || row.readable !== true
+          || !owner.source.snapshot() || sourceIdentity?.read_only_subject || sourceIdentity?.source_readable === false
+          || Object.hasOwn(sourceIdentity?.allowed_actions || {}, 'can_read') && sourceIdentity.allowed_actions.can_read !== true
+          || typeof getTrackModalPreferenceSource !== 'function') return null;
+        return getTrackModalPreferenceSource(mapping.get(row));
+      };
+      owner.trackPreferences = {rows, context, runtime: Object.freeze({
+        trackPreference(row, requested) {
+          const source = resolvePreference(row, requested);
+          return source ? TrackActionsRuntime.preference(source) : null;
+        },
+        setTrackLove({row, context: requested, love_tier, signal} = {}) {
+          const source = resolvePreference(row, requested);
+          if (!source || TrackActionsRuntime.preference(source)?.allowed_actions.can_set_love_tier !== true) {
+            return Promise.reject(Object.assign(new Error('Track love editing is unavailable.'), {status: 403}));
+          }
+          return TrackActionsRuntime.setLove({source, love_tier, signal,
+            isCurrent: () => resolvePreference(row, requested) === source});
+        },
+        subscribeTrackPreferences(listener) {
+          const preference = TrackActionsRuntime.subscribePreferences(listener);
+          const source = typeof subscribeTrackModalPreferences === 'function' ? subscribeTrackModalPreferences(listener) : null;
+          return () => {preference(); source?.();};
+        },
+      })};
+    }
     owner.check = () => {owner.mount?.update();};
     return owner;
   }
@@ -44893,8 +45830,12 @@ const NativePlaytables = (() => {
     const owner = owners.get(key), ui = window.AlbumHavenPlaytableUI;
     if (owner && host) owner.host = host;
     if (!owner || !host || !ui?.mount || !owner.source.snapshot()) return false;
-    owner.mount?.dispose(); owner.observer?.disconnect(); owner.host = host;
-    owner.mount = ui.mount(host, {sourceAdapter: owner.source, tableKey: key,
+    if (owner.mountHost !== host) {owner.mount?.dispose(); owner.mount = null;}
+    owner.observer?.disconnect(); owner.host = host;
+    const options = {sourceAdapter: owner.source, tableKey: key,
+      ...(typeof owner.runtime.buttonHtml === 'function' ? {runtime: owner.runtime} : {}),
+      ...(owner.tablePresentation ? {tablePresentation: owner.tablePresentation} : {}),
+      ...(owner.trackPreferences ? {trackPreferences: owner.trackPreferences} : {}),
       onPlay(rowKey, event, options) {
         if (!owner.source.snapshot()) return;
         const rows = [...host.querySelectorAll('[data-cdt-row-key]')].filter(row => row.getAttribute('data-cdt-row-key') === rowKey);
@@ -44905,8 +45846,10 @@ const NativePlaytables = (() => {
       onPlaylistAction: (packet, lifetime, anchor, options) => ui.open(packet, lifetime, owner.source, anchor, options),
       onContextAction: (packet, lifetime, anchor) => typeof ui.context === 'function'
         ? ui.context(packet, lifetime, owner.source, anchor) : ui.open(packet, lifetime, owner.source, anchor),
-      onError: () => showToast('The selected-track action is unavailable.', 'error', 3200),
-    });
+      onError: message => showToast(typeof message === 'string' ? message : 'The selected-track action is unavailable.', 'error', 3200),
+    };
+    if (owner.mount) owner.mount.update(options); else owner.mount = ui.mount(host, options);
+    owner.mountHost = host;
     if (typeof MutationObserver === 'function') {
       owner.observer = new MutationObserver(owner.check);
       const shell = document.getElementById('app-shell');
@@ -44917,7 +45860,12 @@ const NativePlaytables = (() => {
   window.addEventListener('albumhaven:playtable-ui-ready', () => {
     for (const [key, owner] of owners) if (owner.host) mount(key, owner.host);
   });
-  return {prepare, mount, retire};
+  function refresh(key) {
+    const owner = owners.get(key);
+    if (!owner?.mount) return false;
+    owner.mount.update(); return true;
+  }
+  return {prepare, mount, retire, refresh};
 })();
 
 // END js/runtime/playtable-source.js
@@ -44942,6 +45890,9 @@ const HomeFriendsRuntime = (() => {
   const friendActivityEpochs = new Map();
   function eraseActivity() {activity?.nativeRows?.clear(); activity?.resources?.clear(); activity?.rows?.clear(); activity = null;}
   const own = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+  const ratingTasteState = (value, maximum) => own(value, 'taste_state') && value.taste_state === 'available'
+    && own(value, 'rating') && (value.rating === null
+      || Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= maximum) ? 'available' : 'unavailable';
   const opaque = value => typeof value === 'string' && value.trim() && value.length <= 512 && !/[\\/\x00-\x20\x7f]/.test(value);
   const unreadableActivityRow = row => row.source_readable === false || own(row.allowed_actions, 'can_read') && row.allowed_actions.can_read !== true;
   const selectionApi = () => window.AlbumHavenResourceSelection;
@@ -45219,9 +46170,24 @@ const HomeFriendsRuntime = (() => {
         const valid = () => sync().scopeKey === scope && activityProvider === provider
           && (context.account_ref == null || friendActivityEpochs.get(context.account_ref) === friendEpoch);
         return selectedRows.map(row => {
-          let inventoryRef = null;
+          let inventoryRef = null, canonicalRef = null;
+          const admit = value => {
+            if (!/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value?.inventory_track_ref || '')
+              || inventoryRef && inventoryRef !== value.inventory_track_ref
+              || canonicalRef && value.canonical_track_ref && canonicalRef !== value.canonical_track_ref)
+              throw failure('The queued activity identity changed.', 409);
+            inventoryRef = value.inventory_track_ref;
+            canonicalRef ||= value.canonical_track_ref || null;
+            return value;
+          };
           return {display: {title: row.title, artist: row.artist, album: row.album_title,
           albumTarget: row.album_target, artistTarget: row.artist_target}, isCurrent: valid,
+          async resolveMetadata({signal} = {}) {
+            if (!valid() || signal?.aborted) throw superseded();
+            const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'metadata', signal});
+            if (!valid() || signal?.aborted) throw superseded();
+            return admit(value);
+          },
           async resolvePlaylistItem({signal} = {}) {
             // Enqueue already established this inventory identity. It is only
             // a candidate: the Browse-gated Queue source endpoint freshly
@@ -45249,10 +46215,8 @@ const HomeFriendsRuntime = (() => {
           async resolve({signal} = {}) {
             if (!valid() || signal?.aborted) throw superseded();
             const value = await provider.resolveNative({...context, snapshot_ref: snapshotRef, rowId: row.id, intent: 'play', signal});
-            if (!valid() || signal?.aborted || !/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value.inventory_track_ref || '')
-              || inventoryRef && inventoryRef !== value.inventory_track_ref) throw superseded();
-            inventoryRef = value.inventory_track_ref;
-            return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+            if (!valid() || signal?.aborted) throw superseded();
+            return {...admit(value), source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
           }};
         });
       } : null,
@@ -45326,7 +46290,8 @@ const HomeFriendsRuntime = (() => {
           || data.rows.length && data.rows.every(row => owner.rows.has(row.id)));
         if (invalidAppend && !revocations.size) throw failure('Activity returned an invalid page.');
         if (append && !invalidAppend) owner.cursors.add(options.cursor);
-        const rows = data.rows.map(row => {
+        const preferenceBatch = TrackActionsRuntime.readBatch(epoch), preferenceSources = new Map();
+        let rows = data.rows.map(row => {
           const publicRow = {id: row.id, kind: ['album', 'artist', 'track', 'listen'].includes(row.kind) ? row.kind : null};
           for (const key of ['title', 'artist', 'secondary_artist', 'album_title', 'last_listened_at', 'source_label']) {
             if (own(row, key)) publicRow[key] = typeof row[key] === 'string' ? row[key] : '';
@@ -45335,7 +46300,7 @@ const HomeFriendsRuntime = (() => {
             if (own(row, key)) publicRow[key] = typeof row[key] === 'number' && Number.isFinite(row[key]) && row[key] >= 0 ? row[key] : null;
           }
           if (own(row, 'favorite')) publicRow.favorite = typeof row.favorite === 'boolean' ? row.favorite : null;
-          if (own(row, 'taste_state')) publicRow.taste_state = typeof row.taste_state === 'string' ? row.taste_state : null;
+          publicRow.taste_state = ratingTasteState(row, row.kind === 'album' ? 10 : ['track', 'listen'].includes(row.kind) ? 5 : 0);
           if (own(row, 'availability')) publicRow.availability = ['local', 'missing', 'unresolved'].includes(row.availability) ? row.availability : null;
           if (own(row, 'love_tier')) publicRow.love_tier = ['off', 'loved', 'obsessed'].includes(row.love_tier) ? row.love_tier : null;
           if (unreadableActivityRow(row)) {
@@ -45362,11 +46327,16 @@ const HomeFriendsRuntime = (() => {
               artist: privateResourceTarget(row.artist_target, publicRow.artist_target)}));
           }
           const source = invalidAppend ? null : currentActivityTrack(publicRow, context);
-          TrackActionsRuntime.acceptRead(source, epoch);
-          const preference = TrackActionsRuntime.preference(source);
+          preferenceSources.set(publicRow, source);
+          return publicRow;
+        });
+        for (const source of preferenceSources.values()) preferenceBatch.accept(source);
+        rows = rows.map((publicRow, index) => {
+          if (publicRow.source_readable === false) return publicRow;
+          const preference = TrackActionsRuntime.preference(preferenceSources.get(publicRow));
           if (preference) publicRow.track_preference = preference;
-          else if (own(row, 'track_preference')) {
-            const overlay = TrackActionsRuntime.overlay(row.track_preference);
+          else if (own(data.rows[index], 'track_preference')) {
+            const overlay = TrackActionsRuntime.overlay(data.rows[index].track_preference);
             if (overlay) {publicRow.love_tier = overlay.love_tier; publicRow.rating = overlay.rating;}
           }
           return Object.freeze(publicRow);
@@ -45456,31 +46426,41 @@ const HomeFriendsRuntime = (() => {
     const subject = selection.origin?.account_ref;
     if (selection.origin?.source !== 'activity' || subject == null) return album;
     const supplied = context.subjectTaste || sourceResource(selection, context)?.subject_taste;
-    const taste = supplied?.subject_ref === subject && supplied.read_only === true ? supplied : {tracks: [], rating: null, favorite: null};
-    const byRef = new Map((Array.isArray(taste.tracks) ? taste.tracks : []).map(row => [row.inventory_track_ref, row]));
+    const taste = own(supplied, 'subject_ref') && supplied.subject_ref === subject && own(supplied, 'read_only') && supplied.read_only === true
+      ? supplied : {tracks: [], rating: null, favorite: null};
+    const byRef = new Map(), duplicates = new Set();
+    for (const row of own(taste, 'tracks') && Array.isArray(taste.tracks) ? taste.tracks : []) {
+      if (!own(row, 'inventory_track_ref') || typeof row.inventory_track_ref !== 'string') continue;
+      if (byRef.has(row.inventory_track_ref)) duplicates.add(row.inventory_track_ref);
+      byRef.set(row.inventory_track_ref, row);
+    }
+    for (const ref of duplicates) byRef.delete(ref);
     // Clone every container before overlaying subject facts; fetched native album
     // caches and the signed-in listener's preferences must remain untouched.
-    const personal = new Set(['love_tier', 'track_rating', 'play_count', 'last_listened_at_ms', 'added_at', 'added_at_ms', 'album_rating', 'rating', 'favorite', 'is_favorite', 'listen_count', 'last_listened_at',
+    const personal = new Set(['taste_state', 'love_tier', 'track_rating', 'play_count', 'last_listened_at_ms', 'added_at', 'added_at_ms', 'album_rating', 'rating', 'favorite', 'is_favorite', 'listen_count', 'last_listened_at',
       'track_scrobble_count', 'scrobble_count', 'track_stats', 'listening_progress', 'listen_progress',
-      'album_preference', 'album_preference_overlay', 'track_preference', 'track_preference_overlay', 'tag_album_rating', 'tag_album_rating_source']);
+      'album_preference', 'album_preference_overlay', 'track_preference', 'track_preference_overlay', 'track_preference_state', 'canonical_track_ref', 'tag_album_rating', 'tag_album_rating_source']);
     const copy = value => {
       if (Array.isArray(value)) return value.map(copy);
       if (!value || typeof value !== 'object') return value;
       const result = {};
       for (const [key, child] of Object.entries(value)) result[key] = personal.has(key) ? null : copy(child);
       result.can_edit_preferences = false; result.read_only_subject = subject;
-      if (typeof value.inventory_track_ref === 'string') {
+      if (own(value, 'inventory_track_ref') && typeof value.inventory_track_ref === 'string') {
         const row = byRef.get(value.inventory_track_ref);
-        const rating = Number.isInteger(row?.rating) && row.rating >= 1 && row.rating <= 5 ? row.rating : null;
+        const rating = own(row, 'rating') && Number.isInteger(row.rating) && row.rating >= 1 && row.rating <= 5 ? row.rating : null;
+        const tasteState = ratingTasteState(row, 5);
         const tier = ['off', 'loved', 'obsessed'].includes(row?.love_tier) ? row.love_tier : null;
-        result.read_only_subject = subject; result.rating = rating; result.love_tier = tier;
-        result.track_preference = result.track_preference_overlay = {rating, love_tier: tier, allowed_actions: {can_set_love_tier: false}};
+        result.read_only_subject = subject; result.rating = rating; result.love_tier = tier; result.taste_state = tasteState;
+        result.track_preference = result.track_preference_overlay = tasteState === 'available'
+          ? {rating, love_tier: tier, allowed_actions: {can_set_love_tier: false}} : null;
       }
       return result;
     };
     const result = copy(album);
     result.read_only_subject = subject;
-    result.album_rating = Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
+    result.taste_state = ratingTasteState(taste, 10);
+    result.album_rating = own(taste, 'rating') && Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
     result.favorite = typeof taste.favorite === 'boolean' ? taste.favorite : null;
     return result;
   }
@@ -45647,7 +46627,12 @@ const HomeFriendsRuntime = (() => {
     const modalToken = Number(state.ui?.pendingTrackModalLoadToken || 0);
     const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
     if (typeof fetchTrackModalAlbumDetails !== 'function') throw failure('Album details are unavailable.');
-    const album = await fetchTrackModalAlbumDetails(albumRef);
+    const album = await fetchTrackModalAlbumDetails(albumRef, {isCurrent: () => {
+      requireGrant(intent, albumRef, scopeKey);
+      return sequence === actionSequence
+        && (intent !== 'open' || modalToken === Number(state.ui?.pendingTrackModalLoadToken || 0))
+        && (intent !== 'play' || playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null));
+    }});
     if (sequence !== actionSequence
       || (intent === 'open' && modalToken !== Number(state.ui?.pendingTrackModalLoadToken || 0))
       || (intent === 'play' && playerToken !== (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null))) {
@@ -45709,7 +46694,9 @@ const HomeFriendsRuntime = (() => {
     requireGrant('open', ref, scopeKey);
     if (signal?.aborted) throw superseded();
     if (typeof fetchTrackModalAlbumDetails !== 'function') return {status: 'unavailable'};
-    const album = await fetchTrackModalAlbumDetails(ref, {signal});
+    const album = await fetchTrackModalAlbumDetails(ref, {signal, isCurrent: () => {
+      requireGrant('open', ref, scopeKey); return true;
+    }});
     if (signal?.aborted) throw superseded();
     requireGrant('open', ref, scopeKey);
     if (!album || String(album.key || album.album_ref || '') !== ref || !Array.isArray(album.tracks)
@@ -45885,10 +46872,12 @@ const HomeFriendsRuntime = (() => {
     openChoice: (trigger, options) => openUtilityChoiceDropdown(trigger, options),
     buttonHtml: config => ButtonComponent.renderButton(config),
     actionHtml: config => ButtonComponent.renderActionButton(config),
+    iconHtml: name => ButtonComponent.renderIconSvg(name),
     alertHtml: config => buildOnPageAlertHtml(config),
     galleryBarHtml: config => buildGalleryBarHtml(config),
     tableHtml: config => buildCompactDataTable(config),
     galleryCardHtml: config => buildGalleryCardHtml(config),
+    ratingHtml: config => buildGalleryRatingHtml(config),
     navigationItemHtml: config => window.NavigationTree.renderItem(config),
     artboxHtml: config => buildAlbumArtboxHtml(config),
     detailHeaderHtml: config => buildAlbumDetailsHeaderHtml(config),
@@ -46005,16 +46994,17 @@ const PlaylistReactRuntime = (() => {
     } finally {owner.onDiscard();}
     return true;
   }
-  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null} = {}) {
+  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null, fromGlobal = false} = {}) {
     const start = sync(), navigation = window.AlbumHavenSettingsNavigation?.instance;
     const home = externalScopeKey === null ? null : window.AlbumHavenHomeRuntime?.snapshot();
     const external = home?.visible === true && home.authenticated === true && home.scopeKey === externalScopeKey;
-    if (draft || !(start.visible || external) || external && typeof syncMobileHome !== 'function' || start.scopeKey !== scopeKey || typeof token !== 'string' || !token || /[\\/\x00-\x1f]/.test(token)
+    const global = fromGlobal === true && start.authenticated === true && externalScopeKey === null;
+    if (draft || !(start.visible || external || global) || (external || global) && typeof syncMobileHome !== 'function' || start.scopeKey !== scopeKey || typeof token !== 'string' || !token || /[\\/\x00-\x1f]/.test(token)
       || typeof isCurrent !== 'function' || typeof confirmLeave !== 'function' || typeof onDiscard !== 'function'
       || !navigation?.setPlaylistDraftOwner || !navigation.writeLibraryHistory) return false;
     if (isCurrent() !== true) return false;
     const owner = {token, scopeKey, isCurrent, onDiscard, parentPosition: start.entryKey,
-      parentQuery: external ? new URL(window.location.href).search : null};
+      parentQuery: external || global ? new URL(window.location.href).search : null};
     draft = owner;
     owner.unregister = navigation.setPlaylistDraftOwner({token, scopeKey, isCurrent: () => draftCurrent(owner),
       confirmLeave: () => {interruptDraftNavigation(); return confirmLeave();}, discard: () => {releaseDraft(token); sync();}});
@@ -46024,7 +47014,7 @@ const PlaylistReactRuntime = (() => {
     try {navigation.writeLibraryHistory(url.href, {playlistDraft: {token, scopeKey}}, {mode: 'push'});}
     catch {releaseDraft(token); return false;}
     if (window.history.state?.playlistDraft?.token !== token) {releaseDraft(token); return false;}
-    if (external) syncMobileHome();
+    if (external || global) syncMobileHome();
     sync(); return draftCurrent(owner);
   }
   function retainDraft(token, callback) {
@@ -46083,6 +47073,9 @@ const PlaylistReactRuntime = (() => {
     const origin = resourceOrigin(detail);
     return immutableCopy({playlist_creation_source: creationSource(payload.playlist_creation_source), playlist_detail: {playlist_id: detail.playlist_id, origin,
       revision: detail.revision,
+      playlist_kind: detail.playlist_kind,
+      library_mix: detail.playlist_kind === 'library_mix' && ['regular', 'shuffle', 'unplayed_first'].includes(detail.library_mix?.playback_order)
+        ? {playback_order: detail.library_mix.playback_order} : null,
       allowed_actions: {can_play: exactGrant(detail.allowed_actions, 'can_play')},
       track_rows: Array.from(detail.track_rows, row => row && typeof row === 'object' ? unreadable(row)
         ? copy(row, ['playlist_item_id']) : {
@@ -46115,6 +47108,7 @@ const PlaylistReactRuntime = (() => {
     if (payload.playlist_detail && !Array.isArray(payload.playlist_detail.track_rows)) return null;
     if (!payload.playlist_index && !payload.playlist_detail) return null;
     const origin = resourceOrigin(payload.playlist_detail);
+    const preferenceBatch = epoch !== undefined ? TrackActionsRuntime.readBatch(epoch) : null;
     const result = {playlist_sidebar: {active_playlist_id: payload.playlist_sidebar.active_playlist_id,
       items: payload.playlist_sidebar.items.map(item => copy(item, ['playlist_id', 'title', 'item_count', 'playlist_kind', 'allowed_actions']))}};
     result.playlist_creation_protocol = payload.playlist_creation_protocol;
@@ -46122,13 +47116,13 @@ const PlaylistReactRuntime = (() => {
     result.playlist_creation_source = creationSource(Object.prototype.hasOwnProperty.call(payload, 'playlist_creation_source') ? payload.playlist_creation_source : null);
     if (payload.playlist_index) result.playlist_index = {query: payload.playlist_index.query,
       playlists: payload.playlist_index.playlists.map(item => copy(item, ['playlist_id', 'title', 'description', 'visibility', 'item_count', 'playlist_kind', 'allowed_actions']))};
+    for (const row of payload.playlist_detail?.track_rows || []) if (!unreadable(row)) preferenceBatch?.accept(row);
     if (payload.playlist_detail) result.playlist_detail = {...copy(payload.playlist_detail,
-      ['playlist_id', 'title', 'description', 'visibility', 'playlist_kind', 'items_complete', 'query', 'active_sort', 'saved_default_sort', 'playback_mode', 'listen_to_suggestions_after_playlist', 'allowed_actions']),
+      ['playlist_id', 'title', 'description', 'visibility', 'playlist_kind', 'items_complete', 'query', 'active_sort', 'saved_default_sort', 'playback_mode', 'listen_to_suggestions_after_playlist', 'library_mix', 'popularity_refresh_status', 'popularity_refresh_error', 'allowed_actions']),
       revision: origin?.snapshot_ref ?? null,
       missing_playlist_creation_source: creationSource(Object.prototype.hasOwnProperty.call(payload.playlist_detail, 'missing_playlist_creation_source') ? payload.playlist_detail.missing_playlist_creation_source : null),
       track_rows: payload.playlist_detail.track_rows.map(row => {
         if (unreadable(row)) return {...copy(row, ['playlist_item_id']), source_readable: false};
-        if (epoch !== undefined) TrackActionsRuntime.acceptRead(row, epoch);
         const preference = TrackActionsRuntime.preference(row);
         return {...copy(row, ['playlist_item_id', 'playlist_position', 'album_title', 'title', 'artist', 'secondary_artist',
           'track_number', 'disc_number', 'duration_seconds', 'duration_display']), ...displayFacts(row),
@@ -46232,7 +47226,23 @@ const PlaylistReactRuntime = (() => {
         return selectedRows.map(row => {
           const original = detail.track_rows.find(item => item.playlist_item_id === row.playlist_item_id);
           if (!original || !exactGrant(original.allowed_actions, 'can_play')) return null;
+          let inventoryRef = original.inventory_track_ref || null, canonicalRef = original.canonical_track_ref || null;
+          const admit = value => {
+            if (!/^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value?.inventory_track_ref || '')
+              || inventoryRef && inventoryRef !== value.inventory_track_ref
+              || canonicalRef && value.canonical_track_ref && canonicalRef !== value.canonical_track_ref)
+              throw failure('The queued Playlist identity changed.', 409);
+            inventoryRef = value.inventory_track_ref;
+            canonicalRef ||= value.canonical_track_ref || null;
+            return value;
+          };
           return {display: {title: row.title, artist: row.artist, album: row.album_title, albumTarget: row.album_target}, isCurrent: valid,
+            async resolveMetadata({signal} = {}) {
+              if (!valid() || signal?.aborted) throw aborted();
+              const value = await nativeTarget(original, detail, 'metadata', signal);
+              if (!valid() || signal?.aborted) throw aborted();
+              return admit(value);
+            },
             async resolvePlaylistItem({signal} = {}) {
               if (!valid() || signal?.aborted) throw aborted();
               const params = new URLSearchParams({surface: 'playlists', playlist_id: detail.playlist_id});
@@ -46258,7 +47268,7 @@ const PlaylistReactRuntime = (() => {
               if (!valid() || signal?.aborted) throw aborted();
               const value = await nativeTarget(original, detail, 'play', signal);
               if (!valid() || signal?.aborted) throw aborted();
-              return {...value, source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
+              return {...admit(value), source_readable: true, availability: 'local', playback_state: {can_start_here: true}};
             }};
         });
       },
@@ -46296,7 +47306,7 @@ const PlaylistReactRuntime = (() => {
     const source = playableRow(intent, row, options), owner = raw, detail = raw?.playlist_detail;
     if (activationToken !== (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null)) throw aborted();
     if (!source || !detail) throw failure('This track action is unavailable.', 403);
-    if (TrackActionsRuntime.canPlay(source)) {TrackActionsRuntime.play(source); return;}
+    if (!detail.library_mix && TrackActionsRuntime.canPlay(source)) {TrackActionsRuntime.play(source); return;}
     const request = ++nativeSequence, scopeKey = sync().scopeKey;
     const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
     const current = () => request === nativeSequence && raw === owner && sync().visible && sync().scopeKey === scopeKey
@@ -46310,7 +47320,7 @@ const PlaylistReactRuntime = (() => {
     if (rows.some(item => !item)) throw failure('Playlist order changed.', 409);
     const candidates = rows.filter(item => exactGrant(item.allowed_actions, 'can_play'));
     const previous = state.player.playbackQueue;
-    if (previous?.playlistId === detail.playlist_id && previous.playlistRevision === detail.revision
+    if (!(detail.library_mix && options.fromStart === true) && previous?.playlistId === detail.playlist_id && previous.playlistRevision === detail.revision
       && previous.contextGeneration === PrivateUITransport.generation()
       && JSON.stringify(previous.displayedItemIds) === JSON.stringify(ids)
       && typeof playlistQueueCurrentIndex === 'function'
@@ -46333,7 +47343,7 @@ const PlaylistReactRuntime = (() => {
     if (returned.length !== requested.length || new Set(returned).size !== returned.length || returned.some(id => !requestedSet.has(id))
       || !admitted.includes(source.playlist_item_id)
       || JSON.stringify(admitted) !== JSON.stringify(requested.filter(id => !unavailableSet.has(id)))) throw failure('Playlist queue identities changed.', 409);
-    const tracks = data.tracks.map(item => {
+    let tracks = data.tracks.map(item => {
       const target = item.native_target;
       if (typeof target?.path !== 'string' || !target.path || target.playlist_item_id !== item.playlist_item_id) throw failure('This track is unavailable.');
       const native = {...target, playback_state: {can_start_here: true}};
@@ -46341,13 +47351,19 @@ const PlaylistReactRuntime = (() => {
       nativeTracks.set(item.playlist_item_id, {owner, source: native});
       return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
         artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
-        playlistItemId: item.playlist_item_id, inventory_track_ref: target.inventory_track_ref, albumRef: byItem.get(item.playlist_item_id)?.album_ref || null};
+        playlistItemId: item.playlist_item_id, inventory_track_ref: target.inventory_track_ref, albumRef: byItem.get(item.playlist_item_id)?.album_ref || null,
+        ...(detail.library_mix ? {personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null} : {})};
     });
+    if (orderChoice?.mode === 'unplayed_first') tracks = [...tracks.filter(item => item.personalPlayCount === 0), ...tracks.filter(item => item.personalPlayCount !== 0)];
     const index = tracks.findIndex(track => track.playlistItemId === source.playlist_item_id);
     if (index < 0 || !current() || typeof playTrackFromPayload !== 'function') throw aborted();
-    const selected = tracks[index], previousQueue = state.player.playbackQueue;
+    let selected = tracks[index];
+    const previousQueue = state.player.playbackQueue;
     const shuffled = orderChoice?.mode === 'shuffle';
-    const ordered = typeof playlistQueueOrder === 'function' ? playlistQueueOrder(tracks, shuffled, selected.path, selected.playlistItemId) : tracks;
+    const fromStart = detail.library_mix && options.fromStart === true;
+    const ordered = typeof playlistQueueOrder === 'function' ? playlistQueueOrder(tracks, shuffled,
+      fromStart ? null : selected.path, fromStart ? null : selected.playlistItemId) : tracks;
+    if (fromStart) selected = ordered[0];
     const queue = {tracks: ordered, regularTracks: tracks, shuffle: shuffled, repeatMode: 'off',
       currentIndex: ordered.indexOf(selected), playbackContext: null, albumRef: '', albumSnapshot: null,
       playlistId: detail.playlist_id, playlistRevision: detail.revision, displayedItemIds: [...ids], contextGeneration: PrivateUITransport.generation()};
@@ -46355,10 +47371,18 @@ const PlaylistReactRuntime = (() => {
     if (state.player.current?.path === selected.path && (previousQueue?.playlistId !== detail.playlist_id || previousOccurrence?.playlistItemId === selected.playlistItemId)) {
       if (typeof commitPlaylistQueue !== 'function') throw failure('Playlist queue replacement is unavailable.');
       commitPlaylistQueue(queue, previousQueue); notifyPlayback();
-      TrackActionsRuntime.play(nativeTracks.get(source.playlist_item_id).source);
+      if (!current() || state.player.playbackQueue !== queue) {
+        if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+        throw aborted();
+      }
+      TrackActionsRuntime.play(nativeTracks.get(selected.playlistItemId).source);
       return;
     }
     state.player.playbackQueue = queue; notifyPlayback();
+    if (!current() || state.player.playbackQueue !== queue) {
+      if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+      throw aborted();
+    }
     try {
       const started = await playTrackFromPayload(selected);
       if (started !== true) throw failure('Playlist playback did not start.');
@@ -46374,6 +47398,7 @@ const PlaylistReactRuntime = (() => {
     const owned = queue?.playlistId === options.playlist_id;
     const mode = orderChoice?.scopeKey === shell.scopeKey && orderChoice.playlist_id === options.playlist_id ? orderChoice.mode : 'regular';
     return {status: 'ready', data: {scopeKey: options.scopeKey, playlist_id: options.playlist_id, revision: JSON.stringify([queueRevision, current?.playlistItemId || null]),
+      ...(detail.library_mix ? {library_mix_order: mode} : {}),
       shuffle: owned ? queue.shuffle === true : mode === 'shuffle', repeat: owned ? queue.repeatMode || 'off' : 'off',
       current_playlist_id: current ? queue.playlistId : null, current_playlist_item_id: current?.playlistItemId || null,
       allowed_actions: {can_shuffle: true, can_repeat: owned && Boolean(current),
@@ -46383,10 +47408,12 @@ const PlaylistReactRuntime = (() => {
     const shell = sync();
     if (shell.scopeKey !== options.scopeKey || !shell.visible) return {status: 'denied'};
     if (!orderChoice || orderChoice.scopeKey !== options.scopeKey || orderChoice.playlist_id !== options.playlist_id) {
-      const value = typeof playbackPreferences.read === 'function' ? await playbackPreferences.read(options) : null;
+      const mixMode = raw?.playlist_detail?.library_mix?.playback_order;
+      const isMix = raw?.playlist_detail?.playlist_kind === 'library_mix' && ['regular', 'shuffle', 'unplayed_first'].includes(mixMode);
+      const value = !isMix && typeof playbackPreferences.read === 'function' ? await playbackPreferences.read(options) : null;
       if (options.signal?.aborted || sync().scopeKey !== shell.scopeKey || !sync().visible || sync().playlistId !== options.playlist_id) throw aborted();
       orderChoice = {scopeKey: options.scopeKey, playlist_id: options.playlist_id,
-        mode: value?.preferences?.effective_order_mode === 'shuffle' ? 'shuffle' : 'regular', preferences: value?.preferences ?? null};
+        mode: isMix ? mixMode : value?.preferences?.effective_order_mode === 'shuffle' ? 'shuffle' : 'regular', preferences: value?.preferences ?? null};
     }
     return playbackProjection(options);
   }
@@ -46584,7 +47611,92 @@ const PlaylistReactRuntime = (() => {
       const home = window.AlbumHavenHomeRuntime?.snapshot?.();
       return home?.authenticated === true && home.scopeKey === scopeKey;
     },
+    createLibraryMixRuntime({scopeKey, source, order, isCurrent}) {
+      const targets = new Map();
+      let activation = 0;
+      const current = () => isCurrent() === true && sync().authenticated && sync().scopeKey === scopeKey;
+      const canPlay = row => {
+        const selected = current() ? source() : null;
+        return Boolean(selected?.detail.track_rows.includes(row) && selected.detail.allowed_actions.can_play === true
+          && exactGrant(row.allowed_actions, 'can_play') && row.availability === 'local'
+          && current() && source() === selected);
+      };
+      return {...PlaylistReactRuntime,
+        openForm: options => openReactFormDialog(options, current),
+        createPlaytableSource: undefined,
+        trackPreference: () => null, setTrackLove: undefined,
+        canResourceIntent: () => false, mountResourceSelection: undefined,
+        canTrackIntent: (intent, row) => intent === 'play' && canPlay(row),
+        trackPlayback: row => current() && targets.has(row.playlist_item_id) && state.player.playbackQueue?.libraryMixRef === source()?.source.ref
+          ? TrackActionsRuntime.playback(targets.get(row.playlist_item_id)) : {isCurrent: false, isPlaying: false},
+        async trackIntent(intent, row, options = {}) {
+          if (intent !== 'play' || !canPlay(row)) throw failure('Mix playback is unavailable.', 403);
+          const retained = source(), sequence = ++activation;
+          const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
+          const valid = () => current() && source() === retained && activation === sequence && !options.signal?.aborted
+            && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null);
+          const ids = options.displayedItemIds || retained.entry_refs;
+          if (!Array.isArray(ids) || ids.length !== retained.entry_refs.length || new Set(ids).size !== ids.length
+            || ids.some(id => !retained.entry_refs.includes(id)) || !ids.includes(row.playlist_item_id)) throw failure('Mix membership changed.', 409);
+          if (typeof readLibraryMixNativeQueue !== 'function') throw failure('Mix playback is unavailable.');
+          const data = await readLibraryMixNativeQueue({sourceRef: retained.source.ref, sourceRevision: retained.source.revision,
+            entryRefs: ids, startingEntryRef: row.playlist_item_id, signal: options.signal});
+          if (!valid()) throw aborted();
+          let tracks = data.tracks.map(item => {
+            const target = item.native_target;
+            const native = {...target, playback_state: {can_start_here: true}};
+            targets.set(item.playlist_item_id, native);
+            return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
+              artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
+              inventory_track_ref: target.inventory_track_ref, playlistItemId: item.playlist_item_id,
+              personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null};
+          });
+          const mode = order();
+          if (mode === 'unplayed_first') tracks = [...tracks.filter(item => item.personalPlayCount === 0), ...tracks.filter(item => item.personalPlayCount !== 0)];
+          const regularTracks = tracks;
+          let selected = tracks.find(item => item.playlistItemId === row.playlist_item_id);
+          if (mode === 'shuffle' && typeof playlistQueueOrder === 'function') tracks = playlistQueueOrder(tracks, true,
+            options.fromStart === true ? null : selected.path, options.fromStart === true ? null : selected.playlistItemId);
+          if (options.fromStart === true) selected = tracks[0];
+          if (!selected || !valid() || typeof playTrackFromPayload !== 'function') throw aborted();
+          const previousQueue = state.player.playbackQueue;
+          const queue = {tracks, regularTracks, shuffle: mode === 'shuffle', repeatMode: 'off', currentIndex: tracks.indexOf(selected),
+            playbackContext: null, albumRef: '', albumSnapshot: null, playlistId: null, libraryMixRef: retained.source.ref,
+            playlistRevision: retained.source.revision, sourceEntryRefs: [...retained.entry_refs],
+            displayedItemIds: [...ids], contextGeneration: PrivateUITransport.generation()};
+          if (state.player.current?.path === selected.path) {
+            if (typeof commitPlaylistQueue !== 'function') throw failure('Mix queue replacement is unavailable.');
+            commitPlaylistQueue(queue, previousQueue); notifyPlayback();
+            if (!valid() || state.player.playbackQueue !== queue) {
+              if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+              throw aborted();
+            }
+            TrackActionsRuntime.play(targets.get(selected.playlistItemId)); return;
+          }
+          state.player.playbackQueue = queue; notifyPlayback();
+          if (!valid() || state.player.playbackQueue !== queue) {
+            if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue;
+            throw aborted();
+          }
+          try {if (await playTrackFromPayload(selected) !== true) throw failure('Mix playback did not start.');}
+          catch (error) {if (state.player.playbackQueue === queue) state.player.playbackQueue = previousQueue; throw error;}
+        },
+      };
+    },
     readPlayback, playbackIntent,
+    async completeLibraryMixDraft({token, playlist_id, scopeKey}) {
+      const start = sync();
+      if (!draftCurrent(draft) || draft.token !== token || start.scopeKey !== scopeKey || !start.authenticated) return false;
+      releaseDraft(token);
+      await navigateCurrent(playlist_id, start); return true;
+    },
+    setLibraryMixOrder({scopeKey, playlist_id, mode}) {
+      const shell = sync(), detail = raw?.playlist_detail;
+      if (!shell.visible || shell.scopeKey !== scopeKey || shell.playlistId !== playlist_id
+        || detail?.playlist_id !== playlist_id || detail.playlist_kind !== 'library_mix'
+        || !detail.library_mix || !['regular', 'shuffle', 'unplayed_first'].includes(mode)) return false;
+      orderChoice = {scopeKey, playlist_id, mode, preferences: null}; notifyPlayback(); return true;
+    },
     acceptPlaylistPreferences(value) {
       if (value?.scopeKey !== sync().scopeKey || !value.preferences) return false;
       if (orderChoice?.scopeKey === value.scopeKey) orderChoice.preferences = value.preferences;
@@ -46670,16 +47782,75 @@ window.dispatchEvent(new Event('albumhaven:playlist-runtime-ready'));
 /* Native shell/navigation adapter. Top data never enters gallery state/history. */
 const AlbumTopsRuntime = (() => {
   const listeners = new Set();
-  let current = null, lastView = null, viewVersion = 0, confirmation = null;
+  const pendingListeners = new Set();
+  let snapshotDepth = 0, notificationQueued = false;
+  let current = null, lastView = null, viewVersion = 0, confirmation = null, draftNavigation = null;
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
   const aborted = () => Object.assign(new Error('Album Top navigation was superseded.'), {name: 'AbortError'});
-  function sync() {
-    const shell = document.getElementById('app-shell'), host = document.getElementById('album-tops-root');
+  function privateIdentity() {
+    const shell = document.getElementById('app-shell');
     let context = null;
     try {context = PrivateUITransport.context();} catch { /* A retired context cannot authorize private reads. */ }
     const scopeKey = JSON.stringify([shell?.dataset?.nativeAccountId || '', shell?.dataset?.nativeLibraryId || '', context, PrivateUITransport.generation()]);
     const authenticated = Boolean(context && shell?.dataset?.nativeAccountId && shell?.dataset?.nativeLibraryId);
-    const inLibrary = new URL(window.location.href).pathname === '/' && shell?.hidden !== true;
+    return {shell, scopeKey, authenticated};
+  }
+  const draftCurrent = owner => {
+    const identity = privateIdentity();
+    try {return Boolean(owner && draftNavigation === owner && identity.authenticated && identity.scopeKey === owner.scopeKey
+      && identity.shell?.hidden !== true && state.view === owner.sourceView && owner.isCurrent() === true);} catch {return false;}
+  };
+  function releaseDraftNavigation(owner, discard = false, deferNotification = false) {
+    if (!owner || draftNavigation !== owner) return;
+    draftNavigation = null; owner.unregister?.();
+    if (confirmation?.draftOwner === owner) {
+      if (typeof activeAppConfirmDialog !== 'undefined' && activeAppConfirmDialog?.promise === confirmation.promise) activeAppConfirmDialog.cancel({restoreFocus: false});
+      confirmation = null;
+    }
+    if (discard && deferNotification) {
+      owner.pendingDiscard = true;
+      Promise.resolve().then(() => {
+        if (owner.pendingDiscard) {owner.pendingDiscard = false; owner.onDiscard();}
+      });
+    } else if (discard) owner.onDiscard();
+  }
+  async function confirmDraftDeparture(owner, message, options = {}) {
+    if (!draftCurrent(owner) || typeof showAppConfirmDialog !== 'function' || activeAppConfirmDialog) return false;
+    const pending = {draftOwner: owner, scopeKey: owner.scopeKey, viewVersion,
+      promise: showAppConfirmDialog({title: options.title || 'Discard Album Top changes', message,
+        acceptLabel: options.acceptLabel || 'Discard', danger: options.danger !== false})};
+    confirmation = pending;
+    try {return await pending.promise === true && confirmation === pending && draftCurrent(owner);}
+    finally {if (confirmation === pending) confirmation = null;}
+  }
+  function registerDraftNavigation({isCurrent, confirmLeave, onDiscard} = {}) {
+    const start = sync(), navigation = window.AlbumHavenSettingsNavigation?.instance;
+    const position = window.history.state?.albumHavenNavigationPosition, url = window.location.href;
+    if (draftNavigation || !start.visible || !start.authenticated || !Number.isSafeInteger(position)
+      || typeof isCurrent !== 'function' || typeof confirmLeave !== 'function' || typeof onDiscard !== 'function'
+      || typeof navigation?.setCollectionDraftOwner !== 'function' || typeof window.crypto?.randomUUID !== 'function') return false;
+    const owner = {token: window.crypto.randomUUID(), scopeKey: start.scopeKey, sourceView: state.view, isCurrent, onDiscard};
+    draftNavigation = owner;
+    if (!draftCurrent(owner)) {draftNavigation = null; return false;}
+    owner.unregister = navigation.setCollectionDraftOwner({token: owner.token, scopeKey: owner.scopeKey,
+      isCurrent: () => draftCurrent(owner),
+      ownsHistoryEntry: (snapshot, destination) => Number.isSafeInteger(snapshot?.albumHavenNavigationPosition)
+        && snapshot.albumHavenNavigationPosition === position && destination === url,
+      confirmLeave: () => confirmLeave((message, options) => confirmDraftDeparture(owner, message, options)),
+      discard: () => releaseDraftNavigation(owner, true)});
+    if (!owner.unregister) {draftNavigation = null; return false;}
+    return () => {owner.pendingDiscard = false; releaseDraftNavigation(owner);};
+  }
+  function sync() {
+    const {shell, scopeKey, authenticated} = privateIdentity(), host = document.getElementById('album-tops-root');
+    // A snapshot may run during a React render. Retire authority immediately,
+    // but notify its consumer after that render; cleanup cancels stale notices.
+    if (draftNavigation && !draftCurrent(draftNavigation)) releaseDraftNavigation(draftNavigation, true, true);
+    // The shared history owner keeps the source painted while it confirms or
+    // restores a traversal. Live private identity and source view still govern.
+    const retainedDeparture = Boolean(draftNavigation) && window.AlbumHavenSettingsNavigation?.instance
+      ?.isCollectionDraftDeparturePending?.(draftNavigation.token) === true;
+    const inLibrary = (new URL(window.location.href).pathname === '/' || retainedDeparture) && shell?.hidden !== true;
     const active = inLibrary && String(state.view?.surface?.active || state.view?.surface_request || '') === 'album_tops';
     if (lastView !== state.view) {lastView = state.view; viewVersion++;}
     const next = {scopeKey, authenticated, inLibrary, active, visible: Boolean(host && active && !state.ui?.pendingViewTransition),
@@ -46693,35 +47864,71 @@ const AlbumTopsRuntime = (() => {
     document.getElementById('shell-main-surface')?.classList.toggle('has-react-album-tops', next.visible);
     if (current && Object.keys(next).every(key => current[key] === next[key])) return current;
     current = Object.freeze(next);
-    for (const listener of [...listeners]) listener();
+    if (snapshotDepth) {
+      for (const listener of listeners) pendingListeners.add(listener);
+      if (pendingListeners.size && !notificationQueued) {
+        notificationQueued = true;
+        Promise.resolve().then(() => {
+          notificationQueued = false;
+          const pending = [...pendingListeners]; pendingListeners.clear();
+          for (const listener of pending) if (listeners.has(listener)) listener();
+        });
+      }
+    } else {
+      for (const listener of [...listeners]) {
+        pendingListeners.delete(listener);
+        if (listeners.has(listener)) listener();
+      }
+    }
     return current;
+  }
+  function snapshot() {
+    snapshotDepth++;
+    try {return sync();} finally {snapshotDepth--;}
   }
   const acceptsPrivateScope = scopeKey => {
     const snapshot = sync();
     return snapshot.authenticated && snapshot.inLibrary && snapshot.scopeKey === scopeKey;
   };
-  async function navigate({top_ref = null, isCurrent = () => true, expectedViewRequestId} = {}) {
+  async function navigate({top_ref = null, isCurrent = () => true, expectedViewRequestId, onStart, onSettled} = {}) {
     const start = sync();
     if (!acceptsPrivateScope(start.scopeKey) || top_ref !== null && !uuid(top_ref) || !isCurrent()
       || expectedViewRequestId !== undefined && start.viewRequestId !== expectedViewRequestId) return false;
     const open = async () => {
-      if (!isCurrent() || !acceptsPrivateScope(start.scopeKey) || sync().viewVersion !== start.viewVersion
-        || sync().viewRequestId !== start.viewRequestId) throw aborted();
+      const currentIntent = () => isCurrent() && acceptsPrivateScope(start.scopeKey) && sync().viewVersion === start.viewVersion
+        && sync().viewRequestId === start.viewRequestId;
+      if (!currentIntent()) throw aborted();
       const priorView = state.view, params = new URLSearchParams({surface: 'album_tops'});
       if (top_ref) params.set('top_ref', top_ref);
-      let requestId = null;
-      const pending = fetchAndRender(`/view-data?${params}`, true, {source: 'library', shouldApplyResponse(payload) {
+      let requestId = null, settlement = null;
+      const pending = fetchAndRender(`/view-data?${params}`, true, {source: 'library', onStart({requestId: actualRequestId}) {
+        const ownsDispatch = () => isCurrent() && acceptsPrivateScope(start.scopeKey)
+          && sync().viewVersion === start.viewVersion && state.view === priorView
+          && sync().viewRequestId === actualRequestId;
+        if (requestId !== null || !ownsDispatch()) return false;
+        requestId = actualRequestId;
+        onStart?.();
+        return ownsDispatch();
+      }, onSettled({requestId: completedRequestId, applied, error}) {
+        if (settlement || requestId === null || completedRequestId !== requestId) return;
+        const next = sync();
+        if (requestId !== state.ui.activeViewRequestId || next.scopeKey !== start.scopeKey
+          || !next.authenticated || !next.inLibrary || error?.name === 'AbortError') return;
+        const opened = applied === true && next.visible && next.topRef === top_ref;
+        if (!opened && (!isCurrent() || state.view !== priorView || next.viewVersion !== start.viewVersion)) return;
+        settlement = {opened, error};
+        if (opened) closeArtistsDrawer({restoreFocus: false});
+        try {onSettled?.(settlement);} catch (_error) { /* Completion observers do not own navigation. */ }
+      }, shouldApplyResponse(payload) {
         if (!isCurrent() || sync().scopeKey !== start.scopeKey || !sync().authenticated || state.view !== priorView
           || !sync().inLibrary || requestId !== null && state.ui.activeViewRequestId !== requestId) return false;
         try {PrivateUITransport.accept(payload);} catch {return false;}
         return payload?.surface?.active === 'album_tops' && (payload.top_ref || null) === top_ref;
       }});
-      requestId = state.ui.activeViewRequestId;
       const applied = await pending, next = sync();
+      if (requestId === null) return false;
       if (requestId !== state.ui.activeViewRequestId || next.scopeKey !== start.scopeKey || !next.authenticated) throw aborted();
-      if (applied === false || !next.visible || next.topRef !== top_ref) return false;
-      closeArtistsDrawer({restoreFocus: false});
-      return true;
+      return settlement?.opened === true && applied !== false;
     };
     return (typeof deferAppFormPageReplacement === 'function' && deferAppFormPageReplacement(open)) || open();
   }
@@ -46746,10 +47953,19 @@ const AlbumTopsRuntime = (() => {
   if (shell && typeof MutationObserver === 'function') new MutationObserver(sync).observe(shell,
     {attributes: true, attributeFilter: ['hidden', 'data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
   return Object.freeze({
-    snapshot: sync, sync, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+    snapshot, sync, subscribe(listener) {
+      listeners.add(listener);
+      return () => {listeners.delete(listener); pendingListeners.delete(listener);};
+    },
     acceptsPrivateScope, navigate, selectSidebar: selectLibrarySidebarMode,
+    registerDraftNavigation,
+    deferDraftNavigation(callback) {
+      if (!draftCurrent(draftNavigation)) return false;
+      return window.AlbumHavenSettingsNavigation?.instance?.deferCollectionDraftNavigation(callback) || false;
+    },
     buttonHtml: components.buttonHtml, actionHtml: components.actionHtml, alertHtml: components.alertHtml,
     searchHtml: components.searchHtml,
+    tabsHtml: components.tabsHtml, mountTabs: components.mountTabs,
     notificationRegistry: () => window.AlbumHavenNotifications,
     subscribeNotificationRegistry(listener) {
       window.addEventListener('albumhaven:notifications-ready', listener);
@@ -47002,6 +48218,7 @@ function resolveInitialHydrationEndpoint(startupHydration, options = {}) {
     if (resolvedEndpoint && serverEndpoint) {
       const serverUrl = new URL(serverEndpoint, window.location.href);
       const resolvedUrl = new URL(resolvedEndpoint, window.location.href);
+      if (serverUrl.origin !== resolvedUrl.origin) return serverEndpoint;
       ['gallery_display', 'gallery_scale_percent'].forEach((param) => {
         if (resolvedUrl.searchParams.has(param)) {
           serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
@@ -47017,6 +48234,16 @@ function resolveInitialHydrationEndpoint(startupHydration, options = {}) {
           if (resolvedUrl.searchParams.has(param)) serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
           else serverUrl.searchParams.delete(param);
         });
+        if (resolvedUrl.searchParams.get('surface') === 'albums'
+          && String(resolvedUrl.searchParams.get('artist') || '').trim()
+          && String(serverUrl.searchParams.get('artist') || '').trim()) {
+          // Keep server hydration options, but use the selected Artist and mode
+          // already resolved by this same-source initial view.
+          ['artist', 'page_mode'].forEach((param) => {
+            if (resolvedUrl.searchParams.has(param)) serverUrl.searchParams.set(param, resolvedUrl.searchParams.get(param));
+            else serverUrl.searchParams.delete(param);
+          });
+        }
       }
       return `${serverUrl.pathname}${serverUrl.search}`;
     }

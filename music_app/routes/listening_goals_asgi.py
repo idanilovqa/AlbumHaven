@@ -10,6 +10,9 @@ from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.client_surfaces import client_surface_from_request
+from music_app.services.account_goals_context import (
+    ACCOUNT_GOALS_CONTEXT_SCOPE, AccountGoalsContextError, account_goals_context_ref,
+)
 from music_app.services.listening_goals_commands import GoalsError, normalize_goal_command
 from music_app.services.listening_goal_bonus_settings import normalize_bonus_settings
 from music_app.services.listening_goals_postgres import PostgresListeningGoalsService, READ, WRITE
@@ -33,22 +36,41 @@ def _context(request, action):
             request_origin=_request_origin(request), client_surface_class=client_surface_from_request(request))
     except ValueError:
         raise GoalsError('forbidden', 403) from None
-    # Home continuity is an optional UI fence, never Goals ownership. A
-    # library-less account still uses these same account-authorized endpoints.
-    library_id = actor.current_library_id
+    # Account entry opts into an account/session-only continuity fence. This
+    # value is never authority; the real session, policy and repository still
+    # authorize the request. Never substitute a client-provided identity.
+    account_supplied = request.headers.getlist('x-albumhaven-account-context')
+    supplied = request.headers.getlist('x-albumhaven-context')
     marker = None
-    if type(library_id) is int and library_id > 0:
-        try:
-            marker = private_ui_context_ref(request)
-        except PrivateUIContextError as error:
-            raise GoalsError(error.code, error.status_code) from None
-    request.state.goals_ui_context_ref = marker
-    if action == WRITE:
-        supplied = request.headers.getlist('x-albumhaven-context')
-        if supplied and (len(supplied) != 1 or marker is None
-                or len(supplied[0]) != 64 or not supplied[0].isascii()
-                or not hmac.compare_digest(supplied[0], marker)):
+    scope = None
+    if account_supplied:
+        if len(account_supplied) != 1 or supplied:
             raise GoalsError('stale_context', 409)
+        try:
+            marker = account_goals_context_ref(request)
+        except AccountGoalsContextError as error:
+            raise GoalsError(error.code, error.status_code) from None
+        value = account_supplied[0]
+        if (marker is None or len(value) != 64 or not value.isascii()
+                or not hmac.compare_digest(value, marker)):
+            raise GoalsError('stale_context', 409)
+        scope = ACCOUNT_GOALS_CONTEXT_SCOPE
+    else:
+        # Preserve the existing optional Home fence and headerless account API.
+        # Their library-bound signer and write-only check remain unchanged.
+        library_id = actor.current_library_id
+        if type(library_id) is int and library_id > 0:
+            try:
+                marker = private_ui_context_ref(request)
+            except PrivateUIContextError as error:
+                raise GoalsError(error.code, error.status_code) from None
+        if action == WRITE:
+            if supplied and (len(supplied) != 1 or marker is None
+                    or len(supplied[0]) != 64 or not supplied[0].isascii()
+                    or not hmac.compare_digest(supplied[0], marker)):
+                raise GoalsError('stale_context', 409)
+    request.state.goals_ui_context_ref = marker
+    request.state.goals_ui_context_scope = scope
     resolver = getattr(request.app.state, 'policy_constraint_resolver', None)
     return context, resolver if callable(resolver) else PolicyEvaluationConstraints()
 
@@ -66,6 +88,9 @@ def _response(request, value):
     marker = getattr(request.state, 'goals_ui_context_ref', None)
     if marker is not None:
         payload['context_ref'] = marker
+    scope = getattr(request.state, 'goals_ui_context_scope', None)
+    if scope is not None:
+        payload['context_scope'] = scope
     return JSONResponse(payload, headers=NO_STORE)
 
 

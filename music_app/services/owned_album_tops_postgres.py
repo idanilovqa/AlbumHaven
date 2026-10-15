@@ -13,6 +13,7 @@ from music_app.services.admin_member_mutation_postgres import lock_current_actor
 from music_app.services.policy import PolicyContext, ResourceScope
 from music_app.services import album_top_viewer_actions as viewers
 from music_app.services import album_top_progress as progress
+from music_app.services import album_top_activity_postgres as activity
 from music_app.services import album_top_publication as publication
 from music_app.services import album_top_publication_evidence as publication_evidence
 from music_app.services.postgres_connections import pooled_connection
@@ -98,18 +99,20 @@ class PostgresOwnedAlbumTopsService:
                 raise
             return False
 
-    def _actions(self, context, constraints, top=None):
+    def _actions(self, context, constraints, top=None, *, active=True):
         actions = {action: True for action in ((BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE))
                    if self._allows(context, tuple(dict.fromkeys((BROWSE, action))), constraints, top)}
         if top is None:
             return {**actions, "can_create": actions.get(CREATE, False)}
         read, manage, items = (actions.get(action, False) for action in (BROWSE, MANAGE, ITEMS))
+        own_progress = self._allows(context, (BROWSE, PROGRESS), constraints, top)
         return {**actions, "can_read": read, "can_edit": manage, "can_rename": manage,
                 "can_add": items, "can_remove": items, "can_reorder": items,
                 "can_delete": self._allows(context, (BROWSE, MANAGE), constraints, top, owner_only=True),
                 "can_share": self._allows(context, (BROWSE, ACCESS), constraints, top, owner_only=True),
                 "can_view_sharing": read,
-                "can_manage_own_progress": self._allows(context, (BROWSE, PROGRESS), constraints, top),
+                "can_set_activity": own_progress,
+                "can_manage_own_progress": active and own_progress,
                 "can_request_edit": read and (top["visibility"] == "server_shared" or top.get("viewer_grant", False))
                     and top["owner_account_id"] != context.actor.account_id and not top.get("editor_grant", False),
                 "can_copy": read and self._allows(context, (BROWSE, CREATE), constraints)}
@@ -128,6 +131,7 @@ class PostgresOwnedAlbumTopsService:
                       and g.library_id=p.library_id and g.account_id=%s and g.role in ('editor','viewer')))
                 order by p.id limit %s""",
                 (live.library_id, after, live.actor.account_id, live.actor.account_id, limit + 1)).fetchall()
+            activities = activity.read_activity(connection, live, [str(row["ref"]) for row in rows[:limit]])
             tops = []
             for row in rows[:limit]:
                 try:
@@ -136,11 +140,13 @@ class PostgresOwnedAlbumTopsService:
                     if error.status_code != 404:
                         raise
                     continue
-                actions = self._actions(live, constraints, top)
+                state = activities[str(top["ref"])]
+                actions = self._actions(live, constraints, top, active=state["active"])
                 if actions["can_read"]:
                     tops.append({"top_ref": str(top["ref"]), "title": top["title"],
                         "description": top["description"], "revision": str(top["revision"]),
-                        "visibility": top["visibility"], "allowed_actions": actions})
+                        "visibility": top["visibility"], "allowed_actions": actions,
+                        "top_viewer_overlay": {"activity": state}})
             return {"tops": tops, "allowed_actions": self._actions(live, constraints),
                 "next_cursor": encode_social_cursor(rows[limit - 1]["id"] if len(rows) > limit else None,
                                                      secret=cursor_secret, scope=scope)}
@@ -253,7 +259,8 @@ class PostgresOwnedAlbumTopsService:
                 c.title,c.artist_display,c.release_year from app.album_list_items i
                 join catalog.release_groups c on c.ref=i.catalog_ref
                 where i.top_ref=%s order by i.curator_position""", (ref,)).fetchall()
-            actions = self._actions(live, constraints, top)
+            state = activity.read_activity(connection, live, [ref])[ref]
+            actions = self._actions(live, constraints, top, active=state["active"])
             edit = {}
             if actions.get('can_edit'):
                 working = publication.working_items(connection, top)
@@ -264,7 +271,7 @@ class PostgresOwnedAlbumTopsService:
             return {"top_ref": ref, "title": top["title"], "description": top["description"],
                 "revision": str(top["revision"]), "visibility": top["visibility"],
                 "allowed_actions": actions, **edit,
-                "top_viewer_overlay": progress.read_overlay(connection, live, top),
+                "top_viewer_overlay": {**progress.read_overlay(connection, live, top), "activity": state},
                 "items": [{**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]}
 
     def execute(self, context, command: AlbumTopCommand, *, constraints=None):
@@ -276,6 +283,7 @@ class PostgresOwnedAlbumTopsService:
         command = normalize_top_command(command.action,
             {**command.data, "request_key": command.request_key}, top_ref=command.top_ref)
         manual_progress = command.action == "set_manual_completion"
+        private_state = manual_progress or command.action == "set_activity"
         lock_target = command.data.get("account_id")
         if command.action == "decide_edit_request":
             self._require(context, (BROWSE,), constraints)
@@ -295,7 +303,7 @@ class PostgresOwnedAlbumTopsService:
                 if prior["command_digest"] != command.digest:
                     raise AlbumTopError("request_key_conflict", 409)
                 retained = self._top(connection, live, str(prior["top_ref"]),
-                                     allow_deleted=not manual_progress and prior["publication_ref"] is None)
+                                     allow_deleted=not private_state and prior["publication_ref"] is None)
                 self._require(live, (BROWSE,), constraints, retained)
                 self._require(live, command_actions(command), constraints,
                     retained if command.action not in {"create", "copy"} else None,
@@ -316,17 +324,19 @@ class PostgresOwnedAlbumTopsService:
                     command.data["title"], command.data["description"]))
                 top = self._top(connection, live, ref, write=True)
             else:
-                # Self progress shares the parent lock with other viewers while
+                # Private activity/progress share the parent lock with other viewers while
                 # excluding content/visibility edits through the existing owner.
-                top = self._top(connection, live, command.top_ref, write=not manual_progress)
+                top = self._top(connection, live, command.top_ref, write=not private_state)
                 self._require(live, (BROWSE,), constraints, top)
                 self._require(live, command_actions(command), constraints,
                               None if command.action == "copy" else top, owner_only=command.action == "delete")
-                if not manual_progress and str(top["revision"]) != command.data["revision"]:
+                if not private_state and str(top["revision"]) != command.data["revision"]:
                     raise AlbumTopError("revision_conflict", 409)
             required_actions = command_actions(command)
             if command.action in {"save", "enable_external", "revoke_external"}:
                 receipt, required_actions = publication.save(self, connection, live, command, top, now, constraints)
+            elif command.action == "set_activity":
+                receipt = activity.set_activity(connection, live, command, top, now)
             elif manual_progress:
                 receipt = progress.set_manual_completion(connection, live, command, top, now)
             elif command.action == "copy":

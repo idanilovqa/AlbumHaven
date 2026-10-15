@@ -2,6 +2,7 @@
 from datetime import timezone
 
 from music_app.services.owned_album_tops import AlbumTopError
+from music_app.services.album_top_activity_postgres import require_active
 
 
 def require_member(connection, context, top, album_ref):
@@ -28,6 +29,7 @@ def read_overlay(connection, context, top):
 
 def set_manual_completion(connection, context, command, top, now):
     """Set an explicit self-only value without changing listening or Top state."""
+    require_active(connection, context, top, now)
     album_ref = command.data["album_ref"]
     require_member(connection, context, top, album_ref)
     key = (context.actor.account_id, context.library_id, top["ref"], album_ref)

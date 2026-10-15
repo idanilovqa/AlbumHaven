@@ -140,6 +140,7 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
         "decide_edit_request": {"request_key", "revision", "request_ref", "decision"},
         "copy": {"request_key", "revision", "title"},
         "set_manual_completion": {"request_key", "album_ref", "progress_revision", "completed"},
+        "set_activity": {"request_key", "activity_revision", "active"},
     }
     if type(action) is not str or action not in fields or type(payload) is not dict:
         raise AlbumTopError("invalid_command")
@@ -154,6 +155,15 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
                 "album_refs": _refs(payload.get("album_refs", []), empty=True)}
         return AlbumTopCommand(action, None, key, data)
     target = top_uuid(top_ref)
+    if action == "set_activity":
+        revision = payload.get("activity_revision")
+        if type(revision) is not str or revision != "0":
+            revision = top_revision(revision)
+        if type(payload.get("active")) is not bool:
+            raise AlbumTopError("invalid_command")
+        return AlbumTopCommand(action, target, key, {
+            "activity_revision": revision, "active": payload["active"],
+        })
     if action == "set_manual_completion":
         revision = payload.get("progress_revision")
         if type(revision) is not str or revision != "0":
@@ -214,7 +224,8 @@ def command_actions(command: AlbumTopCommand) -> tuple[str, ...]:
     action = {"create": CREATE, "copy": CREATE, "save": MANAGE, "delete": MANAGE,
               "add": ITEMS, "remove": ITEMS, "reorder": ITEMS, "visibility": ACCESS,
               "grant_editor": ACCESS, "grant_viewer": ACCESS, "revoke_editor": ACCESS,
-              "decide_edit_request": ACCESS, "set_manual_completion": PROGRESS}.get(command.action)
+              "decide_edit_request": ACCESS, "set_manual_completion": PROGRESS,
+              "set_activity": PROGRESS}.get(command.action)
     if action is None:
         raise AlbumTopError("invalid_command")
     return BROWSE, action

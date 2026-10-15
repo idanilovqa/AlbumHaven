@@ -1,5 +1,6 @@
 import { expect, test } from '../support/performanceFixtures.js';
 import { GalleryRegressions } from '../poms/galleryRegressions.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import {
   waitForLibraryStartupEntryVisible,
 } from '../helpers/realAppBenchmarkHelpers.js';
@@ -11,15 +12,24 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
     viewport: { width: 390, height: 844 },
   });
 
-  for (const scrollBeyondJump of [false, true]) {
-    test(scrollBeyondJump
+  const scenarios = [
+    { label: 'Cards', view: 'cards' },
+    { label: 'Covers', view: 'covers' },
+    { label: 'Rows', view: 'list' },
+  ].flatMap(({ label, view }) => [false, true].map((scrollBeyondJump) => ({
+    label, view, scrollBeyondJump,
+  })));
+
+  for (const { label, view, scrollBeyondJump } of scenarios) {
+    test(`mobile ${label} › ${scrollBeyondJump
       ? 'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position'
-      : 'long-press Scroll, album, Back restores an artist beyond the first root page', async ({
+      : 'long-press Scroll, album, Back restores an artist beyond the first root page'}`, async ({
       galleryActions,
       navigationPanelActions,
       page,
     }) => {
       const ui = new GalleryRegressions(page);
+      const layout = new MobileLayoutPage(page);
       await galleryActions.goto();
       await waitForLibraryStartupEntryVisible(page, galleryActions, navigationPanelActions, {
         timeout: 120000,
@@ -35,6 +45,8 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         && !state.busy
         && !String(state.ui?.activeViewRequestUrl || '').trim()
       ), null, { timeout: 120000 });
+
+      await layout.selectView(view);
 
       await navigationPanelActions.openArtistTree();
       const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();

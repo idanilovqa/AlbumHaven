@@ -5,7 +5,7 @@ const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
 const { validatePerformanceChangeImpact } = require('./performance-change-impact.cjs');
 
 const EXPECTED_TARGET_COUNT = 24;
-const EXPECTED_CASE_COUNT = 44;
+const EXPECTED_CASE_COUNT = 50;
 const MATRIX_FIELDS = ['shard', 'fixtureProfile', 'fixtureMode', 'harness', 'basePort', 'targets'];
 const CALIBRATION_POLICY = Object.freeze({
   evidenceMode: 'retained-cohorts',

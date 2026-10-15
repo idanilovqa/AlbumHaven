@@ -1,21 +1,31 @@
 import { expect, test } from '../support/performanceFixtures.js';
 import { GalleryRegressions } from '../poms/galleryRegressions.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHelpers.js';
 
 test.describe('FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration', () => {
   test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false });
 
-  for (const scrollBeyondJump of [false, true]) {
-    test(scrollBeyondJump
+  const scenarios = [
+    { label: 'Cards', view: 'cards' },
+    { label: 'Covers', view: 'covers' },
+  ].flatMap(({ label, view }) => [false, true].map((scrollBeyondJump) => ({
+    label, view, scrollBeyondJump,
+  })));
+
+  for (const { label, view, scrollBeyondJump } of scenarios) {
+    test(`desktop ${label} › ${scrollBeyondJump
       ? 'desktop Scroll, ordinary scroll, album, Close retains the departure position'
-      : 'desktop Scroll, album, Close retains the jumped-to position', async ({
+      : 'desktop Scroll, album, Close retains the jumped-to position'}`, async ({
       galleryActions, navigationPanelActions, trackModalActions, page,
     }, testInfo) => {
       const ui = new GalleryRegressions(page);
+      const layout = new MobileLayoutPage(page);
       await galleryActions.goto();
       await waitForLibraryStartupEntryVisible(page, galleryActions, navigationPanelActions, { timeout: 120000 });
       await navigationPanelActions.waitForSidebarFullyHydrated({ timeout: 120000 });
       await galleryActions.waitForInitialRefreshCompleted({ timeout: 120000 });
+      await layout.selectView(view);
       await navigationPanelActions.openArtistTree();
       const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
       expect(artists.length).toBeGreaterThan(250);

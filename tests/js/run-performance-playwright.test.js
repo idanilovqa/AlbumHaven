@@ -2356,10 +2356,14 @@ test('artist scroll completion requires all navigation, restoration, presentatio
   const titles = [
     'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
     'root continuation starts eight viewports early and never reaches a hard stop during its real request',
-    'long-press Scroll, album, Back restores an artist beyond the first root page',
-      'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
-    'desktop Scroll, album, Close retains the jumped-to position',
-    'desktop Scroll, ordinary scroll, album, Close retains the departure position',
+    ...['Cards', 'Covers', 'Rows'].flatMap((view) => [
+      `mobile ${view} > long-press Scroll, album, Back restores an artist beyond the first root page`,
+      `mobile ${view} > long-press Scroll, ordinary scroll to another artist, album, Back retains the new position`,
+    ]),
+    ...['Cards', 'Covers'].flatMap((view) => [
+      `desktop ${view} > desktop Scroll, album, Close retains the jumped-to position`,
+      `desktop ${view} > desktop Scroll, ordinary scroll, album, Close retains the departure position`,
+    ]),
     'Mobile Cards, covers and rows retain the jumped-to release',
     'Desktop Cards and covers retain the jumped-to release',
     'mobile Cards > native touch swipes track the commanded gesture without reverse movement or layout jitter',
@@ -2377,7 +2381,9 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     expectedCasePatterns: target.casePatterns || [target.casePattern],
     parsedTestResults,
   };
-  assert.equal(target.casePatterns.length, 13);
+  assert.equal(target.casePatterns.length, 19);
+  assert.equal(new Set(target.casePatterns).size, 19);
+  assert.equal(target.casePatterns.some((pattern) => pattern.includes('›')), false);
   assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');
   for (const incomplete of [
     parsedTestResults.slice(0, 2),

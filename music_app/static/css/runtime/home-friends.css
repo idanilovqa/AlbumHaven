@@ -128,3 +128,9 @@
 .home-header[hidden] { display: none; }
 @keyframes home-header-reveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .home-header .home-header__floating-panel { animation: none !important; } }
+
+/* One geometry for Tops and Goals, unaffected by count, filters or achievement. */
+.album-progress { display: inline-flex; width: 160px; min-width: 160px; max-width: 160px; height: 8px; min-height: 8px; flex: 0 0 160px; vertical-align: middle; }
+.album-progress[hidden] { display: none; }
+.album-progress__track { display: block; width: 100%; height: 100%; overflow: hidden; border-radius: 4px; background: color-mix(in srgb, var(--muted) 25%, transparent); }
+.album-progress__fill { display: block; height: 100%; background: var(--appearance-selected-accent, currentColor); }

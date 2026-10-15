@@ -17,3 +17,15 @@ export const isManualProgress = value => Boolean(value && typeof value === 'obje
   && Object.hasOwn(value, 'progress_revision') && Object.hasOwn(value, 'manual_completed_at')
   && isProgressRevision(value.progress_revision) && isCompletionTime(value.manual_completed_at)
   && (value.progress_revision !== '0' || value.manual_completed_at === null));
+
+// Called only at the full-detail transport boundary, never on filtered cards.
+export function projectCompleteTopProgress(items, progress) {
+  if (!Array.isArray(items) || items.length > 5000 || !progress || typeof progress !== 'object' || Array.isArray(progress)
+    || Object.keys(progress).length !== items.length || new Set(items.map(item => item.album_ref)).size !== items.length) return null;
+  let completed = 0;
+  for (const item of items) {
+    if (typeof item.album_ref !== 'string' || !Object.hasOwn(progress, item.album_ref) || !isManualProgress(progress[item.album_ref])) return null;
+    if (progress[item.album_ref].manual_completed_at !== null) completed++;
+  }
+  return Object.freeze({completed, total: items.length});
+}

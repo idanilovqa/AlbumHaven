@@ -1,5 +1,5 @@
 // All network replies are bound to the authenticated native context and caller scope.
-import {isProgressRevision, isManualProgress, isTopActivity} from './progress.mjs';
+import {isProgressRevision, isManualProgress, isTopActivity, projectCompleteTopProgress} from './progress.mjs';
 
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const revision = value => typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value);
@@ -182,7 +182,8 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
     async read(ref, options) {
       if (!uuid(ref)) throw fail('Invalid Album Top identity.');
       const data = await request('/album-tops/' + ref, options), result = top(data);
-      if (result.top_ref !== ref || !Array.isArray(data.items) || data.items.length > 5000) throw fail('Invalid Album Top detail.');
+      if (result.top_ref !== ref || !Array.isArray(data.items) || data.items.length > 5000
+        || Object.hasOwn(data, 'next_cursor') && data.next_cursor !== null) throw fail('Invalid Album Top detail.');
       result.items = data.items.map(row => {
         if (!uuid(row?.ref) || !uuid(row.catalog_ref) || typeof row.title !== 'string' || typeof row.artist_display !== 'string') throw fail('Invalid Album Top album.');
         return {item_ref: row.ref, album_ref: row.catalog_ref, title: row.title, artist: row.artist_display,
@@ -206,6 +207,8 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
           return [item.album_ref, {progress_revision: row.progress_revision, manual_completed_at: row.manual_completed_at}];
         }))};
       }
+      // This endpoint returns all Top members; list/search pages cannot supply this count.
+      result.completion_summary = projectCompleteTopProgress(result.items, result.top_viewer_overlay?.item_progress);
       return result;
     },
     async execute(action, command, options) {

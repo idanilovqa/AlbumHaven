@@ -1,4 +1,5 @@
 import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
+import {mountAlbumProgress} from '../home-friends/album-progress.mjs';
 import {mountSharedHeader} from '../home-friends/shared-header.mjs';
 import {albumTopActionAllowed} from './model.mjs';
 import {isManualProgress, isTopActivity} from './progress.mjs';
@@ -24,9 +25,14 @@ export function mountAlbumTopsView(host, runtime, props) {
     const owner = mountSharedHeader(target, runtime, {id: 'album-tops', tabIndex: -1, ariaLabel: 'Album Tops header', className: 'album-tops__header'});
     const controls = new Map(); let currentEdit = edit;
     const context = node(owner.slots.content, 'div', 'gallery-bar__context'), title = node(context, 'div', 'gallery-bar__title'), titleText = node(title, 'span');
+    const progressHost = node(context, 'span'), progressOwner = mountAlbumProgress(progressHost);
     function control(key, label, options, leading = false) {let item = controls.get(key); if (!item) {const host = node(leading ? owner.slots.leading : owner.slots.actions, 'span'); item = {host, owner: mountButton(host, runtime, {label, ...options})}; controls.set(key, item);} else item.owner.update({label, ...options}); item.host.hidden = false;}
     function refresh(nextEdit = currentEdit) {
       currentEdit = nextEdit; const {state, onOpen} = latest, selected = state.selectedTopRef, detail = state.detail.data;
+      progressHost.hidden = !selected || Boolean(currentEdit);
+      progressOwner.update({summary: state.scopeKey && selected && detail?.top_ref === selected
+        && state.directory.status !== 'denied' && state.detail.status === 'ready' ? detail.completion_summary : null,
+        label: 'Manually completed albums in this Top'});
       const busy = state.mutation.refreshing === true || ['loading', 'uncertain'].includes(state.mutation.status);
       for (const item of controls.values()) item.host.hidden = true;
       if (selected) control('back', 'Back', {icon: 'back', disabled: currentEdit?.busy === true, onClick: async () => {if (!currentEdit || await currentEdit.cancel({restoreFocus: false})) onOpen(null);}}, true);
@@ -49,7 +55,7 @@ export function mountAlbumTopsView(host, runtime, props) {
       }
       owner.update({id: 'album-tops', tabIndex: -1, ariaLabel: 'Album Tops header', className: 'album-tops__header'});
     }
-    refresh(); return {update: refresh, dispose() {for (const item of controls.values()) {item.owner.dispose(); item.host.remove();} context.remove(); owner.dispose(); if (target !== headerHost) target.remove();}};
+    refresh(); return {update: refresh, dispose() {progressOwner.dispose(); for (const item of controls.values()) {item.owner.dispose(); item.host.remove();} context.remove(); owner.dispose(); if (target !== headerHost) target.remove();}};
   }
   normalHeader = createHeader(headerHost);
   function render(next) {

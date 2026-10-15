@@ -434,13 +434,20 @@ function buildAppOpenAllArtistsFocusedLocalSummaryCards(_checkpoints, metricsPay
 }
 
 function buildProblematicFilesFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
+  const measuredMs = metricsPayload?.problematicFilesApiMs;
+  const recorded = typeof measuredMs === 'number' && Number.isFinite(measuredMs) && measuredMs >= 0;
+  const readinessNotes = {
+    'target-met': 'TARGET MET — at or below 1000 ms; 1200 ms hard ceiling',
+    'grace-used': 'GRACE USED — above 1000 ms target; within 1200 ms hard ceiling',
+    'hard-fail': 'HARD FAIL — exceeds 1200 ms hard ceiling or has invalid timing evidence',
+  };
   return [
     {
       label: 'Problematic Files UI Ready',
-      value: `${Math.round(Number(metricsPayload?.problematicFilesApiMs || 0))} ms`,
-      note: metricsPayload?.readinessGraceUsed
-        ? 'GRACE USED — above 1000 ms target; within 1200 ms hard ceiling'
-        : 'TARGET MET — at or below 1000 ms; 1200 ms hard ceiling',
+      value: recorded ? `${Math.round(measuredMs)} ms` : 'Not recorded',
+      note: recorded
+        ? readinessNotes[metricsPayload?.readinessPerformanceStatus] || 'Timing classification not recorded'
+        : 'Timing evidence not recorded',
     },
     {
       label: 'Problematic Items',

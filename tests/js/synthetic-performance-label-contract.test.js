@@ -6,6 +6,37 @@ const vm = require('node:vm');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 
+test('Problematic Files report distinguishes hard failures from grace and missing measurements', () => {
+  const source = readRepositoryFile('tests', 'e2e', 'support', 'performanceFixtures.js');
+  const start = source.indexOf('function buildProblematicFilesFocusedLocalSummaryCards(');
+  const end = source.indexOf('function buildRulesFocusedLocalSummaryCards(', start);
+  assert.ok(start >= 0 && end > start);
+  const buildSummary = vm.runInNewContext(
+    `${source.slice(start, end)}\nbuildProblematicFilesFocusedLocalSummaryCards`,
+  );
+  for (const [milliseconds, status, label] of [
+    [0, 'target-met', 'TARGET MET'],
+    [1000, 'target-met', 'TARGET MET'],
+    [1001, 'grace-used', 'GRACE USED'],
+    [1200, 'grace-used', 'GRACE USED'],
+    [1201, 'hard-fail', 'HARD FAIL'],
+    [6482, 'hard-fail', 'HARD FAIL'],
+  ]) {
+    const card = buildSummary([], {
+      problematicFilesApiMs: milliseconds,
+      readinessPerformanceStatus: status,
+      readinessGraceUsed: milliseconds > 1000,
+    })[0];
+    assert.equal(card.value, `${milliseconds} ms`);
+    assert.ok(card.note.startsWith(label), `${milliseconds} ms: ${card.note}`);
+  }
+  for (const value of [undefined, null, NaN]) {
+    const card = buildSummary([], { problematicFilesApiMs: value })[0];
+    assert.equal(card.value, 'Not recorded');
+    assert.doesNotMatch(card.note, /TARGET MET|GRACE USED/);
+  }
+});
+
 function repositoryPath(...segments) {
   return path.join(repositoryRoot, ...segments);
 }

@@ -160,6 +160,19 @@ def canonical_album_title_without_part_marker(value: str) -> str:
     return canonical_album_title(text)
 
 
+def terminal_album_sequence(value: str) -> tuple[str, int | None]:
+    normalized = canonical_album_title(value)
+    base, separator, raw_marker = normalized.rpartition(" ")
+    if not separator or not base or not raw_marker:
+        return normalized, None
+    if raw_marker.isdigit():
+        return base, int(raw_marker)
+    marker = _parse_simple_roman_numeral(raw_marker)
+    if marker is None:
+        return normalized, None
+    return base, marker
+
+
 def normalize_edition(value: str) -> str:
     return normalize(transliterate_cyrillic(value or ""))
 
@@ -407,6 +420,14 @@ def match_score(
             or target_base_title.startswith(candidate_base_title)
         ):
             return 0.0
+    target_sequence_base, target_sequence_marker = terminal_album_sequence(target_album)
+    candidate_sequence_base, candidate_sequence_marker = terminal_album_sequence(candidate_album)
+    if (
+        target_sequence_base == candidate_sequence_base
+        and target_sequence_marker != candidate_sequence_marker
+        and (target_sequence_marker is not None or candidate_sequence_marker is not None)
+    ):
+        return 0.0
     album_core_score = similarity(target_album_core, candidate_album_core)
     is_self_titled_target = is_self_titled_album(target_artist, target_album)
     if is_self_titled_target:
@@ -422,6 +443,11 @@ def match_score(
     target_tokens = meaningful_title_tokens(target_album)
     candidate_tokens = meaningful_title_tokens(candidate_album)
     if target_tokens and candidate_tokens and not (target_tokens & candidate_tokens) and album_core_score < 0.93:
+        return 0.0
+    if (
+        target_tokens != candidate_tokens
+        and (target_tokens < candidate_tokens or candidate_tokens < target_tokens)
+    ):
         return 0.0
     if has_release_type_marker(candidate_album) and not has_release_type_marker(target_album) and album_core_score < 0.9:
         return 0.0

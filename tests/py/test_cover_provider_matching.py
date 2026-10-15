@@ -245,12 +245,31 @@ def test_match_score_applies_exact_near_and_far_year_scoring():
     assert far_year == pytest.approx(1.13)
 
 
+@pytest.mark.parametrize("candidate_album", ["Sanctuary II", "Sanctuary 2"])
+def test_match_score_accepts_equivalent_terminal_album_sequences(candidate_album):
+    assert matching.match_score(
+        target_artist="Robert Reed",
+        target_album="Sanctuary II",
+        target_edition=None,
+        target_year=2016,
+        candidate_artist="Robert Reed",
+        candidate_album=candidate_album,
+        candidate_year=2016,
+    ) > 0.0
+
+
 @pytest.mark.parametrize(
     ("target_artist", "target_album", "target_year", "candidate_artist", "candidate_album", "candidate_year"),
     [
         ("Test Artist", "Songs Pt. 1", 2001, "Test Artist", "Songs Pt. 2", 2001),
         ("Test Artist", "Songs Pt. 1", 2001, "Test Artist", "Songs", 2001),
         ("Test Artist", "II", 2001, "Test Artist", "III", 2001),
+        ("Jordsjø", "Jordsjø II", None, "Jordsjø", "Jordsjø", None),
+        ("Robert Reed", "Sanctuary II", 2016, "Robert Reed", "Sanctuary I", 2014),
+        ("Robert Reed", "Sanctuary III", 2018, "Robert Reed", "Sanctuary IV", 2025),
+        ("Test Artist", "Sequence 2", 2001, "Test Artist", "Sequence 1", 2001),
+        ("Satellite", "Evening Games", 2005, "Satellite", "Games", 2005),
+        ("The Tangent", "L'Etagere Du Travail", 2013, "The Tangent", "L'Etagere", 2013),
         ("Artist", "Artist", 2001, "Another Band", "Artist", 2001),
         ("Test Artist", "Blue Sky", 2001, "Test Artist", "Blue Sk EP", 2001),
         ("Test Artist", "Blue Sky Live", 2001, "Test Artist", "Blue Sky", 2001),

@@ -5382,6 +5382,45 @@ test('Artist Tree settlement waits for wheel scrolling to settle', () => {
   assert.deepEqual(captured, [3132]);
 });
 
+test('deferred resize and Artist Tree settlement preserve the pre-reflow semantic anchor', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const calls = [];
+  let visibleRelease = 'original-release';
+  virtualGrid.captureScrollAnchor = () => {
+    calls.push(`capture:${visibleRelease}`);
+    return { albumKey: visibleRelease, scrollTop: scrollEl.scrollTop };
+  };
+  virtualGrid.recalculate = options => {
+    calls.push(`recalculate:${options.preserveCardTrackWidth === true ? 'artist-tree' : 'generic'}`);
+    if (options.preserveCardTrackWidth !== true) visibleRelease = 'shifted-release';
+  };
+  virtualGrid.render = () => { calls.push('render'); };
+  virtualGrid.scheduleMeasureRows = () => { calls.push('measure'); };
+  virtualGrid.stabilizeScrollAfterMeasurement = anchor => {
+    calls.push(`stabilize:${anchor.albumKey}`);
+  };
+
+  scrollEl.scrollTop = 3600;
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  virtualGrid.onResize();
+  virtualGrid.onArtistTreeSettled();
+
+  assert.deepEqual(calls, []);
+
+  context.__scheduledBrowserTimeouts.at(-1).callback();
+
+  assert.deepEqual(calls, [
+    'capture:original-release',
+    'recalculate:generic',
+    'render',
+    'measure',
+    'stabilize:original-release',
+    'render',
+    'stabilize:original-release',
+  ]);
+});
+
 test('an immediate gallery render supersedes deferred Artist Tree settlement', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

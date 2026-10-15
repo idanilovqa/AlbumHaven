@@ -36407,14 +36407,26 @@ class VirtualArtistGrid {
           deferredSetGroups.layoutConfig,
         );
       }
-      if (deferredResizeOptions) this.onResize(deferredResizeOptions);
       if (deferredArtistTreeSettlement) {
-        this.onArtistTreeSettled();
+        this.applyArtistTreeSettlement(deferredResizeOptions);
         return;
       }
+      if (deferredResizeOptions) this.onResize(deferredResizeOptions);
       if (deferredSetGroups || deferredResizeOptions) return;
       this.scheduleMeasureRows(true);
     }, 96);
+  }
+
+  applyArtistTreeSettlement(resizeOptions = null) {
+    const anchor = this.captureScrollAnchor();
+    this.onResize(resizeOptions || { preserveCardTrackWidth: true });
+    if (anchor && !this._resetScrollAfterMeasure) {
+      this.stabilizeScrollAfterMeasurement(anchor);
+      // Reflow can virtualize the old anchor. Mount its restored row before
+      // reconciling the exact trigger offset against the new card geometry.
+      this.render(true);
+      this.stabilizeScrollAfterMeasurement(anchor);
+    }
   }
 
   onArtistTreeSettled() {
@@ -36426,15 +36438,7 @@ class VirtualArtistGrid {
       return;
     }
     this._deferredArtistTreeSettlement = false;
-    const anchor = this.captureScrollAnchor();
-    this.onResize({ preserveCardTrackWidth: true });
-    if (anchor && !this._resetScrollAfterMeasure) {
-      this.stabilizeScrollAfterMeasurement(anchor);
-      // Reflow can virtualize the old anchor. Mount its restored row before
-      // reconciling the exact trigger offset against the new card geometry.
-      this.render(true);
-      this.stabilizeScrollAfterMeasurement(anchor);
-    }
+    this.applyArtistTreeSettlement();
   }
 
   onResize(options = {}) {

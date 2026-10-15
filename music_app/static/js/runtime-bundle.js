@@ -35693,15 +35693,25 @@ class VirtualArtistGrid {
           section.kind === 'artist'
           && this.getRenderedSectionKey(section) === sectionOccurrenceKey
         ));
-        const modeledAlbums = Array.isArray(modeledSection?.group?.albums)
-          ? modeledSection.group.albums
-          : [];
-        const modeledAlbumIndex = modeledAlbums.findIndex((album) => (
+        const modeledBlocks = Array.isArray(modeledSection?.blocksData)
+          ? modeledSection.blocksData
+          : modeledSection ? this.getBlocksForSection(modeledSection) : [];
+        const findModeledBlockIndex = (matchesAlbum) => modeledBlocks.findIndex((block) => (
+          block?.kind === 'row'
+          && Array.isArray(block.albums)
+          && block.albums.some(matchesAlbum)
+        ));
+        const matchesCapturedModeledRelease = (album) => (
           String(album?.name || '') === anchorAlbumName
           && (!anchorAlbumYear || String(album?.year ?? '') === anchorAlbumYear)
+        );
+        let blockIndex = findModeledBlockIndex((album) => (
+          getAlbumRequestKey(album) === albumKey || getAlbumIdentity(album) === albumKey
         ));
-        if (modeledAlbumIndex >= 0) {
-          const blockIndex = Math.floor(modeledAlbumIndex / Math.max(1, Number(this.columns || 1)));
+        if (blockIndex < 0) {
+          blockIndex = findModeledBlockIndex(matchesCapturedModeledRelease);
+        }
+        if (blockIndex >= 0) {
           const modeledBlockOffset = Number(modeledSection.blockOffsets?.[blockIndex]);
           const modeledSectionTop = Number(modeledSection.top);
           if (Number.isFinite(modeledBlockOffset) && Number.isFinite(modeledSectionTop)) {

@@ -1040,7 +1040,7 @@ test('scroll anchoring restores an offscreen same-release card from the virtual 
     blockOffsets: [0, 434],
     group: {
       albums: [
-        { key: 'sparse-year-before-scan', name: 'Sparse Year Edit Fixture', year: 2014 },
+      { key: 'other-release-after-scan', name: 'Sparse Year Edit Fixture', year: 2014 },
         { key: 'sparse-year-after-scan', name: 'Sparse Year Edit Fixture', year: 2004 },
       ],
     },
@@ -1049,6 +1049,131 @@ test('scroll anchoring restores an offscreen same-release card from the virtual 
   virtualGrid.restoreScrollAnchor(anchor);
 
   assert.equal(scrollEl.scrollTop, 3408);
+});
+
+test('scroll anchoring restores the exact offscreen release when title and year are duplicated', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const sectionOccurrenceKey = 'artist:all:Duplicate Edition Artist:0';
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'duplicate-edition-b',
+    { top: 80, bottom: 518 },
+    sectionOccurrenceKey,
+    'Duplicate Edition',
+    '2004',
+  )];
+  scrollEl.scrollTop = 4200;
+
+  const anchor = virtualGrid.captureScrollAnchor();
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'duplicate-edition-b',
+    { top: 240, bottom: 678 },
+    sectionOccurrenceKey,
+    'Renamed Edition',
+    '2014',
+  )];
+  virtualGrid.columns = 1;
+  const albums = [
+    { key: 'duplicate-edition-a', name: 'Duplicate Edition', year: 2004 },
+    { key: 'duplicate-edition-b', name: 'Duplicate Edition', year: 2004 },
+  ];
+  const blocksData = virtualGrid.getBlocksForSection({ group: { albums } });
+  virtualGrid.sections = [{
+    kind: 'artist',
+    sectionKey: 'all:Duplicate Edition Artist:0',
+    top: 3000,
+    blockOffsets: [0, 434],
+    blocksData,
+    group: { albums },
+  }];
+
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(scrollEl.scrollTop, 3408);
+});
+
+test('scroll anchoring keeps exact stable identity when the release metadata changes', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const sectionOccurrenceKey = 'artist:all:Renamed Release Artist:0';
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'stable-release',
+    { top: 80, bottom: 518 },
+    sectionOccurrenceKey,
+    'Old Release Name',
+    '2004',
+  )];
+  scrollEl.scrollTop = 4200;
+
+  const anchor = virtualGrid.captureScrollAnchor();
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'stable-release',
+    { top: 240, bottom: 678 },
+    sectionOccurrenceKey,
+    'Rendered Stale Release',
+    '2014',
+  )];
+  virtualGrid.columns = 1;
+  const albums = [
+    { key: 'old-metadata-duplicate', name: 'Old Release Name', year: 2004 },
+    { key: 'stable-release', name: 'Corrected Release Name', year: 2014 },
+  ];
+  const blocksData = virtualGrid.getBlocksForSection({ group: { albums } });
+  virtualGrid.sections = [{
+    kind: 'artist',
+    sectionKey: 'all:Renamed Release Artist:0',
+    top: 3000,
+    blockOffsets: [0, 434],
+    blocksData,
+    group: { albums },
+  }];
+
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(scrollEl.scrollTop, 3408);
+});
+
+test('scroll anchoring restores an offscreen Featured On release from its modeled block', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const sectionOccurrenceKey = 'artist:all:Featured Artist:0';
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'featured-release',
+    { top: 80, bottom: 518 },
+    sectionOccurrenceKey,
+    'Featured Release',
+    '2004',
+  )];
+  scrollEl.scrollTop = 4200;
+
+  const anchor = virtualGrid.captureScrollAnchor();
+  context.__albumTitleButtons = [context.createAlbumTitleButton(
+    'featured-release',
+    { top: 240, bottom: 678 },
+    sectionOccurrenceKey,
+    'Renamed Featured Release',
+    '2014',
+  )];
+  virtualGrid.columns = 2;
+  const albums = [
+    { key: 'owned-a', name: 'Owned A', artist_relationship: 'owned' },
+    { key: 'featured-release', name: 'Featured Release', year: 2004, artist_relationship: 'featured' },
+    { key: 'owned-b', name: 'Owned B', artist_relationship: 'owned' },
+    { key: 'owned-c', name: 'Owned C', artist_relationship: 'owned' },
+  ];
+  const blocksData = virtualGrid.getBlocksForSection({ group: { albums } });
+  virtualGrid.sections = [{
+    kind: 'artist',
+    sectionKey: 'all:Featured Artist:0',
+    top: 3000,
+    blockOffsets: [0, 434, 868, 920],
+    blocksData,
+    group: { albums },
+  }];
+
+  virtualGrid.restoreScrollAnchor(anchor);
+
+  assert.equal(scrollEl.scrollTop, 3894);
 });
 
 test('setGroups absolute scroll preservation restores captured numeric coordinates immediately and on the next frame', () => {

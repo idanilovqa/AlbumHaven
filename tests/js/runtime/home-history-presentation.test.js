@@ -1,10 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {buildSync} = require('esbuild');
+const {appFixture,visible,settle}=require('./home-history-header-native-fixture.cjs');
 
 const source = path.resolve(__dirname, '../../../music_app/static/js/home-friends');
 const model = import(pathToFileURL(path.join(source, 'model.mjs')));
@@ -32,6 +30,7 @@ async function setup(t, {accountRef = null, initial = numbered(), readComparison
   const h = {calls: [], requests: [], scrolls: 0, intents: 0};
   h.providers = {readFriends: friends, readComparison, readActivity: args => {
     h.calls.push(args);
+    if (h.blockedPeriod?.period === args.period) return h.blockedPeriod.promise;
     if (!args.pagination && !args.cursor) return initial;
     const result = deferred(); h.requests.push({args, ...result}); return result.promise;
   }};
@@ -228,71 +227,36 @@ test('denial, unavailability, disposal and synchronous subscriber retirement nev
   }
 });
 
-let appSource;
-function appBeforeEffects() {
-  appSource ||= buildSync({entryPoints: [path.join(source, 'app.jsx')], bundle: true,
-    platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
-  const slots = []; let cursor = 0;
-  const hooks = {...React,
-    useRef(initial) {const index = cursor++; return slots[index] ||= {current: initial};},
-    useState(initial) {const index = cursor++; slots[index] ||= {value: typeof initial === 'function' ? initial() : initial};
-      return [slots[index].value, next => {slots[index].value = typeof next === 'function' ? next(slots[index].value) : next;}];},
-    useMemo(factory) {cursor++; return factory();},
-    useEffect() {}, useLayoutEffect() {},
-  };
-  const fixture = {exports: {}};
-  // Resolve ReactDOM in Node, as the existing component probe does. Child
-  // dialogs are inspected as elements here; their portal lifecycle is not run.
-  vm.runInNewContext(appSource, {module: fixture, exports: fixture.exports, console,
-    require: name => name === 'react' ? hooks : require(name)});
-  // Intentionally inspect the render before effects run: that is the interval
-  // in which a new route must hide the old provider query and stale controls.
-  return props => {cursor = 0; return fixture.exports.HomeFriendsView(props);};
-}
-const elements = node => React.isValidElement(node) ? [node, ...React.Children.toArray(node.props.children).flatMap(elements)] : [];
-const components = (tree, name) => elements(tree).filter(element => element.type?.name === name);
-const shellFor = accountRef => ({section: accountRef ? 'friends' : 'recent', friendRef: accountRef,
-  presentation: {kind: 'tracks', views: {tracks: 'history'}, friendKind: 'tracks', friendViews: {tracks: 'history'}}});
+const shellPresentation={kind:'tracks',kindExplicit:true,views:{tracks:'history'},friendKind:'tracks',friendViews:{tracks:'history'}};
 
-test('HomeFriendsView wires own and friend history through the guarded controller boundary', async t => {
-  for (const accountRef of [null, 'friend:one']) {
-    await t.test(accountRef || 'own', async t => {
-      const h = await setup(t, {accountRef}), render = appBeforeEffects(), shell = shellFor(accountRef);
-      const props = () => ({runtime: {}, controller: h.controller, state: h.controller.getSnapshot(), shell});
-      let tree = render(props());
-      assert.equal(components(tree, 'ActivityPanel').length, 1);
-      const controls = components(tree, 'HistoryNavigation'); assert.equal(controls.length, 1);
-      assert.equal(controls[0].props.value, h.controller.getSnapshot().activity);
-      const pending = controls[0].props.onPage(2);
-      assert.equal(h.requests[0].args.account_ref, accountRef);
-      assert.equal(h.requests[0].args.kind, 'listens'); assert.equal(h.requests[0].args.period, 'week');
-      h.requests[0].resolve(numbered(2)); await pending;
-      tree = render(props());
-      const currentControls = components(tree, 'HistoryNavigation')[0];
-      const widget = elements(tree).find(element => element.props['data-home-widget'] === (accountRef ? 'friends' : 'recent'));
-      const period = components(widget, 'Period')[0];
-      assert.ok(period); period.props.onChange('month'); tree = render(props());
-      assert.equal(components(tree, 'ActivityPanel').length, 0);
-      assert.equal(components(tree, 'HistoryNavigation').length, 0);
-      assert.equal(await currentControls.props.onPage(3), false, 'previous render cannot navigate under the new period');
-      assert.equal(h.requests.length, 1);
-    });
-  }
+test('HomeFriendsView wires own and friend history through the guarded controller boundary',async t=>{
+  for(const accountRef of [null,'friend:one'])await t.test(accountRef||'own',async t=>{
+    const h=await setup(t,{accountRef}),friend=accountRef?h.controller.getSnapshot().friends.data.friends.find(p=>p.account_ref===accountRef):null;
+    const app=await appFixture(t,{controller:h.controller,section:accountRef?'friends':'recent',friend,presentation:shellPresentation});
+    const widget=app.host.querySelector(`[data-home-widget="${accountRef?'friends':'recent'}"]`);
+    assert.ok(widget.querySelector('[data-home-activity-row]'),'actual activity panel has rows');
+    let controls=[...widget.querySelectorAll('.home-history-navigation')].filter(visible);assert.equal(controls.length,1);assert.match(controls[0].textContent,/Page 1 of 3/);
+    app.click(app.named('Next history page',widget));assert.equal(h.requests.length,1);assert.equal(h.requests[0].args.account_ref,accountRef);assert.equal(h.requests[0].args.kind,'listens');assert.equal(h.requests[0].args.period,'week');
+    h.requests[0].resolve(numbered(2));await settle();assert.equal(h.controller.getSnapshot().activityNavigation.page,2);
+    const retired=app.named('Next history page',widget);assert.ok(retired);
+    // Hold the changed-period provider read so the synchronous native update can
+    // be inspected before any replacement data returns.
+    const pending=deferred();h.blockedPeriod={period:'month',promise:pending.promise};
+    assert.equal(h.controller.getSnapshot().selectedFriendRef,accountRef);
+    assert.equal(h.controller.getSnapshot().activityNavigation.page,2);
+    app.choosePeriod('Last month',widget);
+    assert.equal(widget.querySelector('[data-home-activity-row]'),null);assert.equal([...widget.querySelectorAll('.home-history-navigation')].filter(visible).length,0);
+    assert.doesNotMatch(widget.textContent,/Repeated track|Items 101–200/,'new heading cannot retain private old rows even in hidden DOM');app.click(retired);assert.equal(h.requests.length,1);
+    pending.resolve(numbered());await settle();
+  });
 });
 
-test('comparison keeps its existing replacement cursor pager and never uses history navigation', async t => {
-  const calls = [];
-  const h = await setup(t, {accountRef: 'friend:one', readComparison: args => {
-    calls.push(args); return progressive([args.cursor ? 'comparison:second' : 'comparison:first'], args.cursor ? null : 'comparison:next');
-  }});
-  await h.controller.loadComparison({kind: 'tracks', period: 'week'});
-  const render = appBeforeEffects(), shell = shellFor('friend:one'); shell.presentation.friendMode = 'comparison';
-  const tree = render({runtime: {}, controller: h.controller, state: h.controller.getSnapshot(), shell});
-  assert.equal(components(tree, 'HistoryNavigation').length, 0);
-  const next = components(tree, 'Button').find(element => element.props.children === 'Next page');
-  assert.ok(next); await next.props.onClick();
-  assert.equal(calls.length, 2); assert.equal(calls[1].cursor, 'comparison:next');
-  assert.equal(calls[1].account_ref, 'friend:one'); assert.equal(calls[1].pagination, undefined);
-  assert.deepEqual(h.controller.getSnapshot().comparison.data.rows.map(value => value.id), ['comparison:second']);
-  assert.equal(h.requests.length, 0);
+test('comparison keeps its existing replacement cursor pager and never uses history navigation',async t=>{
+  const calls=[],h=await setup(t,{accountRef:'friend:one',readComparison:args=>{calls.push(args);return progressive([args.cursor?'comparison:second':'comparison:first'],args.cursor?null:'comparison:next');}});
+  await h.controller.loadComparison({kind:'tracks',period:'week'});
+  const friend=h.controller.getSnapshot().friends.data.friends.find(p=>p.account_ref==='friend:one');
+  const app=await appFixture(t,{controller:h.controller,section:'friends',friend,presentation:{...shellPresentation,friendMode:'comparison'}});
+  assert.equal([...app.host.querySelectorAll('.home-history-navigation')].filter(visible).length,0);
+  const before=calls.length,next=app.named('Next page');assert.ok(next);app.click(next);await settle();assert.equal(calls.length,before+1);assert.equal(calls.at(-1).cursor,'comparison:next');assert.equal(calls.at(-1).account_ref,'friend:one');assert.equal(calls.at(-1).pagination,undefined);
+  assert.deepEqual(h.controller.getSnapshot().comparison.data.rows.map(value=>value.id),['comparison:second']);assert.equal(h.requests.length,0);
 });

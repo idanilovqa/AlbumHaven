@@ -1,145 +1,70 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const React = require('react');
-const {buildSync} = require('esbuild');
-const source = path.resolve(__dirname, '../../../music_app/static/js/home-friends/app.jsx');
-const slotsToVisit = ['children', 'identity', 'leading', 'actions', 'outsideActions', 'finalAction'];
-const elements = node => React.isValidElement(node) ? [node, ...slotsToVisit.flatMap(key => React.Children.toArray(node.props[key]).flatMap(elements))] : [];
-const named = (tree, name) => elements(tree).filter(node => node.type?.name === name);
-const slotChildren = value => React.Children.toArray(value).flatMap(node => node.type === React.Fragment ? slotChildren(node.props.children) : [node]);
-// Real view state and prop contracts only. No effects, browser reconciliation,
-// transport, focus or geometry are claimed by this bounded composition driver.
-function fixture({section = 'recent', presentation = {}, friend = null, status = 'ready', total = 73} = {}) {
-  const slots = []; let cursor = 0;
-  const hooks = {...React,
-    useRef(initial) {return slots[cursor++] ||= {current: initial};},
-    useState(initial) {const index = cursor++, slot = slots[index] ||= {value: typeof initial === 'function' ? initial() : initial};
-      return [slot.value, next => {slot.value = typeof next === 'function' ? next(slot.value) : next;}];},
-    useMemo(factory) {cursor++; return factory();}, useEffect() {cursor++;}, useLayoutEffect() {cursor++;},
-  };
-  const bundle = buildSync({entryPoints: [source], bundle: true, platform: 'node', format: 'cjs', write: false,
-    external: ['react', 'react-dom']}).outputFiles[0].text;
-  const loaded = {exports: {}};
-  vm.runInNewContext(bundle, {module: loaded, exports: loaded.exports, require: name => name === 'react' ? hooks : require(name),
-    window: {innerWidth: 1200, matchMedia: () => ({matches: false})}, console});
-  const own = {display_name: 'Owner', handle: 'owner', allowed_actions: {can_edit: true}};
-  const query = {account_ref: friend?.account_ref || null, kind: presentation.kind || 'tracks', period: section === 'friends' ? presentation.friendPeriod || 'week' : presentation.period || 'week'};
-  const state = {scopeKey: 'actor/library', selectedFriendRef: friend?.account_ref || null,
-    friends: {status: 'ready', data: {profile: own, friends: friend ? [friend] : [], requests: []}},
-    recent: {status, data: {total_listens: total, recent_local_albums: [], recent_not_local_albums: []}},
-    activity: {status, data: {rows: [], total_listens: total, range_label: 'Chosen period range'}},
-    activityNavigation: {query, status: 'idle'}, comparison: {status: 'unavailable', data: null}, mutation: {status: 'idle'}};
-  const shell = {section, friendRef: friend?.account_ref || '', presentation: {kind: 'tracks', kindExplicit: true, ...presentation}};
-  const navigations = [], runtime = {navigate: next => navigations.push(next)};
-  const controller = {getSnapshot: () => state};
-  return {state, shell, navigations, render() {cursor = 0; return loaded.exports.HomeFriendsView({runtime, controller, state, shell});}};
-}
+'use strict';
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {appFixture,visible,settle}=require('./home-history-header-native-fixture.cjs');
+const header=(h,id)=>h.host.querySelector(`[data-shared-header="${id}"]`);
+const dashboard=h=>h.host.querySelector('[data-dashboard]');
+const widget=(h,key)=>h.host.querySelector(`[data-home-widget="${key}"]`);
+const badges=h=>[...h.host.querySelectorAll('.home-header__listens')];
+const friend=()=>({account_ref:'friend:one',display_name:'Friend',relationship:'accepted',allowed_actions:{can_view_activity:true,can_compare:true}});
 
-test('React Home headers do not enlist a second imperative dashboard insertion owner', () => {
-  const text = fs.readFileSync(source, 'utf8');
-  assert.doesNotMatch(text, /runtime\.mountDashboard\s*\(/, 'Home must not mount Dashboard over React-owned header actions');
-  const h = fixture(), tree = h.render();
-  const dashboards = elements(tree).filter(node => node.props['data-dashboard'] !== undefined);
-  assert.equal(dashboards.length, 1, 'one React-owned dashboard container');
-  assert.equal(dashboards[0].props['data-dashboard-layout'], 'single');
-  assert.ok(named(tree, 'SharedHeader').length >= 3, 'page and both native widget headers use shared ownership');
+test('native Home headers retain one dashboard and one owner for each shared header',async t=>{
+  const h=await appFixture(t),initialDashboard=dashboard(h);
+  assert.equal(h.host.querySelectorAll('[data-dashboard]').length,1);assert.equal(initialDashboard.dataset.dashboardLayout,'single');
+  const headers=[...h.host.querySelectorAll('[data-shared-header]')];assert.ok(headers.length>=3);
+  for(const node of headers)assert.equal(h.host.querySelectorAll(`[data-shared-header="${node.getAttribute('data-shared-header')}"]`).length,1);
+  h.update();assert.equal(dashboard(h),initialDashboard);for(const node of headers)assert.equal(header(h,node.getAttribute('data-shared-header')),node,'update retains actual shared-header owner');
 });
 
-test('own header exposes one authorized period count beside the identity', () => {
-  const h = fixture(), tree = h.render(), badges = named(tree, 'ListensBadge');
-  assert.equal(badges.length, 1); assert.equal(badges[0].props.total, 73);
-  const owner = named(tree, 'SharedHeader').find(node => named(node.props.identity, 'ProfileIdentity').length);
-  assert.ok(owner, 'SharedHeader identity owns profile');
-  assert.equal(named(owner.props.identity, 'ListensBadge').length, 1, 'count sits with the person, not catalog controls');
-  const periods = named(tree, 'Period'); assert.ok(periods.length); assert.equal(periods[0].props.value, 'week');
-  periods[0].props.onChange('month');
-  assert.equal(named(h.render(), 'Period')[0].props.value, 'month');
+test('own header exposes one authorized period count beside the identity',async t=>{
+  const h=await appFixture(t);assert.equal(badges(h).length,1);assert.equal(badges(h)[0].textContent,'73');
+  const identity=header(h,'home-page').querySelector('.home-header__identity');assert.ok(identity);assert.match(identity.textContent,/Owner/);assert.equal(identity.querySelectorAll('.home-header__listens').length,1);
+  const recent=header(h,'home-recent'),period=recent.querySelector('.home-friends__period button');assert.ok(period);assert.equal(period.getAttribute('aria-label'),'Period: Last week');
+  h.choosePeriod('Last month',recent);await settle();assert.equal(recent.querySelector('.home-friends__period button').getAttribute('aria-label'),'Period: Last month');
 });
 
-test('friend header count belongs to selected friend and disappears when activity permission is revoked', () => {
-  const friend = {account_ref: 'friend:one', display_name: 'Friend', relationship: 'accepted', allowed_actions: {can_view_activity: true, can_compare: true}};
-  const h = fixture({section: 'friends', friend, total: 19, presentation: {friendKind: 'tracks', friendPeriod: 'month'}});
-  let tree = h.render();
-  assert.equal(named(tree, 'ProfileIdentity')[0].props.profile.account_ref, 'friend:one');
-  assert.equal(named(tree, 'ListensBadge').length, 1); assert.equal(named(tree, 'ListensBadge')[0].props.total, 19);
-  friend.allowed_actions.can_view_activity = false;
-  tree = h.render();
-  assert.equal(named(tree, 'ListensBadge').some(node => node.props.total === 19), false, 'old private count cannot survive permission loss');
+test('friend header count belongs to selected friend and disappears when activity permission is revoked',async t=>{
+  const selected=friend(),h=await appFixture(t,{section:'friends',friend:selected,total:19,presentation:{friendKind:'tracks',friendPeriod:'month'}});
+  assert.match(header(h,'home-page').querySelector('.home-header__identity').textContent,/Friend/);assert.equal(badges(h).length,1);assert.equal(badges(h)[0].textContent,'19');
+  await h.replaceFriends({profile:{display_name:'Owner',allowed_actions:{}},friends:[{...selected,allowed_actions:{...selected.allowed_actions,can_view_activity:false}}],requests:[]});
+  assert.equal(badges(h).some(node=>node.textContent==='19'),false,'raw DOM cannot retain a private count after permission loss');assert.doesNotMatch(header(h,'home-page').textContent,/\b19\b/);
 });
 
-test('denied recent payload never discloses a stale supplied count', () => {
-  const h = fixture({status: 'denied', total: 99999});
-  assert.equal(named(h.render(), 'ListensBadge').some(node => node.props.total === 99999), false);
+test('denied recent payload never discloses a stale supplied count',async t=>{
+  const h=await appFixture(t,{status:'denied',total:99999});assert.equal(badges(h).some(node=>node.textContent==='99999'),false);assert.doesNotMatch(h.host.textContent,/99999/,'includes all hidden retained DOM');
 });
 
-test('Missing remains native and last ordinary action; View is the only outside action in Home', () => {
-  const h = fixture(), headers = named(h.render(), 'SharedHeader');
-  const recent = headers.find(node => named(React.createElement(React.Fragment, null, node.props.actions), 'ActivityMissingAction').length);
-  assert.ok(recent, 'Recent header keeps canonical Missing action');
-  const actions = slotChildren(recent.props.actions);
-  assert.equal(actions.at(-1).type?.name, 'ActivityMissingAction');
-  const outside = slotChildren(recent.props.outsideActions);
-  assert.equal(outside.length, 1); assert.equal(outside[0].type?.name, 'ViewControl');
+test('Missing remains native and last ordinary action; View is the only outside action in Home',async t=>{
+  const h=await appFixture(t),recent=header(h,'home-recent'),missing=recent.querySelector('[data-home-inspect-missing]');assert.ok(missing,'canonical Missing owner completed eligibility');assert.equal(missing.classList.contains('action-button'),true);
+  const actions=recent.querySelector('.home-header__primary-actions'),buttons=[...actions.querySelectorAll('button')];assert.equal(buttons.at(-1),missing);
+  const outside=recent.querySelector('.home-header__outside');assert.equal(outside.children.length,1);assert.ok(outside.querySelector('[data-unfolding-action-button], .unfolding-action-button, button'),'actual View chooser owns the outside slot');
 });
 
-const dashboardNode = tree => elements(tree).find(node => node.props['data-dashboard'] !== undefined);
-const widgetNode = (tree, key) => elements(tree).find(node => node.props['data-home-widget'] === key);
-const headerNode = (tree, id) => named(tree, 'SharedHeader').find(node => node.props.id === id);
-function selectedTrackFixture() {
-  const h = fixture(), origin = {source: 'activity', account_ref: null, kind: 'tracks', period: 'week'};
-  const target = kind => ({kind, ref: `${kind}:one`, identity_ref: `${kind}:one`, origin, allowed_actions: {can_view_details: true}});
-  h.state.activity.data.rows = [{id: 'track:one', kind: 'track', title: 'Track', source_readable: true,
-    allowed_actions: {can_view_details: true}, album_target: target('album'), artist_target: target('artist')}];
-  let tree = h.render(); named(tree, 'ActivityPanel')[0].props.onTracksSelect(['track:one']); tree = h.render();
-  assert.ok(widgetNode(tree, 'artist')); assert.ok(widgetNode(tree, 'album'));
-  return {h, tree};
-}
+async function selectedTrackFixture(t){const h=await appFixture(t);h.clickRow();await settle();assert.equal(widget(h,'artist').hidden,false);assert.equal(widget(h,'album').hidden,false);assert.equal(h.reads.length,2,'both canonical detail owners request their projections');return h;}
 
-test('native React Full size and Back callbacks control a single dashboard without imperative insertions', () => {
-  const {h} = selectedTrackFixture();
-  for (const key of ['recent', 'artist', 'album']) {
-    let tree = h.render(); assert.equal(dashboardNode(tree).props['data-dashboard-layout'], 'ordinary');
-    const expand = named(headerNode(tree, `home-${key}`).props.leading, 'Button')[0];
-    assert.equal(expand.props.attributes['data-dashboard-action'], 'expand');
-    expand.props.onClick(); tree = h.render();
-    assert.equal(dashboardNode(tree).props['data-dashboard-layout'], 'expanded');
-    assert.equal(dashboardNode(tree).props['data-dashboard-expanded-key'], key);
-    for (const widget of ['recent', 'artist', 'album']) assert.equal(widgetNode(tree, widget).props['data-dashboard-widget-state'], widget === key ? 'expanded' : 'suppressed');
-    const back = named(headerNode(tree, 'home-page').props.leading, 'Button')[0];
-    assert.equal(back.props.attributes['data-dashboard-action'], 'back');
-    assert.equal(named(tree, 'Button').filter(node => node.props.attributes?.['data-dashboard-action'] === 'back').length, 1);
-    back.props.onClick(); tree = h.render();
-    assert.equal(dashboardNode(tree).props['data-dashboard-layout'], 'ordinary');
-    assert.equal(dashboardNode(tree).props['data-dashboard-expanded-key'], undefined);
+test('native Full size and Back controls operate one retained dashboard',async t=>{
+  const h=await selectedTrackFixture(t),original=dashboard(h);
+  for(const key of ['recent','artist','album']){
+    assert.equal(dashboard(h).dataset.dashboardLayout,'ordinary');const expand=header(h,`home-${key}`).querySelector('[data-dashboard-action="expand"]');assert.ok(expand);h.click(expand);await settle();
+    assert.equal(dashboard(h),original);assert.equal(dashboard(h).dataset.dashboardLayout,'expanded');assert.equal(dashboard(h).dataset.dashboardExpandedKey,key);
+    for(const name of ['recent','artist','album'])assert.equal(widget(h,name).dataset.dashboardWidgetState,name===key?'expanded':'suppressed');
+    const back=header(h,'home-page').querySelector('[data-dashboard-action="back"]');assert.ok(back);assert.equal(h.host.querySelectorAll('[data-dashboard-action="back"]').length,1);h.click(back);await settle();
+    assert.equal(dashboard(h).dataset.dashboardLayout,'ordinary');assert.equal(dashboard(h).dataset.dashboardExpandedKey,undefined);
   }
 });
 
-test('Queue navigation retains shared Home header while retiring Recent detail and gallery controls', () => {
-  const {h, tree} = selectedTrackFixture();
-  const sections = elements(tree).find(node => node.props.id === 'home-recent-sections');
-  assert.ok(sections.props.items.some(([key]) => key === 'queue'));
-  sections.props.onChange('queue');
-  let next = h.render();
-  assert.ok(headerNode(next, 'home-page')); assert.ok(headerNode(next, 'home-recent'));
-  assert.equal(named(next, 'QueuePanel').length, 1); assert.equal(named(next, 'ActivityPanel').length, 0);
-  assert.equal(named(next, 'Period').length, 0); assert.equal(named(next, 'ViewControl').length, 0);
-  assert.equal(widgetNode(next, 'artist'), undefined); assert.equal(widgetNode(next, 'album'), undefined);
-  assert.equal(dashboardNode(next).props['data-dashboard-layout'], 'single');
-  h.shell.section = 'friends'; next = h.render();
-  assert.equal(named(next, 'QueuePanel').length, 0, 'another person/directory route never mounts the own Queue');
-  assert.equal(widgetNode(next, 'recent').props.hidden, true);
+test('Queue navigation retains shared Home header while retiring Recent detail and gallery controls',async t=>{
+  const h=await selectedTrackFixture(t),page=header(h,'home-page'),recent=header(h,'home-recent');
+  const queue=recent.querySelector('[data-in-page-tab="queue"]');assert.ok(queue);h.click(queue);await settle();
+  assert.equal(header(h,'home-page'),page);assert.equal(header(h,'home-recent'),recent);assert.equal(widget(h,'recent').getAttribute('aria-label'),'Queued tracks');
+  assert.ok(widget(h,'recent').querySelector('.album-track-table--collection'),'actual Queue panel owns content');assert.equal(h.host.querySelector('[data-home-activity-row]'),null);
+  assert.equal([...h.host.querySelectorAll('.home-friends__period')].filter(visible).length,0);assert.equal(recent.querySelector('.home-header__outside').children.length,0);
+  assert.equal(widget(h,'artist').hidden,true);assert.equal(widget(h,'album').hidden,true);assert.equal(widget(h,'artist').querySelector('[data-dashboard-action="expand"]'),null);assert.equal(widget(h,'album').querySelector('[data-dashboard-action="expand"]'),null);assert.equal(dashboard(h).dataset.dashboardLayout,'single');
+  h.route({section:'friends'});await settle();assert.equal(widget(h,'recent').hidden,true);assert.equal([...widget(h,'recent').querySelectorAll('.album-track-table--collection')].filter(visible).length,0);
 });
 
-test('retired Full size callbacks cannot expand stale detail after source or route changes', () => {
-  const {h, tree} = selectedTrackFixture();
-  const retiredExpand = named(headerNode(tree, 'home-artist').props.leading, 'Button')[0].props.onClick;
-  h.state.activity = {status: 'denied', data: null};
-  let next = h.render(); assert.equal(widgetNode(next, 'artist'), undefined);
-  retiredExpand(); next = h.render();
-  assert.equal(dashboardNode(next).props['data-dashboard-layout'], 'single');
-  assert.equal(dashboardNode(next).props['data-dashboard-expanded-key'], undefined);
-  assert.equal(named(next, 'Button').some(node => node.props.attributes?.['data-dashboard-action'] === 'back'), false);
+test('retired Full size controls cannot expand stale detail after source or route changes',async t=>{
+  const h=await selectedTrackFixture(t),retired=header(h,'home-artist').querySelector('[data-dashboard-action="expand"]');assert.ok(retired);
+  await h.replaceActivity({status:'denied',data:null});assert.equal(widget(h,'artist').hidden,true);assert.equal(retired.isConnected,false);h.click(retired);await settle();
+  assert.equal(dashboard(h).dataset.dashboardLayout,'single');assert.equal(dashboard(h).dataset.dashboardExpandedKey,undefined);assert.equal(h.host.querySelector('[data-dashboard-action="back"]'),null);
 });

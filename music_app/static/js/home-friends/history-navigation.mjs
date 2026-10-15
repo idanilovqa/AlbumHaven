@@ -38,7 +38,27 @@ export function mountHistoryNavigation(host, runtime, initial) {
   }
   form.addEventListener('submit', submit); input.addEventListener('input', clearError);
   function render() {
-    if (disposed) return; host.hidden = !visible(); if (host.hidden) return;
+    if (disposed) return;
+    host.hidden = !visible();
+    if (host.hidden) {
+      // Unreadable resources retire the local operation even if query identity
+      // is unchanged. Late completion must not affect a recovered owner.
+      pending = failure = focus = null;
+      draftPage = draftQuery = undefined;
+      summary.textContent = ''; input.value = ''; input.removeAttribute('value');
+      input.disabled = true; clearError(); statusMessage.replaceChildren();
+      form.hidden = statusHost.hidden = retryHost.hidden = true;
+      host.setAttribute('aria-busy', 'false');
+      previous.update({label: 'Previous history page', icon: 'previous', disabled: true});
+      next.update({label: 'Next history page', icon: 'next', disabled: true});
+      more.update({label: 'Load more history', disabled: true});
+      go.update({label: 'Go', type: 'submit', disabled: true});
+      retry.update({label: 'Retry history loading', disabled: true});
+      // Updating the real Choice owner clears its selected text/title/ARIA
+      // label and closes any externally mounted popup without restoring focus.
+      choice.update({label: 'History page', showLabel: false, value: '', options: [], disabled: true});
+      return;
+    }
     const navigation = props.navigation, numbered = navigation.mode === 'numbered', page = navigation.page, working = busy(); host.setAttribute('aria-busy', String(working));
     summary.textContent = numbered ? `Page ${page} of ${navigation.totalPages} · ${navigation.loadedCount ? `Items ${(page - 1) * navigation.pageSize + 1}–${(page - 1) * navigation.pageSize + navigation.loadedCount} of ${navigation.totalRows}` : '0 items'} · ${navigation.pageSize} per page` : `${navigation.loadedCount} items shown · ${navigation.hasMore ? 'More history available' : 'End of available history'}`;
     previousHost.hidden = choiceHost.hidden = nextHost.hidden = !numbered; moreHost.hidden = numbered; form.hidden = !numbered || navigation.totalPages <= 1;

@@ -5,9 +5,6 @@ const vm = require('node:vm');
 const {createRequire} = require('node:module');
 const ROOT = path.resolve(process.env.ALBUMHAVEN_FRONTEND_ROOT || path.join(__dirname, '../../../..'));
 const local = createRequire(path.join(ROOT, 'package.json'));
-const React = local('react');
-const {renderToStaticMarkup} = local('react-dom/server');
-const {buildSync} = local('esbuild');
 const read = relative => fs.readFileSync(path.join(ROOT, relative), 'utf8');
 function native() {
   const {createNativeHomeRuntime} = local('./tests/js/runtime/native-home-harness.cjs');
@@ -23,24 +20,52 @@ function native() {
     actionHtml: options => env.context.ButtonComponent.renderActionButton(options),
     artistInfoHtml: options => env.context.buildArtistInfoOverlayHtml(options),
     artistFamilyHtml: options => env.context.buildArtistFamilyPanelHtml(options),
-    createIntrinsicDisclosure() {throw new Error('SSR must not acquire mounted native listeners');},
   };
   return {...env, runtime};
 }
-function components() {
-  const code = buildSync({entryPoints: [path.join(ROOT, 'music_app/static/js/home-friends/components.jsx')],
-    bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
-  const loaded = {exports: {}};
-  vm.runInNewContext(code, {module: loaded, exports: loaded.exports, require: local});
-  return loaded.exports;
+// Canonical renderers own these visible facts; there is no replacement React wrapper.
+function renderNative(t, kind, props) {
+  const env = native(), host = env.document.createElement('section');
+  env.document.body.append(host);
+  t.after(() => host.remove());
+  require('node:assert/strict').equal(typeof (kind === 'info' ? env.runtime.artistInfoHtml : env.runtime.artistFamilyHtml), 'function');
+  host.innerHTML = kind === 'info'
+    ? env.runtime.artistInfoHtml({presentation: 'embedded', ...props})
+    : env.runtime.artistFamilyHtml({presentation: 'navigation', ...props});
+  return {...env, host};
 }
-function render(Component, props) {
-  const env = native();
-  const markup = renderToStaticMarkup(React.createElement(Component, {runtime: env.runtime, ...props}));
-  const host = env.document.createElement('div'); host.innerHTML = markup;
-  return {...env, markup, host};
+async function disclosureComponent() {
+  return (await import(require('node:url').pathToFileURL(path.join(ROOT,
+    'music_app/static/js/home-friends/native-controls.mjs')).href)).mountIntrinsicDisclosure;
 }
-module.exports = {ROOT, local, React, native, components, render};
+function renderDisclosure(t, mount, props) {
+  const env = disclosureRuntime();
+  local('./tests/js/runtime/playlist-dom-platform.cjs').withPlaylistDomPlatform(env);
+  const host = env.document.createElement('section'); env.document.body.append(host);
+  const before = env.listeners().length;
+  env.runtime.createIntrinsicDisclosure = env.owner('createIntrinsicDisclosure');
+  let owner;
+  t.after(() => {
+    try {
+      owner?.dispose();
+      require('node:assert/strict').equal(env.listeners().length, before, 'all mounted disclosure listeners retire');
+      require('node:assert/strict').equal(host.childNodes.length, 0);
+    } finally {host.remove();}
+  });
+  owner = mount(host, env.runtime, props);
+  if (props.childText) {
+    const child = env.document.createElement(props.childTag || 'button');
+    if (child.tagName === 'BUTTON') child.type = 'button';
+    child.textContent = props.childText; owner.slots.panel.append(child);
+  }
+  if (props.actionText) {
+    const action = env.document.createElement('button'); action.type = 'button';
+    action.setAttribute('data-independent-header-action', 'true'); action.textContent = props.actionText;
+    owner.slots.actions.append(action);
+  }
+  return {...env, host, owner};
+}
+module.exports = {ROOT, local, native, renderNative, disclosureComponent, renderDisclosure};
 
 function disclosureRuntime() {
   const env = require('./focus-fixture.cjs').withFocus(native());

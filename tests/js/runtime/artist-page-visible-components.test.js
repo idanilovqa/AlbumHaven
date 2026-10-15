@@ -1,18 +1,15 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {React, native, components, render} = require('./artist-visible-fixtures/source-harness.cjs');
+const {native, renderNative, disclosureComponent, renderDisclosure} = require('./artist-visible-fixtures/source-harness.cjs');
 const ARTIST = 'Canonical & Artist / Live';
 const OTHER = 'Family canonical / B';
 const members = () => [
   {artistRef: ARTIST, label: 'Canonical display', albumCount: 3, artworkHtml: ''},
   {artistRef: OTHER, label: 'Related display', albumCount: 2, artworkHtml: ''},
 ];
-function required(name) {
-  const component = components()[name];
-  assert.equal(typeof component, 'function', `The actual existing shared React entry must export ${name}`);
-  return component;
-}
+let Disclosure;
+test.before(async () => {Disclosure = await disclosureComponent();});
 
 test('existing shared native Family owner renders intrinsic canonical navigation instead of a drawer', () => {
   const env = native(), host = env.document.createElement('div');
@@ -56,8 +53,8 @@ test('ordinary shared Family drawer retains its existing native filter contract'
   assert.equal(panel.querySelectorAll('[data-artist-page-family]').length, 0);
 });
 
-test('actual React ArtistInfo wrapper preserves supplied facts through existing embedded native owner', () => {
-  const view = render(required('ArtistInfo'), {artist: ARTIST, summary: 'A source-supplied summary.', metadata: 'Formed 1999', sourceLabel: 'Library metadata'});
+test('canonical native ArtistInfo renderer preserves supplied facts through existing embedded native owner', t => {
+  const view = renderNative(t, 'info', {artist: ARTIST, summary: 'A source-supplied summary.', metadata: 'Formed 1999', sourceLabel: 'Library metadata'});
   const region = view.host.querySelector('.artist-info-overlay--embedded');
   assert.ok(region);
   assert.equal(region.getAttribute('role'), 'region');
@@ -69,17 +66,17 @@ test('actual React ArtistInfo wrapper preserves supplied facts through existing 
   assert.deepEqual(view.forbiddenCalls, []);
 });
 
-test('actual React ArtistInfo has truthful absent Neal Morse metadata without trial biography or image', () => {
-  const view = render(required('ArtistInfo'), {artist: 'Neal Morse'});
+test('canonical native ArtistInfo renderer has truthful absent Neal Morse metadata without trial biography or image', t => {
+  const view = renderNative(t, 'info', {artist: 'Neal Morse'});
   assert.ok(view.host.textContent.includes('No information was supplied.'));
   assert.equal(view.host.querySelector('img'), null);
   assert.equal(view.host.textContent.includes('American singer'), false);
   assert.equal(view.host.textContent.includes('Wikipedia'), false);
 });
 
-test('actual React ArtistFamily wrapper keeps canonical destinations and native navigation rows', () => {
-  const view = render(required('ArtistFamily'), {title: 'Artist Family', members: members(), currentArtist: ARTIST,
-    onNavigate() {assert.fail('SSR must not navigate');}});
+test('canonical native ArtistFamily renderer keeps canonical destinations and native navigation rows', t => {
+  const view = renderNative(t, 'family', {title: 'Artist Family', members: members(), currentArtist: ARTIST,
+    onNavigate() {assert.fail('Rendering must not navigate');}});
   const rows = [...view.host.querySelectorAll('[data-artist-page-family]')];
   assert.equal(rows.length, 2);
   assert.equal(rows[1].getAttribute('data-artist-page-family'), OTHER);
@@ -87,32 +84,31 @@ test('actual React ArtistFamily wrapper keeps canonical destinations and native 
   assert.deepEqual(view.forbiddenCalls, []);
 });
 
-test('actual React intrinsic disclosures render unique real panels and native accessible toggles', () => {
-  const Disclosure = required('IntrinsicDisclosure');
-  const child = React.createElement('button', {type: 'button'}, 'Child action');
-  const first = render(Disclosure, {id: 'artist-entry-8-ep', memberKey: 'release:ep', label: 'EP', count: 2, children: child});
-  const second = render(Disclosure, {id: 'artist-entry-8-family', memberKey: 'family', label: 'Family', count: 1, collapsed: true, children: child});
+test('actual native intrinsic disclosures render unique real panels and native accessible toggles', t => {
+  assert.equal(typeof Disclosure, 'function', 'Actual native controls export mountIntrinsicDisclosure');
+  const first = renderDisclosure(t, Disclosure, {id: 'artist-entry-8-ep', memberKey: 'release:ep', label: 'EP', count: 2, childText: 'Child action'});
+  const second = renderDisclosure(t, Disclosure, {id: 'artist-entry-8-family', memberKey: 'family', label: 'Family', count: 1, collapsed: true, childText: 'Child action'});
   for (const [view, key, expanded] of [[first, 'release:ep', true], [second, 'family', false]]) {
-    const section = view.host.querySelector('[data-disclosure-key]');
+    const section = view.host;
+    assert.equal(view.owner.element, section, 'native disclosure owns the supplied host');
     assert.ok(section);
     assert.equal(section.getAttribute('data-disclosure-key'), key);
     const toggle = section.querySelector('button[aria-controls]');
     const panel = section.querySelector('[data-disclosure-panel]');
-    assert.ok(toggle?.classList.contains('action-button'), 'actual native ActionButton class survives React SSR');
+    assert.ok(toggle?.classList.contains('action-button'), 'actual native ActionButton class survives mounted composition');
     assert.ok(panel?.id);
     assert.equal(toggle.getAttribute('aria-controls'), panel.id);
     assert.equal(toggle.getAttribute('aria-expanded'), String(expanded));
     assert.equal(panel.hasAttribute('hidden'), !expanded);
-    assert.equal(panel.hasAttribute('inert'), !expanded, 'React Boolean inert must serialize correctly');
+    assert.equal(panel.hasAttribute('inert'), !expanded, 'native disclosure maintains inert while collapsed');
     assert.equal(panel.querySelector('button').textContent, 'Child action');
   }
   assert.notEqual(first.host.querySelector('[data-disclosure-panel]').id, second.host.querySelector('[data-disclosure-panel]').id);
 });
 
-test('actual React disclosure keeps independent header actions outside collapsed body', () => {
-  const view = render(required('IntrinsicDisclosure'), {id: 'discography-entry-3', memberKey: 'discography', label: 'Discography', count: 3, collapsed: true,
-    actions: React.createElement('button', {type: 'button', 'data-independent-header-action': 'true'}, 'Full size'),
-    children: React.createElement('span', null, 'Retained releases')});
+test('actual native disclosure keeps independent header actions outside collapsed body', t => {
+  const view = renderDisclosure(t, Disclosure, {id: 'discography-entry-3', memberKey: 'discography', label: 'Discography', count: 3, collapsed: true,
+    actionText: 'Full size', childTag: 'span', childText: 'Retained releases'});
   const panel = view.host.querySelector('[data-disclosure-panel]');
   const action = view.host.querySelector('[data-independent-header-action]');
   assert.ok(action);

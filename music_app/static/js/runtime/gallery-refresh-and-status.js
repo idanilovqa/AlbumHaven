@@ -1007,35 +1007,76 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function fetchRootGalleryRefreshAnchorResponse(
-  apiUrl, retainedArtists, controller, ownsResponse, omitSidebar = true,
+async function recoverRootGalleryRefreshFirstPage(
+  apiUrl, response, retainedArtists, controller, ownsResponse,
+  { omitSidebar = true, allowRevisionRestart = true } = {},
 ) {
-  const artists = [...new Set(retainedArtists)];
-  for (const artist of artists) {
+  const requestedArtist = String(
+    new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist') || '',
+  ).trim();
+  const artists = [...new Set(retainedArtists)].filter(Boolean);
+  if (response && requestedArtist) {
+    const requestedIndex = artists.indexOf(requestedArtist);
+    if (requestedIndex >= 0) artists.splice(requestedIndex, 1);
+    artists.unshift(requestedArtist);
+  }
+  let artistIndex = 0;
+  let currentResponse = response;
+  let currentUrl = apiUrl;
+  let restarted = false;
+  const fetchArtist = async artist => {
     const url = new URL(apiUrl, 'http://localhost');
     url.searchParams.delete('gallery_cursor');
     url.searchParams.set('gallery_page_size', '50');
     url.searchParams.set('gallery_anchor_artist', artist);
     if (omitSidebar) url.searchParams.set('omit_sidebar', '1');
     else url.searchParams.delete('omit_sidebar');
-    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
-    if (!ownsResponse()) return null;
-    if (response.status === 409) return { restart: true, response };
-    if (response.status === 400) {
-      const failure = await response.json();
+    const nextUrl = `${url.pathname}${url.search}`;
+    const nextResponse = await fetchGalleryViewResponse(nextUrl, controller?.signal);
+    return ownsResponse() ? { response: nextResponse, url: nextUrl } : null;
+  };
+  if (!currentResponse) {
+    if (!artists.length) {
+      throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+    }
+    const initial = await fetchArtist(artists[artistIndex]);
+    if (!initial) return null;
+    currentResponse = initial.response;
+    currentUrl = initial.url;
+  }
+  while (ownsResponse()) {
+    if (currentResponse.status === 409) {
+      if (!allowRevisionRestart) return { restart: true, response: currentResponse };
+      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+      restarted = true;
+      const retry = await fetchArtist(artists[artistIndex]);
+      if (!retry) return null;
+      currentResponse = retry.response;
+      currentUrl = retry.url;
+      continue;
+    }
+    if (currentResponse.status === 400) {
+      const failure = await currentResponse.json();
       if (!ownsResponse()) return null;
       const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
-      if (message === 'Gallery artist anchor is unavailable.') continue;
-      throw new Error(message);
+      if (message !== 'Gallery artist anchor is unavailable.') throw new Error(message);
+      artistIndex += 1;
+      if (artistIndex >= artists.length) break;
+      const alternate = await fetchArtist(artists[artistIndex]);
+      if (!alternate) return null;
+      currentResponse = alternate.response;
+      currentUrl = alternate.url;
+      continue;
     }
-    return { response, url: `${url.pathname}${url.search}` };
+    return { response: currentResponse, url: currentUrl, restarted };
   }
   throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
 }
 
 async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse) {
-  const result = await fetchRootGalleryRefreshAnchorResponse(
-    apiUrl, [...retainedArtists].reverse(), controller, ownsResponse,
+  const result = await recoverRootGalleryRefreshFirstPage(
+    apiUrl, null, [...retainedArtists].reverse(), controller, ownsResponse,
+    { allowRevisionRestart: false },
   );
   if (!result || result.restart) return result;
   const payload = await readGalleryResponse(result.response, ownsResponse);
@@ -1049,16 +1090,16 @@ async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, contro
   return { artist: canonicalArtist, offset: page.anchor_offset, length: group.albums.length, revision: page.revision };
 }
 
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist, retainedEndArtist = '', retainedArtists = [retainedEndArtist]) {
+async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist, retainedEndArtist = '', retainedArtists = [retainedEndArtist], revisionRestarted = false) {
   const completeArtistPages = Boolean(new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist'));
   let payload = data;
-  let restarted = false;
+  let restarted = revisionRestarted;
   let endpointArtist = retainedEndArtist;
   let endpointResolved = false;
   let endpointLength = 0;
   const cursors = new Set();
   let remainingPages = Math.ceil(coverage / 50);
-  const restartRefresh = async () => {
+  const restartRefresh = async (conflictResponse = { status: 409 }) => {
     if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
     restarted = true;
     endpointArtist = retainedEndArtist;
@@ -1066,12 +1107,15 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     endpointLength = 0;
     cursors.clear();
     remainingPages = Math.ceil(coverage / 50);
-    const url = new URL(apiUrl, 'http://localhost');
-    url.searchParams.set('gallery_page_size', '50');
-    url.searchParams.delete('gallery_cursor');
-    url.searchParams.delete('omit_sidebar');
-    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
-    payload = await readGalleryResponse(response, ownsResponse);
+    const recovered = await recoverRootGalleryRefreshFirstPage(
+      apiUrl, conflictResponse, retainedArtists, controller, ownsResponse,
+      { omitSidebar: false },
+    );
+    if (!recovered) {
+      payload = null;
+      return;
+    }
+    payload = await readGalleryResponse(recovered.response, ownsResponse);
   };
   while (ownsResponse()) {
     const page = payload?.gallery_page;
@@ -1095,7 +1139,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
       const endpoint = await resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse);
       if (!ownsResponse()) return null;
       if (endpoint.restart || String(endpoint.revision || '') !== String(page?.revision || '')) {
-        await restartRefresh();
+        await restartRefresh(endpoint.restart ? endpoint.response : undefined);
         continue;
       }
       endpointArtist = endpoint.artist;
@@ -1133,7 +1177,7 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
     const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
     if (!ownsResponse()) return null;
     if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
-      await restartRefresh();
+      await restartRefresh(response.status === 409 ? response : undefined);
       continue;
     }
     if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
@@ -1306,24 +1350,16 @@ async function fetchAndRender(url, push = true, options = {}) {
       response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
     }
     const ownsInitialResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision);
-    if (rootRefreshCoverage > 0 && response.status === 400) {
-      const failure = await response.json();
-      if (!ownsInitialResponse()) return false;
-      const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
-      if (message !== 'Gallery artist anchor is unavailable.') throw new Error(message);
-      const requestedArtist = String(
-        new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist') || '',
-      ).trim();
-      const alternate = await fetchRootGalleryRefreshAnchorResponse(
-        apiUrl,
-        retainedArtists.filter(artist => artist !== requestedArtist),
-        controller,
-        ownsInitialResponse,
-        false,
+    let firstPageRevisionRestarted = false;
+    if (rootRefreshCoverage > 0) {
+      const recovered = await recoverRootGalleryRefreshFirstPage(
+        apiUrl, response, retainedArtists, controller, ownsInitialResponse,
+        { omitSidebar: false },
       );
-      if (!alternate) return false;
-      response = alternate.response;
-      if (alternate.url) apiUrl = alternate.url;
+      if (!recovered) return false;
+      response = recovered.response;
+      apiUrl = recovered.url;
+      firstPageRevisionRestarted = recovered.restarted === true;
     }
     let data = await readGalleryResponse(response, ownsInitialResponse);
     if (rootRefreshCoverage > 0) {
@@ -1340,7 +1376,10 @@ async function fetchAndRender(url, push = true, options = {}) {
           return false;
         }
       };
-      data = await collectRootGalleryRefresh(data, apiUrl, rootRefreshCoverage, controller, ownsRefresh, retainedStartArtist, retainedEndArtist, retainedArtists);
+      data = await collectRootGalleryRefresh(
+        data, apiUrl, rootRefreshCoverage, controller, ownsRefresh,
+        retainedStartArtist, retainedEndArtist, retainedArtists, firstPageRevisionRestarted,
+      );
       if (!data || !ownsRefresh()) return false;
     }
     markStartupFollowup('payload_received', requestOptions, {

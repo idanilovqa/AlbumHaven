@@ -6924,11 +6924,7 @@ test('bounded root refresh retains surviving artists when the trailing artist is
 
 test('normal bounded root refresh falls back when the first retained artist is deleted', async () => {
   const f = boundedRootRefreshFixture();
-  f.context.state.view.artist_groups = anchoredRefreshGroups(['Deleted', 'Survivor']);
-  f.context.state.view.gallery_page = {
-    ...f.context.state.view.gallery_page,
-    anchor_artist: 'Deleted', anchor_group_artist: 'Deleted',
-  };
+  configureDeletedFirstRootRefresh(f);
 
   const request = f.start();
   assert.equal(new URL(f.pendingRequests[0].url, 'http://localhost')
@@ -6939,17 +6935,142 @@ test('normal bounded root refresh falls back when the first retained artist is d
 
   assert.equal(new URL(f.pendingRequests[1].url, 'http://localhost')
     .searchParams.get('gallery_anchor_artist'), 'Survivor');
-  const payload = boundedRootRefreshPage(0, 1, 'fresh', false);
-  payload.artist_groups = anchoredRefreshGroups(['Survivor']);
-  Object.assign(payload.gallery_page, {
-    anchor_artist: 'Survivor', anchor_group_artist: 'Survivor', anchor_offset: 0,
-  });
-  await resolveBoundedRootRefreshPage(f, 1, payload);
+  await resolveBoundedRootRefreshPage(f, 1, survivingRootRefreshPayload());
 
   assert.equal(await request, true);
   assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
   assert.equal(f.calls.applyViewPayload.length, 1);
   assert.equal(f.calls.showToast.length, 0);
+});
+
+function configureDeletedFirstRootRefresh(fixture) {
+  fixture.context.state.view.artist_groups = anchoredRefreshGroups(['Deleted', 'Survivor']);
+  fixture.context.state.view.gallery_page = {
+    ...fixture.context.state.view.gallery_page,
+    anchor_artist: 'Deleted', anchor_group_artist: 'Deleted',
+  };
+}
+
+function survivingRootRefreshPayload() {
+  const payload = boundedRootRefreshPage(0, 1, 'fresh', false);
+  payload.artist_groups = anchoredRefreshGroups(['Survivor']);
+  Object.assign(payload.gallery_page, {
+    anchor_artist: 'Survivor', anchor_group_artist: 'Survivor', anchor_offset: 0,
+  });
+  return payload;
+}
+
+test('normal bounded root refresh permits one revision restart after deleted-anchor fallback', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  await resolveBoundedRootRefreshPage(f, 1, { status: 409, ok: false });
+  assert.equal(new URL(f.pendingRequests[2].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Survivor');
+  await resolveBoundedRootRefreshPage(f, 2, survivingRootRefreshPayload());
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+});
+
+test('normal bounded root refresh falls back after its one revision restart loses the anchor', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, { status: 409, ok: false });
+  assert.equal(new URL(f.pendingRequests[1].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Deleted');
+  await resolveBoundedRootRefreshPage(f, 1, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  assert.equal(new URL(f.pendingRequests[2].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Survivor');
+  await resolveBoundedRootRefreshPage(f, 2, survivingRootRefreshPayload());
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
+  assert.equal(f.calls.applyViewPayload.length, 1);
+});
+
+test('normal bounded root refresh rejects later churn after its first-page revision restart', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const pending = f.start();
+  const request = assert.rejects(pending, /changed again/);
+
+  await resolveBoundedRootRefreshPage(f, 0, { status: 409, ok: false });
+  const replacement = boundedRootRefreshPage(0, 1, 'replacement', true);
+  replacement.artist_groups = anchoredRefreshGroups(['Deleted']);
+  Object.assign(replacement.gallery_page, {
+    anchor_artist: 'Deleted', anchor_group_artist: 'Deleted', anchor_offset: 0,
+  });
+  await resolveBoundedRootRefreshPage(f, 1, replacement);
+  await resolveBoundedRootRefreshPage(f, 2, { status: 409, ok: false });
+
+  await request;
+  assert.equal(f.pendingRequests.length, 3, 'the refresh must not start a third snapshot');
+  assert.equal(f.calls.applyViewPayload.length, 0);
+});
+
+test('normal bounded root refresh drops revision recovery after ownership changes', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, { status: 409, ok: false });
+  f.context.state.ui.viewStateRevision += 1;
+  await resolveBoundedRootRefreshPage(f, 1, survivingRootRefreshPayload());
+
+  assert.equal(await request, false);
+  assert.equal(f.calls.applyViewPayload.length, 0);
+});
+
+test('normal bounded root refresh aborts deleted-anchor fallback with its request owner', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+
+  await resolveBoundedRootRefreshPage(f, 0, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  f.context.claimLocalViewStateNavigation();
+  assert.equal(f.pendingRequests[1].options.signal.aborted, true);
+  await resolveBoundedRootRefreshPage(f, 1, survivingRootRefreshPayload());
+
+  assert.equal(await request, false);
+  assert.equal(f.calls.applyViewPayload.length, 0);
+});
+
+test('continuation revision restart falls back when its retained anchor was deleted', async () => {
+  const f = boundedRootRefreshFixture();
+  configureDeletedFirstRootRefresh(f);
+  const request = f.start();
+  const initial = boundedRootRefreshPage(0, 1, 'fresh', true);
+  initial.artist_groups = anchoredRefreshGroups(['Deleted']);
+  Object.assign(initial.gallery_page, {
+    anchor_artist: 'Deleted', anchor_group_artist: 'Deleted', anchor_offset: 0,
+  });
+  await resolveBoundedRootRefreshPage(f, 0, initial);
+
+  await resolveBoundedRootRefreshPage(f, 1, { status: 409, ok: false });
+  assert.equal(new URL(f.pendingRequests[2].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Deleted');
+  await resolveBoundedRootRefreshPage(f, 2, {
+    status: 400, ok: false, error: 'Gallery artist anchor is unavailable.',
+  });
+  assert.equal(new URL(f.pendingRequests[3].url, 'http://localhost')
+    .searchParams.get('gallery_anchor_artist'), 'Survivor');
+  await resolveBoundedRootRefreshPage(f, 3, survivingRootRefreshPayload());
+
+  assert.equal(await request, true);
+  assert.deepEqual(Array.from(f.context.state.view.artist_groups, group => group.artist), ['Survivor']);
+  assert.equal(f.calls.applyViewPayload.length, 1);
 });
 
 test('bounded root refresh resolves a renamed trailing artist through canonical anchor metadata', async () => {

@@ -166,9 +166,15 @@ export function mountQueuePanel(host, runtime, initial) {
       const selectionOptions = {runtime, sourceAdapter, tableKey: 'home-explicit-queue', enabled: Boolean(api), actionsHost: actions, onPlaylistAction: openPlaylist, onError: showError,
         onContextAction: (packet, lifetime, anchor) => {if (!current(owner) || !api?.playlistSelection || !lifetime.isCurrent()) return false; const previousMenu = menu; menu = null; previousMenu?.close(); if (!current(owner) || !lifetime.isCurrent()) return false; const nextMenu = runtime.openChoice(anchor, {formats: [{value: 'create', label: 'Create new playlist'}, {value: 'add', label: 'Add to playlist'}], label: 'Selected track actions', actionMenu: true, menuWidth: 'content', updateTriggerLabel: false, onSelect: mode => {if (lifetime.isCurrent()) safe(() => openPlaylist(packet, lifetime, anchor, {mode}));}}); if (!current(owner) || !lifetime.isCurrent()) {nextMenu?.close({restoreFocus: false}); return false;} menu = nextMenu; return Boolean(menu);},
         initialSelectedRowKeys: props.selectedIds || [], isViewCurrent: () => current(owner), onSelectionChange: result => {if (current(owner) && !syncing && JSON.stringify(result.selectedRowKeys) !== JSON.stringify(props.selectedIds || [])) props.onSelect?.(result.selectedRowKeys);}, onInspect: () => {if (current(owner)) props.onSelect?.(selection?.getSnapshot().selectedRowKeys || [], {inspect: true});}, onPlay: id => {if (api.getSnapshot().entries.some(row => row.id === id && row.canPlay)) runPlay(id);}};
-      if (selection) selection.update(selectionOptions); else selection = acquire(mountPlaytableSelection(host, selectionOptions)); check();
-      const desired = new Set(props.selectedIds || []), selected = new Set(selection.getSnapshot().selectedRowKeys); syncing = true;
-      try {for (const id of selected) if (!desired.has(id)) {selection.select(id, {toggle: true}); check();} for (const id of desired) if (!selected.has(id)) {selection.select(id, {toggle: true}); check();}} finally {syncing = false;}
+      // Updating the native owner synchronously reports its previous selection.
+      // Controlled synchronization must not send that old value back to Home.
+      syncing = true;
+      try {
+        if (selection) selection.update(selectionOptions); else selection = acquire(mountPlaytableSelection(host, selectionOptions)); check();
+        const desired = new Set(props.selectedIds || []), selected = new Set(selection.getSnapshot().selectedRowKeys);
+        for (const id of selected) if (!desired.has(id)) {selection.select(id, {toggle: true}); check();}
+        for (const id of desired) if (!selected.has(id)) {selection.select(id, {toggle: true}); check();}
+      } finally {syncing = false;}
       const presentationOptions = {runtime, resourceKey, source: value, columns: QUEUE_COLUMNS, identityReserve: 176, enabled: Boolean(api), isCurrent: () => current(owner)};
       if (presentation) presentation.update(presentationOptions); else {presentation = acquire(mountTrackTablePresentation(table, presentationOptions)); columns = acquire(mountTrackTableColumnsAction(columnHost, runtime, presentation));}
     } catch (error) {if (error !== retired) {try {dispose();} catch {} throw error;}} finally {rendering = false; if (pendingProps) {const next = pendingProps, revision = updateRevision; pendingProps = null; queueMicrotask(() => {if (!disposed && updateRevision === revision) update(next);});}}

@@ -1,0 +1,33 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {homeFixture}=require('./widget-native-home-fixture.cjs');
+test('native widget fixture publishes complete current snapshots once to its actual directory owner',async t=>{
+  const h=await homeFixture(t),directory=h.page.querySelector('[data-home-friends-directory]');assert.ok(directory);
+  assert.equal(h.listeners.size,1);assert.equal(h.subscriptions.length,1);
+  const friend={account_ref:'publication:one',relationship:'accepted',display_name:'Publication Friend',allowed_actions:{can_view_activity:true}};
+  const initialDeliveries=h.publication.deliveries;
+  h.state={...h.state,friends:{status:'ready',data:{...h.state.friends.data,friends:[friend]}}};
+  assert.equal(h.controller.getSnapshot(),h.state);assert.equal(h.publication.deliveries,initialDeliveries+1);
+  assert.match(directory.textContent,/Publication Friend/,'real subscription paints before parent view update');
+  const same=h.state,before=h.publication.count;h.state=same;assert.equal(h.publication.count,before);assert.equal(h.publication.deliveries,initialDeliveries+1);
+  h.state={...h.state,friends:{status:'ready',data:{...h.state.friends.data,friends:[]}}};
+  assert.doesNotMatch(directory.textContent,/Publication Friend/);assert.equal(h.publication.deliveries,initialDeliveries+2);
+  h.render();assert.equal(h.listeners.size,1);assert.equal(h.subscriptions.length,1);assert.equal(h.subscriptions[0].deliveries,2);
+  h.dispose();assert.equal(h.listeners.size,0);assert.equal(h.subscriptions[0].releases,1);
+  const delivered=h.publication.deliveries;h.state={...h.state};assert.equal(h.publication.deliveries,delivered);
+});
+test('native widget directory and member owner replacement retires each exact subscription',async t=>{
+  const h=await homeFixture(t),first=h.subscriptions[0];assert.ok(first);assert.equal(h.listeners.size,1);
+  h.shell={...h.shell,section:'friends',profileRef:'member:one'};h.render();
+  assert.equal(first.releases,1);assert.equal(h.listeners.has(first.listener),false);
+  assert.equal(h.page.querySelectorAll('[data-home-friends-directory]').length,0);assert.equal(h.page.querySelectorAll('.home-member-profile').length,1);
+  assert.equal(h.listeners.size,1);assert.equal(h.subscriptions.length,2);const second=h.subscriptions[1];
+  const markup=h.page.innerHTML,readCount=h.queue.reads.length;first.listener();assert.equal(h.page.innerHTML,markup);assert.equal(h.queue.reads.length,readCount);
+  const before=h.publication.deliveries;h.state={...h.state};assert.equal(h.publication.deliveries,before+1);assert.equal(first.deliveries,0);assert.equal(second.deliveries,1);
+  h.shell={...h.shell,section:'recent',profileRef:null};h.render();assert.equal(second.releases,1);
+  assert.equal(h.page.querySelectorAll('[data-home-friends-directory]').length,1);assert.equal(h.page.querySelectorAll('.home-member-profile').length,0);
+  assert.equal(h.listeners.size,1);assert.equal(h.subscriptions.length,3);const third=h.subscriptions[2];
+  const currentMarkup=h.page.innerHTML;second.listener();assert.equal(h.page.innerHTML,currentMarkup);
+  h.dispose();assert.equal(h.listeners.size,0);assert.deepEqual(h.subscriptions.map(entry=>entry.releases),[1,1,1]);
+  const delivered=h.publication.deliveries;h.state={...h.state};assert.equal(h.publication.deliveries,delivered);third.listener();assert.equal(h.page.innerHTML,'');
+});

@@ -3,21 +3,13 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const Module = require('node:module');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
 const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
 const root = path.resolve(__dirname, '../../..');
 const sourceRoot = path.join(root, 'music_app/static/js/home-friends');
 const model = import(pathToFileURL(path.join(sourceRoot, 'detail-projection.mjs')));
-const built = buildSync({entryPoints: [path.join(sourceRoot, 'detail-projection.jsx')], bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react']});
-const compiled = new Module(__filename + '.details', module);
-compiled.filename = __filename + '.details'; compiled.paths = module.paths;
-compiled._compile(built.outputFiles[0].text, compiled.filename);
-const {DetailProjectionPanel, detailDuration} = compiled.exports;
-const env = createNativeHomeRuntime();
+const ui = import(pathToFileURL(path.join(sourceRoot, 'detail-projection-ui.mjs')));
+const env = require('./artist-host-fixtures/dom-platform.cjs').withDomPlatform(createNativeHomeRuntime());
 for (const file of ['compact-data-table.js', 'album-details-components.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, 'music_app/static/js/runtime', file), 'utf8'), env.context);
 }
@@ -47,7 +39,15 @@ async function controller(readDetail, target = selection()) {
 }
 async function render(data, target = selection()) {
   const {normalizeDetailResult} = await model;
-  return renderToStaticMarkup(React.createElement(DetailProjectionPanel, {runtime, selection: target, value: normalizeDetailResult(data, target)}));
+  return renderPanel({selection: target, value: normalizeDetailResult(data, target)});
+}
+
+// Serialize the actual mounted native owner; no synthetic markup or SSR adapter.
+async function renderPanel(props) {
+  const {mountDetailProjectionPanel} = await ui;
+  const host = env.document.createElement('section'); env.document.body.append(host);
+  const owner = mountDetailProjectionPanel(host, runtime, props);
+  try {return host.outerHTML;} finally {owner.dispose(); assert.equal(host.childNodes.length, 0); host.remove();}
 }
 
 test('detail source grants are exact, own booleans and independent from history or native actions', async () => {
@@ -92,6 +92,7 @@ test('whitelist excludes raw native media, identity overrides and unapproved fie
 });
 test('known zero, missing numeric data and freshness remain different', async () => {
   const {normalizeDetailResult} = await model;
+  const {detailDuration} = await ui;
   const data = normalizeDetailResult(album('album:one', {track_count: 0, duration_seconds: '0', metadata_state: 'stale',
     tracks: [{id: 'one', title: '', duration_seconds: 0, track_number: null, disc_number: -1}]}), selection()).data;
   assert.equal(data.track_count, 0); assert.equal(data.duration_seconds, null); assert.equal(data.metadata_state, 'unknown');
@@ -219,18 +220,18 @@ test('panel never renders stale data on denied loading error unavailable empty o
   const {normalizeDetailResult} = await model;
   const data = normalizeDetailResult(album(), selection()).data;
   for (const status of ['denied', 'loading', 'error', 'unavailable', 'empty']) {
-    const html = renderToStaticMarkup(React.createElement(DetailProjectionPanel, {runtime, selection: selection(), value: {status, data}, onRetry() {}}));
+    const html = await renderPanel({ selection: selection(), value: {status, data}, onRetry() {}});
     assert.doesNotMatch(html, /Album &lt;one&gt;|compact-data-table|Provider supplied/);
     assert.equal(html.includes('Retry details'), status === 'error');
   }
   for (const target of [selection('album', 'other'), selection('album', 'album:one', {can_view_details: false}),
     selection('album', 'album:one', Object.create({can_view_details: true})), null]) {
-    const html = renderToStaticMarkup(React.createElement(DetailProjectionPanel, {runtime, selection: target, value: {status: 'ready', data}}));
+    const html = await renderPanel({ selection: target, value: {status: 'ready', data}});
     assert.doesNotMatch(html, /Album &lt;one&gt;|compact-data-table|Provider supplied/);
   }
 });
 test('source boundary has no transport persistence preview imports or native playback activation', () => {
-  const source = ['detail-projection.mjs', 'detail-projection.jsx'].map(file => fs.readFileSync(path.join(sourceRoot, file), 'utf8')).join('\n');
+  const source = ['detail-projection.mjs', 'detail-projection-ui.mjs'].map(file => fs.readFileSync(path.join(sourceRoot, file), 'utf8')).join('\n');
   assert.doesNotMatch(source, /\bfetch\s*\(|localStorage|sessionStorage|mock-source|GALLERY_TRIAL|buildAlbumTrackTableHtml|albumIntent\s*\(|openTrackModal\s*\(|playTrackFromPayload\s*\(/);
 });
 
@@ -279,8 +280,8 @@ test('an origin change cannot render a ready projection from another account', a
   const origin = {source: 'activity', account_ref: 'friend:one', kind: 'artists', period: 'week'};
   const target = {...selection('artist', 'artist:one'), origin};
   const value = normalizeDetailResult(artist({origin}), target);
-  const html = renderToStaticMarkup(React.createElement(DetailProjectionPanel, {runtime, value,
-    selection: {...target, origin: {...origin, account_ref: 'friend:two'}}}));
+  const html = await renderPanel({ value,
+    selection: {...target, origin: {...origin, account_ref: 'friend:two'}}});
   assert.doesNotMatch(html, /Known biography|Release|Artist discography/);
 });
 

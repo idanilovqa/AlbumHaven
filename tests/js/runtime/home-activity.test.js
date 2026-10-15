@@ -1,103 +1,45 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
-const Module = require('node:module');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
-
+const {fixture: nativeFixture, load} = require('./home-friends-native-app-fixture.cjs');
 const repo = path.resolve(__dirname, '../../..');
-// Source-level presentation contracts against published native components.
-// This fixture supplies DTOs only; it is not transport or browser acceptance.
-const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/home-friends/activity.jsx')],
-  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']});
-const loaded = new Module(`${__filename}.fixture.cjs`, module);
-loaded.filename = `${__filename}.fixture.cjs`; loaded.paths = module.paths;
-loaded._compile(built.outputFiles[0].text, loaded.filename);
-const {ActivityPanel, activityTimestamp, projectActivityRows} = loaded.exports;
-const native = createNativeHomeRuntime();
-for (const file of ['compact-data-table.js', 'album-track-table.js', 'trigger-anchor.js', 'library-settings.js']) {
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime', file), 'utf8'), native.context);
-}
-const artistTemplate = native.document.createElement('script');
-artistTemplate.id = 'navigation-tree-item-template';
-artistTemplate.textContent = fs.readFileSync(path.join(repo, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
-native.document.body.appendChild(artistTemplate);
-vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/navigation-tree.js'), 'utf8'), native.context);
-const runtime = {
-  openChoice: native.context.openUtilityChoiceDropdown,
-  buttonHtml: config => native.context.ButtonComponent.renderButton(config),
-  actionHtml: config => native.context.ButtonComponent.renderActionButton(config),
-  alertHtml: config => native.context.buildOnPageAlertHtml(config),
-  tableHtml: config => native.context.buildCompactDataTable(config),
-  galleryCardHtml: config => native.context.buildGalleryCardHtml(config),
-  artboxHtml: config => native.context.buildAlbumArtboxHtml(config),
-  navigationItemHtml: config => native.context.NavigationTree.renderItem(config),
-  albumTrackRow: (track, index) => native.context.buildAlbumTrackTableRow(track, index, {readOnly: true}),
-  escapeHtml: native.context.escapeHtml,
-  preferredTimeZone: () => 'UTC',
-};
+let mountActivityPanel, activityTimestamp, projectActivityRows;
+test.before(async () => {({mountActivityPanel, activityTimestamp, projectActivityRows} = await load('activity.mjs'));});
 const row = (id, extra = {}) => ({id, kind: 'track', title: `Title ${id}`, artist: 'Artist', album_title: 'Album',
   listen_count: null, rating: null, duration_seconds: null, last_listened_at: null, artwork_url: null, ...extra});
 const ids = rows => Array.from(rows, item => item.id);
-const render = props => renderToStaticMarkup(React.createElement(ActivityPanel, {runtime, ...props}));
-const documentOf = html => {const host = native.document.createElement('div'); host.innerHTML = html; return host;};
 const ready = rows => ({status: 'ready', data: {rows, total_listens: null, next_cursor: null}});
 const headerLabel = node => (node.querySelector('.compact-data-table__sort-label') || node).textContent;
-const elements = node => React.isValidElement(node) ? [node, ...React.Children.toArray(node.props.children).flatMap(elements)] : [];
-const activityTable = tree => elements(tree).find(element => element.type?.name === 'NativeHtml' && element.props.onClick);
-const activityChoice = tree => elements(tree).find(element => element.type?.name === 'NativeChoice');
-const activityArtists = tree => elements(tree).find(element => element.type?.name === 'ArtistSelectionRows');
-
-// A bounded hook/DOM probe drives the real callbacks and layout effects. It does
-// not claim React reconciliation, native Choice ownership or browser acceptance.
+const visible = node => Boolean(node && !node.closest('[hidden]'));
+const hasDetail = host => visible(host.querySelector('[aria-label="Selected listening item"]'));
+const artistSelected = host => host.querySelector('[data-home-artist-select][aria-current="true"]')?.dataset.homeArtistSelect ?? null;
+const resourceActions = host => host.querySelectorAll('button').filter(node => ['View Album', 'View Artist'].includes(node.textContent));
+const choiceLabels = {server: 'Server order', last_listened_at: 'Last listened', listen_count: 'Listens', title: 'Name', duration_seconds: 'Length'};
+const choiceValue = host => Object.keys(choiceLabels).find(key => host.querySelector(`[aria-label="Activity order: ${choiceLabels[key]}"]`));
+const cleanups = [];
+test.afterEach(() => {for (const cleanup of cleanups.splice(0).reverse()) cleanup();});
 function activityLifecycle(overrides = {}) {
-  const env = createNativeHomeRuntime(), host = env.document.createElement('section');
-  env.document.body.appendChild(host);
-  host.constructor.prototype.focus = function () {if (this.isConnected && !this.disabled) env.document.activeElement = this;};
-  const slots = []; let cursor = 0, pending = [], tree;
-  const currentRuntime = {...runtime, ...overrides};
-  const changed = (old, deps) => !old || !deps || deps.some((value, index) => !Object.is(value, old.deps[index]));
-  const hooks = {...React,
-    useRef(value) {const index = cursor++; return slots[index] ||= {current: value};},
-    useMemo(factory, deps) {const index = cursor++; if (changed(slots[index], deps)) slots[index] = {deps, value: factory()}; return slots[index].value;},
-    useState(value) {const index = cursor++; slots[index] ||= {value: typeof value === 'function' ? value() : value};
-      return [slots[index].value, next => {slots[index].value = typeof next === 'function' ? next(slots[index].value) : next;}];},
-    useLayoutEffect(effect, deps) {const index = cursor++, old = slots[index];
-      if (changed(old, deps)) pending.push(() => {old?.cleanup?.(); slots[index] = {deps, cleanup: effect()};});},
-  };
-  const fixture = {exports: {}};
-  vm.runInNewContext(built.outputFiles[0].text, {module: fixture, exports: fixture.exports,
-    require: name => name === 'react' ? hooks : require(name), console, AbortController});
-  let previousHtml;
-  return {env, host, runtime: currentRuntime,
-    render(props) {
-      cursor = 0; pending = [];
-      tree = fixture.exports.ActivityPanel({runtime: currentRuntime, kind: 'tracks', scopeKey: 'activity:actor', ...props});
-      tree.props.ref.current = host;
-      const trackHost = elements(tree).find(element => element.type === 'div' && element.props.className?.split(' ').includes('album-track-table') && element.props.ref);
-      if (trackHost) trackHost.props.ref.current = host;
-      const table = activityTable(tree);
-      const html = table ? table.props.html : elements(tree).filter(element => element.type?.name === 'NativeHtml').map(element => element.props.html).join('');
-      if (html !== previousHtml) {host.innerHTML = html; previousHtml = html;}
-      for (const effect of pending) effect();
-      return tree;
-    },
-    emit(name, target, patch = {}) {
+  const cleanup = [], env = nativeFixture({after: fn => cleanup.push(fn)});
+  const {host, runtime} = env; Object.assign(runtime, {preferredTimeZone: () => 'UTC'}, overrides);
+  let owner, disposed = false;
+  const api = {env, host, runtime,
+    render(props) {const next = {kind: 'tracks', scopeKey: 'activity:actor', ...props};
+      if (!owner) owner = mountActivityPanel(host, runtime, next); else owner.update(next); return host;},
+    emit(name, target, patch = {}) {assert.ok(target, `Native target for ${name} exists`);
       const type = {onClick: 'click', onDoubleClick: 'dblclick', onKeyDown: 'keydown', onContextMenu: 'contextmenu'}[name];
-      const event = Object.assign(env.event(type, target), {detail: 1}, patch);
-      if (name === 'onKeyDown') tree.props.onKeyDownCapture?.(event);
-      if (!event.stopped) target.dispatchEvent(event);
-      if (!event.stopped) (name === 'onClick' ? activityTable(tree).props : tree.props)[name]?.(event);
-      return event;
-    },
-    dispose() {for (const slot of slots) slot?.cleanup?.(); host.remove();},
-  };
+      const event = Object.assign(env.event(type, target), {detail: 1}, patch); target.dispatchEvent(event); return event;},
+    choose(value) {api.emit('onClick', host.querySelector('.ui-choice__trigger'));
+      const option = env.document.querySelector(`[data-foobar-format="${value}"]`); assert.ok(option, 'Real canonical Choice menu option exists');
+      api.emit('onClick', option);},
+    dispose() {if (disposed) return; disposed = true; owner?.dispose(); host.remove(); for (const fn of cleanup.reverse()) fn();},
+  }; cleanups.push(api.dispose); return api;
 }
+// Rendering assertions serialize a genuinely mounted owner; no SSR or replacement view.
+let lastEnvironment;
+const render = props => {const fixture = activityLifecycle(); lastEnvironment = fixture.env; fixture.render(props);
+  const html = fixture.host.innerHTML; assert.deepEqual(fixture.env.forbiddenCalls, []); fixture.dispose(); return html;};
+const documentOf = html => {const host = lastEnvironment.document.createElement('div'); host.innerHTML = html; return host;};
 
 test('server order is preserved verbatim in a new array, including ties and unknown values', () => {
   const rows = Object.freeze([row('third'), row('first', {listen_count: 7}), row('second', {listen_count: 7})].map(Object.freeze));
@@ -133,42 +75,47 @@ test('native metric headers cycle with the Activity order Choice and preserve se
     row('zero', {listen_count: 0, duration_seconds: 0}), row('middle', {listen_count: 3, duration_seconds: 120})].map(Object.freeze));
   const value = ready(rows), fixture = activityLifecycle(); t.after(() => fixture.dispose());
   let tree = fixture.render({value});
+  // Canonical presentation uses the table host measurement, not window width.
+  fixture.env.setRect(fixture.host.querySelector('.album-track-table--collection'), {width: 1600, height: 600});
+  tree = fixture.render({value});
   fixture.emit('onClick', fixture.host.querySelector('[data-home-activity-row="high"]'));
   tree = fixture.render({value});
-  for (const [key, choiceValue] of [['listens', 'listen_count'], ['duration', 'duration_seconds']]) {
+  for (const [key, metricOrder] of [['listens', 'listen_count'], ['duration', 'duration_seconds']]) {
     for (const [direction, expected, order] of [
-      ['ascending', ['zero', 'middle', 'high', 'unknown'], choiceValue],
-      ['descending', ['high', 'middle', 'zero', 'unknown'], choiceValue],
+      ['ascending', ['zero', 'middle', 'high', 'unknown'], metricOrder],
+      ['descending', ['high', 'middle', 'zero', 'unknown'], metricOrder],
       ['none', ['unknown', 'high', 'zero', 'middle'], 'server'],
     ]) {
-      const heading = fixture.host.querySelector(`[data-cdt-sort="${key}"]`); heading.focus();
+      const heading = fixture.host.querySelector(`[data-cdt-sort="${key}"]`);
+      assert.equal(heading.closest('[data-cdt-responsive-hidden]'), null, 'Sort interaction targets a visible column');
+      heading.focus();
       const event = fixture.env.event('click', heading.querySelector('.compact-data-table__sort-label'));
-      activityTable(tree).props.onClick(event); assert.equal(event.defaultPrevented, true);
+      event.target.dispatchEvent(event); assert.equal(event.defaultPrevented, true);
       tree = fixture.render({value});
-      assert.equal(activityChoice(tree).props.value, order);
+      assert.equal(choiceValue(tree), order);
       assert.equal(fixture.host.querySelector(`[role="columnheader"][data-cdt-column="${key}"]`).getAttribute('aria-sort'), direction);
       assert.deepEqual(fixture.host.querySelectorAll('[data-home-activity-select]').map(node => node.dataset.homeActivitySelect), expected);
       assert.equal(fixture.host.querySelector('[data-cdt-row-key="high"]').getAttribute('aria-selected'), 'true');
       assert.equal(fixture.env.document.activeElement, fixture.host.querySelector(`[data-cdt-sort="${key}"]`));
     }
   }
-  activityChoice(tree).props.onChange('duration_seconds'); tree = fixture.render({value});
+  fixture.choose('duration_seconds'); tree = fixture.render({value});
   assert.equal(fixture.host.querySelector('[data-cdt-column="duration"]').getAttribute('aria-sort'), 'descending');
-  const direction = elements(tree).find(element => element.type?.name === 'Button' && String(element.props.children).startsWith('Sort '));
-  direction.props.onClick(); tree = fixture.render({value});
+  const direction = fixture.host.querySelectorAll('[aria-label]').find(node => node.getAttribute('aria-label').startsWith('Sort '));
+  fixture.emit('onClick', direction); tree = fixture.render({value});
   assert.equal(fixture.host.querySelector('[data-cdt-column="duration"]').getAttribute('aria-sort'), 'ascending');
-  activityChoice(tree).props.onChange('server'); tree = fixture.render({value});
+  fixture.choose('server'); tree = fixture.render({value});
   assert.deepEqual(fixture.host.querySelectorAll('[data-home-activity-select]').map(node => node.dataset.homeActivitySelect), ids(rows));
   assert.deepEqual(ids(rows), ['unknown', 'high', 'zero', 'middle']);
   for (const [metadata, scope] of [[{next_cursor: 'opaque:next'}, 'Sorted within loaded history'],
     [{pagination: {mode: 'numbered', page: 2, page_size: 100, total_rows: 104}}, 'Sorted within this page']]) {
     const paged = {...value, data: {...value.data, ...metadata}};
     tree = fixture.render({value: paged});
-    assert.equal(elements(tree).some(element => String(element.props.children).startsWith('Sorted within ')), false);
-    activityChoice(tree).props.onChange('listen_count'); tree = fixture.render({value: paged});
-    assert.equal(elements(tree).filter(element => element.type === 'span').some(element => element.props.children === scope), true);
+    assert.equal(tree.querySelectorAll('.home-friends__muted').some(node => visible(node) && node.textContent.startsWith('Sorted within ')), false);
+    fixture.choose('listen_count'); tree = fixture.render({value: paged});
+    assert.equal(tree.querySelectorAll('span').some(node => visible(node) && node.textContent === scope), true);
     assert.deepEqual(ids(paged.data.rows), ids(rows), 'scoped sorting preserves provider-owned row order');
-    activityChoice(tree).props.onChange('server'); tree = fixture.render({value: paged});
+    fixture.choose('server'); tree = fixture.render({value: paged});
   }
 });
 
@@ -176,8 +123,11 @@ test('pending activity sort focus never revives a replaced scope or steals anoth
   for (const change of ['scope', 'resource', 'friend', 'period', 'focus']) {
     const fixture = activityLifecycle(); t.after(() => fixture.dispose());
     const value = ready([row('a', {listen_count: 2}), row('b', {listen_count: 1})]);
+    fixture.render({value});
+    fixture.env.setRect(fixture.host.querySelector('.album-track-table--collection'), {width: 1600, height: 600});
     const tree = fixture.render({value}), heading = fixture.host.querySelector('[data-cdt-sort="listens"]');
-    heading.focus(); activityTable(tree).props.onClick(fixture.env.event('click', heading));
+    assert.equal(heading.closest('[data-cdt-responsive-hidden]'), null, 'Retirement begins from a visible sort control');
+    heading.focus(); fixture.emit('onClick', heading);
     const outside = fixture.env.document.createElement('button'); fixture.env.document.body.appendChild(outside);
     if (change === 'focus') outside.focus();
     fixture.render({value: change === 'resource' ? ready([row('new')]) : value,
@@ -254,7 +204,7 @@ test('album views reuse inert GalleryCard and AlbumArtbox owners', () => {
     assert.match(html, /src="\/artwork\/opaque"/);
     assert.doesNotMatch(html, /data-gallery-card-intent|data-album-key|data-track-path|data-open-tracklist|0 tracks/);
   }
-  assert.deepEqual(native.forbiddenCalls, []);
+  assert.deepEqual(lastEnvironment.forbiddenCalls, []);
 });
 
 test('every Artist view uses native rows or circles and keeps unknown and denied identities honest', () => {
@@ -303,16 +253,14 @@ test('controlled resource selection reports the exact current row without creati
     t.after(() => fixture.dispose());
     const props = {value, kind: `${kind}s`, view, selectedResourceId: null, onResourceSelect: (...args) => selections.push(args)};
     let tree = fixture.render(props);
-    assert.equal(elements(tree).some(element => element.type?.name === 'ResourceDetail'), false);
-    if (kind === 'artist') activityArtists(tree).props.onSelect(selected);
-    else if (view === 'rows') fixture.emit('onClick', fixture.host.querySelector('[data-home-activity-select="resource"]'));
-    else elements(tree).find(element => element.props.attributes?.['data-home-activity-select'] === 'resource').props.onClick();
+    assert.equal(Boolean(tree.querySelector('.home-detail__selection')), false);
+    fixture.emit('onClick', fixture.host.querySelector(`[data-home-${kind === 'artist' ? 'artist' : 'activity'}-select="resource"]`));
     assert.equal(selections.length, 1); assert.equal(selections[0][0], selected); assert.equal(selections[0][1], kind);
     tree = fixture.render({...props, selectedResourceId: selected.id});
-    assert.equal(elements(tree).some(element => element.type?.name === 'ResourceDetail' || element.props['aria-label'] === 'Selected listening item'), false);
-    if (kind === 'artist') assert.equal(activityArtists(tree).props.selectedId, selected.id);
+    assert.equal(hasDetail(tree) || Boolean(tree.querySelector('.home-detail__selection')), false);
+    if (kind === 'artist') assert.equal(artistSelected(tree), selected.id);
     else if (view === 'rows') assert.equal(fixture.host.querySelector('[data-cdt-row-key="resource"]').getAttribute('aria-selected'), 'true');
-    else assert.equal(elements(tree).find(element => element.props.attributes?.['data-home-activity-select'] === 'resource').props.selected, true);
+    else assert.equal(tree.querySelector('[data-home-activity-select="resource"]').getAttribute('aria-pressed') === 'true', true);
     assert.deepEqual(plays, []);
   }
 });
@@ -323,7 +271,7 @@ test('controlled resources retire on source, query or access changes and require
     const value = ready([selected]), selections = [], fixture = activityLifecycle(); t.after(() => fixture.dispose());
     const onResourceSelect = (...args) => selections.push(args);
     const props = {value, kind: 'artists', selectedResourceId: selected.id, onResourceSelect};
-    assert.equal(activityArtists(fixture.render(props)).props.selectedId, selected.id);
+    assert.equal(artistSelected(fixture.render(props)), selected.id);
     const replacement = {...props, ...{
       source: {value: ready([selected])}, scope: {scopeKey: 'activity:other'}, friend: {account_ref: 'friend:other'},
       period: {period: 'all'}, kind: {kind: 'albums'},
@@ -331,35 +279,44 @@ test('controlled resources retire on source, query or access changes and require
       grant: {value: ready([{...selected, allowed_actions: {can_view_details: false}}])},
     }[change]};
     const retired = fixture.render(replacement);
-    if (change !== 'kind') assert.equal(activityArtists(retired).props.selectedId, null, change);
+    if (change !== 'kind') assert.equal(artistSelected(retired), null, change);
     assert.equal(selections.length, 1, change); assert.equal(selections[0][0], null, change);
     fixture.render(replacement); assert.equal(selections.length, 1, `${change} clears once`);
     const restored = fixture.render(props);
-    assert.equal(activityArtists(restored).props.selectedId, null, `${change} cannot revive an old id`);
-    activityArtists(restored).props.onSelect(selected);
+    assert.equal(artistSelected(restored), null, `${change} cannot revive an old id`);
+    fixture.emit('onClick', restored.querySelector('[data-home-artist-select="resource"]'));
     assert.equal(selections.length, 2); assert.equal(selections[1][0], selected); assert.equal(selections[1][1], 'artist');
-    assert.equal(activityArtists(fixture.render(props)).props.selectedId, selected.id);
+    assert.equal(artistSelected(fixture.render(props)), selected.id);
   }
 });
 
 test('Artist consumer sorts exact rows, owns only its outlet, and rejects retired or forged child callbacks', t => {
   const a = row('a', {kind: 'artist', listen_count: 1}), b = row('b', {kind: 'artist', listen_count: 9});
-  const value = ready([a, b]), selections = [], fixture = activityLifecycle(); t.after(() => fixture.dispose());
-  const onResourceSelect = (...args) => selections.push(args), listenedAlbumsRef = () => {};
+  const value = ready([a, b]), selections = [], outlets = [], fixture = activityLifecycle(); t.after(() => fixture.dispose());
+  const onResourceSelect = (...args) => selections.push(args), listenedAlbumsRef = element => outlets.push(element);
   const props = {value, kind: 'artists', onResourceSelect, listenedAlbumsRef, selectedResourceId: null};
-  let tree = fixture.render(props), retired = activityArtists(tree).props.onSelect;
-  assert.deepEqual(ids(activityArtists(tree).props.rows), ['a', 'b']);
-  assert.equal(elements(tree).filter(element => element.props.ref === listenedAlbumsRef).length, 1);
-  assert.equal(elements(fixture.render({...props, kind: 'tracks'})).some(element => element.props.ref === listenedAlbumsRef), false);
-  retired(a); assert.deepEqual(selections, []);
-  tree = fixture.render(props); activityChoice(tree).props.onChange('listen_count'); tree = fixture.render(props);
-  assert.deepEqual(ids(activityArtists(tree).props.rows), ['b', 'a']); assert.deepEqual(ids(value.data.rows), ['a', 'b']);
-  for (const candidate of [null, {...a}]) activityArtists(tree).props.onSelect(candidate);
-  assert.deepEqual(selections, [], 'missing or cloned display rows are not current source authority');
-  retired = activityArtists(tree).props.onSelect;
-  fixture.render({...props, value: ready([a, b])}); retired(a); assert.deepEqual(selections, []);
-  tree = fixture.render(props); retired = activityArtists(tree).props.onSelect;
-  fixture.dispose(); retired(a); assert.deepEqual(selections, []);
+  const artistIds = () => fixture.host.querySelectorAll('[data-home-artist-select]').map(node => node.dataset.homeArtistSelect);
+  let tree = fixture.render(props), retired = tree.querySelector('[data-home-artist-select="a"]');
+  assert.deepEqual(artistIds(), ['a', 'b']);
+  assert.equal(outlets.filter(Boolean).length, 1); assert.equal(outlets[0], tree.querySelector('.home-activity__listened-albums'));
+  fixture.render({...props, kind: 'tracks'}); assert.equal(outlets.at(-1), null);
+  fixture.emit('onClick', retired); assert.deepEqual(selections, []);
+  tree = fixture.render(props); fixture.choose('listen_count'); tree = fixture.render(props);
+  assert.deepEqual(artistIds(), ['b', 'a']); assert.deepEqual(ids(value.data.rows), ['a', 'b']);
+  // There is no public callback accepting a row object. Missing/forged DOM keys
+  // cannot produce source authority; a live key resolves to the exact source row.
+  const live = tree.querySelector('[data-home-artist-select="a"]');
+  for (const key of ['', 'forged:not-a-source-row']) {
+    live.setAttribute('data-home-artist-select', key); fixture.emit('onClick', live);
+  }
+  assert.deepEqual(selections, [], 'missing or forged keys are not current source authority');
+  live.setAttribute('data-home-artist-select', 'a'); fixture.emit('onClick', live);
+  assert.equal(selections.length, 1); assert.equal(selections[0][0], a); selections.length = 0;
+  // Retain the actual old control across removal and same-ID reappearance.
+  retired = live; fixture.render({...props, value: ready([])});
+  fixture.render({...props, value: ready([a, b])}); fixture.emit('onClick', retired); assert.deepEqual(selections, []);
+  tree = fixture.render(props); retired = tree.querySelector('[data-home-artist-select="a"]');
+  fixture.dispose(); fixture.emit('onClick', retired); assert.deepEqual(selections, []);
 });
 
 test('Track details expose only granted canonical resource actions and ordinary selection remains local', t => {
@@ -370,22 +327,22 @@ test('Track details expose only granted canonical resource actions and ordinary 
   const props = {value, selectedResourceId: 'external-resource', onResourceSelect};
   fixture.render(props); fixture.emit('onClick', fixture.host.querySelector('[data-home-activity-select="track"]'));
   let tree = fixture.render(props);
-  assert.ok(elements(tree).some(element => element.props['aria-label'] === 'Selected listening item'));
+  assert.ok(hasDetail(tree));
   assert.deepEqual(selections, []); assert.deepEqual(plays, []);
-  const actions = elements(tree).filter(element => ['View Album', 'View Artist'].includes(element.props.children));
+  const actions = resourceActions(tree);
   assert.equal(actions.length, 2);
-  for (const action of actions) action.props.onClick();
+  for (const action of actions) fixture.emit('onClick', action);
   assert.equal(selections.length, 2);
   for (const [index, kind] of ['album', 'artist'].entries()) {assert.equal(selections[index][0], selected); assert.equal(selections[index][1], kind);}
-  const retired = actions[0].props.onClick;
+  const retired = actions[0];
   tree = fixture.render({...props, value: ready([{...selected, source_readable: false}])});
-  retired(); assert.equal(selections.length, 2); assert.deepEqual(plays, []);
+  fixture.emit('onClick', retired); assert.equal(selections.length, 2); assert.deepEqual(plays, []);
   for (const extra of [{}, {artist_target: {...target('artist'), ref: ''}},
     {album_target: {...target('album'), allowed_actions: {can_view_details: false}}}]) {
     const next = ready([row('next', extra)]); fixture.render({value: next, onResourceSelect});
     fixture.emit('onClick', fixture.host.querySelector('[data-home-activity-select="next"]'));
     tree = fixture.render({value: next, onResourceSelect});
-    assert.equal(elements(tree).some(element => ['View Album', 'View Artist'].includes(element.props.children)), false);
+    assert.equal(resourceActions(tree).length > 0, false);
   }
 });
 
@@ -489,13 +446,13 @@ test('overlap revocation removes selected track details and does not restore the
     fixture.render({value: controller.getSnapshot().activity, kind: 'listens'});
     fixture.emit('onClick', fixture.host.querySelector('[data-home-activity-select="a"]'));
     let tree = fixture.render({value: controller.getSnapshot().activity, kind: 'listens'});
-    assert.ok(elements(tree).some(element => element.props['aria-label'] === 'Selected listening item'));
+    assert.ok(hasDetail(tree));
     await controller.loadMoreActivity(); tree = fixture.render({value: controller.getSnapshot().activity, kind: 'listens'});
-    assert.equal(elements(tree).some(element => element.props['aria-label'] === 'Selected listening item'), false);
+    assert.equal(hasDetail(tree), false);
     assert.equal(fixture.host.querySelector('[data-home-activity-row="a"]').hasAttribute('aria-selected'), false);
     assert.doesNotMatch(fixture.host.innerHTML, /Revoked|artwork\/revoked|detail:revoked|Obsessed/);
     tree = fixture.render({value: ready([original]), kind: 'listens'});
-    assert.equal(elements(tree).some(element => element.props['aria-label'] === 'Selected listening item'), false);
+    assert.equal(hasDetail(tree), false);
   }
 });
 
@@ -508,45 +465,47 @@ test('album and artist revocations retire selected details and disable native Se
       ? {rows: [original], next_cursor: 'cursor:one'}
       : {rows: [{...original, source_readable: false}, row('b', {kind})], next_cursor: 'cursor:two', pagination: {mode: 'bad'}}}});
     t.after(() => controller.dispose()); await controller.loadActivity({kind: `${kind}s`});
-    const fixture = activityLifecycle(); t.after(() => fixture.dispose());
-    const props = () => ({value: controller.getSnapshot().activity, kind: `${kind}s`, view});
+    const detailReads = [], fixture = activityLifecycle(); t.after(() => fixture.dispose());
+    const readDetail = request => {detailReads.push(request); return new Promise(() => {});};
+    const props = () => ({value: controller.getSnapshot().activity, kind: `${kind}s`, view, readDetail});
     let tree = fixture.render(props());
-    if (kind === 'artist') activityArtists(tree).props.onSelect(controller.getSnapshot().activity.data.rows[0]);
-    else if (view === 'rows') fixture.emit('onClick', fixture.host.querySelector('[data-home-activity-select="a"]'));
-    else elements(tree).find(element => element.type?.name === 'Button' && element.props.attributes?.['data-home-activity-select'] === 'a').props.onClick();
+    fixture.emit('onClick', tree.querySelector(`[data-home-${kind === 'artist' ? 'artist' : 'activity'}-select="a"]`));
     tree = fixture.render(props());
-    assert.ok(elements(tree).some(element => element.props['aria-label'] === 'Selected listening item'));
-    assert.ok(elements(tree).some(element => element.type?.name === 'ResourceDetail' && element.props.selection?.ref === 'detail:revoked'));
+    assert.ok(hasDetail(tree));
+    assert.ok(tree.querySelector('.home-detail__selection'), 'Actual ResourceDetail owner is mounted');
+    assert.equal(detailReads.at(-1)?.ref, 'detail:revoked');
     await controller.loadMoreActivity(); tree = fixture.render(props());
     assert.equal(controller.getSnapshot().activityNavigation.status, 'error'); assert.equal(controller.getSnapshot().activity.data.rows.length, 1);
-    assert.equal(elements(tree).some(element => element.props['aria-label'] === 'Selected listening item' || element.type?.name === 'ResourceDetail'), false);
+    assert.equal(hasDetail(tree) || Boolean(tree.querySelector('.home-detail__selection')), false);
     const html = render(props()), host = documentOf(html), button = host.querySelector(`[data-home-${kind === 'artist' ? 'artist' : 'activity'}-select="a"]`);
     assert.equal(button.disabled, true); assert.equal(button.getAttribute('aria-disabled'), 'true');
     assert.match(html, new RegExp(`Unavailable ${kind}`)); assert.doesNotMatch(html, /Revoked|artwork\/revoked|detail:revoked/);
-    if (kind === 'artist') activityArtists(tree).props.onSelect(controller.getSnapshot().activity.data.rows[0]);
-    else if (view === 'rows') fixture.emit('onClick', fixture.host.querySelector('[data-home-activity-select="a"]'));
-    else {
-      const control = elements(tree).find(element => element.type?.name === 'Button' && element.props.attributes?.['data-home-activity-select'] === 'a');
-      assert.equal(control.props.disabled, true); control.props.onClick();
-    }
-    tree = fixture.render(props()); assert.equal(elements(tree).some(element => element.props['aria-label'] === 'Selected listening item'), false);
+    const control = tree.querySelector(`[data-home-${kind === 'artist' ? 'artist' : 'activity'}-select="a"]`);
+    assert.equal(control.disabled, true); fixture.emit('onClick', control);
+    tree = fixture.render(props()); assert.equal(hasDetail(tree), false);
   }
 });
 
 test('retired playback callbacks recheck current resource, scope, query and native action owners', async t => {
   for (const change of ['resource', 'scope', 'friend', 'period', 'kind', 'grant', 'action', 'dispose']) {
     const plays = [], track = row('same', {source_readable: true, availability: 'local'}), value = ready([track]);
-    const fixture = activityLifecycle({canTrackIntent: () => true, trackIntent: (...args) => plays.push(args)});
-    t.after(() => fixture.dispose()); const original = fixture.render({value});
+    let duringAuthorityCheck = null;
+    const fixture = activityLifecycle({canTrackIntent: () => {const callback = duringAuthorityCheck; duringAuthorityCheck = null; callback?.(); return true;},
+      trackIntent: (...args) => plays.push(args)});
+    t.after(() => fixture.dispose()); fixture.render({value});
     const button = fixture.host.querySelector('[data-home-activity-play]');
-    if (change === 'grant') fixture.runtime.canTrackIntent = () => false;
-    else if (change === 'action') fixture.runtime.trackIntent = (...args) => plays.push(args);
-    else if (change === 'dispose') fixture.dispose();
-    else fixture.render({value, ...{
-      resource: {value: ready([track])}, scope: {scopeKey: 'other:actor'}, friend: {account_ref: 'friend:one'},
-      period: {period: 'all'}, kind: {kind: 'listens'},
-    }[change]});
-    activityTable(original).props.onClick(fixture.env.event('click', button));
+    // Actual public native authority callback may synchronously retire ownership.
+    // The original private React handler cannot be captured in the native API.
+    duringAuthorityCheck = () => {
+      if (change === 'grant') fixture.runtime.canTrackIntent = () => false;
+      else if (change === 'action') fixture.runtime.trackIntent = (...args) => plays.push(args);
+      else if (change === 'dispose') fixture.dispose();
+      else fixture.render({value, ...{
+        resource: {value: ready([track])}, scope: {scopeKey: 'other:actor'}, friend: {account_ref: 'friend:one'},
+        period: {period: 'all'}, kind: {kind: 'listens'},
+      }[change]});
+    };
+    fixture.emit('onClick', button);
     await Promise.resolve(); assert.deepEqual(plays, [], change);
   }
 });
@@ -576,7 +535,7 @@ test('playback errors expose a generic message and ignore cancellation and retir
     if (mode === 'replaced') fixture.render({value: next});
     reject?.(Object.assign(new Error('/private/media/path'), mode === 'cancelled' ? {name: 'AbortError'} : {}));
     await new Promise(resolve => setImmediate(resolve));
-    const tree = fixture.render({value: next}), html = elements(tree).filter(element => element.type?.name === 'NativeHtml').map(element => element.props.html).join('');
+    const tree = fixture.render({value: next}), html = tree.innerHTML;
     assert.doesNotMatch(html, /private\/media/);
     if (mode === 'failure' || mode === 'synchronous') assert.match(html, /This track could not be played/);
     else assert.doesNotMatch(html, /This track could not be played/);
@@ -625,7 +584,10 @@ test('Love uses the own activity context, keeps its native control during acknow
   assert.equal(button.getAttribute('data-love-tier'), 'loved'); assert.equal(fixture.env.document.activeElement, button);
   fixture.render({value, account_ref: 'friend:one'});
   assert.equal(fixture.host.querySelector('[data-track-love]'), null);
-  assert.equal(fixture.host.querySelector('[data-track-love-cell]').textContent, 'Loved');
+  const readonlyLove = fixture.host.querySelector('[data-track-love-cell] [role="img"]');
+  assert.ok(readonlyLove);
+  assert.equal(readonlyLove.getAttribute('aria-label'), 'Loved');
+  assert.equal(readonlyLove.getAttribute('data-love-tier'), 'loved');
 });
 
 

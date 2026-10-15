@@ -21,6 +21,12 @@ _ALBUM_DISC_MARKER_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(?P<number>\d{1,2})(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+_ALBUM_RELEASE_PART_FOLDER_RE = re.compile(
+    r"^(?:(?:cd|disc|disk|lp)\s*[-_.]?\s*"
+    r"(?:\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"|bonus\s+(?:disc|tracks?))(?:\s*[-_.]\s*.*)?$",
+    re.IGNORECASE,
+)
 _GENERATED_COVER_PREVIEW_STEM = "album-haven-preview"
 _APP_ARTIFACT_DIRECTORY = ".album-haven"
 _LOCAL_COVER_SELECTION_LOCKS_GUARD = Lock()
@@ -64,6 +70,15 @@ def normalize_music_file_path(config: dict[str, object], raw_path: str) -> Path 
 
 def is_disc_like_folder(path: Path) -> bool:
     return bool(_ALBUM_DISC_MARKER_RE.search(path.name or ""))
+
+
+def _is_explicit_release_part_layout(album_root: Path, paths: list[Path]) -> bool:
+    child_paths = [path for path in paths if path != album_root]
+    return bool(child_paths) and all(
+        path.parent == album_root
+        and bool(_ALBUM_RELEASE_PART_FOLDER_RE.search(path.name or ""))
+        for path in child_paths
+    )
 
 
 def resolve_album_root_from_track_paths(
@@ -110,6 +125,8 @@ def resolve_album_root_from_track_paths(
             album_root = next(iter(unique_album_roots.values()))
         else:
             if not all(_is_path_within(path, common_root) for path in resolved_album_roots):
+                return None
+            if not _is_explicit_release_part_layout(common_root, resolved_album_roots):
                 return None
             album_root = common_root
     if not _is_valid_album_root(config, album_root, configured_roots=configured_roots):

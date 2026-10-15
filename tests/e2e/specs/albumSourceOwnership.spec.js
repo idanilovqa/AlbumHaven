@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from '../support/baseFixtures.js';
 import {
@@ -196,6 +197,77 @@ test('FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details w
     await appBarActions.triggerFullRescanAndWait();
     await appBarActions.waitForScanAndCoverRefreshIdle();
     await inspectAlbum();
+  });
+});
+
+test('FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder', { tag: '@area:cover-providers' }, async ({
+  galleryActions, trackModalActions, coverLookupActions, stepLogger,
+}) => {
+  test.setTimeout(240000);
+  const fixture = ownedFixture;
+  const target = { artist: fixture.artist, album: fixture.album, year: fixture.year };
+  let selectedRoot;
+  let siblingRoot;
+  let siblingCoverBytes;
+
+  await stepLogger.step('Open one complete physical source and identify its duplicate sibling', async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(fixture.artist)}`);
+    await galleryActions.waitForGalleryReady();
+    const { album } = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(target);
+    await trackModalActions.waitForLoadedSummary();
+    const selectedRoots = new Set(album.tracks.map(track => path.dirname(path.dirname(track.path))));
+    expect(selectedRoots.size).toBe(1);
+    selectedRoot = [...selectedRoots][0];
+    const duplicateRoots = album.duplicate_sources.map(source => source.folder_path);
+    expect(new Set(duplicateRoots)).toEqual(new Set([
+      path.join(fixture.owner, 'Real Album'),
+      path.join(fixture.owner, 'Complete copy'),
+    ]));
+    siblingRoot = duplicateRoots.find(root => root !== selectedRoot);
+    expect(siblingRoot).toBeTruthy();
+    siblingCoverBytes = await fs.readFile(path.join(siblingRoot, 'cover.png'));
+  });
+
+  await stepLogger.step('Show local candidates only from the selected release folder', async () => {
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalReady();
+    const cards = coverLookupActions.coverLookup.localCoverCards;
+    await expect(cards).toHaveCount(2);
+    const candidatePaths = await Promise.all(
+      [...Array(await cards.count()).keys()].map(async index => {
+        const candidatePath = String(
+          await cards.nth(index).getAttribute('data-select-local-cover') || '',
+        ).trim();
+        expect(candidatePath).not.toBe('');
+        return candidatePath;
+      }),
+    );
+    expect(new Set(candidatePaths)).toEqual(new Set([
+      path.join(selectedRoot, 'cover.png'),
+      path.join(selectedRoot, 'manual-choice.png'),
+    ]));
+    for (const candidatePath of candidatePaths) {
+      const relative = path.relative(selectedRoot, candidatePath);
+      expect(relative).not.toBe('');
+      expect(relative).not.toBe('..');
+      expect(relative.startsWith(`..${path.sep}`)).toBe(false);
+      expect(path.isAbsolute(relative)).toBe(false);
+      expect(path.relative(siblingRoot, candidatePath).startsWith('..')).toBe(true);
+    }
+  });
+
+  await stepLogger.step('Save only to the selected release and leave the sibling source untouched', async () => {
+    const saved = await coverLookupActions.selectLocalCoverByNameAndSave('manual-choice.png');
+    expect(saved.candidate.sourcePath).toBe(path.join(selectedRoot, 'manual-choice.png'));
+    expect(saved.selectedCoverPath).toBe(path.join(selectedRoot, 'cover.jpg'));
+    expect(saved.updatedAlbum.cover_path).toBe(saved.selectedCoverPath);
+    expect(await fs.readFile(path.join(siblingRoot, 'cover.png'))).toEqual(siblingCoverBytes);
+    const siblingCanonicalExists = await fs.stat(path.join(siblingRoot, 'cover.jpg'))
+      .then(() => true, error => {
+        if (error?.code === 'ENOENT') return false;
+        throw error;
+      });
+    expect(siblingCanonicalExists).toBe(false);
   });
 });
 

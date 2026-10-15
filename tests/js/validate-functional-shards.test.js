@@ -18,7 +18,7 @@ const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 53],
-  ['cover-providers', 24],
+  ['cover-providers', 25],
   ['metadata-mutations', 14],
   ['playback-utilities', 41],
 ]);
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 132-case assignment', () => {
+test('functional shard contract pins the approved four-way 133-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 132-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 132);
+  assert.equal(total, 133);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -713,19 +713,20 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
     "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
     "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
+    "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
   ]);
   const isolatedInvocations = waves.flatMap((wave) => wave.invocations).filter(
     (invocation) => invocation.baselineMode === 'isolated-app-process',
   );
 
-  assert.equal(isolatedInvocations.length, 8);
+  assert.equal(isolatedInvocations.length, 9);
   assert.deepEqual(
     new Set(isolatedInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name))),
     expectedCases,
   );
   assert.deepEqual(
     isolatedInvocations.map((invocation) => invocation.cases.length),
-    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
   );
   const sharedIndexes = firstWave.invocations
     .map((invocation, index) => invocation.baselineMode === 'owned-mutation' ? index : -1)
@@ -750,6 +751,7 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
       "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
       "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
       "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
+      "FTC-COVERS-029 duplicate physical sources keep Cover Lookup and saved cover inside the selected release folder",
     ],
   );
   assert.equal(secondWave.invocations.at(-1).baselineMode, 'global-mutation');
@@ -924,7 +926,7 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
     ['gallery-search-visual', { cases: 53, waves: [1, 2] }],
-    ['cover-providers', { cases: 24, waves: [1, 2] }],
+    ['cover-providers', { cases: 25, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
     ['playback-utilities', { cases: 41, waves: [1, 2, 3, 4] }],
   ]);

@@ -657,6 +657,37 @@ def test_resolve_album_root_rejects_same_root_mixed_album_folders(config, tmp_pa
     ) is None
 
 
+def test_resolve_album_root_rejects_nested_artist_common_ancestor_even_when_layout_depth_allows_it(
+    config,
+    tmp_path: Path,
+):
+    library_root = (tmp_path / "Library").resolve()
+    artist_root = (library_root / "Folk Metal" / "Аркона").resolve()
+    first_track = (artist_root / "Возрождение" / "one.mp3").resolve()
+    second_track = (artist_root / "Кобь" / "two.mp3").resolve()
+    for track_path in (first_track, second_track):
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "artist",
+            }],
+        },
+    )
+
+    track_paths = {str(first_track), str(second_track)}
+    assert resolve_album_root_from_track_paths(config, track_paths) is None
+    assert resolve_album_context(
+        config,
+        {"tracks": [{"path": path} for path in track_paths]},
+    ) is None
+
+
 def test_resolve_album_root_keeps_multitrack_same_album_folder(config, tmp_path: Path):
     library_root = (tmp_path / "Library").resolve()
     album_root = (library_root / "Artist" / "Album").resolve()

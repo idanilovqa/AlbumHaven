@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 
 from music_app.services.auth_config import build_auth_config
 from music_app.services.current_actor import (
@@ -13,6 +13,10 @@ from music_app.services.current_actor import (
 )
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+from music_app.services.private_route_boundary import (
+    install_private_route_boundary,
+    private_action_for_route,
+)
 
 
 class Resolver:
@@ -25,13 +29,18 @@ class Resolver:
         return self.actor
 
 
-def _actor(*, bootstrap=False, state=ActorState.ACTIVE):
+def _actor(*, bootstrap=False, state=ActorState.ACTIVE, library_id=None, grants=()):
     return CurrentActor(
         state=state,
         account_id=7 if state is not ActorState.ANONYMOUS else None,
         session_id=11 if state is not ActorState.ANONYMOUS else None,
         username_display="Rendref" if state is not ActorState.ANONYMOUS else None,
         is_bootstrap_owner=bootstrap,
+        current_library_id=library_id,
+        library_relationships=(LibraryRelationship(library_id, "member", bootstrap),)
+        if library_id is not None and state is ActorState.ACTIVE
+        else (),
+        capability_grants=tuple(grants),
     )
 
 
@@ -53,7 +62,9 @@ def _app(actor, *, constraints=None, action="library.read"):
     return app, resolver
 
 
-async def _request_async(app, *, cookie=None, client="203.0.113.8"):
+async def _request_async(
+    app, *, cookie=None, client="203.0.113.8", path="/private", method="GET"
+):
     headers = [(b"host", b"music.test")]
     if cookie:
         headers.append((b"cookie", cookie.encode("ascii")))
@@ -75,10 +86,10 @@ async def _request_async(app, *, cookie=None, client="203.0.113.8"):
             "type": "http",
             "asgi": {"version": "3.0"},
             "http_version": "1.1",
-            "method": "GET",
+            "method": method,
             "scheme": "https",
-            "path": "/private",
-            "raw_path": b"/private",
+            "path": path,
+            "raw_path": path.encode("ascii"),
             "query_string": b"",
             "headers": headers,
             "client": (client, 50000),
@@ -117,7 +128,7 @@ def test_authenticated_policy_denial_returns_stable_403():
 
 
 def test_bootstrap_owner_is_allowed_and_actor_is_resolved_once():
-    app, resolver = _app(_actor(bootstrap=True))
+    app, resolver = _app(_actor(bootstrap=True, library_id=23))
 
     status, body = _request(
         app, cookie="__Host-album_haven_session=opaque-session"
@@ -207,3 +218,108 @@ def test_shell_read_aliases_resolve_the_current_library_scope(action):
     status, _body = _request(app)
 
     assert status == 200
+
+
+def _boundary_probe_app(actor):
+    """Exercise the real middleware; probe handlers are not production routes."""
+    app, resolver = _app(actor)
+    entered = []
+    contexts = []
+    app.state.policy_constraint_resolver = lambda context: (
+        contexts.append(context) or PolicyEvaluationConstraints()
+    )
+
+    async def probe(request: Request):
+        entered.append((request.method, request.url.path))
+        return Response(status_code=204)
+
+    for method, path in (
+        ("GET", "/track"), ("GET", "/bootstrap-data"),
+        ("GET", "/"), ("GET", "/status"),
+        ("GET", "/account"), ("POST", "/logout"),
+    ):
+        app.add_api_route(path, probe, methods=[method])
+    install_private_route_boundary(app)
+    return app, resolver, entered, contexts
+
+
+@pytest.mark.parametrize(("path", "action"), [
+    ("/track", "library.media.read"),
+    ("/bootstrap-data", "app.bootstrap.read"),
+    ("/", "app.shell.read"),
+    ("/status", "app.status.read"),
+])
+@pytest.mark.parametrize("authority", [
+    "ordinary", "bootstrap", "global_action", "global_capabilities",
+])
+def test_real_private_boundary_rejects_no_library_before_handler(path, action, authority):
+    grants = (
+        (CapabilityGrant(action, "global", None),)
+        if authority == "global_action"
+        else (CapabilityGrant("capability.view", "global", None),
+              CapabilityGrant("capability.play", "global", None))
+        if authority == "global_capabilities"
+        else ()
+    )
+    actor = _actor(bootstrap=authority == "bootstrap", grants=grants)
+    app, resolver, entered, contexts = _boundary_probe_app(actor)
+    assert private_action_for_route("GET", path) == action
+
+    status, body = _request(
+        app, path=path, cookie="__Host-album_haven_session=opaque-session",
+    )
+
+    assert status == 403
+    assert body == b'{"detail":"Action not permitted."}'
+    assert entered == []
+    assert resolver.calls == ["opaque-session"]
+    assert len(contexts) == 1
+    assert contexts[0].action == action
+    assert contexts[0].library_id is None
+    assert contexts[0].actor.current_library_id is None
+    assert contexts[0].actor.library_relationships == ()
+    assert app.state.policy_evaluator.evaluate(contexts[0]).decision.reason_code == "library_required"
+
+
+@pytest.mark.parametrize(("method", "path", "action"), [
+    ("GET", "/account", "account.self.read"),
+    ("POST", "/logout", "auth.session.logout"),
+])
+@pytest.mark.parametrize("bootstrap", [False, True])
+def test_real_private_boundary_admits_no_library_account_and_logout_probe(method, path, action, bootstrap):
+    # This checks policy/middleware admission only. The actual account page,
+    # logout form CSRF/session revocation, and Goals routes need separate tests.
+    app, resolver, entered, contexts = _boundary_probe_app(_actor(bootstrap=bootstrap))
+    assert private_action_for_route(method, path) == action
+
+    status, _body = _request(
+        app, path=path, method=method,
+        cookie="__Host-album_haven_session=opaque-session",
+    )
+
+    assert status == 204
+    assert entered == [(method, path)]
+    assert resolver.calls == ["opaque-session"]
+    assert len(contexts) == 1
+    assert contexts[0].action == action
+    assert contexts[0].library_id is None
+    if action.startswith("account.self."):
+        assert contexts[0].target_account_id == 7
+
+
+@pytest.mark.parametrize("action", ["account.self.goals.read", "account.self.goals.write"])
+@pytest.mark.parametrize("bootstrap", [False, True])
+def test_account_goals_dependency_remains_available_without_library(action, bootstrap):
+    # The real require_action dependency is exercised, not a Goals endpoint.
+    app, resolver = _app(_actor(bootstrap=bootstrap), action=action)
+
+    status, body = _request(
+        app, cookie="__Host-album_haven_session=opaque-session",
+    )
+
+    assert status == 200
+    assert body == (
+        b'{"ok":true,"reason":"bootstrap_owner"}' if bootstrap
+        else b'{"ok":true,"reason":"account_self_service"}'
+    )
+    assert resolver.calls == ["opaque-session"]

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -183,3 +184,90 @@ def test_constraints_never_create_authority_and_audit_redacts_origin_key():
 def test_constraint_contract_rejects_non_boolean_values(kwargs):
     with pytest.raises(ValueError, match="constraints"):
         PolicyEvaluationConstraints(**kwargs)
+
+
+@pytest.mark.parametrize("action", [
+    "library.read", "library.browse.read", "library.media.read",
+    "library.artwork.read", "library.playlists.create", "library.future.read",
+    "app.shell.read", "app.bootstrap.read", "app.status.read",
+])
+@pytest.mark.parametrize("authority", ["bootstrap", "global_action", "global_capabilities"])
+def test_library_actions_require_scope_before_bootstrap_or_global_grants(action, authority):
+    grants = (
+        (CapabilityGrant(action, "global", None),)
+        if authority == "global_action"
+        else (CapabilityGrant("capability.view", "global", None),
+              CapabilityGrant("capability.play", "global", None))
+        if authority == "global_capabilities"
+        else ()
+    )
+    actor = replace(
+        _actor(bootstrap=authority == "bootstrap", grants=grants),
+        current_library_id=None,
+        library_relationships=(),
+    )
+
+    result = PolicyEvaluator().evaluate(_context(actor, action, library_id=None))
+
+    assert result.decision.allowed is False
+    assert result.decision.reason_code == "library_required"
+    assert result.audit.reason_code == "library_required"
+    assert actor.current_library_id is None
+    assert actor.library_relationships == ()
+
+
+@pytest.mark.parametrize("library_id", [False, True, 0, -1, "23", 23.0])
+def test_library_guard_rejects_non_positive_integer_even_for_direct_context(library_id):
+    # PolicyContext.build normalizes accepted strings/floats to integers. Direct
+    # dataclass replacement bypasses that normalization, so retain this guard.
+    context = replace(_context(_actor(bootstrap=True)), library_id=library_id)
+
+    result = PolicyEvaluator().evaluate(context)
+
+    assert result.decision.allowed is False
+    assert result.decision.reason_code == "library_required"
+
+
+@pytest.mark.parametrize("action", [
+    "library.read", "library.browse.read", "library.media.read",
+    "app.shell.read", "app.bootstrap.read", "app.status.read",
+])
+@pytest.mark.parametrize("authority", ["bootstrap", "global_action"])
+def test_positive_library_keeps_existing_bootstrap_and_global_authority(action, authority):
+    actor = _actor(
+        bootstrap=authority == "bootstrap",
+        grants=(CapabilityGrant(action, "global", None),)
+        if authority == "global_action" else (),
+    )
+
+    result = PolicyEvaluator().evaluate(_context(actor, action, library_id=23))
+
+    assert result.decision.allowed is True
+    assert result.decision.reason_code == (
+        "bootstrap_owner" if authority == "bootstrap" else "explicit_grant"
+    )
+
+
+@pytest.mark.parametrize("action", [
+    "account.self.read", "account.self.goals.read", "account.self.goals.write",
+    "auth.session.logout", "system.admin",
+])
+@pytest.mark.parametrize("bootstrap", [False, True])
+def test_no_library_does_not_change_account_logout_or_server_admin_authority(action, bootstrap):
+    actor = replace(
+        _actor(bootstrap=bootstrap), current_library_id=None, library_relationships=(),
+    )
+    context = replace(
+        _context(actor, action, library_id=None), target_account_id=actor.account_id,
+    )
+
+    result = PolicyEvaluator().evaluate(context)
+
+    expected = (
+        "bootstrap_owner" if bootstrap
+        else "bootstrap_only" if action == "system.admin"
+        else "session_self_service" if action == "auth.session.logout"
+        else "account_self_service"
+    )
+    assert result.decision.allowed is (bootstrap or action != "system.admin")
+    assert result.decision.reason_code == expected

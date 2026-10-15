@@ -1222,6 +1222,7 @@ def test_automatic_cover_write_guard_blocks_before_write_or_commits_with_origin(
     monkeypatch.setattr(cover_refresh_provider, "image_area", lambda *_args: 160_000)
     monkeypatch.setattr(cover_refresh_provider, "image_sharpness", lambda *_args: 1.0)
     monkeypatch.setattr(cover_refresh_provider, "measure_image_sharpness", lambda *_args: 2.0)
+    monkeypatch.setattr(cover_refresh_provider, "images_are_visually_similar", lambda *_args: True)
 
     def fake_search(**_kwargs):
         return candidate, []

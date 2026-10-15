@@ -972,8 +972,7 @@ def ensure_best_cover_for_folder(
         cover_selection_origin or "automatic"
     ).strip().casefold()
     selected_user_cover = reject_if_user_controlled and normalized_cover_selection_origin == "user"
-    user_controls_cover = selected_user_cover and cover_selection_provenance == "explicit"
-    legacy_user_cover = selected_user_cover and not user_controls_cover
+    user_controls_cover = selected_user_cover
     minimum_edge = _MIN_AUTHORITATIVE_COVER_EDGE if user_controls_cover else automatic_cover_repair_minimum_edge()
     fetch_started_at = time.perf_counter()
     local_cover = (
@@ -1267,8 +1266,16 @@ def ensure_best_cover_for_folder(
 
         preserve_user_ownership = False
         expected_cover_revision = ""
+        if local_cover is not None and not images_are_visually_similar(local_cover, raw_bytes):
+            publish_automatic_improvement()
+            detail["reason"] = "user_controlled_improvement_available"
+            detail["elapsed_ms"] = round(
+                (time.perf_counter() - fetch_started_at) * 1000,
+                2,
+            )
+            return local_cover, False, detail
         if user_controls_cover:
-            if local_cover is None or not images_are_visually_similar(local_cover, raw_bytes):
+            if local_cover is None:
                 publish_automatic_improvement()
                 detail["reason"] = "user_controlled_improvement_available"
                 detail["elapsed_ms"] = round(
@@ -1316,8 +1323,6 @@ def ensure_best_cover_for_folder(
         write_action.provisional_cover_revision = hashlib.sha256(prepared_write_bytes).hexdigest()  # type: ignore[attr-defined]
         write_action.preserve_user_ownership = preserve_user_ownership  # type: ignore[attr-defined]
         write_action.expected_cover_revision = expected_cover_revision  # type: ignore[attr-defined]
-        write_action.replace_legacy_user_selection = legacy_user_cover  # type: ignore[attr-defined]
-        write_action.legacy_selected_cover_revision = selected_cover_revision  # type: ignore[attr-defined]
         write_action.prepared_cover_bytes = prepared_write_bytes  # type: ignore[attr-defined]
         write_action.local_cover_width = width  # type: ignore[attr-defined]
         write_action.local_cover_height = height  # type: ignore[attr-defined]
@@ -1338,8 +1343,6 @@ def ensure_best_cover_for_folder(
         else:
             written = write_action()
         if written:
-            if legacy_user_cover:
-                detail["legacy_user_selection_replaced"] = True
             cache.set(cache_key, {
                 "updated_at": now,
                 "missing": False,

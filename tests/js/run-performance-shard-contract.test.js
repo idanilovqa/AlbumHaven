@@ -156,6 +156,61 @@ test('performance profile runner prepares its fixture exactly once before the ta
   assert.ok(prepareIndex > provisionIndex && prepareIndex < targetLoopIndex, 'prepare after provisioning and before targets');
 });
 
+test('performance shard prepares and owns the preloaded artwork derivative before fixture loading', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  for (const parameter of [
+    'GeneratorCheckout',
+    'ExpectedFixtureRelease',
+    'BaseManifestSha256',
+    'GeneratorCommit',
+    'VariantCount',
+    'SourceMaxEdge',
+  ]) {
+    assert.match(source, new RegExp(`\\$${parameter}\\b`), `missing derived-fixture parameter ${parameter}`);
+  }
+  assert.match(
+    source,
+    /ValidateSet\([^)]*['"]preloaded-release['"][^)]*['"]generated-isolated['"][^)]*['"]preloaded-derived['"][^)]*\)/i,
+  );
+  assert.match(source, /prepare-artwork-diversity-fixture\.ps1/i);
+  assert.match(
+    source,
+    /\$derivedRoot\s*=\s*Join-Path\s+\$profileSessionRoot\s+['"]artwork-diversity-derived['"]/i,
+  );
+  assert.match(
+    source,
+    /\$artworkDiversityProvenancePath\s*=\s*Join-Path\s+\$stateRoot\s+['"]artwork-diversity-provenance\.json['"]/i,
+  );
+  assert.equal(
+    (source.match(/&\s*\$prepareArtworkDiversityFixture\b/gi) || []).length,
+    1,
+    'the shard must invoke the generator helper exactly once',
+  );
+
+  const helperIndex = source.search(/&\s*\$prepareArtworkDiversityFixture\b/i);
+  const loaderIndex = source.search(/&\s*\$PythonPath\s+\$loader\b/i);
+  const targetLoopIndex = source.search(/foreach\s*\(\$target\s+in\s+\$targetNames\)\s*\{\s*\$targetIndex\s*\+=\s*1/i);
+  assert.ok(helperIndex >= 0 && helperIndex < loaderIndex, 'generate before loading the fixture into Postgres');
+  assert.ok(loaderIndex < targetLoopIndex, 'load the derivative before application targets start');
+  assert.match(
+    source,
+    /Set-Item\s+-LiteralPath\s+['"]Env:ALBUM_HAVEN_FIXTURE_ROOT['"]\s+-Value\s+\$derivedRoot/i,
+  );
+  assert.match(
+    source,
+    /Set-Item\s+-LiteralPath\s+['"]Env:ALBUM_HAVEN_MEDIA_ROOT['"]\s+-Value\s+\(Join-Path\s+\$derivedRoot\s+['"]media['"]\)/i,
+  );
+  assert.match(
+    source,
+    /if\s*\(\$FixtureMode\s+-in\s+@\([^)]*preloaded-release[^)]*preloaded-derived[^)]*\)\)/i,
+  );
+  assert.match(
+    source,
+    /Process cleanup is unproven;[^"]*\$derivedRoot[^"]*\$artworkDiversityProvenancePath/i,
+    'cleanup failure must report and retain exact derivative evidence paths',
+  );
+});
+
 test('performance profile runner explicitly marks every sequential target as fixture-prepared', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   assert.match(

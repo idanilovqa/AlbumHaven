@@ -1,9 +1,15 @@
 param(
     [Parameter(Mandatory = $true)][string]$Targets,
     [Parameter(Mandatory = $true)][string]$FixtureProfile,
-    [Parameter(Mandatory = $true)][ValidateSet('preloaded-release', 'generated-isolated')][string]$FixtureMode,
+    [Parameter(Mandatory = $true)][ValidateSet('preloaded-release', 'generated-isolated', 'preloaded-derived')][string]$FixtureMode,
     [Parameter(Mandatory = $true)][ValidateRange(1025, 65000)][int]$BasePort,
     [Parameter(Mandatory = $true)][ValidatePattern('^[a-z0-9]+(?:_[a-z0-9]+)*$')][string]$DatabaseSuffixBase,
+    [string]$GeneratorCheckout = '',
+    [string]$ExpectedFixtureRelease = '',
+    [string]$BaseManifestSha256 = '',
+    [string]$GeneratorCommit = '',
+    [int]$VariantCount = 0,
+    [int]$SourceMaxEdge = 0,
     [ValidatePattern('^\d+$')][string]$ExpectedPostgresMajor = '17',
     [ValidateRange(1, 65535)][int]$PostgresPort = 5432,
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
@@ -29,10 +35,38 @@ if ([string]::IsNullOrWhiteSpace($RunnerTemp)) { throw 'RUNNER_TEMP is required.
 if ([string]::IsNullOrWhiteSpace($GithubEnv)) { throw 'GITHUB_ENV is required.' }
 if ([string]::IsNullOrWhiteSpace($Pgbin)) { throw 'PGBIN is required.' }
 if ([string]::IsNullOrWhiteSpace($PythonPath)) { throw 'PLAYWRIGHT_PYTHON is required.' }
+if ($FixtureMode -eq 'preloaded-derived') {
+    if ($targetNames.Count -ne 1 -or $targetNames[0] -ne 'gallery-artwork-diversity') {
+        throw 'The preloaded-derived fixture mode is reserved for gallery-artwork-diversity.'
+    }
+    if ($FixtureProfile -ne 'synthetic-large-library') {
+        throw 'The artwork-diversity derivative requires the synthetic-large-library profile.'
+    }
+    if ([string]::IsNullOrWhiteSpace($GeneratorCheckout) -or
+        -not [IO.Path]::IsPathRooted($GeneratorCheckout)) {
+        throw 'GeneratorCheckout must be an explicit absolute path for preloaded-derived mode.'
+    }
+    if ([string]::IsNullOrWhiteSpace($ExpectedFixtureRelease)) {
+        throw 'ExpectedFixtureRelease is required for preloaded-derived mode.'
+    }
+    if ($BaseManifestSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'BaseManifestSha256 must be a full SHA-256 for preloaded-derived mode.'
+    }
+    if ($GeneratorCommit -notmatch '^[0-9a-f]{40}$') {
+        throw 'GeneratorCommit must be a full lowercase Git commit for preloaded-derived mode.'
+    }
+    if ($VariantCount -lt 1 -or $SourceMaxEdge -lt 1) {
+        throw 'VariantCount and SourceMaxEdge must be positive for preloaded-derived mode.'
+    }
+    if ([string]::IsNullOrWhiteSpace($env:ALBUM_HAVEN_FIXTURE_ROOT)) {
+        throw 'ALBUM_HAVEN_FIXTURE_ROOT must identify the verified base fixture for preloaded-derived mode.'
+    }
+}
 
 $bootstrap = Join-Path $RepositoryRoot 'scripts\ci\bootstrap-windows-postgres.ps1'
 $performanceRunner = Join-Path $RepositoryRoot 'scripts\run-performance-playwright.cjs'
 $foundationWriter = Join-Path $RepositoryRoot 'scripts\ci\write-foundation-version-manifest.cjs'
+$prepareArtworkDiversityFixture = Join-Path $RepositoryRoot 'scripts\ci\prepare-artwork-diversity-fixture.ps1'
 $nodePath = (Get-Command node -ErrorAction Stop).Source
 $stateRoot = Join-Path $RunnerTemp "album-haven-performance-shard-$ShardName"
 $profileSessionRoot = Join-Path $stateRoot 'prepared-profile'
@@ -41,6 +75,7 @@ $resultRoot = Join-Path $RepositoryRoot 'test-results\playwright-performance-tar
 $failedTargets = [System.Collections.Generic.List[string]]::new()
 $targetIndex = 0
 $postgresServiceName = "postgresql-x64-$ExpectedPostgresMajor"
+$verifiedBaseFixtureRoot = $env:ALBUM_HAVEN_FIXTURE_ROOT
 New-Item -ItemType Directory -Path $stateRoot, $foundationRoot, $resultRoot -Force | Out-Null
 
 function Write-CiJob([string]$Target, [string]$Conclusion) {
@@ -130,7 +165,26 @@ function Prepare-PerformanceFixture {
     $env:ALBUM_HAVEN_E2E_PRESERVE_ON_SHUTDOWN = '1'
     $env:ALBUM_HAVEN_E2E_REUSE_STATE = $null
 
-    if ($FixtureMode -eq 'preloaded-release') {
+    if ($FixtureMode -eq 'preloaded-derived') {
+        & $prepareArtworkDiversityFixture `
+            -BaseFixtureRoot $verifiedBaseFixtureRoot `
+            -GeneratorCheckout $GeneratorCheckout `
+            -Destination $derivedRoot `
+            -ProvenancePath $artworkDiversityProvenancePath `
+            -ExpectedRelease $ExpectedFixtureRelease `
+            -BaseManifestSha256 $BaseManifestSha256 `
+            -GeneratorCommit $GeneratorCommit `
+            -VariantCount $VariantCount `
+            -SourceMaxEdge $SourceMaxEdge `
+            -PythonPath $PythonPath
+        Set-Item -LiteralPath 'Env:ALBUM_HAVEN_FIXTURE_ROOT' -Value $derivedRoot
+        Set-Item -LiteralPath 'Env:ALBUM_HAVEN_MEDIA_ROOT' -Value (Join-Path $derivedRoot 'media')
+        Set-Item `
+            -LiteralPath 'Env:ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE' `
+            -Value $artworkDiversityProvenancePath
+    }
+
+    if ($FixtureMode -in @('preloaded-release', 'preloaded-derived')) {
         $loader = Join-Path $RepositoryRoot 'scripts\ci\load-fixture-profile.py'
         & $PythonPath $loader `
             --fixture-root $env:ALBUM_HAVEN_FIXTURE_ROOT `
@@ -159,11 +213,14 @@ function Prepare-PerformanceFixture {
 Set-Location $RepositoryRoot
 if ($DatabaseSuffixBase.Length -gt 39) { throw 'Database suffix is too long for the performance shard.' }
 $statePath = Join-Path $stateRoot "$ShardName.state.json"
+$derivedRoot = Join-Path $profileSessionRoot 'artwork-diversity-derived'
+$artworkDiversityProvenancePath = Join-Path $stateRoot 'artwork-diversity-provenance.json'
 $setupFailure = $null
 $teardownFailure = $null
 # Matches PROCESS_CLEANUP_FAILURE_EXIT_CODE in ../playwright-exit-codes.cjs.
 $processCleanupFailureExitCode = 2
 $processCleanupFailed = $false
+$targetPortCleanupFailed = $false
 foreach ($target in $targetNames) { Write-CiJob $target 'initialized' }
 
 try {
@@ -187,6 +244,7 @@ try {
     $env:PGPASSWORD = $null
     $env:PLAYWRIGHT_PYTHON = $PythonPath
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
+    $env:ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = $null
     Set-ClearedRuntimeSelectors
     if ($FixtureMode -eq 'generated-isolated') {
         Set-Item -LiteralPath 'Env:ALBUM_HAVEN_FIXTURE_ROOT' -Value ' '
@@ -232,6 +290,7 @@ try {
                     Wait-TargetPortsClear $targetPort
                 } catch {
                     $targetPortFailure = "target port audit: $($_.Exception.Message)"
+                    $targetPortCleanupFailed = $true
                     if (-not $failedTargets.Contains($target)) { [void]$failedTargets.Add($target) }
                 }
             }
@@ -250,14 +309,14 @@ try {
         }
     }
 } finally {
-    if (-not $processCleanupFailed -and (Test-Path -LiteralPath $profileSessionRoot)) {
+    if (-not $processCleanupFailed -and -not $targetPortCleanupFailed -and (Test-Path -LiteralPath $profileSessionRoot)) {
         try {
             Remove-Item -LiteralPath $profileSessionRoot -Recurse -Force
         } catch {
             $teardownFailure = "profile fixture teardown: $($_.Exception.Message)"
         }
     }
-    if (-not $processCleanupFailed -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+    if (-not $processCleanupFailed -and -not $targetPortCleanupFailed -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
         try {
             & $bootstrap `
                 -Mode Teardown `
@@ -283,8 +342,12 @@ try {
     }
 }
 
-if ($processCleanupFailed) {
-    Write-Host "Process cleanup is unproven; database, prepared fixture, and diagnostics retained at $stateRoot." -ForegroundColor Red
+if ($processCleanupFailed -or $targetPortCleanupFailed) {
+    if ($FixtureMode -eq 'preloaded-derived') {
+        Write-Host "Process cleanup is unproven; database and diagnostics retained at $stateRoot; derivative retained at $derivedRoot; provenance retained at $artworkDiversityProvenancePath." -ForegroundColor Red
+    } else {
+        Write-Host "Process cleanup is unproven; database, prepared fixture, and diagnostics retained at $stateRoot." -ForegroundColor Red
+    }
     exit $processCleanupFailureExitCode
 }
 if ($teardownFailure) { throw "Performance shard teardown failed: $teardownFailure" }

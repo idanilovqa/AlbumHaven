@@ -3,41 +3,55 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const Module = require('node:module');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
+const {pathToFileURL} = require('node:url');
+const {actionFixture} = require('./playlist-native-actions-fixture.cjs');
 const {installNativeSearch} = require('./native-search-harness.cjs');
 const repo = path.resolve(__dirname, '../../..');
-const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/playlists/app.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']});
-const loaded = new Module(path.join(repo, 'playlists-component-fixture.cjs'), module);
-loaded.filename = path.join(repo, 'playlists-component-fixture.cjs'); loaded.paths = module.paths;
-loaded._compile(built.outputFiles[0].text, loaded.filename);
-const {PlaylistHeader, PlaylistFilters, PlaylistDirectory, SharingFields, MutationStatus, playlistTableHtml, resolvePlaylistSelection, playlistIntegrationCurrent, playlistReorderSnapshot,
-  paintPlaylistCurrent, restorePlaylistSelectionFocus, confirmPlaylistDiscard, playlistSharingRenderCurrent} = loaded.exports;
-const native = createNativeHomeRuntime();
-for (const filename of ['compact-data-table.js', 'gallery-main-components.js', 'album-track-table.js', 'trigger-anchor.js', 'library-settings.js']) {
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime', filename), 'utf8'), native.context);
-}
-const template = native.document.createElement('script'); template.setAttribute('id', 'navigation-tree-item-template');
-template.textContent = fs.readFileSync(path.join(repo, 'music_app/templates/components/navigation-tree-item.html'), 'utf8'); native.document.body.appendChild(template);
+const native = actionFixture(), runtime = native.runtime, mounted = [];
+const template = native.document.createElement('script'); template.id = 'navigation-tree-item-template';
+template.textContent = fs.readFileSync(path.join(repo, 'music_app/templates/components/navigation-tree-item.html'), 'utf8'); native.document.body.append(template);
 vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/navigation-tree.js'), 'utf8'), native.context);
-const search = installNativeSearch(native);
-const runtime = {searchHtml: search.render, buttonHtml: value => native.context.ButtonComponent.renderButton(value), actionHtml: value => native.context.ButtonComponent.renderActionButton(value),
-  openChoice: native.context.openUtilityChoiceDropdown,
-  alertHtml: value => native.context.buildOnPageAlertHtml(value), galleryBarHtml: value => native.context.buildGalleryBarHtml(value),
-  tableHtml: value => native.context.buildCompactDataTable(value), navigationItemHtml: value => native.context.window.NavigationTree.renderItem(value),
-  artboxHtml: value => native.context.buildAlbumArtboxHtml(value),
-  albumTrackRow: (row, index) => native.context.buildAlbumTrackTableRow({...row, duration: row.duration_display}, index, {readOnly: true}),
-  escapeHtml: native.context.escapeHtml};
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, {runtime, ...props}));
+runtime.navigationItemHtml = native.context.NavigationTree.renderItem;
+const search = installNativeSearch(native); runtime.searchHtml = search.render;
+let PlaylistHeader, PlaylistFilters, PlaylistDirectory, SharingFields, MutationStatus, playlistTableHtml,
+  resolvePlaylistSelection, playlistIntegrationCurrent, playlistReorderSnapshot, paintPlaylistCurrent,
+  restorePlaylistSelectionFocus, confirmPlaylistDiscard, playlistSharingRenderCurrent;
+const load = name => import(pathToFileURL(path.join(repo, 'music_app/static/js/playlists', name)).href);
+test.before(async () => {
+  const app = await load('native-app.mjs');
+  ({playlistTableHtml, resolvePlaylistSelection, playlistIntegrationCurrent, playlistReorderSnapshot,
+    paintPlaylistCurrent, restorePlaylistSelectionFocus, confirmPlaylistDiscard, playlistSharingRenderCurrent} = app);
+  PlaylistFilters = app.mountPlaylistFilters; PlaylistDirectory = app.mountPlaylistDirectory;
+  PlaylistHeader = (await load('native-headers.mjs')).mountPlaylistHeader;
+  SharingFields = (await load('native-sharing.mjs')).mountSharingFields;
+  MutationStatus = (await load('native-mutation-status.mjs')).mountMutationStatus;
+});
+function mount(Component, props) {
+  const host = native.document.createElement('section'); native.document.body.append(host);
+  const record = {host, owner: null}; mounted.push(record);
+  record.owner = Component(host, runtime, props); return host;
+}
+// Serialization observes actual native owner output; no component emulator or JSX evaluation.
+const render = (Component, props) => mount(Component, props).innerHTML;
+test.afterEach(() => {
+  const failures = [];
+  for (const {host, owner} of mounted.splice(0).reverse()) {
+    try {owner?.dispose();}
+    catch (error) {failures.push(error);}
+    finally {
+      try {assert.equal(host.childNodes.length, 0);}
+      catch (error) {failures.push(error);}
+      finally {try {host.remove();} catch (error) {failures.push(error);}}
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Native component cleanup failed after all records were retired.');
+});
+test.after(() => {search.template.remove(); template.remove(); native.host.remove(); native.modal.remove();});
 
 test('header exposes named native icon actions in approved order and preserves disabled reasons', () => {
   const html = render(PlaylistHeader, {detail: {title: '<safe>'}, draft: {title: 'Draft'}, busy: false,
     actions: {add: true, missing: false, top: false, export: true, save: true}, filtersOpen: true});
-  assert.match(html, /gallery-bar__context/); assert.match(html, /action-button/);
+  assert.match(html, /data-shared-header="playlists"/); assert.match(html, /action-button/);
   const positions = ['add', 'missing', 'top', 'export', 'share', 'filters', 'save', 'discard'].map(action => html.indexOf(`data-playlists-action="${action}"`));
   assert.equal(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])), true);
   assert.match(html, /aria-expanded="true"/); assert.match(html, /Discard unsaved changes/);
@@ -45,8 +59,8 @@ test('header exposes named native icon actions in approved order and preserves d
   assert.equal(host.querySelector('[data-playlists-action="top"]').disabled, true);
   assert.equal(host.querySelector('[data-playlists-action="add"]').disabled, false);
   const labels = ['Add tracks', 'Inspect missing tracks', 'Create Album Top', 'Export TXT', 'Share', 'Playlist settings', 'Filters', 'Save', 'Discard unsaved changes'];
-  assert.deepEqual([...host.querySelectorAll('[data-playlists-action]')].map(button => button.getAttribute('aria-label')), labels);
-  assert.ok([...host.querySelectorAll('[data-playlists-action]')].every(button => button.classList.contains('action-button--bare') && button.querySelector('svg')));
+  assert.deepEqual([...host.querySelectorAll('[data-playlists-action]')].filter(button => !button.closest('[hidden]')).map(button => button.getAttribute('aria-label')), labels);
+  assert.ok([...host.querySelectorAll('[data-playlists-action]')].filter(button => !button.closest('[hidden]')).every(button => button.classList.contains('action-button--bare') && button.querySelector('svg')));
   assert.equal(host.querySelector('[data-playlists-action="export"]').disabled, false);
   assert.match(host.querySelector('[data-playlists-action="missing"]').getAttribute('title'), /not available for this source/);
 });
@@ -113,10 +127,19 @@ test('sharing uses native choices and explicit editors, with public links unavai
   assert.equal(host.querySelector('select'), null);
   assert.equal(host.querySelector('button[aria-label="Playlist visibility: Private"]').getAttribute('aria-haspopup'), 'menu');
   assert.equal([...host.querySelectorAll('button')].find(button => button.textContent === 'Remove editor').disabled, true);
-  const fields = SharingFields({runtime, value: {visibility: 'private', can_manage: true, people: []}});
-  const visibility = React.Children.toArray(fields.props.children).find(node => node.type?.name === 'SharingVisibility');
-  const choice = React.Children.toArray(visibility.type(visibility.props).props.children).find(node => node.type?.name === 'NativeChoice');
-  assert.deepEqual(choice.props.options, [['private', 'Private'], ['server_shared', 'Shared with this server'], ['link', 'Public link unavailable', true]]);
+  const changes = [];
+  const fields = mount(SharingFields, {value: {visibility: 'private', can_manage: true, people: []}, onChange: value => changes.push(value.visibility)});
+  native.click(fields.querySelector('button[aria-label="Playlist visibility: Private"]'));
+  const menu = native.document.querySelector('[role="menu"][aria-label="Playlist visibility"]');
+  assert.ok(menu, 'the actual native visibility menu opens');
+  const options = [...menu.querySelectorAll('[data-foobar-format]')].map(button => {
+    const option = [button.getAttribute('data-foobar-format'), button.textContent.trim()];
+    if (button.disabled) option.push(true); return option;
+  });
+  assert.deepEqual(options, [['private', 'Private'], ['server_shared', 'Shared with this server'], ['link', 'Public link unavailable', true]]);
+  native.click(menu.querySelector('[data-foobar-format="private"]'));
+  assert.equal(menu.isConnected, false, 'the real menu closes on current selection');
+  assert.deepEqual(changes, ['private']);
 });
 test('missing/error write states never report a saved draft', () => {
   assert.match(render(MutationStatus, {value: {status: 'unavailable'}}), /not available on this server/);
@@ -124,9 +147,9 @@ test('missing/error write states never report a saved draft', () => {
   assert.match(render(MutationStatus, {value: {status: 'ready'}}), /server confirmed/);
 });
 test('production source has one explicit mount boundary and no mock transport or persistence', () => {
-  const source = ['model.mjs', 'app.jsx', 'track-table.jsx', 'index.jsx'].map(file => fs.readFileSync(path.join(repo, 'music_app/static/js/playlists', file), 'utf8')).join('\n');
+  const source = ['model.mjs', 'native-app.mjs', 'native-track-table.mjs', 'native.mjs'].map(file => fs.readFileSync(path.join(repo, 'music_app/static/js/playlists', file), 'utf8')).join('\n');
   assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB|MockRealLayout|fixture-data|fetch\(/);
-  const entry = fs.readFileSync(path.join(repo, 'music_app/static/js/playlists/index.jsx'), 'utf8');
+  const entry = fs.readFileSync(path.join(repo, 'music_app/static/js/playlists/native.mjs'), 'utf8');
   assert.match(entry, /export function mountPlaylists/); assert.doesNotMatch(entry, /window\.|addEventListener/);
   assert.match(source, /playlistText\(exportRows/); assert.doesNotMatch(source, /playlistText\(rows, \{missingOnly\}\)/);
 });

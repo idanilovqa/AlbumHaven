@@ -214,7 +214,9 @@ export function mountPlaylistFilters(host,runtime,initial) {
     const controls=acquire(mountPlaylistFilterControls(host,runtime,initial)),
     search=acquire(mountCreationSearch(node(controls.children),runtime, {
       id:'playlists-filter-search',
-      value:initial.filters.query
+      value:initial.filters.query,
+      label:'Find tracks',
+      placeholder:'Track, artist or album'
     })),
     availability=acquire(mountChoice(node(controls.children),runtime, {
       label:'Availability',

@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.client_surfaces import client_surface_from_request
 from music_app.services.listening_goals_commands import GoalsError, normalize_goal_command
+from music_app.services.listening_goal_bonus_settings import normalize_bonus_settings
 from music_app.services.listening_goals_postgres import PostgresListeningGoalsService, READ, WRITE
 from music_app.services.policy import PolicyContext
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
@@ -182,6 +183,28 @@ async def _execute(request, action):
 @router.post('/account/goals/add')
 async def add_goal(request: Request):
     return await _execute(request, 'add')
+
+
+@router.get('/account/goals/bonus-settings')
+async def read_goal_bonus_settings(request: Request):
+    try:
+        _query(request)
+        context, constraints = _context(request, READ)
+        value = await run_in_threadpool(_service(request).read_bonus_settings, context, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
+
+
+@router.post('/account/goals/bonus-settings')
+async def save_goal_bonus_settings(request: Request):
+    try:
+        command = normalize_bonus_settings(await _body(request))
+        context, constraints = _context(request, WRITE)
+        value = await run_in_threadpool(_service(request).save_bonus_settings, context, command, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
 
 
 @router.post('/account/goals/reset')

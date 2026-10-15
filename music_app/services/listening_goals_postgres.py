@@ -11,6 +11,9 @@ import json
 from uuid import uuid4
 
 from music_app.services import listening_goals as domain
+from music_app.services.listening_goal_bonus_settings import (
+    BonusSettingsCommand, normalize_bonus_settings, project_bonus_settings,
+)
 from music_app.services.admin_authority import lock_admin_accounts
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.current_actor import ActorState
@@ -107,6 +110,62 @@ class PostgresListeningGoalsService:
             if getattr(error, 'sqlstate', None) in {'23505', '23503', '40001', '40P01'}:
                 raise GoalsError('concurrent_change', 409) from None
             raise
+
+    def read_bonus_settings(self, context, *, constraints=None):
+        with self._authorized(context, READ, constraints) as (connection, live, _):
+            row = connection.execute('select * from app.listening_goal_bonus_settings where account_id=%s',
+                                     (live.actor.account_id,)).fetchone()
+            return project_bonus_settings(row)
+
+    def save_bonus_settings(self, context, command, *, constraints=None):
+        if not isinstance(command, BonusSettingsCommand):
+            raise GoalsError('invalid_command')
+        command = normalize_bonus_settings(command.payload())
+        with self._authorized(context, WRITE, constraints) as (connection, live, now):
+            account = live.actor.account_id
+            prior = connection.execute('''select original_session_id,command_digest,receipt
+                from app.listening_goal_operations where account_id=%s and request_key=%s''',
+                (account, command.request_key)).fetchone()
+            if prior is not None:
+                if prior['original_session_id'] != live.actor.session_id:
+                    raise GoalsError('operation_unavailable', 404)
+                if prior['command_digest'] != command.digest:
+                    raise GoalsError('idempotency_key_reused', 409)
+                return dict(prior['receipt'])
+            row = connection.execute('select * from app.listening_goal_bonus_settings where account_id=%s',
+                                     (account,)).fetchone()
+            before = project_bonus_settings(row)
+            if before['settings_revision'] != command.settings_revision:
+                raise GoalsError('settings_revision_conflict', 409)
+            values = command.values()
+            changed = any(before[key] != value for key, value in values.items())
+            if changed:
+                current = int(before['settings_revision'])
+                if current == BIGINT_MAX:
+                    raise GoalsError('revision_exhausted', 409)
+                params = (current + 1, command.enabled, command.source_mode,
+                          list(command.selected_top_refs), list(command.preferred_top_refs),
+                          command.album_mode, command.unfinished_policy, now)
+                if row is None:
+                    connection.execute('''insert into app.listening_goal_bonus_settings
+                        (account_id,revision,enabled,source_mode,selected_top_refs,preferred_top_refs,
+                         album_mode,unfinished_policy,updated_at,created_at)
+                        values(%s,%s,%s,%s,%s::uuid[],%s::uuid[],%s,%s,%s,%s)''',
+                        (account, *params, now))
+                else:
+                    connection.execute('''update app.listening_goal_bonus_settings set
+                        revision=%s,enabled=%s,source_mode=%s,selected_top_refs=%s::uuid[],
+                        preferred_top_refs=%s::uuid[],album_mode=%s,unfinished_policy=%s,updated_at=%s
+                        where account_id=%s''', (*params, account))
+            after = connection.execute('select * from app.listening_goal_bonus_settings where account_id=%s',
+                                       (account,)).fetchone()
+            receipt = {'ok': True, 'action': 'bonus_settings', 'request_key': command.request_key,
+                       'changed': changed, 'settings': project_bonus_settings(after)}
+            connection.execute('''insert into app.listening_goal_operations
+                (account_id,request_key,original_session_id,action,command_digest,receipt,committed_at)
+                values(%s,%s,%s,'bonus_settings',%s,%s::jsonb,%s)''',
+                (account, command.request_key, live.actor.session_id, command.digest, json.dumps(receipt), now))
+            return receipt
 
     def search_candidates(self, context, title, artist, *, constraints=None, should_cancel=None):
         try:

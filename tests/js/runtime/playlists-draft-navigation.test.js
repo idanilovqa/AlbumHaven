@@ -194,50 +194,46 @@ test('opening and restoring a draft invalidate older native view responses', () 
   assert.equal(aborted, 2); assert.equal(h.calls.fetch.length, 0);
 });
 
-// This mount driver executes the real mount/controllers and controls only hook
-// commits and native/provider boundaries. It is not a browser/React DOM test.
-let mountBundle;
-function mountHarness(readPlaylists, providers, payload) {
-  const React = require('react'), {buildSync} = require('esbuild'), {randomUUID} = require('node:crypto');
-  mountBundle ||= buildSync({entryPoints: [path.join(root, 'playlists/index.jsx')], bundle: true, platform: 'node',
-    format: 'cjs', write: false, external: ['react', 'react-dom', 'react-dom/client']}).outputFiles[0].text;
-  let element, effects = [], owner = null;
-  let shell = {visible: true, scopeKey: 'mount:actor', payload, playlistId: 'source:mount', entryKey: 1,
+// Native entry owns controller, view, draft, subscriptions and teardown.
+// The runtime boundary below supplies shell navigation acknowledgements only.
+async function mountHarness(t, readPlaylists, providers, payload) {
+  const {sessionDom, settle: nativeSettle} = require('./playlist-native-session-migration-fixture.cjs');
+  const {mountPlaylists} = await import('../../../music_app/static/js/playlists/native.mjs');
+  const h = sessionDom(), subscribers = new Set(), calls = {navigate: 0, released: 0}, downloads = [];
+  let owner = null;
+  let shell = {visible: true, authenticated: true, scopeKey: 'mount:actor', payload, playlistId: 'source:mount', entryKey: 1,
     draftToken: null, retainedDraftToken: null};
-  const hooks = {...React,
-    useState: value => [typeof value === 'function' ? value() : value, () => {}],
-    useEffect: callback => {effects.push(callback);},
-    useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
-  };
-  const loaded = {exports: {}};
-  vm.runInNewContext(mountBundle, {module: loaded, exports: loaded.exports, console, AbortController, TextEncoder, URL, crypto: {randomUUID},
-    require(name) {
-      if (name === 'react') return hooks;
-      if (name === 'react-dom') return {createPortal: children => children};
-      if (name === 'react-dom/client') return {createRoot: () => ({render: value => {element = value;}, unmount() {element = null;}})};
-      assert.fail(`Unexpected mount dependency: ${name}`);
-    }});
-  const calls = {navigate: 0, released: 0};
-  const runtime = {snapshot: () => shell, subscribe: () => () => {}, readPlaylists,
-    openDraft(value) {owner = value; shell = {...shell, visible: true, playlistId: null, draftToken: value.token, retainedDraftToken: value.token}; return true;},
+  const emit = () => {for (const listener of [...subscribers]) listener();};
+  Object.assign(h.runtime, {snapshot: () => shell, subscribe: callback => {subscribers.add(callback); return () => subscribers.delete(callback);}, readPlaylists,
+    openDraft(value) {owner = value; shell = {...shell, visible: true, playlistId: null, draftToken: value.token, retainedDraftToken: value.token}; emit(); return true;},
     releaseDraft(token) {
       if (!owner || owner.token !== token) return false;
       const current = owner; owner = null; calls.released++;
-      shell = {...shell, payload: null, draftToken: null, retainedDraftToken: null}; current.onDiscard(); return true;
+      shell = {...shell, payload: null, draftToken: null, retainedDraftToken: null}; current.onDiscard(); emit(); return true;
     },
     retainDraft(token, callback) {return owner?.token === token && owner.isCurrent() ? callback() : false;},
-    navigate() {calls.navigate++; return false;},
+    navigate() {calls.navigate++; return false;}, downloadText: value => downloads.push(value),
+  });
+  let mount;
+  t.after(async () => {
+    try {mount?.dispose();}
+    finally {h.closing.resolve(false); await nativeSettle();}
+  });
+  mount = mountPlaylists({host: h.host, runtime: h.runtime, providers});
+  return {...h, mount, calls, downloads, render: nativeSettle,
+    async openMissing(title, description = '') {
+      h.click(h.host.querySelector('[data-playlists-action="missing"]')); await nativeSettle();
+      h.edit(title, description);
+      const all = h.field('Select visible tracks'); all.checked = true; h.event(all, 'change');
+      h.submit(); await h.closeEntered.promise; await h.finishClose(); await nativeSettle();
+      assert.ok(h.host.querySelector('.playlists-draft__tracks'), 'the actual native entry mounted its Missing draft');
+    },
+    draftAction: name => h.host.querySelector(`[data-playlists-draft-action="${name}"]`),
+    setShell(patch) {shell = {...shell, ...patch}; emit();},
   };
-  const mount = loaded.exports.mountPlaylists({host: {}, runtime, providers});
-  const render = () => {
-    effects = []; const tree = element.type(element.props), pending = effects; effects = [];
-    for (const effect of pending) effect();
-    return tree;
-  };
-  return {mount, runtime, calls, render, renderDraft: tree => tree.type(tree.props), setShell: patch => {shell = {...shell, ...patch};}};
 }
 
-test('Save acknowledgement still revalidates refreshed source grants, identity and revision before preserving private draft facts', async () => {
+test('Save acknowledgement still revalidates refreshed source grants, identity and revision before preserving private draft facts', async t => {
   const creation = await import('../../../music_app/static/js/playlists/creation.mjs');
   const subject = {scopeKey: 'mount:actor', mode: 'missing', canCreate: true, canCreateAlbumTop: true,
     source: {kind: 'playlist', ref: 'source:mount', revision: 'revision:one', allowed_actions: {can_read: true, can_use_for_playlist: true}}};
@@ -258,30 +254,33 @@ test('Save acknowledgement still revalidates refreshed source grants, identity a
         request_key: request.request_key, playlist_id: 'saved:missing-from-directory', revision: 'saved:one'}};},
     };
     const form = creation.createPlaylistCreationController({providers});
+    t.after(() => form.dispose());
     form.setContext(subject); await form.load(); form.edit({title: 'Typed title', description: 'Typed description'});
     const packet = form.prepareDraft(); assert.ok(packet);
-    const h = mountHarness(async () => sourcePayload(changed), providers, sourcePayload(subject.source));
-    h.render(); const originalPage = h.render();
-    assert.equal(originalPage.props.onPrepareDraft(packet), true);
-    const draftPage = h.renderDraft(h.render()), controller = draftPage.props.controller;
-    const ack = await controller.save(); assert.ok(ack); assert.equal(writes, 1);
-    assert.equal(await draftPage.props.onSaved(ack), false);
-    assert.equal(controller.exportText(), '', `${change} source facts must no longer be exportable`);
-    assert.equal(controller.getSnapshot().entries.length, 0);
-    assert.equal(h.calls.navigate, 0);
+    const h = await mountHarness(t, async () => sourcePayload(changed), providers, sourcePayload(subject.source));
+    await h.openMissing(packet.title, packet.description);
+    const save = h.draftAction('save'); assert.ok(save); h.click(save); await h.render();
+    assert.equal(writes, 1); assert.equal(h.calls.navigate, 0);
+    assert.equal(h.host.querySelectorAll('[data-playlist-row-key]').length, 0);
+    assert.doesNotMatch(h.host.textContent, /Private original|Private artist/);
+    const exportButton = h.draftAction('export');
+    if (exportButton) {h.click(exportButton); await h.render();}
+    assert.equal(h.downloads.length, 0, `${change} source facts must no longer be exportable`);
     if (change === 'revision') {
-      assert.equal(controller.getSnapshot().sourceResource.status, 'conflict');
-      assert.equal(controller.getSnapshot().title, 'Typed title');
+      assert.match(h.host.textContent, /source changed/i);
+      assert.equal(h.host.querySelector('[aria-label="Playlist name"]').value, 'Typed title');
     } else {
       assert.equal(h.calls.released, 1);
-      assert.equal(controller.getSnapshot().title, '');
+      assert.doesNotMatch(h.host.innerHTML, /Typed title|Typed description/);
+      assert.equal(h.host.querySelector('[aria-label="Playlist name"]')?.value || '', '');
+      assert.equal(h.host.querySelector('[aria-label="Playlist description"]')?.value || '', '');
     }
-    assert.equal(await controller.save(), false); assert.equal(writes, 1);
+    h.click(save); await h.render(); assert.equal(writes, 1);
     form.dispose(); h.mount.dispose();
   }
 });
 
-test('async Top UI ownership aborts on retained-row and source changes even when the deduplicated albums are unchanged', async () => {
+test('async Top UI ownership aborts on retained-row and source changes even when the deduplicated albums are unchanged', async t => {
   const creation = await import('../../../music_app/static/js/playlists/creation.mjs');
   const subject = {scopeKey: 'mount:actor', mode: 'missing', canCreate: true, canCreateAlbumTop: true,
     source: {kind: 'playlist', ref: 'source:mount', revision: 'revision:one', allowed_actions: {can_read: true, can_use_for_playlist: true}}};
@@ -290,36 +289,46 @@ test('async Top UI ownership aborts on retained-row and source changes even when
     playlist_detail: {playlist_id: 'source:mount', title: 'Source', revision: 'revision:one', track_rows: [], items_complete: true,
       allowed_actions: {can_open: true, can_create_album_top: true}, missing_playlist_creation_source: subject.source}};
   for (const change of ['remove', 'source', 'provider']) {
-    const pending = deferred(); let options, received;
+    const pending = deferred(); let options, received, topCalls = 0;
     const providers = {
       readPlaylistCreationSource: request => ({status: 'ready', data: {...request, allowed_actions: {can_read: true, can_use_for_playlist: true},
         entries_complete: true, retained_parent_albums: [], entries: ['one', 'two'].map(entry_ref => ({entry_ref, title: entry_ref,
           availability: 'missing', allowed_actions: {can_read: true, can_select: true},
           parent_album: {state: 'known', album_ref: 'album:same-parent', allowed_actions: {can_read: true, can_create_album_top: true}}}))}}),
-      openAlbumTopDraft(intent, ui) {received = intent; options = ui; return pending.promise;},
+      openAlbumTopDraft(intent, ui) {topCalls++; received = intent; options = ui; return pending.promise;},
     };
-    const form = creation.createPlaylistCreationController({providers}); form.setContext(subject); await form.load(); form.edit({title: 'Draft'});
+    const form = creation.createPlaylistCreationController({providers});
+    t.after(() => form.dispose()); form.setContext(subject); await form.load(); form.edit({title: 'Draft'});
     const changedSource = {...sourcePayload, playlist_detail: {...sourcePayload.playlist_detail,
-      allowed_actions: {can_open: true, can_create_album_top: false},
-      missing_playlist_creation_source: {...subject.source, revision: 'revision:two'}}};
-    const h = mountHarness(async () => changedSource, providers, sourcePayload);
-    h.render(); assert.equal(h.render().props.onPrepareDraft(form.prepareDraft()), true);
-    const page = h.renderDraft(h.render()), controller = page.props.controller;
-    const opening = page.props.onTop(controller.topIntent());
+      allowed_actions: {can_open: true, can_create_album_top: false}, missing_playlist_creation_source: {...subject.source, revision: 'revision:two'}}};
+    const h = await mountHarness(t, async () => changedSource, providers, sourcePayload);
+    await h.openMissing('Draft'); h.click(h.draftAction('top'));
     assert.equal(options.isCurrent(), true); assert.equal(options.signal.aborted, false);
     assert.doesNotMatch(JSON.stringify(received), /draftToken|playlist_id/);
+    assert.deepEqual(plain(received.album_refs), ['album:same-parent']);
+    const originalAlbums = plain(received.album_refs);
     if (change === 'remove') {
-      const albums = plain(controller.topIntent().album_refs);
-      controller.remove('entry:one');
-      assert.deepEqual(plain(controller.topIntent().album_refs), albums, 'retained occurrence changed while album refs did not');
+      // The actual page disables removal while its Top UI handoff is pending.
+      // The former private-controller mutation is not a public UI action.
+      // Preserve the blocked action and then test retirement after completion.
+      const remove = h.host.querySelector('[data-draft-remove="entry:one"]');
+      assert.ok(remove); assert.equal(remove.disabled, true);
+      h.click(remove); assert.ok(h.host.querySelector('[data-playlist-row-key="entry:one"]'));
+      assert.ok(h.host.querySelector('[data-playlist-row-key="entry:two"]'));
+      assert.equal(topCalls, 1); assert.equal(options.signal.aborted, false); assert.equal(options.isCurrent(), true);
+      pending.resolve(false); await h.render(); h.click(h.host.querySelector('[data-draft-remove="entry:one"]')); await h.render();
+      assert.equal(h.host.querySelector('[data-playlist-row-key="entry:one"]'), null);
+      assert.ok(h.host.querySelector('[data-playlist-row-key="entry:two"]'));
+      // The existing child lifetime must still retire when its retained row set changes.
     } else if (change === 'source') await h.mount.refresh();
     else h.mount.configureProviders({...providers, openAlbumTopDraft() {assert.fail('A replacement provider was invoked by the old child');}});
-    assert.equal(options.signal.aborted, true);
-    assert.equal(options.isCurrent(), false);
-    let navigated = 0;
-    assert.equal(options.retainNavigation(() => {navigated++;}), false);
-    assert.equal(navigated, 0);
-    pending.resolve(true); await opening;
+    assert.equal(options.signal.aborted, true); assert.equal(options.isCurrent(), false);
+    let navigated = 0; assert.equal(options.retainNavigation(() => {navigated++;}), false); assert.equal(navigated, 0);
+    pending.resolve(true); await h.render();
+    if (change === 'remove') {
+      h.click(h.draftAction('top')); await h.render();
+      assert.equal(topCalls, 2); assert.deepEqual(plain(received.album_refs), originalAlbums, 'retained occurrence changed while album refs did not');
+    }
     form.dispose(); h.mount.dispose();
   }
 });
@@ -357,7 +366,7 @@ test('external Missing draft rejects a stale or unauthenticated Home source',()=
   }
 });
 
-test('external Activity packet mounts the existing draft controller while hidden Playlist directory is loading',async()=>{
+test('external Activity packet mounts the existing draft controller while hidden Playlist directory is loading',async t=>{
   const creation=await import('../../../music_app/static/js/playlists/creation.mjs');
   const subject={scopeKey:'mount:actor',mode:'missing',canCreate:true,source:{kind:'activity',ref:'activity:capture',revision:'activity:revision',
     source_protocol:'missing_activity_selection_v1',allowed_actions:{can_read:true,can_use_for_playlist:true}}};
@@ -368,13 +377,12 @@ test('external Activity packet mounts the existing draft controller while hidden
     selectedKeys:sourceResource.data.entries.map(row=>row.row_key)});
   assert.ok(packet);
   let writes=0;const directory=deferred();
-  const h=mountHarness(()=>directory.promise,{createPlaylistFromSelection:()=>{writes++;}},{playlist_sidebar:{items:[]},playlist_index:{playlists:[]}});
-  h.setShell({visible:false,playlistId:null,payload:null});h.render();
-  assert.equal(h.mount.prepareActivityDraft(packet,'home:current'),true);
-  const page=h.renderDraft(h.render());assert.equal(page.props.controller.getSnapshot().source.kind,'activity');
-  assert.equal(page.props.controller.getSnapshot().entries.length,1);assert.equal(writes,0);
-  directory.resolve({playlist_sidebar:{items:[]},playlist_index:{playlists:[]},playlist_actions:{can_create:true}});await settle();
-  assert.equal(page.props.controller.getSnapshot().entries.length,1);
-  h.mount.configureProviders({});assert.equal(h.calls.released,1);assert.equal(page.props.controller.getSnapshot().entries.length,0);
-  h.mount.dispose();
+  const h=await mountHarness(t, ()=>directory.promise,{createPlaylistFromSelection:()=>{writes++;}},{playlist_sidebar:{items:[]},playlist_index:{playlists:[]}});
+  h.setShell({visible:false,playlistId:null,payload:null});await h.render();
+  assert.equal(h.mount.prepareActivityDraft(packet,'home:current'),true);await h.render();
+  assert.match(h.host.textContent,/Missing original/);assert.equal(h.host.querySelectorAll('[data-playlist-row-key]').length,1);assert.equal(writes,0);
+  directory.resolve({playlist_sidebar:{items:[]},playlist_index:{playlists:[]},playlist_actions:{can_create:true}});await h.render();
+  assert.equal(h.host.querySelectorAll('[data-playlist-row-key]').length,1);
+  h.mount.configureProviders({});assert.equal(h.calls.released,1);assert.equal(h.host.querySelectorAll('[data-playlist-row-key]').length,0);
+  assert.doesNotMatch(h.host.textContent,/Missing original/);h.mount.dispose();
 });

@@ -1,46 +1,50 @@
 'use strict';
-const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-const {createRequire} = require('node:module');
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
+const {pathToFileURL} = require('node:url');
 const {nativeFixture} = require('./library-mix-native-fixture.cjs');
-const {withDomPlatform} = require('./artist-host-fixtures/dom-platform.cjs');
+const {withPlaylistDomPlatform} = require('./playlist-dom-platform.cjs');
 const {installAttributeObservers} = require('./library-mix-observers.cjs');
 const {id} = require('./library-mix-fixtures.cjs');
 const root = path.resolve(__dirname, '../../..');
-let compiled;
-function compile() {
-  if (compiled) return compiled;
-  const local = createRequire(path.join(root, 'package.json'));
-  const built = local('esbuild').buildSync({absWorkingDir: root,
-    stdin: {resolveDir: root, sourcefile: 'library-mix-mounted-test-entry.jsx', loader: 'jsx', contents: `
-      import React, {useSyncExternalStore} from 'react'; import {createRoot} from 'react-dom/client'; import {flushSync} from 'react-dom';
-      import {LibraryMixSetup, LibraryMixPage, SavedLibraryMixOrder} from './music_app/static/js/playlists/library-mix.jsx';
-      import {mountPlaylists} from './music_app/static/js/playlists/index.jsx';
-      import {PlaylistsView} from './music_app/static/js/playlists/app.jsx';
-      export {mountPlaylists};
-      export {createLibraryMixController} from './music_app/static/js/playlists/library-mix.mjs';
-      export {createPlaylistController} from './music_app/static/js/playlists/model.mjs';
-      export const flush = flushSync;
-      export function boot() {require('./music_app/static/js/home-friends/index.jsx');}
-      function Saved(props) {const state = useSyncExternalStore(props.controller.subscribe, props.controller.getSnapshot, props.controller.getSnapshot);
-        return <PlaylistsView {...props} state={state}/>;}
-      export function mount(host, component, props) {
-        const root = createRoot(host), Component = {setup: LibraryMixSetup, page: LibraryMixPage, order: SavedLibraryMixOrder, saved: Saved}[component];
-        const render = next => flushSync(() => root.render(<Component {...next}/>)); render(props);
-        return {render, unmount: () => flushSync(() => root.unmount())};
-      }
-    `}, bundle: true, platform: 'browser', target: ['es2020'], format: 'iife', globalName: '__libraryMixTest',
-    define: {'process.env.NODE_ENV': '"production"'}, write: false, metafile: true});
-  const inputs = Object.keys(built.metafile.inputs);
-  for (const suffix of ['playlists/library-mix.jsx', 'playlists/track-table.jsx', 'playlists/index.jsx',
-    'home-friends/index.jsx', 'home-friends/native-dialog.jsx', 'home-friends/native-choice.jsx', 'home-friends/shared-header.jsx',
-    'react-dom-client.production.js', 'react.production.js'])
-    assert.ok(inputs.some(name => name.endsWith(suffix)), `SETUP_FAILURE: actual dependency ${suffix}`);
-  return compiled = built.outputFiles[0].text;
+let entrySequence = 0;
+// Traverse the delivered native owners without freezing their implementation
+// bytes. Reviewed source hashes are external packet staging evidence only.
+const nativeEntries = [
+  "music_app/static/js/playlists/native-library-mix.mjs",
+  "music_app/static/js/playlists/native-app.mjs",
+  "music_app/static/js/playlists/library-mix.mjs",
+  "music_app/static/js/playlists/model.mjs",
+  "music_app/static/js/home-friends/index-native.mjs"
+];
+function verifyNativeClosure() {
+  const visited = new Set();
+  function visit(relative) {
+    if (visited.has(relative)) return;
+    visited.add(relative);
+    assert.ok(relative.startsWith('music_app/static/js/') && relative.endsWith('.mjs'), 'native module stays in the delivery root');
+    const source = fs.readFileSync(path.join(root, relative), 'utf8');
+    assert.doesNotMatch(source, /(?:from\s*|import\s*\(?\s*|require\s*\(\s*)['"](?:react(?:-dom)?(?:\/|['"])|esbuild(?:\/|['"]))/);
+    assert.doesNotMatch(source, /\b(?:import|require)\s*\(/, 'native closure uses statically traversable ES module imports');
+    for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*)(['"])([^'"\n]+)\1/g)) {
+      const specifier = match[2];
+      assert.ok(specifier.startsWith('.'), `SETUP_FAILURE: bare dependency ${specifier}`);
+      visit(path.posix.normalize(path.posix.join(path.posix.dirname(relative), specifier)));
+    }
+  }
+  nativeEntries.forEach(visit);
+  for (const relative of [
+    'playlists/native.mjs', 'playlists/native-library-mix.mjs', 'playlists/native-app.mjs',
+    'playlists/native-track-table.mjs', 'playlists/library-mix.mjs', 'playlists/model.mjs',
+    'home-friends/index-native.mjs', 'home-friends/native-dialog.mjs',
+    'home-friends/native-controls.mjs', 'home-friends/shared-header.mjs',
+  ]) assert.ok(visited.has(`music_app/static/js/${relative}`), `SETUP_FAILURE: actual native dependency ${relative}`);
 }
-function reactFixture(t) {
-  const h = withDomPlatform(nativeFixture()), {context: c, document} = h;
-  // Platform support follows the frozen real React fixtures. No hook, component,
-  // portal, table, Choice or form lifecycle is replaced with a successful stub.
+const load = relative => import(pathToFileURL(path.join(root, 'music_app/static/js', relative)).href);
+async function nativeMixFixture(t) {
+  verifyNativeClosure();
+  const h = withPlaylistDomPlatform(nativeFixture()), {context: c, document} = h;
+  // Browser platform only. Product forms, menus, tables and owner lifetimes
+  // are always the delivered native implementations.
   const tasks = [], frames = new Map(); let frameId = 0;
   c.MessageChannel = class {
     constructor() {this.port1 = {onmessage: null}; this.port2 = {postMessage: data => tasks.push(() => this.port1.onmessage?.({data}))};}
@@ -50,9 +54,18 @@ function reactFixture(t) {
     set(value) {if (this.nodeType === 3) {const before = this.data; this.data = String(value); h.characterDataChanged?.(this, before);}}});
   Object.defineProperty(c.Element.prototype, 'namespaceURI', {configurable: true, get() {return this.__namespace || 'http://www.w3.org/1999/xhtml';}});
   document.createElementNS = (ns, name) => {const node = document.createElement(name); node.__namespace = ns; return node;};
+  for (const name of ['min', 'max', 'step', 'type', 'name', 'inputMode']) {
+    const attribute = name.toLowerCase();
+    Object.defineProperty(c.Element.prototype, name, {configurable: true,
+      get() {return this.getAttribute(attribute) || '';}, set(value) {this.setAttribute(attribute, value);}});
+  }
+  Object.defineProperty(c.Element.prototype, 'tabIndex', {configurable: true,
+    get() {return Number(this.getAttribute('tabindex') || 0);}, set(value) {this.setAttribute('tabindex', value);}});
+  c.Element.prototype.select = function () {this.selectionStart = 0; this.selectionEnd = String(this.value || '').length;};
+  c.Element.prototype.blur = function () {if (document.activeElement === this) document.activeElement = document.body;};
   document.defaultView = c; document.oninput = null;
   c.HTMLIFrameElement = class {static [Symbol.hasInstance](node) {return node?.tagName === 'IFRAME';}};
-  c.navigator = {userAgent: 'bounded actual React Library Mix fixture'}; c.crypto = {randomUUID: () => id(95)};
+  c.navigator = {userAgent: 'bounded actual native Library Mix fixture'}; c.crypto = {randomUUID: () => id(95)};
   c.innerWidth = 1600; c.innerHeight = 1000;
   c.getComputedStyle = node => ({direction: 'ltr', display: 'block', columnGap: '8px', zIndex: node.style.zIndex || 'auto',
     backgroundColor: 'rgb(255, 255, 255)', getPropertyValue: key => node.style.getPropertyValue(key)});
@@ -61,11 +74,6 @@ function reactFixture(t) {
   c.Element.prototype.getBoundingClientRect = function () {const width = this.hasAttribute('data-shared-header') ? 1500 : this.tagName === 'BUTTON' ? 90 : 100;
     return {x: 0, y: 0, left: 0, top: 0, width, height: 32, right: width, bottom: 32};};
   c.Element.prototype.getClientRects = function () {return this.isConnected && !this.closest('[hidden]') ? [this.getBoundingClientRect()] : [];};
-  c.Node.prototype.replaceWith = function (...nodes) {const parent = this.parentNode; if (!parent) return; for (const node of nodes) parent.insertBefore(node, this); parent.removeChild(this);};
-  c.NodeFilter = {SHOW_TEXT: 4};
-  document.createTreeWalker = node => {const nodes = []; const visit = parent => {for (const child of parent.childNodes) {if (child.nodeType === 3) nodes.push(child); visit(child);}};
-    visit(node); let index = -1; return {currentNode: node, nextNode() {this.currentNode = nodes[++index] || null; return Boolean(this.currentNode);}};};
-  document.createRange = () => ({selectNodeContents() {}, getBoundingClientRect() {return {width: 0};}});
   c.requestAnimationFrame = callback => {const id = ++frameId; frames.set(id, callback); return id;};
   c.cancelAnimationFrame = id => frames.delete(id);
   const observers = installAttributeObservers(h);
@@ -86,8 +94,13 @@ function reactFixture(t) {
   const runtime = {...h.runtime, ...renderers, createPlaytableSource: undefined, trackPreference: () => null, setTrackLove: undefined};
   runtime.createLibraryMixRuntime = options => ({...h.runtime.createLibraryMixRuntime(options), ...renderers});
   const errors = []; c.reportError = error => errors.push(error);
-  vm.runInContext(compile(), c, {filename: 'actual-library-mix-react-mount.js'});
-  const api = c.__libraryMixTest, roots = [];
+  const savedGlobals = new Map();
+  for (const [name, value] of Object.entries({window: c, document, Event: c.Event, crypto: c.crypto})) {
+    savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, {configurable: true, writable: true, value});
+  }
+  const roots = [], controllers = [];
+  let booted = false;
   function drain() {
     let turns = 0;
     while (tasks.length || frames.size) {
@@ -95,14 +108,62 @@ function reactFixture(t) {
       while (tasks.length) tasks.shift()();
       const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0);
     }
-    assert.deepEqual(errors, [], 'SETUP_FAILURE: no swallowed React errors');
+    assert.deepEqual(errors, [], 'SETUP_FAILURE: no swallowed native errors');
   }
-  const flush = action => {const value = api.flush(action); drain(); return value;};
+  const flush = action => {const value = action(); drain(); return value;};
   async function settle() {for (let n = 0; n < 16; n++) {await Promise.resolve(); await observers.flush(); flush(() => {});} assert.deepEqual(errors, []);}
-  t.after(async () => {for (const owner of roots) owner.unmount(); await settle(); observers.dispose();});
+  t.after(async () => {
+    try {
+      for (const owner of roots.reverse()) owner.unmount();
+      if (booted) {
+        c.AlbumHavenPlaylistUI.configureProviders({});
+        h.shell.dataset.nativeAccountId = ''; h.shell.dataset.nativeLibraryId = ''; h.runtime.sync();
+      }
+      for (const controller of controllers.reverse()) controller.dispose();
+      await settle();
+    } finally {
+      try {observers.dispose();} finally {
+        for (const [name, descriptor] of savedGlobals) {
+          if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+        }
+      }
+    }
+  });
+  const mix = await load('playlists/native-library-mix.mjs');
+  const app = await load('playlists/native-app.mjs');
+  const domain = await load('playlists/library-mix.mjs');
+  const model = await load('playlists/model.mjs');
+  const api = {
+    createLibraryMixController(options) {const value = domain.createLibraryMixController(options); controllers.push(value); return value;},
+    createPlaylistController(options) {const value = model.createPlaylistController(options); controllers.push(value); return value;},
+  };
+  for (const [name, owner] of Object.entries({
+    mountLibraryMixSetup: mix.mountLibraryMixSetup, mountLibraryMixPage: mix.mountLibraryMixPage,
+    mountSavedLibraryMixOrder: mix.mountSavedLibraryMixOrder, mountPlaylistsView: app.mountPlaylistsView,
+    createLibraryMixController: domain.createLibraryMixController, createPlaylistController: model.createPlaylistController,
+  })) assert.equal(typeof owner, 'function', `actual native export ${name}`);
   function mount(component, props) {
-    const host = h.add(`react-mix-${roots.length}`), owner = api.mount(host, component, {runtime, ...props}); roots.push(owner); drain();
-    return {host, render: next => {owner.render({runtime, ...next}); drain();}, unmount: owner.unmount};
+    const host = h.add(`native-mix-${roots.length}`);
+    let current = {runtime, ...props}, disposed = false, stop = null, owner;
+    const mountOwner = {setup: mix.mountLibraryMixSetup, page: mix.mountLibraryMixPage,
+      order: mix.mountSavedLibraryMixOrder, saved: app.mountPlaylistsView}[component];
+    assert.equal(typeof mountOwner, 'function', `actual native owner for ${component}`);
+    const complete = () => component === 'saved' ? {...current, state: current.controller.getSnapshot()} : current;
+    owner = mountOwner(host, current.runtime, complete());
+    function subscribe() {
+      if (component !== 'saved') return;
+      const controller = current.controller;
+      stop = controller.subscribe(() => {if (!disposed && current.controller === controller) owner.update(complete());});
+      owner.update(complete());
+    }
+    subscribe();
+    const result = {host, render(next) {
+      if (disposed) return;
+      const before = current.controller; current = {runtime, ...next};
+      if (component === 'saved' && before !== current.controller) {stop?.(); stop = null; subscribe();}
+      owner.update(complete()); drain();
+    }, unmount() {if (disposed) return; disposed = true; stop?.(); stop = null; owner.dispose();}};
+    roots.push(result); drain(); return result;
   }
   function click(node) {assert.ok(node, 'activation target exists'); assert.equal(node.disabled, false, 'enabled native activation');
     return flush(() => node.dispatchEvent(new c.MouseEvent('click', {bubbles: true, cancelable: true})));}
@@ -123,9 +184,14 @@ function reactFixture(t) {
   }
   return {...h, c, runtime, api, form, errors, flush, settle, mount, click, choose,
     installNavigation,
-    boot(providers) {c.AlbumHavenPlaylistRuntime = runtime; flush(() => {api.boot(); c.AlbumHavenPlaylistUI.configureProviders(providers);});},
+    async boot(providers) {
+      assert.equal(booted, false, 'one entry owner per fixture');
+      c.AlbumHavenPlaylistRuntime = runtime;
+      await import(`${pathToFileURL(path.join(root, 'music_app/static/js/home-friends/index-native.mjs')).href}?library-mix-test=${++entrySequence}`);
+      booted = true; flush(() => c.AlbumHavenPlaylistUI.configureProviders(providers));
+    },
     mixRuntime(controller) {return {...h.runtime.createLibraryMixRuntime({scopeKey: controller.getSnapshot().scopeKey,
       source: () => controller.source(), order: () => controller.getSnapshot().playbackOrder, isCurrent: () => true}), ...renderers};},
     named(label, parent = document) {return parent.querySelectorAll('button').find(node => (node.getAttribute('aria-label') || node.textContent.trim()) === label);}};
 }
-module.exports = {reactFixture};
+module.exports = {nativeMixFixture};

@@ -1,6 +1,6 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
-const {reactFixture} = require('./library-mix-react-fixture.cjs');
+const {nativeMixFixture} = require('./library-mix-react-fixture.cjs');
 const {id, recipe, mixMetadata, capture, receipt, deferred, plain} = require('./library-mix-fixtures.cjs');
 const {payload, row: savedRow} = require('./library-mix-native-fixture.cjs');
 function controller(h, providers = {}) {
@@ -10,8 +10,8 @@ function controller(h, providers = {}) {
     createPlaylistFromSelection: async options => receipt(options.request_key, {scopeKey}), ...providers}});
 }
 
-test('real React setup portals into shared native form and native Choices send one complete recipe', async t => {
-  const h = reactFixture(t), prepares = [], ready = [];
+test('real native setup mounts into shared native form and native Choices send one complete recipe', async t => {
+  const h = await nativeMixFixture(t), prepares = [], ready = [];
   const c = controller(h, {beginLibraryMix: async options => {prepares.push(options); return capture({scopeKey: options.scopeKey, library_mix: mixMetadata(options.recipe)});}});
   const mounted = h.mount('setup', {controller: c, onClose() {}, onReady: async close => {ready.push(c.source()); return close({force: true, restoreFocus: false});}});
   await h.settle();
@@ -28,7 +28,7 @@ test('real React setup portals into shared native form and native Choices send o
 });
 
 test('busy setup visibly disables creation and all recipe controls; native Cancel retires late ready work', async t => {
-  const h = reactFixture(t), wait = deferred(); let reads = 0, ready = 0, closed = 0;
+  const h = await nativeMixFixture(t), wait = deferred(); let reads = 0, ready = 0, closed = 0;
   const c = controller(h, {beginLibraryMix: () => {reads++; return wait.promise;}});
   const owner = h.mount('setup', {controller: c, onClose: () => {closed++; c.dispose();}, onReady: () => {ready++;}});
   h.click(h.named('Create mix', h.form)); await h.settle();
@@ -42,7 +42,7 @@ test('busy setup visibly disables creation and all recipe controls; native Cance
 });
 
 test('real temporary page reuses shared header/table with locked membership and native playback command', async t => {
-  const h = reactFixture(t), c = controller(h); await c.prepare(recipe({auto_update: true}));
+  const h = await nativeMixFixture(t), c = controller(h); await c.prepare(recipe({auto_update: true}));
   const runtime = h.mixRuntime(c), saved = [];
   const page = h.mount('page', {runtime, controller: c, onSaved: value => saved.push(value), onClose() {}}); await h.settle();
   assert.ok(page.host.querySelector('[data-shared-header="library-mix"]'));
@@ -64,7 +64,7 @@ test('real temporary page reuses shared header/table with locked membership and 
 });
 
 test('empty/refresh/error temporary states use shared statuses and disable playback without inventing tracks', async t => {
-  const h = reactFixture(t), c = controller(h, {beginLibraryMix: async options => capture({scopeKey: options.scopeKey,
+  const h = await nativeMixFixture(t), c = controller(h, {beginLibraryMix: async options => capture({scopeKey: options.scopeKey,
     entries: [], popularity_refresh_status: 'blocked', coverage: {selected_count: 0, excluded_count: 3}})});
   await c.prepare(recipe()); const page = h.mount('page', {runtime: h.mixRuntime(c), controller: c, onSaved() {}, onClose() {}});
   await h.settle(); assert.equal(h.named('Play', page.host).disabled, true);
@@ -75,7 +75,7 @@ test('empty/refresh/error temporary states use shared statuses and disable playb
 });
 
 test('uncertain save locks edits and exposes original-save recovery without a duplicate create', async t => {
-  const h = reactFixture(t); let pending = false, saves = 0, retries = 0;
+  const h = await nativeMixFixture(t); let pending = false, saves = 0, retries = 0;
   const c = controller(h, {hasPendingPlaylistOperation: () => pending,
     createPlaylistFromSelection: async () => {saves++; pending = true; throw new Error('Lost response');},
     retryPlaylistOperation: async () => {retries++; pending = false; return receipt(id(90), {scopeKey: c.getSnapshot().scopeKey});}});
@@ -87,7 +87,7 @@ test('uncertain save locks edits and exposes original-save recovery without a du
 });
 
 test('saved order control reconciles session override on same-ID detail refresh and never rewrites saved default', async t => {
-  const h = reactFixture(t), scopeKey = h.runtime.snapshot().scopeKey;
+  const h = await nativeMixFixture(t), scopeKey = h.runtime.snapshot().scopeKey;
   const detail = {playlist_id: id(80), library_mix: mixMetadata(), allowed_actions: {can_play: true}, track_rows: []};
   let listener, mode = 'unplayed_first'; const changes = [];
   const projection = () => ({status: 'ready', data: {scopeKey, playlist_id: id(80), library_mix_order: mode}});
@@ -104,7 +104,7 @@ test('saved order control reconciles session override on same-ID detail refresh 
 });
 
 test('saved order read cannot overwrite a newer playback notification or a newer playlist/scope', async t => {
-  const h = reactFixture(t), wait = deferred(), scopeKey = h.runtime.snapshot().scopeKey;
+  const h = await nativeMixFixture(t), wait = deferred(), scopeKey = h.runtime.snapshot().scopeKey;
   const detail = {playlist_id: id(80), library_mix: mixMetadata(), allowed_actions: {can_play: true}, track_rows: []};
   let listener; const projections = [];
   const runtime = {...h.runtime, readPlayback(options) {projections.push(options); return wait.promise;},
@@ -122,10 +122,10 @@ test('saved order read cannot overwrite a newer playback notification or a newer
 });
 
 test('actual complete entry dispatches the global action into real setup, native draft history and shared preview', async t => {
-  const h = reactFixture(t), navigation = h.installNavigation(), requests = [];
+  const h = await nativeMixFixture(t), navigation = h.installNavigation(), requests = [];
   h.state.view = {context_ref: 'a'.repeat(64), surface: {active: 'albums'}};
   h.c.history.replaceState(h.c.history.state, '', '/?artist=Retained'); h.runtime.sync();
-  h.boot({readPlaylists: async () => ({playlist_sidebar: {items: []}, playlist_index: {playlists: []}}),
+  await h.boot({readPlaylists: async () => ({playlist_sidebar: {items: []}, playlist_index: {playlists: []}}),
     beginLibraryMix: async options => {requests.push(options); return capture({scopeKey: options.scopeKey, library_mix: mixMetadata(options.recipe)});}});
   await h.settle(); assert.equal(typeof h.c.AlbumHavenPlaylistUI.openLibraryMix, 'function');
   const action = h.add('global-mix-action', 'button'); action.setAttribute('data-library-mix-open', '1'); action.disabled = true;
@@ -147,9 +147,9 @@ test('actual complete entry dispatches the global action into real setup, native
 });
 
 test('actual entry retires setup on native scope change or provider replacement without showing a late preview', async t => {
-  const h = reactFixture(t), waiting = deferred(); let signal;
+  const h = await nativeMixFixture(t), waiting = deferred(); let signal;
   h.state.view = {context_ref: 'a'.repeat(64), surface: {active: 'albums'}}; h.runtime.sync();
-  h.boot({beginLibraryMix: options => {signal = options.signal; return waiting.promise;}});
+  await h.boot({beginLibraryMix: options => {signal = options.signal; return waiting.promise;}});
   h.flush(() => h.c.AlbumHavenPlaylistUI.openLibraryMix()); await h.settle();
   h.click(h.named('Create mix', h.form)); await h.settle();
   const oldScope = h.runtime.snapshot().scopeKey;
@@ -161,7 +161,7 @@ test('actual entry retires setup on native scope change or provider replacement 
 });
 
 test('temporary header Play follows the actual shared table sort while Save retains captured membership order', async t => {
-  const h = reactFixture(t), saved = [], c = controller(h, {createPlaylistFromSelection: async options => {
+  const h = await nativeMixFixture(t), saved = [], c = controller(h, {createPlaylistFromSelection: async options => {
     saved.push(options); return receipt(options.request_key, {scopeKey: options.scopeKey});}});
   await c.prepare(recipe()); const page = h.mount('page', {runtime: h.mixRuntime(c), controller: c, onSaved() {}, onClose() {}}); await h.settle();
   h.click(page.host.querySelector('[data-cdt-sort="popularity_count"]')); await h.settle();
@@ -174,7 +174,7 @@ test('temporary header Play follows the actual shared table sort while Save reta
 });
 
 test('saved Play mix receives real sorted and filtered table rows without changing dynamic membership', async t => {
-  const h = reactFixture(t);
+  const h = await nativeMixFixture(t);
   h.state.view = payload({items_complete: true, active_sort: {key: 'playlist_position', direction: 'asc'},
     library_mix: mixMetadata({auto_update: true}), track_rows: [savedRow(1, {duration_seconds: 20}), savedRow(2, {duration_seconds: 0}), savedRow(3, {duration_seconds: 40})]});
   h.runtime.sync(); const scopeKey = h.runtime.snapshot().scopeKey;

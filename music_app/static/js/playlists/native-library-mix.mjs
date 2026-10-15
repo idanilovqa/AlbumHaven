@@ -200,14 +200,14 @@ export function mountLibraryMixPage(host,runtime,initialProps){
  }
  try{
   scope.defer(()=>release(()=>host.replaceChildren()));
-  host.className='playlists__content';host.setAttribute('aria-label','Temporary Library Mix');
-  header=own(mountSharedHeader(node(host),runtime,{id:'library-mix',className:'playlists__header'}));
+  const page=node(host,'main','playlists__content');page.setAttribute('aria-label','Temporary Library Mix');
+  header=own(mountSharedHeader(node(page),runtime,{id:'library-mix',className:'playlists__header'}));
   title=node(header.slots.content,'div','gallery-bar__title');
   playButton=own(mountButton(node(header.slots.actions),runtime,{label:'Play',icon:'play',onClick:play}));
   orderChoice=own(mountChoice(node(header.slots.actions),runtime,{label:'Playback order',value:'regular',options:MIX_ORDER_OPTIONS}));
   saveButton=own(mountButton(node(header.slots.actions),runtime,{label:'Save as playlist',icon:'save',onClick:()=>save(false)}));
   closeButton=own(mountButton(node(header.slots.finalAction),runtime,{label:'Close mix',icon:'close',onClick:close}));
-  const scroll=node(host,'div','playlists__scroll gallery-scrollbar'),metadata=node(scroll,'div','playlists__metadata tag-editor-form');
+  const scroll=node(page,'div','playlists__scroll gallery-scrollbar'),metadata=node(scroll,'div','playlists__metadata tag-editor-form');
   const titleLabel=node(metadata,'label');titleLabel.append('Title');titleInput=node(titleLabel,'input');titleInput.maxLength=100;titleInput.setAttribute('aria-label','Playlist title');
   listen(titleInput,'input',()=>edit({title:titleInput.value}));
   const descriptionLabel=node(metadata,'label');descriptionLabel.append('Description');description=node(descriptionLabel,'textarea');description.rows=2;description.maxLength=1000;description.setAttribute('aria-label','Playlist description');
@@ -270,16 +270,21 @@ export function mountSavedLibraryMixOrder(host,runtime,initial){
   const owner=active,view=props,version=revision,intent=runtime.trackIntent,can=runtime.canTrackIntent;
   const valid=()=>current(owner)&&props===view&&revision===version&&runtime.trackIntent===intent&&runtime.canTrackIntent===can;
   const rows=view.rows||view.detail.track_rows;
+  let claimedBusy=false;
   try{
    let first;
    for(const row of rows){const allowed=can?.call(runtime,'play',row,{scopeKey:view.scopeKey,playlist_id:view.detail.playlist_id});if(!valid())return;if(allowed===true){first=row;break;}}
    if(!first||!valid())return;
-   starting=true;message='';
+   starting=true;claimedBusy=true;message='';
    const result=intent.call(runtime,'play',first,{scopeKey:view.scopeKey,playlist_id:view.detail.playlist_id,displayedItemIds:rows.map(row=>row.playlist_item_id),fromStart:true});
    if(valid())render();
    await result;
   }catch(error){if(current(owner)&&props===view&&runtime.trackIntent===intent&&error?.name!=='AbortError')message='This mix could not be played.';}
-  finally{if(current(owner)&&props===view){starting=false;render();}}
+  // A current owner may receive new rows/props from its own playback notification.
+  // Release only a busy lifetime this invocation actually acquired. A superseded
+  // pre-admission callback must not release a reentrant operation, and a retired
+  // owner must not release its replacement's operation.
+  finally{if(claimedBusy&&current(owner)){starting=false;render();}}
  }
  function render(){
   if(disposed)return;

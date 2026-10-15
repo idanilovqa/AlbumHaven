@@ -342,6 +342,7 @@ class VirtualArtistGrid {
     this._measureTimeout = 0;
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
+    this._userScrollIntentGeneration = 0;
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
     this._deferredResizeOptions = null;
@@ -375,6 +376,8 @@ class VirtualArtistGrid {
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('pointerup', this.onAlbumCardPointerGestureEnd, { capture: true });
       document.addEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
+      document.addEventListener('touchend', this.onTouchScrollEnd, { passive: true, capture: true });
+      document.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true, capture: true });
     }
     window.addEventListener('resize', this.onResize);
     window.addEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
@@ -425,6 +428,8 @@ class VirtualArtistGrid {
     if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
       document.removeEventListener('pointerup', this.onAlbumCardPointerGestureEnd, { capture: true });
       document.removeEventListener('pointercancel', this.onAlbumCardPointerGestureEnd, { capture: true });
+      document.removeEventListener('touchend', this.onTouchScrollEnd, { capture: true });
+      document.removeEventListener('touchcancel', this.onTouchScrollEnd, { capture: true });
     }
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
@@ -638,6 +643,10 @@ class VirtualArtistGrid {
       blockIndex: String(anchorRow.getAttribute('data-block-index') || ''),
       offsetTop: anchorRect.top - scrollRect.top,
     };
+  }
+
+  getUserScrollIntentGeneration() {
+    return this._userScrollIntentGeneration;
   }
 
   restoreScrollAnchor(anchor) {
@@ -887,7 +896,15 @@ class VirtualArtistGrid {
     this._deferredArtistTreeSettlement = false;
     this._deferredResizeOptions = null;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
-    const hasPendingScrollRender = Boolean(supersededScrollRenderRafOwner);
+    const ownedAbsoluteScrollPosition = (
+      options.preserveAbsoluteScroll !== false
+      && this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
+    )
+      ? {
+        scrollLeft: this._absoluteScrollRestore.scrollLeft,
+        scrollTop: this._absoluteScrollRestore.scrollTop,
+      }
+      : null;
     this._renderGeneration += 1;
     const renderGeneration = this._renderGeneration;
     this._preserveExistingChildrenGeneration = options.preserveMountedGalleryChildren
@@ -939,16 +956,24 @@ class VirtualArtistGrid {
       : null;
     const preservedAbsoluteScroll = preserveScroll && (
       options.preserveAbsoluteScroll === true
-      || (hasPendingScrollRender && options.preserveAbsoluteScroll !== false)
+      || ownedAbsoluteScrollPosition
     )
       ? {
         renderGeneration,
-        scrollLeft: requestedAbsoluteScroll?.scrollLeft ?? Number(this.scrollEl?.scrollLeft || 0),
-        scrollTop: requestedAbsoluteScroll?.scrollTop ?? Number(this.scrollEl?.scrollTop || 0),
+        scrollLeft: requestedAbsoluteScroll?.scrollLeft
+          ?? ownedAbsoluteScrollPosition?.scrollLeft
+          ?? Number(this.scrollEl?.scrollLeft || 0),
+        scrollTop: requestedAbsoluteScroll?.scrollTop
+          ?? ownedAbsoluteScrollPosition?.scrollTop
+          ?? Number(this.scrollEl?.scrollTop || 0),
       }
       : null;
+    const semanticScrollAnchorIsCurrent = options.semanticScrollAnchor && (
+      !Number.isSafeInteger(options.semanticScrollOwnerGeneration)
+      || options.semanticScrollOwnerGeneration === this._userScrollIntentGeneration
+    );
     const preservedAnchor = preserveScroll && !preservedAbsoluteScroll
-      ? this.captureScrollAnchor()
+      ? (semanticScrollAnchorIsCurrent ? options.semanticScrollAnchor : this.captureScrollAnchor())
       : null;
     this._absoluteScrollRestore = preservedAbsoluteScroll;
     const sections = [];
@@ -1357,6 +1382,7 @@ class VirtualArtistGrid {
 
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
+    this._userScrollIntentGeneration += 1;
     if (event?.type === 'wheel') {
       if (this._measureRaf) {
         cancelBrowserAnimationFrame(this._measureRaf);
@@ -2181,7 +2207,7 @@ class VirtualArtistGrid {
       this._activeRenderRafOwner = measurementRenderRafOwner;
     }
     try {
-      this.render(true);
+      this.render(true, { preserveExistingChildren: true });
     } finally {
       this._activeRenderRafOwner = previousActiveRenderRafOwner;
     }

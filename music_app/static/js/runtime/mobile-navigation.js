@@ -178,6 +178,7 @@ function restoreMobileGalleryParent(descriptor) {
     && liveParent.view === state.view && liveParent.groups === state.view?.artist_groups
     && liveParent.revision === state.status?.inventory_mutation_revision
     && descriptor.parentViewUrl === buildUrl(state.view);
+  let jumpScrollAnchor = null;
   if (
     galleryAnchorArtist
     && typeof state !== 'undefined'
@@ -192,15 +193,32 @@ function restoreMobileGalleryParent(descriptor) {
     ) {
       stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
       if (canReuseLiveParent) return;
+      jumpScrollAnchor = virtualGrid?.captureScrollAnchor?.() || null;
     }
   }
-  const position = atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
-  const options = { preserveScroll: !galleryAnchorArtist };
+  const semanticScrollAnchor = atParent
+    ? jumpScrollAnchor || (!galleryAnchorArtist ? descriptor?.parentScrollAnchor : null)
+    : null;
+  const position = semanticScrollAnchor
+    ? null
+    : atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
+  const preserveParentScroll = !galleryAnchorArtist || Boolean(jumpScrollAnchor);
+  const options = {
+    preserveScroll: preserveParentScroll,
+    preserveMountedGalleryChildren: preserveParentScroll,
+  };
   // Root '/' can display the canonical album gallery as well as Home. Retain
   // the owning view route, not its data, through this page's history entry.
   if (atParent && descriptor?.parentViewUrl) options.parentViewUrl = descriptor.parentViewUrl;
   if (galleryAnchorArtist) {
     options.galleryAnchorArtist = galleryAnchorArtist;
+  }
+  if (semanticScrollAnchor) {
+    options.semanticScrollAnchor = semanticScrollAnchor;
+    const ownerGeneration = virtualGrid?.getUserScrollIntentGeneration?.();
+    if (Number.isSafeInteger(ownerGeneration)) {
+      options.semanticScrollOwnerGeneration = ownerGeneration;
+    }
   }
   if (position) {
     options.preserveAbsoluteScroll = true;
@@ -212,16 +230,20 @@ function restoreMobileGalleryParent(descriptor) {
       virtualGrid.render(true);
     }
   }
+  let semanticScrollPositionApplied = false;
   if (
-    atParent
-    && !galleryAnchorArtist
-    && descriptor?.parentScrollAnchor
+    semanticScrollAnchor
     && typeof virtualGrid !== 'undefined'
     && typeof virtualGrid?.restoreScrollAnchor === 'function'
   ) {
-    virtualGrid.restoreScrollAnchor(descriptor.parentScrollAnchor);
+    virtualGrid.render(true);
+    virtualGrid.restoreScrollAnchor(semanticScrollAnchor);
+    semanticScrollPositionApplied = true;
   }
-  if (position && options.absoluteScrollPositionApplied && canReuseLiveParent) return;
+  if (
+    canReuseLiveParent
+    && (semanticScrollPositionApplied || (position && options.absoluteScrollPositionApplied))
+  ) return;
   handleGalleryBootstrapPopState(options);
 }
 function presentMobilePage(descriptor) {

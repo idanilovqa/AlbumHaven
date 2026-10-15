@@ -8,10 +8,18 @@ import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHelpers.js';
 
 const PREFETCH_VIEWPORTS = 8;
+const FULL_REFRESH_SEARCH_QUERY = 'Neal Morse';
 
 function isRootContinuation(response) {
   const url = new URL(response.url());
   return url.pathname.endsWith('/view-data') && url.searchParams.has('gallery_cursor');
+}
+
+function isFullSearchRefresh(response, query) {
+  const url = new URL(response.url());
+  return url.pathname.endsWith('/view-data')
+    && !url.searchParams.has('gallery_cursor')
+    && String(url.searchParams.get('q') || '').trim() === query;
 }
 
 async function openRootGallery(page, galleryActions, navigationPanelActions, view) {
@@ -78,9 +86,9 @@ function expectStableOverlap(samples) {
   const evidence = analyzeNativeScrollGesture(samples, 1);
   expect(evidence.anchorReplacementIndexes, JSON.stringify(samples)).toEqual([]);
   expect(evidence.originalNodeReplacementIndexes, JSON.stringify(samples)).toEqual([]);
-  expect(evidence.maxContentDrift, JSON.stringify(samples)).toBeLessThanOrEqual(1);
+  expect(evidence.maxContentDrift, JSON.stringify(samples)).toBe(0);
   expect(
-    evidence.signedStepDeltas.filter(delta => delta < -0.5),
+    evidence.signedStepDeltas.filter(delta => delta < 0),
     JSON.stringify({ evidence, samples }),
   ).toEqual([]);
 }
@@ -210,6 +218,81 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
 
   test.describe('desktop Cards', () => {
     test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false });
+
+    test('full preserve-scroll response during wheel sequence keeps gallery coordinates stable', async ({
+      galleryActions, navigationPanelActions, page, searchToolbarActions,
+    }, testInfo) => {
+      const ui = await openRootGallery(page, galleryActions, navigationPanelActions, 'cards');
+      const initialResponsePromise = page.waitForResponse(
+        response => isFullSearchRefresh(response, FULL_REFRESH_SEARCH_QUERY),
+      );
+      await searchToolbarActions.search(FULL_REFRESH_SEARCH_QUERY);
+      const initialResponse = await initialResponsePromise;
+      expect(initialResponse.ok()).toBe(true);
+      await searchToolbarActions.waitForQuery(FULL_REFRESH_SEARCH_QUERY);
+      const loadedBefore = await readLoadedAlbumCount(page);
+      expect(loadedBefore).toBeGreaterThan(0);
+
+      const searchInput = searchToolbarActions.searchToolbar.input;
+      await searchInput.focus();
+      const box = await ui.galleryScroll.boundingBox();
+      if (!box) throw new Error('Gallery scroll surface is not visible.');
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      const diagnosticSequenceBeforeInput = await readLatestDiagnosticSequence(galleryActions);
+      const anchor = await ui.captureMiddleVisibleCard();
+      const observation = await ui.startNativeScrollFrameObservation(anchor);
+      let samples;
+      let response = null;
+      let responseAt = null;
+      let deferredEvent = null;
+      let deferredObservedAt = null;
+      const onResponse = candidate => {
+        if (response || !isFullSearchRefresh(candidate, FULL_REFRESH_SEARCH_QUERY)) return;
+        response = candidate;
+        responseAt = Date.now();
+      };
+      page.on('response', onResponse);
+      const inputStartedAt = Date.now();
+      let inputEndedAt;
+      try {
+        await page.mouse.wheel(0, 1);
+        await page.keyboard.press('Enter');
+        for (let step = 0; step < 60 && !deferredEvent; step += 1) {
+          await page.mouse.wheel(0, 1);
+          await page.waitForTimeout(20);
+          deferredEvent = await readDeferredGroupUpdate(
+            galleryActions,
+            diagnosticSequenceBeforeInput,
+          );
+          if (deferredEvent) deferredObservedAt = Date.now();
+        }
+        if (deferredEvent) {
+          await page.mouse.wheel(0, 1);
+          await page.waitForTimeout(20);
+        }
+        inputEndedAt = Date.now();
+        expect(response, 'native wheel sequence must overlap a full search refresh response').not.toBeNull();
+        expect(deferredEvent, 'full refresh must reach the production deferred group-update path').not.toBeNull();
+        expect(deferredEvent.touchGestureActive).toBe(false);
+        expect(response.ok()).toBe(true);
+        const responseUrl = new URL(response.url());
+        expect(responseUrl.searchParams.has('gallery_cursor')).toBe(false);
+        expect(responseAt).toBeGreaterThanOrEqual(inputStartedAt);
+        expect(responseAt).toBeLessThanOrEqual(inputEndedAt);
+        expect(deferredObservedAt).toBeGreaterThanOrEqual(responseAt);
+        expect(deferredObservedAt).toBeLessThanOrEqual(inputEndedAt);
+        await waitForDeferredReplay(galleryActions, deferredEvent);
+        await expect.poll(() => readLoadedAlbumCount(page)).toBe(loadedBefore);
+        await page.waitForTimeout(300);
+      } finally {
+        page.off('response', onResponse);
+        samples = await observation.finish();
+        await testInfo.attach('desktop-full-refresh-overlap', {
+          body: JSON.stringify({ samples }), contentType: 'application/json',
+        });
+      }
+      expectStableOverlap(samples);
+    });
 
     test('real continuation response during wheel sequence keeps gallery coordinates stable', async ({
       galleryActions, navigationPanelActions, page,

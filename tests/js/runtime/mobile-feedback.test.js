@@ -91,7 +91,10 @@ test(`Back restores the departure anchor with ${scenario.name}`, () => {
       captureScrollAnchor: () => anchor,
       restoreOwnedAbsoluteScrollPosition: position => { scroll.scrollTop = position.scrollTop; return true; },
       render() {},
-      restoreScrollAnchor: value => restored.push(value),
+      restoreScrollAnchor: value => {
+        restored.push(value);
+        scroll.scrollTop = value.scrollTop;
+      },
     },
     handleGalleryBootstrapPopState: () => { refreshes += 1; },
     closeArtistsDrawer() {}, closeGalleryMainSurface() {}, requestAnimationFrame() {},
@@ -506,6 +509,7 @@ test('mobile gallery return restores saved coordinates before refreshing through
 
 test('mobile album return restores the captured gallery anchor before refreshing', () => {
   const calls = [];
+  let queuedAbsoluteRestore = null;
   const position = { scrollTop: 720, scrollLeft: 0 };
   const anchor = {
     albumKey: 'album-at-viewport-top',
@@ -518,10 +522,12 @@ test('mobile album return restores the captured gallery anchor before refreshing
     virtualGrid: {
       restoreOwnedAbsoluteScrollPosition: value => {
         calls.push(['position', value]);
+        queuedAbsoluteRestore = () => calls.push(['stale-position', value]);
         return true;
       },
       render: force => calls.push(['render', force]),
       restoreScrollAnchor: value => calls.push(['anchor', value]),
+      getUserScrollIntentGeneration: () => 7,
     },
     handleGalleryBootstrapPopState: options => calls.push(['request', options]),
   });
@@ -531,12 +537,15 @@ test('mobile album return restores the captured gallery anchor before refreshing
     parentScrollAnchor: anchor,
   });
 
-  assert.deepEqual(calls.slice(0, 3), [
-    ['position', position],
+  assert.deepEqual(calls.slice(0, 2), [
     ['render', true],
     ['anchor', anchor],
   ]);
-  assert.equal(calls[3][0], 'request');
+  assert.equal(queuedAbsoluteRestore, null, 'semantic restoration must not leave an absolute RAF owner');
+  assert.equal(calls[2][0], 'request');
+  assert.equal(calls[2][1].semanticScrollAnchor, anchor);
+  assert.equal(calls[2][1].semanticScrollOwnerGeneration, 7);
+  assert.equal(calls[2][1].preserveMountedGalleryChildren, true);
 });
 
 test('mobile album return does not restore a stale anchor at another history position', () => {
@@ -777,6 +786,13 @@ test('mobile album capture drops a transient jump anchor after ordinary gallery 
 
 test('mobile Back reconciles an unproven transient artist after optimistic alignment', () => {
   const calls = [];
+  const jumpAnchor = {
+    albumKey: 'battlelore-album',
+    sectionOccurrenceKey: 'artist:battlelore',
+    offsetTop: 0,
+    scrollTop: 320,
+    scrollLeft: 0,
+  };
   const context = load('mobile-navigation.js', {
     state: {
       view: {
@@ -791,6 +807,8 @@ test('mobile Back reconciles an unproven transient artist after optimistic align
         calls.push(['align', artist]);
         return true;
       },
+      captureScrollAnchor: () => jumpAnchor,
+      getUserScrollIntentGeneration: () => 9,
     },
     stabilizeRootGalleryArtistAlignment: artist => calls.push(['stabilize', artist]),
     handleGalleryBootstrapPopState: options => calls.push(options),
@@ -806,7 +824,10 @@ test('mobile Back reconciles an unproven transient artist after optimistic align
     ['align', 'Battlelore (canonical)'],
     ['stabilize', 'Battlelore (canonical)'],
   ]);
-  assert.equal(calls[2].preserveScroll, false);
+  assert.equal(calls[2].preserveScroll, true);
+  assert.equal(calls[2].preserveMountedGalleryChildren, true);
+  assert.equal(calls[2].semanticScrollAnchor, jumpAnchor);
+  assert.equal(calls[2].semanticScrollOwnerGeneration, 9);
   assert.equal(calls[2].parentViewUrl, '/?surface=albums&all_artists=1');
   assert.equal(calls[2].galleryAnchorArtist, 'Battlelore');
   assert.equal(calls.length, 3);

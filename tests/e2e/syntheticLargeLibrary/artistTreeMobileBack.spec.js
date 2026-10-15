@@ -84,7 +84,12 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
       expect(returnAnchor.albumKey).not.toBe('');
       expect(returnAnchor.artist).toBe(originatingArtist);
       expect(returnAnchor.top).not.toBeNull();
-      await albumOpenTrigger.click();
+      const albumOpenBox = await albumOpenTrigger.boundingBox();
+      expect(albumOpenBox).not.toBeNull();
+      await page.touchscreen.tap(
+        albumOpenBox.x + albumOpenBox.width / 2,
+        albumOpenBox.y + albumOpenBox.height / 2,
+      );
       await expect(ui.mobileAlbum).toBeVisible();
       const anchoredBackRequests = [];
       const viewTimeline = [];

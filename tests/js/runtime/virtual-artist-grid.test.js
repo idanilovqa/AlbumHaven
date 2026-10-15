@@ -1719,6 +1719,153 @@ test('explicit semantic preservation survives a pending scroll render during a p
   assert.equal(scrollEl.scrollTop, 1720);
 });
 
+test('background refresh uses a semantic anchor while a scroll render is pending', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  const anchor = { scrollLeft: 0, scrollTop: 5320, albumKey: 'viewed-album', offsetTop: 12 };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => anchor;
+  virtualGrid.restoreScrollAnchor = value => {
+    restored.push(value);
+    scrollEl.scrollTop = 1720;
+  };
+  scrollEl.scrollTop = 5320;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  assert.ok(virtualGrid._raf, 'the current scroll still has a queued render');
+
+  virtualGrid.setGroups([], [], [], { preserveScroll: true });
+  scheduledFrames.at(-1)();
+
+  assert.ok(restored.includes(anchor));
+  assert.equal(scrollEl.scrollTop, 1720);
+});
+
+test('refreshed mobile parent restores its saved semantic anchor instead of the stale mounted card', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  const departureAnchor = {
+    scrollLeft: 0,
+    scrollTop: 5320,
+    albumKey: 'departure-album',
+    sectionOccurrenceKey: 'artist:departure',
+    offsetTop: 12,
+  };
+  const staleMountedAnchor = {
+    ...departureAnchor,
+    albumKey: 'album-now-at-old-coordinate',
+    sectionOccurrenceKey: 'artist:wrong',
+  };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => staleMountedAnchor;
+  virtualGrid.restoreScrollAnchor = anchor => restored.push(anchor);
+  scrollEl.scrollTop = 5320;
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    semanticScrollAnchor: departureAnchor,
+  });
+  scheduledFrames.at(-1)();
+
+  assert.ok(restored.includes(departureAnchor));
+  assert.ok(!restored.includes(staleMountedAnchor));
+});
+
+test('newer user scroll invalidates a saved mobile parent semantic anchor before refresh applies', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  const departureAnchor = {
+    scrollLeft: 0,
+    scrollTop: 5320,
+    albumKey: 'departure-album',
+    sectionOccurrenceKey: 'artist:departure',
+    offsetTop: 12,
+  };
+  const liveAnchor = {
+    ...departureAnchor,
+    scrollTop: 6180,
+    albumKey: 'newer-user-position',
+    sectionOccurrenceKey: 'artist:newer',
+  };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => liveAnchor;
+  virtualGrid.restoreScrollAnchor = anchor => restored.push(anchor);
+
+  scrollEl.dispatchEvent({ type: 'touchstart', target: scrollEl, touches: [{}] });
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveMountedGalleryChildren: true,
+    semanticScrollAnchor: departureAnchor,
+    semanticScrollOwnerGeneration: 0,
+  });
+
+  assert.deepEqual(restored, []);
+  assert.equal(virtualGrid._renderGeneration, 0);
+
+  scrollEl.dispatchEvent({ type: 'touchend', target: scrollEl, touches: [] });
+  const settle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(typeof settle?.callback, 'function');
+  settle.callback();
+  scheduledFrames.at(-1)();
+
+  assert.ok(restored.includes(liveAnchor));
+  assert.ok(!restored.includes(departureAnchor));
+});
+
+test('delayed presentation measurement preserves mounted gallery children', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const section = {
+    sectionKey: 'artist:presentation-measurement',
+    blockHeights: [120],
+    blockMeasureKeys: ['row:1:presentation-album'],
+    measuredBlockKeys: [''],
+  };
+  virtualGrid.sectionByKey = new Map([[section.sectionKey, section]]);
+  context.__rows = [createMeasuredRow(section.sectionKey, 0, { rowHeight: 360 })];
+  context.__rowSelectorQueryCount = 1;
+  virtualGrid.captureScrollAnchor = () => ({
+    albumKey: 'presentation-album',
+    offsetTop: 24,
+    scrollLeft: 0,
+    scrollTop: 4454,
+  });
+  virtualGrid.recalculate = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.stabilizeScrollAfterMeasurement = () => {};
+  const renders = [];
+  virtualGrid.render = (force, options) => renders.push({ force, options });
+
+  virtualGrid.measureRenderedRows();
+
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].force, true);
+  assert.equal(renders[0].options?.preserveExistingChildren, true);
+});
+
 test('mobile album return refresh preserves a jump-scroll coordinate while its virtual render is pending', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -5241,6 +5388,73 @@ test('pagination group updates wait until an active touch gesture settles', () =
   assert.equal(virtualGrid._renderGeneration, 1);
   assert.equal(virtualGrid.sections[0]?.group?.artist, 'Deferred Artist');
   assert.deepEqual(renders, [932]);
+});
+
+test('background preserve-scroll group updates wait until an active touch gesture settles', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const renders = [];
+  virtualGrid.render = () => { renders.push(scrollEl.scrollTop); };
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.scrollTop = 1900;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 1948;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Background Refresh Artist', artist_display: 'Background Refresh Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+
+  assert.equal(virtualGrid._renderGeneration, 0);
+  assert.equal(virtualGrid.sections.length, 0);
+  assert.deepEqual(renders, []);
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  const settle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(typeof settle?.callback, 'function');
+  settle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Background Refresh Artist');
+  assert.deepEqual(renders, [1948]);
+});
+
+test('pagination group updates replay when touch release reaches the document', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.scrollTop = 900;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 932;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Deferred Artist', artist_display: 'Deferred Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+
+  const gestureSettle = context.__scheduledBrowserTimeouts.at(-1);
+  gestureSettle.callback();
+  assert.equal(virtualGrid._renderGeneration, 0);
+
+  context.document.dispatchEvent({ type: 'touchend', touches: [] });
+  const releaseSettle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.notEqual(
+    releaseSettle?.id,
+    gestureSettle.id,
+    'document-level touch release must schedule deferred continuation replay',
+  );
+  releaseSettle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Deferred Artist');
 });
 
 test('pagination group updates coalesce behind an active wheel scroll', () => {

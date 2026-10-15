@@ -656,6 +656,7 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
     const refreshApplied = await fetchAndRender(buildApiUrl(state.view, { rootFullPayload: true }), false, {
       preserveGalleryOptionsMenu: true,
       ...options,
+      preserveMountedGalleryChildren: true,
     });
     if (refreshApplied) return true;
     if (

@@ -1377,7 +1377,6 @@ test('dropping a stale queued family request still dispatches pending scan recon
     return `/view-data?artist=Morse%20Portnoy%20George${relatedArtist ? `&related_artist=${encodeURIComponent(relatedArtist)}` : ''}`;
   };
   context.state.ui.pendingScanCompletionViewRefresh = true;
-
   const activeRequest = context.fetchAndRender('/view-data?artist=Morse%20Portnoy%20George', false, {
     preserveScroll: true,
   });
@@ -4066,6 +4065,12 @@ test('pollStatus refreshes a selected artist after pending sidebar navigation se
 
 test('scan completion reissues against the current family filter when the first refresh loses revision ownership', async () => {
   const { context, pendingRequests } = createArtistFamilyOwnershipContext();
+  const backgroundRefreshOptions = [];
+  const fetchAndRender = context.fetchAndRender;
+  context.fetchAndRender = (url, pushHistory, options) => {
+    backgroundRefreshOptions.push(options);
+    return fetchAndRender(url, pushHistory, options);
+  };
   seedMorseArtistFamily(context);
   context.buildApiUrl = (view) => {
     const relatedArtist = Array.isArray(view?.related_filter_artists)
@@ -4105,6 +4110,7 @@ test('scan completion reissues against the current family filter when the first 
   });
 
   assert.equal(await refreshPromise, true);
+  assert.equal(backgroundRefreshOptions.at(-1).preserveMountedGalleryChildren, true);
   assert.equal(context.state.ui.pendingScanCompletionViewRefresh, false);
   assert.equal(context.state.ui.pendingScanCompletionViewRefreshRetryCount, 0);
   assert.deepEqual(Array.from(context.state.view.related_filter_artists), ['Neal Morse']);

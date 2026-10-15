@@ -563,7 +563,7 @@ export class GalleryRegressions {
         samples.push({
           at: performance.now(), epoch: performance.timeOrigin + performance.now(),
           gridEvents,
-          connected, delta, stable: connected && Math.abs(delta) <= 1,
+          connected, delta, stable: connected && delta === 0,
           originalConnected: Boolean(originalCard?.isConnected), sameNode: card === originalCard,
           scrollTop: scroller?.scrollTop, scrollHeight: scroller?.scrollHeight,
           viewportTop: cardRect?.top,

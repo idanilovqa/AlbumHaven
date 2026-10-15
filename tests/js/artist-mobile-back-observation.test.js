@@ -1,12 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-test('return observation excludes hidden gallery frames but catches the first visible displacement', async () => {
+test('return observation excludes hidden gallery frames but rejects a one-pixel visible displacement', async () => {
   const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
   const callbacks = new Map();
   let sequence = 0;
   let visible = false;
-  let top = 40;
+  let top = 21;
   let disposed = 0;
   const previous = Object.fromEntries(['window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'].map(key => [key, global[key]]));
   const gallery = { scrollTop: 200, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0, width: visible ? 390 : 0, height: visible ? 600 : 0 }) };
@@ -36,7 +36,7 @@ test('return observation excludes hidden gallery frames but catches the first vi
     top = 20;
     tick();
     const samples = await observation.finish();
-    assert.deepEqual(samples.map(sample => sample.delta), [20, 0]);
+    assert.deepEqual(samples.map(sample => sample.delta), [1, 0]);
     assert.deepEqual(samples.map(sample => sample.stable), [false, true]);
     assert.equal(callbacks.size, 0);
     assert.equal(disposed, 1);

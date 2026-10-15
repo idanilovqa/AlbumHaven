@@ -42,9 +42,9 @@ function stepContaining(job, marker) {
   return step;
 }
 
-test('approved registry keeps 24 independently schedulable targets and 52 cases', () => {
+test('approved registry keeps 24 independently schedulable targets and 53 cases', () => {
   assert.equal(contract.targets.length, 24);
-  assert.equal(contract.targets.flatMap((target) => target.cases).length, 52);
+  assert.equal(contract.targets.flatMap((target) => target.cases).length, 53);
   assert.deepEqual(
     contract.targets.filter((target) => target.defaultMember).map((target) => target.name),
     contract.targets.map((target) => target.name),
@@ -56,7 +56,7 @@ test('approved registry keeps 24 independently schedulable targets and 52 cases'
   const scrollNavigation = contract.targets.find((target) => (
     target.name === 'artist-tree-scroll-navigation'
   ));
-  assert.equal(scrollNavigation.cases.length, 21);
+  assert.equal(scrollNavigation.cases.length, 22);
   assert.deepEqual(
     scrollNavigation.cases
       .filter((entry) => entry.test.endsWith('galleryNativeScrollStability.spec.js'))
@@ -119,7 +119,7 @@ test('validator accepts selectable shards and rejects routing and case drift', (
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
-  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /52 cases/);
+  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /53 cases/);
 
   const paidCampaign = structuredClone(contract);
   paidCampaign.calibrationPolicy.separateCampaignRequired = true;

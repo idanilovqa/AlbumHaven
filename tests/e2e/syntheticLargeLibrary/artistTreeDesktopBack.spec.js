@@ -53,7 +53,12 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration',
       const observation = await ui.startVisibleCardAnchorObservation(anchor);
       let samples;
       try {
-        await albumOpenTrigger.click();
+        const albumOpenBox = await albumOpenTrigger.boundingBox();
+        expect(albumOpenBox).not.toBeNull();
+        await page.mouse.click(
+          albumOpenBox.x + albumOpenBox.width / 2,
+          albumOpenBox.y + albumOpenBox.height / 2,
+        );
         await expect(trackModalActions.trackModal.dialog).toBeVisible();
         await trackModalActions.trackModal.closeButton.click();
         await expect(trackModalActions.trackModal.dialog).toBeHidden();
@@ -69,7 +74,7 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration',
       expect(samples.filter(sample => !sample.stable)).toEqual([]);
       const continuity = await ui.readSemanticVisibleCardAnchorContinuity(anchor);
       expect(continuity.connected).toBe(true);
-      expect(Math.abs(continuity.delta)).toBeLessThanOrEqual(1);
+      expect(continuity.delta).toBe(0);
     });
   }
 });

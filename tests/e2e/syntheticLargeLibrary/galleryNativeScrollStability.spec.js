@@ -45,10 +45,10 @@ function expectGestureStable(samples, direction, commandedDistance) {
   const evidence = analyzeNativeScrollGesture(samples, direction);
   expect(evidence.anchorReplacementIndexes, JSON.stringify(samples)).toEqual([]);
   expect(evidence.originalNodeReplacementIndexes, JSON.stringify(samples)).toEqual([]);
-  expect(evidence.maxContentDrift, JSON.stringify(samples)).toBeLessThanOrEqual(1);
+  expect(evidence.maxContentDrift, JSON.stringify(samples)).toBe(0);
   expect(evidence.firstMovementIndex, JSON.stringify(samples)).toBeGreaterThan(0);
   expect(
-    evidence.signedStepDeltas.filter(delta => delta < -0.5),
+    evidence.signedStepDeltas.filter(delta => delta < 0),
     JSON.stringify({ evidence, samples }),
   ).toEqual([]);
   expect(
@@ -112,13 +112,15 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stabili
         const lowerY = Math.round(box.y + box.height * 0.68);
         const upperY = Math.round(box.y + box.height * 0.46);
         const commandedDistance = Math.abs(lowerY - upperY);
+        // Pinned Chrome consumes the first 15 px to activate native touch scrolling.
+        const touchActivationDistance = 15;
         await observeGesture(
           ui, testInfo, `${view}-mobile-native-swipe-forward`, 1, commandedDistance,
-          () => swipe(lowerY, upperY),
+          () => swipe(lowerY, upperY - touchActivationDistance),
         );
         await observeGesture(
           ui, testInfo, `${view}-mobile-native-swipe-reverse`, -1, commandedDistance,
-          () => swipe(upperY, lowerY),
+          () => swipe(upperY, lowerY + touchActivationDistance),
         );
       } finally {
         await cdp.detach();

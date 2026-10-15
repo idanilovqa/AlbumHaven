@@ -5257,6 +5257,18 @@ test('version selection hydrates the selected preview through the modal opener',
   assert.equal(opened.options.releaseSet.releases[1], version);
 });
 
+test('gallery presentation changes preserve a semantic anchor instead of obsolete pixel coordinates', () => {
+  const { context } = createContext();
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-main-interactions.js'), 'utf8'), context);
+  context.state.gallery.mainState = context.createGalleryMainState({});
+  context.persistCurrentGalleryDisplayPreferences = () => {};
+  const renders = [];
+  context.renderArtistGroups = options => renders.push(options);
+  context.transitionGalleryMain({ type: 'set-view', view: 'covers' });
+  assert.equal(renders[0].preserveScroll, true);
+  assert.equal(renders[0].preserveAbsoluteScroll, false);
+});
+
 test('enabled source remains in search requests after category-restricted hydration', () => {
   const { context, calls } = createContext({ useProductionBuildApiUrl: true,
     currentUrl: 'http://localhost/?surface=albums&category=main_library' });

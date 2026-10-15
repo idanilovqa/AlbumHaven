@@ -99,8 +99,12 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
       page.on('request', recordAnchoredBackRequest);
       page.on('response', recordViewResponse);
       let observation;
+      let returnObservation;
       let samples = [];
       try {
+        returnObservation = await ui.startVisibleCardAnchorObservation(returnAnchor, {
+          waitUntilGalleryVisible: true,
+        });
         await ui.mobileBack.click();
         await expect(ui.mobileAlbum).toBeHidden();
         await expect.poll(() => ui.readSemanticVisibleCardAnchorContinuity(returnAnchor)).toEqual({
@@ -113,7 +117,10 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         observation = scrollBeyondJump
           ? await ui.startVisibleCardAnchorObservation(returnAnchor)
           : await ui.startArtistJumpPlacementObservation(renderedArtist);
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(15000);
+        const returnSamples = await returnObservation.finish();
+        expect(returnSamples.length).toBeGreaterThan(30);
+        expect(returnSamples.filter(sample => !sample.stable)).toEqual([]);
         samples = await observation.finish();
         expect(samples.length).toBeGreaterThan(30);
         expect(samples.filter(sample => !sample.stable)).toEqual([]);
@@ -124,7 +131,10 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         if (!scrollBeyondJump) expect(await ui.readArtistJumpPlacement(renderedArtist)).toEqual(expectedPlacement);
         expect(anchoredBackRequests).toEqual([]);
       } finally {
-        try { await observation?.finish(); }
+        try {
+          await returnObservation?.finish();
+          await observation?.finish();
+        }
         finally {
           page.off('request', recordAnchoredBackRequest);
           page.off('response', recordViewResponse);

@@ -1493,6 +1493,39 @@ test('a newer user wheel cancels a pending relative setGroups restoration', () =
   assert.equal(scrollEl.scrollTop, 1400);
 });
 
+test('explicit semantic preservation survives a pending scroll render during a presentation change', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  virtualGrid.scheduleMeasureRows = () => {};
+  const anchor = { scrollLeft: 0, scrollTop: 5320, albumKey: 'viewed-album', offsetTop: 12 };
+  const restored = [];
+  virtualGrid.captureScrollAnchor = () => anchor;
+  virtualGrid.restoreScrollAnchor = value => {
+    restored.push(value);
+    // The same album occupies a different coordinate in the new presentation.
+    scrollEl.scrollTop = 1720;
+  };
+  scrollEl.scrollTop = 5320;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  assert.ok(virtualGrid._raf, 'the old presentation still has a queued scroll render');
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveAbsoluteScroll: false,
+  });
+  scheduledFrames.at(-1)();
+
+  assert.ok(restored.includes(anchor), 'restore the viewed album rather than obsolete coordinates');
+  assert.equal(scrollEl.scrollTop, 1720);
+});
+
 test('mobile album return refresh preserves a jump-scroll coordinate while its virtual render is pending', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
@@ -1583,6 +1616,33 @@ test('mobile album return cancels a stale artist-selection reset before delayed 
     5320,
     'the delayed stabilization frame must not replay the superseded reset-to-top intent',
   );
+});
+
+test('resumed wheel scrolling defers an already queued row measurement until settled', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    const id = scheduledFrames.size + 1;
+    scheduledFrames.set(id, callback);
+    return id;
+  };
+  let measurementCount = 0;
+  virtualGrid.measureRenderedRows = () => { measurementCount += 1; };
+  virtualGrid.scheduleMeasureRows(true);
+  const queuedMeasurement = scheduledFrames.get(virtualGrid._measureRaf);
+
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  scrollEl.scrollTop = 840;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  queuedMeasurement();
+  assert.equal(measurementCount, 0, 'queued row reconciliation must defer after scrolling resumes');
+
+  const settleTimer = context.__scheduledBrowserTimeouts
+    .filter(({ delay }) => delay === 96).at(-1);
+  settleTimer.callback();
+  scheduledFrames.get(virtualGrid._measureRaf)();
+  assert.equal(measurementCount, 1, 'deferred measurement must run after the quiet period');
 });
 
 test('mobile touch scrolling defers row measurement until the gesture ends', () => {
@@ -1970,6 +2030,7 @@ test('scroll render timer completes a pending frame when animation frames are st
     null,
     { preserveScroll: true },
   );
+  const pendingMeasurementFrameId = virtualGrid._measureRaf;
   scrollEl.scrollTop = 510;
   virtualGrid.onScroll();
   const scrollRenderFrameId = virtualGrid._raf;
@@ -1983,7 +2044,7 @@ test('scroll render timer completes a pending frame when animation frames are st
   assert.equal(diagnostics.latestRender.viewportTop, 510);
   assert.equal(diagnostics.latestRender.renderRafOwner, scrollRenderFrameId);
   assert.equal(virtualGrid._raf, null);
-  assert.deepEqual(context.canceledBrowserAnimationFrames, [scrollRenderFrameId]);
+  assert.deepEqual(context.canceledBrowserAnimationFrames, [pendingMeasurementFrameId, scrollRenderFrameId]);
 
   scheduledFrames.get(scrollRenderFrameId)();
   assert.equal(diagnostics.latestRender.renderRafOwner, scrollRenderFrameId);

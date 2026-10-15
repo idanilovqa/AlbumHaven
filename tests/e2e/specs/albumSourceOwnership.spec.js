@@ -3,7 +3,8 @@ import path from 'node:path';
 import { expect, test } from '../support/baseFixtures.js';
 import {
   createAlbumSourceOwnershipFixture, removeAlbumSourceOwnershipFixture,
-  stageOwnedLegacyCoverContamination, stageOwnedLegacyInFolderCover, readOwnedLegacyCoverState,
+  stageOwnedLegacyCoverContamination, stageOwnedLegacyInFolderCover, stageOwnedAutomaticInFolderCover,
+  readOwnedLegacyCoverState,
 } from '../helpers/albumSourceOwnershipFixture.js';
 import { setOwnedLegacyCoverRepairProvider } from '../helpers/coverLookupProviderHelpers.js';
 
@@ -263,22 +264,20 @@ test('FTC-COVERS-026 an explicit adequate local cover remains user-owned and mak
   });
 });
 
-test('FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search', { tag: '@area:cover-providers' }, async ({
+test('FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search', { tag: '@area:cover-providers' }, async ({
   managedAppLifecycle, galleryActions, trackModalActions, coverLookupActions,
   appBarActions, page, stepLogger, thirdPartyRequestEvidence,
 }, testInfo) => {
   test.setTimeout(240000);
-  expect(process.env.ALBUM_HAVEN_COVER_REPAIR_MIN_EDGE,
-    'Run this repair acceptance case with the isolated application minimum set to 2000').toBe('2000');
   const fixture = ownedFixture;
   const target = { artist: fixture.artist, album: fixture.album, year: fixture.year };
   let inherited;
   let baselineImage;
-  await stepLogger.step('Stage legacy user ownership of correctly located undersized artwork while the application is stopped', async () => {
+  await stepLogger.step('Stage automatic ownership of correctly located undersized artwork while the application is stopped', async () => {
     await managedAppLifecycle.stop();
     try {
-      inherited = await stageOwnedLegacyInFolderCover(fixture);
-      expect(inherited.origin).toBe('user');
+      inherited = await stageOwnedAutomaticInFolderCover(fixture);
+      expect(inherited.origin).toBe('automatic');
       expect(inherited.provenance).toBeNull();
     } finally {
       await managedAppLifecycle.restart();
@@ -286,10 +285,10 @@ test('FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adeq
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(fixture.artist)}`);
     await galleryActions.waitForGalleryReady();
     const opened = await galleryActions.selectAlbumDetailsByIdentityAndReadPayload(target);
-    expect(opened.album.local_cover_width).toBe(1600);
-    expect(opened.album.local_cover_height).toBe(1600);
+    expect(opened.album.local_cover_width).toBe(640);
+    expect(opened.album.local_cover_height).toBe(640);
     baselineImage = await coverLookupActions.readDisplayedImageEvidence(
-      trackModalActions.trackModal.detailedCoverImage, 'undersized legacy artwork',
+      trackModalActions.trackModal.detailedCoverImage, 'undersized automatic artwork',
       { expectedCoverPath: inherited.coverPath, expectedCoverRevision: inherited.wrongRevision },
     );
     await trackModalActions.close();

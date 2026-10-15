@@ -712,7 +712,7 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
     "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
     "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
-    "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+    "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
   ]);
   const isolatedInvocations = waves.flatMap((wave) => wave.invocations).filter(
     (invocation) => invocation.baselineMode === 'isolated-app-process',
@@ -749,7 +749,7 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
       "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
       "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
       "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
-      "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
+      "FTC-COVERS-027 poor automatic in-folder cover upgrades to different adequate artwork on automatic search",
     ],
   );
   assert.equal(secondWave.invocations.at(-1).baselineMode, 'global-mutation');

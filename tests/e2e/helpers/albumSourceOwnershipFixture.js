@@ -103,7 +103,12 @@ from psycopg.types.json import Jsonb
 owner = Path(sys.argv[1]).resolve(strict=True)
 if not owner.name.startswith("E2E Album Source Ownership "):
     raise RuntimeError("Legacy cover setup requires test-owned media")
-wrong = owner / ("Real Album" if sys.argv[2] == "stage-in-folder" else "Random songs") / "cover.png"
+wrong = owner / ("Real Album" if sys.argv[2] in {"stage-in-folder", "stage-in-folder-automatic"} else "Random songs") / "cover.png"
+if sys.argv[2] == "stage-in-folder-automatic":
+    from PIL import Image
+    with Image.open(wrong) as image:
+        resized = image.resize((640, 640))
+    resized.save(wrong)
 revision = hashlib.sha256(wrong.read_bytes()).hexdigest()
 prefix = str(owner / "Real Album") + os.sep
 with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as connection:
@@ -116,12 +121,12 @@ with psycopg.connect(os.environ["ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL"]) as c
     if len(albums) != 1:
         raise RuntimeError("Expected one uniquely owned fixture album")
     album_id = albums[0][0]
-    if sys.argv[2] in {"stage", "stage-in-folder"}:
+    if sys.argv[2] in {"stage", "stage-in-folder", "stage-in-folder-automatic"}:
         from PIL import Image
         with Image.open(wrong) as image:
             width, height = image.size
         metadata = {"cover_path": str(wrong), "cover_revision": revision,
-                    "cover_selection_origin": "user", "local_cover_width": width,
+                "cover_selection_origin": "automatic" if sys.argv[2] == "stage-in-folder-automatic" else "user", "local_cover_width": width,
                     "local_cover_height": height}
         connection.execute("""
             update library.local_albums set cover_path = %s,
@@ -162,4 +167,5 @@ async function legacyCoverState(fixture, operation) {
 // Call staging only while the managed production application is stopped.
 export const stageOwnedLegacyCoverContamination = fixture => legacyCoverState(fixture, 'stage');
 export const stageOwnedLegacyInFolderCover = fixture => legacyCoverState(fixture, 'stage-in-folder');
+export const stageOwnedAutomaticInFolderCover = fixture => legacyCoverState(fixture, 'stage-in-folder-automatic');
 export const readOwnedLegacyCoverState = fixture => legacyCoverState(fixture, 'read');

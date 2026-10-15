@@ -1266,16 +1266,8 @@ def ensure_best_cover_for_folder(
 
         preserve_user_ownership = False
         expected_cover_revision = ""
-        if local_cover is not None and not images_are_visually_similar(local_cover, raw_bytes):
-            publish_automatic_improvement()
-            detail["reason"] = "user_controlled_improvement_available"
-            detail["elapsed_ms"] = round(
-                (time.perf_counter() - fetch_started_at) * 1000,
-                2,
-            )
-            return local_cover, False, detail
         if user_controls_cover:
-            if local_cover is None:
+            if local_cover is None or not images_are_visually_similar(local_cover, raw_bytes):
                 publish_automatic_improvement()
                 detail["reason"] = "user_controlled_improvement_available"
                 detail["elapsed_ms"] = round(

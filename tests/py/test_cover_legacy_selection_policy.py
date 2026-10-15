@@ -79,15 +79,10 @@ def test_repair_target_negative_cache_does_not_block_normal_target_after_restart
         assert image.size == (1600, 1600)
 
 
-@pytest.mark.parametrize(("origin", "provenance"), [
-    ("automatic", None),
-    ("user", None),
-    ("user", "explicit"),
-])
-def test_different_adequate_art_never_replaces_existing_local_cover(
+@pytest.mark.parametrize("provenance", [None, "explicit"])
+def test_different_adequate_art_never_replaces_user_cover(
     tmp_path,
     monkeypatch,
-    origin,
     provenance,
 ):
     folder = tmp_path / "Album"
@@ -108,7 +103,7 @@ def test_different_adequate_art_never_replaces_existing_local_cover(
     selected, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
         folder, "Artist", "Album", None, 2026, {".png", ".jpg"},
         SimpleNamespace(get=lambda *_args: None, set=lambda *_args: None), "Tests/1.0",
-        selected_cover_path=str(current), cover_selection_origin=origin,
+        selected_cover_path=str(current), cover_selection_origin="user",
         cover_selection_provenance=provenance, reject_if_user_controlled=True,
         automatic_write_guard=guard, search_remote_cover_func=lambda **_kwargs: (candidate, []),
         candidate_callback=lambda *args, **kwargs: publications.append((args, kwargs)),
@@ -119,6 +114,35 @@ def test_different_adequate_art_never_replaces_existing_local_cover(
     assert writes == []
     assert detail["reason"] == "user_controlled_improvement_available"
     assert publications
+
+
+def test_different_adequate_art_replaces_automatic_cover(tmp_path, monkeypatch):
+    folder = tmp_path / "Album"
+    folder.mkdir()
+    current = folder / "cover.png"
+    Image.new("RGB", (640, 640), "green").save(current)
+    raw = io.BytesIO()
+    Image.new("RGB", (1600, 1600), "blue").save(raw, format="PNG")
+    candidate = CoverCandidate(source="apple", url="https://images.example/new.png", raw_bytes=raw.getvalue(),
+        width=1600, height=1600, score=0.99, matched_artist="Artist", matched_album="Album")
+    monkeypatch.setattr(cover_refresh_provider, "images_are_visually_similar", lambda *_args: False)
+    writes = []
+    def guard(write_action, *, cover_selection_origin):
+        writes.append((cover_selection_origin, getattr(write_action, "preserve_user_ownership", False)))
+        return write_action()
+    selected, downloaded, detail = cover_refresh_provider.ensure_best_cover_for_folder(
+        folder, "Artist", "Album", None, 2026, {".png", ".jpg"},
+        SimpleNamespace(get=lambda *_args: None, set=lambda *_args: None), "Tests/1.0",
+        selected_cover_path=str(current), cover_selection_origin="automatic",
+        reject_if_user_controlled=True, automatic_write_guard=guard,
+        search_remote_cover_func=lambda **_kwargs: (candidate, []),
+    )
+    assert downloaded is True
+    assert selected is not None
+    with Image.open(selected) as image:
+        assert image.size == (1600, 1600)
+    assert writes == [("automatic", False)]
+    assert detail["reason"] == "cover_written"
 
 
 @pytest.mark.parametrize("dimensions,searches", [((1199, 1200), 1), ((1200, 1200), 0), ((1200, 1199), 1)])

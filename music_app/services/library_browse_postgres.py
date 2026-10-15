@@ -694,13 +694,14 @@ class PostgresLibraryBrowseRepository:
         *,
         query_params: Mapping[str, object] | None = None,
         library_state: Mapping[str, object] | None = None,
+        sidebar_only: bool = False,
     ) -> dict[str, object]:
         started_at = perf_counter()
         started_cpu = thread_time()
         phase_ms = {}
         phase_started_at = started_at
         view_state = _root_sidebar_view_state(query_params)
-        paged = (query_params or {}).get("gallery_page_size") is not None
+        paged = not sidebar_only and (query_params or {}).get("gallery_page_size") is not None
         include_non_album_tracks = _should_load_non_album_tracks(query_params)
         if paged:
             _root_gallery_page_size(query_params or {})
@@ -824,22 +825,23 @@ class PostgresLibraryBrowseRepository:
                         sidebar_displays[key].casefold(),
                     ),
                 )
-                preview_artists = _expanded_artist_name_list(
-                    [sidebar_displays[key] for key in ordered_sidebar_keys[:_STARTUP_PREVIEW_ARTIST_LIMIT]],
-                    root_alias_to_canonical,
-                    relation_alias_maps["canonical_to_aliases"] if root_alias_to_canonical else {},
-                )
-                preview_rows = _canonicalize_artist_rows(
-                    self._load_root_startup_preview_rows(
-                        view_state,
-                        candidate_artists=preview_artists,
-                        connection=connection,
-                    ),
-                    root_alias_to_canonical,
-                )
-                preview_artist_groups = _root_album_browse_artist_groups(preview_rows)[
-                    :_STARTUP_PREVIEW_ARTIST_LIMIT
-                ]
+                if not sidebar_only:
+                    preview_artists = _expanded_artist_name_list(
+                        [sidebar_displays[key] for key in ordered_sidebar_keys[:_STARTUP_PREVIEW_ARTIST_LIMIT]],
+                        root_alias_to_canonical,
+                        relation_alias_maps["canonical_to_aliases"] if root_alias_to_canonical else {},
+                    )
+                    preview_rows = _canonicalize_artist_rows(
+                        self._load_root_startup_preview_rows(
+                            view_state,
+                            candidate_artists=preview_artists,
+                            connection=connection,
+                        ),
+                        root_alias_to_canonical,
+                    )
+                    preview_artist_groups = _root_album_browse_artist_groups(preview_rows)[
+                        :_STARTUP_PREVIEW_ARTIST_LIMIT
+                    ]
             phase_ms["page_hydration" if paged else "unpaged_preview"] = (
                 perf_counter() - phase_started_at
             ) * 1000
@@ -859,11 +861,12 @@ class PostgresLibraryBrowseRepository:
                     configured_root_paths = configured_library_root_paths_snapshot(
                         self._config, connection=connection,
                     )
-            self._apply_private_album_rating_overlays(
-                _album_payloads_from_groups(preview_artist_groups),
-                source_rows=preview_rows,
-                connection=connection,
-            )
+            if not sidebar_only:
+                self._apply_private_album_rating_overlays(
+                    _album_payloads_from_groups(preview_artist_groups),
+                    source_rows=preview_rows,
+                    connection=connection,
+                )
         finally:
             try:
                 rollback = getattr(connection, "rollback", None)
@@ -889,6 +892,13 @@ class PostgresLibraryBrowseRepository:
                 }
                 for artist_key in ordered_sidebar_keys
             ]
+        if sidebar_only:
+            return {
+                "artists_sidebar": artists_sidebar,
+                "album_count": album_count,
+                "artist_count": len(artists_sidebar),
+                "show_all_artists_sidebar_link": True,
+            }
         payload = {
             "surface": _build_view_surface_payload("albums"),
             "shell_layout": _build_shell_layout_payload(

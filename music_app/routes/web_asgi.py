@@ -660,6 +660,7 @@ def _build_postgres_selected_artist_startup_view(
         root_sidebar_payload = repository.build_root_startup_preview_payload(
             query_params=query_args,
             library_state=library_state,
+            sidebar_only=True,
         )
         root_sidebar = list(
             root_sidebar_payload.get("artists_sidebar") or []

@@ -1966,7 +1966,9 @@ def test_root_sidebar_does_not_queue_settings_work_and_closes_database(monkeypat
     monkeypatch.setattr(
         repository._inventory_repository,
         "load_support_state",
-        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}},
+        lambda **_kwargs: pytest.fail(
+            "sidebar-only startup must not load unrelated support state"
+        ),
     )
     monkeypatch.setattr(
         repository,
@@ -4055,6 +4057,90 @@ def test_root_startup_preview_ignores_stale_relation_aliases(monkeypatch):
         "Live Artist"
     ]
     assert "Stale Canonical" not in str(payload)
+
+
+def test_root_startup_preview_sidebar_only_skips_album_preview_work(monkeypatch):
+    from music_app.services import library_browse_postgres as browse_module
+
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_relation_alias_maps",
+        lambda **_kwargs: {
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+            "projection_stale_reason": "",
+        },
+    )
+    monkeypatch.setattr(
+        repository._inventory_repository,
+        "load_support_state",
+        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}},
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_root_sidebar_rows",
+        lambda *_args, **_kwargs: [
+            {
+                **_browse_album_row(
+                    artist="Broadcast",
+                    album_id=10,
+                    album_key="broadcast::tender-buttons",
+                    title="Tender Buttons",
+                ),
+                "album_ids": [10, 11],
+                "album_count": 2,
+            },
+            {
+                **_browse_album_row(
+                    artist="Stereolab",
+                    album_id=20,
+                    album_key="stereolab::dots-and-loops",
+                    title="Dots and Loops",
+                ),
+                "album_ids": [20],
+                "album_count": 1,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_root_startup_preview_rows",
+        lambda *_args, **_kwargs: pytest.fail(
+            "sidebar-only startup must not load album preview rows"
+        ),
+    )
+    monkeypatch.setattr(
+        repository,
+        "_apply_private_album_rating_overlays",
+        lambda *_args, **_kwargs: pytest.fail(
+            "sidebar-only startup must not load album rating overlays"
+        ),
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "_queue_display_cover_variants_for_groups",
+        lambda *_args, **_kwargs: pytest.fail(
+            "sidebar-only startup must not queue album cover variants"
+        ),
+    )
+
+    payload = repository.build_root_startup_preview_payload(
+        query_params={"gallery_page_size": "24"},
+        sidebar_only=True,
+    )
+
+    assert payload["artists_sidebar"] == [
+        {"artist": "Broadcast", "artist_display": "Broadcast", "count": 2},
+        {"artist": "Stereolab", "artist_display": "Stereolab", "count": 1},
+    ]
+    assert payload["artist_count"] == 2
+    assert payload["album_count"] == 3
+    assert payload["show_all_artists_sidebar_link"] is True
 
 
 def test_selected_artist_preview_limits_album_ids_before_track_rollups():

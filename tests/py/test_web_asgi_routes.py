@@ -436,9 +436,11 @@ def test_selected_artist_startup_requests_summary_without_losing_repeated_filter
             *,
             query_params,
             library_state,
+            sidebar_only,
         ):
             captured.append(query_params)
             assert library_state == {}
+            assert sidebar_only is True
             return {}
 
         def build_root_sidebar_payload(self, *, query_params):

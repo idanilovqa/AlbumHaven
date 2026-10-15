@@ -1091,6 +1091,35 @@ def test_delete_local_cover_and_choose_next_promotes_best_remaining_square_cover
     assert next_cover == better_cover
 
 
+def test_delete_local_cover_and_choose_next_skips_generated_preview_assets(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    active_cover = (album_root / "cover.jpg").resolve()
+    generated_preview = (album_root / "album-haven-preview.jpg").resolve()
+    generated_variant = (
+        album_root / ".album-haven" / "cover_variants" / "ab" / "generated.jpg"
+    ).resolve()
+    remaining_cover = (album_root / "folder.jpg").resolve()
+    _write_jpeg(active_cover, (220, 60, 60), size=(12, 12))
+    _write_jpeg(generated_preview, (30, 160, 220), size=(100, 100))
+    _write_jpeg(generated_variant, (160, 30, 220), size=(120, 120))
+    _write_jpeg(remaining_cover, (30, 220, 160), size=(40, 40))
+
+    next_cover = delete_local_cover_and_choose_next(
+        album_root=album_root,
+        source_path=active_cover,
+        active_cover_path=active_cover,
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
+        score_image=score_image,
+    )
+
+    assert not active_cover.exists()
+    assert generated_preview.exists()
+    assert generated_variant.exists()
+    assert next_cover == remaining_cover
+
+
 def test_delete_local_cover_and_choose_next_preserves_active_cover_when_non_active_image_is_deleted(tmp_path: Path):
     album_root = (tmp_path / "Artist" / "Album").resolve()
     active_cover = (album_root / "cover.jpg").resolve()

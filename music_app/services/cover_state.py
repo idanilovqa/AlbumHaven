@@ -5,8 +5,9 @@ import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
-from music_app.services.library import album_to_dict
 from music_app.services.covers import image_dimensions
+from music_app.services.cover_workflow import is_generated_cover_artifact
+from music_app.services.library import album_to_dict
 
 
 def _active_cover_state_for_track_paths(
@@ -118,6 +119,8 @@ def iter_local_cover_candidates(
         for entry in entries:
             try:
                 if entry.is_dir(follow_symlinks=False):
+                    if entry.name.casefold() == ".album-haven":
+                        continue
                     pending_directories.append(Path(entry.path))
                     continue
                 if not entry.is_file() or Path(entry.name).suffix.lower() not in image_extensions:
@@ -125,6 +128,8 @@ def iter_local_cover_candidates(
             except OSError:
                 continue
             path = Path(entry.path)
+            if is_generated_cover_artifact(path, album_root):
+                continue
             width, height = image_dimensions(path)
             relative_path = path.relative_to(album_root)
             candidates.append(

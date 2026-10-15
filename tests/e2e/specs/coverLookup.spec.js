@@ -732,6 +732,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
 
   let originalActiveCover = null;
   let selectedLocalCover = null;
+  let initialUnusedCandidatePaths = [];
   let selectedCoverPath = '';
   let originalPreviewHash = '';
   let originalPreviewRevision = '';
@@ -793,6 +794,13 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     await coverLookupActions.waitForModalReady();
     await expect(coverLookupActions.coverLookup.saveRemoteButton).toBeDisabled();
     const candidates = await coverLookupActions.readLocalCoverCandidates();
+    initialUnusedCandidatePaths = candidates
+      .filter((candidate) => !candidate.isActive)
+      .map((candidate) => candidate.sourcePath)
+      .sort();
+    expect(candidates.some((candidate) => (
+      /[\\/]album-haven-preview(?:-[^\\/]*)?\.[^.\\/]+$/i.test(candidate.sourcePath)
+    ))).toBe(false);
     originalActiveCover = candidates.find((candidate) => candidate.isActive) || null;
     selectedLocalCover = candidates.find((candidate) => (
       !candidate.isActive && /[\\/]Art[\\/]Front\.jpg$/i.test(candidate.sourcePath)
@@ -884,6 +892,8 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     const reopenedCandidates = await coverLookupActions.readLocalCoverCandidates();
+    expect(reopenedCandidates.map((candidate) => candidate.sourcePath).sort())
+      .toEqual(initialUnusedCandidatePaths);
     const reopenedActiveCover = reopenedCandidates.find((candidate) => candidate.isActive) || null;
     const reopenedExistingCopies = reopenedCandidates.filter((candidate) => (
       /[\\/]cover-existing-\d+\.jpg$/i.test(candidate.sourcePath)

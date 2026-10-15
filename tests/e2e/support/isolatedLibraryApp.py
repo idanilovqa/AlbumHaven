@@ -1283,6 +1283,10 @@ def materialize_cover_lookup_album_art(
         album_dir / "cover.jpg",
     )
     _materialize_independent_album_image(
+        back_source,
+        album_dir / "album-haven-preview.jpg",
+    )
+    _materialize_independent_album_image(
         disc_source,
         album_dir / "Art" / "Back.jpg",
     )

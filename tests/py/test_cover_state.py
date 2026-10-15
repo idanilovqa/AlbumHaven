@@ -107,6 +107,58 @@ def test_serialize_cover_gallery_payload_assigns_revision_only_to_active_local_c
     assert "cover_revision" not in candidates_by_path[str(inactive_cover)]
 
 
+def test_serialize_cover_gallery_payload_excludes_generated_preview_assets(tmp_path: Path):
+    album_root = (tmp_path / "Artist" / "Album").resolve()
+    track_path = (album_root / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    active_cover = (album_root / "cover.jpg").resolve()
+    generated_preview = (album_root / "album-haven-preview.jpg").resolve()
+    generated_variant = (
+        album_root / ".album-haven" / "cover_variants" / "ab" / "generated.jpg"
+    ).resolve()
+    _write_jpeg(active_cover, (220, 40, 40))
+    _write_jpeg(generated_preview, (40, 40, 220))
+    _write_jpeg(generated_variant, (40, 220, 40))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {"cover_path": str(active_cover)}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
+    )
+
+    assert [candidate["path"] for candidate in payload["local_covers"]] == [
+        str(active_cover)
+    ]
+
+
+def test_serialize_cover_gallery_payload_allows_reserved_ancestor_outside_album_root(
+    tmp_path: Path,
+):
+    album_root = (tmp_path / ".album-haven" / "Music" / "Artist" / "Album").resolve()
+    track_path = (album_root / "song.mp3").resolve()
+    active_cover = (album_root / "cover.jpg").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    _write_jpeg(active_cover, (220, 40, 40))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=album_root,
+        track_paths={str(track_path)},
+        file_cache={str(track_path): {"cover_path": str(active_cover)}},
+        image_extensions={".jpg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
+    )
+
+    assert [candidate["path"] for candidate in payload["local_covers"]] == [
+        str(active_cover)
+    ]
+
+
 def test_serialize_cover_gallery_payload_includes_task_independent_candidate_snapshot(
     tmp_path: Path,
 ):

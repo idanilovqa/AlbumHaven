@@ -21,8 +21,20 @@ _ALBUM_DISC_MARKER_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(?P<number>\d{1,2})(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+_GENERATED_COVER_PREVIEW_STEM = "album-haven-preview"
+_APP_ARTIFACT_DIRECTORY = ".album-haven"
 _LOCAL_COVER_SELECTION_LOCKS_GUARD = Lock()
 _LOCAL_COVER_SELECTION_LOCKS: dict[str, tuple[Lock, int]] = {}
+
+
+def is_generated_cover_artifact(path: Path, album_root: Path) -> bool:
+    stem = path.stem.casefold()
+    relative_parts = path.relative_to(album_root).parts
+    return (
+        _APP_ARTIFACT_DIRECTORY in (part.casefold() for part in relative_parts)
+        or stem == _GENERATED_COVER_PREVIEW_STEM
+        or stem.startswith(f"{_GENERATED_COVER_PREVIEW_STEM}-")
+    )
 
 
 @dataclass(frozen=True)
@@ -667,7 +679,11 @@ def choose_best_remaining_local_cover(
     score_image,
 ) -> Path | None:
     candidates = [
-        path for path in album_root.rglob("*") if path.is_file() and path.suffix.lower() in image_extensions
+        path
+        for path in album_root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in image_extensions
+        and not is_generated_cover_artifact(path, album_root)
     ]
     if not candidates:
         return None

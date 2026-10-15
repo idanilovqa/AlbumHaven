@@ -36,9 +36,9 @@ test('PR classifier applies changed-path performance ownership before selecting 
 test('sensitive browse, sidebar, modal, status, and mobile changes select their focused targets', () => {
   const cases = [
     ['music_app/services/runtime_asset_versions.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
-    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'utility-problematic-files', 'problematic-files-focused']],
+    ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'gallery-artwork-diversity']],
-    ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse']],
+    ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity']],
     ['music_app/static/js/runtime/track-modal-lightbox-helpers.js', ['selected-artist', 'all-artists', 'gapless-playback']],
     ['music_app/static/js/runtime/status-ui-helpers.js', ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']],
     ['music_app/static/css/mobile-layout.css', ['selected-artist', 'all-artists', 'artist-tree-scroll-navigation']],
@@ -83,6 +83,8 @@ test('gallery virtualization, card retention, and artwork loading owners require
     'music_app/static/js/runtime/render-markup-helpers.js',
     'music_app/static/js/runtime/virtual-artist-grid.js',
     'tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js',
+    'tests/e2e/poms/galleryPage.js',
+    'tests/e2e/helpers/realAppBenchmarkHelpers.js',
   ]) {
     const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
     assert.ok(targets.includes('gallery-artwork-diversity'), changedPath);

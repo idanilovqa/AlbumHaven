@@ -281,6 +281,13 @@ $generatorHead = ([string]($headOutput -join '')).Trim().ToLowerInvariant()
 if ($generatorHead -ne $GeneratorCommit) {
     throw "Generator checkout HEAD mismatch: expected $GeneratorCommit, found $generatorHead."
 }
+$dirtyOutput = @(& git -C $resolvedGenerator status --porcelain=v1 --untracked-files=all --ignored=matching 2>&1)
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to inspect generator checkout cleanliness: $($dirtyOutput -join [Environment]::NewLine)"
+}
+if ($dirtyOutput.Count -gt 0) {
+    throw 'Generator checkout must be clean before artwork-diversity generation.'
+}
 
 if (Test-Path -LiteralPath $resolvedDestination) {
     Remove-Item -LiteralPath $resolvedDestination
@@ -288,7 +295,7 @@ if (Test-Path -LiteralPath $resolvedDestination) {
 
 Push-Location -LiteralPath $resolvedGenerator
 try {
-    & $PythonPath -m generators.artwork_diversity `
+    & $PythonPath -B -m generators.artwork_diversity `
         --source $resolvedBase `
         --destination $resolvedDestination `
         --variant-count $VariantCount `

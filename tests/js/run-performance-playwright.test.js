@@ -282,6 +282,67 @@ test('configured suite rejects mixed preloaded fixture profiles before setup or 
   assert.deepEqual(calls, []);
 });
 
+test('configured suite default entry selects a fixture-compatible released library group', () => {
+  const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'default-performance-fixture');
+  let receivedOptions = null;
+
+  const exitCode = _private.runConfiguredPerformanceSuite(
+    _private.parseCliArgs([]),
+    {
+      ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library',
+      ALBUM_HAVEN_FIXTURE_ROOT: fixtureRoot,
+      ALBUM_HAVEN_MEDIA_ROOT: path.join(fixtureRoot, 'media'),
+    },
+    {
+      loadEnv: (baseEnv) => baseEnv,
+      runDatabasePreflight: () => {},
+      runSuite: (options) => {
+        receivedOptions = options;
+        return 0;
+      },
+    },
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(receivedOptions.group, 'library-browse');
+  const targets = _private.resolveRequestedTargets(receivedOptions);
+  assert.ok(targets.length > 1, 'the default must remain a meaningful performance suite');
+  assert.ok(targets.every((target) => (
+    target.fixtureProfile === 'synthetic-large-library'
+      && target.fixtureMode === 'preloaded-release'
+  )));
+  assert.equal(
+    targets.some((target) => target.aliasNames[0] === 'gallery-artwork-diversity'),
+    false,
+    'the separately provisioned derived target must not inherit the released fixture',
+  );
+});
+
+test('configured suite rejects the non-runnable all registry before setup', () => {
+  const calls = [];
+
+  assert.throws(
+    () => _private.runConfiguredPerformanceSuite(
+      {
+        browser: 'chromium',
+        grep: '',
+        group: 'all',
+        headless: true,
+        repeatCount: 1,
+        targetInput: '',
+      },
+      {},
+      {
+        loadEnv: () => calls.push('load-env'),
+        runDatabasePreflight: () => calls.push('preflight'),
+        runSuite: () => calls.push('suite'),
+      },
+    ),
+    /group all.*not runnable.*compatible group.*cloud performance matrix/i,
+  );
+  assert.deepEqual(calls, []);
+});
+
 test('grouped suite rejects mixing immutable and derived copies of one fixture profile', () => {
   const immutableTarget = performanceRunner.PERFORMANCE_TARGETS['artist-tree-scroll-navigation'];
   const derivedTarget = {
@@ -361,7 +422,7 @@ test('parseCliArgs leaves targetInput empty when no performance target was provi
   assert.deepEqual(parsed, {
     browser: 'chromium',
     grep: '',
-    group: 'all',
+    group: 'library-browse',
     headless: true,
     repeatCount: 2,
     targetInput: '',
@@ -374,7 +435,7 @@ test('parseCliArgs defaults the performance runner to headless mode', () => {
   assert.deepEqual(parsed, {
     browser: 'chromium',
     grep: '',
-    group: 'all',
+    group: 'library-browse',
     headless: true,
     repeatCount: 1,
     targetInput: '',
@@ -575,9 +636,11 @@ test('printUsage advertises the playback-start target, group, and coverage class
     console.log = originalLog;
   }
   const output = lines.join('\n');
-  assert.match(output, /--group all\|idle-memory\|playback-start\|gapless-playback\|real-app\|scan/);
+  assert.match(output, /--group library-browse\|idle-memory\|playback-start\|gapless-playback\|real-app\|scan/);
+  assert.doesNotMatch(output, /Known groups: all,/);
   assert.match(output, /Known names: idle-memory, playback-start, gapless-playback,/);
-  assert.match(output, /Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan/);
+  assert.match(output, /artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists/);
+  assert.match(output, /Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan/);
   assert.match(output, /real-app-isolated-postgres-playback/);
 });
 

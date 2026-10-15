@@ -25,8 +25,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $targetNames = @($Targets.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 11) {
-    throw 'Performance profile runner must own between one and eleven targets.'
+if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 12) {
+    throw 'Performance profile runner must own between one and twelve targets.'
 }
 if ((@($targetNames | Select-Object -Unique)).Count -ne $targetNames.Count) {
     throw 'Performance shard target list contains a duplicate.'
@@ -215,6 +215,12 @@ if ($DatabaseSuffixBase.Length -gt 39) { throw 'Database suffix is too long for 
 $statePath = Join-Path $stateRoot "$ShardName.state.json"
 $derivedRoot = Join-Path $profileSessionRoot 'artwork-diversity-derived'
 $artworkDiversityProvenancePath = Join-Path $stateRoot 'artwork-diversity-provenance.json'
+$retainedArtworkDiversityProvenancePath = $null
+if ($FixtureMode -eq 'preloaded-derived') {
+    $retainedArtworkDiversityProvenancePath = Join-Path `
+        (Join-Path $resultRoot 'gallery-artwork-diversity') `
+        'artwork-diversity-provenance.json'
+}
 $setupFailure = $null
 $teardownFailure = $null
 # Matches PROCESS_CLEANUP_FAILURE_EXIT_CODE in ../playwright-exit-codes.cjs.
@@ -309,13 +315,6 @@ try {
         }
     }
 } finally {
-    if (-not $processCleanupFailed -and -not $targetPortCleanupFailed -and (Test-Path -LiteralPath $profileSessionRoot)) {
-        try {
-            Remove-Item -LiteralPath $profileSessionRoot -Recurse -Force
-        } catch {
-            $teardownFailure = "profile fixture teardown: $($_.Exception.Message)"
-        }
-    }
     if (-not $processCleanupFailed -and -not $targetPortCleanupFailed -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
         try {
             & $bootstrap `
@@ -338,6 +337,51 @@ try {
             } else {
                 $databaseTeardownFailure
             }
+        }
+    }
+        if (-not $processCleanupFailed -and
+            -not $targetPortCleanupFailed -and
+            -not $teardownFailure -and
+            $FixtureMode -eq 'preloaded-derived' -and
+            (Test-Path -LiteralPath $artworkDiversityProvenancePath -PathType Leaf)) {
+            try {
+                if (Test-Path -LiteralPath $retainedArtworkDiversityProvenancePath -PathType Leaf) {
+                    $sourceProvenanceHash = (Get-FileHash `
+                        -LiteralPath $artworkDiversityProvenancePath `
+                        -Algorithm SHA256).Hash
+                    $retainedProvenanceHash = (Get-FileHash `
+                        -LiteralPath $retainedArtworkDiversityProvenancePath `
+                        -Algorithm SHA256).Hash
+                    if ($sourceProvenanceHash -cne $retainedProvenanceHash) {
+                        throw 'Retained artwork-diversity provenance does not match its source.'
+                    }
+                    Remove-Item -LiteralPath $artworkDiversityProvenancePath -Force
+                } elseif (-not $setupFailure -and $failedTargets.Count -eq 0) {
+                    throw 'Artwork-diversity provenance was not retained by the completed target.'
+                }
+            } catch {
+                $teardownFailure = "derived provenance teardown: $($_.Exception.Message)"
+            }
+        }
+    if (-not $processCleanupFailed -and
+        -not $targetPortCleanupFailed -and
+        -not $teardownFailure -and
+        (Test-Path -LiteralPath $profileSessionRoot)) {
+        try {
+            Remove-Item -LiteralPath $profileSessionRoot -Recurse -Force
+        } catch {
+            $teardownFailure = "profile fixture teardown: $($_.Exception.Message)"
+        }
+    }
+    if (-not $processCleanupFailed -and
+        -not $targetPortCleanupFailed -and
+        -not $teardownFailure -and
+        (Test-Path -LiteralPath $stateRoot -PathType Container) -and
+        @(Get-ChildItem -LiteralPath $stateRoot -Force).Count -eq 0) {
+        try {
+            Remove-Item -LiteralPath $stateRoot -Force
+        } catch {
+            $teardownFailure = "state root teardown: $($_.Exception.Message)"
         }
     }
 }

@@ -101,7 +101,8 @@
         "artist-tree-scroll-navigation",
         "artist-family",
         "search-all-artists",
-        "search-browse"
+        "search-browse",
+        "gallery-artwork-diversity"
       ]
     },
     {
@@ -217,7 +218,9 @@
         "music_app/static/js/runtime/gallery-cover-load-scheduler.js",
         "music_app/static/js/runtime/render-markup-helpers.js",
         "music_app/static/js/runtime/virtual-artist-grid.js",
-        "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
+        "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
+        "tests/e2e/poms/galleryPage.js",
+        "tests/e2e/helpers/realAppBenchmarkHelpers.js"
       ],
       "targets": [
         "gallery-artwork-diversity"

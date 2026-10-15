@@ -123,6 +123,19 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'paired-search-calibration',
     'scan-error',
   ],
+  'library-browse': [
+    'all-artists',
+    'artist-family',
+    'search-all-artists',
+    'utility-rules',
+    'selected-artist',
+    'search-browse',
+    'root-album-browse',
+    'artist-tree-scroll-navigation',
+    'app-open-all-artists',
+    'rules-focused',
+    'paired-search-calibration',
+  ],
   'idle-memory': [
     'idle-memory',
   ],
@@ -737,6 +750,12 @@ function runConfiguredPerformanceSuite(args, baseEnv = process.env, dependencies
   const loadEnv = dependencies.loadEnv || ((env) => loadDotEnvFile(env));
   const runDatabasePreflight = dependencies.runDatabasePreflight || runScanPerformanceDatabasePreflight;
   const runSuite = dependencies.runSuite || runSequentialPerformanceSuite;
+  if (!String(args.targetInput || '').trim() && normalizeTargetKey(args.group) === 'all') {
+    throw new Error(
+      'The --group all registry is not runnable with one prepared fixture. '
+      + 'Choose a fixture-compatible group or use the cloud performance matrix.',
+    );
+  }
   const targets = resolveRequestedTargets(args);
   assertSinglePreloadedFixtureProfile(targets);
   const childEnv = loadEnv({ ...baseEnv });
@@ -842,6 +861,7 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     repeatCount: DEFAULT_REPEAT_COUNT,
     targetInput: '',
   };
+  let groupProvided = false;
   Object.defineProperty(options, 'preparedFixture', {
     value: preparedFixtureDefaults.preparedFixture,
     writable: true,
@@ -886,11 +906,13 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     }
     if (arg === '--group') {
       options.group = argv[index + 1] || '';
+      groupProvided = true;
       index += 1;
       continue;
     }
     if (arg.startsWith('--group=')) {
       options.group = arg.slice('--group='.length);
+      groupProvided = true;
       continue;
     }
     if (arg === '--test') {
@@ -936,6 +958,9 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     throw new Error(`Unsupported argument: ${arg}`);
   }
 
+  if (!options.targetInput && !groupProvided) {
+    options.group = 'library-browse';
+  }
   return options;
 }
 
@@ -2546,9 +2571,9 @@ function runSequentialPerformanceSuite(options) {
 }
 
 function printUsage() {
-  console.log('Usage: npm run test:e2e:performance -- [--group all|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-    console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, artist-tree-scroll-navigation, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
-  console.log('Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan');
+  console.log('Usage: npm run test:e2e:performance -- [--group library-browse|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
+  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+  console.log('Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');
   console.log('The browser defaults to Playwright-managed Chromium; branded Chrome and Edge are explicit comparison overrides.');

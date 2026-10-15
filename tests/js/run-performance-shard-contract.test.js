@@ -136,12 +136,12 @@ test('performance profile runner prepares one isolated fixture before compatible
   assert.match(source, /Set-Item\s+-LiteralPath\s+["']Env:\$key["']/i);
 });
 
-test('performance profile runner accepts the ten-target synthetic profile', () => {
+test('performance profile runner accepts the twelve-target synthetic profile', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
-  assert.doesNotMatch(
+  assert.match(
     source,
-    /\$targetNames\.Count\s+-gt\s+[1-9]\b/,
-    'the synthetic profile runner must accept all ten targets',
+    /\$targetNames\.Count\s+-gt\s+12\b/,
+    'the synthetic profile runner must accept its complete twelve-target registry',
   );
 });
 
@@ -208,6 +208,48 @@ test('performance shard prepares and owns the preloaded artwork derivative befor
     source,
     /Process cleanup is unproven;[^"]*\$derivedRoot[^"]*\$artworkDiversityProvenancePath/i,
     'cleanup failure must report and retain exact derivative evidence paths',
+  );
+});
+
+test('performance profile runner removes copied derived provenance only after cleanup is proven', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const databaseTeardownIndex = source.search(/&\s*\$bootstrap\s+`[\s\S]*?-Mode\s+Teardown/i);
+  const provenanceTeardownIndex = source.indexOf('$sourceProvenanceHash');
+  const profileTeardownIndex = source.search(
+    /Remove-Item\s+-LiteralPath\s+\$profileSessionRoot\s+-Recurse\s+-Force/i,
+  );
+  const stateRootTeardownIndex = source.search(
+    /Remove-Item\s+-LiteralPath\s+\$stateRoot\s+-Force/i,
+  );
+  assert.match(
+    source,
+    /\$retainedArtworkDiversityProvenancePath\s*=\s*Join-Path[\s\S]*gallery-artwork-diversity[\s\S]*artwork-diversity-provenance\.json/i,
+  );
+  assert.match(
+    source,
+    /Get-FileHash[\s\S]*\$artworkDiversityProvenancePath[\s\S]*Get-FileHash[\s\S]*\$retainedArtworkDiversityProvenancePath/i,
+    'the source provenance must be removed only after its retained copy is byte-identical',
+  );
+  assert.match(
+    source,
+    /Remove-Item\s+-LiteralPath\s+\$artworkDiversityProvenancePath\s+-Force/i,
+  );
+  assert.match(
+    source,
+    /Get-ChildItem\s+-LiteralPath\s+\$stateRoot\s+-Force[\s\S]*Remove-Item\s+-LiteralPath\s+\$stateRoot\s+-Force/i,
+    'the stable state root must be removed only when cleanup leaves it empty',
+  );
+  assert.ok(
+    databaseTeardownIndex >= 0 && provenanceTeardownIndex > databaseTeardownIndex,
+    'derived provenance cleanup must run only after successful database teardown',
+  );
+  assert.ok(
+    profileTeardownIndex > provenanceTeardownIndex,
+    'derived fixture cleanup must run only after database and provenance teardown are proven',
+  );
+  assert.ok(
+    stateRootTeardownIndex > profileTeardownIndex,
+    'the stable state root can be removed only after its prepared-profile child is deleted',
   );
 });
 

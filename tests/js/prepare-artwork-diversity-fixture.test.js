@@ -348,6 +348,48 @@ test('artwork-diversity preparation rejects trust and integrity failures without
   );
 });
 
+test('artwork-diversity preparation rejects modified tracked generator files', async (t) => {
+  const harness = createHarness();
+  t.after(() => fs.rmSync(harness.root, { recursive: true, force: true }));
+  fs.appendFileSync(
+    path.join(harness.generatorCheckout, 'generators', 'artwork_diversity.py'),
+    '\n# local modification\n',
+    'utf8',
+  );
+
+  const failure = await expectPrepareFailure(harness, {}, /generator checkout.*clean/i);
+  assert.equal(fs.existsSync(failure.destination), false, 'dirty checkout must fail before generation');
+});
+
+test('artwork-diversity preparation rejects untracked generator files', async (t) => {
+  const harness = createHarness();
+  t.after(() => fs.rmSync(harness.root, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(harness.generatorCheckout, 'generators', 'untracked_generator_input.py'),
+    'LOCAL_INPUT = True\n',
+    'utf8',
+  );
+
+  const failure = await expectPrepareFailure(harness, {}, /generator checkout.*clean/i);
+  assert.equal(fs.existsSync(failure.destination), false, 'dirty checkout must fail before generation');
+});
+
+test('artwork-diversity preparation rejects ignored executable generator files', async (t) => {
+  const harness = createHarness();
+  t.after(() => fs.rmSync(harness.root, { recursive: true, force: true }));
+  const excludesPath = path.join(harness.root, 'generator-excludes');
+  fs.writeFileSync(excludesPath, 'sitecustomize.py\n', 'utf8');
+  runGit(harness.generatorCheckout, ['config', 'core.excludesFile', excludesPath]);
+  fs.writeFileSync(
+    path.join(harness.generatorCheckout, 'sitecustomize.py'),
+    'IGNORED_EXECUTABLE_INPUT = True\n',
+    'utf8',
+  );
+
+  const failure = await expectPrepareFailure(harness, {}, /generator checkout.*clean/i);
+  assert.equal(fs.existsSync(failure.destination), false, 'ignored input must fail before generation');
+});
+
 test('artwork-diversity preparation publishes validated provenance atomically', async (t) => {
   const harness = createHarness();
   t.after(() => fs.rmSync(harness.root, { recursive: true, force: true }));

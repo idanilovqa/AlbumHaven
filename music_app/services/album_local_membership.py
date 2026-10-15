@@ -30,12 +30,36 @@ def rejected_local_album_paths(entries: Iterable[Mapping[str, object]]) -> dict[
     from music_app.services.metadata import normalize_exception_value
 
     physical_sources: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
+    physical_roots_by_folder: dict[tuple[str, str], str] = {}
     for entry in entries:
         if normalize_exception_value(entry.get("exception_type")) or is_loose_track_album_value(entry.get("album")):
             continue
         path = str(entry.get("path") or "")
         if path:
-            physical_sources[(str(entry.get("library_root_id") or ""), physical_album_root(path))].append(entry)
+            normalized_path = path.strip()
+            folder_identity = None
+            if normalized_path and not normalized_path.endswith(("/", "\\")):
+                windows_path = "\\" in normalized_path or re.match(r"^[A-Za-z]:", normalized_path)
+                separator_index = (
+                    max(normalized_path.rfind("/"), normalized_path.rfind("\\"))
+                    if windows_path
+                    else normalized_path.rfind("/")
+                )
+                if separator_index >= 0:
+                    folder_identity = (
+                        "windows" if windows_path else "posix",
+                        normalized_path[:separator_index],
+                    )
+            physical_root = (
+                physical_roots_by_folder.get(folder_identity)
+                if folder_identity is not None
+                else None
+            )
+            if physical_root is None:
+                physical_root = physical_album_root(path)
+                if folder_identity is not None:
+                    physical_roots_by_folder[folder_identity] = physical_root
+            physical_sources[(str(entry.get("library_root_id") or ""), physical_root)].append(entry)
     rejected: dict[str, str] = {}
     sources: dict[tuple[str, str, str, str], list[list[Mapping[str, object]]]] = defaultdict(list)
 

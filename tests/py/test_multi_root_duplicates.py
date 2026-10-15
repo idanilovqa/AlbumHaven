@@ -9,6 +9,7 @@ import pytest
 from music_app.models.library import Album, Track
 from music_app.services.album_local_membership import (
     local_album_membership_ctes_sql,
+    physical_album_root,
     rejected_local_album_paths,
 )
 from music_app.services.library import (
@@ -347,6 +348,47 @@ def test_membership_does_not_build_track_signatures_without_competing_sources(mo
 
     monkeypatch.setattr(membership, "_duration", unnecessary_signature)
     assert membership.rejected_local_album_paths(entries) == {}
+
+
+def test_membership_derives_physical_root_once_for_sibling_files(monkeypatch):
+    from music_app.services import album_local_membership as membership
+
+    entries = [
+        {**asdict(_track("main/album", number)), "library_root_id": 1}
+        for number in range(1, 4)
+    ]
+    original = membership.physical_album_root
+    calls = []
+
+    def counted_physical_album_root(path):
+        calls.append(path)
+        return original(path)
+
+    def repeated_folder_derivation(_path):
+        pytest.fail("Memo identity must not repeat PurePath folder derivation")
+
+    monkeypatch.setattr(membership, "physical_album_root", counted_physical_album_root)
+    monkeypatch.setattr(membership, "physical_album_folder", repeated_folder_derivation)
+
+    assert membership.rejected_local_album_paths(entries) == {}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/music/Artist/Album/01.flac", "/music/Artist/Album"),
+        (r"C:\Music\Artist\Album\01.flac", r"c:\music\artist\album"),
+        (r"\\Server\Share\Artist\Album\01.flac", r"\\server\share\artist\album"),
+        (r"C:Artist\Album\01.flac", r"c:artist\album"),
+        ("/music/Artist/Album/", "/music/Artist"),
+        ("C:\\Music\\Artist\\Album\\", r"c:\music\artist"),
+        ("/music/Artist/Album/CD1/01.flac", "/music/Artist/Album"),
+        (r"C:\Music\Artist\Album\Disc 02\01.flac", r"c:\music\artist\album"),
+    ],
+)
+def test_physical_album_root_preserves_path_style_and_disc_folder_parity(path, expected):
+    assert physical_album_root(path) == expected
 
 
 def test_membership_still_rejects_only_strict_subset_from_competing_sources():

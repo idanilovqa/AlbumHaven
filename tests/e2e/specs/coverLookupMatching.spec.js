@@ -21,6 +21,8 @@ const FALSE_MATCH_NAMES = [
   'Kill "Em" All (feat. Discrepancies) - Single',
   "Kill 'Em All (Featuring Discrepancies)",
   "Kill 'Em All - Remixed",
+  "Kill 'Em",
+  "Kill 'Em All II",
 ];
 const FALSE_MATCH_RESOLUTIONS = new Set([
   '3000x3000',
@@ -32,6 +34,8 @@ const FALSE_MATCH_RESOLUTIONS = new Set([
   '4000x4000',
   '4100x4100',
   '4200x4200',
+  '4300x4300',
+  '4400x4400',
 ]);
 const FALSE_ARTIST_IDENTITIES = [
   'Metallica feat. Discrepancies',
@@ -46,6 +50,8 @@ const EXPECTED_PROVIDER_ROLES = [
   'false-single-feature',
   'false-tribute-artist',
   'false-remix',
+  'false-truncated-title',
+  'false-sequence-title',
   'false-album-identity-featuring',
   'false-other-band',
   'false-artist-identity-featured',

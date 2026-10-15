@@ -172,9 +172,9 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
     [/max-parallel:\s*4/, 'maximum parallel four'],
     [/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/, 'same-repository guard'],
     [/run-performance-shard\.ps1/, 'sequential shard runner'],
-    [/-Targets\s+["']?\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}/, 'resolved shard targets'],
-    [/-BasePort\s+["']?\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}/, 'target-owned port base'],
-    [/-Browser\s+chrome/, 'Chrome selection'],
+    [/Targets\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}["']/, 'resolved shard targets'],
+    [/BasePort\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}["']/, 'target-owned port base'],
+    [/Browser\s*=\s*["']chrome["']/, 'Chrome selection'],
     [/node scripts\/ci\/validate-performance-matrix\.cjs --list/, 'matrix validation step'],
   ];
   for (const [pattern, label] of patterns) if (!pattern.test(job)) errors.push(`performance workflow is missing ${label}`);
@@ -182,7 +182,7 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
   const trustedCheckout = namedWorkflowStep(job, 'Checkout trusted fixture downloader');
   const fixtureFetch = namedWorkflowStep(job, 'Fetch immutable performance fixture');
   if (/\n\s+if:/.test(trustedCheckout) || /\n\s+if:/.test(fixtureFetch)) errors.push('trusted fixture seed must be fetched for every performance shard');
-  if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*\.trusted-ci/.test(job)) errors.push('performance shards must use a trusted base checkout');
+  if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*album-haven-trusted-ci/.test(job)) errors.push('performance shards must use a trusted base checkout');
   if (!/-Profile\s+\$\{\{\s*matrix\.shard\s*==\s*'utility-problematic-files'\s*&&\s*'utility-problematic-files'\s*\|\|\s*'synthetic-large-library'\s*\}\}/.test(fixtureFetch)) errors.push('performance fixture fetch must use the static reviewed download-profile mapping');
   if (!/generated-isolated[\s\S]*ALBUM_HAVEN_APPROVED_COVER_ROOT[\s\S]*ALBUM_HAVEN_FIXTURE_ROOT[\s\S]*ALBUM_HAVEN_MEDIA_ROOT/.test(job)) errors.push('generated shards must isolate a verified released cover seed from runtime fixture roots');
   if (job.indexOf('Fetch immutable performance fixture') > job.indexOf('Install Node dependencies')

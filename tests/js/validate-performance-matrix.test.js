@@ -18,6 +18,7 @@ const { EXPECTED } = require('../../scripts/ci/write-foundation-version-manifest
 
 const FIXTURE_RELEASE = 'fixtures-v1.0.25';
 const FIXTURE_MANIFEST_SHA256 = 'e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60';
+const ARTWORK_GENERATOR_COMMIT = 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11';
 const EXPECTED_SHARDS = [
   { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
@@ -129,10 +130,10 @@ test('profile runners remain same-repository PR-context Windows Chrome jobs capp
   assert.match(job, /github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/);
   assert.match(job, /runs-on:\s*windows-2025/);
   assert.doesNotMatch(job, /continue-on-error:/);
-  assert.match(job, /-Browser\s+chrome/);
+  assert.match(job, /Browser\s*=\s*["']chrome["']/);
   assert.match(job, /run-performance-shard\.ps1/);
-  assert.match(job, /-Targets\s+["']?\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}/);
-  assert.match(job, /-BasePort\s+["']?\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}/);
+  assert.match(job, /Targets\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}["']/);
+  assert.match(job, /BasePort\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}["']/);
 });
 
 test('performance foundations are written only after shared shard PostgreSQL provisioning', () => {
@@ -192,6 +193,46 @@ test('each shard fetches an immutable profile or cover seed before pull-request 
   assert.match(job, /ALBUM_HAVEN_APPROVED_COVER_ROOT=\$approvedCoverRoot/);
   assert.match(job, /ALBUM_HAVEN_FIXTURE_ROOT= /);
   assert.match(job, /ALBUM_HAVEN_MEDIA_ROOT= /);
+});
+
+test('artwork-diversity CI pins a sibling generator checkout and passes it only to the derived shard', () => {
+  const job = performanceJobSource();
+  const pullRequestCheckout = stepContaining(job, 'ref: ${{ github.sha }}');
+  const trustedCheckout = stepContaining(job, 'github.event.pull_request.base.sha');
+  const generatorCheckout = stepContaining(job, 'idanilovqa/album-haven-test-data');
+  const runner = stepContaining(job, 'run-performance-shard.ps1');
+
+  assert.match(job, /defaults:\s*\r?\n\s+run:\s*\r?\n\s+working-directory:\s*\$\{\{\s*github\.workspace\s*\}\}\\album-haven-app/);
+  assert.match(pullRequestCheckout, /path:\s*album-haven-app/);
+  assert.match(pullRequestCheckout, /fetch-depth:\s*0/);
+  assert.match(pullRequestCheckout, /persist-credentials:\s*false/);
+  assert.match(trustedCheckout, /path:\s*album-haven-trusted-ci/);
+  assert.match(generatorCheckout, /if:\s*(?:\$\{\{\s*)?matrix\.shard\s*==\s*['"]gallery-artwork-diversity['"](?:\s*\}\})?/);
+  assert.match(generatorCheckout, new RegExp(`ref:\\s*${ARTWORK_GENERATOR_COMMIT}`));
+  assert.match(generatorCheckout, /path:\s*album-haven-test-data/);
+  assert.match(generatorCheckout, /token:\s*\$\{\{\s*secrets\.ALBUM_HAVEN_FIXTURES_TOKEN\s*\}\}/);
+  assert.match(generatorCheckout, /persist-credentials:\s*false/);
+  assert.match(job, /cache-dependency-path:\s*album-haven-app\/package-lock\.json/);
+  assert.match(job, /cache-dependency-path:\s*album-haven-app\/requirements\.txt/);
+  assert.match(job, /album-haven-trusted-ci\\scripts\\ci\\fetch-test-fixtures\.ps1/);
+
+  assert.match(runner, /fixture_mode\s*\}\}"\s+-eq\s+['"]preloaded-derived['"]/);
+  assert.match(runner, /Join-Path\s+['"]\$\{\{\s*github\.workspace\s*\}\}['"]\s+['"]album-haven-test-data['"]/);
+  assert.match(runner, /git\s+-C\s+\$generatorCheckout\s+rev-parse\s+HEAD/);
+  assert.match(runner, new RegExp(`\\$generatorHead\\s+-ne\\s+['"]${ARTWORK_GENERATOR_COMMIT}['"]`));
+  for (const [parameter, value] of [
+    ['GeneratorCheckout', '\\$generatorCheckout'],
+    ['ExpectedFixtureRelease', `["']${FIXTURE_RELEASE.replaceAll('.', '\\.')}["']`],
+    ['BaseManifestSha256', `["']${FIXTURE_MANIFEST_SHA256}["']`],
+    ['GeneratorCommit', `["']${ARTWORK_GENERATOR_COMMIT}["']`],
+    ['VariantCount', '512'],
+    ['SourceMaxEdge', '960'],
+  ]) {
+    assert.match(runner, new RegExp(`${parameter}\\s*=\\s*${value}`));
+  }
+  assert.match(runner, /run-performance-shard\.ps1\s+@runnerArguments/);
+  assert.match(job, /path:\s*album-haven-app\/test-results\/playwright-performance-targets/);
+  assert.match(job, /album-haven-app\/test-results\/playwright-artifacts/);
 });
 
 test('each target retains individual result, diagnostics, and foundation artifacts', () => {

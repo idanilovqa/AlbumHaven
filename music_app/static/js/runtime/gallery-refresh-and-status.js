@@ -1007,16 +1007,20 @@ function rootGalleryRefreshCoverage(apiUrl, options) {
   return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
 }
 
-async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse) {
-  for (const artist of [...new Set(retainedArtists)].reverse()) {
+async function fetchRootGalleryRefreshAnchorResponse(
+  apiUrl, retainedArtists, controller, ownsResponse, omitSidebar = true,
+) {
+  const artists = [...new Set(retainedArtists)];
+  for (const artist of artists) {
     const url = new URL(apiUrl, 'http://localhost');
     url.searchParams.delete('gallery_cursor');
     url.searchParams.set('gallery_page_size', '50');
     url.searchParams.set('gallery_anchor_artist', artist);
-    url.searchParams.set('omit_sidebar', '1');
+    if (omitSidebar) url.searchParams.set('omit_sidebar', '1');
+    else url.searchParams.delete('omit_sidebar');
     const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
     if (!ownsResponse()) return null;
-    if (response.status === 409) return { restart: true };
+    if (response.status === 409) return { restart: true, response };
     if (response.status === 400) {
       const failure = await response.json();
       if (!ownsResponse()) return null;
@@ -1024,17 +1028,25 @@ async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, contro
       if (message === 'Gallery artist anchor is unavailable.') continue;
       throw new Error(message);
     }
-    const payload = await readGalleryResponse(response, ownsResponse);
-    if (!ownsResponse()) return null;
-    const page = payload?.gallery_page;
-    const canonicalArtist = String(page?.anchor_group_artist || '').trim();
-    const group = payload?.artist_groups?.find(item => String(item.artist || '').trim() === canonicalArtist);
-    if (!canonicalArtist || !Number.isInteger(page?.anchor_offset) || page.anchor_offset < 0 || !group?.albums?.length) {
-      throw new Error('Root gallery refresh endpoint metadata is unavailable.');
-    }
-    return { artist: canonicalArtist, offset: page.anchor_offset, length: group.albums.length, revision: page.revision };
+    return { response, url: `${url.pathname}${url.search}` };
   }
   throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+}
+
+async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse) {
+  const result = await fetchRootGalleryRefreshAnchorResponse(
+    apiUrl, [...retainedArtists].reverse(), controller, ownsResponse,
+  );
+  if (!result || result.restart) return result;
+  const payload = await readGalleryResponse(result.response, ownsResponse);
+  if (!ownsResponse()) return null;
+  const page = payload?.gallery_page;
+  const canonicalArtist = String(page?.anchor_group_artist || '').trim();
+  const group = payload?.artist_groups?.find(item => String(item.artist || '').trim() === canonicalArtist);
+  if (!canonicalArtist || !Number.isInteger(page?.anchor_offset) || page.anchor_offset < 0 || !group?.albums?.length) {
+    throw new Error('Root gallery refresh endpoint metadata is unavailable.');
+  }
+  return { artist: canonicalArtist, offset: page.anchor_offset, length: group.albums.length, revision: page.revision };
 }
 
 async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist, retainedEndArtist = '', retainedArtists = [retainedEndArtist]) {
@@ -1293,7 +1305,27 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (response.status === 503) {
       response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
     }
-    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision));
+    const ownsInitialResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision);
+    if (rootRefreshCoverage > 0 && response.status === 400) {
+      const failure = await response.json();
+      if (!ownsInitialResponse()) return false;
+      const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
+      if (message !== 'Gallery artist anchor is unavailable.') throw new Error(message);
+      const requestedArtist = String(
+        new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist') || '',
+      ).trim();
+      const alternate = await fetchRootGalleryRefreshAnchorResponse(
+        apiUrl,
+        retainedArtists.filter(artist => artist !== requestedArtist),
+        controller,
+        ownsInitialResponse,
+        false,
+      );
+      if (!alternate) return false;
+      response = alternate.response;
+      if (alternate.url) apiUrl = alternate.url;
+    }
+    let data = await readGalleryResponse(response, ownsInitialResponse);
     if (rootRefreshCoverage > 0) {
       data = {
         ...data,

@@ -1,3 +1,31 @@
+export function analyzeNativeScrollGesture(samples, direction) {
+  const anchorReplacementIndexes = samples
+    .map((sample, index) => sample.anchorGeneration !== 0 ? index : -1)
+    .filter(index => index >= 0);
+  const firstMovementIndex = samples.findIndex((sample, index) => (
+    index > 0 && Math.abs(Number(sample.scrollTop) - Number(samples[index - 1].scrollTop)) >= 0.5
+  ));
+  const signedStepDeltas = firstMovementIndex < 0 ? [] : samples.slice(firstMovementIndex)
+    .map((sample, index) => (
+      (Number(sample.scrollTop) - Number(samples[firstMovementIndex + index - 1].scrollTop)) * direction
+    ));
+  const movementStart = firstMovementIndex < 0 ? null : samples[firstMovementIndex - 1];
+  const signedTotalDisplacement = movementStart
+    ? (Number(samples.at(-1).scrollTop) - Number(movementStart.scrollTop)) * direction
+    : 0;
+  const initialCoordinate = Number(samples[0]?.contentCoordinate);
+  const maxContentDrift = Math.max(0, ...samples.map(sample => (
+    Math.abs(Number(sample.contentCoordinate) - initialCoordinate)
+  )));
+  return {
+    anchorReplacementIndexes,
+    firstMovementIndex,
+    maxContentDrift,
+    signedStepDeltas,
+    signedTotalDisplacement,
+  };
+}
+
 function observeArtistPlacement({ targetArtist, headingSelector, observe = false }) {
   const read = () => {
     const scroll = document.getElementById('albums-scroll');

@@ -1,5 +1,5 @@
 import { expect, test } from '../support/performanceFixtures.js';
-import { GalleryRegressions } from '../poms/galleryRegressions.js';
+import { analyzeNativeScrollGesture, GalleryRegressions } from '../poms/galleryRegressions.js';
 import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHelpers.js';
 
 async function openDeepGallery(page, galleryActions, navigationPanelActions, mobile) {
@@ -32,66 +32,24 @@ async function openDeepGallery(page, galleryActions, navigationPanelActions, mob
   return ui;
 }
 
-function expectGestureStable(samples, direction) {
+function expectGestureStable(samples, direction, maxTotalDisplacement) {
   expect(samples.length).toBeGreaterThan(5);
   expect(samples.filter(sample => !sample.connected)).toEqual([]);
   const coordinates = samples.map(sample => sample.contentCoordinate);
   expect(coordinates.every(Number.isFinite)).toBe(true);
-  let segmentCoordinate = coordinates[0];
-  const segments = [[samples[0]]];
-  for (let index = 1; index < samples.length; index += 1) {
-    const anchorChanged = samples[index].anchorGeneration !== samples[index - 1].anchorGeneration;
-    if (anchorChanged) {
-      segmentCoordinate = coordinates[index];
-      segments.push([samples[index]]);
-      continue;
-    }
-    const scrollDelta = samples[index].scrollTop - samples[index - 1].scrollTop;
-    const coordinateDelta = coordinates[index] - coordinates[index - 1];
-    const compensatedRebase = Math.abs(scrollDelta) >= 8
-      && Math.abs(coordinateDelta) >= 8;
-    if (compensatedRebase) {
-      const viewportDelta = samples[index].viewportOffset - samples[index - 1].viewportOffset;
-      if (direction > 0) expect(viewportDelta).toBeLessThanOrEqual(1);
-      else expect(viewportDelta).toBeGreaterThanOrEqual(-1);
-      segmentCoordinate = coordinates[index];
-      segments.push([samples[index]]);
-      continue;
-    }
-    expect(
-      Math.abs(coordinates[index] - segmentCoordinate),
-      JSON.stringify({
-        index,
-        direction,
-        segmentCoordinate,
-        previous: samples[index - 1],
-        current: samples[index],
-      }),
-    ).toBeLessThanOrEqual(1);
-    segments.at(-1).push(samples[index]);
-  }
-
-  let committedSegmentCount = 0;
-  for (const segment of segments) {
-    const moving = segment.filter((sample, index) => (
-      index === 0 || Math.abs(sample.scrollTop - segment[index - 1].scrollTop) >= 0.5
-    ));
-    const initial = moving[0]?.scrollTop;
-    const committedIndex = moving.findIndex(sample => (
-      direction > 0 ? sample.scrollTop >= initial + 8 : sample.scrollTop <= initial - 8
-    ));
-    if (committedIndex < 0) continue;
-    committedSegmentCount += 1;
-    const committed = moving.slice(committedIndex);
-    const reverseDeltas = committed.slice(1).map((sample, index) => (
-      sample.scrollTop - committed[index].scrollTop
-    )).filter(delta => (direction > 0 ? delta < -0.5 : delta > 0.5));
-    expect(reverseDeltas, JSON.stringify(committed)).toEqual([]);
-  }
-  expect(committedSegmentCount).toBeGreaterThan(0);
+  const evidence = analyzeNativeScrollGesture(samples, direction);
+  expect(evidence.anchorReplacementIndexes, JSON.stringify(samples)).toEqual([]);
+  expect(evidence.maxContentDrift, JSON.stringify(samples)).toBeLessThanOrEqual(1);
+  expect(evidence.firstMovementIndex, JSON.stringify(samples)).toBeGreaterThan(0);
+  expect(
+    evidence.signedStepDeltas.filter(delta => delta < -0.5),
+    JSON.stringify({ evidence, samples }),
+  ).toEqual([]);
+  expect(evidence.signedTotalDisplacement).toBeGreaterThanOrEqual(8);
+  expect(evidence.signedTotalDisplacement).toBeLessThanOrEqual(maxTotalDisplacement);
 }
 
-async function observeGesture(ui, testInfo, name, direction, gesture) {
+async function observeGesture(ui, testInfo, name, direction, maxTotalDisplacement, gesture) {
   const anchor = await ui.captureMiddleVisibleCard();
   const observation = await ui.startNativeScrollFrameObservation(anchor);
   let samples;
@@ -105,7 +63,7 @@ async function observeGesture(ui, testInfo, name, direction, gesture) {
       contentType: 'application/json',
     });
   }
-  expectGestureStable(samples, direction);
+  expectGestureStable(samples, direction, maxTotalDisplacement);
 }
 
 test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability', () => {
@@ -135,11 +93,11 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stabili
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       };
       try {
-        await observeGesture(ui, testInfo, 'mobile-native-swipe-forward', 1, () => swipe(
+        await observeGesture(ui, testInfo, 'mobile-native-swipe-forward', 1, 240, () => swipe(
           Math.round(box.y + box.height * 0.68),
           Math.round(box.y + box.height * 0.46),
         ));
-        await observeGesture(ui, testInfo, 'mobile-native-swipe-reverse', -1, () => swipe(
+        await observeGesture(ui, testInfo, 'mobile-native-swipe-reverse', -1, 240, () => swipe(
           Math.round(box.y + box.height * 0.46),
           Math.round(box.y + box.height * 0.68),
         ));
@@ -159,13 +117,13 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stabili
       const box = await ui.galleryScroll.boundingBox();
       if (!box) throw new Error('Gallery scroll surface is not visible.');
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await observeGesture(ui, testInfo, 'desktop-native-wheel-forward', 1, async () => {
+      await observeGesture(ui, testInfo, 'desktop-native-wheel-forward', 1, 160, async () => {
         for (let step = 0; step < 4; step += 1) {
           await page.mouse.wheel(0, 32);
           await page.waitForTimeout(20);
         }
       });
-      await observeGesture(ui, testInfo, 'desktop-native-wheel-reverse', -1, async () => {
+      await observeGesture(ui, testInfo, 'desktop-native-wheel-reverse', -1, 160, async () => {
         for (let step = 0; step < 4; step += 1) {
           await page.mouse.wheel(0, -32);
           await page.waitForTimeout(20);

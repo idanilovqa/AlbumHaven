@@ -122,7 +122,6 @@ function writeRuntimeBundle() {
 
 if (require.main === module) {
   writeRuntimeBundle();
-  require('./build-home-friends.cjs').buildHomeFriendsBundle();
   console.log(`Wrote ${path.relative(repoRoot, outputPath)} from ${RUNTIME_SCRIPT_PATHS.length} runtime modules.`);
 }
 

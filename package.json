@@ -23,8 +23,7 @@
     "test:e2e:performance:real-app": "node scripts/run-performance-playwright.cjs --group real-app",
     "test:e2e:performance:production-search": "playwright test --config=playwright.production-search-benchmark.config.cjs",
     "test:e2e:performance:paired-search-calibration": "node scripts/run-paired-search-calibration.cjs",
-    "release:prepare": "powershell -ExecutionPolicy Bypass -File scripts/prepare_release.ps1",
-    "build:home-friends": "node scripts/build-home-friends.cjs"
+    "release:prepare": "powershell -ExecutionPolicy Bypass -File scripts/prepare_release.ps1"
   },
   "repository": {
     "type": "git",

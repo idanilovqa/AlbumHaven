@@ -4187,8 +4187,7 @@ def _duplicate_sources_from_rows(
         if not key or not path or (key, path) in seen_paths:
             continue
         seen_paths.add((key, path))
-        track_path = Path(path)
-        rows_by_path[str(track_path)] = payload
+        rows_by_path[path] = payload
         album = albums.get(key)
         if album is None:
             album = albums[key] = Album(key=key, name=str(entry.get("album") or ""), album_artist=str(entry.get("album_artist") or ""))
@@ -4200,8 +4199,10 @@ def _duplicate_sources_from_rows(
                 cover_path = cover_paths[cover_path]
             else:
                 cover_path = Path(cover_path)
+        # The duplicate linker treats paths as string-like and parses one parent per
+        # physical container; keep this transient track from reparsing every file.
         album.tracks.append(Track(
-            path=track_path, title=str(entry.get("title") or ""),
+            path=path, title=str(entry.get("title") or ""),  # type: ignore[arg-type]
             album=entry.get("album"), album_artist=entry.get("album_artist"),
             artist=entry.get("artist"), year=entry.get("year"),
             disc_number=entry.get("disc_number"), track_number=entry.get("track_number"),

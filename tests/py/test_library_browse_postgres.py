@@ -35,11 +35,10 @@ def test_duplicate_reconstruction_reuses_cover_paths_without_changing_payloads(m
             })
     original_rows, original_entries = deepcopy(rows), deepcopy(entries)
     expected = browse._duplicate_sources_from_rows(rows, file_entries_by_path=entries)
-    constructed_covers = []
+    constructed_paths = []
 
     def counted_path(value):
-        if value in covers:
-            constructed_covers.append(value)
+        constructed_paths.append(str(value))
         return Path(value)
 
     monkeypatch.setattr(browse, "Path", counted_path)
@@ -50,7 +49,7 @@ def test_duplicate_reconstruction_reuses_cover_paths_without_changing_payloads(m
     assert actual["Copy A"]["root_provenance"]["root_ids"] == ["root-0", "root-1"]
     assert rows == original_rows
     assert entries == original_entries
-    assert sorted(constructed_covers) == sorted(covers)
+    assert sorted(constructed_paths) == sorted(covers)
 
 
 @pytest.mark.parametrize("cover_type", ["path", "unhashable_pathlike"])

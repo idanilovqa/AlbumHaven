@@ -2,32 +2,32 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
-const Module = require('node:module');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
+const {fixture: nativeFixture} = require('./playlist-native-review-fixture.cjs');
 const repo = path.resolve(__dirname, '../../..');
 const source = path.join(repo, 'music_app/static/js/playlists');
 const model = import(pathToFileURL(path.join(source, 'selection.mjs')));
-const built = buildSync({entryPoints: [path.join(source, 'selection.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', write: false, external: ['react']});
-const loaded = new Module(__filename + '.selection', module);
-loaded.filename = __filename + '.selection'; loaded.paths = module.paths;
-loaded._compile(built.outputFiles[0].text, loaded.filename);
-const {PlaylistSelectionPanel, PlaylistTrackSummary, PlaylistAlbumDetails} = loaded.exports;
-const native = createNativeHomeRuntime();
-for (const file of ['compact-data-table.js', 'album-details-components.js', 'in-page-tabs.js']) {
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime', file), 'utf8'), native.context);
+const panelModule = import(pathToFileURL(path.join(source, 'native-selection.mjs')));
+const PlaylistSelectionPanel = 'panel', PlaylistTrackSummary = 'track', PlaylistAlbumDetails = 'album';
+const native = nativeFixture();
+const runtime = {...native.runtime, detailHeaderHtml: native.context.buildAlbumDetailsHeaderHtml};
+async function mount(props = {}) {
+  const host = native.document.createElement('section'); native.document.body.append(host);
+  const {mountPlaylistSelectionPanel} = await panelModule;
+  const owner = mountPlaylistSelectionPanel(host, props.runtime || runtime, {scopeKey: 'selection-test', ...props});
+  return {host, owner, close() {owner.dispose(); assert.equal(host.childNodes.length, 0); assert.equal(host.listeners.length, 0); host.remove();}};
 }
-const runtime = {escapeHtml: native.context.escapeHtml, buttonHtml: native.context.ButtonComponent.renderButton,
-  actionHtml: native.context.ButtonComponent.renderActionButton, alertHtml: native.context.buildOnPageAlertHtml,
-  tableHtml: native.context.buildCompactDataTable, artboxHtml: native.context.buildAlbumArtboxHtml,
-  detailHeaderHtml: native.context.buildAlbumDetailsHeaderHtml, tabsHtml: native.context.buildInPageTabsHtml,
-  mountTabs: native.context.mountInPageTabs};
-const render = (Component, props = {}) => renderToStaticMarkup(React.createElement(Component, {runtime, ...props}));
+async function render(view, props = {}) {
+  const value = await mount(props);
+  try {
+    if (view === PlaylistAlbumDetails) {
+      value.host.querySelector('[data-in-page-tab="album"]').dispatchEvent(new native.context.Event('click'));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    return view === PlaylistSelectionPanel ? value.host.outerHTML
+      : value.host.querySelector('[role="tabpanel"]').innerHTML;
+  } finally {value.close();}
+}
 
 // Authorized row projections live only in tests, never in production defaults.
 const row = (overrides = {}) => ({row_key: 'item:one', source_readable: true, playlist_item_id: 'one',
@@ -51,7 +51,7 @@ test('unreadable sources discard every display fact and cannot select an album',
     row({source_readable: 'true'}), row({allowed_actions: {can_read: false, can_view_details: true}})]) {
     assert.deepEqual(playlistTrackSummary(value), {status: 'denied', data: null});
     assert.equal(playlistAlbumSelection(value), null);
-    const html = render(PlaylistTrackSummary, {row: value});
+    const html = await render(PlaylistTrackSummary, {row: value});
     assert.doesNotMatch(html, /Track &lt;one&gt;|Guest|\/art\/one|Library/); assert.match(html, /access/);
   }
   assert.deepEqual(playlistTrackSummary(null), {status: 'unavailable', data: null});
@@ -86,40 +86,42 @@ test('artwork uses only explicit safe server references and never path or album 
     'data:image/png;base64,abc', '/\\other/cover', '/with space', 'javascript:alert(1)']) {
     const value = row({artwork_url, cover_path: '/private/cover.png'});
     assert.equal(playlistTrackSummary(value).data.artwork_url, null);
-    const html = render(PlaylistTrackSummary, {row: value});
+    const html = await render(PlaylistTrackSummary, {row: value});
     assert.match(html, /album-artbox--empty/); assert.doesNotMatch(html, /<img|private\/cover/);
   }
 });
-test('track presentation reuses native artwork and header with escaped display-only facts', () => {
-  const html = render(PlaylistTrackSummary, {row: row({source_label: '<source>'})});
+test('track presentation reuses native artwork and header with escaped display-only facts', async () => {
+  const html = await render(PlaylistTrackSummary, {row: row({source_label: '<source>'})});
   assert.match(html, /album-artbox/); assert.match(html, /album-details-header/);
   assert.match(html, /Track &lt;one&gt;/); assert.match(html, /Last-known metadata/);
   assert.match(html, /&lt;source&gt;/); assert.match(html, /Confirmed local/); assert.match(html, /2:01/);
   assert.doesNotMatch(html, /data-src=|data-track-path=|data-album-key=|play-track-button|album:one|item:one/);
 });
-test('unknown track metadata never becomes invented media, biography or source', () => {
-  const html = render(PlaylistTrackSummary, {row: row({title: '', artist: '', secondary_artist: '', album_title: '',
+test('unknown track metadata never becomes invented media, biography or source', async () => {
+  const html = await render(PlaylistTrackSummary, {row: row({title: '', artist: '', secondary_artist: '', album_title: '',
     duration_seconds: null, duration_display: '', source_label: '', source_kind: '', track_number: null,
     disc_number: null, metadata_state: null, artwork_url: null, availability: null})});
   assert.match(html, /Unknown/); assert.match(html, /Metadata freshness unknown/); assert.match(html, /Unresolved/);
   assert.doesNotMatch(html, /<img|0:00|Biography|Confirmed local|Last-known metadata/);
-  assert.match(render(PlaylistTrackSummary, {row: row({duration_seconds: 0})}), /0:00/);
-  assert.match(render(PlaylistTrackSummary, {row: row({duration_seconds: null, duration_display: '3:45'})}), /3:45/);
+  assert.match(await render(PlaylistTrackSummary, {row: row({duration_seconds: 0})}), /0:00/);
+  assert.match(await render(PlaylistTrackSummary, {row: row({duration_seconds: null, duration_display: '3:45'})}), /3:45/);
 });
-test('album admission reports unavailable or denied without using native Home authority', () => {
+test('album admission reports unavailable or denied without using native Home authority', async () => {
   const withHomeReader = {...runtime, readAlbumProjection() {throw new Error('Home scope must not authorize playlist details');}};
-  const html = render(PlaylistAlbumDetails, {runtime: withHomeReader, scopeKey: 'playlist-scope', row: row()});
+  const html = await render(PlaylistAlbumDetails, {runtime: withHomeReader, scopeKey: 'playlist-scope', row: row()});
   assert.match(html, /unavailable from this provider/); assert.doesNotMatch(html, /Track &lt;one&gt;|compact-data-table/);
-  const denied = render(PlaylistAlbumDetails, {row: row({allowed_actions: {can_open_album: true}}), readDetail() {throw new Error('Denied');}});
+  const denied = await render(PlaylistAlbumDetails, {row: row({allowed_actions: {can_open_album: true}}), readDetail() {throw new Error('Denied');}});
   assert.match(denied, /access to these album details/);
-  const unavailable = render(PlaylistAlbumDetails, {row: row({album_ref: null}), readDetail() {throw new Error('No identity');}});
+  const unavailable = await render(PlaylistAlbumDetails, {row: row({album_ref: null}), readDetail() {throw new Error('No identity');}});
   assert.match(unavailable, /unavailable/);
-  const unreadable = render(PlaylistAlbumDetails, {row: row({source_readable: false}), readDetail() {throw new Error('Unreadable');}});
+  const unreadable = await render(PlaylistAlbumDetails, {row: row({source_readable: false}), readDetail() {throw new Error('Unreadable');}});
   assert.match(unreadable, /access/); assert.doesNotMatch(unreadable, /Track &lt;one&gt;|Album tracks/);
 });
-test('selection opens the track tab, keeps a native close control and links its panel label', () => {
-  assert.equal(render(PlaylistSelectionPanel, {row: null}), '');
-  const html = render(PlaylistSelectionPanel, {row: row(), scopeKey: 'one'});
+test('selection opens the track tab, keeps a native close control and links its panel label', async () => {
+  const absent = await mount({row: null});
+  try {assert.equal(absent.host.hidden, true); assert.equal(absent.host.querySelector('[role="tabpanel"]').childNodes.length, 0);}
+  finally {absent.close();}
+  const html = await render(PlaylistSelectionPanel, {row: row(), scopeKey: 'one'});
   assert.match(html, /aria-label="Selected playlist item"/);
   const host = native.document.createElement('div'); host.innerHTML = html;
   assert.equal(host.querySelector('[data-in-page-tab="track"]').getAttribute('aria-selected'), 'true');
@@ -127,8 +129,8 @@ test('selection opens the track tab, keeps a native close control and links its 
   assert.equal(host.querySelector('[role="tabpanel"]').getAttribute('aria-labelledby'), host.querySelector('[data-in-page-tab="track"]').id);
   assert.match(html, /Close selection/); assert.match(html, /action-button/);
 });
-test('selection source reuses the detail owner without transport, media, navigation or fixture ownership', () => {
-  const text = ['selection.jsx', 'selection.mjs'].map(file => fs.readFileSync(path.join(source, file), 'utf8')).join('\n');
+test('selection source reuses the detail owner without transport, media, navigation or fixture ownership', async () => {
+  const text = ['native-selection.mjs', 'selection.mjs'].map(file => fs.readFileSync(path.join(source, file), 'utf8')).join('\n');
   assert.match(text, /ResourceDetail/); assert.match(text, /DetailProjectionPanel/);
   assert.doesNotMatch(text, /readAlbumProjection|\bfetch\s*\(|localStorage|sessionStorage|mock-source|fixture-data|trackIntent\s*\(|albumIntent\s*\(|window\.|history\./);
 });
@@ -143,6 +145,6 @@ test('playlist uses supplied catalog targets and never derives an Artist from it
   assert.deepEqual(playlistAlbumSelection(row({album_target})), album_target);
   assert.equal(playlistArtistSelection(row({artist_target, source_readable: false})), null);
   assert.equal(playlistAlbumSelection(row({album_target: artist_target})), null);
-  assert.match(render(PlaylistSelectionPanel, {row: row({artist_target})}), /data-in-page-tab="artist"/);
-  assert.doesNotMatch(render(PlaylistSelectionPanel, {row: row()}), /data-in-page-tab="artist"/);
+  assert.match(await render(PlaylistSelectionPanel, {row: row({artist_target})}), /data-in-page-tab="artist"/);
+  assert.doesNotMatch(await render(PlaylistSelectionPanel, {row: row()}), /data-in-page-tab="artist"/);
 });

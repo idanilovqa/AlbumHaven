@@ -221,8 +221,10 @@ export function mountPlaylistTracks(container, runtime, initialProps) {
       const reorderable = canReorder(playlistReorderSnapshot(owner.controller, owner.selected, sort));
       if (!live()) return;
       const html = playlistTableHtml(runtime, {
-        rows, sourceRows: owner.rows, detail: owner.detail, reorderable, sort,
-        preferenceFor: preferences.get
+        // Live Love state is painted into the retained native cell below.
+        // Including pending/tier in the structural HTML would replace every
+        // row and its focused button before that identity-preserving paint.
+        rows, sourceRows: owner.rows, detail: owner.detail, reorderable, sort
       });
       if (!live()) return;
       const focused = host.contains(doc.activeElement) ? doc.activeElement : null;
@@ -279,7 +281,7 @@ export function mountPlaylistTracks(container, runtime, initialProps) {
   }
 
   function click(event) {
-    if (!current() || event.defaultPrevented) return;
+    if (!current() || event.defaultPrevented || !host.contains(event.target)) return;
     const sortButton = event.target.closest('[data-cdt-sort]');
     if (sortButton) {
       if (sortButton.disabled || !Object.hasOwn(SORT_COLUMNS, sortButton.dataset.cdtSort)) return;
@@ -363,8 +365,12 @@ export function mountPlaylistTracks(container, runtime, initialProps) {
       element: container,
       update(next) {
         if (disposed) return;
+        const filtersChanged = playlistFilters(props.state) !== playlistFilters(next.state);
         props = next;
         revision++;
+        // A filter transition retires writes even when the same row remains
+        // visible and the detail/provider object is otherwise unchanged.
+        if (filtersChanged) preferences.cancel();
         preferences.sync();
         if (!disposed) render();
       },

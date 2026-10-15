@@ -26,7 +26,7 @@ export function readTrackPreference(runtime, row, context) {
 /** Transient command state only. The native boundary owns authority and saved
  * preferences; acknowledgement never creates a React persistence cache. */
 export function createTrackPreferenceController({getView, onChange = () => {}, onError = () => {}}) {
-  const pending = new Map();
+  const pending = new Map(), retiredDenials = new Map();
   let generation = 0;
   const read = row => {
     const view = getView();
@@ -45,10 +45,24 @@ export function createTrackPreferenceController({getView, onChange = () => {}, o
   };
   const owns = operation => !operation.controller.signal.aborted && pending.get(operation.identity) === operation
     && matching(operation)?.preference.allowed_actions.can_set_love_tier === true;
+  const currentRetiredDenial = operation => {
+    const eligible = () => operation.permissionLost && retiredDenials.get(operation.identity) === operation
+      && !pending.has(operation.identity);
+    if (!eligible()) return false;
+    const current = matching(operation);
+    // A restored grant or newer operation ends the old denial's authority.
+    // Recheck the marker after the potentially reentrant preference read.
+    return current?.preference.allowed_actions.can_set_love_tier === false && eligible();
+  };
   const cancel = () => {
     generation++;
-    for (const operation of pending.values()) {operation.permissionLost = false; operation.controller.abort();}
+    // Retire only the operations owned on entry. Abort callbacks can acquire
+    // new current operations synchronously; neither iteration nor clear may
+    // visit those replacement entries.
+    const retired = [...pending.values()];
     pending.clear();
+    retiredDenials.clear();
+    for (const operation of retired) {operation.permissionLost = false; operation.controller.abort();}
   };
   return {
     get(row) {
@@ -58,9 +72,16 @@ export function createTrackPreferenceController({getView, onChange = () => {}, o
     },
     sync() {
       let changed = false;
-      for (const [identity, operation] of pending) if (!owns(operation)) {
-        operation.permissionLost = matching(operation)?.preference.allowed_actions.can_set_love_tier === false;
-        operation.controller.abort(); pending.delete(identity); changed = true;
+      for (const [identity, operation] of [...pending]) {
+        if (pending.get(identity) !== operation || owns(operation)) continue;
+        const permissionLost = matching(operation)?.preference.allowed_actions.can_set_love_tier === false;
+        // Provider reads above can reenter as well. Delete only this still-
+        // current entry, before abort listeners can acquire its replacement.
+        if (pending.get(identity) !== operation) continue;
+        operation.permissionLost = permissionLost;
+        pending.delete(identity); changed = true;
+        if (permissionLost) retiredDenials.set(identity, operation);
+        operation.controller.abort();
       }
       if (changed) onChange();
     },
@@ -72,6 +93,8 @@ export function createTrackPreferenceController({getView, onChange = () => {}, o
       const operation = {row, runtime, generation, source: current.view.source, context: contextOf(current.view.context),
         identity: current.preference.identity, reader: runtime.trackPreference, setter: runtime.setTrackLove,
         controller: new AbortController(), love_tier: tiers[(tiers.indexOf(current.preference.love_tier) + 1) % tiers.length]};
+      // A replacement invalidates old denial feedback even after it settles.
+      retiredDenials.delete(operation.identity);
       pending.set(operation.identity, operation); onChange();
       try {
         // Recheck after the event turn so a simultaneous source/provider change
@@ -88,12 +111,13 @@ export function createTrackPreferenceController({getView, onChange = () => {}, o
         return true;
       } catch (error) {
         const denied = error?.status === 401 || error?.status === 403;
-        if (error?.name !== 'AbortError' && (owns(operation) || denied && operation.permissionLost && matching(operation))) {
+        if (error?.name !== 'AbortError' && (owns(operation) || denied && currentRetiredDenial(operation))) {
           onError(denied ? 'You no longer have permission to change Love for this track.'
             : 'The Love change was not confirmed. Check the current value before trying again.');
         }
         return false;
       } finally {
+        if (retiredDenials.get(operation.identity) === operation) retiredDenials.delete(operation.identity);
         if (pending.get(operation.identity) === operation) {pending.delete(operation.identity); onChange();}
       }
     },

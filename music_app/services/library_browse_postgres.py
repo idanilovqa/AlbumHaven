@@ -200,6 +200,48 @@ def _preferred_duplicate_source(
     return max(sources, key=credit_score)
 
 
+def _log_search_payload_timing(
+    *,
+    elapsed_ms: float,
+    thread_cpu_ms: float,
+    phase_ms: Mapping[str, float],
+    payload: Mapping[str, object],
+    exact_artist_match: bool,
+    omit_sidebar: bool,
+) -> None:
+    artist_groups = payload.get("artist_groups") or []
+    if not isinstance(artist_groups, list):
+        artist_groups = []
+    artists_sidebar = payload.get("artists_sidebar") or []
+    if not isinstance(artists_sidebar, list):
+        artists_sidebar = []
+    logging.getLogger(__name__).info(
+        "Search payload preparation completed %s",
+        json.dumps(
+            {
+                "album_count": sum(
+                    len(group.get("albums") or [])
+                    for group in artist_groups
+                    if isinstance(group, Mapping)
+                ),
+                "artist_count": sum(
+                    1 for group in artist_groups if isinstance(group, Mapping)
+                ),
+                "elapsed_ms": round(float(elapsed_ms), 2),
+                "exact_artist_match": bool(exact_artist_match),
+                "omit_sidebar": bool(omit_sidebar),
+                "phase_ms": {
+                    str(key): round(float(value), 2)
+                    for key, value in sorted(phase_ms.items())
+                },
+                "sidebar_artist_count": len(artists_sidebar),
+                "thread_cpu_ms": round(float(thread_cpu_ms), 2),
+            },
+            sort_keys=True,
+        ),
+    )
+
+
 class GalleryProjectionPending(RuntimeError):
     """Gallery awaits a valid persisted membership projection."""
 
@@ -1762,12 +1804,16 @@ class PostgresLibraryBrowseRepository:
         library_state: Mapping[str, object] | None = None,
         connection: Any,
     ) -> dict[str, object]:
+        started_at = perf_counter()
+        started_cpu = thread_time()
+        phase_ms: dict[str, float] = {}
         params = query_params or {}
         view_state = _root_sidebar_view_state(params)
         query = str(params.get("q") or "").strip()
         requested_all_artists = _request_flag(params.get("all_artists"))
         omit_sidebar = _request_flag(params.get("omit_sidebar"))
 
+        aliases_started_at = started_at
         relation_alias_maps = self._load_relation_alias_maps(connection=connection)
         alias_to_canonical = relation_alias_maps["alias_to_canonical"]
         canonical_to_aliases = relation_alias_maps["canonical_to_aliases"]
@@ -1790,7 +1836,10 @@ class PostgresLibraryBrowseRepository:
             }
         if relation_alias_maps.get("projection_stale_reason"):
             raise SearchProjectionPending("Artist relationships are being prepared.")
+        phase_ms["aliases"] = (perf_counter() - aliases_started_at) * 1000
         if query and not requested_all_artists:
+            exact_match_started_at = perf_counter()
+            exact_match_search_rows_ms = 0.0
             projected_artist_match = ""
             projection_is_authoritative = (
                 relation_alias_maps.get("projection_stale_reason") == ""
@@ -1806,6 +1855,7 @@ class PostgresLibraryBrowseRepository:
                 )
             exact_artist_match = projected_artist_match
             if exact_artist_match and _multi_values(params, "category"):
+                search_rows_started_at = perf_counter()
                 search_rows = self._load_search_rows(
                     query,
                     view_state,
@@ -1813,6 +1863,13 @@ class PostgresLibraryBrowseRepository:
                     canonical_to_aliases=canonical_to_aliases,
                     include_missing=True,
                     connection=connection,
+                )
+                search_rows_elapsed_ms = (
+                    perf_counter() - search_rows_started_at
+                ) * 1000
+                exact_match_search_rows_ms += search_rows_elapsed_ms
+                phase_ms["search_rows"] = (
+                    phase_ms.get("search_rows", 0.0) + search_rows_elapsed_ms
                 )
                 canonical_search_rows = _canonicalize_artist_rows(
                     search_rows,
@@ -1843,7 +1900,14 @@ class PostgresLibraryBrowseRepository:
                 )
                 if exact_artist_match:
                     raise SearchProjectionPending("Artist relationships are being prepared.")
+            phase_ms["aliases"] += max(
+                0.0,
+                (perf_counter() - exact_match_started_at) * 1000
+                - exact_match_search_rows_ms,
+            )
         if exact_artist_match:
+            sidebar_started_at = perf_counter()
+            sidebar_search_rows_ms = 0.0
             sidebar_artist_groups = []
             search_missing_album_rows: list[object] | None = None
             if not omit_sidebar:
@@ -1853,6 +1917,7 @@ class PostgresLibraryBrowseRepository:
                     canonical_to_aliases,
                 )
                 if search_rows is None:
+                    search_rows_started_at = perf_counter()
                     search_rows = (
                         self._load_search_rows(
                             query,
@@ -1872,6 +1937,13 @@ class PostgresLibraryBrowseRepository:
                             view_state,
                             connection=connection,
                         )
+                    )
+                    sidebar_search_rows_ms = (
+                        perf_counter() - search_rows_started_at
+                    ) * 1000
+                    phase_ms["search_rows"] = (
+                        phase_ms.get("search_rows", 0.0)
+                        + sidebar_search_rows_ms
                     )
                 if canonical_search_rows is None:
                     canonical_search_rows = _canonicalize_artist_rows(
@@ -1905,10 +1977,17 @@ class PostgresLibraryBrowseRepository:
                     )
                     == exact_artist_key
                 ]
+            if not omit_sidebar:
+                phase_ms["sidebar"] = max(
+                    0.0,
+                    (perf_counter() - sidebar_started_at) * 1000
+                    - sidebar_search_rows_ms,
+                )
             delegated_params = _clone_query_params_mapping(params)
             delegated_params["artist"] = exact_artist_match
             if "surface" not in delegated_params:
                 delegated_params["surface"] = "albums"
+            selected_payload_started_at = perf_counter()
             payload = self.build_selected_artist_payload(
                 query_params=delegated_params,
                 library_state=library_state,
@@ -1919,6 +1998,10 @@ class PostgresLibraryBrowseRepository:
                 _exclude_primary_from_family_preview=True,
                 _connection=connection,
             )
+            phase_ms["selected_payload"] = (
+                perf_counter() - selected_payload_started_at
+            ) * 1000
+            finalize_started_at = perf_counter()
             search_context = payload.get("search_context")
             if isinstance(search_context, dict):
                 search_context["selected_artist_source"] = "auto_top_match"
@@ -1955,11 +2038,27 @@ class PostgresLibraryBrowseRepository:
                     sidebar_artist_groups,
                     limit=_SEARCH_ALL_ARTISTS_DISPLAY_COVER_QUEUE_LIMIT,
                 )
+            phase_ms["finalize"] = (
+                perf_counter() - finalize_started_at
+            ) * 1000
+            _log_search_payload_timing(
+                elapsed_ms=(perf_counter() - started_at) * 1000,
+                thread_cpu_ms=(thread_time() - started_cpu) * 1000,
+                phase_ms=phase_ms,
+                payload=payload,
+                exact_artist_match=True,
+                omit_sidebar=omit_sidebar,
+            )
             return payload
+        support_state_started_at = perf_counter()
         support_state = self._inventory_repository.load_support_state(
             connection=connection,
         )
+        phase_ms["support_state"] = (
+            perf_counter() - support_state_started_at
+        ) * 1000
         if search_rows is None:
+            search_rows_started_at = perf_counter()
             search_rows = self._load_search_rows(
                 query,
                 view_state,
@@ -1968,6 +2067,11 @@ class PostgresLibraryBrowseRepository:
                 include_missing=True,
                 connection=connection,
             )
+            phase_ms["search_rows"] = (
+                phase_ms.get("search_rows", 0.0)
+                + (perf_counter() - search_rows_started_at) * 1000
+            )
+        grouping_family_started_at = perf_counter()
         rows = (
             canonical_search_rows
             if canonical_search_rows is not None
@@ -2142,6 +2246,10 @@ class PostgresLibraryBrowseRepository:
                 )
             ],
         )
+        phase_ms["grouping_family"] = (
+            perf_counter() - grouping_family_started_at
+        ) * 1000
+        finalize_started_at = perf_counter()
         selected_family_keys = {
             _artist_display_dedupe_key(str(family_artist or "").strip())
             for family_artist in [selected_artist, *family_artists]
@@ -2219,7 +2327,11 @@ class PostgresLibraryBrowseRepository:
         }
         if search_context is not None:
             payload["search_context"] = search_context
+        phase_ms["finalize"] = (
+            perf_counter() - finalize_started_at
+        ) * 1000
         if not omit_sidebar:
+            sidebar_started_at = perf_counter()
             sidebar_groups = (
                 _merge_artist_groups_for_sidebar(
                     rendered_artist_groups,
@@ -2232,9 +2344,24 @@ class PostgresLibraryBrowseRepository:
                 sidebar_groups
             )
             payload["artist_count"] = len(sidebar_groups)
+            phase_ms["sidebar"] = (
+                perf_counter() - sidebar_started_at
+            ) * 1000
+        finalize_started_at = perf_counter()
         _queue_display_cover_variants_for_groups(
             self._config,
             rendered_artist_groups if selected_artist and not requested_all_artists else artist_groups,
+        )
+        phase_ms["finalize"] += (
+            perf_counter() - finalize_started_at
+        ) * 1000
+        _log_search_payload_timing(
+            elapsed_ms=(perf_counter() - started_at) * 1000,
+            thread_cpu_ms=(thread_time() - started_cpu) * 1000,
+            phase_ms=phase_ms,
+            payload=payload,
+            exact_artist_match=False,
+            omit_sidebar=omit_sidebar,
         )
         return payload
 

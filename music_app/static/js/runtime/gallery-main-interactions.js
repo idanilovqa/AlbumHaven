@@ -318,6 +318,7 @@ function getFilteredGalleryMainModel() {
   const groups = typeof buildDisplayGroups === 'function' ? buildDisplayGroups(sourceGroups) : sourceGroups;
   return {
     primaryGroups, familyGroups, fallbackGroups, groups,
+    scopeGroups: primary.length || family.length ? [...primary, ...family] : fallbackGroups,
     totals: {
       artistCount: groups.length,
       albumCount: groups.reduce((total, group) => total + group.albums.length, 0),
@@ -422,6 +423,12 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   return true;
 }
 
+function galleryArtistPopularInput(model = getFilteredGalleryMainModel()) {
+  return {groups: model.scopeGroups, albums: model.groups.flatMap(group => group.albums || []),
+    filters: {categories: activeGallerySourceCategories(ensureGalleryMainState()),
+      album_types: [...ensureGalleryMainState().albumTypes]}};
+}
+
 function updateGalleryMainControls() {
   const mainState = ensureGalleryMainState();
   mainState.view = normalizeGalleryView(mainState.view);
@@ -431,6 +438,14 @@ function updateGalleryMainControls() {
   const hasSelectedArtist = Boolean(String(state.view.selected_artist || '').trim());
   const familyTrigger = document.querySelector('[data-gallery-bar-action="artist-family"]');
   if (familyTrigger) familyTrigger.hidden = !hasSelectedArtist;
+  const popularTrigger = document.querySelector('[data-gallery-bar-action="popular-tracks"]');
+  if (popularTrigger) {
+    const model = getFilteredGalleryMainModel();
+    popularTrigger.hidden = !hasSelectedArtist;
+    popularTrigger.disabled = !hasSelectedArtist
+      || typeof window.AlbumHavenPlaylistUI?.openArtistPopular !== 'function'
+      || window.AlbumHavenPlaylistUI?.canOpenArtistPopular?.(galleryArtistPopularInput(model)) !== true;
+  }
   if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
     closeGalleryMainSurface(false);
   }
@@ -686,6 +701,14 @@ function openGalleryArtistInfo(anchor) {
 }
 
 function handleGalleryMainClick(event) {
+  const popular = event.target.closest?.('[data-gallery-bar-action="popular-tracks"]');
+  if (popular) {
+    event.preventDefault();
+    if (popular.isConnected && !popular.hidden && !popular.disabled && String(state.view.selected_artist || '').trim()) {
+      window.AlbumHavenPlaylistUI?.openArtistPopular?.(galleryArtistPopularInput());
+    }
+    return true;
+  }
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const readMore = event.target.closest?.('[data-artist-info-read-more]');
   if (readMore) {

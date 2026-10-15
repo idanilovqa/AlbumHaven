@@ -51,15 +51,15 @@ export function mountLibraryMixSetup(host,runtime,initialProps){
   else next?.();
  }
  try{
-  dialog=openNativeDialog(runtime,{title:'Library Mix',pageId:'library-mix'},{fallbackHost:host,
+  dialog=openNativeDialog(runtime,{title:props.controller.getSnapshot().artistScope?'Popular Artist tracks':'Library Mix',pageId:'library-mix'},{fallbackHost:host,
    mount(body,close){
     try{
-     closeDialog=close;form=node(body,'form','tag-editor-form');const intro=node(form,'p','playlists__note');intro.textContent='Choose popular songs from your whole server library, ranked by Last.fm global plays.';
+     closeDialog=close;form=node(body,'form','tag-editor-form');const intro=node(form,'p','playlists__note');intro.textContent=props.controller.getSnapshot().artistScope?'Choose popular songs from this captured Artist selection, ranked by Last.fm global plays.':'Choose popular songs from your whole server library, ranked by Last.fm global plays.';
      choiceBasis=acquire(mountChoice(node(form),runtime,{label:'Choose songs',value:basis,options:[['per_artist','Per artist'],['per_album','Per album']],onChange:value=>{if(!operational)return;basis=value;render();}}));
      const label=node(form,'label');label.append('Songs per group');input=node(label,'input');Object.assign(input,{type:'number',min:'1',max:'5000',step:'1',inputMode:'numeric',value:count});input.setAttribute('aria-label','Songs per group');listen(input,'input',()=>{if(!operational)return;count=input.value;render();});
      choiceOrder=acquire(mountChoice(node(form),runtime,{label:'Playback order',value:order,options:MIX_ORDER_OPTIONS,onChange:value=>{if(!operational)return;order=value;render();}}));
      choiceAuto=acquire(mountChoice(node(form),runtime,{label:'Update automatically when saved',value:'off',options:[['off','Off'],['on','On']],onChange:value=>{if(!operational)return;automatic=value==='on';render();}}));
-     const note=node(form,'p','playlists__note');note.textContent='Songs without resolved Last.fm popularity are left out. Auto-updating mixes recalculate the top songs as your library changes and keep generated membership locked. Mixes are limited to 5,000 songs; reduce songs per group if the result is too large.';
+     const note=node(form,'p','playlists__note');note.textContent=(props.controller.getSnapshot().artistScope?'Off saves this exact captured list. On recalculates only these Artist IDs and retained category/type filters. New family members are not added. ':'')+'Songs without resolved Last.fm popularity are left out. Auto-updating mixes recalculate the top songs as your library changes and keep generated membership locked. Mixes are limited to 5,000 songs; reduce songs per group if the result is too large.';
      status=acquire(mountStatus(node(form),runtime,{value:props.controller.getSnapshot().resource,label:'Library Mix'}));status.element.hidden=!['loading','error','denied'].includes(props.controller.getSnapshot().resource.status);
      const actions=node(form,'div','dialog-actions');acquire(mountButton(node(actions),runtime,{label:'Cancel',onClick:()=>{if(operational)close();}}));
      create=acquire(mountButton(node(actions),runtime,{label:'Create mix',icon:'play',onClick:prepare}));
@@ -82,6 +82,8 @@ export function mountLibraryMixPage(host,runtime,initialProps){
  let selected=null,starting=false,message='',displayedView=null,table=null,panel=null;
  let header,title,playButton,orderChoice,saveButton,closeButton,titleInput,description;
  let notes,tableHost,panelHost,resource,mutation,retryHost,savedHost,errorHost;
+ let selectionHost,selectionBasisOwner,selectionAutoOwner,selectionApply,selectionCountInput;
+ let selectionRecipe=null,selectionBasis='per_artist',selectionCount='3',selectionAuto=false;
  let cleanupFailure=null;
  const release=callback=>{try{callback?.();}catch(error){cleanupFailure??=error;}};
  const own=owner=>{scope.defer(()=>release(()=>owner.dispose()));return owner;};
@@ -161,12 +163,32 @@ export function mountLibraryMixPage(host,runtime,initialProps){
   const state=view.controller.getSnapshot();if(!current())return;
   const detail=state.resource.data?.detail,rows=rowsFor(state),busy=state.mutation.status==='loading',saved=state.mutation.status==='ready';
   const pending=view.controller.pendingSave();if(!current())return;
+  const selecting=state.resource.status==='loading';
+  if(state.artistScope&&state.recipe!==selectionRecipe&&state.resource.status==='ready'){
+   selectionRecipe=state.recipe;selectionBasis=state.recipe.selection_basis;
+   selectionCount=String(state.recipe.songs_per_group);selectionAuto=state.recipe.auto_update;
+  }
+  const selectedOptions=normalizeMixRecipe({selection_basis:selectionBasis,
+   songs_per_group:/^\d+$/.test(selectionCount)?Number(selectionCount):null,
+   auto_update:selectionAuto,playback_order:state.playbackOrder});
+  const selectionDirty=Boolean(state.artistScope&&(!selectedOptions||JSON.stringify({...selectedOptions,playback_order:state.recipe?.playback_order})!==JSON.stringify(state.recipe)));
+  if(selectionHost){
+  selectionHost.hidden=!state.artistScope;
+  const selectionBusy=busy||saved||pending||selecting;
+  selectionBasisOwner.update({label:'Choose songs',value:selectionBasis,disabled:selectionBusy,
+   options:[['per_artist','Per artist'],['per_album','Per album']],onChange:value=>{if(current()){selectionBasis=value;render();}}});if(!current())return;
+  selectionAutoOwner.update({label:'Update automatically when saved',value:selectionAuto?'on':'off',disabled:selectionBusy,
+   options:[['off','Off'],['on','On']],onChange:value=>{if(current()){selectionAuto=value==='on';render();}}});if(!current())return;
+  selectionCountInput.disabled=selectionBusy;if(selectionCountInput.value!==selectionCount)selectionCountInput.value=selectionCount;
+  selectionApply.update({label:'Update selection',disabled:selectionBusy||!selectionDirty||!selectedOptions,
+   onClick:()=>{if(current())view.controller.prepare(selectedOptions);}});if(!current())return;
+  }
   const canSave=view.controller.canSave();if(!current())return;
   title.textContent=state.title||'Library Mix';
   header.update({id:'library-mix',className:'playlists__header'});if(!current())return;
   playButton.update({label:'Play',icon:'play',disabled:starting||!detail?.allowed_actions.can_play||!rows.length,onClick:play});if(!current())return;
   orderChoice.update({label:'Playback order',value:state.playbackOrder,options:MIX_ORDER_OPTIONS,disabled:busy||saved||pending,onChange:value=>{if(current())view.controller.setOrder(value);}});if(!current())return;
-  saveButton.update({label:'Save as playlist',icon:'save',disabled:!canSave,onClick:()=>save(false)});if(!current())return;
+  saveButton.update({label:'Save as playlist',icon:'save',disabled:!canSave||selectionDirty,onClick:()=>save(false)});if(!current())return;
   closeButton.update({label:'Close mix',icon:'close',disabled:busy,onClick:close});if(!current())return;
   titleInput.disabled=description.disabled=Boolean(busy||saved||pending);
   if(titleInput.value!==state.title)titleInput.value=state.title||'';
@@ -174,6 +196,8 @@ export function mountLibraryMixPage(host,runtime,initialProps){
   notes.replaceChildren();
   const note=text=>{const p=node(notes,'p','playlists__note');p.setAttribute('role','status');p.textContent=text;};
   note(`Temporary mix · ${rows.length} songs · Last.fm global plays${state.recipe?.auto_update?' · Auto-updating after save; generated membership is locked':' · Save keeps this selection'}`);
+  if(state.artistScope)note('Saved scope keeps these selected Artist IDs. Automatic updates are optional; new family members are not added.');
+  if(state.selectionError)note('The selection could not be updated. The previous captured list is retained.');
   if(Number.isSafeInteger(state.coverage.excluded_count))note(`${state.coverage.excluded_count} local tracks excluded because popularity or grouping could not be resolved.`);
   if(['queued','running'].includes(state.popularityRefreshStatus))note('Last.fm popularity refresh is in progress. This temporary mix keeps its captured selection; create another mix later to use newly resolved counts.');
   if(state.popularityRefreshStatus==='blocked'||state.popularityRefreshError)note(`${state.popularityRefreshError==='not_configured'?'Last.fm popularity refresh is not configured.':'Last.fm popularity refresh is unavailable.'} Resolved cached counts are still used.`);
@@ -212,6 +236,15 @@ export function mountLibraryMixPage(host,runtime,initialProps){
   listen(titleInput,'input',()=>edit({title:titleInput.value}));
   const descriptionLabel=node(metadata,'label');descriptionLabel.append('Description');description=node(descriptionLabel,'textarea');description.rows=2;description.maxLength=1000;description.setAttribute('aria-label','Playlist description');
   listen(description,'input',()=>edit({description:description.value}));
+  if(props.controller.getSnapshot().artistScope){
+  selectionHost=node(scroll,'div','playlists__metadata tag-editor-form');selectionHost.hidden=true;
+  selectionBasisOwner=own(mountChoice(node(selectionHost),runtime,{label:'Choose songs',value:selectionBasis,options:[['per_artist','Per artist'],['per_album','Per album']]}));
+  const countLabel=node(selectionHost,'label');countLabel.append('Songs per group');selectionCountInput=node(countLabel,'input');
+  Object.assign(selectionCountInput,{type:'number',min:'1',max:'5000',step:'1',value:'3'});selectionCountInput.setAttribute('aria-label','Songs per group');
+  listen(selectionCountInput,'input',()=>{selectionCount=selectionCountInput.value;render();});
+  selectionAutoOwner=own(mountChoice(node(selectionHost),runtime,{label:'Update automatically when saved',value:'off',options:[['off','Off'],['on','On']]}));
+  selectionApply=own(mountButton(node(selectionHost),runtime,{label:'Update selection'}));
+  }
   notes=node(scroll);tableHost=node(scroll);panelHost=node(scroll);
   resource=own(mountStatus(node(scroll),runtime,{value:{status:'idle'},label:'Library Mix'}));
   mutation=own(mountStatus(node(scroll),runtime,{value:{status:'idle'},label:'Saving playlist'}));

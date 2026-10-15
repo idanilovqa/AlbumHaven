@@ -1,3 +1,4 @@
+import {captureArtistMixScope} from '../playlists/library-mix-recipe.mjs';
 import {createPresencePublisher} from './presence.mjs';
 import {normalizeCreationResult, prepareMissingDraft} from '../playlists/creation.mjs';
 import {createPlaylistMatchProviders} from '../playlists/match-providers.mjs';
@@ -300,6 +301,11 @@ async function inspectActivityMissing(options) {
 window.AlbumHavenPlaylistUI = Object.freeze({
   activityMissingEligibility, inspectActivityMissing,
   openLibraryMix() {mountPlaylistSurface(); return playlistMount?.openLibraryMix() ?? false;},
+  canOpenArtistPopular({groups,albums,filters}) {return captureArtistMixScope(groups,albums,filters) !== null;},
+  openArtistPopular({groups,albums,filters}) {
+    const artistScope=captureArtistMixScope(groups,albums,filters);if(!artistScope)return false;
+    mountPlaylistSurface();return playlistMount?.openLibraryMix({artistScope})??false;
+  },
   configureProviders(next = {}) {
     if (!next || typeof next !== 'object' || Array.isArray(next)) throw new TypeError('Playlist providers must be an object.');
     const configuration = ++playlistProviderGeneration;
@@ -326,6 +332,9 @@ window.AlbumHavenPlaylistUI = Object.freeze({
   },
   refresh() {return playlistMount?.refresh();},
 });
+// Gallery may render before the native entry publishes its Artist action.
+// Refresh current controls only; readiness grants no captured scope or authority.
+if (document.querySelector('[data-gallery-bar-action="popular-tracks"]')) window.updateGalleryMainControls?.();
 window.addEventListener('albumhaven:playlist-runtime-ready', mountPlaylistSurface);
 document.addEventListener('click', event => {
   const trigger = event.target.closest?.('[data-library-mix-open]');

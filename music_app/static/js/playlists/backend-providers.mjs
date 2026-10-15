@@ -15,7 +15,7 @@ const fail = (message, status = 409) => Object.assign(new Error(message), {statu
 const aborted = () => Object.assign(new Error('Playlist request superseded.'), {name: 'AbortError'});
 const tuple = source => ({kind: source.kind, ref: source.ref, revision: source.revision});
 const same = (a, b) => a?.kind === b?.kind && a?.ref === b?.ref && a?.revision === b?.revision;
-const sourceProtocols = new Set(['library_selection_v1', 'complete_inventory_selection_v1', 'complete_activity_selection_v1', 'missing_playlist_selection_v1', 'missing_activity_selection_v1', 'library_mix_selection_v1']);
+const sourceProtocols = new Set(['library_selection_v1', 'complete_inventory_selection_v1', 'complete_activity_selection_v1', 'missing_playlist_selection_v1', 'missing_activity_selection_v1', 'library_mix_selection_v1', 'artist_popular_selection_v1']);
 const visibilityModes = ['private', 'server_shared'];
 function preferences(value) {
   if (typeof value?.remember_order_mode !== 'boolean' || !['regular', 'shuffle'].includes(value.last_order_mode)
@@ -79,7 +79,7 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
   function descriptor(data) {return {...tuple(data.source), source_protocol: data.source_protocol, allowed_actions: {...data.allowed_actions}};}
   function projection(data, scopeKey) {
     const {actor_scope, context_ref, capture_ref, ...safe} = data;
-    if (data.source_protocol === 'library_mix_selection_v1') delete safe.diagnostics;
+    if (['library_mix_selection_v1','artist_popular_selection_v1'].includes(data.source_protocol)) delete safe.diagnostics;
     return {...safe, scopeKey, ...(Array.isArray(data.entries) ? {entries: data.entries.map(({inventory_track_ref, ...row}) => row)} : {})};
   }
   async function begin(options) {
@@ -277,6 +277,30 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
         || !Array.isArray(data.entries)) throw fail('Library Mix source was not acknowledged.');
       return {status: 'ready', data: projection(data, options.scopeKey)};
     },
+    async beginArtistMix(options) {
+      const token = identity(options.scopeKey);
+      if (await recoverCreate(options)) throw fail('Your previous playlist was saved. Open Playlists before creating another.', 409);
+      active(token, options.signal);
+      const response = await transport.request('/playlists/creation-source/artist-popular', {
+        method:'POST',body:{scope:options.artistScope,recipe:options.recipe},signal:options.signal,expected:JSON.parse(token)[0]});
+      const data = sourceData(response,token,options.signal);
+      if (data.source_protocol !== 'artist_popular_selection_v1' || data.entries_complete !== true || !Array.isArray(data.entries))
+        throw fail('Artist selection was not acknowledged.');
+      return {status:'ready',data:projection(data,options.scopeKey)};
+    },
+    async regenerateArtistMix(options) {
+      const token = identity(options.scopeKey), known = sources.get(options.source?.ref);
+      if (!known || known.protocol !== 'artist_popular_selection_v1' || !same(known.source,options.source))
+        throw fail('The captured Artist selection is unavailable.',409);
+      if (pendingOperation({scopeKey:options.scopeKey,action:'create'})) throw fail('The original save must be resolved first.',409);
+      const response = await transport.request('/playlists/creation-source/artist-popular/regenerate', {
+        method:'POST',body:{source_ref:known.source.ref,source_revision:known.source.revision,recipe:options.recipe},
+        signal:options.signal,expected:JSON.parse(token)[0]});
+      const data = sourceData(response,token,options.signal);
+      if (data.source_protocol !== known.protocol || data.entries_complete !== true || !Array.isArray(data.entries))
+        throw fail('Artist selection was not acknowledged.');
+      return {status:'ready',data:projection(data,options.scopeKey)};
+    },
     recoverPlaylistCreation: recoverCreate,
     async beginPlaylistSelectionSource(options) {
       const token = identity(options.scopeKey), refs = options.track_refs;
@@ -395,7 +419,8 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
       let response;
       try {
         response = await transport.request(transport.query(isPaged ? '/playlists/creation-source/entries'
-          : known.protocol === 'library_mix_selection_v1' ? '/playlists/creation-source/library-mix' : '/playlists/creation-source/complete', {
+          : known.protocol === 'library_mix_selection_v1' ? '/playlists/creation-source/library-mix'
+          : known.protocol === 'artist_popular_selection_v1' ? '/playlists/creation-source/artist-popular' : '/playlists/creation-source/complete', {
           source_ref: known.source.ref, source_revision: known.source.revision,
           ...(isPaged ? {q: options.q || '', cursor: options.cursor, limit: 100}
             : known.protocol === 'complete_activity_selection_v1' ? {source_protocol: known.protocol} : {})}), {signal: options.signal});
@@ -414,7 +439,7 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
         || options.source_protocol !== known.protocol) throw fail('Playlist source unavailable.', 409);
       return mutate('create', options, '/playlists', 'POST', {source_protocol: known.protocol, mode: options.mode, source: tuple(known.source),
         title: options.title, description: options.description, entry_refs: options.entry_refs,
-        ...(known.protocol === 'library_mix_selection_v1' ? {mix_playback_order: options.mix_playback_order} : {})});
+        ...(['library_mix_selection_v1','artist_popular_selection_v1'].includes(known.protocol) ? {mix_playback_order: options.mix_playback_order} : {})});
     },
     savePlaylist(options) {
       identity(options.scopeKey);

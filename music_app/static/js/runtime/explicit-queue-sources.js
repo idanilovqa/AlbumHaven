@@ -99,16 +99,18 @@ function captureNativeAlbumQueueSources(album, rows) {
 
 // Both temporary Mix starts and explicit-queue returns revalidate the captured
 // source. A temporary source ref is never used as a saved Playlist identity.
-async function readLibraryMixNativeQueue({sourceRef, sourceRevision, entryRefs, startingEntryRef, signal}) {
+async function readLibraryMixNativeQueue({sourceRef, sourceRevision, entryRefs, startingEntryRef, signal, sourceProtocol = 'library_mix_selection_v1'}) {
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   if (!uuid(sourceRef) || !uuid(sourceRevision) || !Array.isArray(entryRefs) || !entryRefs.length || entryRefs.length > 5000
     || entryRefs.some(ref => !uuid(ref)) || new Set(entryRefs).size !== entryRefs.length || !entryRefs.includes(startingEntryRef))
     throw new Error('Mix queue membership is unavailable.');
-  const reply = await PrivateUITransport.request('/playlists/creation-source/library-mix/native-queue', {
+  if (!['library_mix_selection_v1','artist_popular_selection_v1'].includes(sourceProtocol)) throw new Error('Mix protocol is unavailable.');
+  const route=sourceProtocol==='artist_popular_selection_v1'?'artist-popular':'library-mix';
+  const reply = await PrivateUITransport.request(`/playlists/creation-source/${route}/native-queue`, {
     method: 'POST', signal, body: {source_ref: sourceRef, source_revision: sourceRevision,
       entry_refs: entryRefs, starting_entry_ref: startingEntryRef}});
   const data = reply?.data;
-  if (reply.status !== 'ready' || data?.source_protocol !== 'library_mix_selection_v1' || data.source?.kind !== 'library'
+  if (reply.status !== 'ready' || data?.source_protocol !== sourceProtocol || data.source?.kind !== 'library'
     || data.source.ref !== sourceRef || data.source.revision !== sourceRevision || data.starting_item_ref !== startingEntryRef
     || !Array.isArray(data.tracks) || !Array.isArray(data.unavailable_item_refs)) throw new Error('Mix playback was not acknowledged.');
   const admitted = data.tracks.map(item => item?.playlist_item_id), missing = new Set(data.unavailable_item_refs);
@@ -128,7 +130,7 @@ async function refreshExplicitQueueReturnTrack(context, track, {signal} = {}) {
   const queue=context?.nativeQueue;
   if (queue?.libraryMixRef && !queue.playlistId && track?.playlistItemId) {
     const data = await readLibraryMixNativeQueue({sourceRef: queue.libraryMixRef, sourceRevision: queue.playlistRevision,
-      entryRefs: queue.sourceEntryRefs, startingEntryRef: track.playlistItemId, signal});
+      entryRefs: queue.sourceEntryRefs, startingEntryRef: track.playlistItemId, signal, sourceProtocol:queue.libraryMixProtocol});
     const target = data.tracks.find(item => item.playlist_item_id === track.playlistItemId)?.native_target;
     if (target?.path !== track.path) throw new Error('The temporary Mix playback context is unavailable.');
     return {...track, title: target.title, artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds};

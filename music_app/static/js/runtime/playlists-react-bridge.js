@@ -712,7 +712,7 @@ const PlaylistReactRuntime = (() => {
             || ids.some(id => !retained.entry_refs.includes(id)) || !ids.includes(row.playlist_item_id)) throw failure('Mix membership changed.', 409);
           if (typeof readLibraryMixNativeQueue !== 'function') throw failure('Mix playback is unavailable.');
           const data = await readLibraryMixNativeQueue({sourceRef: retained.source.ref, sourceRevision: retained.source.revision,
-            entryRefs: ids, startingEntryRef: row.playlist_item_id, signal: options.signal});
+            entryRefs: ids, startingEntryRef: row.playlist_item_id, signal: options.signal, sourceProtocol:retained.source_protocol});
           if (!valid()) throw aborted();
           let tracks = data.tracks.map(item => {
             const target = item.native_target;
@@ -734,7 +734,7 @@ const PlaylistReactRuntime = (() => {
           const previousQueue = state.player.playbackQueue;
           const queue = {tracks, regularTracks, shuffle: mode === 'shuffle', repeatMode: 'off', currentIndex: tracks.indexOf(selected),
             playbackContext: null, albumRef: '', albumSnapshot: null, playlistId: null, libraryMixRef: retained.source.ref,
-            playlistRevision: retained.source.revision, sourceEntryRefs: [...retained.entry_refs],
+            playlistRevision: retained.source.revision, libraryMixProtocol:retained.source_protocol, sourceEntryRefs: [...retained.entry_refs],
             displayedItemIds: [...ids], contextGeneration: PrivateUITransport.generation()};
           if (state.player.current?.path === selected.path) {
             if (typeof commitPlaylistQueue !== 'function') throw failure('Mix queue replacement is unavailable.');

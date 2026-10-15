@@ -6,6 +6,7 @@ import {playlistCreationContext} from './creation-session.mjs';
 import {createMissingPlaylistDraftController} from './draft.mjs';
 import {mountMissingPlaylistDraftPage} from './native-draft.mjs';
 import {createLibraryMixController} from './library-mix.mjs';
+import {normalizeArtistMixScope} from './library-mix-recipe.mjs';
 import {mountLibraryMixSetup, mountLibraryMixPage} from './native-library-mix.mjs';
 
 // The existing production boot owns when/where to mount this slice. No global
@@ -335,13 +336,15 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     throw error;
   }
   return Object.freeze({
-    openLibraryMix() {
+    openLibraryMix(options = {}) {
+      const artistScope = options.artistScope == null ? null : normalizeArtistMixScope(options.artistScope);
+      if (options.artistScope != null && !artistScope) return false;
       const shell = runtime.snapshot();
       if (disposed || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
-        || typeof configuredProviders.beginLibraryMix !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function') return false;
+        || typeof (artistScope ? configuredProviders.beginArtistMix : configuredProviders.beginLibraryMix) !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function') return false;
       const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, entryKey: shell.entryKey, phase: 'setup', retired: false};
       activeMix = owner;
-      owner.controller = createLibraryMixController({providers: configuredProviders, scopeKey: owner.scopeKey, isCurrent: () => mixCurrent(owner)});
+      owner.controller = createLibraryMixController({providers: configuredProviders, scopeKey: owner.scopeKey, artistScope, isCurrent: () => mixCurrent(owner)});
       owner.runtime = runtime.createLibraryMixRuntime({scopeKey: owner.scopeKey, isCurrent: () => mixCurrent(owner),
         source: () => owner.controller.source(), order: () => owner.controller.getSnapshot().playbackOrder});
       requestRender(); return true;

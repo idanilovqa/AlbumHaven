@@ -1,4 +1,4 @@
-import {mountAlbumTops} from './music_app/static/js/album-tops/index.jsx';
+import {mountAlbumTops} from '/music_app/static/js/album-tops/index.mjs';
 const id=n=>'00000000-0000-4000-8000-'+String(n).padStart(12,'0');
 window.startNavigationFixture=function(options={}){
   const f=window.navFixture,{TOP,OTHER,calls}=f;

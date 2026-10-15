@@ -156,7 +156,7 @@ class PostgresOwnedAlbumTopsService:
         query = query.strip()
         with self._authorized(context, constraints) as (connection, live, _):
             top = self._top(connection, live, ref) if ref else None
-            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
             scope = ['album-top-picker-v1', live.actor.account_id, live.actor.session_id,
                      live.library_id, query, ref]
             after = viewers.page_position(cursor, cursor_secret, scope)
@@ -182,7 +182,7 @@ class PostgresOwnedAlbumTopsService:
                     'album_ref': str(row['catalog_ref']) if row['catalog_ref'] is not None else None,
                     'title': row['title'], 'artist': row['artist'],
                     'year': row['release_year'] if type(row['release_year']) is int and 1 <= row['release_year'] <= 9999 else None})
-            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
             return {'albums': albums, 'next_cursor': encode_social_cursor(
                 rows[limit - 1]['id'] if len(rows) > limit else None, secret=cursor_secret, scope=scope)}
 
@@ -193,7 +193,7 @@ class PostgresOwnedAlbumTopsService:
         ref = top_uuid(top_ref) if top_ref is not None else None
         with self._authorized(context, constraints) as (connection, live, _):
             top = self._top(connection, live, ref) if ref else None
-            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
             from music_app.services.private_library_authority import require_private_action
             require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
             row = connection.execute("""select a.title,a.release_year,ar.name as artist_display
@@ -203,7 +203,7 @@ class PostgresOwnedAlbumTopsService:
                 (album_id, live.library_id)).fetchone()
             if row is None:
                 raise AlbumTopError("album_unavailable", 404)
-            self._require(live, (BROWSE, MANAGE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+            self._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
             require_private_action(live, BROWSE, resource=ResourceScope("album", str(album_id)), constraints=constraints)
             existing = connection.execute("""select catalog_ref from library.catalog_album_links
                 where library_id=%s and local_album_id=%s""", (live.library_id, album_id)).fetchone()

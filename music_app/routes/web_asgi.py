@@ -187,7 +187,10 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
     if asset_paths is None:
         static_root = Path(__file__).resolve().parent.parent / "static"
         runtime_stylesheets = tuple(sorted((static_root / "css").rglob("*.css")))
-        runtime_javascript = tuple(sorted((static_root / "js").rglob("*.js")))
+        runtime_javascript = tuple(sorted((
+            *(static_root / "js").rglob("*.js"),
+            *(static_root / "js").rglob("*.mjs"),
+        )))
         asset_paths = (
             static_root / "app.js",
             *runtime_javascript,

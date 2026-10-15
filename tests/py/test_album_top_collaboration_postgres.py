@@ -321,3 +321,93 @@ def test_collaboration_tables_have_only_private_minimum_runtime_privileges(db):
                 'app.album_list_edit_requests_id_seq',%s) as app, has_sequence_privilege('album_haven_readonly',
                 'app.album_list_edit_requests_id_seq',%s) as readonly""", (privilege, privilege)).fetchone()
             assert actual == {"app": privilege == "USAGE", "readonly": False}
+
+
+@pytest.mark.parametrize("role", ["owner", "editor"])
+def test_add_catalog_matches_can_add_without_metadata_manage_authority(db, role):
+    actor = db.owner if role == "owner" else member(db)
+    receipt, _ = db.create(refs=[])
+    if role == "editor":
+        receipt, _ = write(db, "grant_editor", receipt, account_id=actor.account_id, role="editor")
+    context = db.context(actor)
+
+    def constraints(target):
+        return PolicyEvaluationConstraints(request_origin_allowed=target.action != MANAGE)
+
+    allowed = detail(db, receipt, actor, constraints=constraints)["allowed_actions"]
+    assert allowed["can_add"] is True
+    assert allowed["can_edit"] is False
+    assert allowed["can_rename"] is False
+    found = db.service.search_inventory_albums(context, query="Same display title",
+        top_ref=receipt["top_ref"], cursor_secret=CURSOR_SECRET, constraints=constraints)
+    assert {row["local_album_id"] for row in found["albums"]} == set(db.album_ids)
+    admitted = db.service.admit_inventory_album(context, album_id=db.album_ids[0],
+        top_ref=receipt["top_ref"], constraints=constraints)
+    assert admitted == {"album_ref": db.album_refs[0]}
+    added = db.service.execute(context, db.command("add", receipt,
+        album_refs=[admitted["album_ref"]]), constraints=constraints)
+    current = detail(db, added, actor, constraints=constraints)
+    assert [item["catalog_ref"] for item in current["items"]] == [db.album_refs[0]]
+    assert current["title"] == "Synthetic Top"
+    assert current["description"] == "Authored description"
+    before = snapshot(db)
+    assert_error(lambda: db.service.execute(context, db.command("save", added,
+        title="Must remain denied"), constraints=constraints), "forbidden", 403)
+    assert snapshot(db) == before
+
+
+@pytest.mark.parametrize("denial", ["viewer", "revoked_editor", "items", "album", "session"])
+def test_add_catalog_preserves_object_item_album_and_session_denials(db, denial):
+    actor = member(db)
+    receipt, _ = db.create(refs=[])
+    role = "viewer" if denial == "viewer" else "editor"
+    receipt, _ = write(db, "grant_viewer" if role == "viewer" else "grant_editor",
+        receipt, account_id=actor.account_id, role=role)
+    if denial == "revoked_editor":
+        receipt, _ = write(db, "revoke_editor", receipt, grant_ref=receipt["grant_ref"])
+    elif denial == "session":
+        with db.connect() as connection:
+            connection.execute("update app.account_sessions set revoked_at=now() where id=%s",
+                (actor.session_id,))
+
+    def constraints(target):
+        denied = denial == "items" and target.action == ITEMS
+        denied = denied or (denial == "album" and target.action == BROWSE
+            and target.resource is not None and target.resource.resource_kind == "album")
+        return PolicyEvaluationConstraints(request_origin_allowed=not denied)
+
+    context = db.context(actor)
+    before = snapshot(db)
+    search = lambda: db.service.search_inventory_albums(context, query="Same display title",
+        top_ref=receipt["top_ref"], cursor_secret=CURSOR_SECRET, constraints=constraints)
+    if denial == "album":
+        assert search()["albums"] == []
+    else:
+        assert_error(search, "top_unavailable" if denial == "revoked_editor" else "forbidden",
+                     404 if denial == "revoked_editor" else 403)
+    assert_error(lambda: db.service.admit_inventory_album(context, album_id=db.album_ids[0],
+        top_ref=receipt["top_ref"], constraints=constraints),
+        "top_unavailable" if denial == "revoked_editor" else "forbidden",
+        404 if denial == "revoked_editor" else 403)
+    assert snapshot(db) == before
+
+
+@pytest.mark.parametrize("operation", ["search", "admission"])
+def test_add_catalog_rechecks_items_after_read_before_return(db, operation):
+    receipt, _ = db.create(refs=[])
+    checks = []
+
+    def constraints(target):
+        if target.action == ITEMS:
+            checks.append(target.resource.resource_ref)
+        return PolicyEvaluationConstraints(request_origin_allowed=(
+            target.action != ITEMS or len(checks) == 1))
+
+    before = snapshot(db)
+    invoke = (lambda: db.service.search_inventory_albums(db.context(), query="Same display title",
+        top_ref=receipt["top_ref"], cursor_secret=CURSOR_SECRET, constraints=constraints)) if operation == "search" else (
+        lambda: db.service.admit_inventory_album(db.context(), album_id=db.album_ids[0],
+            top_ref=receipt["top_ref"], constraints=constraints))
+    assert_error(invoke, "forbidden", 403)
+    assert checks == [receipt["top_ref"], receipt["top_ref"]]
+    assert snapshot(db) == before

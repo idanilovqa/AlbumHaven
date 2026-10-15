@@ -2351,13 +2351,19 @@ test('scan-health selects only the natural unavailable-root contract without mea
   assert.equal(target.grep, 'FTC-OPS-003F');
 });
 
-test('artist scroll completion requires navigation, paging, and mobile Back cases once', () => {
+test('artist scroll completion requires all navigation, restoration, presentation, and native-scroll cases once', () => {
   const target = performanceRunner.PERFORMANCE_TARGETS['artist-tree-scroll-navigation'];
   const titles = [
     'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
     'root continuation starts eight viewports early and never reaches a hard stop during its real request',
     'long-press Scroll, album, Back restores an artist beyond the first root page',
       'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+    'desktop Scroll, album, Close retains the jumped-to position',
+    'desktop Scroll, ordinary scroll, album, Close retains the departure position',
+    'Mobile Cards, covers and rows retain the jumped-to release',
+    'Desktop Cards and covers retain the jumped-to release',
+    'native touch swipes track the gesture without reverse movement or layout jitter',
+    'native wheel input tracks the gesture without reverse movement or layout jitter',
   ];
   const parsedTestResults = titles.map(testName => ({
     status: 'passed', testName, fullName: `FTC-GALLERY-NAV-03 > ${testName}`,
@@ -2938,7 +2944,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[8].args.includes('--grep=FTC-GALLERY-STARTUP-005Q'), true);
   assert.equal(calls[9].args.includes('--grep=FTC-GALLERY-STARTUP-005R'), true);
   assert.equal(calls[10].args.includes('--grep=FTC-GALLERY-STARTUP-005S'), true);
-  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3)'), true);
+  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3|4|5)'), true);
   assert.equal(calls[12].args.includes('--grep=FTC-GALLERY-NAV-036'), true);
   assert.equal(calls[13].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
   assert.equal(calls[14].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);

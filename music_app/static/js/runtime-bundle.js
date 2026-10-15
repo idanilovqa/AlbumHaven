@@ -29532,6 +29532,7 @@ function closeCoverLookupDeleteConfirm() {
 
 async function startCoverLookupForAlbum(album, options = {}) {
   if (!album) return;
+  const session = coverLookupModalSession;
   const backgroundOnly = Boolean(options?.backgroundOnly);
   const triggerButton = backgroundOnly ? options?.triggerButton : null;
   const triggerWasDisabled = Boolean(triggerButton?.disabled);
@@ -29594,9 +29595,14 @@ async function startCoverLookupForAlbum(album, options = {}) {
       5000,
       { placement: 'top-center' },
     );
-    await loadCoverLookupTasks({ toast: false });
-    if (!backgroundOnly && modalOpen) {
-      await refreshCoverLookupGallery(false);
+    if (backgroundOnly) {
+      await loadCoverLookupTasks({ toast: false });
+    } else if (modalOpen && session === coverLookupModalSession) {
+      if (data.gallery && typeof data.gallery === 'object') {
+        applyCoverLookupGalleryPayload(data.gallery);
+      } else {
+        await refreshCoverLookupGallery(false);
+      }
     }
   } catch (error) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);

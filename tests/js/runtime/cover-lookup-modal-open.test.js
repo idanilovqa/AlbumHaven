@@ -222,6 +222,60 @@ test('accepted lookup renders running feedback before follow-up reads settle', a
   await startPromise;
 });
 
+test('start response cannot hydrate a later Cover Lookup modal session', async () => {
+  const album = {
+    album_artist: 'Neal Morse',
+    name: 'Sola Scriptura',
+    year: 2007,
+  };
+  let resolveStartRequest;
+  const startResponse = new Promise((resolve) => { resolveStartRequest = resolve; });
+  const context = {
+    window: {},
+    state: {
+      coverLookup: {
+        tasks: [],
+        modal: { album, pastedImages: [], manualBusy: false },
+      },
+    },
+    URLSearchParams,
+    console,
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async (url) => {
+      if (url === '/utilities/cover-lookup/start') return startResponse;
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    document: {
+      getElementById: (id) => ({
+        'cover-lookup-modal': { hidden: false },
+        'cover-lookup-modal-body': { querySelector: () => null },
+      }[id] || null),
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.collectManualCoverLookupUrls = () => [];
+  context.renderCoverLookupDrawer = () => {};
+  context.renderCoverLookupModal = () => {};
+  let appliedGalleries = 0;
+  context.applyCoverLookupGalleryPayload = () => { appliedGalleries += 1; };
+
+  const pending = context.startCoverLookupForAlbum(album);
+  vm.runInContext('coverLookupModalSession += 1', context);
+  resolveStartRequest({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      task: { id: 'stale-lookup', status: 'running', album_payload: album },
+      gallery: { local_covers: [], other_art: [] },
+    }),
+  });
+  await pending;
+
+  assert.equal(appliedGalleries, 0);
+});
+
 test('background lookup marks its trigger busy before the start request settles', async () => {
   const album = {
     album_artist: 'Neal Morse',
@@ -271,7 +325,8 @@ test('background lookup marks its trigger busy before the start request settles'
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.renderCoverLookupDrawer = () => {};
   context.ensureCoverLookupPolling = () => {};
-  context.loadCoverLookupTasks = async () => {};
+  let taskReloads = 0;
+  context.loadCoverLookupTasks = async () => { taskReloads += 1; };
 
   const startPromise = context.startCoverLookupForAlbum(album, {
     backgroundOnly: true,
@@ -296,6 +351,7 @@ test('background lookup marks its trigger busy before the start request settles'
 
   assert.equal(triggerButton.disabled, false);
   assert.equal(attributes.has('aria-busy'), false);
+  assert.equal(taskReloads, 1, 'background lookup keeps its immediate status refresh');
 });
 
 

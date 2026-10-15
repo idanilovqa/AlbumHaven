@@ -2,100 +2,38 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
-const React = require('react');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
-
+const {actionFixture} = require('./playlist-native-actions-fixture.cjs');
 const repo = path.resolve(__dirname, '../../..');
-const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/playlists/track-table.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
+let mountPlaylistTracks, missingPlaylistDraftTableHtml;
+test.before(async () => {
+  ({mountPlaylistTracks} = await import('../../../music_app/static/js/playlists/native-track-table.mjs'));
+  ({missingPlaylistDraftTableHtml} = await import('../../../music_app/static/js/playlists/native-draft.mjs'));
+});
 const row = (id, patch = {}) => ({row_key: `item:${id}`, playlist_item_id: id, title: id, source_readable: true,
   availability: 'local', duration_seconds: null, ...patch});
-const children = node => React.isValidElement(node) ? [node, ...React.Children.toArray(node.props.children).flatMap(children)] : [];
-
-// A bounded hook/DOM driver exercises the actual table component and handlers
-// with the native HTML renderer. Commits and provider changes are explicit;
-// browser event synthesis, layout and real React reconciliation remain E2E work.
 function fixture(t, {rows, grants = {}, canPlay = true} = {}) {
-  const native = createNativeHomeRuntime(), doc = native.document;
-  for (const file of ['compact-data-table.js', 'album-track-table.js']) {
-    vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime', file), 'utf8'), native.context);
-  }
-  const host = doc.createElement('div'); doc.body.appendChild(host);
-  // Native harness event ownership, plus the minimal non-layout DOM APIs used
-  // by the current column presenter. These cases never resize or start gestures.
-  const win = doc.createElement('window'); doc.defaultView = win;
-  Object.assign(win, {NodeFilter: {SHOW_TEXT: 4}, cancelAnimationFrame() {},
-    MutationObserver: class {observe() {} disconnect() {}},
-  });
-  doc.createTreeWalker = root => {
-    const texts = [], collect = node => {for (const child of node.childNodes) {
-      if (child.nodeType === 3) texts.push(child); else collect(child);
-    }};
-    collect(root); let index = -1;
-    return {currentNode: null, nextNode() {this.currentNode = texts[++index] || null; return Boolean(this.currentNode);}};
-  };
-  // No text/layout measurements are available in this bounded DOM seam.
-  doc.createRange = () => ({selectNodeContents() {}, getBoundingClientRect: () => ({width: 0})});
+  const native = actionFixture(), doc = native.document, host = native.host;
   host.clientWidth = 832;
-  const Element = host.constructor;
-  Element.prototype.replaceWith = function (...nodes) {
-    const parent = this.parentNode;
-    if (parent) {for (const node of nodes) parent.insertBefore(node, this); this.remove();}
-  };
-  Element.prototype.focus = function () {if (this.isConnected && !this.disabled) doc.activeElement = this;};
-  let detail = {playlist_id: 'table:owned', title: 'Owned playlist', track_rows: rows, items_complete: true, author_order: true,
+  const detail = {playlist_id: 'table:owned', title: 'Owned playlist', track_rows: rows, items_complete: true, author_order: true,
     allowed_actions: {can_play: true, can_edit: true, can_reorder: true, ...grants}};
-  let state = {scopeKey: 'scope:owned', selectedPlaylistId: detail.playlist_id, resource: {status: 'ready', data: {detail}},
+  const state = {scopeKey: 'scope:owned', selectedPlaylistId: detail.playlist_id, resource: {status: 'ready', data: {detail}},
     drafts: {}, filters: {}, mutation: {status: 'idle'}};
   const plays = [], selects = [], errors = [], moves = [];
   const controller = {getSnapshot: () => state, reorder: ids => {moves.push([...ids]); return true;}};
-  const runtime = {escapeHtml: native.context.escapeHtml,
-    buttonHtml: value => native.context.ButtonComponent.renderButton(value),
-    actionHtml: value => native.context.ButtonComponent.renderActionButton(value), tableHtml: value => native.context.buildCompactDataTable(value),
-    artboxHtml: value => native.context.buildAlbumArtboxHtml(value),
-    albumTrackRow: (track, index) => native.context.buildAlbumTrackTableRow({...track, duration: track.duration_display}, index, {readOnly: true}),
-    canTrackIntent: () => canPlay, trackIntent: (...args) => {plays.push(args);}};
-  const slots = []; let cursor = 0, pending = [], tree, props, disposed = false;
-  const changed = (old, deps) => !old || !deps || deps.length !== old.deps.length || deps.some((value, index) => !Object.is(value, old.deps[index]));
-  const hooks = {...React,
-    useRef(initial) {return slots[cursor++] ||= {current: initial};},
-    useState(initial) {const slot = slots[cursor++] ||= {value: initial}; return [slot.value, value => {slot.value = typeof value === 'function' ? value(slot.value) : value;}];},
-    useMemo(factory, deps) {const index = cursor++; if (changed(slots[index], deps)) slots[index] = {deps, value: factory()}; return slots[index].value;},
-    useLayoutEffect(callback, deps) {const index = cursor++, old = slots[index]; if (changed(old, deps)) pending.push(() => {old?.cleanup?.(); slots[index] = {deps, cleanup: callback()};});},
-  };
-  const loaded = {exports: {}};
-  vm.runInNewContext(built, {module: loaded, exports: loaded.exports, document: doc, console, AbortController,
-    require(name) {
-      if (name === 'react') return hooks;
-      if (name === 'react-dom/client') return {createRoot() {assert.fail('This consumer uses the shared hook; native root mounting is tested separately.');}};
-      assert.fail(`Unexpected dependency: ${name}`);
-    }});
-  function render(patch = {}) {
-    assert.equal(disposed, false);
-    props = {...{runtime, controller, rows, detail, state, selected: null, currentItemId: null,
-      onSelect: value => selects.push(value), onError: value => errors.push(value)}, ...props, state, detail, rows, ...patch};
-    cursor = 0; pending = []; tree = loaded.exports.PlaylistTracks(props);
-    const table = children(tree).find(node => node.props.className?.split(' ').includes('playlists__tracks'));
-    table.props.ref.current = host; host.className = table.props.className;
-    for (const effect of pending) effect();
-    return table.props;
-  }
-  function emit(name, target, values = {}, handlers = children(tree).find(node => node.props.className?.split(' ').includes('playlists__tracks')).props) {
+  const runtime = {...native.runtime, canTrackIntent: () => canPlay, trackIntent: (...args) => {plays.push(args);}};
+  let props = {runtime, controller, rows, detail, state, selected: null, currentItemId: null,
+    onSelect: value => selects.push(value), onError: value => errors.push(value)};
+  const owner = mountPlaylistTracks(host, runtime, props);
+  let disposed = false;
+  const render = (patch = {}) => {assert.equal(disposed, false); props = {...props, ...patch}; owner.update(props);};
+  function emit(name, target, values = {}) {
     const type = {onClick: 'click', onDoubleClick: 'dblclick', onKeyDown: 'keydown', onContextMenu: 'contextmenu'}[name];
     const event = Object.assign(new native.context.Event(type), {button: 0, detail: 1}, values);
-    event.target = target;
-    if (name === 'onKeyDown') handlers.onKeyDownCapture?.(event);
-    if (!event.stopped) target.dispatchEvent(event);
-    if (!event.stopped) handlers[name]?.(event);
-    return event;
+    target.dispatchEvent(event); return event;
   }
-  function close() {if (disposed) return; disposed = true; for (const slot of slots) slot?.cleanup?.(); host.remove();}
-  t.after(close); render();
+  t.after(() => {disposed = true; owner.dispose(); assert.equal(host.childNodes.length, 0); host.remove();});
   return {host, doc, runtime, plays, selects, render, emit,
-    row: id => host.querySelector(`[data-playlist-row-key="item:${id}"]`),
-  };
+    row: id => host.querySelector(`[data-playlist-row-key="item:${id}"]`)};
 }
 
 // Missing/unresolved inventory has no confirmed local source. Capability denial
@@ -128,17 +66,13 @@ for (const [name, grants, canPlay, disabled] of [
   });
 }
 
-const draftBuilt = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/playlists/draft.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
-const draftModule = {exports: {}};
-vm.runInNewContext(draftBuilt, {module: draftModule, exports: draftModule.exports, require, console, AbortController});
 function draftTable(t, availability) {
   const value = fixture(t, {rows: [row('native-runtime')]});
   const entry = {row_key: 'entry:subject', entry_ref: 'subject', title: 'Original', artist: 'Artist', album_title: 'Album',
     availability, match_state: availability === 'local' ? 'accepted' : null, source_readable: true,
     metadata_state: 'unknown', duration_seconds: null, allowed_actions: {can_read: true, can_select: true}};
   const state = {title: 'Draft', selectedKeys: ['entry:subject']};
-  const html = draftModule.exports.missingPlaylistDraftTableHtml(value.runtime, {id: 'unconfirmed-draft', state,
+  const html = missingPlaylistDraftTableHtml(value.runtime, {id: 'unconfirmed-draft', state,
     projection: {entries: [entry], authoredEntries: [entry], canReorder: false}});
   const host = value.doc.createElement('div'); host.className = 'album-track-table'; host.innerHTML = html;
   return {host, state};

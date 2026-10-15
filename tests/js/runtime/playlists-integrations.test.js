@@ -1,11 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const Module = require('node:module');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
 const model = import('../../../music_app/static/js/playlists/integrations.mjs');
 const row = (id = 'item:one', extra = {}) => ({playlist_item_id: id, title: 'Unresolved original', availability: 'unresolved', source_readable: true,
   allowed_actions: {can_review_matches: true, can_accept_match: true}, ...extra});
@@ -255,40 +249,42 @@ test('queue acknowledgements require the requested mode without missing or contr
   }
 });
 
-const repo = path.resolve(__dirname, '../../..');
-const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/playlists/integrations.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']});
-const loaded = new Module(path.join(repo, 'playlist-integrations-fixture.cjs'), module);
-loaded.filename = path.join(repo, 'playlist-integrations-fixture.cjs'); loaded.paths = module.paths;
-loaded._compile(built.outputFiles[0].text, loaded.filename);
-const {PlaylistPlaybackControls, PlaylistMatchReview} = loaded.exports;
-const native = createNativeHomeRuntime();
-const runtime = {buttonHtml: value => native.context.ButtonComponent.renderButton(value),
-  actionHtml: value => native.context.ButtonComponent.renderActionButton(value), alertHtml: value => native.context.buildOnPageAlertHtml(value)};
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, {runtime, ...props}));
+const {actionFixture} = require('./playlist-native-actions-fixture.cjs');
+let PlaylistPlaybackControls, PlaylistMatchReview;
+test.before(async () => {
+  ({mountPlaylistPlaybackControls: PlaylistPlaybackControls, mountPlaylistMatchReview: PlaylistMatchReview} =
+    await import('../../../music_app/static/js/playlists/native-integrations.mjs'));
+});
+function render(t, Component, props) {
+  const native = actionFixture();
+  const owner = Component(native.host, native.runtime, props);
+  const html = native.host.innerHTML;
+  owner.dispose(); assert.equal(native.host.childNodes.length, 0); native.host.remove();
+  return html;
+}
 
-test('unconfigured native controls remain visible and truthfully explain incomplete integrations', async () => {
+test('unconfigured native controls remain visible and truthfully explain incomplete integrations', async t => {
   const controller = await setup(); const state = controller.getSnapshot();
-  const controls = render(PlaylistPlaybackControls, {controller, state});
+  const controls = render(t, PlaylistPlaybackControls, {controller, state});
   assert.match(controls, /Shuffle/); assert.match(controls, /Repeat/); assert.match(controls, /Return to current/);
   assert.match(controls, /queue provider/); assert.match(controls, /disabled/);
-  const review = render(PlaylistMatchReview, {controller, state});
+  const review = render(t, PlaylistMatchReview, {controller, state});
   assert.match(review, /Unresolved original/); assert.match(review, /match provider/); assert.match(review, /Accept selected local match/);
   assert.doesNotMatch(review, /Possible version/); controller.dispose();
 });
 
-test('match review escapes provider labels and offers an explicit candidate choice before acceptance', async () => {
+test('match review escapes provider labels and offers an explicit candidate choice before acceptance', async t => {
   const controller = await setup({readMatches: () => matches({candidates: [candidate('candidate:one', {title: '<script>Bad</script>'})]}), acceptMatch() {}});
-  let html = render(PlaylistMatchReview, {controller, state: controller.getSnapshot()});
+  let html = render(t, PlaylistMatchReview, {controller, state: controller.getSnapshot()});
   assert.match(html, /&lt;script&gt;Bad&lt;\/script&gt;/); assert.doesNotMatch(html, /<script>/);
   assert.match(html, /Choose a possible local match/); assert.match(html, /disabled/);
-  controller.chooseCandidate('candidate:one'); html = render(PlaylistMatchReview, {controller, state: controller.getSnapshot()});
-  const host = native.document.createElement('div'); host.innerHTML = html;
+  controller.chooseCandidate('candidate:one'); html = render(t, PlaylistMatchReview, {controller, state: controller.getSnapshot()});
+  const native = actionFixture(); const host = native.document.createElement('div'); host.innerHTML = html;
   assert.equal(host.querySelector('[data-playlists-accept-match]').disabled, false); controller.dispose();
 });
 
-test('foreign current playback is explained without printing an unrelated title as playlist content', async () => {
+test('foreign current playback is explained without printing an unrelated title as playlist content', async t => {
   const controller = await setup({readPlayback: () => playback({current_playlist_id: 'elsewhere', current_title: 'Private foreign title'})});
-  const html = render(PlaylistPlaybackControls, {controller, state: controller.getSnapshot()});
+  const html = render(t, PlaylistPlaybackControls, {controller, state: controller.getSnapshot()});
   assert.match(html, /another playlist/); assert.doesNotMatch(html, /Private foreign title|Current: Unresolved original/); controller.dispose();
 });

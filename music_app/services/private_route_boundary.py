@@ -32,6 +32,12 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
+    ("GET", "/account/goals"): "account.self.goals.read",
+    ("GET", "/account/goals/history"): "account.self.goals.read",
+    ("GET", "/account/goals/operations/{request_key}"): "account.self.goals.read",
+    ("POST", "/account/goals/remote-evidence"): "account.self.goals.write",
+    ("POST", "/account/goals/add"): "account.self.goals.write",
+    ("POST", "/account/goals/reset"): "account.self.goals.write",
     ("GET", "/home/activity/now-playing"): "library.browse.read",
     ("POST", "/playback/session/presence-source"): "library.media.read",
     ("POST", "/playback/session/presence"): "library.browse.read",
@@ -243,6 +249,18 @@ def install_private_route_boundary(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def require_private_authentication(request: Request, call_next):
+        # Goals errors must remain private even if actor resolution, policy
+        # configuration or downstream execution fails before normal headers.
+        # Catch Exception only: task cancellation/BaseException propagates.
+        try:
+            return await _require_private_authentication(request, call_next)
+        except Exception:
+            if request.url.path == "/account/goals" or request.url.path.startswith("/account/goals/"):
+                return JSONResponse({"ok": False, "error": "goals_unavailable"}, status_code=503,
+                                    headers={"Cache-Control": "private, no-store"})
+            raise
+
+    async def _require_private_authentication(request: Request, call_next):
         _redact_lifecycle_link_query(request)
         if _is_public(request.method, request.url.path) or _is_public_share_request(request):
             return await call_next(request)
@@ -255,7 +273,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
         private_top_view = route_path == "/view-data" and str(request.query_params.get("surface") or "").strip().casefold() == "album_tops"
         preference_headers = (
             {"Cache-Control": "private, no-store"}
-            if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/")) else
+            if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")) else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -306,7 +324,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 headers=preference_headers,
             )
         response = await call_next(request)
-        if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/")):
+        if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")):
             response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)

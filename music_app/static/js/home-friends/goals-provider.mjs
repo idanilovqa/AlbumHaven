@@ -130,6 +130,45 @@ export function normalizeCurrentBonus(value) {
   if (value.cycle_id === null && (value.bonus !== null || value.manual_count !== 0)) fail();
   return freeze({cycle_id: value.cycle_id, bonus: value.bonus === null ? null : {...value.bonus}, manual_count: value.manual_count});
 }
+// Server-evaluated attention is provenance, never client calendar authority.
+export function normalizeGoalAttention(value) {
+  if (!exactKeys(value, ['goal_ref', 'revision', 'evaluated_at', 'periods', 'weekly_event', 'weekly_acknowledged', 'indicator'])
+    || !(value.goal_ref === null || uuid(value.goal_ref)) || !revision(value.revision)
+    || !exactKeys(value.periods, GOAL_PERIODS) || typeof value.weekly_acknowledged !== 'boolean'
+    || typeof value.evaluated_at !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|\+00:00)$/.test(value.evaluated_at)
+    || !date(value.evaluated_at.slice(0, 10)) || !Number.isFinite(Date.parse(value.evaluated_at))) fail();
+  const seen = new Set(), periods = {};
+  for (const name of GOAL_PERIODS) {
+    const row = value.periods[name];
+    if (!exactKeys(row, ['cycle_id', 'due_date', 'timezone_name', 'total', 'completed', 'due', 'achieved'])
+      || !(row.cycle_id === null || uuid(row.cycle_id)) || !Number.isSafeInteger(row.total) || row.total < 0
+      || !Number.isSafeInteger(row.completed) || row.completed < 0 || row.completed > row.total
+      || typeof row.due !== 'boolean' || row.achieved !== (row.total > 0 && row.completed === row.total)) fail();
+    if (row.cycle_id === null) {
+      if (row.due_date !== null || row.timezone_name !== null || row.total !== 0 || row.completed !== 0 || row.due) fail();
+    } else {
+      if (value.goal_ref === null || seen.has(row.cycle_id) || !date(row.due_date)
+        || typeof row.timezone_name !== 'string' || !row.timezone_name || row.timezone_name.length > 255) fail();
+      try {new Intl.DateTimeFormat('en', {timeZone: row.timezone_name});} catch {fail();}
+      seen.add(row.cycle_id);
+    }
+    periods[name] = {...row};
+  }
+  const week = periods.week;
+  if (value.goal_ref === null && value.revision !== '1' || week.cycle_id === null && value.weekly_acknowledged) fail();
+  if (week.total === 0) {if (value.weekly_event !== null) fail();}
+  else if (!exactKeys(value.weekly_event, ['kind', 'goal_ref', 'cycle_id'])
+    || value.weekly_event.kind !== 'weekly_cycle_started' || value.weekly_event.goal_ref !== value.goal_ref
+    || value.weekly_event.cycle_id !== week.cycle_id) fail();
+  const red = GOAL_PERIODS.some(name => periods[name].total > 0 && periods[name].due);
+  const indicator = red ? 'red' : week.total > 0 && !value.weekly_acknowledged ? 'blue' : 'none';
+  if (value.indicator !== indicator) fail();
+  return freeze({goal_ref: value.goal_ref, revision: value.revision, evaluated_at: value.evaluated_at,
+    periods, weekly_event: value.weekly_event === null ? null : {...value.weekly_event},
+    weekly_acknowledged: value.weekly_acknowledged, indicator});
+}
+
 export function createGoalsProvider(transport) {
   let disposed = false, generation = 0;
   const listeners = new Set(), evidenceOwners = new WeakMap();
@@ -148,6 +187,8 @@ export function createGoalsProvider(transport) {
   return Object.freeze({
     subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     async read(options) {return normalizeGoals(await request('/account/goals', options));},
+    async readAttention(options) {return normalizeGoalAttention(await request('/account/goals/attention', options));},
+    async attention_ack(command, options) {return request('/account/goals/attention/ack', {...options, method: 'POST', body: command});},
     async readBonusSettings(options) {return normalizeBonusSettings(await request('/account/goals/bonus-settings', options));},
     async readCurrentBonus(options) {return normalizeCurrentBonus(await request('/account/goals/bonus', options));},
     async bonus_settings(command, options) {return request('/account/goals/bonus-settings', {...options, method: 'POST', body: command});},

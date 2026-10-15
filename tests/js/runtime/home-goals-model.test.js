@@ -79,7 +79,8 @@ async function harness(script, options = {}) {
 test('read publishes immutable canonical data and selection remains read-only', async () => {
   const h = await harness([dto()]);
   assert.deepEqual(h.controller.getSnapshot(), {status: 'idle', data: null, period: 'week', mutation: 'idle', error: null,
-    bonusStatus: 'idle', settings: null, bonus: null, outcome: null});
+    bonusStatus: 'idle', settings: null, bonus: null, outcome: null,
+    attentionStatus: 'idle', attention: null, attentionError: null});
   const states = [];
   const unsubscribe = h.controller.subscribe(state => states.push(state));
   await h.controller.load();

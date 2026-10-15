@@ -74,6 +74,14 @@ function bonusCoherent(data, bonus) {
 }
 
 function acceptReceipt(value, pending) {
+  if (pending.action === 'attention_ack') {
+    const event = pending.command.event;
+    if (!exactKeys(value, ['ok', 'action', 'request_key', 'event', 'changed']) || value.ok !== true
+      || value.action !== 'attention_ack' || value.request_key !== pending.command.request_key
+      || typeof value.changed !== 'boolean' || !exactKeys(value.event, ['kind', 'goal_ref', 'cycle_id'])
+      || Object.keys(event).some(key => value.event[key] !== event[key])) malformed();
+    return Object.freeze({...value, event: Object.freeze({...value.event})});
+  }
   if (bonusAction(pending.action)) return acceptBonusReceipt(value, pending);
   const {action, command, goalRef, total, expectedChanged} = pending;
   const keys = ['ok', 'action', 'request_key', 'changed', 'reason', 'goal_ref', 'revision', 'period', 'cycle_id'];
@@ -148,8 +156,11 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   timezone = Intl.DateTimeFormat().resolvedOptions().timeZone, canDrawBonus = () => false}) {
   let disposed = false, epoch = 0, sequence = 0, active = null, pending = null;
   let bonusRequested = false;
+  let attentionSequence = 0, attentionActive = null, visitGeneration = 0;
+  let visits = new WeakMap();
   let snapshot = Object.freeze({status: 'idle', data: null, period: 'week', mutation: 'idle', error: null,
-    bonusStatus: 'idle', settings: null, bonus: null, outcome: null});
+    bonusStatus: 'idle', settings: null, bonus: null, outcome: null,
+    attentionStatus: 'idle', attention: null, attentionError: null});
   const listeners = new Set(), issuedKeys = new Set(), usedEvidence = new WeakSet();
 
   function publish(patch) {
@@ -161,6 +172,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     }
   }
   function retire() {
+    retireAttention();
     sequence++;
     active?.abort();
     active = null;
@@ -175,18 +187,21 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   }
   function clearDenied() {
     pending = null;
+    visitGeneration++;
+    visits = new WeakMap();
     retire();
-    publish({status: 'denied', data: null, mutation: 'idle', settings: null, bonus: null, bonusStatus: 'idle', outcome: null,
+    publish({attentionStatus: 'idle', attention: null, attentionError: null, status: 'denied', data: null, mutation: 'idle', settings: null, bonus: null, bonusStatus: 'idle', outcome: null,
       error: failure('denied', 'Goals are not available for this account.')});
   }
   const actionLabel = intent => ({add: 'Add', reset: 'Reset', completion: 'Completion', remove: 'Removal',
-    bonus_settings: 'Bonus settings', bonus_draw: 'Bonus draw', transition: 'Next period'})[intent?.action] || 'Goal change';
+    bonus_settings: 'Bonus settings', bonus_draw: 'Bonus draw', transition: 'Next period', attention_ack: 'Visit acknowledgment'})[intent?.action] || 'Goal change';
   function uncertain() {
     publish({status: snapshot.data ? 'ready' : 'unavailable', mutation: 'uncertain',
       error: failure('uncertain', `The ${actionLabel(pending)} outcome is unknown. Retry checks its saved result first.`)});
   }
   async function read(task, acknowledged = false) {
     publish({status: 'loading', data: null, mutation: acknowledged ? 'refreshing' : 'idle', error: null,
+      attentionStatus: 'idle', attention: null, attentionError: null,
       ...(!acknowledged ? {outcome: null} : {}),
       ...(bonusRequested ? {bonusStatus: 'loading', settings: null, bonus: null} : {})});
     try {
@@ -227,10 +242,121 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     }
     return snapshot;
   }
+  function retireAttention() {
+    attentionSequence++; attentionActive?.abort(); attentionActive = null;
+  }
+  function attentionCoherent() {
+    const {data, attention} = snapshot;
+    return snapshot.status === 'ready' && snapshot.attentionStatus === 'ready' && data && attention
+      && data.goal_ref === attention.goal_ref && data.revision === attention.revision
+      && GOAL_PERIODS.every(name => {
+        const left = data.periods[name], right = attention.periods[name];
+        return (left.cycle?.cycle_id ?? null) === right.cycle_id
+          && left.total === right.total && left.completed === right.completed;
+      });
+  }
+  function validVisit(token) {
+    const record = visits.get(token);
+    const matches = () => !disposed && record && record.epoch === epoch && record.generation === visitGeneration
+      && snapshot.period === record.period && snapshot.data === record.data && snapshot.attention === record.attention
+      && attentionCoherent();
+    if (!matches()) return false;
+    let visible = false;
+    try {visible = record.isCurrent() === true;} catch {}
+    return visible && matches(); // Caller callbacks may synchronously replace every captured identity.
+  }
+  function createVisit({isCurrent} = {}) {
+    if (disposed || pending || snapshot.mutation !== 'idle' || typeof isCurrent !== 'function' || !attentionCoherent()) return null;
+    const token = Object.freeze({}), record = {epoch, generation: ++visitGeneration, period: snapshot.period,
+      data: snapshot.data, attention: snapshot.attention, isCurrent};
+    visits.set(token, record);
+    return validVisit(token) ? token : null;
+  }
+  async function loadAttention() {
+    if (disposed || pending || snapshot.mutation !== 'idle' || snapshot.status === 'loading') return snapshot;
+    retireAttention();
+    const controller = new AbortController(), ownerEpoch = epoch, ownerSequence = attentionSequence;
+    attentionActive = controller;
+    const current = () => !disposed && epoch === ownerEpoch && attentionSequence === ownerSequence && !controller.signal.aborted;
+    publish({attentionStatus: 'loading', attention: null, attentionError: null});
+    try {
+      if (!current() || pending) return snapshot;
+      const attention = await provider.readAttention({signal: controller.signal, isCurrent: current});
+      if (!current() || pending) return snapshot;
+      publish({attentionStatus: 'ready', attention, attentionError: null});
+    } catch (error) {
+      if (!current()) return snapshot;
+      if (denied(error)) clearDenied();
+      else publish({attentionStatus: 'unavailable', attention: null,
+        attentionError: failure('attention-read', 'Goal attention could not be loaded. Try again.')});
+    }
+    return snapshot;
+  }
+  async function readAcknowledgedAttention(task) {
+    const intent = pending;
+    publish({mutation: 'refreshing', error: null, attentionStatus: 'loading', attention: null, attentionError: null});
+    try {
+      if (!task.current() || pending !== intent) return snapshot;
+      const attention = await provider.readAttention(task.options);
+      if (!task.current() || pending !== intent) return snapshot;
+      const event = intent.command.event;
+      if (attention.goal_ref !== event.goal_ref || BigInt(attention.revision) < BigInt(intent.attentionRevision)
+        || (attention.periods.week.cycle_id === event.cycle_id ? !attention.weekly_acknowledged
+          : BigInt(attention.revision) <= BigInt(intent.attentionRevision))) {
+        throw new Error('Attention refresh does not include the saved acknowledgment.');
+      }
+      pending = null; visitGeneration++;
+      publish({mutation: 'idle', error: null, attentionStatus: 'ready', attention, attentionError: null});
+    } catch (error) {
+      if (!task.current() || pending !== intent) return snapshot;
+      if (denied(error)) clearDenied();
+      else publish({mutation: 'idle', attentionStatus: 'unavailable', attention: null,
+        error: failure('acknowledged-refresh', 'The visit was acknowledged, but attention could not be refreshed. Retry refreshes only.')});
+    }
+    return snapshot;
+  }
+  const readAcknowledged = task => pending?.action === 'attention_ack' ? readAcknowledgedAttention(task) : read(task, true);
+  function acknowledgeVisit(token) {
+    if (disposed || pending || snapshot.mutation !== 'idle' || !validVisit(token)) return Promise.resolve(snapshot);
+    const attention = snapshot.attention;
+    if (!attention.weekly_event || attention.weekly_acknowledged || snapshot.data.allowed_actions.can_add !== true) return Promise.resolve(snapshot);
+    let command;
+    try {
+      const key = requestKey();
+      if (!uuid(key) || issuedKeys.has(key)) throw new Error();
+      command = Object.freeze({action: 'attention_ack', request_key: key, event: attention.weekly_event});
+      issuedKeys.add(key);
+    } catch {
+      if (validVisit(token)) publish({attentionError: failure('invalid-command', 'The visit acknowledgment could not be prepared.')});
+      return Promise.resolve(snapshot);
+    }
+    if (pending || snapshot.mutation !== 'idle' || snapshot.attention !== attention || !validVisit(token)
+      || pending || snapshot.mutation !== 'idle' || snapshot.attention !== attention) return Promise.resolve(snapshot);
+    pending = {action: 'attention_ack', command, token, attentionRevision: attention.revision, acknowledged: false};
+    return write(begin(), pending);
+  }
+  function dismissAttentionAcknowledgment(token) {
+    if (disposed || pending?.action !== 'attention_ack' || pending.token !== token
+      || ['submitting', 'recovering', 'refreshing'].includes(snapshot.mutation)) return false;
+    // Explicitly retire local recovery, never claim to undo an append-only server
+    // acknowledgment. A late exact-cycle ack cannot change Goals or settings.
+    pending = null; retire(); visitGeneration++;
+    publish({mutation: 'idle', error: null, attentionStatus: 'idle', attention: null, attentionError: null});
+    return true;
+  }
+
   async function write(task, intent) {
     if (!task.current() || pending !== intent) return snapshot;
-    publish({mutation: 'submitting', error: null, outcome: null});
+    if (intent.action !== 'attention_ack') visitGeneration++;
+    publish({mutation: 'submitting', error: null, outcome: null,
+      ...(intent.action !== 'attention_ack' ? {attentionStatus: 'idle', attention: null, attentionError: null} : {})});
     try {
+      if (!task.current() || pending !== intent) return snapshot;
+      if (intent.action === 'attention_ack' && !validVisit(intent.token)) {
+        if (task.current() && pending === intent) publish({mutation: 'uncertain',
+          error: failure('visit-unavailable', 'The original visit is no longer current. Retry checks its saved result, or dismiss this acknowledgment.')});
+        return snapshot;
+      }
       if (!task.current() || pending !== intent) return snapshot;
       if (intent.action === 'bonus_draw' && !sourceAvailable()) {
         if (task.current() && pending === intent) publish({mutation: 'uncertain',
@@ -242,7 +368,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       if (!task.current() || pending !== intent) return snapshot;
       intent.receipt = acceptReceipt(receipt, intent);
       intent.acknowledged = true;
-      return await read(task, true);
+      return await readAcknowledged(task);
     } catch (error) {
       if (!task.current() || pending !== intent) return snapshot;
       if (intent.action === 'bonus_draw' && error?.responseRejected === true
@@ -255,7 +381,11 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
         if (task.current() && snapshot.status === 'ready') publish({error: failure('source-unavailable',
           'Album Top sources are unavailable. Saved Goals and settings are kept. Refresh sources before another draw.')});
       } else if (denied(error)) clearDenied();
-      else if (rejected(error)) {
+      else if (intent.action === 'attention_ack' && rejected(error)) {
+        pending = null; visitGeneration++;
+        publish({mutation: 'idle', attentionStatus: 'unavailable', attention: null,
+          error: null, attentionError: failure('attention-conflict', 'The visit changed. Reload attention before acknowledging it.')});
+      } else if (rejected(error)) {
         // A rejection is definitive for this command. Fresh state is required
         // before another explicitly requested mutation can obtain a new key.
         const label = actionLabel(intent);
@@ -282,7 +412,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   }
   function selectPeriod(period) {
     if (!disposed && snapshot.mutation === 'idle' && GOAL_PERIODS.includes(period)
-      && period !== snapshot.period) publish({period});
+      && period !== snapshot.period) {visitGeneration++; publish({period});}
     return snapshot;
   }
   function ready(action) {
@@ -403,7 +533,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
     if (disposed || ['submitting', 'recovering', 'refreshing'].includes(snapshot.mutation)) return snapshot;
     if (!pending) return load();
     const task = begin(), intent = pending;
-    if (intent.acknowledged) return read(task, true);
+    if (intent.acknowledged) return readAcknowledged(task);
     publish({mutation: 'recovering', error: null});
     try {
       if (!task.current() || pending !== intent) return snapshot;
@@ -412,7 +542,7 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       if (exactKeys(result, ['status', 'receipt']) && result.status === 'committed') {
         intent.receipt = acceptReceipt(result.receipt, intent);
         intent.acknowledged = true;
-        return await read(task, true);
+        return await readAcknowledged(task);
       }
       if (exactKeys(result, ['status']) && result.status === 'unknown') return await write(task, intent);
       malformed();
@@ -426,9 +556,11 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
   const unsubscribe = provider.subscribe(() => {
     if (disposed) return;
     epoch++;
+    visitGeneration++;
+    visits = new WeakMap();
     retire();
     pending = null;
-    publish({status: 'unavailable', data: null, period: 'week', mutation: 'idle', settings: null, bonus: null, bonusStatus: 'idle', outcome: null,
+    publish({attentionStatus: 'idle', attention: null, attentionError: null, status: 'unavailable', data: null, period: 'week', mutation: 'idle', settings: null, bonus: null, bonusStatus: 'idle', outcome: null,
       error: failure('context', 'Your session changed. Reload Goals to continue.')});
   });
   return Object.freeze({
@@ -438,16 +570,19 @@ export function createGoalsController({provider, requestKey = () => globalThis.c
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    loadAttention, createVisit, acknowledgeVisit, dismissAttentionAcknowledgment,
     load, loadBonus, selectPeriod, reset, setCompletion, remove, add, retry, saveBonusSettings, drawBonus, transition,
     admissionFailed(error) {if (!disposed && denied(error)) clearDenied(); return snapshot;},
     dispose() {
       if (disposed) return;
       disposed = true;
+      visits = new WeakMap();
       epoch++;
       retire();
       pending = null;
       snapshot = Object.freeze({status: 'idle', data: null, period: 'week', mutation: 'idle', error: null,
-        settings: null, bonus: null, bonusStatus: 'idle', outcome: null});
+        settings: null, bonus: null, bonusStatus: 'idle', outcome: null,
+        attentionStatus: 'idle', attention: null, attentionError: null});
       unsubscribe?.();
       listeners.clear();
       issuedKeys.clear();

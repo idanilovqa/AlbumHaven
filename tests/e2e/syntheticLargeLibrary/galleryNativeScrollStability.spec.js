@@ -32,131 +32,6 @@ async function openDeepGallery(page, galleryActions, navigationPanelActions, mob
   return ui;
 }
 
-async function captureMiddleVisibleCard(page) {
-  // parity-check: allow-read-only-measurement-evaluate -- select the initial semantic card for native gesture observation
-  return page.evaluate(() => {
-    const scroll = document.getElementById('albums-scroll');
-    const viewport = scroll.getBoundingClientRect();
-    const midpoint = viewport.top + viewport.height / 2;
-    const candidates = [...document.querySelectorAll('#artist-groups .album-card')]
-      .map(card => {
-        const rect = card.getBoundingClientRect();
-        const albumKey = card.querySelector('[data-open-tracklist="1"][data-album-key]')
-          ?.getAttribute('data-album-key') || '';
-        const artist = card.closest('.artist-section')
-          ?.querySelector('.family-artist-header[data-scroll-artist]')
-          ?.getAttribute('data-scroll-artist') || '';
-        const sectionKey = card.closest('[data-virtual-section-key]')
-          ?.getAttribute('data-virtual-section-key') || '';
-        return { card, rect, albumKey, artist, sectionKey };
-      })
-      .filter(({ rect, albumKey, artist, sectionKey }) => (
-        albumKey && artist && sectionKey
-        && rect.bottom >= viewport.top + 40 && rect.top <= viewport.bottom - 40
-      ))
-      .sort((left, right) => (
-        Math.abs((left.rect.top + left.rect.bottom) / 2 - midpoint)
-        - Math.abs((right.rect.top + right.rect.bottom) / 2 - midpoint)
-      ));
-    const selected = candidates[0];
-    if (!selected) throw new Error('No centered gallery card is available for native-scroll observation.');
-    return {
-      albumKey: selected.albumKey,
-      artist: selected.artist,
-      sectionKey: selected.sectionKey,
-    };
-  });
-}
-
-async function startFrameObservation(page, anchor) {
-  // parity-check: allow-read-only-measurement-evaluate -- collect every animation frame through the native gesture
-  await page.evaluate(saved => {
-    const samples = [];
-    let frame = 0;
-    let observed = saved;
-    let anchorGeneration = 0;
-    const readIdentity = card => ({
-      albumKey: card?.querySelector('[data-open-tracklist="1"][data-album-key]')
-        ?.getAttribute('data-album-key') || '',
-      artist: card?.closest('.artist-section')
-        ?.querySelector('.family-artist-header[data-scroll-artist]')
-        ?.getAttribute('data-scroll-artist') || '',
-      sectionKey: card?.closest('[data-virtual-section-key]')
-        ?.getAttribute('data-virtual-section-key') || '',
-    });
-    const findCard = identity => [...document.querySelectorAll('#artist-groups .album-card')]
-      .find(item => {
-        const candidate = readIdentity(item);
-        return candidate.artist === identity.artist
-          && candidate.albumKey === identity.albumKey
-          && candidate.sectionKey === identity.sectionKey;
-      });
-    const findCenteredCard = scroll => {
-      const viewport = scroll?.getBoundingClientRect();
-      if (!viewport) return null;
-      const midpoint = viewport.top + viewport.height / 2;
-      return [...document.querySelectorAll('#artist-groups .album-card')]
-        .map(card => ({ card, rect: card.getBoundingClientRect(), ...readIdentity(card) }))
-        .filter(candidate => (
-          candidate.card.isConnected
-          && candidate.albumKey
-          && candidate.artist
-          && candidate.sectionKey
-          && candidate.rect.bottom >= viewport.top + 40
-          && candidate.rect.top <= viewport.bottom - 40
-        ))
-        .sort((left, right) => (
-          Math.abs((left.rect.top + left.rect.bottom) / 2 - midpoint)
-          - Math.abs((right.rect.top + right.rect.bottom) / 2 - midpoint)
-        ))[0] || null;
-    };
-    const sample = () => {
-      const scroll = document.getElementById('albums-scroll');
-      let card = findCard(observed);
-      if (!card?.isConnected) {
-        const replacement = findCenteredCard(scroll);
-        card = replacement?.card || null;
-        if (replacement) {
-          observed = {
-            albumKey: replacement.albumKey,
-            artist: replacement.artist,
-            sectionKey: replacement.sectionKey,
-          };
-          anchorGeneration += 1;
-        }
-      }
-      const viewport = scroll?.getBoundingClientRect();
-      const rect = card?.getBoundingClientRect();
-      samples.push({
-        at: performance.now(),
-        anchorGeneration,
-        albumKey: observed.albumKey,
-        artist: observed.artist,
-        sectionKey: observed.sectionKey,
-        scrollTop: Number(scroll?.scrollTop || 0),
-        connected: Boolean(card?.isConnected),
-        viewportOffset: rect && viewport ? rect.top - viewport.top : null,
-        contentCoordinate: rect && viewport
-          ? rect.top - viewport.top + Number(scroll.scrollTop || 0)
-          : null,
-      });
-      frame = requestAnimationFrame(sample);
-    };
-    frame = requestAnimationFrame(sample);
-    window.__galleryNativeScrollObservation = {
-      finish() {
-        cancelAnimationFrame(frame);
-        return samples;
-      },
-    };
-  }, anchor);
-  return async () => page.evaluate(() => {
-    const observation = window.__galleryNativeScrollObservation;
-    delete window.__galleryNativeScrollObservation;
-    return observation?.finish() || [];
-  });
-}
-
 function expectGestureStable(samples, direction) {
   expect(samples.length).toBeGreaterThan(5);
   expect(samples.filter(sample => !sample.connected)).toEqual([]);
@@ -216,15 +91,15 @@ function expectGestureStable(samples, direction) {
   expect(committedSegmentCount).toBeGreaterThan(0);
 }
 
-async function observeGesture(page, testInfo, name, direction, gesture) {
-  const anchor = await captureMiddleVisibleCard(page);
-  const finish = await startFrameObservation(page, anchor);
+async function observeGesture(ui, testInfo, name, direction, gesture) {
+  const anchor = await ui.captureMiddleVisibleCard();
+  const observation = await ui.startNativeScrollFrameObservation(anchor);
   let samples;
   try {
     await gesture();
-    await page.waitForTimeout(300);
+    await ui.page.waitForTimeout(300);
   } finally {
-    samples = await finish();
+    samples = await observation.finish();
     await testInfo.attach(name, {
       body: JSON.stringify({ anchor, direction, samples }),
       contentType: 'application/json',
@@ -260,11 +135,11 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stabili
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       };
       try {
-        await observeGesture(page, testInfo, 'mobile-native-swipe-forward', 1, () => swipe(
+        await observeGesture(ui, testInfo, 'mobile-native-swipe-forward', 1, () => swipe(
           Math.round(box.y + box.height * 0.68),
           Math.round(box.y + box.height * 0.46),
         ));
-        await observeGesture(page, testInfo, 'mobile-native-swipe-reverse', -1, () => swipe(
+        await observeGesture(ui, testInfo, 'mobile-native-swipe-reverse', -1, () => swipe(
           Math.round(box.y + box.height * 0.46),
           Math.round(box.y + box.height * 0.68),
         ));
@@ -284,13 +159,13 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stabili
       const box = await ui.galleryScroll.boundingBox();
       if (!box) throw new Error('Gallery scroll surface is not visible.');
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await observeGesture(page, testInfo, 'desktop-native-wheel-forward', 1, async () => {
+      await observeGesture(ui, testInfo, 'desktop-native-wheel-forward', 1, async () => {
         for (let step = 0; step < 4; step += 1) {
           await page.mouse.wheel(0, 32);
           await page.waitForTimeout(20);
         }
       });
-      await observeGesture(page, testInfo, 'desktop-native-wheel-reverse', -1, async () => {
+      await observeGesture(ui, testInfo, 'desktop-native-wheel-reverse', -1, async () => {
         for (let step = 0; step < 4; step += 1) {
           await page.mouse.wheel(0, -32);
           await page.waitForTimeout(20);

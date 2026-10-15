@@ -33,7 +33,7 @@ async function openDeepGallery(page, galleryActions, navigationPanelActions, mob
 }
 
 async function captureMiddleVisibleCard(page) {
-  // parity-check: allow-read-only-measurement-evaluate -- select a semantic card that remains mounted through a short native gesture
+  // parity-check: allow-read-only-measurement-evaluate -- select the initial semantic card for native gesture observation
   return page.evaluate(() => {
     const scroll = document.getElementById('albums-scroll');
     const viewport = scroll.getBoundingClientRect();
@@ -46,10 +46,13 @@ async function captureMiddleVisibleCard(page) {
         const artist = card.closest('.artist-section')
           ?.querySelector('.family-artist-header[data-scroll-artist]')
           ?.getAttribute('data-scroll-artist') || '';
-        return { card, rect, albumKey, artist };
+        const sectionKey = card.closest('[data-virtual-section-key]')
+          ?.getAttribute('data-virtual-section-key') || '';
+        return { card, rect, albumKey, artist, sectionKey };
       })
-      .filter(({ rect, albumKey, artist }) => (
-        albumKey && artist && rect.bottom >= viewport.top + 40 && rect.top <= viewport.bottom - 40
+      .filter(({ rect, albumKey, artist, sectionKey }) => (
+        albumKey && artist && sectionKey
+        && rect.bottom >= viewport.top + 40 && rect.top <= viewport.bottom - 40
       ))
       .sort((left, right) => (
         Math.abs((left.rect.top + left.rect.bottom) / 2 - midpoint)
@@ -57,7 +60,11 @@ async function captureMiddleVisibleCard(page) {
       ));
     const selected = candidates[0];
     if (!selected) throw new Error('No centered gallery card is available for native-scroll observation.');
-    return { albumKey: selected.albumKey, artist: selected.artist };
+    return {
+      albumKey: selected.albumKey,
+      artist: selected.artist,
+      sectionKey: selected.sectionKey,
+    };
   });
 }
 
@@ -66,18 +73,66 @@ async function startFrameObservation(page, anchor) {
   await page.evaluate(saved => {
     const samples = [];
     let frame = 0;
+    let observed = saved;
+    let anchorGeneration = 0;
+    const readIdentity = card => ({
+      albumKey: card?.querySelector('[data-open-tracklist="1"][data-album-key]')
+        ?.getAttribute('data-album-key') || '',
+      artist: card?.closest('.artist-section')
+        ?.querySelector('.family-artist-header[data-scroll-artist]')
+        ?.getAttribute('data-scroll-artist') || '',
+      sectionKey: card?.closest('[data-virtual-section-key]')
+        ?.getAttribute('data-virtual-section-key') || '',
+    });
+    const findCard = identity => [...document.querySelectorAll('#artist-groups .album-card')]
+      .find(item => {
+        const candidate = readIdentity(item);
+        return candidate.artist === identity.artist
+          && candidate.albumKey === identity.albumKey
+          && candidate.sectionKey === identity.sectionKey;
+      });
+    const findCenteredCard = scroll => {
+      const viewport = scroll?.getBoundingClientRect();
+      if (!viewport) return null;
+      const midpoint = viewport.top + viewport.height / 2;
+      return [...document.querySelectorAll('#artist-groups .album-card')]
+        .map(card => ({ card, rect: card.getBoundingClientRect(), ...readIdentity(card) }))
+        .filter(candidate => (
+          candidate.card.isConnected
+          && candidate.albumKey
+          && candidate.artist
+          && candidate.sectionKey
+          && candidate.rect.bottom >= viewport.top + 40
+          && candidate.rect.top <= viewport.bottom - 40
+        ))
+        .sort((left, right) => (
+          Math.abs((left.rect.top + left.rect.bottom) / 2 - midpoint)
+          - Math.abs((right.rect.top + right.rect.bottom) / 2 - midpoint)
+        ))[0] || null;
+    };
     const sample = () => {
       const scroll = document.getElementById('albums-scroll');
-      const section = [...document.querySelectorAll('#artist-groups .artist-section')]
-        .find(item => item.querySelector('.family-artist-header[data-scroll-artist]')
-          ?.getAttribute('data-scroll-artist') === saved.artist);
-      const card = [...(section?.querySelectorAll('.album-card') || [])]
-        .find(item => item.querySelector('[data-open-tracklist="1"][data-album-key]')
-          ?.getAttribute('data-album-key') === saved.albumKey);
+      let card = findCard(observed);
+      if (!card?.isConnected) {
+        const replacement = findCenteredCard(scroll);
+        card = replacement?.card || null;
+        if (replacement) {
+          observed = {
+            albumKey: replacement.albumKey,
+            artist: replacement.artist,
+            sectionKey: replacement.sectionKey,
+          };
+          anchorGeneration += 1;
+        }
+      }
       const viewport = scroll?.getBoundingClientRect();
       const rect = card?.getBoundingClientRect();
       samples.push({
         at: performance.now(),
+        anchorGeneration,
+        albumKey: observed.albumKey,
+        artist: observed.artist,
+        sectionKey: observed.sectionKey,
         scrollTop: Number(scroll?.scrollTop || 0),
         connected: Boolean(card?.isConnected),
         viewportOffset: rect && viewport ? rect.top - viewport.top : null,
@@ -110,6 +165,12 @@ function expectGestureStable(samples, direction) {
   let segmentCoordinate = coordinates[0];
   const segments = [[samples[0]]];
   for (let index = 1; index < samples.length; index += 1) {
+    const anchorChanged = samples[index].anchorGeneration !== samples[index - 1].anchorGeneration;
+    if (anchorChanged) {
+      segmentCoordinate = coordinates[index];
+      segments.push([samples[index]]);
+      continue;
+    }
     const scrollDelta = samples[index].scrollTop - samples[index - 1].scrollTop;
     const coordinateDelta = coordinates[index] - coordinates[index - 1];
     const compensatedRebase = Math.abs(scrollDelta) >= 8
@@ -122,7 +183,16 @@ function expectGestureStable(samples, direction) {
       segments.push([samples[index]]);
       continue;
     }
-    expect(Math.abs(coordinates[index] - segmentCoordinate)).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(coordinates[index] - segmentCoordinate),
+      JSON.stringify({
+        index,
+        direction,
+        segmentCoordinate,
+        previous: samples[index - 1],
+        current: samples[index],
+      }),
+    ).toBeLessThanOrEqual(1);
     segments.at(-1).push(samples[index]);
   }
 

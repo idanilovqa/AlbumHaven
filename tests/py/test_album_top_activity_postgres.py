@@ -338,3 +338,47 @@ def test_private_activity_never_changes_guest_or_member_publication_payload(db):
     assert_public(guest())
     assert_public(member_publication())
     assert_error(lambda: db.service.read(db.context(viewer), top_ref=top["top_ref"]), "top_unavailable", 404)
+
+
+@pytest.mark.parametrize("operation", ["pause", "progress"])
+def test_private_event_time_is_sampled_after_parent_wait(db, operation):
+    top, _ = db.create()
+    # Establish activity using the ordinary service clock, later than db.now.
+    db.service.execute(db.context(), activity_command(top, True))
+    command = activity_command(top, False) if operation == "pause" else completion_command(db, top, True)
+    reached_parent = Event()
+    observed_now = [db.now]
+    after_wait = db.now + timedelta(minutes=1)
+
+    class Connection:
+        def __init__(self, real):
+            self.real = real
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.lower().split())
+            if "select * from app.album_lists" in normalized and "for share" in normalized:
+                reached_parent.set()
+            return self.real.execute(sql, params)
+
+    @contextmanager
+    def connect(url):
+        with pooled_connection(url) as real:
+            real.execute("set local statement_timeout='8s'")
+            yield Connection(real)
+
+    service = PostgresOwnedAlbumTopsService({"ALBUM_HAVEN_APP_DATABASE_URL": db.app_url},
+        connect=connect, clock=lambda: observed_now[0])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with db.connect() as blocker:
+            blocker.execute("select ref from app.album_lists where ref=%s for update", (top["top_ref"],))
+            future = pool.submit(service.execute, db.context(), command)
+            assert reached_parent.wait(5), "Private mutation must reach the held parent lock"
+            observed_now[0] = after_wait
+        receipt = future.result(timeout=10)
+    assert receipt["changed"] is True
+    state = state_snapshot(db)
+    if operation == "pause":
+        assert receipt["active"] is False and receipt["activity_revision"] == "1"
+        assert state["album_list_activity_transitions"][-1]["occurred_at"] == after_wait
+    else:
+        assert state["album_list_item_progress"][0]["manual_completed_at"] == after_wait

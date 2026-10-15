@@ -304,6 +304,11 @@ class PostgresOwnedAlbumTopsService:
                     raise AlbumTopError("request_key_conflict", 409)
                 retained = self._top(connection, live, str(prior["top_ref"]),
                                      allow_deleted=not private_state and prior["publication_ref"] is None)
+                if private_state:
+                    # The parent lock can outlive session validity. Check before
+                    # replay work as well as at the final commit boundary.
+                    lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
+                        actor_session_id=live.actor.session_id, clock=self._clock)
                 self._require(live, (BROWSE,), constraints, retained)
                 self._require(live, command_actions(command), constraints,
                     retained if command.action not in {"create", "copy"} else None,
@@ -327,6 +332,11 @@ class PostgresOwnedAlbumTopsService:
                 # Private activity/progress share the parent lock with other viewers while
                 # excluding content/visibility edits through the existing owner.
                 top = self._top(connection, live, command.top_ref, write=not private_state)
+                if private_state:
+                    # Sample event time only after the parent wait; stale entry
+                    # time must not reach progress/activity domain transitions.
+                    now = lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
+                        actor_session_id=live.actor.session_id, clock=self._clock)
                 self._require(live, (BROWSE,), constraints, top)
                 self._require(live, command_actions(command), constraints,
                               None if command.action == "copy" else top, owner_only=command.action == "delete")

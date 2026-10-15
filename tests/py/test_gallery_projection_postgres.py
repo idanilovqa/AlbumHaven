@@ -1,6 +1,7 @@
 """Gallery projection must preserve the established root semantic oracle."""
 import copy
 from concurrent.futures import Future
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -324,22 +325,52 @@ def test_readonly_projection_never_connects_or_queues(monkeypatch):
     assert not projection._PENDING
 
 
-@pytest.mark.parametrize("failure", [None, RuntimeError, InterruptedError])
+def test_startup_queues_settings_prewarm_after_gallery_ready(monkeypatch):
+    from music_app.services import state, gallery_projection_postgres as projection
+    app = SimpleNamespace(config={"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"}, library_state={}, logger=Mock())
+    events = []
+    monkeypatch.setattr(
+        state,
+        "ensure_relation_projection_ready",
+        lambda *args, **kwargs: events.append("relations") or {"ready": True},
+    )
+
+    def ensure(*args, **kwargs):
+        events.append("gallery")
+        return {"built": 2}
+
+    monkeypatch.setattr(projection, "ensure_gallery_projection_ready", ensure)
+    repository = Mock()
+    repository.queue_settings_projection_prewarm.side_effect = lambda: events.append("settings")
+    repository_type = Mock(return_value=repository)
+    monkeypatch.setattr(state, "PostgresLibraryBrowseRepository", repository_type)
+
+    assert state.ensure_runtime_relation_projection_ready(app)["ready"]
+
+    assert events == ["relations", "gallery", "settings"]
+    repository_type.assert_called_once_with(app.config)
+    repository.queue_settings_projection_prewarm.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, InterruptedError])
 def test_startup_gallery_failure_falls_back_but_cancellation_propagates(monkeypatch, failure):
     from music_app.services import state, gallery_projection_postgres as projection
     app = SimpleNamespace(config={"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"}, library_state={}, logger=Mock())
     monkeypatch.setattr(state, "ensure_relation_projection_ready", lambda *args, **kwargs: {"ready": True})
+
     def ensure(*args, **kwargs):
-        if failure:
-            raise failure("owned test")
-        return {"built": 2}
+        raise failure("owned test")
+
     monkeypatch.setattr(projection, "ensure_gallery_projection_ready", ensure)
+    repository_type = Mock()
+    monkeypatch.setattr(state, "PostgresLibraryBrowseRepository", repository_type)
     if failure is InterruptedError:
         with pytest.raises(InterruptedError):
             state.ensure_runtime_relation_projection_ready(app)
     else:
         assert state.ensure_runtime_relation_projection_ready(app)["ready"]
-        assert app.logger.exception.called == (failure is RuntimeError)
+        app.logger.exception.assert_called_once()
+    repository_type.assert_not_called()
 
 
 def test_startup_without_database_does_not_attempt_gallery_preparation(monkeypatch):
@@ -348,9 +379,65 @@ def test_startup_without_database_does_not_attempt_gallery_preparation(monkeypat
     monkeypatch.setattr(state, "ensure_relation_projection_ready", lambda *args, **kwargs: {"ready": True})
     ensure = Mock()
     monkeypatch.setattr(projection, "ensure_gallery_projection_ready", ensure)
+    repository_type = Mock()
+    monkeypatch.setattr(state, "PostgresLibraryBrowseRepository", repository_type)
     assert state.ensure_runtime_relation_projection_ready(app)["ready"]
     ensure.assert_not_called()
+    repository_type.assert_not_called()
     app.logger.exception.assert_not_called()
+
+
+def test_startup_without_ready_relations_does_not_queue_settings_prewarm(monkeypatch):
+    from music_app.services import state, gallery_projection_postgres as projection
+    app = SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"},
+        library_state={},
+        logger=Mock(),
+    )
+    monkeypatch.setattr(
+        state,
+        "ensure_relation_projection_ready",
+        lambda *args, **kwargs: {"ready": False},
+    )
+    ensure = Mock()
+    repository_type = Mock()
+    monkeypatch.setattr(projection, "ensure_gallery_projection_ready", ensure)
+    monkeypatch.setattr(state, "PostgresLibraryBrowseRepository", repository_type)
+
+    assert not state.ensure_runtime_relation_projection_ready(app)["ready"]
+
+    ensure.assert_not_called()
+    repository_type.assert_not_called()
+
+
+def test_startup_cancellation_after_gallery_ready_skips_settings_prewarm(monkeypatch):
+    from music_app.services import state, gallery_projection_postgres as projection
+    cancel_requested = Event()
+    app = SimpleNamespace(
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"},
+        library_state={},
+        logger=Mock(),
+    )
+    monkeypatch.setattr(
+        state,
+        "ensure_relation_projection_ready",
+        lambda *args, **kwargs: {"ready": True},
+    )
+    monkeypatch.setattr(
+        projection,
+        "ensure_gallery_projection_ready",
+        lambda *args, **kwargs: cancel_requested.set() or {"built": 0},
+    )
+    repository_type = Mock()
+    monkeypatch.setattr(state, "PostgresLibraryBrowseRepository", repository_type)
+
+    with pytest.raises(InterruptedError):
+        state.ensure_runtime_relation_projection_ready(
+            app,
+            cancel_requested=cancel_requested,
+        )
+
+    repository_type.assert_not_called()
 
 
 def test_old_schema_context_uses_accurate_fallback():

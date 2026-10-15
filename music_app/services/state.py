@@ -58,6 +58,7 @@ from music_app.services.scan_state import refresh_library_state
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
+    _raise_if_projection_cancelled,
     ensure_relation_projection_ready,
 )
 
@@ -351,6 +352,9 @@ def ensure_runtime_relation_projection_ready(
             raise
         except Exception:
             app.logger.exception("Gallery summary preparation failed; computed browse remains available")
+        else:
+            _raise_if_projection_cancelled(cancel_requested)
+            PostgresLibraryBrowseRepository(app.config).queue_settings_projection_prewarm()
     return result
 
 def scan_percent_for_state(library_state: dict[str, object]) -> int:

@@ -35330,6 +35330,7 @@ class VirtualArtistGrid {
     this._measureTimeout = 0;
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
+    this._deferredSetGroups = null;
     this._resetScrollAfterMeasure = false;
     this.isScrollSettled = true;
     this._diagnosticSequence = 0;
@@ -35435,6 +35436,7 @@ class VirtualArtistGrid {
     this._deferredPointerGestureRender = null;
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
+    this._deferredSetGroups = null;
     if (this._measureRaf) {
       cancelBrowserAnimationFrame(this._measureRaf);
       this._measureRaf = null;
@@ -35844,6 +35846,28 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    const shouldDeferMountedGroupUpdate = (
+      Boolean(options.preserveScroll)
+      && options.preserveMountedGalleryChildren === true
+      && options.resetScrollForUserArtistSelection !== true
+      && options.preserveAbsoluteScroll !== true
+      && !this._absoluteScrollRestore
+      && (this._touchScrollGestureActive || !this.isScrollSettled)
+    );
+    if (shouldDeferMountedGroupUpdate) {
+      this._deferredSetGroups = {
+        primaryGroups,
+        familyGroups,
+        fallbackGroups,
+        options,
+        layoutConfig,
+      };
+      this.recordDiagnosticEvent('group-update-deferred', {
+        touchGestureActive: this._touchScrollGestureActive,
+      });
+      return;
+    }
+    this._deferredSetGroups = null;
     const supersededScrollRenderRafOwner = Number(this._raf || 0);
     const hasPendingScrollRender = Boolean(supersededScrollRenderRafOwner);
     this._renderGeneration += 1;
@@ -36346,7 +36370,7 @@ class VirtualArtistGrid {
     const hadScroll = this._touchScrollGestureHadScroll;
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
-    if (hadScroll) this.scheduleSettledMeasurement();
+    if (hadScroll || this._deferredSetGroups) this.scheduleSettledMeasurement();
   }
 
   scheduleSettledMeasurement() {
@@ -36355,6 +36379,18 @@ class VirtualArtistGrid {
       this._measureTimeout = 0;
       if (this._touchScrollGestureActive) return;
       this.isScrollSettled = true;
+      const deferredSetGroups = this._deferredSetGroups;
+      if (deferredSetGroups) {
+        this._deferredSetGroups = null;
+        this.setGroups(
+          deferredSetGroups.primaryGroups,
+          deferredSetGroups.familyGroups,
+          deferredSetGroups.fallbackGroups,
+          deferredSetGroups.options,
+          deferredSetGroups.layoutConfig,
+        );
+        return;
+      }
       this.scheduleMeasureRows(true);
     }, 96);
   }

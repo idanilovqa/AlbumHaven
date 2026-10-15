@@ -5207,3 +5207,122 @@ for (const rowGap of [14, 23]) {
     assert.equal(full.bottomSpacerHeight, 0);
   });
 }
+
+test('pagination group updates wait until an active touch gesture settles', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const renders = [];
+  virtualGrid.render = () => {
+    renders.push(scrollEl.scrollTop);
+  };
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.scrollTop = 900;
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  scrollEl.scrollTop = 932;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Deferred Artist', artist_display: 'Deferred Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+
+  assert.equal(virtualGrid._renderGeneration, 0);
+  assert.equal(virtualGrid.sections.length, 0);
+  assert.deepEqual(renders, []);
+
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+  const settle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(typeof settle?.callback, 'function');
+  settle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Deferred Artist');
+  assert.deepEqual(renders, [932]);
+});
+
+test('pagination group updates coalesce behind an active wheel scroll', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const renders = [];
+  virtualGrid.render = () => {
+    renders.push(scrollEl.scrollTop);
+  };
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.scrollTop = 1400;
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Stale Page', artist_display: 'Stale Page', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Latest Page', artist_display: 'Latest Page', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+
+  assert.equal(virtualGrid._renderGeneration, 0);
+  assert.deepEqual(renders, []);
+
+  const settle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(typeof settle?.callback, 'function');
+  settle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Latest Page');
+  assert.deepEqual(renders, [1400]);
+});
+
+test('a deferred pagination update flushes after a touch that does not scroll', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.dispatchEvent({ type: 'touchstart', touches: [{}] });
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Tap Deferred Artist', artist_display: 'Tap Deferred Artist', albums: [] }],
+    { preserveScroll: true, preserveMountedGalleryChildren: true },
+  );
+  scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
+
+  const settle = context.__scheduledBrowserTimeouts.at(-1);
+  assert.equal(typeof settle?.callback, 'function');
+  settle.callback();
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Tap Deferred Artist');
+});
+
+test('an explicit absolute return bypasses pagination deferral', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+
+  scrollEl.scrollTop = 1700;
+  scrollEl.dispatchEvent({ type: 'wheel' });
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Returned Artist', artist_display: 'Returned Artist', albums: [] }],
+    {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      preserveAbsoluteScroll: true,
+      absoluteScrollPosition: { scrollLeft: 0, scrollTop: 4321 },
+    },
+  );
+
+  assert.equal(virtualGrid._renderGeneration, 1);
+  assert.equal(virtualGrid.sections[0]?.group?.artist, 'Returned Artist');
+  assert.equal(scrollEl.scrollTop, 4321);
+});

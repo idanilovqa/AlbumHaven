@@ -49,12 +49,13 @@ for (const [entry, modules] of Object.entries(graphs)) {
     for (const other of new Set(Object.values(graphs).flat())) if (!modules.includes(other)) await rejected(route, '/' + other);
     assert.deepEqual(await request(route, '/', {resourceType:'document'}), {contentType:'text/html', body:html});
     assert.deepEqual(await request(route, '/ordinary/page?view=one', {resourceType:'document'}), {contentType:'text/html', body:html});
+    assert.deepEqual(await request(route, '/ordinary/page?name=a%20b', {resourceType:'document'}), {contentType:'text/html', body:html});
     await rejected(route, '/ordinary/page');
   });
   test(`native mobile columns delivery rejects invalid requests for ${entry}`, async () => {
     const route = nativeDelivery(root, html, [entry]), resource = '/' + modules[0];
     for (const pathname of [entryURL(entry)+'?v=1', resource+'?v=1', '/missing.mjs', '/music_app/static/js/missing.mjs',
-      '/__mobile_columns_fixture__/unknown.mjs', '/%65ncoded', '/music_app/static/js/%2e%2e/secret.mjs']) {
+      '/__mobile_columns_fixture__/unknown.mjs', '/%65ncoded', '/music_app/static/js/%2e%2e/secret.mjs', '/%2e%2e/ordinary', '/one/%2E%2E/ordinary', '/%2e/ordinary']) {
       await rejected(route, pathname); await rejected(route, pathname, {resourceType:'document'});
     }
     for (const pathname of ['/unknown.js', '/unknown.jsx', '/unknown.cjs', '/unknown.mjs', '/unknown.mjs/child', '/music_app/no-extension', '/__mobile_columns_fixture__/no-extension']) await rejected(route, pathname, {resourceType:'document'});

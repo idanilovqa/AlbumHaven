@@ -44,6 +44,9 @@ function nativeDelivery(root, html, entryNames) {
   return route=>{
     const request=route.request(),raw=request.url();
     const reject=()=>route.fulfill({status:404,contentType:'text/plain',body:'Unknown fixture resource'});
+    // Reject encoded authority/path before URL parsing removes encoded dot segments.
+    // Query/fragment encoding does not change the document pathname.
+    if(raw.split(/[?#]/,1)[0].includes('%'))return reject();
     let url;try{url=new URL(raw);}catch{return reject();}
     const pathname=url.pathname;
     // Never reinterpret encoded/malformed paths as the document fallback.

@@ -19,6 +19,9 @@ from music_app.services.policy import PolicyContext
 from music_app.services.policy_evaluator import PolicyEvaluator, PolicyEvaluationConstraints
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.remote_album_provider import fetch_release_group_evidence
+from music_app.services.remote_album_search import (
+    SEARCH_LIMIT, normalize_album_search, search_release_group_candidates,
+)
 from music_app.services.remote_album_evidence import canonical_release_group_id, RemoteAlbumEvidenceError, ReleaseGroupEvidence
 from music_app.services.social_cursors import encode_social_cursor, decode_social_cursor
 
@@ -40,13 +43,14 @@ def _facts_version(row):
 
 
 class PostgresListeningGoalsService:
-    def __init__(self, config, *, connect=None, clock=None, provider=None, user_agent=None):
+    def __init__(self, config, *, connect=None, clock=None, provider=None, user_agent=None, searcher=None):
         self._url = str(config.get('ALBUM_HAVEN_APP_DATABASE_URL') or '').strip()
         if not self._url:
             raise RuntimeError('Postgres configuration is required for Goals.')
         self._connect = connect or pooled_connection
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._provider = provider or fetch_release_group_evidence
+        self._searcher = searcher or search_release_group_candidates
         # Deployment composition supplies the same public product identifier as
         # existing MusicBrainz consumers. It is never copied from a request.
         self._user_agent = user_agent
@@ -103,6 +107,30 @@ class PostgresListeningGoalsService:
             if getattr(error, 'sqlstate', None) in {'23505', '23503', '40001', '40P01'}:
                 raise GoalsError('concurrent_change', 409) from None
             raise
+
+    def search_candidates(self, context, title, artist, *, constraints=None, should_cancel=None):
+        try:
+            title, artist = normalize_album_search(title, artist)
+        except RemoteAlbumEvidenceError as error:
+            raise GoalsError(error.code, 400) from None
+        with self._authorized(context, WRITE, constraints, should_cancel=should_cancel):
+            pass
+        try:
+            candidates = self._searcher(title, artist, user_agent=self._user_agent,
+                                       should_cancel=should_cancel)
+        except RemoteAlbumEvidenceError as error:
+            raise GoalsError(error.code, 503) from None
+        if (type(candidates) is not tuple or len(candidates) > SEARCH_LIMIT
+                or any(not isinstance(item, ReleaseGroupEvidence) for item in candidates)):
+            raise GoalsError('invalid_provider_metadata', 503)
+        # Network never holds account/session locks. Reauthorize after IO before
+        # returning private preview data; search creates no durable evidence.
+        with self._authorized(context, WRITE, constraints, should_cancel=should_cancel):
+            return {'limit': SEARCH_LIMIT, 'candidates': [{
+                'provider': 'musicbrainz', 'entity_kind': 'release-group',
+                'release_group_id': item.release_group_id, 'title': item.title,
+                'artist_display': item.artist_display, 'first_release_date': item.first_release_date,
+                'primary_type': item.primary_type} for item in candidates]}
 
     def acquire_evidence(self, context, release_group_id, *, constraints=None, should_cancel=None):
         try:

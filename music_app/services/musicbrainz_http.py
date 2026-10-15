@@ -7,6 +7,7 @@ import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from copy import deepcopy
@@ -24,6 +25,28 @@ _STRICT_RELEASE_GROUP_URL = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
     r"\?inc=artist-credits&fmt=json"
 )
+
+
+def _strict_release_group_search_url(url):
+    """Only the bounded official candidate-search shape, never a general URL."""
+    if type(url) is not str or len(url) > 3000:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        if (parts.scheme != 'https' or parts.netloc != 'musicbrainz.org'
+                or parts.path != '/ws/2/release-group/' or parts.fragment):
+            return False
+        pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True,
+                                      strict_parsing=True, errors='strict', max_num_fields=3)
+        if [key for key, _ in pairs] != ['query', 'fmt', 'limit']:
+            return False
+        query, fmt, limit = (value for _, value in pairs)
+        if (not 1 <= len(query) <= 450 or fmt != 'json' or limit != '10'
+                or any(ord(char) < 32 or ord(char) == 127 for char in query)):
+            return False
+        return url == 'https://musicbrainz.org/ws/2/release-group/?' + urllib.parse.urlencode(pairs)
+    except (ValueError, UnicodeError):
+        return False
 
 _REQUEST_LOCK = threading.Lock()
 _STATE_LOCK = threading.Lock()
@@ -192,7 +215,7 @@ def get_json(
 ) -> tuple[dict | None, dict[str, object]]:
     """Use the shared pacing/retry owner; strict evidence is explicitly opt-in.
 
-    Strict mode admits only the adapter's fixed official release-group endpoint,
+    Strict mode admits only fixed official release-group lookup/search shapes,
     default JSON accept and no additional headers. It does not install a global
     opener or change the default transport/cache behavior of existing callers.
     """
@@ -200,7 +223,8 @@ def get_json(
     if callable(should_cancel) and should_cancel():
         return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
     if strict_evidence and (
-        type(url) is not str or _STRICT_RELEASE_GROUP_URL.fullmatch(url) is None
+        type(url) is not str or (_STRICT_RELEASE_GROUP_URL.fullmatch(url) is None
+                                and not _strict_release_group_search_url(url))
         or accept != "application/json" or extra_headers
     ):
         return None, {"status": "invalid_evidence_request", "cache_hit": False, "attempt": 0}

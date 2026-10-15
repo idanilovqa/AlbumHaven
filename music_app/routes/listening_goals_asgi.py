@@ -12,7 +12,6 @@ from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_ob
 from music_app.services.client_surfaces import client_surface_from_request
 from music_app.services.listening_goals_commands import GoalsError, normalize_goal_command
 from music_app.services.listening_goals_postgres import PostgresListeningGoalsService, READ, WRITE
-from music_app.services.musicbrainz_http import default_user_agent
 from music_app.services.policy import PolicyContext
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
 from music_app.services.policy_asgi import _deployment_mode, _request_origin
@@ -58,7 +57,7 @@ def _service(request):
     if service is not None:
         return service
     return PostgresListeningGoalsService(request.app.state.config,
-        user_agent=default_user_agent('AlbumHaven', '0.0.0', ''))
+        user_agent=request.app.state.config.get('MUSICBRAINZ_USER_AGENT'))
 
 
 def _response(request, value):
@@ -134,18 +133,21 @@ async def _watch_disconnect(request, cancelled):
         await asyncio.sleep(0.1)
 
 
-@router.post('/account/goals/remote-evidence')
-async def acquire_goal_evidence(request: Request):
+async def _remote_lookup(request, *, search):
     cancelled = Event()
     watcher = None
     try:
         payload = await _body(request)
-        if type(payload) is not dict or set(payload) != {'release_group_id'}:
+        fields = {'title', 'artist'} if search else {'release_group_id'}
+        if type(payload) is not dict or set(payload) != fields:
             raise GoalsError('invalid_command', 400)
         context, constraints = _context(request, WRITE)
         watcher = asyncio.create_task(_watch_disconnect(request, cancelled))
-        value = await run_in_threadpool(_service(request).acquire_evidence, context,
-            payload['release_group_id'], constraints=constraints, should_cancel=cancelled.is_set)
+        service = _service(request)
+        method = service.search_candidates if search else service.acquire_evidence
+        args = (payload['title'], payload['artist']) if search else (payload['release_group_id'],)
+        value = await run_in_threadpool(method, context, *args,
+            constraints=constraints, should_cancel=cancelled.is_set)
         return _response(request, value)
     except GoalsError as error:
         return _error(error)
@@ -155,6 +157,16 @@ async def acquire_goal_evidence(request: Request):
             watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await watcher
+
+
+@router.post('/account/goals/remote-search')
+async def search_goal_candidates(request: Request):
+    return await _remote_lookup(request, search=True)
+
+
+@router.post('/account/goals/remote-evidence')
+async def acquire_goal_evidence(request: Request):
+    return await _remote_lookup(request, search=False)
 
 
 async def _execute(request, action):

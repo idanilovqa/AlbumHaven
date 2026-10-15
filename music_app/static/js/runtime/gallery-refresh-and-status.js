@@ -130,6 +130,7 @@ async function loadNextRootGalleryPage() {
       data = await collectRootGalleryRefresh(
         data, `${url.pathname}${url.search}`, recoveryCoverage,
         request.controller, ownsDataResponse, recoveryStartArtist, recoveryEndArtist, recoveryArtists,
+        restarted,
       );
     }
     if (!ownsDataResponse()) return false;

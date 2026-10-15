@@ -179,6 +179,34 @@ test('stale cursor recovery reloads the retained window before replacing mounted
   assert.equal(f.state.view.artist_groups[74].artist, 'Retained 74');
 });
 
+test('stale cursor recovery rejects later continuation churn without restarting again', async () => {
+  const f = fixture();
+  const groups = Array.from({ length: 75 }, (_, index) => ({
+    artist: `Retained ${index}`, albums: [{ key: `retained-${index}` }],
+  }));
+  f.state.view.artist_groups = groups;
+  f.context.fetch = (url, options) => new Promise(resolve => f.pending.push({ url, options, resolve }));
+  f.context.renderView = options => f.renders.push(options);
+
+  const request = f.context.loadNextRootGalleryPage();
+  f.pending[0].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
+  await new Promise(resolve => setImmediate(resolve));
+  f.pending[1].resolve({
+    status: 200, ok: true,
+    json: async () => page(groups.slice(0, 50), {
+      gallery_page: { revision: 'r2', has_more: true, next_cursor: 'fresh-50' },
+    }),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  f.pending[2].resolve({ status: 409, ok: false, json: async () => ({ restart_required: true }) });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(f.pending.length, 3, 'a second conflict must not consume another restart');
+  assert.equal(await request, false);
+  assert.equal(f.state.view.artist_groups, groups);
+  assert.equal(f.renders.length, 0);
+});
+
 test('stale cursor recovery survives deletion of the first retained artist', async () => {
   const f = fixture();
   f.scroll.scrollTop = 300;

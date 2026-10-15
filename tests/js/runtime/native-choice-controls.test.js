@@ -3,26 +3,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
 const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
+const {withDomPlatform} = require('./artist-host-fixtures/dom-platform.cjs');
 const repo = path.resolve(__dirname, '../../..');
 const read = file => fs.readFileSync(path.join(repo, file), 'utf8');
-const bundle = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/home-friends/native-choice.jsx')],
-  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react']}).outputFiles[0].text;
-const loadComponent = hooks => {
-  const module = {exports: {}};
-  vm.runInNewContext(bundle, {module, exports: module.exports, require: name => {
-    assert.equal(name, 'react'); return hooks;
-  }});
-  return module.exports.NativeChoice;
-};
+const controls = () => import('../../../music_app/static/js/home-friends/native-controls.mjs');
 
 // Run the native owner unchanged. This bounded DOM supplies only measurable
 // viewport/focus/observer behavior; it makes no browser or CSS-layout claim.
 function nativeHarness() {
-  const env = createNativeHomeRuntime(), {context, document} = env, observers = [];
+  const env = withDomPlatform(createNativeHomeRuntime()), {context, document} = env, observers = [];
   const windowNode = document.createElement('window'); windowNode.appendChild(document);
   const viewport = document.createElement('viewport');
   Object.assign(viewport, {offsetLeft: 0, offsetTop: 0, width: 390, height: 720});
@@ -159,41 +149,29 @@ test('Choice rejection and synchronous consumer replacement cannot overwrite a r
   assert.equal(replacement.isOpen, true); assert.equal(other.getAttribute('aria-expanded'), 'true');
 });
 
-// Execute the component's actual layout effects with explicit hook commits.
-// This checks ownership disposal, independently of React DOM/browser coverage.
-function componentHarness(h) {
-  let cursor = 0, pending = [], slots = [], mounted = false;
-  const hooks = {...React,
-    useRef(value) {const index = cursor++; return slots[index] ||= {current: value};},
-    useLayoutEffect(callback, dependencies) {
-      const index = cursor++, prior = slots[index];
-      if (!prior || dependencies.some((value, offset) => !Object.is(value, prior.dependencies[offset]))) {
-        pending.push(() => {prior?.cleanup?.(); slots[index] = {dependencies, cleanup: callback()};});
-      }
-    },
-  };
-  const Component = loadComponent(hooks), host = h.document.createElement('span'); h.document.body.append(host);
+// Mount/update/dispose the actual native adapter with the canonical native menu.
+// No hooks, virtual tree, renderer emulation, or successful menu fake is used.
+async function componentHarness(h) {
+  const {mountChoice} = await controls();
+  const host = h.document.createElement('span'); h.document.body.append(host);
+  let owner;
   return {host,
     render(props) {
-      cursor = 0; pending = [];
-      const tree = Component({runtime: h.runtime, label: 'Period', value: 'week', options: options.formats, ...props});
-      const control = tree.props.children[1];
-      if (!mounted) {host.innerHTML = control.props.dangerouslySetInnerHTML.__html; mounted = true;}
-      control.props.ref.current = host;
-      for (const effect of pending) effect(); return tree;
+      const next = {label: 'Period', value: 'week', options: options.formats, ...props};
+      if (owner) owner.update(next); else owner = mountChoice(host, h.runtime, next);
     },
-    unmount() {for (const slot of slots) slot.cleanup?.(); host.remove();},
+    unmount() {owner?.dispose(); host.remove();},
   };
 }
 
-test('NativeChoice retains its trigger, fresh callbacks, selected labels and exact unmount lifetime', () => {
-  const h = nativeHarness(), component = componentHarness(h), calls = [];
+test('NativeChoice retains its trigger, fresh callbacks, selected labels and exact unmount lifetime', async () => {
+  const h = nativeHarness(), component = await componentHarness(h), calls = [];
   component.render({onChange: value => calls.push(`old:${value}`)});
-  const trigger = component.host.firstElementChild; h.click(trigger);
+  const trigger = component.host.querySelector('.ui-choice__control').firstElementChild; h.click(trigger);
   component.render({onChange: value => calls.push(`new:${value}`)});
   assert.equal(trigger.getAttribute('aria-expanded'), 'true');
   h.click(h.document.querySelector('[data-foobar-format="month"]')); assert.deepEqual(calls, ['new:month']);
-  component.render({value: 'month'}); assert.equal(component.host.firstElementChild, trigger);
+  component.render({value: 'month'}); assert.equal(component.host.querySelector('.ui-choice__control').firstElementChild, trigger);
   assert.equal(trigger.getAttribute('aria-label'), 'Period: Last month');
   assert.equal(trigger.querySelector('.ui-button__content').textContent, 'Last month');
   h.key(trigger, 'ArrowUp'); assert.equal(h.document.activeElement.getAttribute('data-foobar-format'), 'month');
@@ -203,9 +181,9 @@ test('NativeChoice retains its trigger, fresh callbacks, selected labels and exa
   assert.equal(h.document.querySelector('[role="menu"]'), null);
 });
 
-test('NativeChoice closes on changed selected identity even when the visible labels match', () => {
-  const h = nativeHarness(), component = componentHarness(h), choices = [['first', 'Same'], ['second', 'Same']];
-  component.render({value: 'first', options: choices}); const trigger = component.host.firstElementChild;
+test('NativeChoice closes on changed selected identity even when the visible labels match', async () => {
+  const h = nativeHarness(), component = await componentHarness(h), choices = [['first', 'Same'], ['second', 'Same']];
+  component.render({value: 'first', options: choices}); const trigger = component.host.querySelector('.ui-choice__control').firstElementChild;
   h.click(trigger); component.render({value: 'second', options: choices});
   assert.equal(h.document.querySelector('[role="menu"]'), null); assert.equal(h.document.activeElement, trigger);
   h.click(trigger); assert.equal(h.document.activeElement.getAttribute('data-foobar-format'), 'second');
@@ -213,23 +191,25 @@ test('NativeChoice closes on changed selected identity even when the visible lab
   assert.equal(h.document.querySelector('[role="menu"]'), null); component.unmount();
 });
 
-test('NativeChoice disables unavailable integrations and escapes values through native Button', () => {
-  const h = nativeHarness(), NativeChoice = loadComponent(React);
-  const html = renderToStaticMarkup(React.createElement(NativeChoice, {runtime: {buttonHtml: h.runtime.buttonHtml},
-    label: 'Style', value: '<private>', options: [['<private>', '<Rock>']], showLabel: false}));
-  const host = h.document.createElement('span'); host.innerHTML = html;
-  assert.equal(host.querySelector('button').disabled, true);
-  assert.equal(host.querySelector('button').getAttribute('aria-label'), 'Style: <Rock>');
-  assert.equal(host.querySelector('.ui-button__content').textContent, '<Rock>');
-  assert.equal(host.querySelector('select'), null);
+test('NativeChoice disables unavailable integrations and escapes values through native Button', async () => {
+  const h = nativeHarness(), {mountChoice} = await controls();
+  const host = h.document.createElement('span'); h.document.body.append(host);
+  const owner = mountChoice(host, {buttonHtml: h.runtime.buttonHtml},
+    {label: 'Style', value: '<private>', options: [['<private>', '<Rock>']], showLabel: false});
+  try {
+    assert.equal(host.querySelector('button').disabled, true);
+    assert.equal(host.querySelector('button').getAttribute('aria-label'), 'Style: <Rock>');
+    assert.equal(host.querySelector('.ui-button__content').textContent, '<Rock>');
+    assert.equal(host.querySelector('select'), null);
+  } finally {owner.dispose(); host.remove();}
 });
 
 
-test('NativeChoice can name a compact field inside its trigger without changing menu values or accessible naming', () => {
-  const h = nativeHarness(), component = componentHarness(h), calls = [];
+test('NativeChoice can name a compact field inside its trigger without changing menu values or accessible naming', async () => {
+  const h = nativeHarness(), component = await componentHarness(h), calls = [];
   component.render({label: 'Added', value: 'month', controlLabelPrefix: 'Added', showLabel: false,
     onChange: value => calls.push(value)});
-  const trigger = component.host.firstElementChild;
+  const trigger = component.host.querySelector('.ui-choice__control').firstElementChild;
   assert.equal(trigger.querySelector('.ui-button__content').textContent, 'Added: Last month');
   assert.equal(trigger.getAttribute('aria-label'), 'Added: Last month');
   h.click(trigger); h.click(h.document.querySelector('[data-foobar-format="week"]'));

@@ -876,6 +876,29 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
+    if (
+        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        and not album_context.track_paths <= set(library_state.get("file_cache") or {})
+    ):
+        from music_app.services.library import build_albums_from_file_cache
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+        def load_selected_inventory():
+            repository = PostgresLibraryBrowseRepository(config)
+            albums = repository.build_album_payloads_by_track_paths(album_context.track_paths)
+            paths = {
+                str(track.get("path") or "").strip()
+                for selected_album in albums
+                for track in selected_album.get("tracks", [])
+                if str(track.get("path") or "").strip()
+            }
+            entries = repository.build_track_file_entries_by_paths(paths)
+            file_cache = {**(library_state.get("file_cache") or {}), **entries}
+            return file_cache, build_albums_from_file_cache(file_cache)
+
+        file_cache, albums = await run_in_threadpool(load_selected_inventory)
+        library_state["file_cache"] = file_cache
+        library_state["albums"] = albums
     authoritative_cover_path = album_context.album_root / "cover.jpg"
     prior_cover_bytes = (
         authoritative_cover_path.read_bytes()
@@ -888,12 +911,14 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except Exception as exc:
         return _json_response(({"ok": False, "error": str(exc or "Failed to save pasted image.")}, 500))
+    cover_revision = cover_revision_for_path(saved_cover_path)
     try:
         persist_cover_selection_for_tracks(
             album_context.track_paths,
             saved_cover_path,
             config=config,
             logger=logger,
+            cover_revision=cover_revision,
             cover_selection_origin="user",
             explicit_selection=True,
         )
@@ -909,11 +934,13 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
         config=config,
         logger=logger,
         library_state=library_state,
+        cover_revision=cover_revision,
     )
     return JSONResponse(
         {
             "ok": True,
             "selected_cover_path": str(saved_cover_path),
+            "cover_revision": cover_revision,
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,

@@ -923,6 +923,32 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-028 pasted cover revision reconciles album details, gallery, and mobile caches",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:manual-composer"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:pasted-cover-revision"
+    ],
+    "expectedContracts": [
+      "pasted-cover-revision-persistence",
+      "desktop-mobile-cover-cache-reconciliation"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:pasted-cover-revision",
+      "filesystemCopy": "media/cases/pasted-cover-revision"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-017 manual lookup progressively retains provider alternatives",
     "profile": "functional-core",
     "setupScope": "isolated",

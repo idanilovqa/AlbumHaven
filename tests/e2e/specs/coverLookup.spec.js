@@ -7,6 +7,7 @@ import {
   COVER_LOOKUP_TEST_TARGETS,
   findFixtureCoverBySubtitle,
 } from '../helpers/coverLookupFixtureData.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 
 const {
   cancelClear: CANCEL_CLEAR_TARGET,
@@ -139,6 +140,124 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     await coverLookupActions.closeModal();
     await trackModalActions.close();
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
+  });
+});
+
+test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, and mobile caches', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  page,
+  stepLogger,
+  trackModalActions,
+}) => {
+  const lookup = coverLookupActions.coverLookup;
+  const mobileLayout = new MobileLayoutPage(page);
+  const pickerName = 'album-haven-cloud-vinyl.png';
+  const pickerPath = path.resolve('music_app', 'static', 'images', pickerName);
+  let savedCoverPath = '';
+  let savedCoverRevision = '';
+  let savedPreviewHash = '';
+
+  await stepLogger.step('Save a staged image through the visible Cover Lookup controls', async () => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
+      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    await coverLookupActions.chooseComposerImages([pickerPath]);
+    await expect(lookup.pendingAttachmentByName(pickerName)).toBeVisible();
+    await lookup.manualExtractButton.click();
+    const stagedCover = lookup.stagedCoverCardByName(pickerName);
+    await expect(stagedCover).toBeVisible();
+    await coverLookupActions.selectOnlyCover(stagedCover);
+
+    const saveResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
+    ));
+    await lookup.saveRemoteButton.click();
+    const saveResponse = await saveResponsePromise;
+    const payload = await saveResponse.json();
+    expect(saveResponse.status()).toBe(200);
+    expect(payload.ok).toBe(true);
+    savedCoverPath = String(payload.selected_cover_path || '').trim();
+    savedCoverRevision = String(payload.cover_revision || '').trim();
+    expect(savedCoverPath).toMatch(/[\\/]cover\.jpg$/i);
+    expect(savedCoverRevision).toMatch(/^[a-f0-9]{64}$/i);
+    expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
+    expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
+    await expect(lookup.modal).toBeHidden();
+  });
+
+  await stepLogger.step('Use one saved revision for Album Details and full-size artwork', async () => {
+    await trackModalActions.waitForLoadedSummary();
+    const detailCover = await coverLookupActions.readDisplayedImageEvidence(
+      trackModalActions.trackModal.detailedCoverImage,
+      'pasted Album Details cover',
+      {
+        expectedCoverPath: savedCoverPath,
+        expectedCoverRevision: savedCoverRevision,
+      },
+    );
+    savedPreviewHash = detailCover.sha256;
+    const fullSizeCover = await coverLookupActions.readFullSizeCoverEvidence({
+      coverPath: savedCoverPath,
+      coverRevision: savedCoverRevision,
+      label: 'pasted authoritative cover',
+    });
+    expect(fullSizeCover.sha256).toBe(savedCoverRevision.toUpperCase());
+  });
+
+  await stepLogger.step('Keep Album Details and the gallery card reconciled at mobile width', async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileDetailCover = await coverLookupActions.readDisplayedImageEvidence(
+      trackModalActions.trackModal.detailedCoverImage,
+      'mobile pasted Album Details cover',
+      {
+        expectedCoverPath: savedCoverPath,
+        expectedCoverRevision: savedCoverRevision,
+      },
+    );
+    expect(mobileDetailCover.sha256).toBe(savedPreviewHash);
+    await trackModalActions.backFromMobilePage();
+    await mobileLayout.libraryButton.click();
+    await expect(mobileLayout.artistRail).toHaveAttribute('aria-hidden', 'false');
+    await mobileLayout.allArtists.click();
+    await expect(mobileLayout.home).toBeHidden();
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.scrollToAlbumUnderHeading(
+      USER_OWNED_IMPROVEMENT_TARGET.artist,
+      USER_OWNED_IMPROVEMENT_TARGET.album,
+    );
+    const cardCover = await coverLookupActions.readDisplayedImageEvidence(
+      galleryActions.albumCoverByName(USER_OWNED_IMPROVEMENT_TARGET.album),
+      'mobile pasted gallery cover',
+      {
+        expectedCoverPath: savedCoverPath,
+        expectedCoverRevision: savedCoverRevision,
+      },
+    );
+    expect(cardCover.sha256).toBe(savedPreviewHash);
+  });
+
+  await stepLogger.step('Reload the mobile gallery without reviving the prior cached cover', async () => {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.scrollToAlbumUnderHeading(
+      USER_OWNED_IMPROVEMENT_TARGET.artist,
+      USER_OWNED_IMPROVEMENT_TARGET.album,
+    );
+    const reloadedCardCover = await coverLookupActions.readDisplayedImageEvidence(
+      galleryActions.albumCoverByName(USER_OWNED_IMPROVEMENT_TARGET.album),
+      'reloaded mobile pasted gallery cover',
+      {
+        expectedCoverPath: savedCoverPath,
+        expectedCoverRevision: savedCoverRevision,
+      },
+    );
+    expect(reloadedCardCover.sha256).toBe(savedPreviewHash);
   });
 });
 

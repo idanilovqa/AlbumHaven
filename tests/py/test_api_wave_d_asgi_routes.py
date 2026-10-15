@@ -617,6 +617,33 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     assert next_cover_path != selected_cover_path
     assert delete_payload["gallery"]["active_cover_path"] == next_cover_path
 
+    from music_app.services import library_browse_postgres
+
+    hydrated_entry = dict(asgi_app.state.library_state["file_cache"][str(track_path)])
+    hydrated_entry["title"] = "Song"
+    hydrated_album = _album_payload(track_path)
+
+    class FakePostgresLibraryBrowseRepository:
+        def __init__(self, selected_config):
+            assert selected_config is app.config
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            assert track_paths == {str(track_path)}
+            return [hydrated_album]
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            assert track_paths == {str(track_path)}
+            return {str(track_path): hydrated_entry}
+
+    monkeypatch.setattr(
+        library_browse_postgres,
+        "PostgresLibraryBrowseRepository",
+        FakePostgresLibraryBrowseRepository,
+    )
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://fixture"
+    asgi_app.state.library_state["file_cache"] = {}
+    asgi_app.state.library_state["albums"] = []
+
     pasted_status, _pasted_headers, pasted_body = _run_asgi_request(
         asgi_app,
         "POST",
@@ -627,8 +654,12 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     assert pasted_status == 200
     pasted_payload = _decode_json(pasted_body)
     assert pasted_payload["selected_cover_path"] == selected_cover_path
+    pasted_revision = pasted_payload["cover_revision"]
+    assert pasted_revision
     assert pasted_payload["gallery"]["active_cover_path"] == selected_cover_path
+    assert pasted_payload["updated_album"]["cover_revision"] == pasted_revision
     assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_path"] == selected_cover_path
+    assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_revision"] == pasted_revision
     assert revision_loads
     assert snapshot_saves
     assert set(snapshot_saves) == {0}

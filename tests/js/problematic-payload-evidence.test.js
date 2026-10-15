@@ -42,7 +42,7 @@ test('network evidence counts repeated summary requests and releases its listene
         listener({ url: () => `http://localhost${route}` });
       }
     },
-  }, { async waitForReady() {} });
+  }, { async waitForFirstVisible() {}, async waitForReady() {} });
   assert.equal(evidence.summaryRequestCount, 3, 'Duplicate requests must remain observable');
   assert.equal(evidence.detailRequestCount, 1);
   assert.equal(released, true);

@@ -33,17 +33,13 @@ export async function measureProblematicFilesOpen(
   options = {},
 ) {
   const timeout = Number(options.timeout || 120000);
-  return measureActionTime(
+  return measureProblematicFilesReadiness(
     async () => {
       await settingsModalAppBarActions.openSettings();
       await utilityTabBarActions.openTab('problematic-files');
     },
-    async () => {
-      await utilityProblematicFilesActions.waitForReady({
-        timeout,
-        requirePopulated: true,
-      });
-    },
+    utilityProblematicFilesActions,
+    { ...options, timeout },
   );
 }
 
@@ -54,17 +50,32 @@ export async function measureProblematicFilesSettingsOpen(
 ) {
   const timeout = Number(options.timeout || 120000);
   await settingsModalAppBarActions.prepareToOpenSettings();
-  return measureActionTime(
+  return measureProblematicFilesReadiness(
     async () => {
       await settingsModalAppBarActions.openSettings();
     },
-    async () => {
-      await utilityProblematicFilesActions.waitForReady({
-        timeout,
-        requirePopulated: true,
-      });
-    },
+    utilityProblematicFilesActions,
+    { ...options, timeout },
   );
+}
+
+async function measureProblematicFilesReadiness(action, actions, options) {
+  const readyCheck = () => actions.waitForReady({ timeout: options.timeout, requirePopulated: true });
+  if (!options.onFirstVisible) return measureActionTime(action, readyCheck);
+  const startedAt = Date.now();
+  await action();
+  const [visible, ready] = await Promise.allSettled([
+    actions.waitForFirstVisible({ timeout: options.timeout, requirePopulated: true })
+      .then(() => {
+        const elapsed = Date.now() - startedAt;
+        options.onFirstVisible(elapsed);
+        return elapsed;
+      }),
+    readyCheck().then(() => Date.now() - startedAt),
+  ]);
+  if (ready.status === 'rejected') throw ready.reason;
+  if (visible.status === 'rejected') throw visible.reason;
+  return ready.value;
 }
 
 export async function readGalleryCoverPreemptionSnapshot(page) {
@@ -131,17 +142,27 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
       const url = new URL(response.url());
       return url.pathname === summaryPathname && !url.searchParams.has('limit');
     }, { timeout });
+    let firstVisibleMs;
+    const externalFirstVisible = options.onFirstVisible;
+    const timingOptions = {
+      ...options,
+      timeout,
+      onFirstVisible: (elapsed) => {
+        firstVisibleMs = elapsed;
+        externalFirstVisible?.(elapsed);
+      },
+    };
     const readyPromise = options.utilityTabBarActions
       ? measureProblematicFilesOpen(
         settingsModalAppBarActions,
         options.utilityTabBarActions,
         utilityProblematicFilesActions,
-        { ...options, timeout },
+        timingOptions,
       )
       : measureProblematicFilesSettingsOpen(
         settingsModalAppBarActions,
         utilityProblematicFilesActions,
-        { ...options, timeout },
+        timingOptions,
       );
     const [readyResult, summaryResponseResult, completeSummaryResponseResult] = await Promise.allSettled(
       [readyPromise, summaryResponsePromise, completeSummaryResponsePromise],
@@ -159,6 +180,7 @@ export async function measureProblematicFilesSettingsOpenWithNetworkEvidence(
     const viewPreemptionAfter = await readStartupViewPreemptionSnapshot(page);
     return {
       readyMs: readyResult.value,
+      firstVisibleMs,
       summaryResponse: summaryResponseResult.value,
       completeSummaryResponse: completeSummaryResponseResult.value,
       detailRequestCount: detailRequests.length,

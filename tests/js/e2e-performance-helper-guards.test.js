@@ -1366,7 +1366,7 @@ test('Problematic Files records timing classification before strict runtime-erro
   const helper = readRepoFile('tests/e2e/helpers/utilityPerformanceHelpers.js');
   const fixture = readRepoFile('tests/e2e/support/baseFixtures.js');
   const timingCheckpoint = spec.indexOf('recordTimingCheckpoint({');
-  const readinessClassification = spec.indexOf('recordTextCheckpoint({');
+  const readinessClassification = spec.indexOf("key: 'problematic-files-focused-readiness-contract'");
   const retainedMetrics = spec.indexOf('setMetricsPayload({');
   const hardAssertion = spec.indexOf('expectTimingBudgetOutcome(');
   const runtimePartition = spec.indexOf('partitionProblematicFilesRuntimeLogs(');

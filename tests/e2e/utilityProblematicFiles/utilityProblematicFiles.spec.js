@@ -47,6 +47,11 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
           timeout: 120000,
           summaryPathname: SUMMARY_PATHNAME,
           detailPathname: DETAIL_PATHNAME,
+          onFirstVisible: (elapsed) => problematicFilesFocusedLocalReport.recordTextCheckpoint({
+            key: 'problematic-files-first-visible-observed',
+            label: 'Problematic Files first visible populated detail (diagnostic)',
+            valueText: `${elapsed} ms from the Settings click boundary`,
+          }),
         },
       )
     ));
@@ -54,6 +59,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       coverPreemptionWindow,
       detailRequestCount,
       readyMs,
+      firstVisibleMs,
       summaryResponse,
       viewPreemptionWindow,
     } = networkEvidence;
@@ -95,6 +101,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       timingMs: readyMs,
       details: {
         phase: 'focused_utility_problematic_files',
+        firstVisibleMs,
         problematicItemCount: summary.items.length,
         firstSummaryDetailLoaded: firstSummary.detail_loaded,
         initialDetailKey: detail.key,
@@ -108,6 +115,11 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         persistenceSeam: summary.persistence_seam,
         viewDataSource: summary.view_data_source,
       },
+    });
+    problematicFilesFocusedLocalReport.recordTextCheckpoint({
+      key: 'problematic-files-first-visible',
+      label: 'Problematic Files first visible populated detail (diagnostic)',
+      valueText: `${firstVisibleMs} ms from the same Settings click boundary; full readiness ${readyMs} ms`,
     });
     problematicFilesFocusedLocalReport.recordTextCheckpoint({
       key: 'problematic-files-focused-readiness-contract',
@@ -124,6 +136,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       valueText: summarizeProblematicFilesDiagnostics(loadDiagnostics),
     });
     const focusedMetrics = {
+      firstVisibleMs,
       boundedResponseMs: await readCompletedResponseDurationMs(summaryResponse),
       completeResponseMs: await readCompletedResponseDurationMs(networkEvidence.completeSummaryResponse),
       summaryRequestCount: networkEvidence.summaryRequestCount,

@@ -1,45 +1,16 @@
 const path = require('node:path');
-const {buildSync} = require('esbuild');
+const {nativeDelivery} = require('./homeQueueNativeDelivery.cjs');
 const {test, expect} = require('@playwright/test');
 const root = path.resolve(__dirname, '../..');
 const shared = '[data-shared-header="fixture"]';
 const tools = page => page.locator(`${shared} [data-header-tools]`).locator('button').or(page.locator(`${shared} button[data-header-tools]`));
-// Isolated real-React/native-component fixture. This neither boots the server
+// Isolated actual-native-owner fixture. This neither boots the server
 // application nor substitutes its configuration, authentication, or providers.
-function browserBundle() {
-  return buildSync({stdin: {resolveDir: root, sourcefile: 'home-header-isolated-fixture.jsx', loader: 'jsx', contents: `
-    import React, {useState} from 'react';
-    import {createRoot} from 'react-dom/client';
-    import {flushSync} from 'react-dom';
-    import {SharedHeader, ListensBadge} from './music_app/static/js/home-friends/shared-header.jsx';
-    import {Button, Period} from './music_app/static/js/home-friends/components.jsx';
-    import {NativeChoice} from './music_app/static/js/home-friends/native-choice.jsx';
-    import {ProfileIdentity} from './music_app/static/js/home-friends/profile.jsx';
-    const runtime = {buttonHtml: x => window.ButtonComponent.renderButton(x), actionHtml: x => window.ButtonComponent.renderActionButton(x),
-      iconHtml: x => window.ButtonComponent.renderIconSvg(x), openChoice: (...args) => window.openUtilityChoiceDropdown(...args),
-      artboxHtml: x => window.buildAlbumArtboxHtml(x), alertHtml: x => window.buildOnPageAlertHtml(x), openAvatar() {}};
-    window.fixtureCalls = []; const owner = createRoot(document.querySelector('#fixture'));
-    function Fixture() {
-      const [revision, setRevision] = useState(0), [permitted, setPermitted] = useState(true), [period, setPeriod] = useState('week');
-      window.fixtureUpdate = patch => flushSync(() => {if ('permitted' in patch) setPermitted(patch.permitted); if ('period' in patch) setPeriod(patch.period); setRevision(x => x + 1);});
-      return <SharedHeader runtime={runtime} id="fixture" className="gallery-bar home-friends__page-header"
-        identity={<><ProfileIdentity runtime={runtime} profile={{display_name: 'Fixture Person', handle: 'fixture', avatar_url: null}}/>
-          <ListensBadge runtime={runtime} total={period === 'week' ? 7 : 28} range="Selected period"/></>}
-        leading={<Button runtime={runtime} icon="expand" onClick={() => window.fixtureCalls.push('expand')}>Full size</Button>}
-        actions={<><Button runtime={runtime} key="reset" onClick={() => window.fixtureCalls.push('reset:' + revision)}>Reset</Button>
-          <Period runtime={runtime} value={period} onChange={setPeriod}/>
-          <NativeChoice runtime={runtime} label="Rows" showLabel={false} value="all" options={[['all','All rows'],['few','Few rows']]} onChange={x => window.fixtureCalls.push('rows:' + x)}/>
-          <Button runtime={runtime} key="missing" disabled={!permitted} onClick={() => window.fixtureCalls.push('missing')}>Missing</Button></>}
-        outsideActions={<Button runtime={runtime} icon="cover" onClick={() => window.fixtureCalls.push('view')}>View</Button>}
-        finalAction={(window.fixtureFinalOrder || ['collapse']).map(icon => <Button key={icon} runtime={runtime} icon={icon}
-          onClick={() => window.fixtureCalls.push(icon)}>{({collapse: 'Collapse', more: 'More actions', close: 'Close'})[icon]}</Button>)}/>
-    }
-    flushSync(() => owner.render(<Fixture/>)); window.fixtureUnmount = () => flushSync(() => owner.unmount());
-  `}, bundle: true, platform: 'browser', format: 'iife', write: false}).outputFiles[0].text;
-}
 async function mount(page, width = 370, finalOrder = ['collapse']) {
   await page.setViewportSize({width, height: 700});
-  await page.setContent('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><main class="home-friends"><div id="fixture"></div></main><button id="outside">Outside target</button></body></html>');
+  const html = '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><main class="home-friends"><div id="fixture"></div></main><button id="outside">Outside target</button></body></html>';
+  await page.route('https://albumhaven.test/**', nativeDelivery(root, html, ['homeSharedHeaderEntry.mjs', 'homeNativeWrappersEntry.mjs']));
+  await page.goto('https://albumhaven.test/');
   for (const file of ['button-component.css', 'choice-component.css', 'gallery-main.css', 'runtime/trigger-anchor.css', 'runtime/home-friends.css', 'runtime/home-profile.css']) {
     await page.addStyleTag({path: path.join(root, 'music_app/static/css', file)});
   }
@@ -48,7 +19,7 @@ async function mount(page, width = 370, finalOrder = ['collapse']) {
     await page.addScriptTag({path: path.join(root, 'music_app/static/js', file)});
   }
   await page.evaluate(order => {window.fixtureFinalOrder = order;}, finalOrder);
-  await page.addScriptTag({content: browserBundle()});
+  await page.evaluate(() => {window.homeFixtureReady = import('/__home_queue_fixture__/homeSharedHeaderEntry.mjs'); return window.homeFixtureReady.then(() => undefined);});
   await expect(page.locator(shared)).toHaveCount(1);
 }
 async function compact(page) {
@@ -137,32 +108,7 @@ async function mountNativeWrappers(page) {
     await page.addScriptTag({path: path.join(root, 'music_app/static/js', file)});
   }
   await page.addStyleTag({path: path.join(root, 'music_app/static/css/unfolding-action-button.css')});
-  // A second bounded mounted-React fixture exercises the remaining wrappers.
-  // It mounts the real native tabs and unfolding owner, without app services.
-  const entry = `
-    import React, {useState} from 'react';
-    import {createRoot} from 'react-dom/client'; import {flushSync} from 'react-dom';
-    import {Tabs} from './music_app/static/js/home-friends/components.jsx';
-    import {ViewControl} from './music_app/static/js/home-friends/view-control.jsx';
-    const runtime = {
-      tabsHtml: config => window.buildInPageTabsHtml(config), mountTabs: host => window.mountInPageTabs(host),
-      viewChooserHtml: config => window.UnfoldingActionButton.render(config),
-      mountViewChooser: (host, config) => window.UnfoldingActionButton.mount(host, config),
-    };
-    window.wrapperCalls = [];
-    function Probe() {
-      const [revision, setRevision] = useState(0), [tab, setTab] = useState('recent'), [view, setView] = useState('grouped');
-      window.refreshWrappers = () => flushSync(() => setRevision(x => x+1));
-      return <><output data-probe-revision>{revision}</output>
-        <Tabs runtime={runtime} id="native-wrapper-tabs" label="Probe tabs" items={ [['recent','Recent'],['news','News']] }
-          value={tab} onChange={value => {window.wrapperCalls.push('tab:'+value); setTab(value);}}/>
-        <ViewControl runtime={runtime} kind="tracks" value={view} onChange={value => {window.wrapperCalls.push('view:'+value); setView(value);}}/></>;
-    }
-    flushSync(() => createRoot(document.querySelector('#fixture')).render(<Probe/>));
-  `;
-  const bundle = buildSync({stdin: {contents: entry, resolveDir: root, sourcefile: 'native-header-wrapper-probe.jsx', loader: 'jsx'},
-    bundle: true, platform: 'browser', format: 'iife', write: false}).outputFiles[0].text;
-  await page.addScriptTag({content: bundle});
+  await page.evaluate(() => {window.wrapperFixtureReady = import('/__home_queue_fixture__/homeNativeWrappersEntry.mjs'); return window.wrapperFixtureReady.then(() => undefined);});
 }
 
 function mountPlayerObstruction(page) {

@@ -1,9 +1,5 @@
-// Isolated component boundary: real React, QueuePanel and shared native owners.
-// This API supplies public DTOs only; it is not a server or full-app fixture.
-import React, {useState} from 'react';
-import {createRoot} from 'react-dom/client';
-import {flushSync} from 'react-dom';
-import {QueueHeader, QueuePanel} from '../../music_app/static/js/home-friends/queue.jsx';
+// Plain ES module retained at the historical fixture path; no JSX parser.
+import {mountQueueHeader, mountQueuePanel} from '/music_app/static/js/home-friends/queue.mjs';
 
 const listeners = new Set(), preferenceListeners = new Set(), pending = [];
 const identities = new Map([['one', 'opaque:shared'], ['two', 'opaque:shared'], ['other', 'opaque:other'], ['missing', 'opaque:missing']]);
@@ -15,10 +11,10 @@ let value = {enabled: true, revision: 1, entries: [
   {id: 'other', title: 'Same title', artist: 'Another artist', album: 'Album B', duration_seconds: 0, timing: 'next', sourceReadable: true, canPlay: true, ready: true, availability: 'local'},
   {id: 'missing', title: 'Readable missing', artist: 'Artist', album: 'Known album', duration_seconds: null, timing: 'next', sourceReadable: true, canPlay: false, ready: false, availability: 'missing'},
 ]};
-let scopeKey = 'own-session', setView;
+let scopeKey = 'own-session', disposed = false, selectedIds = [], header, panel;
 const calls = {love: [], plays: [], reorders: [], retimes: [], removes: [], clears: [], selection: [], choices: [], refresh: [], confirms: []};
-const publish = () => flushSync(() => {setView?.(old => old + 1); for (const listener of listeners) listener();});
-const publishPreferences = () => flushSync(() => {for (const listener of preferenceListeners) listener();});
+const publish = () => {render(); for (const listener of listeners) listener();};
+const publishPreferences = () => {for (const listener of preferenceListeners) listener();};
 const api = {
   getSnapshot: () => value,
   subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
@@ -49,14 +45,11 @@ const runtime = {
     return {close: () => {entry.closed = true;}, isOpen: true};
   },
 };
-const root = createRoot(document.getElementById('fixture'));
-function Fixture() {
-  const [, update] = useState(0); setView = update;
-  const [selectedIds, setSelectedIds] = useState([]);
-  return <><QueueHeader runtime={runtime} api={api} value={value}/>
-    <QueuePanel runtime={runtime} api={api} value={value} scopeKey={scopeKey} selectedIds={selectedIds}
-      onSelect={ids => {calls.selection.push(ids); setSelectedIds(ids);}}/></>;
-}
+const root = document.getElementById('fixture'), headerHost = document.createElement('div'), panelHost = document.createElement('div');
+root.append(headerHost, panelHost);
+function panelProps() {return {api, value, scopeKey, selectedIds, onSelect: ids => {calls.selection.push(ids); selectedIds = ids; render();}};}
+function render() {if (disposed) return; header?.update({api, value}); panel?.update(panelProps());}
+function unmount() {if (disposed) return; disposed = true; try {panel?.dispose();} finally {try {header?.dispose();} finally {root.replaceChildren();}}}
 window.queueFixture = {
   calls, api,
   acknowledge(index, tier) {
@@ -74,7 +67,7 @@ window.queueFixture = {
   patch(id, patch) {value = {...value, entries: value.entries.map(row => row.id === id ? {...row, ...patch} : row)}; publish(); publishPreferences();},
   revoke(id) {preferences.delete(identities.get(id)); publishPreferences();},
   changeScope() {scopeKey = 'replacement-session'; publish();},
-  unmount() {flushSync(() => root.unmount());},
+  unmount,
   preferenceSubscribers: () => preferenceListeners.size,
 };
-flushSync(() => root.render(<Fixture/>));
+try {header = mountQueueHeader(headerHost, runtime, {api, value}); panel = mountQueuePanel(panelHost, runtime, panelProps());} catch (error) {unmount(); throw error;}

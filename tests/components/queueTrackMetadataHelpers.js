@@ -1,7 +1,7 @@
-// Component regression only. Real browser/React/native renderers, isolated API
+// Component regression only. Real browser/native renderers, isolated API
 // responses. No Postgres, transport, full-app or end-to-end acceptance claim.
 const path = require('node:path');
-const {buildSync} = require('esbuild');
+const {nativeDelivery} = require('./homeQueueNativeDelivery.cjs');
 const {test, expect} = require('@playwright/test');
 const root = path.resolve(__dirname, '../..');
 const errors = new WeakMap();
@@ -10,7 +10,9 @@ const love = (page, id) => row(page, id).locator('[data-track-love]');
 async function mount(page, width = 390) {
   const failures = []; errors.set(page, failures); page.on('pageerror', error => failures.push(String(error)));
   await page.setViewportSize({width, height: 800});
-  await page.setContent('<!doctype html><html><body><main id="fixture"></main><button id="outside">Outside</button></body></html>');
+  const html = '<!doctype html><html><body><main id="fixture"></main><button id="outside">Outside</button></body></html>';
+  await page.route('https://albumhaven.test/**', nativeDelivery(root, html, ['queueTrackMetadataFixture.jsx']));
+  await page.goto('https://albumhaven.test/');
   for (const file of ['button-component.js', 'runtime/markup-format-helpers.js', 'runtime/compact-data-table.js']) {
     await page.addScriptTag({path: path.join(root, 'music_app/static/js', file)});
   }
@@ -18,9 +20,7 @@ async function mount(page, width = 390) {
     await page.addStyleTag({path: path.join(root, 'music_app/static/css', file)});
   }
   await page.addStyleTag({content: 'body{margin:0}main{width:100%;min-width:0}'});
-  const bundle = buildSync({entryPoints: [path.join(__dirname, 'queueTrackMetadataFixture.jsx')], bundle: true,
-    platform: 'browser', format: 'iife', write: false}).outputFiles[0].text;
-  await page.addScriptTag({content: bundle});
+  await page.evaluate(() => {window.queueFixtureReady = import('/__home_queue_fixture__/queueTrackMetadataFixture.mjs'); return window.queueFixtureReady.then(() => undefined);});
   await expect(row(page, 'one')).toHaveCount(1);
 }
 test.afterEach(async ({page}) => {expect(errors.get(page) || [], 'Browser runtime errors').toEqual([]);});

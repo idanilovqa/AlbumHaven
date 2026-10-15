@@ -37,11 +37,6 @@
   },
   "homepage": "https://github.com/idanilovqa/AlbumHaven#readme",
   "devDependencies": {
-    "@playwright/test": "1.61.1",
-    "esbuild": "0.25.12"
-  },
-  "dependencies": {
-    "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "@playwright/test": "1.61.1"
   }
 }

@@ -1,30 +1,25 @@
-// Real Chromium DOM + unchanged production React/native renderers. Isolated DTOs,
+// Real Chromium DOM + actual production native renderers. Isolated DTOs,
 // no server routes, database, global Rating mutation or app-E2E claim.
 const {test}=require("@playwright/test");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path");
 const root=path.resolve(__dirname,"../..");
 const pageErrors=new WeakMap();
-test.afterEach(async ({page})=>assert.deepEqual(pageErrors.get(page)||[],[],"No browser runtime errors"));
-const {buildSync}=require('esbuild');
-const entry=`
-import React from 'react';
-import {createRoot} from 'react-dom/client';
-import {flushSync} from 'react-dom';
-import {PlaylistTracks} from './music_app/static/js/playlists/track-table.jsx';
-import {ActivityPanel} from './music_app/static/js/home-friends/activity.jsx';
-import {bindTrackTablePresentation} from './music_app/static/js/playtables/track-table-presentation.mjs';
-window.componentFixture={React,createRoot,flushSync,PlaylistTracks,ActivityPanel,bindTrackTablePresentation};`;
-const bundle=buildSync({stdin:{contents:entry,resolveDir:root,loader:'jsx'},bundle:true,write:false,platform:'browser',format:'iife'}).outputFiles[0].text;
+test.afterEach(async ({page})=>{
+ try {if(!page.isClosed()) await page.evaluate(()=>{try {window.nativeConsumerOwner?.dispose();} finally {window.binding?.dispose();}});}
+ finally {assert.deepEqual(pageErrors.get(page)||[],[],"No browser runtime errors");}
+});
+const {nativeDelivery}=require('./mobileTrackColumnsNativeDelivery.cjs');
 async function mount(page,width=390){
  await page.setViewportSize({width,height:800});const errors=[];pageErrors.set(page,errors);
  page.on("pageerror",error=>errors.push(String(error)));
- await page.setContent('<!doctype html><html><head></head><body><main id="root"></main></body></html>');
+ await page.route('https://albumhaven.test/**',nativeDelivery(root,'<!doctype html><html><head></head><body><main id="root"></main></body></html>',['mobileTrackColumnsNativeEntry.mjs']));
+ await page.goto('https://albumhaven.test/');
  for(const file of ['js/button-component.js','js/runtime/markup-format-helpers.js','js/runtime/loader-status-helpers.js','js/runtime/alert-components.js','js/runtime/album-artbox.js','js/runtime/gallery-main-components.js','js/runtime/gallery-card-component.js','js/runtime/album-details-components.js','js/runtime/compact-data-table.js','js/runtime/album-track-table.js'])
   await page.addScriptTag({content:fs.readFileSync(path.join(root,'music_app/static',file),'utf8')});
  for(const file of ['css/button-component.css',...new Set([...fs.readFileSync(path.join(root,'music_app/templates/index.html'),'utf8').matchAll(/css\/([a-zA-Z0-9_\/-]+\.css)/g)].map(match=>'css/'+match[1]))])
   await page.addStyleTag({content:fs.readFileSync(path.join(root,'music_app/static',file),'utf8')});
  await page.addStyleTag({content:'body{margin:0;overflow:auto;height:auto}main{width:100%;min-width:0}'});
- await page.addScriptTag({content:bundle});
+ await page.evaluate(()=>import('/__mobile_columns_fixture__/mobileTrackColumnsNativeEntry.mjs').then(()=>undefined));
  await page.evaluate(()=>{
   window.calls={choices:[],changes:[],inspects:[],plays:[],reorders:[],closed:0};
   window.runtime={escapeHtml,tableHtml:buildCompactDataTable,buttonHtml:c=>ButtonComponent.renderButton(c),actionHtml:c=>ButtonComponent.renderActionButton(c),
@@ -68,14 +63,17 @@ function waitForVisibleRating(page, rating) {
 
 async function renderConsumer(page,kind,id='A'){
  await page.evaluate(({kind,id})=>{
-  const f=componentFixture;window.reactRoot ||= f.createRoot(document.querySelector('#root'));
+  const f=componentFixture;
   const row={id:'recent:one',row_key:'item:one',playlist_item_id:'one',kind:'track',source_readable:true,title:'Subject track',artist:'Subject artist',album_title:'Subject album',availability:'missing',duration_seconds:130,duration_display:'2:10',rating:4,track_rating:4,love_tier:'loved',listen_count:7,play_count:7,popularity_count:81,last_listened_at:'2026-10-10T10:00:00Z'};
   window.row=row;window.detail={playlist_id:id,title:'List '+id,track_rows:[row],items_complete:true,author_order:true,allowed_actions:{can_play:false,can_edit:false,can_reorder:false}};
   window.state={scopeKey:'owner',selectedPlaylistId:id,resource:{status:'ready',data:{detail}},mutation:{status:'idle'},drafts:{},filters:{}};
   const controller={getSnapshot:()=>state,reorder:ids=>calls.reorders.push(ids)};
   const props=kind==='playlist'?{runtime,rows:[row],detail,state,controller,onSelect:r=>calls.inspects.push(r),onError:()=>{}}:
    {runtime,value:{status:'ready',data:{rows:[row]}},kind:'tracks',scopeKey:'owner',account_ref:id,period:'week',onTracksSelect:ids=>calls.inspects.push(ids),selectedTrackIds:[]};
-  f.flushSync(()=>reactRoot.render(f.React.createElement(kind==='playlist'?f.PlaylistTracks:f.ActivityPanel,props)));
+  if(window.nativeConsumerKind!==kind){window.nativeConsumerOwner?.dispose();window.nativeConsumerOwner=null;}
+  if(window.nativeConsumerOwner)nativeConsumerOwner.update(props);
+  else window.nativeConsumerOwner=(kind==='playlist'?f.mountPlaylistTracks:f.mountActivityPanel)(document.querySelector('#root'),runtime,props);
+  window.nativeConsumerKind=kind;
  },{kind,id});
  await page.locator('[data-track-table-columns]').waitFor();
 }

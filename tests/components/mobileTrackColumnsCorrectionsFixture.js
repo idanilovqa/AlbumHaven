@@ -4,17 +4,20 @@ const {test}=require("@playwright/test");
 const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path");
 const root=path.resolve(__dirname,"../..");
 const pageErrors=new WeakMap();
-test.afterEach(async ({page})=>assert.deepEqual(pageErrors.get(page)||[],[],"No browser runtime errors"));
-const {buildSync}=require("esbuild");
-const bundle=buildSync({stdin:{contents:`import {bindTrackTablePresentation} from './music_app/static/js/playtables/track-table-presentation.mjs';import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';import {PlaylistTracks} from './music_app/static/js/playlists/track-table.jsx';window.bindTrackTablePresentation=bindTrackTablePresentation;window.playlistFixture={React,createRoot,flushSync,PlaylistTracks};`,resolveDir:root},bundle:true,write:false,platform:'browser',format:'iife'}).outputFiles[0].text;
+test.afterEach(async ({page})=>{
+ try {if(!page.isClosed()) await page.evaluate(()=>{try {window.nativeConsumerOwner?.dispose();} finally {window.binding?.dispose();}});}
+ finally {assert.deepEqual(pageErrors.get(page)||[],[],"No browser runtime errors");}
+});
+const {nativeDelivery}=require('./mobileTrackColumnsNativeDelivery.cjs');
 async function fixture(page){
  await page.setViewportSize({width:390,height:800});const errors=[];pageErrors.set(page,errors);page.on("pageerror",error=>errors.push(String(error)));
- await page.setContent('<!doctype html><main id="host"></main><button id="outside">Outside</button>');
+ await page.route('https://albumhaven.test/**',nativeDelivery(root,'<!doctype html><main id="host"></main><button id="outside">Outside</button>',['mobileTrackColumnsNativeEntry.mjs']));
+ await page.goto('https://albumhaven.test/');
  for(const file of ['button-component.js','runtime/markup-format-helpers.js','runtime/loader-status-helpers.js','runtime/alert-components.js','runtime/album-artbox.js','runtime/gallery-main-components.js','runtime/album-details-components.js','runtime/compact-data-table.js','runtime/album-track-table.js','runtime/trigger-anchor.js','runtime/library-settings.js'])await page.addScriptTag({content:fs.readFileSync(path.join(root,'music_app/static/js',file),'utf8')});
  const styles=['button-component.css',...new Set([...fs.readFileSync(path.join(root,'music_app/templates/index.html'),'utf8').matchAll(/css\/([a-zA-Z0-9_\/-]+\.css)/g)].map(m=>m[1]))];
  for(const file of styles)await page.addStyleTag({content:fs.readFileSync(path.join(root,'music_app/static/css',file),'utf8')});
  await page.addStyleTag({content:'body{margin:0;height:auto;overflow:auto}#host{width:390px;max-width:100%;min-width:0}'});
- await page.addScriptTag({content:bundle});
+ await page.evaluate(()=>import('/__mobile_columns_fixture__/mobileTrackColumnsNativeEntry.mjs').then(()=>undefined));
  await page.evaluate(()=>{
   const columns=[{key:'title',label:'Track',width:140,identity:true},{key:'love',label:'Love',width:36,required:true},{key:'rating',label:'Rating',width:80},{key:'duration',label:'Length',width:56,required:true,sortable:true}];
   const host=document.querySelector('#host');
@@ -52,8 +55,8 @@ async function mountLongPlaylistTitle(page) {
   const rows=[{row_key:'item:one',playlist_item_id:'one',source_readable:true,title:'A very long production Playlist track title that must end in an ellipsis inside the flexible artwork identity area instead of merely clipping at the cell edge',artist:'Subject artist',album_title:'Subject album',availability:'missing',duration_seconds:130,love_tier:'loved'}];
   const detail={playlist_id:'ellipsis',title:'Ellipsis fixture',track_rows:rows,items_complete:true,author_order:true,allowed_actions:{can_play:false,can_edit:false,can_reorder:false}};
   const state={scopeKey:'owner',selectedPlaylistId:'ellipsis',resource:{status:'ready',data:{detail}},mutation:{status:'idle'},drafts:{},filters:{}};
-  const f=playlistFixture;window.reactRoot=f.createRoot(document.querySelector('#host'));
-  f.flushSync(()=>reactRoot.render(f.React.createElement(f.PlaylistTracks,{runtime,rows,detail,state,controller:{getSnapshot:()=>state},onSelect:()=>{},onError:()=>{}})));
+  window.nativeConsumerOwner?.dispose();
+  window.nativeConsumerOwner=componentFixture.mountPlaylistTracks(document.querySelector('#host'),runtime,{rows,detail,state,controller:{getSnapshot:()=>state},onSelect:()=>{},onError:()=>{}});
  });
 }
 

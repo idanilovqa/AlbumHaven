@@ -1431,7 +1431,8 @@ class VirtualArtistGrid {
 
   applyArtistTreeSettlement(resizeOptions = null) {
     const anchor = this.captureScrollAnchor();
-    this.onResize(resizeOptions || { preserveCardTrackWidth: true });
+    if (resizeOptions) this.onResize(resizeOptions);
+    this.onResize({ preserveCardTrackWidth: true });
     if (anchor && !this._resetScrollAfterMeasure) {
       this.stabilizeScrollAfterMeasurement(anchor);
       // Reflow can virtualize the old anchor. Mount its restored row before

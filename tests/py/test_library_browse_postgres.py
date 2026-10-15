@@ -1529,7 +1529,11 @@ def test_selected_family_alias_chips_keep_independent_variations_with_constant_i
         or [_browse_album_row(artist="Family Alias", album_id=2, album_key="family", title="Family")],
     )
 
-    payload = repository.build_selected_artist_payload(query_params={"artist": "Primary Alias"})
+    phase_ms = {}
+    payload = repository.build_selected_artist_payload(
+        query_params={"artist": "Primary Alias"},
+        _search_phase_ms=phase_ms,
+    )
 
     assert selected_calls == [["Primary", "Primary Alias"]]
     assert family_calls == [["Primary", "Primary Alias", "Family", "Family Alias"]]
@@ -1545,6 +1549,18 @@ def test_selected_family_alias_chips_keep_independent_variations_with_constant_i
     assert [group["artist"] for group in payload["primary_artist_groups"]] == ["Primary"]
     assert [group["artist"] for group in payload["family_artist_groups"]] == ["Family"]
     assert payload["non_album_tracks_deferred"] is True
+    assert {
+        "selected_support_state",
+        "selected_family_context",
+        "selected_family_preview",
+        "selected_duplicate_overlay",
+        "selected_rating_overlay",
+        "selected_remaining",
+    } <= set(phase_ms)
+    assert all(
+        isinstance(value, (int, float)) and value >= 0
+        for value in phase_ms.values()
+    )
     assert [kind for kind, _sql, _params in inventory["queries"]] == ["support"]
 
 

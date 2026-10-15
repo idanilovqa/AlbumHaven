@@ -65,7 +65,9 @@ def test_search_payload_phase_diagnostics_are_numeric_and_private_free(caplog):
     assert "album-key" not in message
 
 
-def test_exact_artist_search_path_emits_phase_diagnostics(monkeypatch):
+def test_exact_artist_search_path_emits_selected_payload_subphase_diagnostics(
+    monkeypatch,
+):
     repository = browse.PostgresLibraryBrowseRepository(
         {
             "ALBUM_HAVEN_APP_DATABASE_URL": (
@@ -87,10 +89,26 @@ def test_exact_artist_search_path_emits_phase_diagnostics(monkeypatch):
         "primary_artist_groups": [],
         "family_artist_groups": [],
     }
+
+    def build_selected_artist_payload(**kwargs):
+        phase_ms = kwargs.get("_search_phase_ms")
+        assert isinstance(phase_ms, dict)
+        phase_ms.update(
+            {
+                "selected_support_state": 1.0,
+                "selected_family_context": 2.0,
+                "selected_family_preview": 3.0,
+                "selected_duplicate_overlay": 4.0,
+                "selected_rating_overlay": 5.0,
+                "selected_remaining": 6.0,
+            }
+        )
+        return delegated_payload
+
     monkeypatch.setattr(
         repository,
         "build_selected_artist_payload",
-        lambda **_kwargs: delegated_payload,
+        build_selected_artist_payload,
     )
     monkeypatch.setattr(
         repository,
@@ -128,7 +146,17 @@ def test_exact_artist_search_path_emits_phase_diagnostics(monkeypatch):
     assert timing["payload"] is payload
     assert timing["exact_artist_match"] is True
     assert timing["omit_sidebar"] is True
-    assert {"aliases", "selected_payload", "finalize"} <= set(timing["phase_ms"])
+    assert {
+        "aliases",
+        "selected_payload",
+        "selected_support_state",
+        "selected_family_context",
+        "selected_family_preview",
+        "selected_duplicate_overlay",
+        "selected_rating_overlay",
+        "selected_remaining",
+        "finalize",
+    } <= set(timing["phase_ms"])
     assert all(
         isinstance(value, (int, float)) and value >= 0
         for value in timing["phase_ms"].values()

@@ -1032,6 +1032,7 @@ class PostgresLibraryBrowseRepository:
         _selected_artist_preview_rows: list[object] | None = None,
         _search_missing_album_rows: list[object] | None = None,
         _exclude_primary_from_family_preview: bool = False,
+        _search_phase_ms: dict[str, float] | None = None,
         _connection: Any | None = None,
     ) -> dict[str, object]:
         if _connection is None:
@@ -1049,8 +1050,15 @@ class PostgresLibraryBrowseRepository:
                     _exclude_primary_from_family_preview=(
                         _exclude_primary_from_family_preview
                     ),
+                    _search_phase_ms=_search_phase_ms,
                     _connection=connection,
                 )
+        selected_payload_started_at = (
+            perf_counter() if _search_phase_ms is not None else None
+        )
+        selected_subphase_ms: dict[str, float] | None = (
+            {} if _search_phase_ms is not None else None
+        )
         view_state = _root_sidebar_view_state(query_params)
         query = str((query_params or {}).get("q") or "").strip()
         requested_artist = str((query_params or {}).get("artist") or "").strip()
@@ -1059,9 +1067,15 @@ class PostgresLibraryBrowseRepository:
             _relation_alias_maps
             or self._load_relation_alias_maps(connection=_connection)
         )
+        if selected_subphase_ms is not None:
+            support_state_started_at = perf_counter()
         support_state = self._inventory_repository.load_support_state(
             connection=_connection,
         )
+        if selected_subphase_ms is not None:
+            selected_subphase_ms["selected_support_state"] = (
+                perf_counter() - support_state_started_at
+            ) * 1000
         alias_to_canonical = dict(relation_alias_maps.get("alias_to_canonical") or {})
         canonical_to_aliases = dict(relation_alias_maps.get("canonical_to_aliases") or {})
         cached_primary_aliases = relation_alias_maps.get(
@@ -1109,6 +1123,8 @@ class PostgresLibraryBrowseRepository:
                     loaded_search_rows,
                     selected_artist_alias_to_canonical,
                 )
+        if selected_subphase_ms is not None:
+            family_context_started_at = perf_counter()
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
             config=self._config,
@@ -1117,6 +1133,10 @@ class PostgresLibraryBrowseRepository:
             canonical_to_aliases=canonical_to_aliases,
             connection=_connection,
         )
+        if selected_subphase_ms is not None:
+            selected_subphase_ms["selected_family_context"] = (
+                perf_counter() - family_context_started_at
+            ) * 1000
         selected_scope_keys = {
             local_inventory_identity_key(artist) for artist in selected_artist_scope
         }
@@ -1256,6 +1276,8 @@ class PostgresLibraryBrowseRepository:
             library_non_album_entries,
             config=self._config,
         )
+        if selected_subphase_ms is not None:
+            family_preview_started_at = perf_counter()
         family_preview_rows = (
             self._load_artist_preview_rows(
                 [
@@ -1292,6 +1314,10 @@ class PostgresLibraryBrowseRepository:
                 )
                 in query_album_pairs
             ]
+        if selected_subphase_ms is not None:
+            family_preview_elapsed_ms = (
+                perf_counter() - family_preview_started_at
+            ) * 1000
         primary_artist_groups = _selected_artist_primary_groups(
             artist_display,
             albums,
@@ -1300,6 +1326,8 @@ class PostgresLibraryBrowseRepository:
             canonical_to_aliases=family_context["canonical_to_aliases"],
         )
         reusable_primary_artist_groups = list(primary_artist_groups)
+        if selected_subphase_ms is not None:
+            family_preview_grouping_started_at = perf_counter()
         family_artist_groups = _selected_artist_family_groups_from_preview_rows(
             family_artists,
             family_preview_rows,
@@ -1307,6 +1335,11 @@ class PostgresLibraryBrowseRepository:
             canonical_to_aliases=family_context["canonical_to_aliases"],
         )
         sidebar_family_artist_groups = list(family_artist_groups)
+        if selected_subphase_ms is not None:
+            selected_subphase_ms["selected_family_preview"] = (
+                family_preview_elapsed_ms
+                + (perf_counter() - family_preview_grouping_started_at) * 1000
+            )
         requested_related_artists = _query_param_list(query_params, "related_artist")
         primary_filter_requested = _request_flag(
             (query_params or {}).get("primary_filter")
@@ -1401,6 +1434,8 @@ class PostgresLibraryBrowseRepository:
                     query=query,
                 )
             )
+        if selected_subphase_ms is not None:
+            duplicate_overlay_started_at = perf_counter()
         self._attach_duplicate_sources(
             _album_payloads_from_groups([
                 *artist_groups,
@@ -1410,6 +1445,11 @@ class PostgresLibraryBrowseRepository:
             connection=_connection,
             defer_on_cache_miss=True,
         )
+        if selected_subphase_ms is not None:
+            selected_subphase_ms["selected_duplicate_overlay"] = (
+                perf_counter() - duplicate_overlay_started_at
+            ) * 1000
+            rating_overlay_started_at = perf_counter()
         self._apply_private_album_rating_overlays(
             _album_payloads_from_groups(
                 [
@@ -1422,6 +1462,10 @@ class PostgresLibraryBrowseRepository:
             connection=_connection,
             ensure_gallery_summary=use_summary_albums,
         )
+        if selected_subphase_ms is not None:
+            selected_subphase_ms["selected_rating_overlay"] = (
+                perf_counter() - rating_overlay_started_at
+            ) * 1000
         selected_artist_family_filters = _selected_artist_family_filter_payloads(
             artist_display,
             family_artists,
@@ -1559,6 +1603,17 @@ class PostgresLibraryBrowseRepository:
                 else artist_groups if artist_groups else [*primary_artist_groups, *family_artist_groups]
             ),
         )
+        if (
+            _search_phase_ms is not None
+            and selected_subphase_ms is not None
+            and selected_payload_started_at is not None
+        ):
+            _search_phase_ms.update(selected_subphase_ms)
+            _search_phase_ms["selected_remaining"] = max(
+                0.0,
+                (perf_counter() - selected_payload_started_at) * 1000
+                - sum(selected_subphase_ms.values()),
+            )
         return payload
 
     def build_album_detail_payload(
@@ -1996,6 +2051,7 @@ class PostgresLibraryBrowseRepository:
                 _selected_artist_preview_rows=selected_artist_preview_rows,
                 _search_missing_album_rows=search_missing_album_rows,
                 _exclude_primary_from_family_preview=True,
+                _search_phase_ms=phase_ms,
                 _connection=connection,
             )
             phase_ms["selected_payload"] = (

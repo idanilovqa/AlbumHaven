@@ -1,41 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const Module = require('node:module');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime, buttonNamed} = require('./native-home-harness.cjs');
-const repo = path.resolve(__dirname, '../../..');
+const {buttonNamed} = require('./native-home-harness.cjs');
+const {filterFixture} = require('./playlist-filter-native-fixture.cjs');
 let model, components;
 test.before(async () => {
   model = await import('../../../music_app/static/js/playlists/filters.mjs');
-  const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/playlists/directory-filters.jsx')],
-    bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react']});
-  const loaded = new Module(path.join(repo, 'playlist-filter-render-fixture.cjs'), module);
-  loaded.filename = path.join(repo, 'playlist-filter-render-fixture.cjs'); loaded.paths = module.paths;
-  loaded._compile(built.outputFiles[0].text, loaded.filename); components = loaded.exports;
+  components = await import('../../../music_app/static/js/playlists/native-directory-filters.mjs');
 });
 const NOW = Date.parse('2026-10-08T12:00:00Z');
 const fact = patch => model.normalizePlaylistFacts(patch);
 const matches = (row, filters, now = NOW) => model.matchesPlaylistFilters(fact(row), filters, now);
-function nativeRuntime() {
-  const native = createNativeHomeRuntime();
-  for (const file of ['trigger-anchor.js', 'library-settings.js']) {
-    vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime', file), 'utf8'), native.context);
-  }
-  const template = native.document.createElement('script'); template.setAttribute('id', 'navigation-tree-item-template');
-  template.textContent = fs.readFileSync(path.join(repo, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
-  native.document.body.appendChild(template);
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/navigation-tree.js'), 'utf8'), native.context);
-  return {native, runtime: {buttonHtml: config => native.context.ButtonComponent.renderButton(config),
-    openChoice: native.context.openUtilityChoiceDropdown,
-    actionHtml: config => native.context.ButtonComponent.renderActionButton(config),
-    navigationItemHtml: config => native.context.window.NavigationTree.renderItem(config), escapeHtml: native.context.escapeHtml}};
-}
-
 test('optional facts normalize exact explicit values and retain unknown separately from zero/empty', () => {
   const input = {love_tier: 'loved', styles: [' Rock ', 'Rock', 'Ambient'], duration_seconds: 0,
     added_at: '2026-10-07T12:00:00Z', listen_count: 0, last_listened_at: null, last_listened_known: true};
@@ -155,43 +129,51 @@ test('grouping only trusts exact own playlist_kind and preserves provider order'
   assert.equal(groups.manual[0], items[0]); assert.equal(Object.isFrozen(groups.manual), true);
 });
 test('native group headings provide disclosure semantics and exact-grant disabled rows', () => {
-  const {runtime, native} = nativeRuntime();
-  const html = renderToStaticMarkup(React.createElement(components.PlaylistGroupedDirectory, {runtime, selectedPlaylistId: 'one', items: [
+  const native = filterFixture(), {runtime} = native;
+  const host = native.host;
+  const owner = components.mountPlaylistGroupedDirectory(host, runtime, {selectedPlaylistId: 'one', items: [
     {playlist_id: 'one', title: '<Mine>', playlist_kind: 'manual', item_count: 0, allowed_actions: {can_open: true}},
     {playlist_id: 'two', title: 'Locked', playlist_kind: 'autoplaylist', allowed_actions: {can_open: 'true'}},
     {playlist_id: 'three', title: 'Unclassified', allowed_actions: {}},
-  ]}));
+  ]});
+  const html = host.outerHTML;
   assert.match(html, /navigation-tree/); assert.match(html, /&lt;Mine&gt;/); assert.match(html, /Autoplaylists/); assert.match(html, /Other playlists/);
   assert.match(html, /aria-expanded="true"/); assert.match(html, /aria-controls=/); assert.match(html, /aria-current="true"/);
-  const host = native.document.createElement('div'); host.innerHTML = html;
   assert.equal(host.querySelector('[data-playlist-group-item="two"]').disabled, true);
   assert.equal(host.querySelector('[data-playlist-group-item="one"]').disabled, false);
   assert.equal(components.playlistDisclosureState(false, 'ArrowLeft'), true);
   assert.equal(components.playlistDisclosureState(true, 'ArrowRight'), false);
-  assert.equal(components.playlistDisclosureState(true, 'Home'), true);
+  assert.equal(components.playlistDisclosureState(true, 'Home'), true); owner.dispose();
 });
 test('filter leaves expose exact v54 fields, conditional Match and truthful unknown note', () => {
-  const {runtime, native} = nativeRuntime(), rows = [
+  const native = filterFixture(), {runtime, host} = native, rows = [
     {styles: ['Rock', 'Ambient']}, {styles: ['Private'], source_readable: false},
   ];
-  const render = filters => renderToStaticMarkup(React.createElement(components.PlaylistFilterControls, {runtime, rows, filters}));
   const filters = {love: 'obsessed', style: 'Absent selection', frequency: 'mid', frequencyMode: 'exclude'};
-  const html = render(filters), host = native.document.createElement('div'); host.innerHTML = html;
+  const owner = components.mountPlaylistFilterControls(host, runtime, {rows, filters});
+  const render = filters => {owner.update({rows, filters}); return host.outerHTML;};
+  const html = host.outerHTML;
   for (const name of ['Love: Only obsessed', 'Style: Absent selection', 'Length: Any length', 'Added: Any time',
     'Listening: Mid (10–19)', 'Match: Filter these out']) {
     const trigger = host.querySelector(`button[aria-label="${name}"]`); assert.ok(trigger, name);
     assert.equal(trigger.getAttribute('aria-haspopup'), 'menu'); assert.equal(trigger.disabled, false);
   }
-  const choices = React.Children.toArray(components.PlaylistFilterControls({runtime, rows, filters}).props.children)
-    .filter(child => child.type?.name === 'NativeChoice');
-  assert.deepEqual(choices.find(child => child.props.label === 'Love').props.options,
+  function choices(name) {
+    native.click(host.querySelector(`button[aria-label="${name}"]`));
+    const menu = native.document.querySelector('[role="menu"]'); assert.ok(menu);
+    const options = menu.querySelectorAll('[role="menuitemradio"]').map(button => [button.getAttribute('data-foobar-format'), button.textContent]);
+    menu.dispatchEvent(new native.context.Event('keydown', {key: 'Tab'}));
+    return options;
+  }
+  assert.deepEqual(choices('Love: Only obsessed'),
     [['all', 'Any love'], ['loved', 'Only loved'], ['obsessed', 'Only obsessed']]);
-  assert.deepEqual(choices.find(child => child.props.label === 'Style').props.options,
+  assert.deepEqual(choices('Style: Absent selection'),
     [['', 'Any style'], ['Ambient', 'Ambient'], ['Rock', 'Rock'], ['Absent selection', 'Absent selection']]);
   assert.match(html, /Unknown filter values remain visible/); assert.doesNotMatch(html, /Private/);
   assert.equal(host.querySelector('select'), null);
   assert.doesNotMatch(render({}), /aria-label="Match:/);
   assert.match(render({includeUnknown: false}), /Unknown filter values are excluded/);
+  owner.dispose();
 });
 test('invalid or missing last-listen timestamps cannot become a confirmed never-listened fact', () => {
   for (const patch of [{last_listened_at: 'bad'}, {}]) {
@@ -222,12 +204,13 @@ test('generic Any love includes known off as well as loved and obsessed', () => 
   for (const love_tier of ['off', 'loved', 'obsessed']) assert.equal(matches({love_tier}, {love: 'all'}), true);
 });
 test('parent reset grant composes outer filters without adding query or availability logic to the leaf', () => {
-  const {runtime, native} = nativeRuntime();
-  const host = native.document.createElement('div');
-  const render = props => renderToStaticMarkup(React.createElement(components.PlaylistFilterControls, {runtime, filters: {}, ...props}));
-  host.innerHTML = render({}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
-  host.innerHTML = render({canReset: true}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, false);
-  host.innerHTML = render({canReset: true, disabled: true}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
-  host.innerHTML = render({filters: {love: 'loved'}, canReset: false}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
-  host.innerHTML = render({canReset: 'true'}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
+  const native = filterFixture(), {runtime, host} = native;
+  const owner = components.mountPlaylistFilterControls(host, runtime, {filters: {}});
+  const render = props => owner.update({filters: {}, ...props});
+  render({}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
+  render({canReset: true}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, false);
+  render({canReset: true, disabled: true}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
+  render({filters: {love: 'loved'}, canReset: false}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
+  render({canReset: 'true'}); assert.equal(buttonNamed(host, /^Reset filters$/).disabled, true);
+  owner.dispose();
 });

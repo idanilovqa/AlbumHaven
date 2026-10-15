@@ -44,6 +44,7 @@ function expectGestureStable(samples, direction, commandedDistance) {
   expect(coordinates.every(Number.isFinite)).toBe(true);
   const evidence = analyzeNativeScrollGesture(samples, direction);
   expect(evidence.anchorReplacementIndexes, JSON.stringify(samples)).toEqual([]);
+  expect(evidence.originalNodeReplacementIndexes, JSON.stringify(samples)).toEqual([]);
   expect(evidence.maxContentDrift, JSON.stringify(samples)).toBeLessThanOrEqual(1);
   expect(evidence.firstMovementIndex, JSON.stringify(samples)).toBeGreaterThan(0);
   expect(

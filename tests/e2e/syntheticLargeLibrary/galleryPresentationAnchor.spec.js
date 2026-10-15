@@ -16,12 +16,13 @@ for (const mobile of [true, false]) {
     }, testInfo) => {
       const ui = new GalleryRegressions(page);
       const layout = new MobileLayoutPage(page);
-      await galleryActions.goto();
+      await galleryActions.goto('/?surface=albums&all_artists=1');
       await waitForLibraryStartupEntryVisible(page, galleryActions, navigationPanelActions, {
         timeout: 120000,
       });
       await navigationPanelActions.waitForSidebarFullyHydrated({ timeout: 120000 });
       await galleryActions.waitForInitialRefreshCompleted({ timeout: 120000 });
+      await layout.selectView('cards');
       await navigationPanelActions.openArtistTree();
       const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
       expect(artists.length).toBeGreaterThan(250);
@@ -34,7 +35,6 @@ for (const mobile of [true, false]) {
       await expect.poll(() => ui.readArtistJumpOwnership(requestedArtist))
         .toMatchObject({ anchorArtist: requestedArtist });
       const artist = (await ui.readArtistJumpOwnership(requestedArtist)).anchorGroupArtist || requestedArtist;
-      await layout.selectView('cards');
       await expect.poll(() => ui.readArtistJumpPlacement(artist)).toEqual({
         rendered: true, chromeMatches: true, rowsAligned: true, firstCardUncut: true,
       });

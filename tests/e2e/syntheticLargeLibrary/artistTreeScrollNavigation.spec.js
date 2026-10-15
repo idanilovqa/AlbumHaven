@@ -185,6 +185,11 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     for (let step = 0; step < 200 && upwardArtists.size < 20; step += 1) {
       // parity-check: allow-read-only-measurement-evaluate -- capture a visible card across slow native wheel input
       const before = await ui.captureVisibleCardAnchor();
+      const diagnosticsBefore = await galleryActions.readVirtualGridDiagnostics();
+      const diagnosticSequenceBefore = Math.max(
+        0,
+        ...(diagnosticsBefore?.events || []).map(event => Number(event.sequence || 0)),
+      );
       const box = await ui.galleryScroll.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, -160);
@@ -195,8 +200,19 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       if (continuity.connected && continuity.delta !== null) {
         stableAnchorComparisons += 1;
         if (continuity.delta < -2 || continuity.delta > 220) {
+          const diagnosticsAfter = await galleryActions.readVirtualGridDiagnostics();
           await testInfo.attach('reverse-scroll-displacement', {
-            body: JSON.stringify({ step, wheelDeltaY: -160, continuity }),
+            body: JSON.stringify({
+              step,
+              wheelDeltaY: -160,
+              continuity,
+              gridEvents: (diagnosticsAfter?.events || []).filter(
+                event => Number(event.sequence || 0) > diagnosticSequenceBefore,
+              ),
+              latestScroll: diagnosticsAfter?.latestScroll || null,
+              latestRender: diagnosticsAfter?.latestRender || null,
+              latestMeasurement: diagnosticsAfter?.latestMeasurement || null,
+            }),
             contentType: 'application/json',
           });
         }

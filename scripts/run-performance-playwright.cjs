@@ -377,6 +377,8 @@ const PERFORMANCE_TARGETS = {
       'mobile Rows > native touch swipes track the commanded gesture without reverse movement or layout jitter',
       'desktop Cards > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
       'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'real continuation response during held touch keeps gallery coordinates stable',
+      'real continuation response during wheel sequence keeps gallery coordinates stable',
     ],
     measurementExpected: false,
     env: {

@@ -24,6 +24,19 @@ test('native scroll evidence exposes replacement before its first animation-fram
   assert.deepEqual(analyzeNativeScrollGesture(samples, 1).anchorReplacementIndexes, [0, 1]);
 });
 
+test('native scroll evidence exposes replacement by an equivalent DOM node', async () => {
+  const { analyzeNativeScrollGesture } = await import('../e2e/poms/galleryRegressions.js');
+  const samples = [
+    { anchorGeneration: 0, originalConnected: true, sameNode: true, scrollTop: 100, contentCoordinate: 500 },
+    { anchorGeneration: 0, originalConnected: false, sameNode: false, scrollTop: 132, contentCoordinate: 500 },
+  ];
+
+  assert.deepEqual(
+    analyzeNativeScrollGesture(samples, 1).originalNodeReplacementIndexes,
+    [1],
+  );
+});
+
 test('native scroll evidence keeps a reverse first twitch in the full signed movement stream', async () => {
   const { analyzeNativeScrollGesture } = await import('../e2e/poms/galleryRegressions.js');
   const samples = [
@@ -68,4 +81,13 @@ test('native scroll displacement rejects same-direction jumps beyond the command
   assert.equal(nativeScrollDisplacementMatchesCommand(138, 128), false);
   assert.equal(nativeScrollDisplacementMatchesCommand(129, 139), false);
   assert.equal(nativeScrollDisplacementMatchesCommand(178, 128), false);
+});
+
+test('response-overlap wheel input crosses the threshold then uses minimal keepalive pulses', async () => {
+  const { nativeOverlapWheelDelta } = await import('../e2e/poms/galleryRegressions.js');
+
+  assert.equal(nativeOverlapWheelDelta(8.35 * 800, 800, 8), 32);
+  assert.equal(nativeOverlapWheelDelta(8.01 * 800, 800, 8), 9);
+  assert.equal(nativeOverlapWheelDelta(8 * 800, 800, 8), 1);
+  assert.equal(nativeOverlapWheelDelta(7.5 * 800, 800, 8), 1);
 });

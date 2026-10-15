@@ -30,7 +30,7 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
     }) => {
       const ui = new GalleryRegressions(page);
       const layout = new MobileLayoutPage(page);
-      await galleryActions.goto();
+      await galleryActions.goto('/?surface=albums&all_artists=1');
       await waitForLibraryStartupEntryVisible(page, galleryActions, navigationPanelActions, {
         timeout: 120000,
       });
@@ -46,6 +46,7 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         && !String(state.ui?.activeViewRequestUrl || '').trim()
       ), null, { timeout: 120000 });
 
+      await layout.selectView(view);
       await navigationPanelActions.openArtistTree();
       const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
       expect(artists.length).toBeGreaterThan(250);
@@ -56,7 +57,6 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
       await expect(ui.scrollToArtistAction).toBeVisible();
       await expect(ui.artistTreeContextMenu).toHaveAttribute('data-artist', requestedArtist);
       await ui.scrollToArtistAction.click();
-      await layout.selectView(view);
 
       await expect.poll(() => ui.readArtistJumpOwnership(requestedArtist))
         .toMatchObject({ anchorArtist: requestedArtist });

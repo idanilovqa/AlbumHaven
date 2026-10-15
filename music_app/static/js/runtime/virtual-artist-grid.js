@@ -1407,6 +1407,9 @@ class VirtualArtistGrid {
       const deferredSetGroups = this._deferredSetGroups;
       const deferredArtistTreeSettlement = this._deferredArtistTreeSettlement;
       const deferredResizeOptions = this._deferredResizeOptions;
+      const deferredReflowAnchor = deferredArtistTreeSettlement || deferredResizeOptions
+        ? this.captureScrollAnchor()
+        : undefined;
       this._deferredArtistTreeSettlement = false;
       this._deferredResizeOptions = null;
       if (deferredSetGroups) {
@@ -1420,26 +1423,35 @@ class VirtualArtistGrid {
         );
       }
       if (deferredArtistTreeSettlement) {
-        this.applyArtistTreeSettlement(deferredResizeOptions);
+        this.applyArtistTreeSettlement(deferredResizeOptions, deferredReflowAnchor);
         return;
       }
-      if (deferredResizeOptions) this.onResize(deferredResizeOptions);
-      if (deferredSetGroups || deferredResizeOptions) return;
+      if (deferredResizeOptions) {
+        this.onResize(deferredResizeOptions);
+        this.stabilizeReflowAnchor(deferredReflowAnchor);
+        return;
+      }
+      if (deferredSetGroups) return;
       this.scheduleMeasureRows(true);
     }, 96);
   }
 
-  applyArtistTreeSettlement(resizeOptions = null) {
-    const anchor = this.captureScrollAnchor();
+  stabilizeReflowAnchor(anchor) {
+    if (!anchor || this._resetScrollAfterMeasure) return;
+    this.stabilizeScrollAfterMeasurement(anchor);
+    // Reflow can virtualize the old anchor. Mount its restored row before
+    // reconciling the exact trigger offset against the new card geometry.
+    this.render(true);
+    this.stabilizeScrollAfterMeasurement(anchor);
+  }
+
+  applyArtistTreeSettlement(resizeOptions = null, preservedAnchor = undefined) {
+    const anchor = preservedAnchor === undefined
+      ? this.captureScrollAnchor()
+      : preservedAnchor;
     if (resizeOptions) this.onResize(resizeOptions);
     this.onResize({ preserveCardTrackWidth: true });
-    if (anchor && !this._resetScrollAfterMeasure) {
-      this.stabilizeScrollAfterMeasurement(anchor);
-      // Reflow can virtualize the old anchor. Mount its restored row before
-      // reconciling the exact trigger offset against the new card geometry.
-      this.render(true);
-      this.stabilizeScrollAfterMeasurement(anchor);
-    }
+    this.stabilizeReflowAnchor(anchor);
   }
 
   onArtistTreeSettled() {

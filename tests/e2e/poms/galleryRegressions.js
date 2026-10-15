@@ -2,6 +2,11 @@ export function analyzeNativeScrollGesture(samples, direction) {
   const anchorReplacementIndexes = samples
     .map((sample, index) => sample.anchorGeneration !== 0 ? index : -1)
     .filter(index => index >= 0);
+  const originalNodeReplacementIndexes = samples
+    .map((sample, index) => (
+      sample.originalConnected === false || sample.sameNode === false ? index : -1
+    ))
+    .filter(index => index >= 0);
   const firstMovementIndex = samples.findIndex((sample, index) => (
     index > 0 && Math.abs(Number(sample.scrollTop) - Number(samples[index - 1].scrollTop)) >= 0.5
   ));
@@ -19,6 +24,7 @@ export function analyzeNativeScrollGesture(samples, direction) {
   )));
   return {
     anchorReplacementIndexes,
+    originalNodeReplacementIndexes,
     firstMovementIndex,
     maxContentDrift,
     signedStepDeltas,
@@ -34,6 +40,13 @@ export function nativeScrollDisplacementMatchesCommand(actualDistance, commanded
   const commanded = Math.abs(Number(commandedDistance));
   return Number.isFinite(actual) && Number.isFinite(commanded)
     && Math.abs(actual - commanded) <= NATIVE_SCROLL_DISPLACEMENT_TOLERANCE_PX;
+}
+
+export function nativeOverlapWheelDelta(remaining, viewport, prefetchViewports) {
+  const distanceToThreshold = Number(remaining)
+    - Number(viewport) * Number(prefetchViewports);
+  if (!Number.isFinite(distanceToThreshold) || distanceToThreshold <= 0) return 1;
+  return Math.min(32, Math.max(1, Math.floor(distanceToThreshold) + 1));
 }
 
 function observeArtistPlacement({ targetArtist, headingSelector, observe = false }) {
@@ -343,6 +356,7 @@ export class GalleryRegressions {
             - Math.abs((right.rect.top + right.rect.bottom) / 2 - midpoint)
           ))[0] || null;
       };
+      const originalCard = findCard(observed);
       const sample = () => {
         const scroll = document.getElementById('albums-scroll');
         let card = findCard(observed);
@@ -368,6 +382,8 @@ export class GalleryRegressions {
           sectionKey: observed.sectionKey,
           scrollTop: Number(scroll?.scrollTop || 0),
           connected: Boolean(card?.isConnected),
+          originalConnected: Boolean(originalCard?.isConnected),
+          sameNode: card === originalCard,
           viewportOffset: rect && viewport ? rect.top - viewport.top : null,
           contentCoordinate: rect && viewport
             ? rect.top - viewport.top + Number(scroll.scrollTop || 0)

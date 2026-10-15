@@ -5446,20 +5446,33 @@ test('an immediate gallery render supersedes deferred Artist Tree settlement', (
   assert.deepEqual(captured, []);
 });
 
-test('pagination regrouping flushes before coalesced Artist Tree settlement', () => {
+test('coalesced pagination and Artist Tree settlement retain the pre-regroup semantic anchor', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const captures = [];
   const resizedArtists = [];
+  const stabilizedArtists = [];
   virtualGrid.captureScrollAnchor = () => {
-    captures.push(virtualGrid.sections[0]?.group?.artist || 'none');
-    return null;
+    const artist = virtualGrid.sections[0]?.group?.artist || 'none';
+    captures.push(artist);
+    return { artist };
   };
   virtualGrid.onResize = () => {
     resizedArtists.push(virtualGrid.sections[0]?.group?.artist || 'none');
   };
+  virtualGrid.stabilizeScrollAfterMeasurement = anchor => {
+    stabilizedArtists.push(anchor.artist);
+  };
   virtualGrid.render = () => {};
   virtualGrid.primeVisibleCoverImages = () => {};
+
+  virtualGrid.setGroups(
+    [],
+    [],
+    [{ artist: 'Viewed Artist', artist_display: 'Viewed Artist', albums: [] }],
+    { preserveScroll: false },
+  );
+  captures.length = 0;
 
   scrollEl.dispatchEvent({ type: 'wheel' });
   virtualGrid.setGroups(
@@ -5473,22 +5486,35 @@ test('pagination regrouping flushes before coalesced Artist Tree settlement', ()
 
   context.__scheduledBrowserTimeouts.at(-1).callback();
 
-  assert.deepEqual(captures, ['none', 'Updated Artist']);
+  assert.deepEqual(captures, ['Viewed Artist', 'Viewed Artist']);
   assert.deepEqual(resizedArtists, ['Updated Artist']);
+  assert.deepEqual(stabilizedArtists, ['Viewed Artist', 'Viewed Artist']);
 });
 
 test('window resize waits for an active touch gesture final position', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);
   const reflows = [];
+  const captures = [];
+  const stabilizations = [];
+  let visibleArtist = 'Viewed Artist';
+  virtualGrid.captureScrollAnchor = () => {
+    captures.push(visibleArtist);
+    return { artist: visibleArtist };
+  };
   virtualGrid.recalculate = options => {
     reflows.push({ phase: 'recalculate', scrollTop: scrollEl.scrollTop, options });
+    visibleArtist = 'Wrong Artist';
   };
   virtualGrid.render = () => {
     reflows.push({ phase: 'render', scrollTop: scrollEl.scrollTop });
   };
   virtualGrid.scheduleMeasureRows = () => {
     reflows.push({ phase: 'measure', scrollTop: scrollEl.scrollTop });
+  };
+  virtualGrid.stabilizeScrollAfterMeasurement = anchor => {
+    stabilizations.push(anchor.artist);
+    visibleArtist = anchor.artist;
   };
 
   scrollEl.scrollTop = 4100;
@@ -5502,8 +5528,16 @@ test('window resize waits for an active touch gesture final position', () => {
   scrollEl.dispatchEvent({ type: 'touchend', touches: [] });
   context.__scheduledBrowserTimeouts.at(-1).callback();
 
-  assert.deepEqual(reflows.map(reflow => reflow.phase), ['recalculate', 'render', 'measure']);
-  assert.deepEqual(reflows.map(reflow => reflow.scrollTop), [4172, 4172, 4172]);
+  assert.deepEqual(reflows.map(reflow => reflow.phase), [
+    'recalculate',
+    'render',
+    'measure',
+    'render',
+  ]);
+  assert.deepEqual(reflows.map(reflow => reflow.scrollTop), [4172, 4172, 4172, 4172]);
+  assert.deepEqual(captures, ['Viewed Artist']);
+  assert.deepEqual(stabilizations, ['Viewed Artist', 'Viewed Artist']);
+  assert.equal(visibleArtist, 'Viewed Artist');
 });
 
 test('an immediate gallery render supersedes deferred window resize', () => {

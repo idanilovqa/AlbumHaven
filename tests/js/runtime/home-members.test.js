@@ -4,13 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
+const {snapshot, load} = require('./home-profile-native-observations.cjs');
 const repo = path.resolve(__dirname, '../../..');
 const model = import(pathToFileURL(path.join(repo, 'music_app/static/js/home-friends/model.mjs')));
-// Source-level provider and SSR fixtures only. No live account, transport,
+// Source-level provider and native-owner fixtures only. No live account, transport,
 // database, browser, endpoint, or successful external write is simulated.
 const member = (account_ref = 'member:one', overrides = {}) => ({account_ref, display_name: 'Taylor <safe>',
   handle: 'taylor', avatar_url: '/avatars/taylor.webp', relationship: 'none', allowed_actions: {can_request: true}, ...overrides});
@@ -31,32 +28,11 @@ async function setup(providers = {}) {
   return controller;
 }
 
-const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/home-friends/friends-directory.jsx')],
-  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react']});
-const Module = require('node:module');
-const loaded = new Module(path.join(__dirname, 'home-members-fixture.cjs'), module);
-loaded.filename = loaded.id; loaded.paths = module.paths;
-loaded._compile(built.outputFiles[0].text, loaded.filename);
-const {FriendsDirectory, MemberSearch, MemberResults} = loaded.exports;
-const native = createNativeHomeRuntime();
-vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime/in-page-tabs.js'), 'utf8'), native.context);
-const navTemplate = native.document.createElement('script');
-navTemplate.setAttribute('id', 'navigation-tree-item-template');
-navTemplate.textContent = fs.readFileSync(path.join(repo, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
-native.document.body.appendChild(navTemplate);
-vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/navigation-tree.js'), 'utf8'), native.context);
-const runtime = {
-  buttonHtml: config => native.context.ButtonComponent.renderButton(config),
-  actionHtml: config => native.context.ButtonComponent.renderActionButton(config),
-  alertHtml: config => native.context.buildOnPageAlertHtml(config),
-  tabsHtml: config => native.context.buildInPageTabsHtml(config),
-  escapeHtml: native.context.escapeHtml,
-  artboxHtml: config => native.context.buildAlbumArtboxHtml(config),
-  navigationItemHtml: config => native.context.window.NavigationTree.renderItem(config),
-};
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, {runtime, ...props}));
+let FriendsDirectory, MemberSearch, MemberResults;
+test.before(async () => ({mountFriendsDirectory: FriendsDirectory, mountMemberSearch: MemberSearch, mountMemberResults: MemberResults} = await load('friends-directory.mjs')));
+const render = (mount, props) => snapshot(mount, props).html;
 
-test('member discovery never runs on construction, friends load, selection, or SSR', async () => {
+test('member discovery never runs on construction, friends load, selection, or native mount', async () => {
   let reads = 0;
   const c = await setup({readMembers: () => {reads++; return members();}});
   c.selectFriend(null);
@@ -275,11 +251,11 @@ test('scope changes cancel outgoing writes with no late cross-account refresh', 
 
 test('member rows escape identities, use native artwork and only expose permitted requests', async () => {
   const c = await setup(); await c.loadMembers({query: 'Taylor'});
-  const html = render(MemberResults, {controller: c, value: c.getSnapshot().members, busy: false});
+  const {html, raw} = snapshot(MemberResults, {controller: c, value: c.getSnapshot().members, busy: false});
   assert.match(html, /Taylor &lt;safe&gt;/); assert.match(html, /album-artbox--ready/); assert.match(html, /referrerpolicy="no-referrer"/);
-  assert.match(html, /Send request/); assert.match(html, /ui-button/); assert.doesNotMatch(html, /<safe>/);
+  assert.match(html, /Send request/); assert.match(html, /ui-button/); assert.doesNotMatch(raw, /<safe>/);
   for (const person of [member('one', {relationship: 'accepted'}), member('one', {allowed_actions: {can_request: false}})]) {
-    assert.doesNotMatch(render(MemberResults, {controller: c, value: {data: {members: [person]}}}), /Send request/);
+    assert.doesNotMatch(render(MemberResults, {controller: c, value: {status: 'ready', data: {members: [person]}}}), /Send request/);
   }
 });
 
@@ -307,9 +283,9 @@ test('directory uses native Friends/People tabs and only exact outgoing cancella
 
 test('directory retains mutation errors inside its desktop dialog content', async () => {
   const c = await setup(); await c.mutate('cancelRequest', 'request:one');
-  const html = render(FriendsDirectory, {controller: c});
+  const {html, raw} = snapshot(FriendsDirectory, {controller: c});
   assert.match(html, /Friend changes are not available/);
-  assert.doesNotMatch(html, /Friend request sent|Friend request cancelled/);
+  assert.doesNotMatch(raw, /Friend request sent|Friend request cancelled/);
 });
 
 test('directory acknowledges requests and resolved cancellations only after an explicit provider success', async () => {
@@ -317,9 +293,9 @@ test('directory acknowledges requests and resolved cancellations only after an e
     let changed = false;
     const c = await setup({readFriends: () => friends(changed && action === 'cancelRequest' ? {requests: []} : {}),
       [action]: () => {changed = true; return {ok: true};}}); await c.loadMembers({query: 'Taylor'});
-    assert.doesNotMatch(render(FriendsDirectory, {controller: c}), /Friend request sent|Friend request cancelled/);
+    assert.doesNotMatch(snapshot(FriendsDirectory, {controller: c}).raw, /Friend request sent|Friend request cancelled/);
     await c.mutate(action, target);
     assert.ok(render(FriendsDirectory, {controller: c}).includes(message));
-    c.setScope('new'); assert.doesNotMatch(render(FriendsDirectory, {controller: c}), /Friend request sent|Friend request cancelled/);
+    c.setScope('new'); assert.doesNotMatch(snapshot(FriendsDirectory, {controller: c}).raw, /Friend request sent|Friend request cancelled/);
   }
 });

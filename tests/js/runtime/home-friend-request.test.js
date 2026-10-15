@@ -1,49 +1,24 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime, buttonNamed: nativeButtonNamed} = require('./native-home-harness.cjs');
-
+const {environment, load, settle, visibleHtml} = require('./home-profile-native-observations.cjs');
 const repo = path.resolve(__dirname, '../../..');
 const model = import(pathToFileURL(path.join(repo, 'music_app/static/js/home-friends/model.mjs')));
-const sources = Object.fromEntries(['friend-request', 'member-profile', 'friends-directory'].map(name => [name,
-  buildSync({entryPoints: [path.join(repo, `music_app/static/js/home-friends/${name}.jsx`)], bundle: true,
-    platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text]));
-function load(name, hooks = React) {
-  const module = {exports: {}};
-  vm.runInNewContext(sources[name], {module, exports: module.exports,
-    require: id => id === 'react' ? hooks : require(id), console, URL});
-  return module.exports;
-}
-const {FriendRequestContent} = load('friend-request');
-const {MemberProfile} = load('member-profile');
-const {FriendsDirectory, MemberResults} = load('friends-directory');
-const buttonNamed = (root, label, required = true) => nativeButtonNamed(root, new RegExp(`^${label}$`), required);
-
-// Bounded component/provider fixtures. No live transport, browser, database,
-// app boot, or external writer runs in these tests.
-function nativeRuntime() {
-  const env = createNativeHomeRuntime();
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime/in-page-tabs.js'), 'utf8'), env.context);
-  const template = env.document.createElement('script'); template.setAttribute('id', 'navigation-tree-item-template');
-  template.textContent = fs.readFileSync(path.join(repo, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
-  env.document.body.appendChild(template);
-  vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/navigation-tree.js'), 'utf8'), env.context);
-  return {...env, runtime: {
-    buttonHtml: value => env.context.ButtonComponent.renderButton(value),
-    actionHtml: value => env.context.ButtonComponent.renderActionButton(value),
-    alertHtml: value => env.context.buildOnPageAlertHtml(value),
-    artboxHtml: value => env.context.buildAlbumArtboxHtml(value),
-    tabsHtml: value => env.context.buildInPageTabsHtml(value),
-    navigationItemHtml: value => env.context.window.NavigationTree.renderItem(value),
-    escapeHtml: env.context.escapeHtml,
-  }};
-}
+let FriendRequestContent, FriendRequestDialog, MemberProfile, FriendsDirectory, MemberResults, PersonNavigation;
+test.before(async () => {
+  ({mountFriendRequestContent: FriendRequestContent, mountFriendRequestDialog: FriendRequestDialog} = await load('friend-request.mjs'));
+  ({mountMemberProfile: MemberProfile} = await load('member-profile.mjs'));
+  ({mountFriendsDirectory: FriendsDirectory, mountMemberResults: MemberResults, mountPersonNavigation: PersonNavigation} = await load('friends-directory.mjs'));
+});
+const buttonNamed = (root, label, required = true) => {
+  const button = root.querySelectorAll('button').find(node => !node.closest('[hidden]') && (node.getAttribute('aria-label') || node.textContent.trim()) === label) || null;
+  if (required) assert.ok(button, `Expected native button ${label}`);
+  return button;
+};
+let currentTest;
+test.beforeEach(t => {currentTest = t;});
+const nativeRuntime = () => environment(currentTest);
 const request = (extra = {}) => ({request_ref: 'request:one', account_ref: 'member:one', display_name: 'Taylor <safe>',
   handle: 'taylor', bio: 'Listens together', avatar_url: '/avatars/taylor.webp', direction: 'incoming',
   allowed_actions: {can_view_profile: true, can_accept: true, can_decline: true}, ...extra});
@@ -59,80 +34,57 @@ async function setup(providers = {}) {
 function deferred() {
   let resolve; const promise = new Promise(yes => {resolve = yes;}); return {promise, resolve};
 }
-function render(env, Component, props) {
-  const html = renderToStaticMarkup(React.createElement(Component, {runtime: env.runtime, ...props}));
-  const host = env.document.createElement('section'); host.innerHTML = html;
-  return {html, host};
-}
-
-// Executes only the wrapper's hooks and callbacks. Native form teardown itself
-// is covered by the native owner tests; this fixture controls its completion.
-function lifecycle(source, component) {
-  const slots = []; let cursor = 0, effects = [], tree;
-  const hooks = {...React,
-    useRef(initial) {const index = cursor++; return slots[index] ||= {current: initial};},
-    useState(initial) {
-      const index = cursor++; if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
-      return [slots[index], value => {slots[index] = typeof value === 'function' ? value(slots[index]) : value;}];
-    },
-    useId() {return `fixture-${cursor++}`;},
-    useSyncExternalStore(_subscribe, snapshot) {return snapshot();},
-    useEffect(effect, deps) {
-      const index = cursor++, previous = slots[index];
-      if (!previous || deps.some((value, i) => !Object.is(value, previous.deps[i]))) effects.push(() => {
-        previous?.cleanup?.(); slots[index] = {deps, cleanup: effect()};
-      });
-    },
-    useLayoutEffect(effect, deps) {return hooks.useEffect(effect, deps);},
-  };
-  const Component = load(source, hooks)[component];
-  return {render(props, host) {
-    cursor = 0; effects = []; tree = Component(props);
-    if (host && tree.props.ref) tree.props.ref.current = host;
-    for (const effect of effects) effect(); return tree;
-  }, dispose() {for (const slot of slots) slot?.cleanup?.();}};
+function render(env, mount, props) {
+  const host = env.document.createElement('section'); env.document.body.append(host);
+  env.own(mount(host, env.runtime, props));
+  return {html: visibleHtml(host), raw: host.innerHTML, host};
 }
 function dialogFixture(controller, options = {}) {
-  const env = nativeRuntime(), fixture = lifecycle('friend-request', 'FriendRequestDialog'), closes = [], events = [];
-  const props = {runtime: env.runtime, controller, requestRef: 'request:one', parentSurface: '#cover-lookup-drawer',
-    returnFocus: () => null, onClose: () => events.push('closed'), onProfile: ref => events.push(ref), ...options};
-  const close = options => {closes.push(options); return true;};
-  let tree;
-  return {...env, closes, events, render() {tree = fixture.render(props); return tree.props.children(close).props;},
-    nativeClosed(options = {}) {tree.props.onClose({restoreFocus: false, ...options});}, get ownerProps() {return tree.props;}, dispose: fixture.dispose};
+  const env = nativeRuntime(), closes = [], events = []; let pendingClose, ownerProps;
+  const openForm = env.runtime.openForm;
+  const runtime = {...env.runtime, openForm(props) {
+    ownerProps = props;
+    return openForm({...props, onMount(host, close) {
+      props.onMount(host, (result, options) => {closes.push(options); return close(result, options);});
+    }, onClose(host, value) {pendingClose = extra => props.onClose(host, {...value, ...extra});}});
+  }};
+  const owner = env.own(FriendRequestDialog(env.host, runtime, {controller, requestRef: 'request:one', parentSurface: '#cover-lookup-drawer',
+    returnFocus: () => null, onClose: () => events.push('closed'), onProfile: ref => events.push(ref), ...options}));
+  // Drive the real mounted buttons; never invoke a copied component callback.
+  return {...env, closes, events, get ownerProps() {return ownerProps;},
+    render() {
+      const buttons = env.form.querySelectorAll('button');
+      const activate = label => {const button = buttons.find(node => node.textContent.trim() === label); if (button) env.click(button);};
+      return {message: visibleHtml(env.form),
+      onAction: async action => {activate({acceptRequest:'Accept request', declineRequest:'Decline', cancelRequest:'Cancel request'}[action]); await settle();},
+      onRefresh: async () => {activate('Refresh'); await settle();}, onProfile: () => activate('View profile'), onClose: () => activate('Close')};},
+    nativeClosed(options = {}) {const close = pendingClose; pendingClose = null; if (close) close(options);},
+    dispose: () => owner.dispose()};
 }
-function findElement(tree, predicate) {
-  if (predicate(tree)) return tree;
-  for (const child of React.Children.toArray(tree?.props?.children)) {
-    const found = findElement(child, predicate); if (found) return found;
-  }
-  return null;
-}
-const actionElement = (tree, label) => findElement(tree, node => node?.type?.name === 'Button' && node.props.children === label);
 
 test('incoming request uses shared identity and exact current action grants', async () => {
   const c = await setup(), env = nativeRuntime();
-  const {html, host} = render(env, FriendRequestContent, {state: c.getSnapshot(), requestRef: 'request:one', onProfile() {}});
+  const {html, raw, host} = render(env, FriendRequestContent, {state: c.getSnapshot(), requestRef: 'request:one', onProfile() {}});
   assert.match(html, /Taylor &lt;safe&gt;/); assert.match(html, /home-profile__identity/);
   assert.equal(buttonNamed(host, 'Accept request').disabled, false);
   assert.equal(buttonNamed(host, 'Decline').disabled, false);
   assert.equal(buttonNamed(host, 'View profile').disabled, false);
   assert.equal(buttonNamed(host, 'Cancel request', false), null);
-  assert.doesNotMatch(html, /Edit profile|<safe>|localStorage/);
+  assert.doesNotMatch(html, /Edit profile/); assert.doesNotMatch(raw, /<safe>|localStorage/);
 });
 
 test('outgoing request cannot expose incoming actions and unsafe artwork stays empty', async () => {
   const c = await setup({readFriends: () => friends({requests: [request({direction: 'outgoing', avatar_url: 'javascript:alert(1)',
     allowed_actions: {can_cancel: true, can_accept: true, can_decline: true, can_view_profile: false}})]})});
-  const env = nativeRuntime(), {html, host} = render(env, FriendRequestContent, {state: c.getSnapshot(), requestRef: 'request:one', onProfile() {}});
-  assert.match(html, /album-artbox--empty/); assert.doesNotMatch(html, /javascript:|Accept request|>Decline</);
+  const env = nativeRuntime(), {html, raw, host} = render(env, FriendRequestContent, {state: c.getSnapshot(), requestRef: 'request:one', onProfile() {}});
+  assert.match(html, /album-artbox--empty/); assert.doesNotMatch(raw, /javascript:/); assert.doesNotMatch(html, /Accept request|>Decline</);
   assert.equal(buttonNamed(host, 'Cancel request').disabled, false);
   assert.equal(buttonNamed(host, 'View profile').disabled, true);
 });
 
 test('request without current change grants explains denial through the native status owner', async () => {
   const c = await setup({readFriends: () => friends({requests: [request({allowed_actions: {can_accept: 'true', can_decline: false}})]})});
-  const env = nativeRuntime(), {html, host} = render(env, FriendRequestContent, {state: c.getSnapshot(), requestRef: 'request:one'});
+  const env = nativeRuntime(), {html, raw, host} = render(env, FriendRequestContent, {state: c.getSnapshot(), requestRef: 'request:one'});
   assert.equal(buttonNamed(host, 'Accept request').disabled, true); assert.equal(buttonNamed(host, 'Decline').disabled, true);
   assert.match(host.textContent, /don't have access to Friend request changes/); assert.match(html, /role="status"/);
 });
@@ -141,11 +93,13 @@ test('fabricated, stale, revoked and loading requests never retain old person fa
   const c = await setup(), env = nativeRuntime(), initial = c.getSnapshot();
   for (const status of ['loading', 'error', 'denied', 'unavailable']) {
     const state = {...initial, friends: {status, data: initial.friends.data}};
-    const {html} = render(env, FriendRequestContent, {state, requestRef: 'request:one'});
+    const {html, raw} = render(env, FriendRequestContent, {state, requestRef: 'request:one'});
+    assert.doesNotMatch(raw, /Taylor|taylor.webp/);
     assert.doesNotMatch(html, /Taylor|taylor.webp|Accept request|View profile/);
     assert.match(html, status === 'error' ? /role="alert"/ : /role="status"/);
   }
-  const {html} = render(env, FriendRequestContent, {state: initial, requestRef: 'request:invented'});
+  const {html, raw} = render(env, FriendRequestContent, {state: initial, requestRef: 'request:invented'});
+  assert.doesNotMatch(raw, /Taylor|taylor.webp/);
   assert.match(html, /no longer available/); assert.doesNotMatch(html, /Taylor|Accept request/);
 });
 
@@ -165,7 +119,7 @@ test('double activation coalesces and closes only after authoritative accepted f
   const c = await setup({readFriends: () => payload, acceptRequest: async () => {writes++; await write.promise; return {ok: true};}});
   const h = dialogFixture(c), content = h.render(), first = content.onAction('acceptRequest');
   await content.onAction('acceptRequest'); assert.equal(writes, 1); assert.equal(h.closes.length, 0);
-  payload = friends({friends: [friend()], requests: []}); write.resolve(); await first;
+  payload = friends({friends: [friend()], requests: []}); write.resolve(); await first; await settle();
   assert.equal(h.closes.length, 1); assert.equal(h.closes[0].reason, 'request-resolved');
   h.dispose();
 });
@@ -174,8 +128,8 @@ test('missing writer remains open and does not announce success', async () => {
   const c = await setup(), h = dialogFixture(c);
   await h.render().onAction('acceptRequest');
   assert.equal(c.getSnapshot().mutation.status, 'unavailable'); assert.equal(h.closes.length, 0);
-  const {html} = render(h, FriendRequestContent, h.render());
-  assert.match(html, /not available on this server/); assert.doesNotMatch(html, /now friends|sent, but/);
+  const html = visibleHtml(h.form);
+  assert.match(html, /not available on this server/); assert.doesNotMatch(h.form.innerHTML, /now friends|sent, but/);
   h.dispose();
 });
 
@@ -198,7 +152,7 @@ test('acknowledged unresolved request disables another write and makes no friend
   const c = await setup({acceptRequest: () => {writes++; return {ok: true};}}), h = dialogFixture(c);
   await h.render().onAction('acceptRequest');
   assert.equal(h.closes.length, 0); assert.match(h.render().message, /not been confirmed/);
-  const {host} = render(h, FriendRequestContent, h.render());
+  const host = h.form;
   assert.equal(buttonNamed(host, 'Accept request').disabled, true);
   await h.render().onAction('acceptRequest'); assert.equal(writes, 1);
   h.dispose();
@@ -232,7 +186,7 @@ test('closing a pending request keeps its late write completion from closing ano
   const c = await setup({readFriends: () => payload, acceptRequest: () => write.promise}), h = dialogFixture(c);
   const content = h.render(), operation = content.onAction('acceptRequest');
   content.onClose(); h.nativeClosed();
-  payload = friends({friends: [friend()], requests: []}); write.resolve({ok: true}); await operation;
+  payload = friends({friends: [friend()], requests: []}); write.resolve({ok: true}); await operation; await settle();
   assert.equal(h.closes.length, 1); assert.deepEqual(h.events, ['closed']); h.dispose();
 });
 
@@ -256,7 +210,8 @@ test('failed configured profile read does not leak a cached directory identity',
   for (const status of ['denied', 'error']) {
     const c = await setup({readProfile: () => {if (status === 'error') throw new Error('Unavailable'); return {status};}});
     c.selectProfile('member:one'); await c.loadProfile();
-    const {html} = render(nativeRuntime(), MemberProfile, {controller: c, accountRef: 'member:one'});
+    const {html, raw} = render(nativeRuntime(), MemberProfile, {controller: c, accountRef: 'member:one'});
+    assert.doesNotMatch(raw, /Taylor|Listens together|taylor.webp/);
     assert.doesNotMatch(html, /Taylor|Listens together|taylor.webp/);
     assert.match(html, status === 'error' ? /role="alert"/ : /role="status"/);
   }
@@ -268,27 +223,27 @@ test('directory and discovered members use native rows and keep Unfriend in the 
   assert.equal(host.querySelectorAll('[data-navigation-tree-item]').length, 2);
   assert.ok(buttonNamed(host, 'Unfriend')); assert.doesNotMatch(html, />Block<|>Remove<|>Accept request</);
   const member = {...friend(), relationship: 'none', allowed_actions: {can_view_profile: true}};
-  const rows = render(env, MemberResults, {controller: c, value: {data: {members: [member]}}, onProfile() {}});
+  const rows = render(env, MemberResults, {controller: c, value: {status: 'ready', data: {members: [member]}}, onProfile() {}});
   assert.equal(rows.host.querySelector('[data-navigation-tree-item]').disabled, false);
 });
 
 test('only the most recently selected member can navigate after row feedback', async () => {
   const members = ['member:one', 'member:two'].map(account_ref => ({...friend({account_ref}), relationship: 'none'}));
   const c = await setup({readMembers: () => ({members, next_cursor: null})}); await c.loadMembers({query: 'Taylor'});
-  const env = nativeRuntime(), fixture = lifecycle('friends-directory', 'MemberResults'), opened = [];
-  const tree = fixture.render({runtime: env.runtime, controller: c, value: c.getSnapshot().members, onProfile: ref => opened.push(ref)});
-  const rows = members.map(person => findElement(tree, node => node?.type?.name === 'PersonNavigation' && node.props.person.account_ref === person.account_ref));
-  rows[0].props.onSelect(); rows[1].props.onSelect();
-  rows[0].props.onActivate(null); rows[1].props.onActivate(null);
-  assert.deepEqual(opened, ['member:two']); fixture.dispose();
+  const env = nativeRuntime(), opened = [];
+  const owner = env.own(MemberResults(env.host, env.runtime, {controller: c, value: c.getSnapshot().members, onProfile: ref => opened.push(ref)}));
+  const rows = members.map(person => env.host.querySelector(`[data-home-person-ref="${person.account_ref}"]`));
+  env.click(rows[0]); env.click(rows[1]);
+  env.drain();
+  assert.deepEqual(opened, ['member:two']); owner.dispose();
 });
 
 test('directory never labels an acknowledged but unresolved cancellation complete', async () => {
   const c = await setup({readFriends: () => friends({requests: [request({direction: 'outgoing', allowed_actions: {can_cancel: true}})]}),
     cancelRequest: () => ({ok: true})});
   await c.mutate('cancelRequest', 'request:one');
-  const {html, host} = render(nativeRuntime(), FriendsDirectory, {controller: c});
-  assert.doesNotMatch(html, /Friend request cancelled/); assert.match(html, /not been confirmed/);
+  const {html, raw, host} = render(nativeRuntime(), FriendsDirectory, {controller: c});
+  assert.doesNotMatch(raw, /Friend request cancelled/); assert.match(html, /not been confirmed/);
   assert.equal(buttonNamed(host, 'Cancel request').disabled, true); assert.ok(buttonNamed(host, 'Refresh Friends'));
 });
 
@@ -298,63 +253,55 @@ test('an authoritative empty envelope confirms cancellation without fabricated r
     : friends({requests: [request({direction: 'outgoing', allowed_actions: {can_cancel: true}})]}),
     cancelRequest: () => {cancelled = true; return {ok: true};}});
   await c.mutate('cancelRequest', 'request:one');
-  const {html} = render(nativeRuntime(), FriendsDirectory, {controller: c});
-  assert.match(html, /Friend request cancelled/); assert.doesNotMatch(html, /not been confirmed|Taylor/);
+  const {html, raw} = render(nativeRuntime(), FriendsDirectory, {controller: c});
+  assert.match(html, /Friend request cancelled/); assert.doesNotMatch(raw, /not been confirmed|Taylor/);
 });
 
 test('Unfriend rechecks the exact current friendship after native confirmation', async () => {
   const confirmation = deferred(); let confirms = 0, writes = 0, payload = friends({friends: [friend()], requests: []});
   const c = await setup({readFriends: () => payload, removeFriend: () => {writes++; return {ok: true};}});
-  const env = nativeRuntime(), fixture = lifecycle('friends-directory', 'FriendsDirectory');
-  const root = env.document.createElement('section'), trigger = env.document.createElement('button'); root.append(trigger); env.document.body.append(root);
+  const env = nativeRuntime();
   const runtime = {...env.runtime, confirm: (_message, options) => {confirms++; assert.equal(options.acceptLabel, 'Unfriend'); assert.equal(options.danger, true); return confirmation.promise;}};
-  const props = {runtime, controller: c};
-  const button = actionElement(fixture.render(props, root), 'Unfriend');
-  const first = button.props.onClick(env.event('click', trigger));
-  await button.props.onClick(env.event('click', trigger)); assert.equal(confirms, 1);
+  const owner = env.own(FriendsDirectory(env.host, runtime, {controller: c}));
+  const button = buttonNamed(env.host, 'Unfriend');
+  env.click(button); env.click(button); await settle(); assert.equal(confirms, 1);
   payload = friends({friends: [friend({allowed_actions: {can_remove: false}})], requests: []}); await c.loadFriends();
-  confirmation.resolve(true); await first;
-  assert.equal(writes, 0); assert.match(render(env, FriendsDirectory, {controller: c}).html, /Friends/);
-  fixture.dispose();
+  confirmation.resolve(true); await settle();
+  assert.equal(writes, 0); assert.match(visibleHtml(env.host), /Friends/);
+  owner.dispose();
 });
 
 test('confirmed removal restores the connected directory when its opener disappears', async () => {
   let payload = friends({friends: [friend()], requests: []}), writes = 0;
-  const env = nativeRuntime(), root = env.document.createElement('section'), trigger = env.document.createElement('button'), focused = [];
-  root.append(trigger); env.document.body.append(root); root.focus = () => focused.push(root);
+  const env = nativeRuntime(); let trigger;
   const c = await setup({readFriends: () => payload, removeFriend: () => {
     writes++; trigger.remove(); payload = friends({friends: [], requests: []}); return {ok: true};
   }});
-  const fixture = lifecycle('friends-directory', 'FriendsDirectory');
-  const tree = fixture.render({runtime: {...env.runtime, confirm: () => Promise.resolve(true)}, controller: c}, root);
-  await actionElement(tree, 'Unfriend').props.onClick(env.event('click', trigger));
-  assert.equal(writes, 1); assert.deepEqual(focused, [root]); fixture.dispose();
+  const owner = env.own(FriendsDirectory(env.host, {...env.runtime, confirm: () => Promise.resolve(true)}, {controller: c}));
+  const root = env.host.querySelector('[data-home-friends-directory]'); trigger = buttonNamed(root, 'Unfriend');
+  trigger.focus(); env.click(trigger); await settle(); env.drain();
+  assert.equal(writes, 1); assert.equal(env.document.activeElement, root); owner.dispose();
 });
 
 test('native person row preserves its button and rejects delayed activation after revocation', () => {
-  const env = nativeRuntime(), pending = new Map(); let sequence = 0, selected = 0, opens = 0;
-  env.document.defaultView = {requestAnimationFrame: callback => {pending.set(++sequence, callback); return sequence;},
-    cancelAnimationFrame: id => pending.delete(id)};
-  const root = env.document.createElement('section'); env.document.body.append(root);
-  const fixture = lifecycle('friends-directory', 'PersonNavigation');
-  const props = {runtime: env.runtime, person: friend(), rowKey: 'friend:member:one', selected: false, disabled: false,
+  const env = nativeRuntime(); let selected = 0, opens = 0;
+  const props = {person: friend(), rowKey: 'friend:member:one', selected: false, disabled: false,
     onSelect: () => {selected++;}, onActivate: () => {opens++;}};
-  const tree = fixture.render(props, root), button = root.querySelector('[data-navigation-tree-item]');
-  tree.props.onClick(env.event('click', button)); assert.equal(selected, 1); assert.equal(opens, 0);
-  fixture.render({...props, selected: true, disabled: true}, root);
-  assert.equal(root.querySelector('[data-navigation-tree-item]'), button); assert.equal(button.disabled, true);
+  const owner = env.own(PersonNavigation(env.host, env.runtime, props)), button = env.host.querySelector('[data-navigation-tree-item]');
+  env.click(button); assert.equal(selected, 1); assert.equal(opens, 0);
+  owner.update({...props, selected: true, disabled: true});
+  assert.equal(env.host.querySelector('[data-navigation-tree-item]'), button); assert.equal(button.disabled, true);
   assert.equal(button.getAttribute('aria-current'), 'true');
-  while (pending.size) {const next = pending.entries().next().value; pending.delete(next[0]); next[1]();}
-  assert.equal(opens, 0); fixture.dispose(); assert.equal(pending.size, 0);
+  env.drain(); assert.equal(opens, 0); owner.dispose(); assert.equal(env.frames.size, 0);
 });
 
 test('profile activity callback rechecks accepted source grants after the button was rendered', async () => {
   let payload = friends({friends: [friend()], requests: []}), opens = 0;
   const c = await setup({readFriends: () => payload}); c.selectProfile('member:one'); await c.loadProfile();
-  const env = nativeRuntime(), fixture = lifecycle('member-profile', 'MemberProfile');
-  const tree = fixture.render({runtime: env.runtime, controller: c, accountRef: 'member:one', onActivity: () => {opens++;}, showIdentity: false});
-  const button = actionElement(tree, 'Listening activity'); assert.ok(button);
-  assert.equal(findElement(tree, node => node?.type?.name === 'ProfileIdentity'), null);
+  const env = nativeRuntime();
+  const owner = env.own(MemberProfile(env.host, env.runtime, {controller: c, accountRef: 'member:one', onActivity: () => {opens++;}, showIdentity: false}));
+  const button = buttonNamed(env.host, 'Listening activity'); assert.ok(button);
+  assert.doesNotMatch(visibleHtml(env.host), /home-profile__identity/);
   payload = friends({friends: [friend({allowed_actions: {can_view_profile: true}})], requests: []}); await c.loadFriends();
-  button.props.onClick(); assert.equal(opens, 0); fixture.dispose();
+  env.click(button); assert.equal(opens, 0); owner.dispose();
 });

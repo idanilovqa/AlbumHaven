@@ -4,33 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {File} = require('node:buffer');
-const React = require('react');
-const {renderToStaticMarkup} = require('react-dom/server');
-const {buildSync} = require('esbuild');
-const {createNativeHomeRuntime} = require('./native-home-harness.cjs');
+const {snapshot: nativeSnapshot, load} = require('./home-profile-native-observations.cjs');
 const repo = path.resolve(__dirname, '../../..');
-const output = path.join(repo, 'tests/js/runtime/home-profile-fixture.cjs');
-// Source-only SSR and lifecycle fixtures. No upload, browser, or API is mocked.
-const built = buildSync({entryPoints: [path.join(repo, 'music_app/static/js/home-friends/profile.jsx')],
-  bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react']});
-const Module = require('node:module');
-const loaded = new Module(output, module);
-loaded.filename = output; loaded.paths = module.paths;
-loaded._compile(built.outputFiles[0].text, output);
-const {ProfileIdentity, ProfileEditor, createAvatarDraft} = loaded.exports;
-const native = createNativeHomeRuntime();
-vm.runInContext(fs.readFileSync(path.join(repo, 'music_app/static/js/runtime/album-artbox.js'), 'utf8'), native.context);
-const runtime = {
-  buttonHtml: config => native.context.ButtonComponent.renderButton(config),
-  actionHtml: config => native.context.ButtonComponent.renderActionButton(config),
-  alertHtml: config => native.context.buildOnPageAlertHtml(config),
-  artboxHtml: config => native.context.buildAlbumArtboxHtml(config),
-};
+let ProfileIdentity, ProfileEditor, createAvatarDraft;
+test.before(async () => ({mountProfileIdentity: ProfileIdentity, mountProfileEditor: ProfileEditor, createAvatarDraft} = await load('profile.mjs')));
 const profile = {display_name: 'Alex <safe>', handle: 'alex', bio: 'My listening', avatar_url: '/avatars/alex.webp',
   allowed_actions: {can_edit: true, can_upload_avatar: true}};
 const snapshot = {scopeKey: 'self', mutation: {status: 'idle'}, friends: {status: 'ready', data: {profile}}};
 const controller = {getSnapshot: () => snapshot, subscribe: () => () => {}};
-const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, {runtime, ...props}));
+const render = (mount, props) => nativeSnapshot(mount, props).html;
 const pngBytes = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0];
 const file = (bytes = pngBytes, type = 'image/png') => new File([new Uint8Array(bytes)], 'avatar.png', {type});
 
@@ -50,10 +32,10 @@ function avatarFixture() {
 }
 
 test('identity renders truthful server values and own edit grant with native artwork', () => {
-  const html = render(ProfileIdentity, {profile, own: true, onEdit() {}});
+  const {html, raw} = nativeSnapshot(ProfileIdentity, {profile, own: true, onEdit() {}});
   assert.match(html, /Alex &lt;safe&gt;/); assert.match(html, /@alex/); assert.match(html, /My listening/);
   assert.match(html, /src="\/avatars\/alex.webp"/); assert.match(html, /Edit profile/);
-  assert.doesNotMatch(html, /<safe>|mountain|forest|data-track-path/);
+  assert.doesNotMatch(raw, /<safe>|mountain|forest|data-track-path/);
 });
 
 test('friend identity is read-only even with an irrelevant edit grant', () => {
@@ -71,25 +53,26 @@ test('identity artwork and name remain top-aligned, including the native empty a
 
 test('missing and unsafe avatars use native empty artwork without an enabled view action', () => {
   for (const avatar_url of [null, '', 'javascript:alert(1)', 'data:image/svg+xml,<svg/>', 'blob:foreign', '//third.example/photo', 'file:///tmp/avatar']) {
-    const html = render(ProfileIdentity, {profile: {...profile, avatar_url}});
+    const {html, raw} = nativeSnapshot(ProfileIdentity, {profile: {...profile, avatar_url}});
     assert.match(html, /album-artbox--empty/); assert.match(html, /No profile image for Alex/);
-    assert.doesNotMatch(html, /<img|View .*avatar/);
+    assert.doesNotMatch(raw, /<img|javascript:|data:image|blob:foreign|third.example|file:\/\/|View .*avatar/);
   }
 });
 
 test('profile editor uses an explicit save boundary and local-only image preview notice', () => {
-  const html = render(ProfileEditor, {profile, controller, onClose() {}});
+  const observed = nativeSnapshot(ProfileEditor, {profile, controller, onClose() {}}), html = observed.html;
   assert.match(html, /aria-label="Edit profile"/); assert.match(html, /Save profile/); assert.match(html, />Cancel</);
-  assert.match(html, /type="file"/); assert.match(html, /accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(observed.raw, /type="file"/); assert.match(observed.raw, /accept="image\/png,image\/jpeg,image\/webp"/);
   assert.match(html, /until you save/); assert.match(html, /5 MiB/); assert.match(html, /Edit name:/);
-  assert.doesNotMatch(html, /presets|localStorage|uploaded successfully/);
+  assert.doesNotMatch(observed.raw, /presets|localStorage|uploaded successfully/);
 });
 
 test('missing upload or edit grants do not expose a file picker', () => {
   for (const allowed_actions of [{can_edit: true}, {can_upload_avatar: true}, {can_edit: 'true', can_upload_avatar: true}]) {
     const own = {...profile, allowed_actions}, ownSnapshot = {...snapshot, friends: {status: 'ready', data: {profile: own}}};
-    const html = render(ProfileEditor, {profile: own, controller: {...controller,
-      getSnapshot: () => ownSnapshot}, onClose() {}});
+    const observation = nativeSnapshot(ProfileEditor, {profile: own, controller: {...controller,
+      getSnapshot: () => ownSnapshot}, onClose() {}}), html = observation.html;
+    assert.ok(observation.fileInputs.every(input => input.disabled), 'retained file inputs cannot be used without both exact grants');
     assert.doesNotMatch(html, /type="file"|Choose image/);
   }
 });

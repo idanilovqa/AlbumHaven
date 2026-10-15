@@ -11,7 +11,7 @@ function load(name, globals = {}) {
   return context;
 }
 
-for (const scenario of [
+const mobileParentFreshnessScenarios = [
   { name: 'unchanged live gallery', refreshes: 0, change() {} },
   { name: 'advanced inventory revision', refreshes: 1, change(state) { state.status.inventory_mutation_revision += 1; } },
   { name: 'replaced gallery view', refreshes: 1, change(state) { state.view = { ...state.view }; } },
@@ -31,7 +31,49 @@ for (const scenario of [
   { name: 'reconstructed history descriptor', refreshes: 1, change(_state, context) {
     vm.runInContext('mobilePageState.pages = JSON.parse(JSON.stringify(mobilePageState.pages));', context);
   } },
-]) {
+];
+
+for (const scenario of mobileParentFreshnessScenarios) {
+test(`Back safely aligns an exact jump anchor with ${scenario.name}`, () => {
+  const scroll = { scrollTop: 1200, scrollLeft: 0, getBoundingClientRect: () => ({ top: 0, width: 390, height: 600 }) };
+  const aligned = [];
+  let refreshes = 0;
+  const outlet = { dataset: {} };
+  const context = load('mobile-navigation.js', {
+    state: { view: { surface: 'albums', gallery_page: { anchor_artist: 'B', anchor_group_artist: 'B' },
+      artist_groups: [{ artist: 'B', albums: [{ key: 'b-album' }] }] },
+      ui: {}, status: { inventory_mutation_revision: 3 }, busy: false },
+    window: { innerWidth: 390, history: { state: { albumHavenNavigationPosition: 2 } } },
+    document: {
+      getElementById: id => id === 'mobile-page-outlet' ? outlet : id === 'albums-scroll' ? scroll : id === 'track-modal' ? {} : null,
+      querySelectorAll: () => [],
+    },
+    buildUrl: () => '/?surface=albums',
+    virtualGrid: {
+      scrollEl: scroll,
+      captureScrollAnchor: () => null,
+      scrollToArtist: artist => { aligned.push(artist); return true; },
+    },
+    stabilizeRootGalleryArtistAlignment() {},
+    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+    closeArtistsDrawer() {}, closeGalleryMainSurface() {}, requestAnimationFrame() {},
+  });
+  context.syncMobilePageShell = () => {};
+  context.writeMobilePageHistory = () => {};
+  context.cleanupMobilePage = () => {};
+  vm.runInContext("mobilePageState.originals.set('album', {});", context);
+  scenario.before?.(context.state);
+  assert.equal(context.presentMobilePage({ kind: 'album', albumKey: 'b-album' }), true);
+  vm.runInContext("mobilePageState.pages[0].parentGalleryAnchorArtist = 'B';", context);
+  scenario.change(context.state, context);
+  context.window.history.state = { albumHavenNavigationPosition: 2, mobilePages: [] };
+  assert.equal(context.handleMobilePagePopState(), true);
+  assert.deepEqual(aligned, ['B']);
+  assert.equal(refreshes, scenario.refreshes, 'reuse only a fresh descriptor while reconciling every stale parent');
+});
+}
+
+for (const scenario of mobileParentFreshnessScenarios) {
 test(`Back restores the departure anchor with ${scenario.name}`, () => {
   const anchor = { scrollTop: 1200, scrollLeft: 0, albumKey: 'b-album', sectionOccurrenceKey: 'artist:B', offsetTop: 16 };
   const scroll = { scrollTop: 1200, scrollLeft: 0, getBoundingClientRect: () => ({ top: 0, width: 390, height: 600 }) };
@@ -733,7 +775,7 @@ test('mobile album capture drops a transient jump anchor after ordinary gallery 
   assert.equal(context.captureMobileParentGalleryAnchorArtist(), '');
 });
 
-test('mobile Back keeps an already-mounted transient artist window without refetching it', () => {
+test('mobile Back reconciles an unproven transient artist after optimistic alignment', () => {
   const calls = [];
   const context = load('mobile-navigation.js', {
     state: {
@@ -760,10 +802,14 @@ test('mobile Back keeps an already-mounted transient artist window without refet
     parentScrollPosition: { scrollTop: 320, scrollLeft: 0 },
   });
 
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.slice(0, 2), [
     ['align', 'Battlelore (canonical)'],
     ['stabilize', 'Battlelore (canonical)'],
   ]);
+  assert.equal(calls[2].preserveScroll, false);
+  assert.equal(calls[2].parentViewUrl, '/?surface=albums&all_artists=1');
+  assert.equal(calls[2].galleryAnchorArtist, 'Battlelore');
+  assert.equal(calls.length, 3);
 });
 
 test('mobile Back reloads a missing retained artist without pushing gallery history', () => {

@@ -173,6 +173,11 @@ function restoreMobileGalleryParent(descriptor) {
   const galleryAnchorArtist = atParent
     ? String(descriptor?.parentGalleryAnchorArtist || '').trim()
     : '';
+  const liveParent = descriptor && mobileLiveGalleryParents.get(descriptor);
+  const canReuseLiveParent = atParent && liveParent && mobileGalleryParentIsSettled()
+    && liveParent.view === state.view && liveParent.groups === state.view?.artist_groups
+    && liveParent.revision === state.status?.inventory_mutation_revision
+    && descriptor.parentViewUrl === buildUrl(state.view);
   if (
     galleryAnchorArtist
     && typeof state !== 'undefined'
@@ -186,7 +191,7 @@ function restoreMobileGalleryParent(descriptor) {
       && virtualGrid?.scrollToArtist?.(mountedGalleryArtist)
     ) {
       stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
-      return;
+      if (canReuseLiveParent) return;
     }
   }
   const position = atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
@@ -216,11 +221,7 @@ function restoreMobileGalleryParent(descriptor) {
   ) {
     virtualGrid.restoreScrollAnchor(descriptor.parentScrollAnchor);
   }
-  const liveParent = descriptor && mobileLiveGalleryParents.get(descriptor);
-  if (atParent && position && options.absoluteScrollPositionApplied && liveParent && mobileGalleryParentIsSettled()
-    && liveParent.view === state.view && liveParent.groups === state.view?.artist_groups
-    && liveParent.revision === state.status?.inventory_mutation_revision
-    && descriptor.parentViewUrl === buildUrl(state.view)) return;
+  if (position && options.absoluteScrollPositionApplied && canReuseLiveParent) return;
   handleGalleryBootstrapPopState(options);
 }
 function presentMobilePage(descriptor) {

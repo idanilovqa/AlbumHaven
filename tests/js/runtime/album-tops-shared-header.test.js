@@ -1,240 +1,154 @@
+'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const vm = require('node:vm');
-const {createRequire} = require('node:module');
-const root = path.resolve(process.env.ALBUMHAVEN_FRONTEND_ROOT || path.join(__dirname, '../../..'));
-const local = createRequire(path.join(root, 'package.json'));
-const React = local('react');
-const {renderToStaticMarkup} = local('react-dom/server');
-const {buildSync} = local('esbuild');
-const {createNativeHomeRuntime, buttonNamed} = local('./tests/js/runtime/native-home-harness.cjs');
-const code = buildSync({entryPoints: [path.join(root, 'music_app/static/js/album-tops/app.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
-const TOP = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const BROWSE = 'library.browse.read', CREATE = 'library.album_tops.create';
-const slots = ['children', 'identity', 'leading', 'actions', 'outsideActions', 'finalAction'];
-function elements(node) {
-  if (!React.isValidElement(node)) return [];
-  const found = [node];
-  for (const key of slots) React.Children.forEach(node.props[key], child => {found.push(...elements(child));});
-  return found;
-}
-const named = (tree, name) => elements(tree).filter(node => node.type?.name === name);
-const buttons = tree => named(tree, 'Button');
-const button = (tree, label) => buttons(tree).find(node => node.props.children === label);
-const labels = tree => buttons(tree).map(node => node.props.children);
-function fixture(t, {selected = true, grants = {}, editDraft = false} = {}) {
-  let state = {scopeKey: 'shared-header:actor:library', selectedTopRef: selected ? TOP : null,
-    directory: {status: 'ready', data: {tops: [], allowed_actions: {[BROWSE]: true, [CREATE]: true, can_create: true}}},
-    detail: {status: selected ? 'ready' : 'idle', data: selected ? {top_ref: TOP, title: 'Top <safe>', description: 'Subtitle', revision: '7', items: [],
-      ...(editDraft ? {edit_draft: {title: 'Top <safe>', description: 'Subtitle', items: []}} : {}),
-      allowed_actions: {[BROWSE]: true, can_edit: true, can_view_sharing: true, can_copy: true, can_delete: true, ...grants}} : null}, mutation: {status: 'idle'}};
-  const native = createNativeHomeRuntime(), calls = {opens: [], mutations: [], confirms: []};
-  const runtime = {buttonHtml: value => native.context.ButtonComponent.renderButton(value),
-    actionHtml: value => native.context.ButtonComponent.renderActionButton(value),
-    alertHtml: value => native.context.buildOnPageAlertHtml(value),
-    galleryCardHtml: value => native.context.buildGalleryCardHtml(value), artboxHtml: value => native.context.buildAlbumArtboxHtml(value),
-    confirm: async (...args) => {calls.confirms.push(args); return true;}};
-  const controller = {getSnapshot: () => state, mutate: async (...args) => {calls.mutations.push(args); return true;},
-    open() {}, load() {}, canRetryMutation: () => false};
-  // Existing component-test hook contract: real view handlers and effects, no
-  // replacement application controller, React reconciliation or geometry claim.
-  const store = []; let cursor = 0, pending = [];
-  const effect = (callback, deps) => {const index = cursor++, old = store[index];
-    if (!old || !deps || deps.some((value, i) => !Object.is(value, old.deps[i]))) pending.push(() => {
-      old?.cleanup?.(); store[index] = {deps, cleanup: callback()};
-    });};
-  const hooks = {...React, useRef(value) {return store[cursor++] ||= {current: value};},
-    useState(initial) {const slot = store[cursor++] ||= {value: typeof initial === 'function' ? initial() : initial};
-      return [slot.value, next => {slot.value = typeof next === 'function' ? next(slot.value) : next;}];},
-    useEffect: effect, useLayoutEffect: effect};
-  const loaded = {exports: {}};
-  vm.runInNewContext(code, {module: loaded, exports: loaded.exports, console, AbortController,
-    require: name => name === 'react' ? hooks : local(name)});
-  t.after(() => {for (const slot of store) slot?.cleanup?.();});
-  const props = () => ({runtime, controller, state, onOpen: ref => calls.opens.push(ref)});
-  return {native, calls, runtime, controller, state: () => state, replace: next => {state = next;},
-    render() {cursor = 0; pending = []; const tree = loaded.exports.AlbumTopsView(props()); for (const run of pending) run(); return tree;},
-    markup(tree) {const host = native.document.createElement('div'); host.innerHTML = renderToStaticMarkup(tree); return host;}};
-}
-function shared(tree) {
-  const headers = named(tree, 'SharedHeader');
-  assert.equal(headers.length, 1, 'PRODUCT_NOT_IMPLEMENTED: Album Tops must use exactly one existing SharedHeader owner');
-  assert.equal(elements(tree).filter(node => node.type === 'header').length, 0, 'no bespoke header wrapper competes with SharedHeader');
-  return headers[0];
-}
+const {load, id, ALBUM, ACTIONS, labels, fixture, measure, navigation, drain, nativeEnvironment} = require('./album-tops-native-fixtures/shared-header-driver.cjs');
 
-test('directory delegates its one Create action to the shared Tools capsule', t => {
-  const h = fixture(t, {selected: false}), tree = h.render(), header = shared(tree);
-  assert.deepEqual(labels(header.props.actions), ['Create Album Top']);
-  assert.deepEqual(labels(header.props.leading), []);
-  assert.deepEqual(labels(header.props.outsideActions), []);
-  assert.deepEqual(labels(header.props.finalAction), []);
-  const host = h.markup(tree), actual = host.querySelector('[data-shared-header]');
-  assert.ok(actual); assert.equal(host.querySelectorAll('header').length, 1);
-  assert.equal(actual.getAttribute('aria-label'), 'Album Tops header');
-  assert.equal(actual.getAttribute('tabindex'), '-1');
-  assert.ok(buttonNamed(actual.querySelector('[data-header-action-capsule]'), /^Create Album Top$/));
-  assert.equal(actual.querySelectorAll('[data-header-tools]').length, 1);
+test('directory delegates its one Create action to the shared Tools capsule', async t => {
+  const h = await fixture(t, {selected: false}), header = h.header();
+  assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), ['Create Album Top']);
+  for (const slot of ['leading', 'outside', 'final-action']) assert.deepEqual(labels(header.querySelector(`.home-header__${slot}`)), []);
+  assert.equal(header.getAttribute('aria-label'), 'Album Tops header'); assert.equal(header.getAttribute('tabindex'), '-1');
+  assert.ok(h.button(header.querySelector('[data-header-action-capsule]'), 'Create Album Top'));
+  assert.equal(header.querySelectorAll('[data-header-tools]').length, 1);
 });
 
-test('detail delegates original ordered actions once and Back remains leading', t => {
-  const h = fixture(t), tree = h.render(), header = shared(tree);
-  assert.deepEqual(labels(header.props.leading), ['Back']);
-  assert.deepEqual(labels(header.props.actions), ['Edit Album Top', 'Share', 'Save a copy', 'Delete Album Top']);
-  assert.deepEqual(labels(header.props.outsideActions), []);
-  assert.deepEqual(labels(header.props.finalAction), []);
-  assert.deepEqual(labels(tree), ['Back', 'Edit Album Top', 'Share', 'Save a copy', 'Delete Album Top']);
-  const host = h.markup(tree), capsule = host.querySelector('[data-header-action-capsule]');
-  for (const label of ['Edit Album Top', 'Share', 'Save a copy', 'Delete Album Top']) {
-    assert.equal([...host.querySelectorAll('button')].filter(node => node.getAttribute('aria-label') === label).length, 1);
-    assert.ok(buttonNamed(capsule, new RegExp(`^${label}$`)));
-  }
-  assert.equal(buttonNamed(capsule, /^Back$/, false), null);
-  assert.match(host.innerHTML, /Top &lt;safe&gt;/);
+test('detail delegates original ordered actions once and Back remains leading', async t => {
+  const h = await fixture(t), header = h.header(), capsule = header.querySelector('[data-header-action-capsule]');
+  assert.deepEqual(labels(header.querySelector('.home-header__leading')), ['Back']);
+  assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), ACTIONS);
+  for (const slot of ['outside', 'final-action']) assert.deepEqual(labels(header.querySelector(`.home-header__${slot}`)), []);
+  assert.deepEqual(labels(h.host), ['Back', ...ACTIONS]);
+  for (const label of ACTIONS) {assert.equal(h.host.querySelectorAll('button').filter(node => node.getAttribute('aria-label') === label).length, 1); assert.ok(h.button(capsule, label));}
+  assert.equal(capsule.querySelector('[aria-label="Back"]'), null); assert.match(h.host.innerHTML, /Top &lt;safe&gt;/);
 });
 
-test('shared capsule retains strict current action projections and busy state', t => {
-  for (const grants of [{can_edit: false, can_view_sharing: false, can_copy: false, can_delete: false},
-    {can_edit: 'true', can_view_sharing: 1, can_copy: 'true', can_delete: 1}]) {
-    const h = fixture(t, {grants}); assert.deepEqual(labels(shared(h.render()).props.actions), []);
+test('shared capsule retains strict current action projections and busy state', async t => {
+  for (const grants of [{can_edit: false, can_view_sharing: false, can_copy: false, can_delete: false}, {can_edit: 'true', can_view_sharing: 1, can_copy: 'true', can_delete: 1}]) {
+    const h = await fixture(t, {grants}); assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), []);
   }
   for (const mutation of [{status: 'loading'}, {status: 'uncertain'}, {status: 'idle', refreshing: true}]) {
-    const h = fixture(t); h.replace({...h.state(), mutation});
-    for (const action of buttons(shared(h.render()).props.actions)) assert.equal(action.props.disabled, true);
+    const h = await fixture(t); h.replace({...h.state(), mutation});
+    const actions = h.header().querySelector('.home-header__primary-actions').querySelectorAll('button');
+    assert.equal(actions.length, 4); for (const action of actions) assert.equal(action.disabled, true);
   }
-  const h = fixture(t); h.replace({...h.state(), detail: {status: 'denied', data: null}});
-  assert.deepEqual(labels(shared(h.render()).props.actions), []);
+  const h = await fixture(t); h.replace({...h.state(), detail: {status: 'denied', data: null}});
+  assert.deepEqual(labels(h.header().querySelector('.home-header__primary-actions')), []);
 });
 
 test('retired capsule handlers cannot act on another detail object or revoked grants', async t => {
-  for (const kind of ['replacement', 'revoked']) for (const label of ['Edit Album Top', 'Share', 'Save a copy', 'Delete Album Top']) {
-    const h = fixture(t), tree = h.render(); shared(tree); const callback = button(tree, label).props.onClick;
-    const old = h.state(), data = {...old.detail.data, ...(kind === 'revoked' ? {allowed_actions: {[BROWSE]: true}} : {})};
-    h.replace({...old, detail: {...old.detail, data}}); await callback();
-    assert.deepEqual(h.calls.mutations, []); assert.deepEqual(h.calls.confirms, []);
-    const next = h.render(); assert.equal(named(next, 'ShareAlbumTop').length, 0);
-    assert.equal(named(next, 'TopFields').length, 0); assert.equal(named(next, 'AlbumTopBuilder').length, 0);
+  for (const kind of ['replacement', 'revoked']) for (const label of ACTIONS) {
+    const h = await fixture(t), button = h.button(h.header(), label), old = h.state();
+    const data = {...old.detail.data, ...(kind === 'revoked' ? {allowed_actions: {'library.browse.read': true}} : {})};
+    h.replace({...old, detail: {...old.detail, data}}, false); h.click(button); await drain();
+    assert.deepEqual(h.calls.mutations, []); assert.deepEqual(h.calls.confirms, []); assert.equal(h.opens.length, 0);
+    h.render(); assert.equal(h.host.querySelector('form'), null); assert.equal(h.content().querySelector('form'), null); assert.equal(h.modal().hidden, true);
   }
 });
 
 test('Delete keeps the confirmation-time snapshot guard after shared delegation', async t => {
-  const h = fixture(t), tree = h.render(); shared(tree);
-  let resolve; h.runtime.confirm = () => new Promise(yes => {resolve = yes;});
-  const pending = button(tree, 'Delete Album Top').props.onClick();
-  h.replace({...h.state(), mutation: {status: 'idle'}}); resolve(true); await pending;
-  assert.deepEqual(h.calls.mutations, []);
+  const h = await fixture(t); h.click(h.button(h.header(), 'Delete Album Top'));
+  assert.equal(h.calls.confirms.length, 1); assert.equal(h.document.getElementById('app-confirm-modal').hidden, false);
+  h.replace({...h.state(), mutation: {status: 'idle'}}, false);
+  h.click(h.document.getElementById('app-confirm-accept')); await drain(); assert.deepEqual(h.calls.mutations, []);
 });
 
-test('inline draft header reuses SharedHeader with the exact field/action nodes and guarded Back', async t => {
-  const h = fixture(t, {editDraft: true}); let tree = h.render(); shared(tree);
-  button(tree, 'Edit Album Top').props.onClick(); tree = h.render();
-  const inline = named(tree, 'InlineAlbumTopEdit')[0]; assert.ok(inline);
-  const fields = React.createElement('input', {name: 'title', defaultValue: 'Draft'});
-  const actions = React.createElement(React.Fragment, null, React.createElement('button', null, 'Save'), React.createElement('button', null, 'Cancel'));
-  const cancels = []; let allow = false;
-  const edit = {fields, actions, busy: false, cancel: async options => {cancels.push(options); return allow;}};
-  const header = shared(inline.props.renderHeader(edit));
-  assert.ok(elements(header.props.identity).includes(fields) || elements(header.props.children).includes(fields), 'draft field keeps its exact React node');
-  assert.equal(header.props.actions, actions, 'Save/Cancel remain owned by InlineAlbumTopEdit');
-  assert.deepEqual(labels(header), ['Back'], 'normal Top actions disappear while inline editing');
-  await button(header.props.leading, 'Back').props.onClick(); assert.deepEqual(h.calls.opens, []);
-  allow = true; await button(header.props.leading, 'Back').props.onClick(); assert.deepEqual(h.calls.opens, [null]);
-  assert.equal(cancels.length, 2); assert.equal(cancels[0].restoreFocus, false); assert.equal(cancels[1].restoreFocus, false);
-  assert.equal(button(shared(inline.props.renderHeader({...edit, busy: true})).props.leading, 'Back').props.disabled, true);
+test('inline draft header reuses shared header with exact field/action nodes and guarded Back', async t => {
+  const h = await fixture(t, {editDraft: true}), nav = navigation(h);
+  h.click(h.button(h.header(), 'Edit Album Top'));
+  const header = h.header(), form = h.host.querySelector('form'), fields = form.querySelector('.album-top-builder__identity'), actions = form.querySelector('.playlists__actions');
+  assert.ok(form); assert.equal(header.querySelector('.gallery-bar__title').firstChild, fields);
+  assert.equal(actions.parentNode, header.querySelector('.home-header__primary-actions'));
+  assert.deepEqual(labels(header), ['Back', 'Save', 'Cancel']);
+  const input = fields.querySelector('[name="top-name"]'), save = h.button(actions, 'Save'), cancel = h.button(actions, 'Cancel');
+  h.input(input, 'Draft'); h.render();
+  assert.equal(h.header(), header); assert.equal(form.querySelector('.album-top-builder__identity'), fields); assert.equal(form.querySelector('.playlists__actions'), actions);
+  assert.equal(h.button(actions, 'Save'), save); assert.equal(h.button(actions, 'Cancel'), cancel);
+  h.click(h.button(header, 'Back')); await drain(); assert.deepEqual(h.calls.opens, []); assert.equal(nav.calls, 1); assert.equal(h.document.activeElement, input);
+  h.replace({...h.state(), mutation: {status: 'loading'}}); assert.equal(h.button(header, 'Back').disabled, true);
+  h.replace({...h.state(), mutation: {status: 'idle'}}); nav.allow = true; h.click(h.button(header, 'Back')); await drain();
+  assert.deepEqual(h.calls.opens, [null]); assert.equal(nav.calls, 2); assert.equal(nav.callbacks, 1);
+  assert.notEqual(h.document.activeElement, h.header().querySelector('[aria-label="Edit Album Top"]'), 'Back uses cancel({restoreFocus:false})');
 });
 
-// Use the native harness's DOM for visibility ancestry and connectivity. Rect
-// availability is supplied explicitly; this is focus-target policy, not layout
-// measurement or a browser-focus acceptance claim.
-function focusHost(h, {compact = false, toolsHidden = false, editDisabled = false} = {}) {
-  const host = h.native.document.createElement('header');
-  host.setAttribute('tabindex', '-1');
-  host.innerHTML = `<span ${toolsHidden ? 'hidden' : ''}><button data-header-tools="true" aria-label="Tools">Tools</button></span><span ${compact ? 'inert="" aria-hidden="true"' : ''}><button aria-label="Edit Album Top" ${editDisabled ? 'disabled' : ''}>Edit Album Top</button></span>`;
-  h.native.document.body.appendChild(host);
-  const focused = [];
-  for (const node of [host, ...host.querySelectorAll('button')]) {
-    node.getClientRects = () => node.closest('[hidden],[inert],[aria-hidden="true"]') ? [] : [{}];
-    node.focus = () => focused.push(node);
-  }
-  return {host, focused, edit: host.querySelector('[aria-label="Edit Album Top"]'), tools: host.querySelector('[data-header-tools]')};
-}
-function attachHeader(header, host) {
-  assert.ok(header.props.headerRef, 'Top exposes its actual shared DOM header to existing focus owner');
-  if (typeof header.props.headerRef === 'function') header.props.headerRef(host);
-  else header.props.headerRef.current = host;
-}
-
-test('inline return selects visible Edit then shared Tools then focusable header', t => {
+// Real native measurement decides compactness before entry and after Cancel.
+// Only hidden/disabled fixture inputs are supplied to canonical button renderers.
+test('inline return selects visible Edit then shared Tools then focusable header', async t => {
   for (const [options, target] of [[{}, 'edit'], [{compact: true}, 'tools'], [{compact: true, toolsHidden: true}, 'host'], [{editDisabled: true, toolsHidden: true}, 'host']]) {
-    const h = fixture(t, {editDraft: true}), dom = focusHost(h, options);
-    let tree = h.render(); attachHeader(shared(tree), dom.host);
-    button(tree, 'Edit Album Top').props.onClick(); tree = h.render();
-    const inline = named(tree, 'InlineAlbumTopEdit')[0]; assert.ok(inline);
-    inline.props.onClose({restoreFocus: true}); h.render();
-    assert.equal(dom.focused.at(-1), dom[target], JSON.stringify(options));
+    const h = await fixture(t, {editDraft: true}), width = options.compact ? 210 : 1000;
+    const original = measure(h, width);
+    assert.equal(original.getAttribute('data-header-compact'), String(Boolean(options.compact)));
+    if (options.compact) h.click(h.button(original, 'Tools'));
+    h.click(h.button(original, 'Edit Album Top')); assert.ok(h.host.querySelector('form'));
+    assert.equal(original.isConnected, false, 'inline owner retires the old normal header');
+    const render = h.runtime.actionHtml;
+    h.runtime.actionHtml = config => render(config.ariaLabel === 'Tools' && options.toolsHidden ? {...config, hidden: true}
+      : config.ariaLabel === 'Edit Album Top' && options.editDisabled ? {...config, disabled: true} : config);
+    // The shared platform's basic focus() checks connectivity/disabled only.
+    // Add the browser restriction; never redirect focus to an expected node.
+    const focus = h.context.Element.prototype.focus;
+    h.context.Element.prototype.focus = function (...args) {
+      if (this.closest('[hidden],[inert],[aria-hidden="true"]')) return;
+      return focus.apply(this, args);
+    };
+    h.click(h.button(h.header(), 'Cancel')); await drain();
+    const header = measure(h, width);
+    assert.notEqual(header, original, 'normal header was actually recreated');
+    assert.equal(header.getAttribute('data-header-compact'), String(Boolean(options.compact)));
+    assert.equal(header.querySelector('.home-header__actions').hasAttribute('inert'), Boolean(options.compact));
+    const edit = header.querySelector('[aria-label="Edit Album Top"]'), tools = header.querySelector('[data-header-tools]');
+    assert.equal(tools.hidden, Boolean(options.toolsHidden)); assert.equal(edit.disabled, Boolean(options.editDisabled));
+    const expected = target === 'host' ? header : target === 'edit' ? edit : tools;
+    assert.equal(h.document.activeElement, expected, JSON.stringify(options));
+    assert.equal(Boolean(expected.closest('[hidden],[inert],[aria-hidden="true"]')), false, 'return target is visible and not inert');
   }
 });
 
-test('dialog focus return rejects a connected opener hidden by compact layout', t => {
+test('dialog focus return rejects a connected opener hidden by compact layout', async t => {
   for (const kind of ['Edit Album Top', 'Share']) for (const compact of [false, true]) {
-    const h = fixture(t), dom = focusHost(h, {compact});
-    const tree = h.render(); attachHeader(shared(tree), dom.host);
-    button(tree, kind).props.onClick({target: dom.edit});
-    const next = h.render();
-    const dialog = kind === 'Share' ? named(next, 'ShareAlbumTop')[0] :
-      named(next, 'TopFields')[0] || named(next, 'AlbumTopBuilder')[0];
-    assert.ok(dialog, kind);
-    assert.equal(dialog.props.returnFocus(), compact ? dom.tools : dom.edit);
+    const h = await fixture(t); measure(h, 1000);
+    const opener = h.button(h.header(), kind); opener.focus(); h.click(opener); await drain(); assert.equal(h.modal().hidden, false);
+    if (compact) measure(h, 210);
+    assert.equal(opener.isConnected, true); assert.equal(h.header().getAttribute('data-header-compact'), String(compact));
+    h.click(h.document.getElementById('app-form-close')); await drain(); assert.equal(h.modal().hidden, true);
+    assert.equal(h.document.activeElement, compact ? h.header().querySelector('[data-header-tools]') : opener);
   }
 });
 
-test('SharedHeader external object/callback refs compose with its internal root and clear on unmount', () => {
-  const sharedCode = buildSync({entryPoints: [path.join(root, 'music_app/static/js/home-friends/shared-header.jsx')],
-    bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
+test('SharedHeader external object/callback refs compose with its internal root and clear on unmount', async () => {
+  const {mountSharedHeader} = await load('home-friends/shared-header.mjs');
   for (const kind of ['object', 'callback', 'absent']) {
-    const refs = [], seen = [], object = {current: null}, dom = {nodeType: 1};
-    const hooks = {...React, useRef(value) {const ref = {current: value}; refs.push(ref); return ref;},
-      useState(initial) {return [initial, () => {}];}, useCallback: callback => callback,
-      useLayoutEffect() {}, useEffect() {}};
-    const loaded = {exports: {}};
-    vm.runInNewContext(sharedCode, {module: loaded, exports: loaded.exports, require: name => name === 'react' ? hooks : local(name)});
-    const headerRef = kind === 'object' ? object : kind === 'callback' ? node => seen.push(node) : undefined;
-    const tree = loaded.exports.SharedHeader({runtime: {}, id: 'bounded-ref-test', headerRef, tabIndex: -1, ariaLabel: 'Album Tops header'});
-    assert.equal(tree.type, 'header'); assert.equal(tree.props.tabIndex, -1); assert.equal(tree.props['aria-label'], 'Album Tops header');
-    const commit = value => typeof tree.props.ref === 'function' ? tree.props.ref(value) : (tree.props.ref.current = value);
-    commit(dom); assert.equal(refs[0].current, dom, 'internal measurement owner retains its actual root');
-    if (kind === 'object') assert.equal(object.current, dom);
-    if (kind === 'callback') assert.deepEqual(seen, [dom]);
-    commit(null); assert.equal(refs[0].current, null);
-    if (kind === 'object') assert.equal(object.current, null);
-    if (kind === 'callback') assert.deepEqual(seen, [dom, null]);
+    const h = nativeEnvironment(), seen = [], object = {current: null}, headerRef = kind === 'object' ? object : kind === 'callback' ? node => seen.push(node) : undefined;
+    const owner = mountSharedHeader(h.host, h.runtime, {id: 'bounded-ref-test', headerRef, tabIndex: -1, ariaLabel: 'Album Tops header'}), dom = owner.element;
+    try {
+      assert.equal(dom.tagName, 'HEADER'); assert.equal(dom.getAttribute('tabindex'), '-1'); assert.equal(dom.getAttribute('aria-label'), 'Album Tops header');
+      assert.equal(h.host.firstChild, dom); if (kind === 'object') assert.equal(object.current, dom); if (kind === 'callback') assert.deepEqual(seen, [dom]);
+      measure(h, 1000); assert.equal(owner.element, dom);
+    } finally {owner.dispose();}
+    assert.equal(dom.isConnected, false); if (kind === 'object') assert.equal(object.current, null); if (kind === 'callback') assert.deepEqual(seen, [dom, null]); h.assertClean();
   }
 });
 
-test('SharedHeader preserves React 19 callback-ref cleanup and replacement lifetimes', () => {
-  const sharedCode = buildSync({entryPoints: [path.join(root, 'music_app/static/js/home-friends/shared-header.jsx')],
-    bundle: true, platform: 'node', format: 'cjs', write: false, external: ['react', 'react-dom']}).outputFiles[0].text;
-  const refs = [], events = []; let cursor = 0;
-  const hooks = {...React, useRef(value) {return refs[cursor++] ||= {current: value};},
-    useState(initial) {return [initial, () => {}];}, useCallback: callback => callback, useLayoutEffect() {}, useEffect() {}};
-  const loaded = {exports: {}};
-  vm.runInNewContext(sharedCode, {module: loaded, exports: loaded.exports, require: name => name === 'react' ? hooks : local(name)});
-  const render = headerRef => {cursor = 0; return loaded.exports.SharedHeader({runtime: {}, id: 'ref-replacement', headerRef});};
-  const first = {nodeType: 1, id: 'first'}, next = {nodeType: 1, id: 'next'};
+test('SharedHeader preserves callback-ref cleanup and replacement lifetimes', async () => {
+  const {mountSharedHeader} = await load('home-friends/shared-header.mjs'), h = nativeEnvironment(), events = [];
   const callback = node => {events.push(['attach', node]); return () => events.push(['cleanup', node]);};
-  const old = render(callback);
-  assert.equal(typeof old.props.ref, 'function', 'external ref must compose with shared internal ref');
-  const dispose = old.props.ref(first);
-  assert.equal(typeof dispose, 'function', 'React19 returned callback cleanup must not be discarded');
-  assert.equal(refs[0].current, first);
-  dispose();
-  assert.equal(refs[0].current, null); assert.deepEqual(events, [['attach', first], ['cleanup', first]]);
-  const replacement = {current: null}, replacementTree = render(replacement);
-  const disposeReplacement = replacementTree.props.ref(next);
-  assert.equal(replacement.current, next); assert.equal(refs[0].current, next);
-  if (typeof disposeReplacement === 'function') disposeReplacement(); else replacementTree.props.ref(null);
-  assert.equal(replacement.current, null); assert.equal(refs[0].current, null);
-  assert.deepEqual(events, [['attach', first], ['cleanup', first]], 'retired callback receives no duplicate null/cleanup');
+  const owner = mountSharedHeader(h.host, h.runtime, {id: 'ref-replacement', headerRef: callback}), first = owner.element, replacement = {current: null};
+  try {
+    assert.deepEqual(events, [['attach', first]]); owner.update({id: 'ref-replacement', headerRef: replacement});
+    assert.deepEqual(events, [['attach', first], ['cleanup', first]]); assert.equal(replacement.current, first); assert.equal(owner.element, first);
+  } finally {owner.dispose(); owner.dispose();}
+  assert.equal(replacement.current, null); assert.equal(first.isConnected, false); assert.deepEqual(events, [['attach', first], ['cleanup', first]], 'retired callback receives no duplicate null/cleanup'); h.assertClean();
+});
+
+test('responsive action order and progress nodes remain stable through compact and expanded updates', async t => {
+  const h = await fixture(t, {patch: {items: [{item_ref: id(21), album_ref: ALBUM, title: 'Album', artist: 'Artist', year: 2001}], top_viewer_overlay: {item_progress: {[ALBUM]: {progress_revision: '4', manual_completed_at: null}}}}});
+  const header = h.header(), actions = ACTIONS.map(label => h.button(header, label)), title = header.querySelector('.gallery-bar__title').firstChild;
+  const completion = h.host.querySelector('[data-gallery-card-intent="complete"]'); assert.ok(completion);
+  for (const [width, compact] of [[1000, false], [210, true], [1000, false]]) {
+    measure(h, width); assert.equal(header.getAttribute('data-header-compact'), String(compact));
+    assert.deepEqual(labels(header.querySelector('.home-header__primary-actions')), ACTIONS);
+    ACTIONS.forEach((label, index) => assert.equal(header.querySelector(`[aria-label="${label}"]`), actions[index]));
+    h.replace({...h.state(), mutation: {status: 'idle'}});
+    assert.equal(h.header(), header); assert.equal(header.querySelector('.gallery-bar__title').firstChild, title);
+    assert.equal(h.host.querySelector('[data-gallery-card-intent="complete"]'), completion); assert.equal(completion.getAttribute('aria-pressed'), 'false');
+  }
 });

@@ -30,6 +30,9 @@ export function mountSharedHeader(host, runtime, initial) {
   const trigger = () => triggerHost.firstElementChild;
   const focusable = node => node?.isConnected && !node.disabled && node.getAttribute('aria-disabled') !== 'true'
     && !node.closest('[hidden],[inert],[aria-hidden="true"]') && node.getClientRects().length > 0;
+  const collapsedFocusTarget = () => focusable(trigger()) ? trigger()
+    : root.hasAttribute('tabindex') && focusable(root) ? root
+      : [...leading.querySelectorAll('button')].find(focusable);
   const childMenu = target => Boolean(root.querySelector('[aria-expanded="true"]:not([data-header-tools])')
     && target?.closest?.('[role="menu"], [role="dialog"]'));
   const buttonProps = () => ({icon: 'tools', label: 'Tools', attributes: {'data-header-tools': 'true',
@@ -75,13 +78,13 @@ export function mountSharedHeader(host, runtime, initial) {
       compact = nextCompact; outside = nextOutside; if (!compact) open = false;
       // Reveal the trigger before moving focus and concealing consumer controls.
       triggerHost.hidden = !hasActions() || !compact;
-      if (focusTools && focusable(trigger())) trigger().focus({preventScroll: true});
+      if (focusTools) collapsedFocusTarget()?.focus({preventScroll: true});
       if (disposed || operation !== revision) return;
       apply();
     }
     if (focusInline) [...actions.querySelectorAll('button'), ...outsideActions.querySelectorAll('button'), ...root.querySelectorAll('button')].find(focusable)?.focus({preventScroll: true});
     if (disposed || operation !== revision) return;
-    if (compact && !open && root.contains(doc.activeElement) && doc.activeElement.closest('[inert]')) trigger()?.focus({preventScroll: true});
+    if (compact && !open && root.contains(doc.activeElement) && doc.activeElement.closest('[inert]')) collapsedFocusTarget()?.focus({preventScroll: true});
     if (disposed || operation !== revision) return;
     const rect = root.getBoundingClientRect(), viewport = win.visualViewport;
     const viewportTop = (viewport?.offsetTop || 0) + 8, viewportBottom = (viewport?.offsetTop || 0) + (viewport?.height || win.innerHeight) - 8;

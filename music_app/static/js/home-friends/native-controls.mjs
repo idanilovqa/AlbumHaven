@@ -22,8 +22,9 @@ export function mountButton(host, runtime, initial) {
   };
   const update = next => {
     if (disposed) return;
-    props = next;
     const {label = '', onClick, icon, selected, ...options} = next;
+    if (typeof label !== 'string' && typeof label !== 'number') throw new TypeError('Native Button expects text labels.');
+    props = next;
     const config = {...options, label: String(label), disabled: options.disabled === true,
       attributes: {...options.attributes, ...(selected === undefined ? {} : {'aria-pressed': String(selected)})}};
     syncButton(host, icon ? runtime.actionHtml({...config, icon, pressed: selected,

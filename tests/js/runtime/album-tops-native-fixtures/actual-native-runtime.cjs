@@ -77,7 +77,7 @@ function nativeEnvironment() {
   const marker = '<div class="confirm-modal" id="app-confirm-modal" hidden>';
   assert.ok(modals.includes(marker));
   const modalHtml = modals.slice(modals.indexOf(marker)).replace("{{ action_button('Close dialog', id='app-form-close', icon='close', hidden=true) }}",
-    buttons.renderActionButton({id: 'app-form-close', icon: 'close', ariaLabel: 'Close dialog', hidden: true}));
+    buttons.renderActionButton({attributes: {id: 'app-form-close'}, icon: 'close', ariaLabel: 'Close dialog', hidden: true}));
   assert.doesNotMatch(modalHtml, /{%|{{/); document.body.insertAdjacentHTML('beforeend', modalHtml);
   for (const file of ['search-input.js', 'in-page-tabs.js', 'browser-dialog-helpers.js']) vm.runInContext(readRepo(`music_app/static/js/runtime/${file}`), context, {filename: file});
   vm.runInContext(readRepo('music_app/static/js/navigation-tree.js'), context, {filename: 'navigation-tree.js'});

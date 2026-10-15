@@ -26,8 +26,8 @@ export function analyzeNativeScrollGesture(samples, direction) {
   };
 }
 
-// CDP touch coordinates are integer-rounded and scrollTop may retain a fractional native pixel.
-const NATIVE_SCROLL_DISPLACEMENT_TOLERANCE_PX = 2;
+// Pinned Chrome CDP touch gestures can land four CSS pixels short while scrollTop remains fractional.
+const NATIVE_SCROLL_DISPLACEMENT_TOLERANCE_PX = 4;
 
 export function nativeScrollDisplacementMatchesCommand(actualDistance, commandedDistance) {
   const actual = Number(actualDistance);
@@ -153,6 +153,9 @@ export class GalleryRegressions {
   albumMetadataByKey(key) { return this.albumCardByKey(key).locator('.album-meta-row'); }
   albumDetailsByKey(key) {
     return this.albumCardByKey(key).locator('.album-title-button[data-open-tracklist="1"]');
+  }
+  albumOpenTriggerByKey(key) {
+    return this.albumCardByKey(key).locator('[data-open-tracklist="1"][data-album-key]').first();
   }
   get mobileAlbum() { return this.page.locator('#mobile-page-outlet #track-modal'); }
   get mobileBack() { return this.page.locator('#mobile-back-button'); }
@@ -438,10 +441,9 @@ export class GalleryRegressions {
     // parity-check: allow-read-only-measurement-evaluate -- identify a different artist's visible album after native wheel input
     return this.page.evaluate(excluded => {
       const viewport = document.getElementById('albums-scroll').getBoundingClientRect();
-      for (const metadata of document.querySelectorAll('#artist-groups .album-meta-row')) {
-        const bounds = metadata.getBoundingClientRect();
+      for (const card of document.querySelectorAll('#artist-groups .album-card')) {
+        const bounds = card.getBoundingClientRect();
         if (bounds.height <= 0 || bounds.top < viewport.top || bounds.bottom > viewport.bottom) continue;
-        const card = metadata.closest('.album-card');
         const artist = card?.closest('.artist-section')
           ?.querySelector('.family-artist-header[data-scroll-artist]')?.getAttribute('data-scroll-artist');
         const albumKey = card?.querySelector('[data-open-tracklist="1"][data-album-key]')?.getAttribute('data-album-key');
@@ -460,7 +462,7 @@ export class GalleryRegressions {
       await this.page.waitForTimeout(80);
       const target = await this.readFullyVisibleGalleryAlbumOutsideArtist(artist);
       if (!target) continue;
-      await this.revealAlbumWithGalleryWheel(this.albumMetadataByKey(target.albumKey));
+      await this.revealAlbumWithGalleryWheel(this.albumCardByKey(target.albumKey));
       return target;
     }
     throw new Error('Native gallery scrolling did not reveal a different artist');

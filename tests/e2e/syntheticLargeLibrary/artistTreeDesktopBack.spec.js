@@ -45,15 +45,15 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large desktop gallery restoration',
         : { artist, albumKey: await ui.firstAlbumKeyForArtist(artist) };
       if (scrollBeyondJump) expect(target.artist).not.toBe(artist);
       expect(target.albumKey).not.toBe('');
-      const metadata = ui.albumMetadataByKey(target.albumKey);
-      await expect(metadata).toBeInViewport({ ratio: 1 });
+      const albumOpenTrigger = ui.albumOpenTriggerByKey(target.albumKey);
+      await expect(albumOpenTrigger).toBeInViewport({ ratio: 1 });
       const anchor = await ui.captureSemanticVisibleCardAnchor(target.albumKey);
       expect(anchor.artist).toBe(target.artist);
       expect(anchor.top).not.toBeNull();
       const observation = await ui.startVisibleCardAnchorObservation(anchor);
       let samples;
       try {
-        await ui.albumDetailsByKey(target.albumKey).click();
+        await albumOpenTrigger.click();
         await expect(trackModalActions.trackModal.dialog).toBeVisible();
         await trackModalActions.trackModal.closeButton.click();
         await expect(trackModalActions.trackModal.dialog).toBeHidden();

@@ -46,8 +46,6 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         && !String(state.ui?.activeViewRequestUrl || '').trim()
       ), null, { timeout: 120000 });
 
-      await layout.selectView(view);
-
       await navigationPanelActions.openArtistTree();
       const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
       expect(artists.length).toBeGreaterThan(250);
@@ -58,6 +56,7 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
       await expect(ui.scrollToArtistAction).toBeVisible();
       await expect(ui.artistTreeContextMenu).toHaveAttribute('data-artist', requestedArtist);
       await ui.scrollToArtistAction.click();
+      await layout.selectView(view);
 
       await expect.poll(() => ui.readArtistJumpOwnership(requestedArtist))
         .toMatchObject({ anchorArtist: requestedArtist });
@@ -79,13 +78,13 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
 
       const albumKey = target.albumKey;
       expect(albumKey).not.toBe('');
-      const albumMetadata = ui.albumMetadataByKey(albumKey);
-      await expect(albumMetadata).toBeInViewport({ ratio: 1 });
+      const albumOpenTrigger = ui.albumOpenTriggerByKey(albumKey);
+      await expect(albumOpenTrigger).toBeInViewport({ ratio: 1 });
       const returnAnchor = await ui.captureSemanticVisibleCardAnchor(albumKey);
       expect(returnAnchor.albumKey).not.toBe('');
       expect(returnAnchor.artist).toBe(originatingArtist);
       expect(returnAnchor.top).not.toBeNull();
-      await albumMetadata.click();
+      await albumOpenTrigger.click();
       await expect(ui.mobileAlbum).toBeVisible();
       const anchoredBackRequests = [];
       const viewTimeline = [];

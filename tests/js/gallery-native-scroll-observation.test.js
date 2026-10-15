@@ -53,17 +53,19 @@ test('native scroll evidence reports total same-direction displacement for gestu
   assert.equal(evidence.maxContentDrift, 0);
 });
 
-test('native scroll displacement accepts the commanded distance within native rounding tolerance', async () => {
+test('native scroll displacement accepts the commanded distance within native delivery tolerance', async () => {
   const { nativeScrollDisplacementMatchesCommand } = await import('../e2e/poms/galleryRegressions.js');
 
   assert.equal(nativeScrollDisplacementMatchesCommand(128, 128), true);
   assert.equal(nativeScrollDisplacementMatchesCommand(126, 128), true);
   assert.equal(nativeScrollDisplacementMatchesCommand(130, 128), true);
+  assert.equal(nativeScrollDisplacementMatchesCommand(135, 139), true);
 });
 
 test('native scroll displacement rejects same-direction jumps beyond the commanded distance', async () => {
   const { nativeScrollDisplacementMatchesCommand } = await import('../e2e/poms/galleryRegressions.js');
 
   assert.equal(nativeScrollDisplacementMatchesCommand(138, 128), false);
+  assert.equal(nativeScrollDisplacementMatchesCommand(129, 139), false);
   assert.equal(nativeScrollDisplacementMatchesCommand(178, 128), false);
 });

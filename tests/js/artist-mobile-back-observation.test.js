@@ -91,11 +91,30 @@ test('ordinary scrolling discovers a different artist without assuming later mou
     assert.equal(artist, 'A');
     return wheels < 3 ? null : { artist: 'B', albumKey: 'b-album' };
   };
-  ui.albumMetadataByKey = key => { assert.equal(key, 'b-album'); return 'metadata'; };
-  ui.revealAlbumWithGalleryWheel = async metadata => { assert.equal(metadata, 'metadata'); settled += 1; };
+  ui.albumCardByKey = key => { assert.equal(key, 'b-album'); return 'card'; };
+  ui.revealAlbumWithGalleryWheel = async card => { assert.equal(card, 'card'); settled += 1; };
   assert.deepEqual(await ui.scrollToDifferentGalleryArtist('A'), { artist: 'B', albumKey: 'b-album' });
   assert.equal(wheels, 3);
   assert.equal(settled, 1);
+});
+
+test('mode-neutral album opener targets the first open trigger', async () => {
+  const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
+  const ui = Object.create(GalleryRegressions.prototype);
+  const firstTrigger = {};
+  let selector = '';
+  ui.albumCardByKey = key => {
+    assert.equal(key, 'album');
+    return {
+      locator(value) {
+        selector = value;
+        return { first: () => firstTrigger };
+      },
+    };
+  };
+
+  assert.equal(ui.albumOpenTriggerByKey('album'), firstTrigger);
+  assert.equal(selector, '[data-open-tracklist="1"][data-album-key]');
 });
 
 test('native artist long press uses 600 ms touch and detaches after failure', async () => {

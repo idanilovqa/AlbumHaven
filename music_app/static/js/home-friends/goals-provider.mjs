@@ -49,7 +49,8 @@ export function normalizeGoals(value) {
   if (value.goal_ref === null && (value.revision !== '1' || albums.length || GOAL_PERIODS.some(period => periods[period].cycle))) fail();
   return freeze({goal_ref: value.goal_ref, revision: value.revision, albums, periods,
     allowed_actions: {can_read: true, can_add: value.allowed_actions.can_add === true,
-      can_reset: value.allowed_actions.can_reset === true}});
+      can_reset: value.allowed_actions.can_reset === true,
+      can_complete: value.allowed_actions.can_complete === true, can_remove: value.allowed_actions.can_remove === true}});
 }
 export function createGoalsProvider(transport) {
   let disposed = false, generation = 0;
@@ -69,6 +70,8 @@ export function createGoalsProvider(transport) {
     subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     async read(options) {return normalizeGoals(await request('/account/goals', options));},
     async reset(command, options) {return request('/account/goals/reset', {...options, method: 'POST', body: command});},
+    async completion(command, options) {return request('/account/goals/completion', {...options, method: 'POST', body: command});},
+    async remove(command, options) {return request('/account/goals/remove', {...options, method: 'POST', body: command});},
     async operation(key, options) {if (!uuid(key)) fail(); return request(`/account/goals/operations/${encodeURIComponent(key)}`, options);},
     dispose() {if (disposed) return; disposed = true; generation++; unsubscribe?.(); listeners.clear();},
   });

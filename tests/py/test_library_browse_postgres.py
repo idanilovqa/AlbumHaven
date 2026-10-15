@@ -13606,6 +13606,66 @@ def test_problematic_files_summary_embeds_only_the_first_sorted_album_detail():
     assert "problematic_track_paths" not in remaining_summary
 
 
+def test_problematic_full_payload_materializes_duplicate_sources_only_for_initial_detail(monkeypatch):
+    from music_app.services import library as library_module
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    def duplicate_rows(album_key, album_title, album_id, track_id, track_key):
+        base = _normal_problematic_product_row(
+            album_key=album_key,
+            album_title=album_title,
+        )
+        base.update({
+            "album_id": album_id,
+            "album_release_year": 2001,
+            "track_id": track_id,
+            "track_key": track_key,
+            "duplicate_file_count": 2,
+        })
+        rows = []
+        for copy_name in ("Copy A", "Copy B"):
+            path = rf"D:\Music\Product Artist\{album_title} {copy_name}\01.flac"
+            rows.append({
+                **base,
+                "file_private_path": path,
+                "file_entry": {
+                    **base["file_entry"],
+                    "path": path,
+                    "year": "2001",
+                },
+            })
+        return rows
+
+    loaded_rows = [
+        *duplicate_rows("z-album", "Zulu Album", 101, 501, "zulu-track"),
+        *duplicate_rows("a-album", "Alpha Album", 102, 502, "alpha-track"),
+    ]
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _ProblematicSnapshotConnectionStub(),
+    )
+    repository._load_problematic_file_rows = lambda **_kwargs: loaded_rows
+    built_folders = []
+    real_builder = library_module._build_album_duplicate_source_payload
+
+    def track_builder(**kwargs):
+        built_folders.append(kwargs["folder_path"])
+        return real_builder(**kwargs)
+
+    monkeypatch.setattr(library_module, "_build_album_duplicate_source_payload", track_builder)
+
+    payload = repository._build_problematic_files_payload_uncached()
+
+    assert [item["key"] for item in payload["items"]] == ["a-album", "z-album"]
+    assert all("Duplicate files" in item["problem_reasons"] for item in payload["items"])
+    assert payload["initial_detail"]["key"] == "a-album"
+    assert len(payload["initial_detail"]["duplicate_sources"]) == 2
+    assert sorted(built_folders) == [
+        r"D:\Music\Product Artist\Alpha Album Copy A",
+        r"D:\Music\Product Artist\Alpha Album Copy B",
+    ]
+
+
 def test_problematic_files_page_builds_only_bounded_candidate_rows():
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 

@@ -4137,11 +4137,14 @@ def _duplicate_candidate_ids_from_index(index: list[tuple[int, str, object]], al
 
 
 def _duplicate_sources_from_rows(
-    rows: list[object], *, file_entries_by_path: Mapping[str, dict[str, object]] | None = None,
+    rows: list[object],
+    *,
+    file_entries_by_path: Mapping[str, dict[str, object]] | None = None,
+    defer_source_payloads: bool = False,
 ) -> dict[str, dict[str, object]]:
     """Use the domain's physical-container identity for every read projection."""
     from music_app.models.library import Album, Track
-    from music_app.services.library import _link_duplicate_album_sources, get_album_duplicate_sources
+    from music_app.services.library import _link_duplicate_album_sources
     from music_app.services.album_local_membership import rejected_local_album_paths
 
     albums = {}
@@ -4208,30 +4211,55 @@ def _duplicate_sources_from_rows(
             library_root_id=payload.get("file_library_root_id") or file_entry.get("library_root_id"),
             library_root_category=payload.get("file_library_root_category") or file_entry.get("library_root_category"),
         ))
-    _link_duplicate_album_sources(list(albums.values()))
-    for album in albums.values():
-        for source in get_album_duplicate_sources(album):
+    album_values = list(albums.values())
+    duplicate_contexts = _link_duplicate_album_sources(
+        album_values,
+        defer_source_payloads=True,
+    )
+
+    def attach_track_references(sources: list[dict[str, object]]) -> list[dict[str, object]]:
+        for source in sources:
             for track in source["tracks"]:
                 row = rows_by_path[track["path"]]
                 track["key"] = row.get("track_key")
                 track["track_ref"] = row.get("track_key")
+        return sources
+
     results = {}
-    for key, album in albums.items():
-        sources = get_album_duplicate_sources(album)
+    for (key, album), context in zip(albums.items(), duplicate_contexts):
+        materialize_sources = context["materialize_sources"]
+
+        def materialize_sources_with_track_references(
+            materialize_sources=materialize_sources,
+        ) -> list[dict[str, object]]:
+            return attach_track_references(materialize_sources())
+
+        sources = (
+            []
+            if defer_source_payloads
+            else materialize_sources_with_track_references()
+        )
         provenance_by_year = {}
         for track in album.tracks:
             provenance_by_year.setdefault(_coerce_int(track.year), []).append(
                 build_root_provenance_payload(track.library_root_id, track.library_root_category)
             )
-        for source in sources:
-            for track in source["tracks"]:
-                provenance_by_year.setdefault(_coerce_int(track.get("year")), []).append(
-                    build_root_provenance_payload(track.get("library_root_id"), track.get("library_root_category"))
-                )
+        for track in context["linked_tracks"]:
+            provenance_by_year.setdefault(_coerce_int(track.year), []).append(
+                build_root_provenance_payload(track.library_root_id, track.library_root_category)
+            )
         results[key] = {
-            "has_duplicate_files": bool(sources), "duplicate_sources": sources,
+            "has_duplicate_files": bool(context["has_duplicate_files"]),
+            "duplicate_sources": sources,
             "_root_provenance_by_year": {year: summarize_root_provenance_payloads(values) for year, values in provenance_by_year.items()},
-            **({"root_provenance": album.root_provenance} if sources else {}),
+            **({"root_provenance": album.root_provenance} if context["has_duplicate_files"] else {}),
+            **({
+                "_duplicate_source_materializer": materialize_sources_with_track_references,
+                "_duplicate_source_years": [
+                    {_coerce_int(track.year) for track in tracks}
+                    for tracks in context["source_track_groups"]
+                ],
+            } if defer_source_payloads and context["has_duplicate_files"] else {}),
         }
     return results
 
@@ -4372,11 +4400,15 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
             }
         )
     projected_albums = list(albums.values())
-    duplicates = _duplicate_sources_from_rows(rows, file_entries_by_path={
-        str(entry["path"]): entry
-        for album in albums.values()
-        for entry in album["_file_entries"]
-    })
+    duplicates = _duplicate_sources_from_rows(
+        rows,
+        file_entries_by_path={
+            str(entry["path"]): entry
+            for album in albums.values()
+            for entry in album["_file_entries"]
+        },
+        defer_source_payloads=True,
+    )
     for album in projected_albums:
         duplicate_result = duplicates.get(str(album.get("_persisted_album_key") or album.get("key")), {})
         sources = _duplicate_sources_for_projected_album(album, duplicate_result)
@@ -4384,7 +4416,13 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
         track_keys = [track["key"] for track in album["tracks"] if track["key"]]
         album.update(
             duplicate_sources=sources,
-            has_duplicate_files=bool(sources) or len(track_keys) != len(set(track_keys)),
+            has_duplicate_files=(
+                bool(duplicate_result.get("has_duplicate_files"))
+                if not album.get("_persisted_album_key")
+                or album.get("key") == album.get("_persisted_album_key")
+                else {_coerce_int(album.get("year"))}
+                in duplicate_result.get("_duplicate_source_years", [])
+            ) or len(track_keys) != len(set(track_keys)),
         )
         album["root_provenance"] = _duplicate_provenance_for_projected_album(album, duplicate_result)
         album["tracks"].sort(
@@ -5583,6 +5621,15 @@ def _problematic_album_summary_payload(
 def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, object] | None:
     from music_app.services.problem_suggestions import build_problem_suggestions
 
+    duplicate_source_materializer = album.get("_duplicate_source_materializer")
+    if callable(duplicate_source_materializer):
+        album = {
+            **album,
+            "duplicate_sources": _duplicate_sources_for_projected_album(
+                album,
+                {"duplicate_sources": duplicate_source_materializer()},
+            ),
+        }
     album_scope_reasons = _problematic_album_scope_reasons(album)
     track_problem_rows = _problematic_track_problem_rows(album)
     summary = _problematic_album_summary_payload(

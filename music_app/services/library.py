@@ -1147,7 +1147,11 @@ def _summarize_duplicate_album_provenance(
     ])
 
 
-def _link_duplicate_album_sources(albums: list[Album]) -> None:
+def _link_duplicate_album_sources(
+    albums: list[Album],
+    *,
+    defer_source_payloads: bool = False,
+) -> list[dict[str, object]]:
     """Link physical copies across edition records without changing their queues."""
     containers: dict[str, dict[str, Track]] = {}
     folder_paths: dict[str, str] = {}
@@ -1169,22 +1173,73 @@ def _link_duplicate_album_sources(albums: list[Album]) -> None:
         folder_identities[folder] = identity
         if identity is not None:
             identities.setdefault(identity, []).append((folder_paths[folder], tracks))
-    sources_by_identity = {
-        identity: [
-            _build_album_duplicate_source_payload(index=index, folder_path=folder, tracks=tracks)
-            for index, (folder, tracks) in enumerate(sorted(groups, key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold())))
-        ]
-        for identity, groups in identities.items() if len(groups) > 1
+    duplicate_groups_by_identity = {
+        identity: sorted(
+            groups,
+            key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
+        )
+        for identity, groups in identities.items()
+        if len(groups) > 1
     }
+    sources_by_identity: dict[tuple[str, str, int], list[dict[str, object]]] = {}
+
+    def materialize_identity_sources(identity: tuple[str, str, int]) -> list[dict[str, object]]:
+        sources = sources_by_identity.get(identity)
+        if sources is None:
+            sources = [
+                _build_album_duplicate_source_payload(
+                    index=index,
+                    folder_path=folder,
+                    tracks=tracks,
+                )
+                for index, (folder, tracks) in enumerate(duplicate_groups_by_identity[identity])
+            ]
+            sources_by_identity[identity] = sources
+        return sources
+
+    def materialize_sources(
+        duplicate_identities: tuple[tuple[str, str, int], ...],
+    ) -> list[dict[str, object]]:
+        sources = [
+            source
+            for identity in duplicate_identities
+            for source in materialize_identity_sources(identity)
+        ]
+        return [
+            {**source, "index": index, "label": str(index + 1)}
+            for index, source in enumerate(sources)
+        ]
+
+    contexts: list[dict[str, object]] = []
     for album, folder_keys in zip(albums, album_folder_keys):
         own_identities = {folder_identities[key] for key in folder_keys}
-        duplicate_identities = own_identities.intersection(sources_by_identity)
-        sources = [source for identity in sorted(duplicate_identities) for source in sources_by_identity[identity]]
-        sources = [{**source, "index": index, "label": str(index + 1)} for index, source in enumerate(sources)]
-        album._cached_duplicate_sources = sources
-        if sources:
-            linked_tracks = [track for identity in duplicate_identities for _, tracks in identities[identity] for track in tracks]
+        duplicate_identities = tuple(sorted(own_identities.intersection(duplicate_groups_by_identity)))
+        source_track_groups = [
+            tracks
+            for identity in duplicate_identities
+            for _, tracks in identities[identity]
+        ]
+        linked_tracks: list[Track] = []
+        if duplicate_identities:
+            linked_tracks = [track for tracks in source_track_groups for track in tracks]
             album.root_provenance = _summarize_duplicate_album_provenance(album.tracks, linked_tracks)
+        if defer_source_payloads:
+            album._cached_duplicate_sources = []
+
+            def deferred_materializer(
+                duplicate_identities=duplicate_identities,
+            ) -> list[dict[str, object]]:
+                return materialize_sources(duplicate_identities)
+
+            contexts.append({
+                "has_duplicate_files": bool(duplicate_identities),
+                "linked_tracks": linked_tracks,
+                "materialize_sources": deferred_materializer,
+                "source_track_groups": source_track_groups,
+            })
+        else:
+            album._cached_duplicate_sources = materialize_sources(duplicate_identities)
+    return contexts
 
 
 def _build_album_duplicate_source_payload(

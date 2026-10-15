@@ -8561,6 +8561,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     roleState.firstFrameNotified = true;
+    if (roleState.role === 'current') roleState.transportRecoveryAttempt = 0;
     if (!engine.diagnostics.firstFrameAtMs) {
       engine.diagnostics.firstFrameAtMs = performance.now();
     }

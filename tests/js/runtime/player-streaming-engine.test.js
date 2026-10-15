@@ -4212,6 +4212,53 @@ test('unexpected socket close reconnects once from the rendered position and lea
   assert.equal(stoppedSnapshot.diagnostics.lastError, undefined);
 });
 
+test('audible socket recovery restores the automatic reconnect allowance', async () => {
+  const harness = createEngineHarness();
+  const track = makeTrack();
+  await harness.api.start(track);
+  const first = harness.sent('open')[0];
+  harness.nodes[0].port.dispatch({
+    type: 'position',
+    generation: first.generation,
+    streamId: first.streamId,
+    timelineFrame: 3 * 48_000,
+  });
+
+  harness.sockets[0].unexpectedClose({ code: 1006, reason: 'first network loss' });
+  await harness.settle();
+  await harness.settle();
+
+  const recovered = harness.sockets[1].sent.find(({ type }) => type === 'open');
+  assert.ok(recovered);
+  harness.nodes[1].port.dispatch({
+    type: 'first-frame',
+    generation: recovered.generation,
+    streamId: recovered.streamId,
+    renderedFrame: 0,
+    contextTime: 4,
+  });
+  harness.nodes[1].port.dispatch({
+    type: 'position',
+    generation: recovered.generation,
+    streamId: recovered.streamId,
+    timelineFrame: 48_000,
+  });
+
+  harness.sockets[1].unexpectedClose({ code: 1006, reason: 'later network loss' });
+  await harness.settle();
+  await harness.settle();
+
+  assert.equal(harness.sockets.length, 3);
+  const recoveredAgain = harness.sockets[2].sent.find(({ type }) => type === 'open');
+  assert.ok(recoveredAgain);
+  assert.equal(recoveredAgain.path, track.path);
+  assert.equal(recoveredAgain.startFrame, 4 * 48_000);
+  const snapshot = harness.api.snapshot();
+  assert.notEqual(snapshot.mode, 'error');
+  assert.equal(snapshot.diagnostics.lastError, undefined);
+  assert.equal(snapshot.diagnostics.transportReconnects, 2);
+});
+
 test('concurrent prepare calls share one in-flight context, worklet, node, and socket', async () => {
   let releaseModule;
   const moduleGate = new Promise((resolve) => {

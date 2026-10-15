@@ -1,12 +1,11 @@
 // Synthetic providers and host; all mounted UI and controller modules are real.
-import React, {useState, useSyncExternalStore} from 'react';
-import {createRoot} from 'react-dom/client';
-import {AlbumTopBuilder} from './music_app/static/js/album-tops/builder.jsx';
-import {AlbumTopsView} from './music_app/static/js/album-tops/app.jsx';
-import {createAlbumTopController} from './music_app/static/js/album-tops/model.mjs';
-import {CreationSearch, CreationForm} from './music_app/static/js/playlists/creation.jsx';
-import {createPlaylistCreationController} from './music_app/static/js/playlists/creation.mjs';
-import {Tabs} from './music_app/static/js/home-friends/components.jsx';
+import {openAlbumTopBuilder} from '/music_app/static/js/album-tops/builder.mjs';
+import {mountAlbumTopsView} from '/music_app/static/js/album-tops/app.mjs';
+import {createAlbumTopController} from '/music_app/static/js/album-tops/model.mjs';
+import {mountCreationSearch} from '/music_app/static/js/playlists/native-creation.mjs';
+import {mountCreationForm} from '/music_app/static/js/playlists/native-creation-form.mjs';
+import {createPlaylistCreationController} from '/music_app/static/js/playlists/creation.mjs';
+import {mountTabs} from '/music_app/static/js/home-friends/native-controls.mjs';
 const id=n=>'00000000-0000-4000-8000-'+String(n).padStart(12,'0');
 const TOP=id(1),A=id(11),B=id(12),C=id(13),D=id(14),IA=id(21),IB=id(22),SOURCE=id(31);
 const BROWSE='library.browse.read',CREATE='library.album_tops.create',MANAGE='library.album_tops.manage',ITEMS='library.album_tops.items.manage';
@@ -24,15 +23,21 @@ function runtimeFor(options,calls){return {
 };}
 window.startReviewFixture=async(kind='top-create',options={})=>{
   const calls={search:[],admit:[],writes:[],confirms:[],forms:[]},pendingSearch=[],pendingWrites=[],pendingAdmissions=[];
-  const runtime=runtimeFor(options,calls),host=document.querySelector('#mount'),reactRoot=createRoot(host),opener=document.querySelector('#opener');
+  const runtime=runtimeFor(options,calls),host=document.querySelector('#mount'),opener=document.querySelector('#opener');
   let controller,settleShared,original,persisted,sequence=0;
   const held=(value,fail=false)=>{const match=typeof value==='string'?pendingSearch.find(row=>row.query===value):pendingSearch.at(-1);if(match){pendingSearch.splice(pendingSearch.indexOf(match),1);fail?match.reject(Object.assign(new Error('Unavailable'),{status:503})):match.resolve(match.result);}};
-  let dispose=()=>reactRoot.unmount();
+  let dispose=()=>{};
   if(kind==='shared-search'){
-    function Shared(){const [query,setQuery]=useState(''),[phase,setPhase]=useState('idle'),[tab,setTab]=useState('all');settleShared=()=>setPhase('ready');
-      return <section aria-label="Shared search probe"><CreationSearch runtime={runtime} id="shared-probe" value={query} disabled={false} label="Shared search" onChange={value=>{calls.search.push({q:value});setQuery(value);setPhase('loading');}}/>
-        <Tabs runtime={runtime} id="shared-tabs" label="Probe tabs" items={[[ 'all','All'],['selected','Selected']]} value={tab} onChange={setTab}/><output aria-label="Query state">{query}</output><output aria-label="Resource phase">{phase}</output></section>;}
-    reactRoot.render(<Shared/>);
+    const section=document.createElement('section');section.setAttribute('aria-label','Shared search probe');host.append(section);
+    const searchHost=document.createElement('div'),tabsHost=document.createElement('div'),queryOutput=document.createElement('output'),phaseOutput=document.createElement('output');
+    queryOutput.setAttribute('aria-label','Query state');phaseOutput.setAttribute('aria-label','Resource phase');section.append(searchHost,tabsHost,queryOutput,phaseOutput);
+    let query='',phase='idle',tab='all',search=null,tabs=null,disposed=false;
+    const searchProps=()=>({id:'shared-probe',value:query,disabled:false,label:'Shared search',onChange:value=>{if(disposed)return;calls.search.push({q:value});query=value;phase='loading';render();}});
+    const tabsProps=()=>({id:'shared-tabs',label:'Probe tabs',items:[['all','All'],['selected','Selected']],value:tab,onChange:value=>{if(disposed)return;tab=value;render();}});
+    function render(){if(disposed)return;search?.update(searchProps());tabs?.update(tabsProps());queryOutput.textContent=query;phaseOutput.textContent=phase;}
+    search=mountCreationSearch(searchHost,runtime,searchProps());tabs=mountTabs(tabsHost,runtime,tabsProps());render();
+    settleShared=()=>{phase='ready';render();};
+    dispose=()=>{if(disposed)return;disposed=true;search.dispose();tabs.dispose();section.remove();};
   }else if(kind==='playlist-create'){
     const grants={can_read:true,can_use_for_playlist:true},source={kind:'library',ref:'source:one',revision:'rev:one',source_protocol:'library_selection_v1',allowed_actions:grants};
     const page=query=>({status:'ready',data:{scopeKey:'playlist:fixture',mode:'ordinary',source,source_protocol:'library_selection_v1',entries_complete:false,
@@ -41,8 +46,11 @@ window.startReviewFixture=async(kind='top-create',options={})=>{
       if(!request.q)return Promise.resolve(result);return new Promise((resolve,reject)=>pendingSearch.push({query:request.q,resolve,reject,result}));},
       createPlaylistFromSelection:async request=>{calls.writes.push(request);return {status:'ready',data:{scopeKey:request.scopeKey,request_key:request.request_key,playlist_id:'fixture:created',revision:'1'}};}}});
     controller.setContext({scopeKey:'playlist:fixture',mode:'ordinary',canCreate:true,source});await controller.load();
-    function Playlist(){const state=useSyncExternalStore(controller.subscribe,controller.getSnapshot);return <CreationForm runtime={runtime} controller={controller} state={state} onDismiss={()=>{}}/>;}
-    reactRoot.render(<Playlist/>);dispose=()=>{reactRoot.unmount();controller.dispose();};
+    let owner=null,disposed=false;
+    const props=()=>({controller,state:controller.getSnapshot(),onDismiss:()=>{}});
+    const update=()=>{if(!disposed)owner?.update(props());},unsubscribe=controller.subscribe(update);
+    try{owner=mountCreationForm(host,runtime,props());update();}catch(error){unsubscribe();owner?.dispose();controller.dispose();throw error;}
+    dispose=()=>{if(disposed)return;disposed=true;unsubscribe();owner.dispose();controller.dispose();};
   }else{
     const items=[{item_ref:IA,album_ref:A,title:'Retained local',artist:'Artist',year:2001,original_position:4,position:1},{item_ref:IB,album_ref:B,title:'Retained nonlocal',artist:'Artist',year:null,original_position:9,position:2}];
     persisted={top_ref:TOP,revision:'7',title:'Curated Top',description:'Subtitle',visibility:'private',items,
@@ -62,10 +70,14 @@ window.startReviewFixture=async(kind='top-create',options={})=>{
         return {top_ref:TOP,revision:persisted.revision,action,request_key:command.request_key};}};
     controller=createAlbumTopController({providers,requestKey:()=>id(100+sequence++)});controller.setScope('top:review:fixture');await controller.load();
     const editing=kind==='top-inline'||kind==='top-edit';if(editing)await controller.open(TOP);
-    function Top(){const state=useSyncExternalStore(controller.subscribe,controller.getSnapshot),[open,setOpen]=useState(true);
-      if(kind==='top-inline')return <AlbumTopsView runtime={runtime} controller={controller} providers={providers} state={state} onOpen={ref=>controller.open(ref)}/>;
-      return open?<AlbumTopBuilder runtime={runtime} controller={controller} providers={providers} state={state} existing={editing?original:null} onClose={()=>setOpen(false)} returnFocus={()=>opener}/>:null;}
-    reactRoot.render(<Top/>);dispose=()=>{reactRoot.unmount();controller.dispose();};
+    let owner=null,closed=false,disposed=false;
+    const ownerProps=()=>({runtime,controller,providers,state:controller.getSnapshot(),existing:editing?original:null,
+      onOpen:ref=>controller.open(ref),onClose:()=>{closed=true;},returnFocus:()=>opener,fallbackHost:host});
+    const update=()=>{if(!closed&&!disposed)owner?.update(ownerProps());};
+    const unsubscribe=controller.subscribe(update);
+    try {owner=kind==='top-inline'?mountAlbumTopsView(host,runtime,ownerProps()):openAlbumTopBuilder(ownerProps());update();}
+    catch(error){unsubscribe();owner?.dispose();controller.dispose();throw error;}
+    dispose=()=>{if(disposed)return;disposed=true;unsubscribe();owner?.dispose();controller.dispose();};
   }
   window.reviewFixture={calls,controller,original,getPersisted:()=>persisted,resolveSearch:q=>kind==='shared-search'?settleShared?.():held(q),rejectSearch:q=>held(q,true),
     resolveWrite:()=>pendingWrites.shift()?.(),resolveAdmission:()=>pendingAdmissions.shift()?.resolve(),rejectAdmission:()=>pendingAdmissions.shift()?.reject(Object.assign(new Error('Admission unavailable'),{status:503})),dispose,

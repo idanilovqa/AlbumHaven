@@ -1,19 +1,17 @@
-// Synthetic providers and host; actual React app/controller, native bridge,
+// Synthetic providers and host; actual native app/controller, native bridge,
 // Settings/mobile navigation, request, and confirmation owners. No runtime stub.
-import React, {useState, useSyncExternalStore} from 'react';
-import {createRoot} from 'react-dom/client';
-import {AlbumTopBuilder} from './music_app/static/js/album-tops/builder.jsx';
-import {AlbumTopsView} from './music_app/static/js/album-tops/app.jsx';
-import {createAlbumTopController} from './music_app/static/js/album-tops/model.mjs';
+import {openAlbumTopBuilder} from '/music_app/static/js/album-tops/builder.mjs';
+import {mountAlbumTopsView} from '/music_app/static/js/album-tops/app.mjs';
+import {createAlbumTopController} from '/music_app/static/js/album-tops/model.mjs';
 const id=n=>'00000000-0000-4000-8000-'+String(n).padStart(12,'0');
 const TOP=id(1),A=id(11),B=id(12),C=id(13),D=id(14),IA=id(21),IB=id(22),SOURCE=id(31);
 const BROWSE='library.browse.read',CREATE='library.album_tops.create',MANAGE='library.album_tops.manage',ITEMS='library.album_tops.items.manage';
 window.startReviewFixture=async(kind='top-create',options={})=>{
   const calls={search:[],admit:[],preview:[],writes:[],confirms:[],forms:[]},pendingSearch=[],pendingWrites=[],pendingAdmissions=[];
-  const runtime=window.AlbumHavenAlbumTopsRuntime,host=document.querySelector('#mount'),reactRoot=createRoot(host),opener=document.querySelector('#opener');
+  const runtime=window.AlbumHavenAlbumTopsRuntime,host=document.querySelector('#mount'),opener=document.querySelector('#opener');
   let controller,original,persisted,sequence=0;
   const held=(value,fail=false)=>{const match=typeof value==='string'?pendingSearch.find(row=>row.query===value):pendingSearch.at(-1);if(match){pendingSearch.splice(pendingSearch.indexOf(match),1);fail?match.reject(Object.assign(new Error('Unavailable'),{status:503})):match.resolve(match.result);}};
-  let dispose=()=>reactRoot.unmount();
+  let dispose=()=>{};
   if(!['top-inline','top-create'].includes(kind))throw new Error('Unsupported UI port fixture kind');
   {
     const items=[{item_ref:IA,album_ref:A,title:'Retained local',artist:'Artist',year:2001,original_position:4,position:1},{item_ref:IB,album_ref:B,title:'Retained nonlocal',artist:'Artist',year:null,original_position:9,position:2}];
@@ -41,10 +39,14 @@ window.startReviewFixture=async(kind='top-create',options={})=>{
         return {top_ref:TOP,revision:persisted.revision,action,request_key:command.request_key};}};
     controller=createAlbumTopController({providers,requestKey:()=>id(100+sequence++)});controller.setScope(runtime.snapshot().scopeKey);await controller.load();
     const editing=kind==='top-inline'||kind==='top-edit';if(editing)await controller.open(TOP);
-    function Top(){const state=useSyncExternalStore(controller.subscribe,controller.getSnapshot),[open,setOpen]=useState(true);
-      if(kind==='top-inline')return <AlbumTopsView runtime={runtime} controller={controller} providers={providers} state={state} onOpen={ref=>controller.open(ref)}/>;
-      return open?<AlbumTopBuilder runtime={runtime} controller={controller} providers={providers} state={state} existing={editing?original:null} onClose={()=>setOpen(false)} returnFocus={()=>opener}/>:null;}
-    reactRoot.render(<Top/>);dispose=()=>{reactRoot.unmount();controller.dispose();};
+    let owner=null,closed=false,disposed=false;
+    const ownerProps=()=>({runtime,controller,providers,state:controller.getSnapshot(),existing:editing?original:null,
+      onOpen:ref=>controller.open(ref),onClose:()=>{closed=true;},returnFocus:()=>opener,fallbackHost:host});
+    const update=()=>{if(!closed&&!disposed)owner?.update(ownerProps());};
+    const unsubscribe=controller.subscribe(update);
+    try {owner=kind==='top-inline'?mountAlbumTopsView(host,runtime,ownerProps()):openAlbumTopBuilder(ownerProps());update();}
+    catch(error){unsubscribe();owner?.dispose();controller.dispose();throw error;}
+    dispose=()=>{if(disposed)return;disposed=true;unsubscribe();owner?.dispose();controller.dispose();};
   }
   window.reviewFixture={calls,controller,original,getPersisted:()=>persisted,resolveSearch:q=>held(q),rejectSearch:q=>held(q,true),
     resolveWrite:()=>pendingWrites.shift()?.(),resolveAdmission:()=>pendingAdmissions.shift()?.resolve(),rejectAdmission:()=>pendingAdmissions.shift()?.reject(Object.assign(new Error('Admission unavailable'),{status:503})),dispose,

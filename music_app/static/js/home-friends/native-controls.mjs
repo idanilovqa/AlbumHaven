@@ -35,29 +35,45 @@ export function mountButton(host, runtime, initial) {
 
 export function mountTabs(host, runtime, initial) {
   host.classList.add('home-friends__tabs');
-  let props, previousHtml, disposed = false;
+  let props, previousHtml, disposed = false, tabsOwner = null, revision = 0, rendering = false, pending = null;
   const sync = () => {
     if (disposed) return;
     const next = host.querySelector('[aria-selected="true"]')?.dataset.inPageTab;
     if (next && next !== props.value) props.onChange?.(next);
   };
-  const update = next => {
+  const render = next => {
     if (disposed) return;
+    const operation = ++revision;
+    const current = () => !disposed && revision === operation;
     props = next;
     const html = runtime.tabsHtml({id: next.id, label: next.label, selectedKey: next.value,
       tabs: next.items.map(([key, label, options]) => ({key, label, disabled: options?.disabled === true, panelId: options?.panelId}))});
-    if (html === previousHtml) return;
+    if (!current() || html === previousHtml) return;
     const active = host.contains(host.ownerDocument.activeElement) ? host.ownerDocument.activeElement.dataset.inPageTab : null;
+    const previousOwner = tabsOwner; tabsOwner = null;
+    previousOwner?.dispose?.();
+    if (!current()) return;
     host.innerHTML = html; previousHtml = html;
-    runtime.mountTabs(host.firstElementChild);
+    const mounted = runtime.mountTabs(host.firstElementChild);
+    if (!current()) {mounted?.dispose?.(); return;}
+    tabsOwner = mounted;
     if (active) {
       const buttons = [...host.querySelectorAll('[data-in-page-tab]')];
       (buttons.find(node => node.dataset.inPageTab === active && !node.disabled)
         || buttons.find(node => node.getAttribute('aria-selected') === 'true'))?.focus({preventScroll: true});
     }
   };
+  const update = next => {
+    if (disposed) return;
+    if (rendering) {pending = next; return;}
+    rendering = true;
+    try {
+      let value = next;
+      do {pending = null; render(value); value = pending;} while (value && !disposed);
+    } finally {rendering = false;}
+  };
   update(initial); host.addEventListener('click', sync); host.addEventListener('keydown', sync);
-  return {element: host, update, dispose() {if (disposed) return; disposed = true; host.removeEventListener('click', sync); host.removeEventListener('keydown', sync); host.replaceChildren(); props = null;}};
+  return {element: host, update, dispose() {if (disposed) return; disposed = true; revision++; pending = null; host.removeEventListener('click', sync); host.removeEventListener('keydown', sync); const previousOwner = tabsOwner; tabsOwner = null; try {previousOwner?.dispose?.();} finally {host.replaceChildren(); props = null;}}};
 }
 
 const chevron = '<svg class="ui-choice__chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>';

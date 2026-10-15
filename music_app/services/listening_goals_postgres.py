@@ -17,6 +17,9 @@ from music_app.services.listening_goal_bonus_settings import (
 )
 from music_app.services.listening_goal_bonus import BonusDrawCommand, normalize_bonus_draw
 from music_app.services import listening_goal_bonus_postgres as bonus
+from music_app.services.listening_goal_transition import (
+    GoalTransitionCommand, normalize_goal_transition, transition_goal_period,
+)
 from music_app.services.admin_authority import lock_admin_accounts
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.current_actor import ActorState
@@ -114,6 +117,69 @@ class PostgresListeningGoalsService:
             if getattr(error, 'sqlstate', None) in {'23505', '23503', '40001', '40P01'}:
                 raise GoalsError('concurrent_change', 409) from None
             raise
+
+    def transition(self, context, command, *, constraints=None):
+        if not isinstance(command, GoalTransitionCommand):
+            raise GoalsError('invalid_command')
+        command = normalize_goal_transition(command.payload())
+        with self._authorized(context, WRITE, constraints) as (connection, live, now):
+            account = live.actor.account_id
+            prior = bonus.replay(connection, account, live.actor.session_id, command)
+            if prior is not None:
+                return prior
+            aggregate, before, _ = self._load(connection, account)
+            revision = aggregate['revision'] if aggregate else 1
+            if str(revision) != command.revision:
+                raise GoalsError('revision_conflict', 409)
+            settings = project_bonus_settings(connection.execute(
+                'select * from app.listening_goal_bonus_settings where account_id=%s', (account,)).fetchone())
+            if settings['settings_revision'] != command.settings_revision:
+                raise GoalsError('settings_revision_conflict', 409)
+            if command.period not in before['periods']:
+                raise GoalsError('period_not_started', 409)
+            if revision == BIGINT_MAX:
+                raise GoalsError('revision_exhausted', 409)
+            # Captured draw provenance, not album admission kind or client hints:
+            # a MusicBrainz-admitted album may later have been a real bonus.
+            selected_members = before['periods'][command.period]['current']['album_refs']
+            origins = frozenset(str(row['catalog_ref']) for row in connection.execute(
+                '''select distinct catalog_ref from app.listening_goal_bonus_draws
+                    where account_id=%s and catalog_ref=any(%s::uuid[])''',
+                (account,selected_members)).fetchall())
+            captured = bonus.cycle_bonus(connection, account, before) if command.period == 'week' else None
+            captured_ref = (str(captured['catalog_ref']) if captured
+                and str(captured['catalog_ref']) in selected_members else None)
+            new_cycle = str(uuid4())
+            after = transition_goal_period(before, period=command.period,
+                expected_cycle_id=command.expected_cycle_id, new_cycle_id=new_cycle, occurred_at=now,
+                timezone_name=command.timezone_name, viewer_ref=str(account), bonus_origin_refs=origins,
+                captured_bonus_ref=captured_ref, unfinished_policy=settings['unfinished_policy'])
+            revision += 1
+            self._persist(connection, account, before, after, evidence=None, now=now,
+                          revision=revision, exists=True)
+            members = after['periods'][command.period]['current']['album_refs']
+            carried_bonus = command.period == 'week' and captured_ref in members
+            if carried_bonus:
+                connection.execute('''insert into app.listening_goal_bonus_draws
+                    (account_id,goal_ref,cycle_id,catalog_ref,admission_ref,captured_at)
+                    values(%s,%s,%s,%s,%s,%s)''',
+                    (account,after['top_ref'],new_cycle,captured_ref,captured['admission_ref'],now))
+            # Rollover archives marks; it is not an explicit Clear and must not
+            # reset completed-source eligibility or mutate any other period.
+            receipt = {'ok':True,'action':'transition','request_key':command.request_key,
+                'changed':True,'reason':'','goal_ref':after['top_ref'],'revision':str(revision),
+                'period':command.period,'previous_cycle_id':command.expected_cycle_id,
+                'cycle_id':new_cycle,'settings_revision':command.settings_revision,
+                'retained_count':len(members),'bonus_carried':carried_bonus}
+            if command.period == 'week':
+                receipt['manual_count'] = len(members) - int(carried_bonus)
+                receipt['manual_slots_available'] = 5 - receipt['manual_count']
+                receipt['bonus_slot_available'] = not carried_bonus
+            connection.execute('''insert into app.listening_goal_operations
+                (account_id,request_key,original_session_id,action,command_digest,receipt,committed_at)
+                values(%s,%s,%s,'transition',%s,%s::jsonb,%s)''',
+                (account,command.request_key,live.actor.session_id,command.digest,json.dumps(receipt),now))
+            return receipt
 
     def read_current_bonus(self, context, *, constraints=None):
         with self._authorized(context, READ, constraints) as (connection, live, _):

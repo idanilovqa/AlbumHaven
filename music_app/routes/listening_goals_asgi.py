@@ -16,6 +16,7 @@ from music_app.services.account_goals_context import (
 from music_app.services.listening_goals_commands import GoalsError, normalize_goal_command
 from music_app.services.listening_goal_bonus_settings import normalize_bonus_settings
 from music_app.services.listening_goal_bonus import normalize_bonus_draw
+from music_app.services.listening_goal_transition import normalize_goal_transition
 from music_app.services.listening_goals_postgres import PostgresListeningGoalsService, READ, WRITE
 from music_app.services.policy import PolicyContext
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
@@ -217,6 +218,17 @@ async def read_goal_bonus_settings(request: Request):
         _query(request)
         context, constraints = _context(request, READ)
         value = await run_in_threadpool(_service(request).read_bonus_settings, context, constraints=constraints)
+        return _response(request, value)
+    except GoalsError as error:
+        return _error(error)
+
+
+@router.post('/account/goals/transition')
+async def transition_goal_period(request: Request):
+    try:
+        command = normalize_goal_transition(await _body(request))
+        context, constraints = _context(request, WRITE)
+        value = await run_in_threadpool(_service(request).transition, context, command, constraints=constraints)
         return _response(request, value)
     except GoalsError as error:
         return _error(error)

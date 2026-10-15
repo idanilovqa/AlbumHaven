@@ -215,6 +215,8 @@ export function mountCollectionReorder(host, {snapshot, onReorder, onAnnounce = 
   host.addEventListener('pointerdown', down); host.addEventListener('keydown', key); host.addEventListener('lostpointercapture', pointerCancel);
   host.addEventListener('click', click, true); host.addEventListener('dblclick', click, true); host.addEventListener('dragstart', nativeDrag);
   return {
+    // Explicit owner cancellation retains the drag-origin click suppression.
+    cancel() {if (disposed) return; pendingFocus = null; stop();},
     update() {if (drag && !valid(drag)) stop(); if (!disposed) focusCurrent();},
     dispose() {
       if (disposed) return;

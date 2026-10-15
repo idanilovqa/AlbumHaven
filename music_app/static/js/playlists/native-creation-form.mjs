@@ -74,7 +74,7 @@ export function creationResultsHtml(runtime, {id, projection, selectedKeys, disa
 let nextId=0;
 export function mountCreationResults(host, runtime, initial) {
   const scope = createNativeOwnerScope();
-  let props = initial, disposed = false, revision = 0, selection;
+  let props = initial, disposed = false, revision = 0, selection, renderedHtml = null;
   const document = host.ownerDocument;
   const actions = document.createElement('div'), table = document.createElement('div');
   const note = document.createElement('p');
@@ -88,6 +88,7 @@ export function mountCreationResults(host, runtime, initial) {
   try {
     table.className = 'album-track-table playlists-creation__results';
     note.className = 'playlists__note';
+    note.setAttribute('role', 'status');
     note.textContent = 'Add to playlist is unavailable while this creation form is open. Use the checkboxes to choose this playlist’s tracks.';
     host.replaceChildren(actions, note, table);
     const current = () => !disposed && !props.disabled && props.controller.getSnapshot() === props.state;
@@ -112,7 +113,12 @@ export function mountCreationResults(host, runtime, initial) {
       const html = creationResultsHtml(runtime, {id: next.id, projection: next.projection,
         selectedKeys: next.state.selectedKeys, disabled: next.disabled});
       if (!ownsPass()) return;
-      if (table.innerHTML !== html) table.innerHTML = html;
+      // Selection decorates live rows; compare canonical output, not live DOM.
+      if (renderedHtml !== html) {
+        table.innerHTML = html;
+        if (!ownsPass()) return;
+        renderedHtml = html;
+      }
       const options = {runtime, actionsHost: actions, controller: next.controller, state: next.state,
         rows: next.projection.entries, tableKey: 'playlist-creation', disabled: next.disabled,
         onInspect: key => {if (ownsPass()) next.controller.review(key);}};

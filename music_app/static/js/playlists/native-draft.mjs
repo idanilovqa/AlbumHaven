@@ -84,12 +84,55 @@ export function missingPlaylistDraftReorderSnapshot(controller, selectedRowKey =
 
 export function mountMissingPlaylistDraftTracks(host,runtime,initial){
  const scope=createNativeOwnerScope();scope.defer(()=>host.replaceChildren());
- try {let props=initial,disposed=false,sort={key:null,direction:'default'},identity=initial.state;const doc=host.ownerDocument,actions=doc.createElement('div'),announcement=doc.createElement('span'),note=doc.createElement('p'),table=doc.createElement('div');announcement.setAttribute('role','status');announcement.setAttribute('aria-live','polite');announcement.className='sr-only';table.className='album-track-table album-track-table--collection playlists__tracks playlists-draft__tracks';host.replaceChildren(actions,announcement,note,table);let selection;const reorder=scope.own(mountPlaylistReorder(table,{snapshot:()=>!disposed?missingPlaylistDraftReorderSnapshot(props.controller,props.reviewKey,props.disabled,sort.direction==='default'):null,collectionKey:value=>value.draftToken,itemKey:row=>row.row_key,onReorder:keys=>props.controller.reorder(keys),onAnnounce:text=>{announcement.textContent=text;}}));const current=()=>!disposed&&!props.disabled&&props.controller.getSnapshot()===props.state&&projectMissingPlaylistDraft(props.state).canEdit;
+ try {let props=initial,disposed=false,revision=0,renderedHtml=null,sort={key:null,direction:'default'},identity=initial.state;const doc=host.ownerDocument,actions=doc.createElement('div'),announcement=doc.createElement('span'),note=doc.createElement('p'),table=doc.createElement('div');note.setAttribute('role','status');announcement.setAttribute('role','status');announcement.setAttribute('aria-live','polite');announcement.className='sr-only';table.className='album-track-table album-track-table--collection playlists__tracks playlists-draft__tracks';host.replaceChildren(actions,announcement,note,table);let selection;scope.listen(table,'click',sortClick,true);const reorder=scope.own(mountPlaylistReorder(table,{snapshot:()=>!disposed?missingPlaylistDraftReorderSnapshot(props.controller,props.reviewKey,props.disabled,sort.direction==='default'):null,collectionKey:value=>value.draftToken,itemKey:row=>row.row_key,onReorder:keys=>props.controller.reorder(keys),onAnnounce:text=>{announcement.textContent=text;}}));const current=()=>!disposed&&!props.disabled&&props.controller.getSnapshot()===props.state&&projectMissingPlaylistDraft(props.state).canEdit;
+ // Registered before the gesture capture listener: only this current owner's
+ // enabled metric heading may cancel a drag and consume its own sort click.
+ function sortClick(e){
+  if(e.defaultPrevented||!current())return;
+  const heading=e.target.closest?.('[data-cdt-sort]');
+  if(!heading||!table.contains(heading)||heading.disabled||heading.getAttribute('aria-disabled')==='true'
+    ||heading.closest('[data-playlist-row-key]')||!Object.hasOwn(metricSortColumns,heading.dataset.cdtSort))return;
+  e.preventDefault();e.stopImmediatePropagation();
+  const next=props,pass=revision,key=heading.dataset.cdtSort;
+  reorder.cancel();
+  if(disposed||props!==next||revision!==pass||!current())return;
+  sort=cycleTableSort(sort,key);paint();
+ }
  function change(e){const input=e.target.closest('[data-draft-pick]');if(input&&table.contains(input)&&!input.disabled&&current())props.controller.toggle(input.dataset.draftPick);}
- function click(e){if(e.defaultPrevented||!current())return;const heading=e.target.closest('[data-cdt-sort]');if(heading){if(heading.disabled||!Object.hasOwn(metricSortColumns,heading.dataset.cdtSort))return;e.preventDefault();e.stopPropagation();sort=cycleTableSort(sort,heading.dataset.cdtSort);paint();return;}const row=e.target.closest('[data-playlist-row-key]'),entry=props.projection.entries.find(entry=>entry.row_key===row?.dataset.playlistRowKey),button=e.target.closest('button');if(!entry||e.target.closest('[data-playlists-drag]')||button?.disabled)return;if(button?.hasAttribute('data-draft-review'))props.onReview(entry.row_key);else if(button?.hasAttribute('data-draft-remove'))props.controller.remove(entry.row_key);else if(button?.hasAttribute('data-draft-move')&&props.projection.canReorder&&sort.direction==='default'){const keys=props.projection.authoredEntries.map(row=>row.row_key),from=keys.indexOf(entry.row_key),to=from+(button.dataset.draftMove==='up'?-1:1);if(from>=0&&to>=0&&to<keys.length){[keys[from],keys[to]]=[keys[to],keys[from]];if(props.controller.reorder(keys))announcement.textContent=`Moved to position ${to+1} of ${keys.length}.`;}}}
+ function click(e){if(e.defaultPrevented||!current())return;const row=e.target.closest('[data-playlist-row-key]'),entry=props.projection.entries.find(entry=>entry.row_key===row?.dataset.playlistRowKey),button=e.target.closest('button');if(!entry||e.target.closest('[data-playlists-drag]')||button?.disabled)return;if(button?.hasAttribute('data-draft-review'))props.onReview(entry.row_key);else if(button?.hasAttribute('data-draft-remove'))props.controller.remove(entry.row_key);else if(button?.hasAttribute('data-draft-move')&&props.projection.canReorder&&sort.direction==='default'){const keys=props.projection.authoredEntries.map(row=>row.row_key),from=keys.indexOf(entry.row_key),to=from+(button.dataset.draftMove==='up'?-1:1);if(from>=0&&to>=0&&to<keys.length){[keys[from],keys[to]]=[keys[to],keys[from]];if(props.controller.reorder(keys))announcement.textContent=`Moved to position ${to+1} of ${keys.length}.`;}}}
  scope.listen(table,'change',change);scope.listen(table,'click',click);
- function paint(){if(disposed)return;const active=table.contains(doc.activeElement)?doc.activeElement:null,key=active?.closest('[data-playlist-row-key]')?.dataset.playlistRowKey,attribute=rowAttributes.find(name=>active?.hasAttribute(name)),value=attribute&&active.getAttribute(attribute),sortKey=active?.getAttribute('data-cdt-sort'),prior=[...table.querySelectorAll('[data-playlist-row-key]')],position=prior.findIndex(row=>row.dataset.playlistRowKey===key);const projection={...props.projection,entries:sortTableRows(props.projection.entries,sort,metricSortColumns),canReorder:props.projection.canReorder&&sort.direction==='default'},html=missingPlaylistDraftTableHtml(runtime,{id:props.id,state:props.state,projection,disabled:props.disabled,sort});if(table.innerHTML!==html)table.innerHTML=html;reorder.update();const options={runtime,actionsHost:actions,controller:props.controller,state:props.state,rows:projection.entries,tableKey:'playlist-missing-draft',disabled:props.disabled,onInspect:props.onReview};if(selection)selection.update(options);else selection=scope.own(mountEditorPlaytableSelection(table,options));note.textContent=`Add to playlist is unavailable for these unsaved source tracks.${sort.direction!=='default'?' Sorted view. Restore default table order to reorder tracks.':''}`;if(doc.activeElement?.isConnected&&doc.activeElement!==doc.body)return;if(sortKey){[...table.querySelectorAll('[data-cdt-sort]')].find(button=>button.dataset.cdtSort===sortKey&&!button.disabled)?.focus({preventScroll:true});return;}if(!key)return;const rows=[...table.querySelectorAll('[data-playlist-row-key]')],row=rows.find(row=>row.dataset.playlistRowKey===key),same=attribute?[...(row?.querySelectorAll(`[${attribute}]`)||[])].find(button=>button.getAttribute(attribute)===value&&!button.disabled):row?.getAttribute('tabindex')==='0'?row:null,fallback=rows[Math.min(Math.max(position,0),rows.length-1)];(same||(fallback?.getAttribute('tabindex')==='0'?fallback:fallback?.querySelector('[data-draft-pick]:not(:disabled)'))||table.closest('main')?.querySelector('[data-playlists-draft-action="filters"]:not(:disabled)'))?.focus({preventScroll:true});}
- paint();return {update(next){if(!samePage(identity,next.state)||props.controller!==next.controller){identity=next.state;sort={key:null,direction:'default'};}props=next;paint();},dispose(){if(disposed)return;disposed=true;scope.dispose();reorder.dispose();selection?.dispose();table.removeEventListener('change',change);table.removeEventListener('click',click);host.replaceChildren();}};
+ function paint(){
+  if(disposed)return;
+  const next=props,pass=++revision,ownsPass=()=>!disposed&&props===next&&revision===pass;
+  const active=table.contains(doc.activeElement)?doc.activeElement:null,
+    key=active?.closest('[data-playlist-row-key]')?.dataset.playlistRowKey,
+    attribute=rowAttributes.find(name=>active?.hasAttribute(name)),value=attribute&&active.getAttribute(attribute),
+    sortKey=active?.getAttribute('data-cdt-sort'),prior=[...table.querySelectorAll('[data-playlist-row-key]')],
+    position=prior.findIndex(row=>row.dataset.playlistRowKey===key);
+  const projection={...next.projection,entries:sortTableRows(next.projection.entries,sort,metricSortColumns),
+    canReorder:next.projection.canReorder&&sort.direction==='default'},
+    html=missingPlaylistDraftTableHtml(runtime,{id:next.id,state:next.state,projection,disabled:next.disabled,sort});
+  if(!ownsPass())return;
+  // Selection and drag decorate live rows without changing canonical markup.
+  if(renderedHtml!==html){table.innerHTML=html;if(!ownsPass())return;renderedHtml=html;}
+  reorder.update();if(!ownsPass())return;
+  const options={runtime,actionsHost:actions,controller:next.controller,state:next.state,rows:projection.entries,
+    tableKey:'playlist-missing-draft',disabled:next.disabled,onInspect:key=>{if(ownsPass())next.onReview(key);}};
+  if(selection)selection.update(options);
+  else{const acquired=mountEditorPlaytableSelection(table,options);if(!ownsPass()){acquired.dispose();return;}selection=scope.own(acquired);}
+  if(!ownsPass())return;
+  note.textContent=`Add to playlist is unavailable for these unsaved source tracks.${sort.direction!=='default'?' Sorted view. Restore default table order to reorder tracks.':''}`;
+  if(doc.activeElement?.isConnected&&doc.activeElement!==doc.body)return;
+  if(sortKey){[...table.querySelectorAll('[data-cdt-sort]')].find(button=>button.dataset.cdtSort===sortKey&&!button.disabled)?.focus({preventScroll:true});return;}
+  if(!key)return;
+  const rows=[...table.querySelectorAll('[data-playlist-row-key]')],row=rows.find(row=>row.dataset.playlistRowKey===key),
+    same=attribute?[...(row?.querySelectorAll(`[${attribute}]`)||[])].find(button=>button.getAttribute(attribute)===value&&!button.disabled)
+      :row?.getAttribute('tabindex')==='0'?row:null,fallback=rows[Math.min(Math.max(position,0),rows.length-1)];
+  if(ownsPass())(same||(fallback?.getAttribute('tabindex')==='0'?fallback:fallback?.querySelector('[data-draft-pick]:not(:disabled)'))
+    ||table.closest('main')?.querySelector('[data-playlists-draft-action="filters"]:not(:disabled)'))?.focus({preventScroll:true});
+ }
+
+ paint();return {update(next){if(disposed)return;if(!samePage(identity,next.state)||props.controller!==next.controller){identity=next.state;sort={key:null,direction:'default'};}props=next;paint();},dispose(){if(disposed)return;disposed=true;revision++;scope.dispose();reorder.dispose();selection?.dispose();table.removeEventListener('change',change);table.removeEventListener('click',click);host.replaceChildren();}};
 
  }catch(error){scope.dispose();throw error;}
 }

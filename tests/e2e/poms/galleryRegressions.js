@@ -26,6 +26,16 @@ export function analyzeNativeScrollGesture(samples, direction) {
   };
 }
 
+// CDP touch coordinates are integer-rounded and scrollTop may retain a fractional native pixel.
+const NATIVE_SCROLL_DISPLACEMENT_TOLERANCE_PX = 2;
+
+export function nativeScrollDisplacementMatchesCommand(actualDistance, commandedDistance) {
+  const actual = Number(actualDistance);
+  const commanded = Math.abs(Number(commandedDistance));
+  return Number.isFinite(actual) && Number.isFinite(commanded)
+    && Math.abs(actual - commanded) <= NATIVE_SCROLL_DISPLACEMENT_TOLERANCE_PX;
+}
+
 function observeArtistPlacement({ targetArtist, headingSelector, observe = false }) {
   const read = () => {
     const scroll = document.getElementById('albums-scroll');

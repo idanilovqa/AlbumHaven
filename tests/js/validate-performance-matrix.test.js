@@ -42,9 +42,9 @@ function stepContaining(job, marker) {
   return step;
 }
 
-test('approved registry keeps 24 independently schedulable targets and 41 cases', () => {
+test('approved registry keeps 24 independently schedulable targets and 44 cases', () => {
   assert.equal(contract.targets.length, 24);
-  assert.equal(contract.targets.flatMap((target) => target.cases).length, 41);
+  assert.equal(contract.targets.flatMap((target) => target.cases).length, 44);
   assert.deepEqual(
     contract.targets.filter((target) => target.defaultMember).map((target) => target.name),
     contract.targets.map((target) => target.name),
@@ -53,6 +53,22 @@ test('approved registry keeps 24 independently schedulable targets and 41 cases'
     target.cases.some((entry) => entry.case.startsWith('FTC-GALLERY-NAV-036 '))
   );
   assert.deepEqual(nav036Owners.map((target) => target.name), ['gallery-artwork-diversity']);
+  const scrollNavigation = contract.targets.find((target) => (
+    target.name === 'artist-tree-scroll-navigation'
+  ));
+  assert.equal(scrollNavigation.cases.length, 13);
+  assert.deepEqual(
+    scrollNavigation.cases
+      .filter((entry) => entry.test.endsWith('galleryNativeScrollStability.spec.js'))
+      .map((entry) => entry.case),
+    [
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Cards › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Covers › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Rows › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop Cards › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop Covers › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+    ],
+  );
   for (const target of contract.targets) {
     assert.equal(target.workers, 1, target.name);
     assert.equal(target.blocking, target.name === 'paired-search-calibration', target.name);
@@ -103,7 +119,7 @@ test('validator accepts selectable shards and rejects routing and case drift', (
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
-  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /41 cases/);
+  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /44 cases/);
 
   const paidCampaign = structuredClone(contract);
   paidCampaign.calibrationPolicy.separateCampaignRequired = true;

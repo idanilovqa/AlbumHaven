@@ -1,5 +1,10 @@
 import { expect, test } from '../support/performanceFixtures.js';
-import { analyzeNativeScrollGesture, GalleryRegressions } from '../poms/galleryRegressions.js';
+import {
+  analyzeNativeScrollGesture,
+  GalleryRegressions,
+  nativeScrollDisplacementMatchesCommand,
+} from '../poms/galleryRegressions.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import { waitForLibraryStartupEntryVisible } from '../helpers/realAppBenchmarkHelpers.js';
 
 async function openDeepGallery(page, galleryActions, navigationPanelActions, mobile) {
@@ -32,7 +37,7 @@ async function openDeepGallery(page, galleryActions, navigationPanelActions, mob
   return ui;
 }
 
-function expectGestureStable(samples, direction, maxTotalDisplacement) {
+function expectGestureStable(samples, direction, commandedDistance) {
   expect(samples.length).toBeGreaterThan(5);
   expect(samples.filter(sample => !sample.connected)).toEqual([]);
   const coordinates = samples.map(sample => sample.contentCoordinate);
@@ -45,11 +50,16 @@ function expectGestureStable(samples, direction, maxTotalDisplacement) {
     evidence.signedStepDeltas.filter(delta => delta < -0.5),
     JSON.stringify({ evidence, samples }),
   ).toEqual([]);
-  expect(evidence.signedTotalDisplacement).toBeGreaterThanOrEqual(8);
-  expect(evidence.signedTotalDisplacement).toBeLessThanOrEqual(maxTotalDisplacement);
+  expect(
+    nativeScrollDisplacementMatchesCommand(
+      evidence.signedTotalDisplacement,
+      commandedDistance,
+    ),
+    JSON.stringify({ evidence, commandedDistance, samples }),
+  ).toBe(true);
 }
 
-async function observeGesture(ui, testInfo, name, direction, maxTotalDisplacement, gesture) {
+async function observeGesture(ui, testInfo, name, direction, commandedDistance, gesture) {
   const anchor = await ui.captureMiddleVisibleCard();
   const observation = await ui.startNativeScrollFrameObservation(anchor);
   let samples;
@@ -63,17 +73,22 @@ async function observeGesture(ui, testInfo, name, direction, maxTotalDisplacemen
       contentType: 'application/json',
     });
   }
-  expectGestureStable(samples, direction, maxTotalDisplacement);
+  expectGestureStable(samples, direction, commandedDistance);
 }
 
 test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability', () => {
-  test.describe('mobile', () => {
+  for (const { label, view } of [
+    { label: 'Cards', view: 'cards' },
+    { label: 'Covers', view: 'covers' },
+    { label: 'Rows', view: 'list' },
+  ]) test.describe(`mobile ${label}`, () => {
     test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
-    test('native touch swipes track the gesture without reverse movement or layout jitter', async ({
+    test('native touch swipes track the commanded gesture without reverse movement or layout jitter', async ({
       galleryActions, navigationPanelActions, page,
     }, testInfo) => {
       const ui = await openDeepGallery(page, galleryActions, navigationPanelActions, true);
+      await new MobileLayoutPage(page).selectView(view);
       const box = await ui.galleryScroll.boundingBox();
       if (!box) throw new Error('Gallery scroll surface is not visible.');
       const cdp = await page.context().newCDPSession(page);
@@ -93,37 +108,45 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stabili
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       };
       try {
-        await observeGesture(ui, testInfo, 'mobile-native-swipe-forward', 1, 240, () => swipe(
-          Math.round(box.y + box.height * 0.68),
-          Math.round(box.y + box.height * 0.46),
-        ));
-        await observeGesture(ui, testInfo, 'mobile-native-swipe-reverse', -1, 240, () => swipe(
-          Math.round(box.y + box.height * 0.46),
-          Math.round(box.y + box.height * 0.68),
-        ));
+        const lowerY = Math.round(box.y + box.height * 0.68);
+        const upperY = Math.round(box.y + box.height * 0.46);
+        const commandedDistance = Math.abs(lowerY - upperY);
+        await observeGesture(
+          ui, testInfo, `${view}-mobile-native-swipe-forward`, 1, commandedDistance,
+          () => swipe(lowerY, upperY),
+        );
+        await observeGesture(
+          ui, testInfo, `${view}-mobile-native-swipe-reverse`, -1, commandedDistance,
+          () => swipe(upperY, lowerY),
+        );
       } finally {
         await cdp.detach();
       }
     });
   });
 
-  test.describe('desktop', () => {
+  for (const { label, view } of [
+    { label: 'Cards', view: 'cards' },
+    { label: 'Covers', view: 'covers' },
+  ]) test.describe(`desktop ${label}`, () => {
     test.use({ viewport: { width: 1280, height: 844 }, isMobile: false, hasTouch: false });
 
-    test('native wheel input tracks the gesture without reverse movement or layout jitter', async ({
+    test('native wheel input tracks the commanded gesture without reverse movement or layout jitter', async ({
       galleryActions, navigationPanelActions, page,
     }, testInfo) => {
       const ui = await openDeepGallery(page, galleryActions, navigationPanelActions, false);
+      await new MobileLayoutPage(page).selectView(view);
       const box = await ui.galleryScroll.boundingBox();
       if (!box) throw new Error('Gallery scroll surface is not visible.');
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await observeGesture(ui, testInfo, 'desktop-native-wheel-forward', 1, 160, async () => {
+      const commandedDistance = 4 * 32;
+      await observeGesture(ui, testInfo, `${view}-desktop-native-wheel-forward`, 1, commandedDistance, async () => {
         for (let step = 0; step < 4; step += 1) {
           await page.mouse.wheel(0, 32);
           await page.waitForTimeout(20);
         }
       });
-      await observeGesture(ui, testInfo, 'desktop-native-wheel-reverse', -1, 160, async () => {
+      await observeGesture(ui, testInfo, `${view}-desktop-native-wheel-reverse`, -1, commandedDistance, async () => {
         for (let step = 0; step < 4; step += 1) {
           await page.mouse.wheel(0, -32);
           await page.waitForTimeout(20);

@@ -1,4 +1,8 @@
-"""Receipt-scoped native targets and action projections for Home and comparison."""
+"""Receipt-scoped native targets for Home, comparison and listener Search.
+
+Listener entry points are server-owned service seams only. HTTP admission stays
+with its existing owners; the raw listener-history-v1 reader is unchanged.
+"""
 from dataclasses import replace
 from datetime import datetime, timezone
 import re
@@ -47,6 +51,22 @@ def normalize_native_origin(value):
     return dict(value),query
 
 
+def normalize_listener_native_origin(value):
+    """The bounded listener grammar can only issue own/friend tracks/all receipts."""
+    origin,query=normalize_native_origin(value)
+    if origin['audience'] not in {'own','friend'} or query.kind!='tracks' or query.period!='all':
+        raise NativeTargetError('invalid_command',422)
+    return origin,query
+
+
+def _listener_row_refs(values):
+    if (type(values) is not list or not 1<=len(values)<=100
+            or any(type(value) is not str or not _ROW.fullmatch(value) for value in values)
+            or len(set(values))!=len(values)):
+        raise NativeTargetError('invalid_command',422)
+    return list(values)
+
+
 class ActivityNativeTargets:
     def __init__(self,config,*,connect=None,clock=None,media_resolver=None):
         self.config=config
@@ -73,6 +93,16 @@ class ActivityNativeTargets:
 
     def resolve(self,context,*,origin,row_ref,intent,target_kind=None,constraints=None):
         origin,query=normalize_native_origin(origin)
+        return self._resolve(context,origin=origin,query=query,row_ref=row_ref,intent=intent,
+            target_kind=target_kind,constraints=constraints,subject_taste=True)
+
+    def resolve_listener(self,context,*,origin,row_ref,intent,target_kind=None,constraints=None):
+        """Reauthorize one listener row through native owners without peer taste."""
+        origin,query=normalize_listener_native_origin(origin)
+        return self._resolve(context,origin=origin,query=query,row_ref=row_ref,intent=intent,
+            target_kind=target_kind,constraints=constraints,subject_taste=False)
+
+    def _resolve(self,context,*,origin,query,row_ref,intent,target_kind,constraints,subject_taste):
         if not isinstance(row_ref,str) or not _ROW.fullmatch(row_ref) or not isinstance(intent,str) or intent not in {'play','details','metadata'}:
             raise NativeTargetError('invalid_command',422)
         if target_kind is not None and (intent != "details" or not isinstance(target_kind,str) or target_kind not in {"album","artist"}):
@@ -109,7 +139,7 @@ class ActivityNativeTargets:
                     (live.library_id,target['album_ref'])).fetchone()
                 if album is None:raise NativeTargetError()
                 target={**target,'title':album['title'],'artist':album['artist']}
-                if origin['audience']!='own':
+                if subject_taste and origin['audience']!='own':
                     target['subject_taste']=subject_album_overlay(con,live,origin,album['id'],constraints=constraints)
             lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
                 clock=self.clock or (lambda:datetime.now(timezone.utc)))
@@ -117,6 +147,27 @@ class ActivityNativeTargets:
 
     def project(self,context,*,origin,rows,constraints=None):
         origin,query=normalize_native_origin(origin)
+        return self._project(context,origin=origin,query=query,rows=rows,
+            constraints=constraints,subject_taste=True)
+
+    def project_listener(self,context,*,origin,row_refs,constraints=None):
+        """Return separate native bindings, never reader rows or subject taste.
+
+        Row references are receipt coordinates, not catalog IDs. No caller
+        metadata or actions enter this projection; the existing receipt and
+        native owners derive every binding under one authority transaction.
+        """
+        origin,query=normalize_listener_native_origin(origin)
+        refs=_listener_row_refs(row_refs)
+        projected=self._project(context,origin=origin,query=query,
+            rows=[{'id':ref} for ref in refs],constraints=constraints,subject_taste=False)
+        return {'origin':origin,'bindings':[
+            {'row_ref':row['id'],'allowed_actions':row['allowed_actions'],
+             'inventory_track_ref':row['inventory_track_ref'],'artwork_url':row['artwork_url'],
+             **{key:row[key] for key in ('album_target','artist_target') if key in row}}
+            for row in projected]}
+
+    def _project(self,context,*,origin,query,rows,constraints,subject_taste):
         if not rows:return rows
         refs=[row['id'] for row in rows]
         if len(refs)>100:raise NativeTargetError('invalid_command',422)
@@ -134,7 +185,7 @@ class ActivityNativeTargets:
                 (live.library_id,track_ids)).fetchall()}
             create=allows(live,'library.playlists.create',None,constraints)
             items=allows(live,'library.playlists.items.manage',None,constraints)
-            taste=project_subject_taste(con,live,origin,mappings,constraints=constraints) if origin['audience']!='comparison' else {}
+            taste=project_subject_taste(con,live,origin,mappings,constraints=constraints) if subject_taste and origin['audience']!='comparison' else {}
             output=[]
             for row in rows:
                 resource=mappings[row['id']]

@@ -1,6 +1,9 @@
 """Authenticated Album Top transport; playback authority stays independent."""
+import asyncio
 import hmac
+from contextlib import suppress
 from html import escape
+from threading import Event
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
@@ -14,6 +17,7 @@ from music_app.services.owned_album_tops import (
     require_top_authority, top_uuid, normalize_top_publication_preview,
 )
 from music_app.services.owned_album_tops_postgres import PostgresOwnedAlbumTopsService
+from music_app.services.album_top_remote_acquisition import TopRemoteAcquisitionService
 from music_app.services.album_top_publication_sources import validate_request as validate_publication_source_request
 from music_app.services.policy import PolicyContext
 from music_app.services.policy_asgi import _deployment_mode, _request_origin
@@ -55,15 +59,28 @@ def _context_ref(request):
 
 
 def _require_context(request):
-    supplied = request.headers.get("x-albumhaven-context", "")
+    # Count raw occurrences case-insensitively; no header collection may fold
+    # duplicate values into one apparently valid continuity witness.
+    supplied_values = [value.decode('latin1') for name, value in request.scope.get('headers', ())
+                       if name.lower() == b'x-albumhaven-context']
     current = _context_ref(request)
+    if len(supplied_values) != 1:
+        raise AlbumTopError("stale_context", 409)
+    supplied = supplied_values[0]
     if len(supplied) != 64 or not supplied.isascii() or not hmac.compare_digest(supplied, current):
         raise AlbumTopError("stale_context", 409)
+    return current
 
 
 def _service(request):
     service = getattr(request.app.state, "owned_album_tops_service", None)
     return service if service is not None else PostgresOwnedAlbumTopsService(request.app.state.config)
+
+
+def _remote_service(request):
+    service = getattr(request.app.state, 'album_top_remote_acquisition_service', None)
+    return service if service is not None else TopRemoteAcquisitionService(_service(request),
+        user_agent=request.app.state.config.get('MUSICBRAINZ_USER_AGENT'))
 
 
 def _response(request, value):
@@ -334,6 +351,72 @@ def search_album_top_inventory(request: Request):
             cursor_secret=request.app.state.auth_policy_config['hmac']['secret'], constraints=constraints))
     except AlbumTopError as error:
         return _error(error)
+
+
+async def _watch_remote_disconnect(request, cancelled):
+    try:
+        while not cancelled.is_set():
+            if await request.is_disconnected():
+                cancelled.set()
+                return
+            await asyncio.sleep(0.1)
+    except Exception:
+        # A failed disconnect observer cannot permit a later preparation write.
+        cancelled.set()
+    finally:
+        # Cancellation itself still propagates, while an observer that has
+        # stopped can never leave its worker believing the request is live.
+        cancelled.set()
+
+
+async def _remote_lookup(request, *, search):
+    cancelled = Event()
+    watcher = None
+    try:
+        if request.query_params or request.scope.get('query_string', b''):
+            raise AlbumTopError('invalid_command')
+        context, constraints = _context(request, BROWSE)
+        context_ref = _require_context(request)
+        payload = await read_bounded_json_object(request, max_bytes=4096)
+        required = {'destination', 'title'} if search else {'request_key', 'destination', 'release_group_id'}
+        allowed = required | {'artist'} if search else required
+        if type(payload) is not dict or not required <= set(payload) <= allowed:
+            raise AlbumTopError('invalid_command')
+        service = _remote_service(request)
+        watcher = asyncio.create_task(_watch_remote_disconnect(request, cancelled))
+        options = {'context_ref': context_ref, 'constraints': constraints, 'should_cancel': cancelled.is_set}
+        if search:
+            value = await run_in_threadpool(service.search_candidates, context,
+                destination=payload['destination'], title=payload['title'], artist=payload.get('artist', ''), **options)
+        else:
+            value = await run_in_threadpool(service.acquire, context, payload=payload, **options)
+        if cancelled.is_set():
+            raise AlbumTopError('provider_cancelled', 503)
+        if _require_context(request) != context_ref:
+            raise AlbumTopError('stale_context', 409)
+        return _response(request, value)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('remote_acquisition_unavailable', 503))
+    finally:
+        cancelled.set()
+        if watcher is not None:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
+
+
+@router.post('/album-top-catalog/remote-search')
+async def search_album_top_remote(request: Request):
+    return await _remote_lookup(request, search=True)
+
+
+@router.post('/album-top-catalog/remote-acquisitions')
+async def acquire_album_top_remote(request: Request):
+    return await _remote_lookup(request, search=False)
 
 
 @router.post("/album-tops/{top_ref}/{action}")

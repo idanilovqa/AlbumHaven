@@ -214,6 +214,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/album-tops/{top_ref}/{action}"): "library.browse.read",
     ("POST", "/album-top-catalog/inventory"): "library.album_tops.create",
     ("GET", "/album-top-catalog/search"): "library.browse.read",
+    ("POST", "/album-top-catalog/remote-search"): "library.browse.read",
+    ("POST", "/album-top-catalog/remote-acquisitions"): "library.browse.read",
     ("POST", "/album-tops/{top_ref}/publication-preview"): "library.album_tops.access.manage",
     ("POST", "/album-tops/{top_ref}/catalog/inventory"): "library.browse.read",
     ("GET", "/playlists/edit-requests"): "library.browse.read",
@@ -280,6 +282,10 @@ def install_private_route_boundary(app: FastAPI) -> None:
         try:
             return await _require_private_authentication(request, call_next)
         except Exception:
+            if request.method == "POST" and _matched_route_path(app, request) in {
+                    "/album-top-catalog/remote-search", "/album-top-catalog/remote-acquisitions"}:
+                return JSONResponse({"ok": False, "error": "remote_acquisition_unavailable"}, status_code=503,
+                                    headers={"Cache-Control": "private, no-store"})
             if request.method == "POST" and _matched_route_path(app, request) in {"/search/native-target", "/search/native-targets"}:
                 return JSONResponse({"ok": False, "error_code": "private_search_unavailable",
                                      "error": "Search is unavailable.", "location": None}, status_code=503,

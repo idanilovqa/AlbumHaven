@@ -1,9 +1,9 @@
-"""Dormant explicit Top-native MusicBrainz acquisition under existing authority.
+"""Explicit Top-native MusicBrainz acquisition under existing authority.
 
 Search previews and exact provider reads run outside database transactions. This
 owner cannot add a member, retain a Top admission, create a catalog identity, read
-Goals, publish, or grant authority through an acquisition UUID. No route registers
-it. Deployment composition supplies the existing public MusicBrainz user agent.
+Goals, publish, or grant authority through an acquisition UUID. The private Top
+transport supplies the existing public MusicBrainz user agent.
 """
 from contextlib import contextmanager
 from datetime import timezone
@@ -68,7 +68,7 @@ def load_pending_remote_source(connection, *, selector, live, destination, owner
 
 
 class TopRemoteAcquisitionService:
-    """Explicit construction only. No existing app/membership owner invokes it."""
+    """Private preparation only; the membership owner never fetches provider facts."""
     def __init__(self, owner, *, provider=None, searcher=None, user_agent=None):
         self.owner = owner
         self.provider = provider or fetch_release_group_evidence
@@ -82,12 +82,35 @@ class TopRemoteAcquisitionService:
             raise AlbumTopError('revision_conflict', 409)
         return top
 
-    @contextmanager
-    def _authorized(self, context, destination, constraints, should_cancel, *, write=False):
+    def _discover_owner(self, context, destination, constraints, should_cancel):
         _cancel(should_cancel)
+        if destination.kind == 'create':
+            return None
+        self.owner._require(context, (BROWSE,), constraints)
+        # Exact, unlocked discovery supplies only a lock-order hint. The same
+        # owner is pinned across provider I/O and checked against the locked Top.
+        with self.owner._connect(self.owner._url) as lookup:
+            row = lookup.execute('''select owner_account_id from app.album_lists
+                where ref=%s and library_id=%s''', (destination.ref, context.library_id)).fetchone()
+        _cancel(should_cancel)
+        if row is None:
+            raise AlbumTopError('top_unavailable', 404)
+        return row['owner_account_id']
+
+    @contextmanager
+    def _authorized(self, context, destination, constraints, should_cancel, *, write=False,
+                    discovered_owner=None):
+        _cancel(should_cancel)
+        if destination.kind == 'top' and discovered_owner is None:
+            # Preserve the direct database-only helper seam. Public search and
+            # acquire callers pass their single pre-provider discovery instead.
+            discovered_owner = self._discover_owner(context, destination, constraints, should_cancel)
         try:
-            with self.owner._authorized(context, constraints) as (connection, live, now):
+            with self.owner._authorized(context, constraints,
+                    target_account_id=discovered_owner) as (connection, live, now):
                 top = self._destination(connection, live, destination, constraints, write=write)
+                if top is not None and top['owner_account_id'] != discovered_owner:
+                    raise AlbumTopError('concurrent_change', 409)
                 _cancel(should_cancel)
                 yield connection, live, top
                 _cancel(should_cancel)
@@ -169,7 +192,9 @@ class TopRemoteAcquisitionService:
             title, artist = normalize_album_search(title, artist)
         except RemoteAlbumEvidenceError as error:
             raise AlbumTopError(error.code) from None
-        with self._authorized(context, destination, constraints, should_cancel):
+        discovered_owner = self._discover_owner(context, destination, constraints, should_cancel)
+        with self._authorized(context, destination, constraints, should_cancel,
+                discovered_owner=discovered_owner):
             pass
         failure = None
         try:
@@ -181,7 +206,8 @@ class TopRemoteAcquisitionService:
                 raise RemoteAlbumEvidenceError('invalid_provider_metadata')
         except RemoteAlbumEvidenceError as error:
             failure = error
-        with self._authorized(context, destination, constraints, should_cancel):
+        with self._authorized(context, destination, constraints, should_cancel,
+                discovered_owner=discovered_owner):
             if failure is not None:
                 raise AlbumTopError(failure.code, 503) from None
             # Deliberately no acquisition selector or digest in candidate DTOs.
@@ -191,7 +217,9 @@ class TopRemoteAcquisitionService:
     def acquire(self, context, *, payload, context_ref, constraints=None, should_cancel=None):
         command = normalize_remote_acquisition(payload)
         context_ref = remote_context_ref(context_ref)
-        with self._authorized(context, command.destination, constraints, should_cancel) as (connection, live, top):
+        discovered_owner = self._discover_owner(context, command.destination, constraints, should_cancel)
+        with self._authorized(context, command.destination, constraints, should_cancel,
+                discovered_owner=discovered_owner) as (connection, live, top):
             prior = self._prior(connection, live, top, command, context_ref)
             if prior is not None:
                 return self._receipt(connection, live, top, command, context_ref, prior, constraints, should_cancel)
@@ -205,7 +233,8 @@ class TopRemoteAcquisitionService:
                 raise RemoteAlbumEvidenceError('provider_identity_changed')
         except RemoteAlbumEvidenceError as error:
             failure = error
-        with self._authorized(context, command.destination, constraints, should_cancel, write=True) as (connection, live, top):
+        with self._authorized(context, command.destination, constraints, should_cancel, write=True,
+                discovered_owner=discovered_owner) as (connection, live, top):
             if failure is not None:
                 # A cancellation or denial is terminal, even if a concurrent
                 # identical request happened to commit while this lookup failed.

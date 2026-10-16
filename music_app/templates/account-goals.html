@@ -22,6 +22,8 @@
   <script src="/static/js/button-component.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/runtime/markup-format-helpers.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/runtime/alert-components.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/browser-scheduling-helpers.js?v={{ runtime_asset_version }}" defer></script>
+  <script src="/static/js/runtime/notification-ui-helpers.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/runtime/album-artbox.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/runtime/gallery-main-components.js?v={{ runtime_asset_version }}" defer></script>
   <script src="/static/js/runtime/gallery-card-component.js?v={{ runtime_asset_version }}" defer></script>
@@ -43,6 +45,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button class="button ui-button ui-button--secondary ui-button--medium" type="submit">Sign Out</button>
   </form>
+  <div class="toast-layer" id="toast-layer"></div>
   {% include "partials/app-form-modal.html" %}
 </body>
 </html>

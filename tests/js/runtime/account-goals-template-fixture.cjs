@@ -1,4 +1,5 @@
 'use strict';
+const {attentionReadFixture}=require('./goals-attention-read-fixture.cjs');
 const {bonusReadFixture}=require('./goals-bonus-read-fixture.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -19,8 +20,8 @@ const VERSION = 'b'.repeat(64), PERIODS = ['week', 'month', 'six-months', 'year'
 const albumDisplay = title => ({title, artist_display: 'Private artist', first_release_date: '2026-10', primary_type: 'Album'});
 function value({full = false, completed = false, revision = full ? '2' : '1'} = {}) {
   return {goal_ref: full ? GOAL : null, revision,
-    periods: Object.fromEntries(PERIODS.map(period => [period, {period, top_ref: full ? GOAL : null,
-      cycle: full ? {cycle_id: CYCLE, started_at: '2026-10-14T00:00:00Z', start_date: '2026-10-14', due_date: '2026-10-21', timezone_name: 'UTC'} : null,
+    periods: Object.fromEntries(PERIODS.map((period,index) => [period, {period, top_ref: full ? GOAL : null,
+      cycle: full ? {cycle_id: index===0?CYCLE:`33333333-3333-4333-8333-${String(index).padStart(12,'0')}`, started_at: '2026-10-14T00:00:00Z', start_date: '2026-10-14', due_date: '2026-10-21', timezone_name: 'UTC'} : null,
       album_refs: full ? [ALBUM] : [], manual_completed_at: full ? {[ALBUM]: completed ? '2026-10-15T12:00:00Z' : null} : {},
       total: full ? 1 : 0, completed: full && completed ? 1 : 0, percent: full && completed ? 100 : 0}])),
     albums: full ? [{catalog_ref: ALBUM, ...albumDisplay('Stored private album')}] : [],
@@ -88,7 +89,7 @@ async function fixture(t, {full = false} = {}) {
   let env, c, owner, data = value({full});
   const frames = new Map(), timers = new Map(), gates = [], tasks = [], observers = [];
   const calls = [], script = [], loaded = [];
-  const bonusReads=bonusReadFixture(t,()=>data);
+  const bonusReads=bonusReadFixture(t,()=>data),attentionReads=attentionReadFixture(t,()=>data);
   let sequence = 0;
   function drain() {
     let turns = 0;
@@ -162,6 +163,7 @@ async function fixture(t, {full = false} = {}) {
   c.Element.prototype.getClientRects = function() {return this.isConnected && !this.closest('[hidden]') ? [{width: 100, height: 32}] : [];};
   c.addEventListener = document.addEventListener.bind(document); c.removeEventListener = document.removeEventListener.bind(document);
   c.fetch = (route, options = {}) => {
+    const attention=attentionReads.dispatch(route,options);if(attention.handled)return Promise.resolve({ok:true,status:200,json:async()=>({status:"ready",context_ref:STAMP,context_scope:"account-goals-v1",data:attention.data})});
     const bonus=bonusReads.dispatch(route,options);if(bonus.handled)return Promise.resolve({ok:true,status:200,json:async()=>({status:"ready",context_ref:STAMP,context_scope:"account-goals-v1",data:bonus.data})});
     calls.push({route, options});
     const task = (async () => {
@@ -194,7 +196,7 @@ async function fixture(t, {full = false} = {}) {
   }
   const entry = await import(pathToFileURL(path.join(repo, assets.module)).href);
   owner = entry.mountAccountGoalsEntry(host, entry.accountGoalsRuntime(c), c.createAlbumHavenPrivateUITransport);
-  await bonusReads.ready;await settle(); drain();bonusReads.assertInitial();
+  await bonusReads.ready;await attentionReads.ready;await settle(); drain();bonusReads.assertInitial();attentionReads.assertInitial();
   const named = (label, root = document) => root.querySelectorAll('button').find(node => !node.closest('[hidden], [inert]')
     && (node.getAttribute('aria-label') || node.textContent.trim()) === label);
   const input = (element, text) => {element.value = text; element.dispatchEvent(new c.Event('input', {bubbles: true}));};
@@ -203,7 +205,7 @@ async function fixture(t, {full = false} = {}) {
     let resolve; const promise = new Promise(yes => {resolve = yes;}); const gate = {promise, resolve};
     gates.push(gate); enqueue(route, () => promise); return gate;
   }
-  return {...env, lookup: env.owner, c, host, form, owner, calls, loaded, assets, bonusReads, named, input, enqueue, deferred, scrollCalls,
+  return {...env, lookup: env.owner, c, host, form, owner, calls, loaded, assets, bonusReads, attentionReads, allRequests:attentionReads.allRequests, named, input, enqueue, deferred, scrollCalls,
     setData: next => {data = next;}, async flush() {await settle(); drain(); await settle();},
     submit(element) {element.dispatchEvent(new c.Event('submit', {bubbles: true, cancelable: true}));}};
 }

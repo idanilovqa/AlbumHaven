@@ -1,3 +1,4 @@
+import {createGoalsOwner} from './goals-owner.mjs';
 import {mountGoalsPanel} from './goals.mjs';
 import {mountSharedHeader} from './shared-header.mjs';
 import {mountProfileIdentity} from './profile.mjs';
@@ -8,7 +9,7 @@ import {createNativeLifetime} from './native-lifetime.mjs';
 export function mountAccountGoalsEntry(root, runtime, createTransport, {onRestore = () => root.ownerDocument.defaultView.location.reload()} = {}) {
   const life = createNativeLifetime(), doc = root.ownerDocument, win = doc.defaultView;
   const username = root.dataset.accountName || '';
-  let retired = false, transport, panel, visibilityRequest = null, visibilitySequence = 0;
+  let retired = false, transport, goalsOwner, panel, visibilityRequest = null, visibilitySequence = 0;
   let focused = typeof doc.hasFocus === 'function' ? doc.hasFocus() : true;
   let visible = doc.visibilityState !== 'hidden' && focused;
   const current = () => !retired && !life.disposed;
@@ -48,14 +49,19 @@ export function mountAccountGoalsEntry(root, runtime, createTransport, {onRestor
   try {
     transport=createTransport({root,accountGoals:true});life.own(transport);
     life.defer(transport.subscribe(retire));
+    goalsOwner = life.own(createGoalsOwner({transport, isCurrent:current, document:doc}));
     root.replaceChildren();root.classList.add('home-friends');
     const page=life.own(mountSharedHeader(make(root,'div',''),runtime,{id:'home-page',className:'home-friends__page-header'}));
     life.own(mountProfileIdentity(page.slots.identity,runtime,{profile:null,own:true,fallbackName:username || 'My music'}));
     const widget=make(root,'section','home-friends__widget');widget.setAttribute('aria-label','Goals');
     const subsection=life.own(mountSharedHeader(make(widget,'div',''),runtime,{id:'home-recent',className:'home-friends__widget-header'}));
     const content=make(widget,'div','home-friends__widget-content');content.id='account-home-goals';content.setAttribute('role','tabpanel');content.setAttribute('aria-labelledby','home-recent-sections-goals');
-    life.own(mountTabs(subsection.slots.identity,runtime,{id:'home-recent-sections',label:'Home sections',items:[['goals','Goals',{panelId:content.id}]],value:'goals'}));
-    panel=life.own(mountGoalsPanel(content,runtime,{transport,header:{actions:page.slots.actions,content:subsection.slots.content},isCurrent:()=>current()&&visible}));
+    const tabs = life.own(mountTabs(subsection.slots.identity,runtime,{id:'home-recent-sections',label:'Home sections',items:[['goals','Goals',{panelId:content.id}]],value:'goals',onActivate:()=>panel?.update({visitIntent:{}})}));
+    life.defer(goalsOwner.controller.subscribe(() => {
+      const state = goalsOwner.controller.getSnapshot();
+      tabs.setAttention('goals', state.attentionStatus === 'ready' ? state.attention.indicator : 'none');
+    }));
+    panel=life.own(mountGoalsPanel(content,runtime,{transport,owner:goalsOwner,visitIntent:{},header:{actions:page.slots.actions,content:subsection.slots.content},isCurrent:()=>current()&&visible}));
     doc.addEventListener('visibilitychange',visibilityChanged);life.defer(()=>doc.removeEventListener('visibilitychange',visibilityChanged));
     win.addEventListener('blur',blurred);win.addEventListener('focus',focusedAgain);
     life.defer(()=>{win.removeEventListener('blur',blurred);win.removeEventListener('focus',focusedAgain);});
@@ -70,6 +76,7 @@ export function accountGoalsRuntime(target) {
     iconHtml:name=>target.ButtonComponent.renderIconSvg(name),alertHtml:value=>target.buildOnPageAlertHtml(value),
     artboxHtml:value=>target.buildAlbumArtboxHtml(value),galleryCardHtml:value=>target.buildGalleryCardHtml(value),
     switchHtml:value=>target.buildGallerySwitchHtml(value),
+    showOwnedToast:(message,variant)=>target.showToast(message,variant,undefined,{placement:'top-center'}),
     tabsHtml:value=>target.buildInPageTabsHtml(value),mountTabs:element=>target.mountInPageTabs(element),
     openChoice:(anchor,options)=>target.openUtilityChoiceDropdown(anchor,options),
     openForm:options=>target.openReactFormDialog(options,()=>Boolean(target.document.getElementById('account-home')?.dataset.accountGoalsContext)),

@@ -115,7 +115,7 @@ const HomeFriendsRuntime = (() => {
     return Object.freeze({
       kind: choice(value.kind, ['albums', 'tracks', 'artists'], 'albums'),
       kindExplicit: ['albums', 'tracks', 'artists'].includes(value.kind) && value.kindExplicit !== false,
-      homeSection: choice(value.homeSection, ['recent', 'queue'], 'recent'),
+      homeSection: choice(value.homeSection, ['recent', 'queue', 'goals'], 'recent'),
       period: choice(value.period, ['week', 'month', 'six', 'year', 'all'], 'week'),
       views: views(value.views),
       friendKind: choice(value.friendKind, ['albums', 'tracks', 'artists'], 'tracks'),
@@ -1000,6 +1000,7 @@ const HomeFriendsRuntime = (() => {
     actionHtml: config => ButtonComponent.renderActionButton(config),
     iconHtml: name => ButtonComponent.renderIconSvg(name),
     alertHtml: config => buildOnPageAlertHtml(config),
+    showOwnedToast: (message, variant) => showToast(message, variant, undefined, {placement:'top-center'}),
     galleryBarHtml: config => buildGalleryBarHtml(config),
     tableHtml: config => buildCompactDataTable(config),
     galleryCardHtml: config => buildGalleryCardHtml(config),

@@ -1,3 +1,4 @@
+const {attentionReadFixture}=require('./goals-attention-read-fixture.cjs');
 const {bonusReadFixture}=require('./goals-bonus-read-fixture.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -7,8 +8,8 @@ const vm = require('node:vm');
 const {fixture,load,settle,deferred} = require('./home-friends-native-app-fixture.cjs');
 const stamp='a'.repeat(64),goal='11111111-1111-4111-8111-111111111111',album='22222222-2222-4222-8222-222222222222',cycle='33333333-3333-4333-8333-333333333333';
 function value(full=false) {
-  return {goal_ref:full?goal:null,revision:full?'2':'1',periods:Object.fromEntries(['week','month','six-months','year'].map(period=>[period,{period,top_ref:full?goal:null,
-    cycle:full?{cycle_id:cycle,started_at:'2026-12-01T00:00:00Z',start_date:'2026-12-01',due_date:'2027-01-01',timezone_name:'UTC'}:null,
+  return {goal_ref:full?goal:null,revision:full?'2':'1',periods:Object.fromEntries(['week','month','six-months','year'].map((period,index)=>[period,{period,top_ref:full?goal:null,
+    cycle:full?{cycle_id:index===0?cycle:`33333333-3333-4333-8333-${String(index).padStart(12,'0')}`,started_at:'2026-12-01T00:00:00Z',start_date:'2026-12-01',due_date:'2027-01-01',timezone_name:'UTC'}:null,
     album_refs:full?[album]:[],manual_completed_at:full?{[album]:null}:{},total:full?1:0,completed:0,percent:0}])),
     albums:full?[{catalog_ref:album,title:'Private album',artist_display:'Private artist',first_release_date:null,primary_type:null}]:[],
     allowed_actions:{can_read:true,can_add:true,can_reset:true,can_complete:true,can_remove:true}};
@@ -16,9 +17,9 @@ function value(full=false) {
 async function mounted(t,{full=false}={}) {
   const h=fixture(t),entry=await load('account-entry.mjs');let owner,restores=0;
   const calls=[],script=[];let data=value(full);
-  const bonusReads=bonusReadFixture(t,()=>data);
+  const bonusReads=bonusReadFixture(t,()=>data),attentionReads=attentionReadFixture(t,()=>data);
   h.c.URLSearchParams=URLSearchParams;
-  h.c.fetch=async(route,options)=>{const bonus=bonusReads.dispatch(route,options);if(bonus.handled)return {ok:true,status:200,json:async()=>({status:"ready",context_ref:stamp,context_scope:"account-goals-v1",data:bonus.data})};calls.push({route,options});const next=script.length?script.shift():data;
+  h.c.fetch=async(route,options)=>{const attention=attentionReads.dispatch(route,options);if(attention.handled)return {ok:true,status:200,json:async()=>({status:"ready",context_ref:stamp,context_scope:"account-goals-v1",data:attention.data})};const bonus=bonusReads.dispatch(route,options);if(bonus.handled)return {ok:true,status:200,json:async()=>({status:"ready",context_ref:stamp,context_scope:"account-goals-v1",data:bonus.data})};calls.push({route,options});const next=script.length?script.shift():data;
     const result=await(typeof next==='function'?next(route,options):next);if(result instanceof Error)throw result;
     return result?.response||{ok:true,status:200,json:async()=>({status:'ready',context_ref:stamp,context_scope:'account-goals-v1',data:result})};};
   vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/js/runtime/private-ui-transport.js'),'utf8'),h.c);
@@ -26,8 +27,8 @@ async function mounted(t,{full=false}={}) {
   Object.defineProperty(h.document,'visibilityState',{value:'visible',writable:true,configurable:true});
   t.after(()=>owner?.dispose());
   owner=h.own(entry.mountAccountGoalsEntry(h.host,entry.accountGoalsRuntime(h.c),h.c.createAlbumHavenPrivateUITransport,{onRestore:()=>restores++}));
-  await bonusReads.ready;await settle();h.drain();bonusReads.assertInitial();
-  return {...h,owner,calls,script,bonusReads,setData:next=>{data=next;},restores:()=>restores,
+  await bonusReads.ready;await attentionReads.ready;await settle();h.drain();bonusReads.assertInitial();attentionReads.assertInitial();
+  return {...h,owner,calls,script,bonusReads,attentionReads,allRequests:attentionReads.allRequests,setData:next=>{data=next;},restores:()=>restores,
     visibility(value){h.document.visibilityState=value;h.document.dispatchEvent(new h.c.Event('visibilitychange'));},
     page(name,persisted=false){const event=new h.c.Event(name);event.persisted=persisted;h.document.dispatchEvent(event);}};
 }

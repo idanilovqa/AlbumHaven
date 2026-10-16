@@ -36,11 +36,15 @@ export function mountButton(host, runtime, initial) {
 
 export function mountTabs(host, runtime, initial) {
   host.classList.add('home-friends__tabs');
+  const attention = new Map();
   let props, previousHtml, disposed = false, tabsOwner = null, revision = 0, rendering = false, pending = null;
-  const sync = () => {
+  const sync = event => {
     if (disposed) return;
     const next = host.querySelector('[aria-selected="true"]')?.dataset.inPageTab;
     if (next && next !== props.value) props.onChange?.(next);
+    else {const target = event.target.closest?.('[data-in-page-tab]');
+      if (next && target && !target.disabled && target.dataset.inPageTab === next
+        && (event.type === 'click' || ['ArrowLeft','ArrowRight','Home','End'].includes(event.key))) props.onActivate?.(next);}
   };
   const render = next => {
     if (disposed) return;
@@ -58,6 +62,7 @@ export function mountTabs(host, runtime, initial) {
     const mounted = runtime.mountTabs(host.firstElementChild);
     if (!current()) {mounted?.dispose?.(); return;}
     tabsOwner = mounted;
+    for (const [key, value] of attention) tabsOwner?.setAttention?.(key, value);
     if (active) {
       const buttons = [...host.querySelectorAll('[data-in-page-tab]')];
       (buttons.find(node => node.dataset.inPageTab === active && !node.disabled)
@@ -74,7 +79,7 @@ export function mountTabs(host, runtime, initial) {
     } finally {rendering = false;}
   };
   update(initial); host.addEventListener('click', sync); host.addEventListener('keydown', sync);
-  return {element: host, update, dispose() {if (disposed) return; disposed = true; revision++; pending = null; host.removeEventListener('click', sync); host.removeEventListener('keydown', sync); const previousOwner = tabsOwner; tabsOwner = null; try {previousOwner?.dispose?.();} finally {host.replaceChildren(); props = null;}}};
+  return {element: host, update, setAttention(key, value) {if (disposed) return; attention.set(key, value); tabsOwner?.setAttention?.(key, value);}, dispose() {if (disposed) return; disposed = true; revision++; pending = null; host.removeEventListener('click', sync); host.removeEventListener('keydown', sync); const previousOwner = tabsOwner; tabsOwner = null; try {previousOwner?.dispose?.();} finally {host.replaceChildren(); props = null;}}};
 }
 
 const chevron = '<svg class="ui-choice__chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg>';

@@ -138,3 +138,10 @@
 /* Goals keeps its single primary empty-state action with the empty copy. */
 .home-goals__empty-state { display: grid; justify-items: center; gap: 12px; padding: 24px; text-align: center; }
 .home-goals__empty-state[hidden] { display: none; }
+
+/* Attention markers occupy no layout space and leave the selected underline alone. */
+.in-page-tabs [data-in-page-tab] { position: relative; }
+.in-page-tabs__attention { position: absolute; width: 6px; height: 6px; border-radius: 50%; top: 3px; right: 3px; pointer-events: none; }
+.in-page-tabs__attention[data-attention="blue"] { background: var(--appearance-player-accent, #55c7ff); }
+.in-page-tabs__attention[data-attention="red"] { background: var(--appearance-error, #ef5350); }
+.in-page-tabs__attention[hidden] { display: none; }

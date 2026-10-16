@@ -1,3 +1,4 @@
+import {createGoalsAttentionView} from './goals-attention-view.mjs';
 import {createGoalsProvider} from './goals-provider.mjs';
 import {createGoalsController} from './goals-model.mjs';
 import {mountChoice, mountButton} from './native-controls.mjs';
@@ -21,6 +22,7 @@ export function mountGoalsPanel(host, runtime, initial) {
   const doc = host.ownerDocument;
   let provider, controller, resetHost, periodHost, progressHost, body, status, error, retryHost, list, emptyHost, startHost, addHost;
   let disposed = false, dialog = null, dialogGuard = null, unsubscribe, choice, progress, reset, retry, start, add;
+  let attentionView, dismissAttention, dismissAttentionHost, retryAttention, retryAttentionHost;
   let rendering = false, queuedRender = false, frameSnapshot = null;
   let menu = null, menuGuard = null, menuGeneration = 0;
   let bonusHost, bonusSwitch, bonusOutcome, sourceSequence = 0;
@@ -56,7 +58,7 @@ export function mountGoalsPanel(host, runtime, initial) {
         if (!valid() || operation !== menuGeneration || !formats.some(item => item.value === action)) return;
         closeMenu();
         if (!valid()) return;
-        if (action === 'completion') void controller.setCompletion(ref, !completed, expected);
+        if (action === 'completion') {const result = controller.setCompletion(ref, !completed, expected); if (!completed) attentionView?.completed(result, captured);}
         else void controller.remove(ref, expected);
       }});
     if (!valid() || operation !== menuGeneration) {try {opened?.close({restoreFocus: false});} catch {}}
@@ -181,7 +183,7 @@ export function mountGoalsPanel(host, runtime, initial) {
     if (!checkpoint()) return;
     choice.update({icon: periodIcons[snapshot.period], showLabel: false, label: 'Period', className: 'home-friends__period',
       menuWidth: 'content', value: snapshot.period, options: periods,
-      disabled: snapshot.mutation !== 'idle', onChange: value => {if (current()) {closeDialog(); controller.selectPeriod(value);}}});
+      disabled: snapshot.mutation !== 'idle', onChange: value => {if (current()) {closeDialog(); controller.selectPeriod(value); attentionView?.enter({});}}});
     if (!checkpoint()) return;
     progress.update({summary: snapshot.status === 'ready' ? selected : null, label: 'Goals completed'});
     if (!checkpoint()) return;
@@ -209,6 +211,7 @@ export function mountGoalsPanel(host, runtime, initial) {
       : snapshot.status === 'denied' ? 'Goals are unavailable for this session.' : 'Goals could not be loaded.';
     error.setAttribute('role', 'alert'); error.textContent = snapshot.error?.message || '';
     retryHost.hidden = !snapshot.error || ['submitting', 'recovering', 'refreshing'].includes(snapshot.mutation);
+    updateAttentionDismiss();
     retry.update({label: 'Retry', disabled: retryHost.hidden, onClick: () => {if (current()) void controller.retry();}});
     if (!checkpoint()) return;
     const desired = snapshot.status === 'ready' ? selected.album_refs : [];
@@ -257,14 +260,24 @@ export function mountGoalsPanel(host, runtime, initial) {
     }
     if (menuGuard && !menuGuard()) closeMenu();
   }
+  function updateAttentionDismiss() {
+    if (disposed || !dismissAttention) return;
+    dismissAttentionHost.hidden = !attentionView?.canDismiss();
+    dismissAttention.update({label:'Dismiss visit acknowledgment', disabled:dismissAttentionHost.hidden, onClick:()=>attentionView?.dismiss()});
+    const snapshot = controller.getSnapshot();
+    retryAttentionHost.hidden = !snapshot.attentionError || snapshot.mutation !== 'idle' || Boolean(snapshot.error);
+    retryAttention.update({label:'Retry goal attention', disabled:retryAttentionHost.hidden,
+      onClick:()=>{if (current()) void initial.owner.refreshAttention({immediate:true});}});
+  }
   function dispose() {
-    if (disposed) return; disposed = true; unsubscribe?.(); closeMenu(); closeDialog(); controller?.dispose(); provider?.dispose();
+    if (disposed) return; disposed = true; attentionView?.dispose(); dismissAttention?.dispose(); retryAttention?.dispose(); unsubscribe?.(); closeMenu(); closeDialog(); if (!initial.owner) {try {controller?.dispose();} finally {provider?.dispose();}}
     bonusSwitch?.dispose(); retry?.dispose(); start?.dispose(); add?.dispose(); reset?.dispose(); progress?.dispose(); choice?.dispose();
     for (const row of rows.values()) disposeRow(row);
     nodes.reverse().forEach(value => value.remove()); rows.clear();
   }
   try {
-    provider = createGoalsProvider(initial.transport); controller = createGoalsController({provider, canDrawBonus:sourceCurrent});
+    if (initial.owner) {provider = initial.owner.provider; controller = initial.owner.controller;}
+    else {provider = createGoalsProvider(initial.transport); controller = createGoalsController({provider, canDrawBonus:sourceCurrent});}
     const firstAction = initial.header.actions.firstChild;
     resetHost = node(initial.header.actions, 'span'); addHost = node(initial.header.actions, 'span'); periodHost = node(initial.header.actions, 'span');
     initial.header.actions.insertBefore(resetHost, firstAction); initial.header.actions.insertBefore(addHost, firstAction); initial.header.actions.insertBefore(periodHost, firstAction);
@@ -282,7 +295,26 @@ export function mountGoalsPanel(host, runtime, initial) {
     start = mountButton(startHost, runtime, {label: 'Start', variant: 'primary', disabled: true});
     add = mountButton(addHost, runtime, {label: 'Add', icon: 'add', disabled: true});
     retry = mountButton(retryHost, runtime, {label: 'Retry', disabled: true});
-    unsubscribe = controller.subscribe(render); render(); void controller.loadBonus();
+    if (initial.owner) {
+      dismissAttentionHost = node(body, 'span');
+      dismissAttention = mountButton(dismissAttentionHost, runtime, {label:'Dismiss visit acknowledgment', disabled:true});
+      retryAttentionHost = node(body, 'span');
+      retryAttention = mountButton(retryAttentionHost, runtime, {label:'Retry goal attention', disabled:true});
+      attentionView = createGoalsAttentionView({controller, visitState:initial.owner.visitState, document:doc,
+        isCurrent:current, notify:(message, variant) => runtime.showOwnedToast?.(message, variant), onChange:updateAttentionDismiss,
+        refreshAttention:options=>initial.owner.refreshAttention?.(options)});
+      if (initial.visitIntent) attentionView.enter(initial.visitIntent);
+    }
+    let rendered = null;
+    const panelKeys = ['status','data','period','mutation','error','bonusStatus','settings','bonus','outcome'];
+    unsubscribe = controller.subscribe(() => {
+      const next = controller.getSnapshot();
+      if (rendered && panelKeys.every(key => rendered[key] === next[key])) return;
+      rendered = next; render();
+    });
+    rendered = controller.getSnapshot(); render();
+    const mountedState = controller.getSnapshot();
+    if (mountedState.mutation === 'idle' && !mountedState.error && !['loading', 'ready'].includes(mountedState.bonusStatus)) void controller.loadBonus();
   } catch (error) {dispose(); throw error;}
-  return {update() {render();}, dispose};
+  return {update(next) {if (next?.visitIntent) attentionView?.enter(next.visitIntent); render(); attentionView?.update();}, dispose};
 }

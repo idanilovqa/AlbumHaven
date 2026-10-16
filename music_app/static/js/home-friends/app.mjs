@@ -39,6 +39,7 @@ export function mountHomeFriendsView(host, initial) {
     selectedFocus = null, selectionOpener = null, profileFocus = null, sizeFocus = null, scrollTimer = null, nowPlayingValue = null, queueDetailsOwner, queueDetails,
     activeRouteKey, loadedRecentKey, loadedFriendKey, loadedFriendResource, loadedMembersResource, lastFriends, lastPresentation, originalRestorationKey, latest = null, presentation;
   const lifetimeScope = createNativeLifetime(), owners = new Map(), slots = new Map(), retiredRender = Symbol('retired Home render');
+  let goalsVisitIntent = null;
   let profileDialogOwner, directoryDialogOwner, directoryContentOwner, requestDialogOwner;
   // A queued external ownership change retires the active frame immediately,
   // before native focus returns. Ordinary same-input publications keep leases.
@@ -50,6 +51,11 @@ export function mountHomeFriendsView(host, initial) {
     if(latest?.query){const x=selectionSource(as,latest.query),y=selectionSource(bs,latest.query);if(x?.status!==y?.status||x?.data!==y?.data)return false;}
     return true;
   }
+  function syncGoalsMarker() {
+    if (disposed) return;
+    const value = props.goalsOwner?.controller.getSnapshot();
+    owners.get('home-sections')?.owner.setAttention?.('goals', value?.attentionStatus === 'ready' ? value.attention.indicator : 'none');
+  }
   function checkpoint() {if (!homeCurrent()) throw retiredRender;}
   function accept(owner) {if (!homeCurrent()) {try {owner?.dispose?.();} catch (_cleanupError) {} throw retiredRender;} return owner;}
   function dispose() {
@@ -60,6 +66,7 @@ export function mountHomeFriendsView(host, initial) {
     lifetimeScope.dispose(); host.replaceChildren();
   }
   try {
+  if (initial.goalsOwner) lifetimeScope.defer(initial.goalsOwner.controller.subscribe(syncGoalsMarker));
   if (!selections.length && selectedAlbum) selections = updateSelectionEntry(selections, {section:'recent',account_ref:null,kind:'albums',period:'week'}, {pane:saved.expanded === 'recent' ? 'recent':'album',expanded:saved.expanded === 'selection' ? 'album':saved.expanded,scroll:{source:saved.scroll?.recent}});
   const savedScroll = saved?.scroll && {...saved.scroll,...(saved.kindExplicit === false && saved.kind !== kind ? {recent:0}:{})};
   const scroll = createScrollState(savedScroll); let pendingScroll = savedScroll;
@@ -228,7 +235,8 @@ export function mountHomeFriendsView(host, initial) {
       show('pane-back',hasSelection,slot('pane-back'),mountButton,{label:x.activePane==='album'&&hasArtist?'Back to Artist Info':queueMode?'Back to Queue':'Back to Recent',icon:'back',disabled:x.activePane==='recent',onClick:()=>showPane(latest.activePane==='album'&&latest.hasArtist?'artist':'recent')});
       show('pane-tabs',hasSelection,slot('pane-tabs'),mountTabs,{id:'home-selected-sections',label:'Selected resource sections',items:[['recent',queueMode?'Queue':'Recent'],...(hasArtist?[['artist','Artist Info']]:[]),...(hasAlbum?[['album','Album Info']]:[])],value:x.activePane,onChange:showPane});
       for(const [key,header] of [['recent',recentHeader],['friends',friendsHeader],['artist',artistHeader],['album',albumHeader]])show(`expand-${key}`,x.dashboardKeys.length>1&&expandedKey!==key&&x.dashboardKeys.includes(key),header.slots.leading,mountButton,{label:'Full size',icon:'expand',attributes:{'data-dashboard-action':'expand','aria-expanded':'false'},onClick:()=>resizeWidget(key)});
-      mount('home-sections',recentHeader.slots.identity,mountTabs,{id:'home-recent-sections',label:'Home sections',items:section==='recent'&&props.goalsTransport?[...homeSections,['goals','Goals']]:section==='recent'?homeSections:homeSections.filter(([key])=>key!=='queue'),value:homeSection,onChange:value=>change(()=>{homeSection=value;})});
+      mount('home-sections',recentHeader.slots.identity,mountTabs,{id:'home-recent-sections',label:'Home sections',items:section==='recent'&&props.goalsTransport?[...homeSections,['goals','Goals']]:section==='recent'?homeSections:homeSections.filter(([key])=>key!=='queue'),value:homeSection,onActivate:value=>{if(value==='goals')change(()=>{goalsVisitIntent={};});},onChange:value=>change(()=>{homeSection=value;goalsVisitIntent=value==='goals'?{}:null;})});
+      syncGoalsMarker();
       show('recent-period',homeSection==='recent',recentHeader.slots.actions,mountPeriod,{value:period,onChange:value=>change(()=>{period=value;}),range:currentRecent.data?.range_label||(period==='week'?'Last 7 days':'')});
       show('recent-missing',homeSection==='recent',recentHeader.slots.actions,mountActivityMissingAction,{value:currentRecent,scopeKey:state.scopeKey,kind:x.recentKind,period,selectedRowIds:x.trackSelection?.rows.map(row=>row.id),enabled:section==='recent',onError:setError});
       show('recent-view',homeSection==='recent'&&kind!=='albums',recentHeader.slots.outsideActions,mountViewControl,{kind,value:views[kind],onChange:value=>change(()=>{views={...views,[kind]:value};})});
@@ -237,7 +245,7 @@ export function mountHomeFriendsView(host, initial) {
       slot('recent-body').className=`home-friends__widget-body ${queueMode?'gallery-scrollbar':'home-friends__recent-body'}`;
       const retryRecent=()=>kind==='albums'&&period==='week'?controller.loadRecent():controller.loadActivity({kind:latest.recentKind,period});
       show('queue-panel',queueMode,recentContent,mountQueuePanel,{...x.queue,scopeKey:state.scopeKey,selectedIds:queueDetails.value.selectedIds,onSelect:selectQueuedTracks});
-      show('goals-panel',section==='recent'&&homeSection==='goals'&&Boolean(props.goalsTransport),recentContent,mountGoalsPanel,{transport:props.goalsTransport,sourceTransport:props.goalsSourceTransport,header:{actions:pageHeader.slots.actions,content:recentHeader.slots.content},isCurrent:()=>homeCurrent()&&props.shell.section!=='friends'&&homeSection==='goals'},runtime,props.goalsTransport);
+      show('goals-panel',section==='recent'&&homeSection==='goals'&&Boolean(props.goalsTransport),recentContent,mountGoalsPanel,{transport:props.goalsTransport,sourceTransport:props.goalsSourceTransport,owner:props.goalsOwner,visitIntent:goalsVisitIntent,header:{actions:pageHeader.slots.actions,content:recentHeader.slots.content},isCurrent:()=>homeCurrent()&&props.shell.section!=='friends'&&homeSection==='goals'},runtime,props.goalsTransport);
       show('recent-albums',!queueMode&&homeSection!=='queue'&&homeSection!=='goals'&&kind==='albums'&&period==='week',recentContent,mountRecentAlbums,{value:state.recent,retry:retryRecent,selected:selectedAlbum,selectionMode:x.customDetail?'details':'native',onSelect:selectRecentAlbum,onError:setError});
       const activityVisible=homeSection!=='queue'&&homeSection!=='goals'&&!(kind==='albums'&&period==='week');recentActivityHost.hidden=!activityVisible;
       show('recent-status',activityVisible,recentActivity,mountStatus,{value:currentRecent,label:'Listening activity',retry:retryRecent});

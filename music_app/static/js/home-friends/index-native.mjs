@@ -1,3 +1,4 @@
+import {createGoalsOwner} from './goals-owner.mjs';
 import {captureArtistMixScope} from '../playlists/library-mix-recipe.mjs';
 import {createPresencePublisher} from './presence.mjs';
 import {normalizeCreationResult, prepareMissingDraft} from '../playlists/creation.mjs';
@@ -32,10 +33,13 @@ function createHomeOwner(host, runtime) {
     const previous = session;
     if (!previous) return;
     session = null;
-    previous.unsubscribe?.(); previous.releaseNotifications?.();
-    previous.view?.dispose();
     if (activeController === previous.controller) activeController = null;
-    previous.controller.dispose();
+    let failure;
+    for (const release of [previous.unsubscribe, previous.releaseNotifications, () => previous.view?.dispose(),
+      () => previous.goalsOwner?.dispose(), () => previous.controller.dispose()]) {
+      try {release?.();} catch (error) {failure ||= error;}
+    }
+    if (failure) throw failure;
   }
   function reconcile() {
     if (disposed) return;
@@ -45,22 +49,29 @@ function createHomeOwner(host, runtime) {
       do {
         queued = false;
         const shell = runtime.snapshot();
+        const goalsTransport = shell.authenticated === true ? window.AlbumHavenPrivateUITransport : null;
         if (!shell.visible) {retireSession(); continue;}
-        if (session && (session.scopeKey !== shell.scopeKey || session.generation !== providerGeneration)) retireSession();
+        if (session && (session.scopeKey !== shell.scopeKey || session.generation !== providerGeneration || session.goalsTransport !== goalsTransport)) retireSession();
         if (!session) {
           const controller = createHomeFriendsController({readRecent: runtime.readRecent, providers,
             onFriendsAuthority: runtime.retireFriendActivity});
           controller.setScope(shell.scopeKey);
           session = {controller, scopeKey: shell.scopeKey, generation: providerGeneration,
             view: null, entryKey: null, initialized: false, payload: undefined,
-            notifications: null, releaseNotifications: null};
+            notifications: null, releaseNotifications: null, goalsOwner: null, goalsTransport};
+          const owned = session;
+          if (owned.goalsTransport) {
+            try {owned.goalsOwner = createGoalsOwner({transport: owned.goalsTransport, sourceTransport: owned.goalsTransport, document:host.ownerDocument,
+              isCurrent: () => session === owned && !disposed && runtime.snapshot().visible && runtime.snapshot().scopeKey === owned.scopeKey});}
+            catch (error) {retireSession(); throw error;}
+          }
           activeController = controller;
           session.unsubscribe = controller.subscribe(reconcile);
         }
         const current = session, entryKey = shell.entryKey ?? 'initial';
         const props = {runtime, controller: current.controller, state: current.controller.getSnapshot(), shell,
           readDetail: providers.readDetail, readNowPlaying: providers.readNowPlaying,
-          goalsTransport: window.AlbumHavenPrivateUITransport, goalsSourceTransport: window.AlbumHavenPrivateUITransport};
+          goalsTransport: current.goalsTransport, goalsSourceTransport: current.goalsTransport, goalsOwner: current.goalsOwner};
         const stillCurrent = () => {
           const latest = runtime.snapshot();
           return session === current && current.generation === providerGeneration && latest.visible
@@ -91,6 +102,8 @@ function createHomeOwner(host, runtime) {
           else current.controller.loadRecent();
         }
         if (initial) {
+          // Off-tab startup reads only bounded attention; visible panel owns full reads.
+          if (current.goalsOwner?.controller.getSnapshot().status === 'idle') void current.goalsOwner.refreshAttention();
           // Bootstrap summaries may be empty; always read the genuine seam.
           if (shell.payload) current.controller.loadRecent();
           current.controller.loadFriends();

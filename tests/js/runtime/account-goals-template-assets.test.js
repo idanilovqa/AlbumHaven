@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {fixture, templateAssets, read, value, searchValue, evidenceValue, STAMP, CSRF, GOAL, ALBUM, CYCLE, GROUP} = require('./account-goals-template-fixture.cjs');
 const CLASSIC = ['button-component.js', 'runtime/markup-format-helpers.js', 'runtime/alert-components.js',
+  'runtime/browser-scheduling-helpers.js', 'runtime/notification-ui-helpers.js',
   'runtime/album-artbox.js', 'runtime/gallery-main-components.js', 'runtime/gallery-card-component.js',
   'runtime/in-page-tabs.js', 'runtime/trigger-anchor.js', 'runtime/library-settings.js',
   'runtime/browser-dialog-helpers.js', 'runtime/session-csrf-fetch.js', 'runtime/private-ui-transport.js']
@@ -39,9 +40,12 @@ test('exact account template assets mount empty Goals through the actual entry a
   assert.deepEqual(h.calls.map(call => call.route), ['/account/goals']);
   assert.equal(header(h.calls[0], 'X-AlbumHaven-Account-Context'), STAMP);
   for (const name of ['state', 'NavigationTree', 'UnfoldingActionButton', 'buildCompactDataTable', 'buildAlbumDetailsHeaderHtml',
-    'openTrackModal', 'playAlbum', 'scheduleBrowserAnimationFrame', 'scheduleBrowserTimeout']) {
+    'openTrackModal', 'playAlbum']) {
     assert.equal(h.lookup(name), undefined, `${name} is not injected to hide a missing template dependency.`);
   }
+  for (const name of ['scheduleBrowserAnimationFrame','scheduleBrowserTimeout','showToast']) assert.equal(typeof h.lookup(name),'function', `${name} comes from the exact canonical template asset.`);
+  assert.ok(h.document.getElementById('toast-layer'));
+  assert.equal(h.allRequests.filter(row=>row.options.method==='POST').length,0,'Empty direct entry never acknowledges an empty cycle.');
   assert.equal(h.document.getElementById('app-shell'), null);
 });
 

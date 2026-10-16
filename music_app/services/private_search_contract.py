@@ -1,7 +1,8 @@
-"""The bounded own-subject token subset delegated by the shared Search owner."""
+"""Protected Search contracts; only the own-love subset has HTTP admission."""
 from dataclasses import dataclass
 import re
 
+from music_app.services.auth_tokens import normalize_login_identifier
 from music_app.services.gallery_display import normalize_gallery_display_mode, normalize_gallery_scale_percent
 from music_app.services.gallery_scope import normalize_gallery_scope, normalize_visible_categories
 
@@ -10,6 +11,54 @@ class PrivateSearchError(ValueError):
     def __init__(self, code='invalid_private_search_request', status_code=400, location=None):
         super().__init__('Invalid search request.' if status_code == 400 else 'Search is unavailable.')
         self.code, self.status_code, self.location = code, status_code, location
+
+
+@dataclass(frozen=True)
+class ListenerHistoryCriteria:
+    """Confirmed listener shorthand; not yet admitted by the HTTP normalizer."""
+    username: str
+
+    def __post_init__(self):
+        try:
+            object.__setattr__(self, 'username', normalize_login_identifier(self.username))
+        except ValueError:
+            raise PrivateSearchError() from None
+
+    def as_payload(self):
+        return {'subject': {'kind': 'username', 'username': self.username},
+                'predicate_domain': 'tracks', 'history': {'period': 'all'}}
+
+
+def normalize_listener_history_query(query):
+    """Normalize only @handle or @handle :tracks listened:all.
+
+    This independent foundation deliberately does not widen live Search
+    admission. The history reader must supply event policy and bounded paging
+    before normalize_private_search_request can delegate here.
+    """
+    if (not isinstance(query, str) or not query.strip() or len(query) > 200 or '\0' in query
+            or any('\ud800' <= ch <= '\udfff' for ch in query)):
+        raise PrivateSearchError()
+    username, selectors = None, {}
+    for match in re.finditer(r'\S+', query):
+        word = match.group()
+        token = word.casefold()
+        location = {'start': match.start(), 'end': match.end()}
+        if word.startswith('@') and username is None:
+            try:
+                # Use the account username owner, including its ASCII/case
+                # contract. Casefolded Unicode is not a username alias.
+                username = normalize_login_identifier(word[1:])
+            except ValueError:
+                raise PrivateSearchError(location=location) from None
+        elif token in {':tracks', 'listened:all'} and token not in selectors:
+            selectors[token] = location
+        else:
+            raise PrivateSearchError('unsupported_private_search_combination', location=location)
+    if username is None or selectors and set(selectors) != {':tracks', 'listened:all'}:
+        location = next(iter(selectors.values()), None)
+        raise PrivateSearchError('unsupported_private_search_combination', location=location)
+    return ListenerHistoryCriteria(username)
 
 
 @dataclass(frozen=True)

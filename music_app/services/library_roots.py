@@ -588,3 +588,13 @@ def _normalize_album_folder_name(value: str) -> str:
     text = re.sub(r"[_\-]+", " ", text)
     return " ".join(text.split()).casefold()
 
+
+
+def resolve_typed_artwork_observations(value):
+    """Dormant explicit-root observations; caller must be off-loop/outside DB.
+
+    This entry does not change existing media resolution or confer authority.
+    It accepts only the fixed immutable private resolution input contract.
+    """
+    from music_app.services._top_artwork_resolution import resolve
+    return resolve(value)

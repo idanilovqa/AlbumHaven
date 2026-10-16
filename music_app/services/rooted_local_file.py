@@ -9,6 +9,7 @@ import os
 from pathlib import PurePosixPath
 import stat
 import threading
+import time
 
 
 class RootedFileUnavailable(ValueError):
@@ -20,6 +21,13 @@ class RootSelection:
     platform: str
     root_path: str
     relative_parts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RootObservationSelection:
+    """An honest root-only selection; no fabricated leaf is required."""
+    platform: str
+    root_path: str
 
 
 @dataclass(frozen=True)
@@ -47,32 +55,69 @@ def _directory_identity(info, error=RootedFileUnavailable):
 
 class PosixDirectoryChain:
     """Existing artwork walk, with its exception factory supplied by the facade."""
-    def __init__(self, stack, root, error=RootedFileUnavailable):
+    def __init__(self, stack, root, error=RootedFileUnavailable, *,
+                 operation_context=None):
         self.stack = stack
         self.error = error
+        self.operation_context = operation_context
         self.links = []
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        if operation_context is not None:
+            operation_context.before_syscall()
         self.fd = os.open('/', flags)
-        stack.callback(os.close, self.fd)
+        if operation_context is None:
+            stack.callback(os.close, self.fd)
+        else:
+            self._register_counted_close(self.fd)
+            operation_context.before_syscall()
         _directory_identity(os.fstat(self.fd), error)
         for part in root.parts[1:]:
             self.descend(part)
 
+    def _register_counted_close(self, fd):
+        # The fixed context closes on callback-construction failure and returns
+        # an idempotent token. If registration itself fails after retaining the
+        # callback, immediate cleanup and later ExitStack cleanup cannot double
+        # close a recycled descriptor. Legacy None behavior is untouched.
+        close = self.operation_context.register_close(fd)
+        try:
+            self.stack.callback(close)
+        except BaseException:
+            close()
+            raise
+
     def descend(self, part):
         parent = self.fd
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        context = self.operation_context
+        if context is not None:
+            context.charge_component()
+            context.before_syscall()
         child = os.open(part, flags, dir_fd=parent)
-        self.stack.callback(os.close, child)
+        if context is None:
+            self.stack.callback(os.close, child)
+        else:
+            self._register_counted_close(child)
+            context.before_syscall()
         identity = _directory_identity(os.fstat(child), self.error)
         self.links.append((parent, part, child, identity))
         self.fd = child
 
     def check(self):
         for parent, name, child, expected in self.links:
+            if self.operation_context is not None:
+                self.operation_context.before_syscall()
             current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            if (_directory_identity(current, self.error) != expected or
-                    _directory_identity(os.fstat(child), self.error) != expected):
+            if self.operation_context is None:
+                if (_directory_identity(current, self.error) != expected or
+                        _directory_identity(os.fstat(child), self.error) != expected):
+                    raise self.error('artwork_source_changed')
+            elif _directory_identity(current, self.error) != expected:
                 raise self.error('artwork_source_changed')
+            else:
+                self.operation_context.before_syscall()
+                if _directory_identity(os.fstat(child), self.error) != expected:
+                    raise self.error('artwork_source_changed')
 
 
 def _posix_selection(selection):
@@ -387,27 +432,108 @@ def describe_root(selection, *, backend=None):
         return PosixRootStamp('posix', device, inode)
 
 
-class _AcquisitionJob:
-    """One slot owner: worker arbitrates delivery before disposing/releasing.
+def _posix_root_observation_selection(selection):
+    if (type(selection) is not RootObservationSelection
+            or type(selection.platform) is not str
+            or selection.platform != 'posix'
+            or type(selection.root_path) is not str):
+        raise RootedFileUnavailable('source_invalid')
+    text = selection.root_path
+    if len(text) > 8192:
+        raise RootedFileUnavailable('source_invalid')
+    try:
+        encoded = text.encode('utf-8')
+    except UnicodeError:
+        raise RootedFileUnavailable('source_invalid') from None
+    if (not text.startswith('/') or text.startswith('//') or '\x00' in text
+            or len(encoded) > 8192):
+        raise RootedFileUnavailable('source_invalid')
+    parts = [] if text == '/' else text.split('/')[1:]
+    if len(parts) > 256 or any(not part or part in ('.', '..') for part in parts):
+        raise RootedFileUnavailable('source_invalid')
+    return PurePosixPath(text)
+
+
+def observe_root(selection, *, operation_context):
+    """Bounded root-only observation; no leaf identity or authority is implied."""
+    root = _posix_root_observation_selection(selection)
+    _require_posix()
+    with ExitStack() as stack:
+        chain = PosixDirectoryChain(stack, root,
+                                    operation_context=operation_context)
+        chain.check()
+        if operation_context is not None:
+            operation_context.before_syscall()
+        device, inode = _directory_identity(os.fstat(chain.fd))
+        return PosixRootStamp('posix', device, inode)
+
+
+class _SingleReleaseJob:
+    """Shared decision and single-release owner with fixed optional policies.
 
     Only an original executor worker releases after dequeue/discard or completed
     delivery/cleanup. Even a submit exception can mean the job was enqueued: the
     caller abandons but never releases uncertain capacity or cancels the Future.
+    The probe adapter alone enables deadline-at-claim and cleanup quarantine;
+    acquisition keeps its original defaults and lease disposal policy.
     """
-    def __init__(self, release):
+    def __init__(self, release, *, deadline=None, clock=None,
+                 quarantine_cleanup=False):
         self._release_slot = release
         self._condition = threading.Condition()
         self.completed = threading.Event()
         self._decision = None
         self._factory_started = False
         self._released = False
-        self._lease = None
+        self._result = None
         self._error = None
         self.cleanup_error = None
+        self._deadline = deadline
+        self._clock = time.monotonic if clock is None else clock
+        self._quarantine_cleanup = quarantine_cleanup
+        self._quarantined = False
+
+    def _expire_locked(self):
+        if self._deadline is None or self._clock() < self._deadline:
+            return False
+        if self._decision is None:
+            self._decision = 'abandoned'
+            self._condition.notify_all()
+        return True
+
+    def start_work(self):
+        with self._condition:
+            if self._expire_locked() or self._decision == 'abandoned':
+                return False
+            # Shared linearization point: later abandonment is in-flight.
+            self._factory_started = True
+            return True
+
+    def check_active(self):
+        with self._condition:
+            return not self._expire_locked() and self._decision is None
+
+    def is_abandoned(self):
+        with self._condition:
+            return self._decision == 'abandoned'
+
+    def is_quarantined(self):
+        with self._condition:
+            return self._quarantined
+
+    def report_cleanup_failure(self, error=None):
+        with self._condition:
+            self.cleanup_error = error
+            if self._quarantine_cleanup:
+                self._quarantined = True
 
     def release_once(self):
         with self._condition:
-            if self._released:
+            if self._released or self._quarantined:
+                return
+            if self._quarantine_cleanup and self._decision is None:
+                # The probe policy cannot release completed-but-unclaimed or
+                # otherwise undecided ownership. Legacy behavior is unchanged.
                 return
             self._released = True
         self._release_slot()
@@ -417,14 +543,16 @@ class _AcquisitionJob:
 
     def claim(self):
         with self._condition:
+            if self._expire_locked():
+                raise RootedFileUnavailable('artwork_probe_timeout')
             if not self.completed.is_set() or self._decision is not None:
                 raise RootedFileUnavailable('acquisition_claim_invalid')
             self._decision = 'claimed'
-            lease, error = self._lease, self._error
+            result, error = self._result, self._error
             self._condition.notify_all()
         if error is not None:
             raise error
-        return lease
+        return result
 
     def abandon(self):
         with self._condition:
@@ -434,33 +562,42 @@ class _AcquisitionJob:
             self._condition.notify_all()
             return True
 
+    def publish_and_wait(self, result, error=None):
+        """Called only by the worker to await the synchronized caller decision.
+
+        Return whether the result was claimed. Probe cleanup must finish first;
+        a quarantined probe publishes its bounded failure, never a success. The
+        legacy adapter retains its lease until delivery or abandoned disposal.
+        This owner knows neither the probe result schema nor resource I/O.
+        """
+        with self._condition:
+            self._expire_locked()
+            self._result, self._error = result, error
+            self.completed.set()
+            while self._decision is None:
+                self._condition.wait()
+            return self._decision == 'claimed'
+
+
+class _AcquisitionJob(_SingleReleaseJob):
+    """Legacy lease adapter; deadline and cleanup quarantine remain disabled."""
+
     def run(self, factory, selection, expected_root_stamp):
         try:
-            with self._condition:
-                if self._decision == 'abandoned':
-                    # Dequeue is the first proof this retained queue entry can
-                    # release capacity. Never acquire for an already-gone caller.
-                    return
-                # Linearization point for acquisition start. Later abandonment
-                # is an in-flight cancellation and leaves cleanup to this worker.
-                self._factory_started = True
+            if not self.start_work():
+                # Dequeue proves this retained queue entry can release capacity.
+                return
             try:
                 lease = factory(selection, expected_root_stamp)
                 error = None
             except BaseException as caught:
                 lease, error = None, caught
-            with self._condition:
-                self._lease, self._error = lease, error
-                self.completed.set()
-                while self._decision is None:
-                    self._condition.wait()
-                abandoned = self._decision == 'abandoned'
-            if abandoned and lease is not None:
+            if not self.publish_and_wait(lease, error) and lease is not None:
                 # Same bounded acquisition worker, still owning its slot.
                 try:
                     lease.close()
                 except BaseException as caught:
-                    self.cleanup_error = caught
+                    self.report_cleanup_failure(caught)
                     raise
         finally:
             self.release_once()

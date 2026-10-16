@@ -1,0 +1,43 @@
+<!doctype html>
+{% from "partials/button.html" import ui_link %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Shared Album Top · AlbumHaven</title>
+  {% for stylesheet in ['runtime/base-layout.css', 'button-component.css', 'runtime/non-album-and-player.css', 'runtime/album-artbox-and-gallery-card.css', 'gallery-main.css', 'runtime/album-details-components.css', 'runtime/album-track-table.css', 'runtime/compact-data-table.css', 'public-album-tops.css'] %}
+  <link rel="stylesheet" href="/static/css/{{ stylesheet }}?v={{ runtime_asset_version | urlencode }}">
+  {% endfor %}
+  {% if payload is not none %}
+  <script src="/static/js/public-album-tops/page.js?v={{ runtime_asset_version | urlencode }}"></script>
+  {% for script in ['markup-format-helpers.js', 'album-artbox.js', 'gallery-main-components.js', 'gallery-card-component.js', 'album-details-components.js', 'compact-data-table.js', 'album-track-table.js'] %}
+  <script src="/static/js/runtime/{{ script }}?v={{ runtime_asset_version | urlencode }}" defer></script>
+  {% endfor %}
+  {% endif %}
+</head>
+<body class="public-album-top-page">
+  {% if payload is not none %}<p id="public-album-top-loading" class="public-album-top" role="status">Loading published metadata…</p>{% endif %}
+  <main id="public-album-top-page" class="public-album-top" aria-live="polite"{% if payload is not none %} hidden{% endif %}>
+    <header class="public-album-top__heading">
+      <p class="public-album-top__eyebrow">AlbumHaven · Shared Album Top</p>
+      <h1>{{ payload.data.title if payload is not none and payload.kind == 'top' else page_title }}</h1>
+      {% if payload is not none and payload.kind == 'top' and payload.data.description %}<p class="public-album-top__description">{{ payload.data.description }}</p>{% endif %}
+      {% if payload is not none %}<p class="public-album-top__notice">Published album and track metadata. Audio and listening progress aren't included.</p>{% endif %}
+    </header>
+    {% if payload is not none %}
+    <div id="public-album-top-content" class="public-album-top__content"><p role="status">Loading published metadata…</p></div>
+    {% else %}
+    <p role="status">{{ error_message }}</p>
+    {% endif %}
+    {% if top_path or first_page or next_page %}
+    <nav class="public-album-top__navigation" aria-label="Published metadata pages">
+      {% if top_path %}{{ ui_link('Back to Top', top_path, size='small') }}{% endif %}
+      {% if first_page %}{{ ui_link('First page', first_page, size='small') }}{% endif %}
+      {% if next_page %}{{ ui_link('Next page', next_page, size='small') }}{% endif %}
+    </nav>
+    {% endif %}
+    {% if payload is not none %}<script id="public-album-top-data" type="application/json">{{ payload | tojson }}</script>{% endif %}
+  </main>
+  {% if payload is not none %}<noscript><p class="public-album-top">Enable JavaScript to view this published metadata gallery.</p></noscript>{% endif %}
+</body>
+</html>

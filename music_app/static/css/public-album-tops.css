@@ -1,0 +1,29 @@
+body.public-album-top-page { height: auto; min-height: 100%; overflow: auto; }
+.public-album-top { max-width: 1180px; margin: 0 auto; padding: 28px 24px 40px; }
+.public-album-top__heading { margin-bottom: 24px; }
+.public-album-top__heading h1 { margin: 6px 0 12px; overflow-wrap: anywhere; }
+.public-album-top__eyebrow,
+.public-album-top__notice,
+.public-album-top__track-count { color: var(--muted); }
+.public-album-top__eyebrow { margin: 0; font-size: 0.8rem; }
+.public-album-top__notice { font-size: 0.85rem; }
+.public-album-top__description { max-width: 75ch; overflow-wrap: anywhere; }
+.public-album-top__gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 18px; }
+.public-album-top__card-link { display: block; min-width: 0; color: inherit; text-decoration: none; border-radius: 14px; }
+.public-album-top__card-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.public-album-top__navigation { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.public-album-top__content,
+.public-album-top__detail { min-width: 0; }
+.public-album-top__album-heading { display: flex; align-items: center; gap: 20px; min-width: 0; }
+.public-album-top__artwork { width: 128px; flex: 0 0 128px; border-radius: 14px; overflow: hidden; }
+.public-album-top .album-details-header__primary { white-space: normal; overflow-wrap: anywhere; }
+.public-album-top .album-details-header__secondary { display: block; overflow-wrap: anywhere; margin-top: 5px; }
+.public-album-top .album-details-header__eyebrow { color: var(--muted); font-size: 0.8rem; margin-bottom: 5px; }
+.public-album-top__empty { padding: 16px 0; color: var(--muted); }
+@media (max-width: 640px) {
+  .public-album-top { padding: 20px 16px 32px; }
+  .public-album-top__gallery { gap: 14px; }
+  .public-album-top__album-heading { gap: 12px; align-items: flex-start; }
+  .public-album-top__artwork { width: 80px; flex-basis: 80px; }
+  .public-album-top__navigation .ui-button { max-width: 100%; }
+}

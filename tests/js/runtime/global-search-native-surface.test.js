@@ -30,7 +30,7 @@ for(const order of ['runtime-first','module-first'])test(`actual entry mounts ex
   await h.mount();assert.equal(h.host.querySelector('[data-search-results-content]'),before);
 });
 
-test('actual native Tracks consumer renders one flat read-only table with Artist/Album/duration and no track-match paint',async t=>{
+test('actual native Tracks consumer renders one flat selectable table with Artist/Album/duration and no track-match paint',async t=>{
   const h=fixture(t);await h.mount();const payload=ready({presentation:'tracks'});payload.tracks[0].title='<Private & title>';payload.tracks[0].matches_search=true;
   await admit(h,payload);h.resize(1100);
   assert.equal(h.host.querySelectorAll('.compact-data-table').length,1);assert.equal(h.host.querySelectorAll('.album-track-table__row').length,2);
@@ -39,7 +39,14 @@ test('actual native Tracks consumer renders one flat read-only table with Artist
   for(const key of ['title','artist','album','duration'])assert.ok(h.host.querySelector(`[data-cdt-column="${key}"]`),`native ${key} cell exists`);
   assert.equal(h.host.querySelectorAll('.album-track-table__row--search-match,[data-track-search-match="true"],.album-card--search-match').length,0);
   assert.equal(h.host.querySelectorAll('.play-track-button,[data-open-tracklist],[data-track-row-path],[data-track-path]').length,0);
-  for(const row of h.host.querySelectorAll('.album-track-table__row')){assert.ok(row.tabIndex<0,'read-only rows are not dead focusable controls');assert.equal(row.getAttribute('aria-selected'),null);}
+  const selectableRows=[...h.host.querySelectorAll('.album-track-table__row')];
+  for(const row of selectableRows){assert.equal(row.tabIndex,0,'native selectable rows are keyboard reachable');assert.equal(row.getAttribute('aria-selected'),null);}
+  selectableRows[0].focus();h.dispatch(selectableRows[0],'keydown',{key:' ',ctrlKey:true});
+  assert.equal(selectableRows[0].getAttribute('aria-selected'),'true','actual keyboard selection paints only the selected row');
+  assert.equal(selectableRows[1].getAttribute('aria-selected'),null);
+  h.dispatch(selectableRows[1],'keydown',{key:' ',ctrlKey:true});
+  assert.ok(selectableRows.every(row=>row.getAttribute('aria-selected')==='true'),'native multiselection retains both rows');
+  assert.equal(h.requests.length,1,'selection alone grants no native action request');
   assert.equal(h.host.innerHTML.includes('inventory-track:'),false,'display never publishes inventory track authority');
   assert.equal(h.host.innerHTML.includes('listener-history-v1'),false);
 });

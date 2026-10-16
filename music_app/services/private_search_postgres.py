@@ -1,12 +1,14 @@
 """Current-subject Search over canonical, authorized PostgreSQL witnesses.
 
-No browse cache, file-backed fallback, source persistence, or media projection.
-Every continuation resolves its safe identity under current inventory/policy.
+No browse cache, file-backed fallback, or source persistence. Read DTOs carry
+no media projection. Separate native actions re-prove the current witness and
+resolve their target on the same authorized connection.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hmac
 import json
+import re
 
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.library_browse_postgres import (
@@ -22,6 +24,11 @@ from music_app.services.private_library_authority import (
 )
 from music_app.services.track_preferences_postgres import canonical_candidate_selection_ctes
 from music_app.services.view_search import PrivateSearchError
+from music_app.services.private_native_targets import PrivateNativeTargets, NativeTargetError
+from music_app.services.library_roots import (
+    normalize_persisted_library_root_settings, _root_paths_from_settings,
+    resolve_configured_media_path,
+)
 from music_app.services.social_cursors import (
     encode_search_cursor, decode_search_cursor, search_order_digest, SearchCursorScopeError,
 )
@@ -39,6 +46,19 @@ _ORDER = {
 }
 _NULLABLE = {'album_release_year', 'disc_number', 'track_number'}
 _ID = {'sidebar': 'artist_id', 'albums': 'album_id', 'tracks': 'track_id', 'detail': 'track_id', 'witness': 'track_id'}
+
+
+def normalize_native_search_command(resource_ref, intent):
+    """Inventory coordinates are candidates, never a native path or grant."""
+    match = re.fullmatch(r'inventory-(track|album):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})',
+                        resource_ref, re.ASCII) if type(resource_ref) is str else None
+    if (match is None or type(intent) is not str or intent not in {'metadata', 'play', 'details'}
+            or match[1] == 'album' and intent != 'details'):
+        raise PrivateSearchError()
+    kind, library_id, identifier = match[1], int(match[2]), int(match[3])
+    if library_id > 9223372036854775807 or identifier > 9223372036854775807:
+        raise PrivateSearchError()
+    return kind, library_id, identifier
 
 
 def _order_sql(kind):
@@ -537,6 +557,7 @@ def _page(limit, rows, cursor):
 
 class PostgresPrivateSearchService:
     def __init__(self, config, *, connect=None, clock=None):
+        self._config = config
         self._url = str(config.get('ALBUM_HAVEN_APP_DATABASE_URL') or '').strip()
         self._connect = connect or pooled_connection
         self._clock = clock or (lambda: datetime.now(timezone.utc))
@@ -567,6 +588,99 @@ class PostgresPrivateSearchService:
         if left['state'] == right['state'] == 'selected':
             return left['artist'] == right['artist']
         return left == right
+
+    def _native_targets(self, connection, live, *, intent):
+        # current_library_transaction already holds SHARE on this library.
+        # Read settings before taking track/Album/file/root locks: settings
+        # writers acquire the library/settings rows before inventory roots.
+        # Never consult a process snapshot or the bootstrap library, and never
+        # let the native owner's default path resolver open another connection.
+        roots = ()
+        if intent == 'play':
+            row = connection.execute('''select settings_payload from library.library_root_settings
+                where library_id=%s for share''', (live.library_id,)).fetchone()
+            if row is not None:
+                try:
+                    roots = _root_paths_from_settings(
+                        normalize_persisted_library_root_settings(row['settings_payload']))
+                except (TypeError, ValueError):
+                    raise PrivateSearchError('private_search_unavailable', 503) from None
+
+        def media_resolver(config, raw_path, *, configured_root_paths=None, **options):
+            # Native resolution first checks all authorized configured roots,
+            # then the exact active inventory root. It requires equal resolved
+            # paths, so neither check can substitute for the other.
+            return resolve_configured_media_path(config, raw_path,
+                configured_root_paths=roots if configured_root_paths is None else configured_root_paths,
+                **options)
+
+        return PrivateNativeTargets(self._config, media_resolver=media_resolver)
+
+    def resolve_native_target(self, context, *, request, context_ref, cursor_secret,
+                              resource_ref, intent, constraints=None):
+        """Re-prove own Love and resolve the actual native target in one transaction.
+
+        No cursor, retained DTO, caller path or foreign origin supplies authority.
+        Unknown, foreign-library and currently nonmatching inventory are the same
+        non-projecting denial. An indeterminate Album proof never returns a target.
+        """
+        kind, library_id, identifier = normalize_native_search_command(resource_ref, intent)
+        if (request.cursor is not None or request.sidebar_cursor is not None
+                or request.detail_album_ref is not None or request.sidebar_only
+                or request.presentation not in {'albums', 'tracks'}
+                or (request.artist is None) == (not request.all_artists)):
+            raise PrivateSearchError()
+        with self._authorized(context, constraints) as (connection, live, _):
+            if library_id != live.library_id:
+                raise PrivateSearchError('private_search_forbidden', 403)
+            require_private_action(live, BROWSE, resource=ResourceScope(kind, str(identifier)),
+                                   constraints=constraints)
+            targets = self._native_targets(connection, live, intent=intent)
+            # Freeze the candidate's identity before the fresh witness read.
+            # Follow the native owner's account/session -> track -> Album order;
+            # its later inventory/file/root locks use this same connection.
+            if kind == 'track':
+                candidate = connection.execute('''select id,album_id from library.local_tracks
+                    where library_id=%s and id=%s for update''', (library_id, identifier)).fetchone()
+                if candidate is None or candidate['album_id'] is None:
+                    raise PrivateSearchError('private_search_forbidden', 403)
+                album_id = candidate['album_id']
+            else:
+                album_id = identifier
+            album = connection.execute('''select id from library.local_albums
+                where library_id=%s and id=%s for share''', (library_id, album_id)).fetchone()
+            if album is None:
+                raise PrivateSearchError('private_search_forbidden', 403)
+            read = _Read(connection, live, request, constraints, cursor_secret)
+            rows = read.rows('witness' if kind == 'track' else 'albums', identifier=identifier, limit=1)
+            if not rows:
+                raise PrivateSearchError('private_search_forbidden', 403)
+            row = rows[0]
+            if request.artist is not None:
+                artists = read.matching_artist_rows(request.artist)
+                if len(artists) != 1 or artists[0]['artist_id'] != row['artist_id']:
+                    raise PrivateSearchError('private_search_forbidden', 403)
+            if kind == 'track':
+                qualified = row['album_id'] == album_id and read.readable(row)
+            else:
+                qualified, _ = read.qualify(row, 'albums')
+            if qualified is None:
+                raise PrivateSearchError('search_native_target_retry_required', 409)
+            if qualified is not True:
+                raise PrivateSearchError('private_search_forbidden', 403)
+            try:
+                target = (targets.resolve(connection, live, identifier, intent=intent, constraints=constraints)
+                          if kind == 'track' else
+                          targets.resolve_album(connection, live, identifier, constraints=constraints))
+            except NativeTargetError as error:
+                raise PrivateSearchError(error.code, error.status_code) from None
+            data = {'resource_ref': resource_ref, 'intent': intent, 'native_target': target}
+            if kind == 'track' and intent == 'details':
+                data['parent_album_ref'] = f'inventory-album:{library_id}:{album_id}'
+            # Exiting _authorized performs the real final session and Browse
+            # checks before this return is allowed to leave the service.
+            return {'status': 'ready', 'contract_version': 'own-love-native-v1',
+                    'context_ref': context_ref, 'data': data}
 
     def _pending_selection(self, read, request, context_ref, selected, selection,
                            *, result_cursor=None, sidebar_cursor=None):

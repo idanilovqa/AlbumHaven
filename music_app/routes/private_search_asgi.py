@@ -1,7 +1,9 @@
 """Personal global Search admission, before transient or ordinary browse."""
 import hmac
+import json
 
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from music_app.services.client_surfaces import client_surface_from_request
 from music_app.services.policy import PolicyContext
@@ -10,38 +12,106 @@ from music_app.services.policy_evaluator import PolicyEvaluationConstraints
 from music_app.services.private_library_authority import require_private_action, PrivateLibraryAuthorityError
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
 from music_app.services.view_search import PrivateSearchError, normalize_private_search_request
-from music_app.services.private_search_postgres import PostgresPrivateSearchService
+from music_app.services.private_search_postgres import PostgresPrivateSearchService, normalize_native_search_command
 from music_app.services.social_cursors import decode_search_cursor, SearchCursorScopeError
 
 _NO_STORE = {'Cache-Control': 'private, no-store'}
+_NATIVE_QUERY_KEYS = frozenset({'q', 'surface', 'artist', 'all_artists',
+                              'search_presentation', 'gallery_scope', 'category'})
+_NATIVE_BODY_LIMIT = 1024
+
+
+def _private_search_context(request):
+    """The existing own-love context/policy rules, shared by reads and actions."""
+    try:
+        context_ref = private_ui_context_ref(request)
+    except PrivateUIContextError as error:
+        raise PrivateSearchError(error.code, error.status_code) from None
+    actor = getattr(request.state, 'current_actor', None)
+    if actor is None or not actor.is_authenticated:
+        raise PrivateSearchError('private_search_forbidden', 403)
+    if context_ref is None:
+        raise PrivateSearchError('private_search_forbidden', 403)
+    supplied = request.headers.get('x-albumhaven-context', '')
+    if (len(supplied) != 64 or not supplied.isascii()
+            or not hmac.compare_digest(supplied, context_ref)):
+        raise PrivateSearchError('stale_context', 409)
+    try:
+        context = PolicyContext.build(actor=actor, action='library.browse.read',
+            library_id=actor.current_library_id, deployment_mode=_deployment_mode(request),
+            request_origin=_request_origin(request), client_surface_class=client_surface_from_request(request))
+    except ValueError:
+        raise PrivateSearchError('private_search_forbidden', 403) from None
+    resolver = getattr(request.app.state, 'policy_constraint_resolver', None)
+    constraints = resolver if callable(resolver) else PolicyEvaluationConstraints()
+    require_private_action(context, 'library.browse.read', constraints=constraints)
+    return context, context_ref, constraints, request.app.state.auth_policy_config['hmac']['secret']
+
+
+def _error_response(error):
+    return JSONResponse({'ok': False, 'error_code': error.code, 'error': str(error),
+                         'location': error.location}, status_code=error.status_code, headers=_NO_STORE)
+
+
+def _native_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise PrivateSearchError()
+        result[key] = value
+    return result
+
+
+async def _native_command(request):
+    if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+        raise PrivateSearchError()
+    length = request.headers.get('content-length')
+    if length is not None and (not length.isascii() or not length.isdecimal()
+                               or len(length) > 4 or int(length) > _NATIVE_BODY_LIMIT):
+        raise PrivateSearchError()
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > _NATIVE_BODY_LIMIT:
+            raise PrivateSearchError()
+        body.extend(chunk)
+    try:
+        command = json.loads(body.decode('utf-8'), object_pairs_hook=_native_object)
+    except (ValueError, UnicodeError, RecursionError):
+        raise PrivateSearchError() from None
+    if type(command) is not dict or set(command) != {'resource_ref', 'intent'}:
+        raise PrivateSearchError()
+    normalize_native_search_command(command['resource_ref'], command['intent'])
+    return command
+
+
+async def private_search_native_target_response(request):
+    try:
+        if set(request.query_params) - _NATIVE_QUERY_KEYS:
+            raise PrivateSearchError()
+        query = normalize_private_search_request(request.query_params)
+        if (query.artist is None) == (not query.all_artists):
+            raise PrivateSearchError()
+        context, context_ref, constraints, secret = _private_search_context(request)
+        command = await _native_command(request)
+        service = getattr(request.app.state, 'private_search_service', None)
+        if service is None:
+            service = PostgresPrivateSearchService(request.app.state.config)
+        payload = await run_in_threadpool(service.resolve_native_target, context, request=query,
+            context_ref=context_ref, cursor_secret=secret, constraints=constraints, **command)
+        return JSONResponse(payload, headers=_NO_STORE)
+    except PrivateLibraryAuthorityError:
+        error = PrivateSearchError('private_search_forbidden', 403)
+    except PrivateSearchError as caught:
+        error = caught
+    except Exception:
+        error = PrivateSearchError('private_search_unavailable', 503)
+    return _error_response(error)
 
 
 def private_search_view_response(request):
     try:
         query = normalize_private_search_request(request.query_params)
-        try:
-            context_ref = private_ui_context_ref(request)
-        except PrivateUIContextError as error:
-            raise PrivateSearchError(error.code, error.status_code) from None
-        actor = getattr(request.state, 'current_actor', None)
-        if actor is None or not actor.is_authenticated:
-            raise PrivateSearchError('private_search_forbidden', 403)
-        if context_ref is None:
-            raise PrivateSearchError('private_search_forbidden', 403)
-        supplied = request.headers.get('x-albumhaven-context', '')
-        if (len(supplied) != 64 or not supplied.isascii()
-                or not hmac.compare_digest(supplied, context_ref)):
-            raise PrivateSearchError('stale_context', 409)
-        try:
-            context = PolicyContext.build(actor=actor, action='library.browse.read',
-                library_id=actor.current_library_id, deployment_mode=_deployment_mode(request),
-                request_origin=_request_origin(request), client_surface_class=client_surface_from_request(request))
-        except ValueError:
-            raise PrivateSearchError('private_search_forbidden', 403) from None
-        resolver = getattr(request.app.state, 'policy_constraint_resolver', None)
-        constraints = resolver if callable(resolver) else PolicyEvaluationConstraints()
-        require_private_action(context, 'library.browse.read', constraints=constraints)
-        secret = request.app.state.auth_policy_config['hmac']['secret']
+        context, context_ref, constraints, secret = _private_search_context(request)
         # Reject malformed encoding before a database read, while the guarded
         # read validates scope and live anchors after current authority refresh.
         for token in (query.cursor, query.sidebar_cursor):
@@ -68,5 +138,4 @@ def private_search_view_response(request):
         # A failed infrastructure read is never a ready/empty result and never
         # routes into ordinary browse. Do not include SQL or private row values.
         error = PrivateSearchError('private_search_unavailable', 503)
-    return JSONResponse({'ok': False, 'error_code': error.code, 'error': str(error),
-                         'location': error.location}, status_code=error.status_code, headers=_NO_STORE)
+    return _error_response(error)

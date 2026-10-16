@@ -642,6 +642,12 @@ def _transient_scan_view_response(
     return _private_browse_response(request, payload, transient=True)
 
 
+@router.post("/search/native-target")
+async def search_native_target(request: Request) -> JSONResponse:
+    from music_app.routes.private_search_asgi import private_search_native_target_response
+    return await private_search_native_target_response(request)
+
+
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     if str(request.query_params.get("surface") or "").strip().casefold() == "album_tops":

@@ -9,6 +9,7 @@ const SearchResultsRuntime = (() => {
     galleryDisplayMode: normalizeGalleryView(state.view?.gallery_display_mode)});
   const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const text = (value, maximum = 4096) => typeof value === 'string' && value.length <= maximum ? value : null;
+  const reference = value => typeof value === 'string' && value.trim() && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
   const albumRef = value => typeof value === 'string' && /^inventory-album:[1-9]\d*:[1-9]\d*$/.test(value) ? value : null;
   const trackRef = value => typeof value === 'string' && /^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value) ? value : null;
   const readable = value => value?.allowed_actions?.can_read === true;
@@ -85,10 +86,19 @@ const SearchResultsRuntime = (() => {
     // Detach before abort listeners can synchronously claim another parent.
     request?.controller.abort();
   }
+  function retireNativeActions(candidate) {
+    if (!candidate) return;
+    const requests = [...candidate.nativeRequests]; candidate.nativeRequests.clear();
+    candidate.playRequest = null; candidate.playSequence++;
+    for (const binding of candidate.nativeAlbums.values()) if (!binding.transferred) binding.revoked = true;
+    candidate.nativeAlbums.clear(); candidate.nativeTracks.clear();
+    // Owners are already detached before abort observers can publish a successor.
+    for (const controller of requests) controller.abort();
+    resourceSelection?.invalidateResourceSelections();
+  }
   function retireGalleryArtwork() {
     if (!installed()) return;
-    // This bounded owner does not activate artwork or detail. Still erase old
-    // marked result pixels synchronously if a prior consumer left them mounted.
+    // Erase old marked result pixels synchronously before action-owner disposal.
     const host = document.getElementById('search-results-root');
     // Conceal the previous native publication before disposal observers run.
     // The consumer replaces its result subtree only after a fresh admission.
@@ -120,6 +130,7 @@ const SearchResultsRuntime = (() => {
       visibilityScope = next.visible ? previous?.capture || visibilityScope : null;
       retireGalleryArtwork(); previous?.unsubscribe?.();
       abortSidebar(previous);
+      retireNativeActions(previous);
       // The native request captures its existing scope after native erasure and
       // bridge detachment, while any reentrant publication is still batched.
       beforeObservers?.();
@@ -140,7 +151,7 @@ const SearchResultsRuntime = (() => {
   }
   function retireAccepted(candidate, reason) {
     if (owner !== candidate) return;
-    if (state.view === candidate.nativeView) {
+    if (installed() && state.view === candidate.nativeView) {
       retireNativePrivateSearchView(() => owner === candidate && state.view === candidate.nativeView, reason);
     } else retire(reason);
   }
@@ -291,6 +302,7 @@ const SearchResultsRuntime = (() => {
       current = detached;
       retireGalleryArtwork(); previous?.unsubscribe?.();
       abortSidebar(previous);
+      retireNativeActions(previous);
       for (const source of oldSources) {
         try {source.dispose();} catch { /* Disposal observers cannot restore an old grant. */ }
       }
@@ -304,7 +316,9 @@ const SearchResultsRuntime = (() => {
         requestedArtist: new URL(state.ui.activeViewRequestUrl, window.location.href).searchParams.get('artist') || '',
         nativeView: state.view, scopeKey, unsubscribe: null, sidebarRead: null,
         sidebarCursor: payload.sidebar?.next_cursor || null, sidebarHasMore: payload.sidebar?.has_more === true,
-        sidebarArtists: state.view.artists_sidebar};
+        sidebarArtists: state.view.artists_sidebar,
+        nativeUrl: nativeRequestUrl(payload, state.view), nativeRequests: new Set(),
+        nativeAlbums: new Map(), nativeTracks: new Map(), nativeDenied: new Set(), playSequence: 0, playRequest: null};
       owner = next;
       next.unsubscribe = capture.transport.subscribe(() => {
         if (owner === next && !owns(next)) retireAccepted(next, 'context');
@@ -479,7 +493,223 @@ const SearchResultsRuntime = (() => {
     } catch {return false;}
     return window.AlbumHavenPlaytableUI?.[method]?.(packet, lifetime, adapter, anchor, options) ?? false;
   }
+
+  // Own-love inventory targets and listener receipt targets are different
+  // contracts. This owner accepts only the currently active own-love dialect.
+  const nativeFailure = (message = 'This Search action is unavailable.', status = 403) => Object.assign(new Error(message), {status});
+  const nativeStale = () => Object.assign(new Error('Search action was superseded.'), {name: 'AbortError'});
+  const exactKeys = (value, keys) => plain(value) && Object.keys(value).length === keys.length
+    && keys.every(key => Object.hasOwn(value, key));
+  function nativeRequestUrl(payload, view) {
+    const built = new URL(buildApiUrl({...view, query: payload.query, selected_artist: payload.selected_artist || '',
+      all_artists_active: payload.selection_state === 'all_artists', surface: {active: 'albums'}, surface_request: 'albums'}), window.location.href);
+    const params = new URLSearchParams();
+    for (const [key, value] of built.searchParams) if (['q', 'surface', 'artist', 'all_artists', 'gallery_scope', 'category'].includes(key)) params.append(key, value);
+    params.set('search_presentation', payload.presentation);
+    return `/search/native-target?${params}`;
+  }
+  function nativeRow(snapshot, row) {
+    const candidate = owner;
+    if (!isCurrent(snapshot) || !candidate || !candidate.result.tracks.includes(row)) return null;
+    return candidate.trackSources.get(row.rowKey) || null;
+  }
+  function nativeAlbum(snapshot, row) {
+    const candidate = owner;
+    if (!isCurrent(snapshot) || !candidate) return null;
+    if (candidate.result.tracks.includes(row)) {
+      const source = candidate.trackSources.get(row.rowKey), album = candidate.albumSources.get(row.albumRef);
+      return source && album?.canOpen === true
+        ? {resourceRef: source.inventory_track_ref, albumRef: row.albumRef} : null;
+    }
+    return candidate.result.albums.includes(row) && row.canOpen === true
+      ? {resourceRef: row.albumRef, albumRef: row.albumRef} : null;
+  }
+  const nativeScopeCurrent = lease => installed() && galleryReadScopeIsCurrent(lease.capture);
+  function assertNativeReply(reply, resourceRef, intent, parentRef) {
+    if (!exactKeys(reply, ['status', 'contract_version', 'context_ref', 'data']) || reply.status !== 'ready'
+      || reply.contract_version !== 'own-love-native-v1') throw nativeFailure('Invalid Search action response.', 409);
+    const data = reply.data, trackDetails = intent === 'details' && Boolean(trackRef(resourceRef));
+    if (!exactKeys(data, ['resource_ref', 'intent', 'native_target', ...(trackDetails ? ['parent_album_ref'] : [])])
+      || data.resource_ref !== resourceRef || data.intent !== intent
+      || trackDetails && data.parent_album_ref !== parentRef) throw nativeFailure('Search action identity changed.', 409);
+    const target = data.native_target;
+    if (intent === 'play') {
+      if (!exactKeys(target, ['inventory_track_ref', 'track_ref', 'path', 'title', 'artist', 'album_title', 'duration_seconds'])
+        || target.inventory_track_ref !== resourceRef || text(target.path) === null || !target.path
+        || target.track_ref !== target.path || ['title', 'artist', 'album_title'].some(key => target[key] !== null && text(target[key]) === null)
+        || target.duration_seconds !== null && (!Number.isFinite(target.duration_seconds) || target.duration_seconds < 0)) {
+        throw nativeFailure('Invalid Search playback target.', 409);
+      }
+      // This grant is derived only from this exact, freshly authorized play
+      // response. Browse metadata and local availability never reach this seam.
+      return Object.freeze({...target, title: target.title || '', artist: target.artist || '', album_title: target.album_title || '',
+        playback_state: Object.freeze({can_start_here: true})});
+    }
+    if (!exactKeys(target, ['album_ref', 'allowed_actions']) || !reference(target.album_ref)
+      || !exactKeys(target.allowed_actions, ['can_view_details', 'can_play_album'])
+      || target.allowed_actions.can_view_details !== true || typeof target.allowed_actions.can_play_album !== 'boolean') {
+      throw nativeFailure('Invalid Search Album target.', 409);
+    }
+    return Object.freeze({kind: 'album', ref: parentRef, allowed_actions: Object.freeze({can_view_details: true}),
+      native_actions: Object.freeze({album_ref: target.album_ref, allowed_actions: Object.freeze({
+        can_open_album: true, can_play_album: target.allowed_actions.can_play_album})})});
+  }
+  async function readNative(lease, intent, {signal, isCurrent} = {}) {
+    const current = () => !signal?.aborted && nativeScopeCurrent(lease) && isCurrent() === true;
+    if (!current()) throw nativeStale();
+    const reply = await lease.capture.transport.request(lease.url, {method: 'POST',
+      body: {resource_ref: lease.resourceRef, intent}, expected: lease.capture.context, signal, isCurrent: current});
+    if (!current()) throw nativeStale();
+    const target = assertNativeReply(reply, lease.resourceRef, intent, lease.albumRef);
+    if (!current()) throw nativeStale();
+    return target;
+  }
+  function nativeRejected(candidate, resourceRef, intent, error) {
+    if (!owns(candidate) || error?.name === 'AbortError') return;
+    if (intent === 'play') candidate.nativeTracks.delete(resourceRef);
+    if (intent === 'details') {
+      const binding = candidate.nativeAlbums.get(resourceRef);
+      if (binding) {binding.revoked = true; candidate.nativeAlbums.delete(resourceRef);}
+    }
+    if ([401, 403, 404].includes(error?.status)) candidate.nativeDenied.add(`${resourceRef}:${intent}`);
+    resourceSelection?.invalidateResourceSelections();
+    if (error?.status === 401 || error?.code === 'stale_context') retireAccepted(candidate, 'context');
+    else if (owns(candidate)) notify();
+  }
+  function canPlayTrack(snapshot, row) {
+    const source = nativeRow(snapshot, row), candidate = owner;
+    return Boolean(source && candidate && !candidate.nativeDenied.has(`${source.inventory_track_ref}:play`)
+      && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows?.('library.media.read') === true));
+  }
+  function trackPlayback(snapshot, row) {
+    const source = nativeRow(snapshot, row), target = source && owner.nativeTracks.get(source.inventory_track_ref);
+    return target ? TrackActionsRuntime.playback(target) : Object.freeze({isCurrent: false, isPlaying: false});
+  }
+  async function playTrack(snapshot, row) {
+    if (!canPlayTrack(snapshot, row)) throw nativeFailure();
+    const candidate = owner, source = nativeRow(snapshot, row);
+    const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
+    const sequence = ++candidate.playSequence, controller = new AbortController(), previous = candidate.playRequest;
+    candidate.playRequest = controller; candidate.nativeRequests.add(controller); previous?.abort();
+    const current = () => owns(candidate) && candidate.playRequest === controller && candidate.playSequence === sequence
+      && candidate.result.tracks.includes(row) && !controller.signal.aborted
+      && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null);
+    try {
+      const target = await readNative({capture: candidate.capture, url: candidate.nativeUrl,
+        resourceRef: source.inventory_track_ref, albumRef: row.albumRef}, 'play', {signal: controller.signal, isCurrent: current});
+      if (!current() || !TrackActionsRuntime.canPlay(target) || !current()) throw nativeStale();
+      candidate.nativeTracks.set(source.inventory_track_ref, target);
+      TrackActionsRuntime.play(target);
+      if (owns(candidate)) TrackActionsRuntime.syncPlayback();
+      return true;
+    } catch (error) {
+      if (current()) nativeRejected(candidate, source.inventory_track_ref, 'play', error);
+      throw error;
+    } finally {
+      candidate.nativeRequests.delete(controller);
+      if (candidate.playRequest === controller) candidate.playRequest = null;
+    }
+  }
+  let detailSequence = 0, resourceSelection = null;
+  const bindingCurrent = binding => !binding.revoked && owns(binding.candidate)
+    && binding.candidate.nativeAlbums.get(binding.resourceRef) === binding && nativeScopeCurrent(binding)
+    && binding.actionCurrent() === true;
+  function bindingSource(selection, context) {
+    const binding = context?.searchBinding;
+    return binding && context.scopeKey === binding.scopeKey && bindingCurrent(binding)
+      && selection?.kind === 'album' && selection.ref === binding.albumRef && selection.origin == null
+      ? binding.target : null;
+  }
+  async function authorizeBinding(selection, context) {
+    const binding = context?.searchBinding;
+    if (!bindingSource(selection, context)) throw nativeStale();
+    const current = () => bindingCurrent(binding) && !context.signal?.aborted;
+    try {
+      const target = await readNative(binding, 'details', {signal: context.signal, isCurrent: current});
+      if (!current()) throw nativeStale();
+      if (target.native_actions.album_ref !== binding.target.native_actions.album_ref) throw nativeFailure('Search Album identity changed.', 409);
+      binding.target = target;
+    } catch (error) {
+      if (current()) nativeRejected(binding.candidate, binding.resourceRef, 'details', error);
+      throw error;
+    }
+  }
+  function selectionOwner() {
+    if (resourceSelection) return resourceSelection;
+    const api = window.AlbumHavenResourceSelection;
+    if (!api?.create || !api.projectTarget) throw nativeFailure('Native Album details are unavailable.', 503);
+    resourceSelection = api.create({sourceResource: bindingSource, authorizeResource: authorizeBinding,
+      retainResource(selection, context) {
+        const binding = context?.searchBinding, target = bindingSource(selection, context);
+        if (!target || context.signal?.aborted) return null;
+        binding.transferred = true;
+        return Object.freeze({target: api.projectTarget(target),
+          isCurrent: () => !binding.revoked && nativeScopeCurrent(binding)});
+      },
+      async revalidateResource(selection, context, {signal} = {}) {
+        const binding = context?.searchBinding;
+        if (!binding || !binding.transferred || binding.revoked || context.scopeKey !== binding.scopeKey
+          || selection?.kind !== 'album' || selection.ref !== binding.albumRef || selection.origin != null
+          || !nativeScopeCurrent(binding)) throw nativeStale();
+        const url = window.location.href, revision = readViewStateRevision(), version = (binding.replayVersion || 0) + 1;
+        binding.replayVersion = version;
+        const current = () => !signal?.aborted && !binding.revoked && nativeScopeCurrent(binding)
+          && binding.replayVersion === version && window.location.href === url && readViewStateRevision() === revision;
+        try {
+          const target = await readNative(binding, 'details', {signal, isCurrent: current});
+          if (!current()) throw nativeStale();
+          if (target.native_actions.album_ref !== selection.native_actions?.album_ref) throw nativeFailure('Search Album identity changed.', 409);
+          return Object.freeze({target: api.projectTarget(target), isCurrent: current});
+        } catch (error) {
+          // A transferred receipt is no longer in the visible result map. Its
+          // exact current replay still owns revocation; an obsolete replay does
+          // not get to revoke a successor version or another Search result.
+          if (current() && error?.name !== 'AbortError') {
+            binding.revoked = true;
+            resourceSelection?.invalidateResourceSelections();
+          }
+          throw error;
+        }
+      }});
+    return resourceSelection;
+  }
+  function canOpenAlbum(snapshot, row) {
+    const identity = nativeAlbum(snapshot, row);
+    return Boolean(identity && !owner.nativeDenied.has(`${identity.resourceRef}:details`));
+  }
+  async function openAlbum(snapshot, row, intent = 'open') {
+    if (!['open', 'artwork', 'page'].includes(intent) || !canOpenAlbum(snapshot, row)) throw nativeFailure();
+    const candidate = owner, identity = nativeAlbum(snapshot, row), sequence = ++detailSequence;
+    // Capture before the first Search POST, not only inside later native
+    // hydration. A newer ordinary Album selection owns that presentation too.
+    const modalToken = Number(state.ui?.pendingTrackModalLoadToken || 0);
+    const controller = new AbortController(); candidate.nativeRequests.add(controller);
+    const current = () => owns(candidate) && detailSequence === sequence && !controller.signal.aborted
+      && nativeAlbum(snapshot, row)?.resourceRef === identity.resourceRef
+      && modalToken === Number(state.ui?.pendingTrackModalLoadToken || 0);
+    try {
+      // Each activation owns a fresh binding. An older reauthorization failure
+      // must not revoke another click's binding for the same inventory Album.
+      const binding = {candidate, capture: candidate.capture, url: candidate.nativeUrl, ...identity,
+        scopeKey: candidate.scopeKey, revoked: false, transferred: false, actionCurrent: current};
+      binding.target = await readNative(binding, 'details', {signal: controller.signal, isCurrent: current});
+      if (!current()) throw nativeStale();
+      candidate.nativeAlbums.set(identity.resourceRef, binding);
+      if (!current() || !bindingCurrent(binding)) throw nativeStale();
+      await selectionOwner().resourceIntent(intent, binding.target,
+        {scopeKey: candidate.scopeKey, searchBinding: binding, signal: controller.signal});
+      return true;
+    } catch (error) {
+      if (current()) nativeRejected(candidate, identity.resourceRef, 'details', error);
+      throw error;
+    } finally {candidate.nativeRequests.delete(controller);}
+  }
   // Native navigation retires sources in the event turn, before consumer cleanup.
+  window.addEventListener('albumhaven:search-runtime-ready', () => {
+    // A newly installed runtime owns the shell. Release this superseded private
+    // owner directly rather than asking the shared dispatcher to retire it.
+    if (!installed() && (owner || pending)) retire('runtime');
+  });
   window.addEventListener('popstate', () => {
     if (installed()) retireNativePrivateSearchView(installed, 'navigation');
   }, true);
@@ -530,6 +760,8 @@ const SearchResultsRuntime = (() => {
   return Object.freeze({snapshot() {reconcileLifetime(); return current;}, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
     validate(payload, library) {try {project(payload, library, false); return true;} catch {return false;}},
     accept, retire, syncNativeView, syncVisibility, syncPresentation, isCurrent, createPlaytableSource: sourceFor,
+    canPlayTrack, playTrack, trackPlayback, canOpenAlbum, openAlbum,
+    subscribeTrackPlayback: listener => TrackActionsRuntime.subscribePlayback(listener),
     checkpointIdentity, identityRevision: readIdentityRevision, sidebarNodeIsCurrent,
     selectPresentation(snapshot, value) {return isCurrent(snapshot) && value !== snapshot.presentation ? readPage(owner, value) : false;},
     continueResults(snapshot) {
@@ -566,6 +798,7 @@ const SearchResultsRuntime = (() => {
     tableHtml: config => native.tableHtml(config), galleryCardHtml: config => native.galleryCardHtml(config),
     tabsHtml: config => native.tabsHtml(config), mountTabs: host => native.mountTabs(host),
     buttonHtml: config => native.buttonHtml(config), actionHtml: config => native.actionHtml(config),
+    iconHtml: (name, options) => ButtonComponent.renderIconSvg(name, options),
     alertHtml: config => native.alertHtml(config), artboxHtml: config => native.artboxHtml(config),
     openChoice: (anchor, options) => native.openChoice(anchor, options), escapeHtml: value => native.escapeHtml(value),
   });

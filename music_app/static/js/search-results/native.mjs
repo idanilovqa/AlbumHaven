@@ -1,8 +1,9 @@
 import {mountButton, mountTabs} from '../home-friends/native-controls.mjs';
 import {bindTrackTablePresentation} from '../playtables/track-table-presentation.mjs';
+import {createPlaytableSource, mountPlaytableSelection} from '../playtables/native-selection.mjs';
 
-// The foreground runtime owns admission and navigation. This bounded consumer
-// displays admitted own-love metadata only; it grants no native row actions.
+// Foreground Search owns admission. Native action authority stays in its private
+// runtime; this consumer keeps only admitted rows and opaque selection keys.
 let mounted = null;
 const stalePublication = Symbol('stale Search publication');
 const presentations = ['albums', 'tracks'];
@@ -57,10 +58,14 @@ export function mountSearchResults({host, runtime} = {}) {
     candidate.live = false;
     candidate.root.hidden = true; candidate.root.setAttribute('inert', '');
     // Detach every owner before disposal callbacks can publish a successor.
-    const owners = [candidate.presentation, candidate.tabs, candidate.columnsButton,
+    const owners = [candidate.selection, candidate.playtableSource, candidate.presentation, candidate.tabs, candidate.columnsButton,
       candidate.continueButton, candidate.retryButton, candidate.sidebarButton];
+    candidate.selection = candidate.playtableSource = null;
     candidate.presentation = candidate.tabs = candidate.columnsButton = null;
     candidate.continueButton = candidate.retryButton = candidate.sidebarButton = null;
+    candidate.root.removeEventListener('click', candidate.click);
+    const stopPlayback = candidate.stopPlayback; candidate.stopPlayback = null;
+    try {stopPlayback?.();} catch { /* Remaining exact owners must still retire. */ }
     for (const owner of owners) {
       try {owner?.dispose();} catch { /* Other native owners must still retire. */ }
     }
@@ -123,7 +128,8 @@ export function mountSearchResults({host, runtime} = {}) {
     const next = {root, snapshot, ready, live: true, resultId: snapshot.resultId,
       source: snapshot.sourceIdentity, result: snapshot.result, mode: snapshot.presentation,
       galleryMode: null, choices: {}, tabs: null, presentation: null, columnsButton: null,
-      continueButton: null, retryButton: null, sidebarButton: null};
+      continueButton: null, retryButton: null, sidebarButton: null, selection: null, playtableSource: null,
+      stopPlayback: null, actionSequence: 0};
     session = next; next.native = nativeControls(next);
     next.tabsHost = element('div', 'search-results__tabs', root);
     for (const key of presentations) {
@@ -134,6 +140,7 @@ export function mountSearchResults({host, runtime} = {}) {
       if (!panel.hidden) next.panel = panel;
     }
     next.status = element('div', 'search-results__status', next.panel);
+    next.actionStatus = element('div', 'search-results__status', next.panel); next.actionStatus.hidden = true;
     next.body = element('div', 'search-results__body', next.panel);
     next.actions = element('div', 'search-results__actions', next.panel);
     next.continueHost = element('span', '', next.actions);
@@ -151,21 +158,32 @@ export function mountSearchResults({host, runtime} = {}) {
     if (!contentCurrent(next)) throw stalePublication;
     root.hidden = false; host.hidden = false;
     if (next.tableHost) connectTable(next);
+    next.click = event => activate(next, event);
+    root.addEventListener('click', next.click);
+    if (next.tableHost) {
+      const stop = runtime.subscribeTrackPlayback(() => paintTrackActions(next));
+      if (!contentCurrent(next, true)) {stop?.(); throw stalePublication;}
+      next.stopPlayback = stop;
+      paintTrackActions(next);
+    }
     return next;
   }
   function paintAlbums(candidate) {
     const snapshot = candidate.snapshot;
-    if (candidate.galleryMode === snapshot.galleryDisplayMode) return;
-    const html = snapshot.result.albums.map(album => {
+    const grants = snapshot.result.albums.map(album => checked(candidate, () => runtime.canOpenAlbum(snapshot, album), true));
+    const signature = JSON.stringify([snapshot.galleryDisplayMode, grants]);
+    if (candidate.galleryMode === signature) return;
+    const html = snapshot.result.albums.map((album, index) => {
       const artboxHtml = checked(candidate, () => runtime.artboxHtml({state: 'empty', label: `${album.name} artwork`}), true);
-      return checked(candidate, () => runtime.galleryCardHtml({interaction: 'none', identity: album.albumRef,
+      return checked(candidate, () => runtime.galleryCardHtml({interaction: 'controlled', identity: album.albumRef,
+        actionRef: album.albumRef, actions: {select: grants[index], open: grants[index]},
         displayMode: snapshot.galleryDisplayMode, title: album.name, artist: album.artist, year: album.year,
         isSearchMatch: album.isSearchMatch === true, artboxHtml, listeningSummaryHtml: ''}), true);
     }).join('');
     if (!contentCurrent(candidate, true)) throw stalePublication;
     candidate.body.className = 'search-results__body search-results__albums';
     candidate.body.setAttribute('data-gallery-display', snapshot.galleryDisplayMode);
-    candidate.body.innerHTML = html; candidate.galleryMode = snapshot.galleryDisplayMode;
+    candidate.body.innerHTML = html; candidate.galleryMode = signature;
   }
   function buildTracks(candidate) {
     const columns = checked(candidate, () => runtime.trackColumns(), true).flatMap(column => column.key === 'title'
@@ -175,30 +193,57 @@ export function mountSearchResults({host, runtime} = {}) {
       const seconds = track.durationSeconds;
       const duration = seconds === null ? '' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
       const native = checked(candidate, () => runtime.albumTrackRow({rowKey: track.rowKey, title: track.title,
-        trackNumber: track.trackNumber, duration, readable: true, selectable: false, isSearchMatch: false}, index), true);
+        trackNumber: track.trackNumber, duration, readable: true, selectable: track.selectable, isSearchMatch: false}, index), true);
       const artbox = checked(candidate, () => runtime.artboxHtml({state: 'empty', label: `${track.title} artwork`}), true);
       const artist = checked(candidate, () => runtime.escapeHtml(track.artist), true);
       const album = checked(candidate, () => runtime.escapeHtml(track.album), true);
-      // Keep native row/cell anatomy, without its selection/tabindex/data-action
-      // fields. A readable row is not a playback, detail or inventory grant.
-      return {key: native.key, className: native.className, cells: {
-        number: native.cells.number, duration: native.cells.duration,
+      const canOpen = checked(candidate, () => runtime.canOpenAlbum(candidate.snapshot, track), true);
+      const play = checked(candidate, () => runtime.actionHtml({icon: 'play', ariaLabel: `Play ${track.title}`,
+        presentation: 'bare', className: 'album-track-table__play', disabled: !runtime.canPlayTrack(candidate.snapshot, track),
+        attributes: {'data-search-track-play': track.rowKey}}), true);
+      const details = checked(candidate, () => runtime.actionHtml({icon: 'more', ariaLabel: `Open Album for ${track.title}`,
+        presentation: 'bare', disabled: !canOpen, attributes: {'data-search-track-details': track.rowKey}}), true);
+      // The native selection anatomy is retained, but private paths and native
+      // media attributes never enter these rows. Each activation resolves anew.
+      return {...native, cells: {
+        number: {content: native.cells.number.content.replace('</span>', '</span>' + play)}, duration: native.cells.duration,
         title: {content: `<div class="home-detail__release">${artbox}${native.cells.title.content}</div>`},
-        artist: {content: artist}, album: {content: album},
+        artist: {content: artist}, album: {content: `${album}${details}`},
       }};
     });
     const html = checked(candidate, () => runtime.tableHtml({id: 'search-tracks', ariaLabel: 'Search tracks',
       columnsConfig: columns,
       columns: columns.map(column => column.identity ? `minmax(${column.width}px,1fr)` : `${column.width}px`).join(' '),
-      density: 'compact', frame: 'outline', overflow: 'local', mobile: 'preserve', selection: 'none', rows}), true);
+      density: 'compact', frame: 'outline', overflow: 'local', mobile: 'preserve', selection: 'multiple', rows}), true);
     candidate.columns = columns;
     candidate.body.className = 'search-results__body search-results__tracks';
     const actions = element('div', 'search-results__table-actions', candidate.body);
+    candidate.selectionHost = element('div', '', actions);
     candidate.columnsHost = element('span', 'compact-data-table__columns-action', actions);
     candidate.tableHost = element('div', 'album-track-table album-track-table--collection', candidate.body);
     candidate.tableHost.innerHTML = html;
   }
   function connectTable(candidate) {
+    const snapshot = candidate.snapshot, rows = snapshot.result.tracks;
+    const context = Object.freeze({scopeKey: snapshot.scopeKey, resultId: snapshot.resultId});
+    candidate.playtableSource = checkedOwner(candidate, () => createPlaytableSource({runtime,
+      sourceRows: rows, rows, context, instance: snapshot.sourceIdentity, revision: snapshot.sourceIdentity,
+      enabled: true, isCurrent: () => controlCurrent(candidate, true),
+      rowFacts: row => ({rowKey: row.rowKey, readable: true, selectable: row.selectable === true})}), true);
+    const adapter = candidate.playtableSource.sourceAdapter;
+    const rowFor = key => rows.find(row => row.rowKey === key);
+    candidate.selection = checkedOwner(candidate, () => mountPlaytableSelection(candidate.tableHost, {
+      runtime: candidate.native, sourceAdapter: adapter, tableKey: 'search-tracks', enabled: true,
+      actionsHost: candidate.selectionHost, isViewCurrent: () => controlCurrent(candidate, true),
+      actionsAvailable: candidate.playtableSource.actionsAvailable,
+      onPlay: key => {const row = rowFor(key); if (row) runAction(candidate, () => runtime.playTrack(candidate.snapshot, row));},
+      onInspect: key => {const row = rowFor(key); if (row) runAction(candidate, () => runtime.openAlbum(candidate.snapshot, row));},
+      onContextAction: (packet, lifetime, anchor) => command(candidate, true,
+        () => runtime.openPlaytableContext(packet, lifetime, adapter, anchor)),
+      onPlaylistAction: (packet, lifetime, anchor, options) => command(candidate, true,
+        () => runtime.openPlaylistAction(packet, lifetime, adapter, anchor, options)),
+      onError: message => {if (controlCurrent(candidate, true)) paintAlert(candidate, candidate.actionStatus, String(message), true);},
+    }), true);
     const openChoice = (anchor, options) => {
       if (!controlCurrent(candidate, true)) return null;
       const menu = runtime.openChoice(anchor, options);
@@ -220,6 +265,58 @@ export function mountSearchResults({host, runtime} = {}) {
       {label: 'Track columns', icon: 'more', disabled: typeof runtime.openChoice !== 'function',
         attributes: {'data-track-table-columns': '', 'aria-haspopup': 'menu', 'aria-expanded': 'false'},
         onClick: event => command(candidate, true, () => candidate.presentation?.openColumns(event.target.closest('button')))}), true);
+  }
+  function runAction(candidate, work) {
+    if (!controlCurrent(candidate, true)) return false;
+    const sequence = ++candidate.actionSequence;
+    paintAlert(candidate, candidate.actionStatus, '');
+    const fail = error => {
+      if (sequence === candidate.actionSequence && controlCurrent(candidate, true) && error?.name !== 'AbortError') {
+        paintAlert(candidate, candidate.actionStatus, 'This Search action is unavailable. Try a fresh search.', true);
+      }
+    };
+    try {Promise.resolve(work()).catch(fail);} catch (error) {fail(error);}
+    return true;
+  }
+  function activate(candidate, event) {
+    if (!controlCurrent(candidate, true) || event.defaultPrevented || !candidate.root.contains(event.target)) return;
+    const button = event.target.closest?.('[data-search-track-play],[data-search-track-details],[data-gallery-card-intent]');
+    if (!button || !candidate.root.contains(button)) return;
+    event.preventDefault(); event.stopPropagation();
+    if (button.disabled || event.detail > 1) return;
+    const play = button.getAttribute('data-search-track-play'), details = button.getAttribute('data-search-track-details');
+    if (play || details) {
+      const row = candidate.snapshot.result.tracks.find(row => row.rowKey === (play || details));
+      if (row) runAction(candidate, () => play ? runtime.playTrack(candidate.snapshot, row) : runtime.openAlbum(candidate.snapshot, row));
+    } else if (['select', 'open'].includes(button.getAttribute('data-gallery-card-intent'))) {
+      const album = candidate.snapshot.result.albums.find(row => row.albumRef === button.getAttribute('data-gallery-card-ref'));
+      if (album) runAction(candidate, () => runtime.openAlbum(candidate.snapshot, album));
+    }
+  }
+  function paintTrackActions(candidate) {
+    if (!controlCurrent(candidate, true) || !candidate.tableHost) return;
+    for (const row of candidate.snapshot.result.tracks) {
+      if (!controlCurrent(candidate, true)) return;
+      const element = [...candidate.tableHost.querySelectorAll('[data-cdt-row-key]')]
+        .find(node => node.getAttribute('data-cdt-row-key') === row.rowKey);
+      if (!element) continue;
+      const playback = runtime.trackPlayback(candidate.snapshot, row);
+      const canPlay = runtime.canPlayTrack(candidate.snapshot, row), canOpen = runtime.canOpenAlbum(candidate.snapshot, row);
+      if (!controlCurrent(candidate, true)) return;
+      element.classList.toggle('album-track-table__row--current', playback.isCurrent === true);
+      element.classList.toggle('album-track-table__row--playing', playback.isPlaying === true);
+      const button = element.querySelector('[data-search-track-play]'), details = element.querySelector('[data-search-track-details]');
+      if (button) {
+        button.disabled = !canPlay; button.setAttribute('aria-disabled', String(!canPlay));
+        button.setAttribute('aria-label', `${playback.isPlaying ? 'Pause' : 'Play'} ${row.title}`);
+        const icon = playback.isPlaying ? 'pause' : 'play';
+        if (button.getAttribute('data-search-play-icon') !== icon) {
+          button.innerHTML = checked(candidate, () => runtime.iconHtml(icon), true);
+          button.setAttribute('data-search-play-icon', icon);
+        }
+      }
+      if (details) {details.disabled = !canOpen; details.setAttribute('aria-disabled', String(!canOpen));}
+    }
   }
   function paintAlert(candidate, target, message, error = false) {
     const html = message ? checked(candidate, () => runtime.alertHtml({severity: error ? 'error' : 'info',
@@ -245,6 +342,7 @@ export function mountSearchResults({host, runtime} = {}) {
       : !candidate.ready ? 'Loading search results…' : rows.length ? '' : `No matching ${snapshot.presentation}.`;
     paintAlert(candidate, candidate.status, message, error);
     if (candidate.ready && snapshot.presentation === 'albums' && rows.length) paintAlbums(candidate);
+    if (candidate.ready && snapshot.presentation === 'tracks' && rows.length) paintTrackActions(candidate);
     const canContinue = (candidate.ready || pending) && snapshot.result?.page.hasMore === true;
     button(candidate, 'continueButton', candidate.continueHost, canContinue
       ? {label: 'Continue', onClick: () => command(candidate, false, value => runtime.continueResults(value))} : null);

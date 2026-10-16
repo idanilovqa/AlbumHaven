@@ -307,7 +307,7 @@ def build_activity_projection(raw_rows, *, scope, kind, window, allowed_actions_
 
 
 def read_home_activity(config, *, actor, query, allowed_actions_for_resource, now=None, repository=None,
-                       subject_account_id=None, comparison=False):
+                       subject_account_id=None, comparison=False, listener=None):
     if not actor.is_authenticated:
         raise HomeActivityError("Authentication required.", 401, "activity_denied")
     if type(comparison) is not bool or comparison and subject_account_id is None:
@@ -329,4 +329,5 @@ def read_home_activity(config, *, actor, query, allowed_actions_for_resource, no
     project.policy = allowed_actions_for_resource
     project.read_action = scope.read_action
     project.scope_wide_policy = getattr(allowed_actions_for_resource, "scope_wide", False) is True
-    return repository.read(scope=scope, query=query, now=reference, build_projection=project)
+    options = {} if listener is None else {"listener": listener}
+    return repository.read(scope=scope, query=query, now=reference, build_projection=project, **options)

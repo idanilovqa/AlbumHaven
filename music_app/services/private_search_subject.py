@@ -8,6 +8,7 @@ through consumer work. No route is registered and no history is read here.
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from uuid import UUID
 
 from music_app.services.admin_member_mutation_postgres import (
     lock_current_actor_session, RecentAuthenticationRequired,
@@ -43,6 +44,46 @@ def _denied():
     return PrivateSearchError('private_search_forbidden', 403)
 
 
+@dataclass(frozen=True)
+class ListenerHistoryExpectation:
+    """Server-derived selector rechecked by the actual Home transaction owner."""
+    username: str
+    account_ref: str | None = None
+    relationship_revision: int | None = None
+
+    def __post_init__(self):
+        normalized = ListenerHistoryCriteria(self.username).username
+        if normalized != self.username:
+            raise PrivateSearchError()
+        if self.account_ref is not None:
+            try:
+                if not isinstance(self.account_ref, str) or str(UUID(self.account_ref)) != self.account_ref:
+                    raise ValueError
+            except (ValueError, TypeError, AttributeError):
+                raise PrivateSearchError() from None
+        if self.relationship_revision is not None and (
+                self.account_ref is None or type(self.relationship_revision) is not int
+                or not 0 < self.relationship_revision <= 9223372036854775807):
+            raise PrivateSearchError()
+
+
+def read_locked_listener_profile(connection, *, account_id, username, library_id):
+    """Exact mapping only; the caller owns connection, authority and transaction.
+
+    This does not resolve another account or open/commit a nested transaction.
+    A changed/deleted/reassigned hint fails closed before any history read.
+    """
+    row = connection.execute('''select a.id as account_id,a.username_display,a.display_name,
+            p.account_ref::text from app.accounts a
+        join library.library_memberships m on m.account_id=a.id and m.library_id=%s
+        join app.social_profiles p on p.account_id=a.id
+        where a.id=%s and a.username_normalized=%s and a.is_active and a.disabled_at is null
+        for share of a,m,p''', (library_id, account_id, username)).fetchone()
+    if row is None or row['account_id'] != account_id:
+        raise _denied()
+    return row
+
+
 class PostgresListenerSearchSubjects:
     def __init__(self, config, *, connect=None, clock=None):
         self._url = str(config.get('ALBUM_HAVEN_APP_DATABASE_URL') or '').strip()
@@ -61,20 +102,10 @@ class PostgresListenerSearchSubjects:
             raise _denied()
         return row['account_id']
 
-    @staticmethod
-    def _current_profile(connection, *, account_id, username, library_id):
-        row = connection.execute('''select a.id as account_id,a.username_display,a.display_name,
-                p.account_ref::text from app.accounts a
-            join library.library_memberships m on m.account_id=a.id and m.library_id=%s
-            join app.social_profiles p on p.account_id=a.id
-            where a.id=%s and a.username_normalized=%s and a.is_active and a.disabled_at is null
-            for share of a,m,p''', (library_id, account_id, username)).fetchone()
-        if row is None or row['account_id'] != account_id:
-            raise _denied()
-        return row
+    _current_profile = staticmethod(read_locked_listener_profile)
 
-    @contextmanager
-    def authorized(self, context, *, criteria, constraints=None):
+    def lookup_hint(self, context, *, criteria, constraints=None):
+        """Preflight and close the identity-only lookup; never grants authority."""
         if type(criteria) is not ListenerHistoryCriteria or not isinstance(context, PolicyContext):
             raise PrivateSearchError()
         actor = context.actor
@@ -87,7 +118,14 @@ class PostgresListenerSearchSubjects:
             raise PrivateSearchError('private_search_unavailable', 503)
         try:
             require_private_action(context, BROWSE, constraints=constraints)
-            target = self._lookup_hint(criteria.username, context.library_id)
+            return self._lookup_hint(criteria.username, context.library_id)
+        except PrivateLibraryAuthorityError:
+            raise _denied() from None
+
+    @contextmanager
+    def authorized(self, context, *, criteria, constraints=None):
+        try:
+            target = self.lookup_hint(context, criteria=criteria, constraints=constraints)
             # The hint connection has ended. The one shared transaction owner
             # now locks the actor and target in its existing canonical order.
             with current_library_transaction(self._url, context, constraints=constraints,

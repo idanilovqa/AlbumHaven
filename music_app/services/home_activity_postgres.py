@@ -203,9 +203,34 @@ class HomeActivityPostgresRepository:
         except FriendScopeError:
             raise HomeActivityError("Action not permitted.", 403, "activity_denied") from None
 
+    @staticmethod
+    def _listener_profile(connection, scope, listener, friend, project):
+        # The Home capture transaction remains the sole authority owner. This
+        # indexed mapping check must precede both receipt and ledger reads.
+        from music_app.services.private_search_subject import read_locked_listener_profile
+        from music_app.services.private_search_contract import PrivateSearchError
+        try:
+            profile = read_locked_listener_profile(connection,
+                account_id=scope.source_account_id, username=listener.username,
+                library_id=scope.library_id)
+        except PrivateSearchError:
+            raise HomeActivityError("Action not permitted.", 403, "activity_denied") from None
+        actions = project.policy("account", str(scope.source_account_id))
+        if not isinstance(actions, AllowedActions) or not actions.allows(scope.read_action):
+            raise HomeActivityError("Action not permitted.", 403, "activity_denied")
+        revision = friend["profile"]["relationship_revision"] if friend else None
+        if listener.account_ref is not None and (
+                profile["account_ref"] != listener.account_ref
+                or revision != listener.relationship_revision):
+            raise _expired()
+        return {"account_ref": profile["account_ref"], "username": profile["username_display"],
+                "display_name": profile["display_name"]}, revision
+
     @contextmanager
-    def _validated_snapshot(self, connection, scope, query, now, project):
+    def _validated_snapshot(self, connection, scope, query, now, project, *, listener=None):
         with self._friend_authority(connection, scope) as friend:
+            if listener is not None:
+                self._listener_profile(connection, scope, listener, friend, project)
             authority = self._authority(connection, scope, now)
             if query.snapshot_ref:
                 snapshot = connection.execute("""select * from app.activity_snapshots
@@ -241,10 +266,16 @@ class HomeActivityPostgresRepository:
                 raise _expired()
             yield snapshot, token, friend
 
-    def read(self, *, scope, query, now, build_projection):
+    def read(self, *, scope, query, now, build_projection, listener=None):
         if (not isinstance(scope, ActivityScope) or not isinstance(query, ActivityQuery)
                 or isinstance(query, ComparisonQuery) != (scope.audience == "comparison")):
             raise HomeActivityError()
+        if listener is not None:
+            from music_app.services.private_search_subject import ListenerHistoryExpectation
+            if (type(listener) is not ListenerHistoryExpectation or type(query) is not ActivityQuery
+                    or query.kind != "tracks" or query.period != "all"
+                    or scope.audience not in {"own", "friend"}):
+                raise HomeActivityError()
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             raise HomeActivityError()
         now = now.astimezone(timezone.utc)
@@ -255,10 +286,16 @@ class HomeActivityPostgresRepository:
                 with self._connection() as connection:
                     with _capture_lock(connection, scope, enabled=query.snapshot_ref is None):
                         connection.execute("set transaction isolation level repeatable read")
-                        with self._validated_snapshot(connection, scope, query, now, build_projection) as (snapshot, token, friend):
+                        with self._validated_snapshot(connection, scope, query, now, build_projection,
+                                listener=listener) as (snapshot, token, friend):
                             response = self._page(connection, snapshot, token, query)
                             if friend:
                                 response["account_ref"] = friend["profile"]["account_ref"]
+                            if listener is not None:
+                                profile, revision = self._listener_profile(
+                                    connection, scope, listener, friend, build_projection)
+                                response["listener"] = profile
+                                response["listener_relationship_revision"] = revision
                         connection.commit()
                         return response
             except Exception as error:

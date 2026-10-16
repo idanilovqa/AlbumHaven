@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {fixture,topPayload,settle,F,outcome}=require('./album-tops-membership-fixtures/actual-request-fixture.cjs');
+const {fixture,topPayload,settle,F,outcome}=require('./shared-request-unit-fixture.cjs').topRequest();
 const source=`/view-data?surface=album_tops&top_ref=${F.TOP}`,target=`/view-data?surface=album_tops&top_ref=${F.OTHER}`;
 function blocker(h){
   const saved=h.context.AbortController;h.context.AbortController=undefined;

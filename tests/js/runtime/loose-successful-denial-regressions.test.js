@@ -3,7 +3,7 @@
 const nodeTest = require('node:test');
 const test = (name, body) => nodeTest(name, {timeout: 5000}, body);
 const assert = require('node:assert/strict');
-const {fixture, albumRead, readKnown, unavailable, looseRow, browsePayload, overlay} = require('./loose-revocation-regression-harness.cjs');
+const {fixture, albumRead, readKnown, unavailable, looseRow, browsePayload, overlay} = require('./shared-request-unit-fixture.cjs').looseRevocation();
 const rootPayload = rows => browsePayload(rows, {all_artists_active: true, gallery_scope: 'all',
   visible_library_categories: ['main_library'], artist_groups: [{artist: 'Fixture', albums: [{key: 'display-album'}]}]});
 

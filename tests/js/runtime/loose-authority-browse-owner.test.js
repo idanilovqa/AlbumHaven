@@ -3,7 +3,7 @@
 const nodeTest = require('node:test');
 const test = (name, body) => nodeTest(name, {timeout: 5000}, body);
 const assert = require('node:assert/strict');
-const {createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome, settle} = require('./loose-authority-harness.cjs');
+const {createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome, settle} = require('./shared-request-unit-fixture.cjs').looseAuthority();
 const clone = value => JSON.parse(JSON.stringify(value));
 const baseUrl = '/view-data?surface=albums&gallery_page_size=50';
 const page = (rows, {start = 0, count = 50, revision = 'r1', cursor = 'next', hasMore = true} = {}) =>

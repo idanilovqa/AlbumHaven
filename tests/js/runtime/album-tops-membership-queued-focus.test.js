@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {fixture,settle,F}=require('./album-tops-membership-fixtures/actual-request-fixture.cjs');
+const {fixture,settle,F}=require('./shared-request-unit-fixture.cjs').topRequest();
 test('a queued own success retains the native drawer close options and does not restore stale sidebar focus',{timeout:2000},async t=>{
   const h=fixture(t),closed=[],settled=[];
   h.context.closeArtistsDrawer=options=>closed.push({...options});

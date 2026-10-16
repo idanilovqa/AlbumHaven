@@ -4,7 +4,7 @@
 const nodeTest = require('node:test');
 const test = (name, body) => nodeTest(name, {timeout: 5000}, body);
 const assert = require('node:assert/strict');
-const {fixture, albumRead, readKnown, looseRow, browsePayload, overlay} = require('./loose-revocation-regression-harness.cjs');
+const {fixture, albumRead, readKnown, looseRow, browsePayload, overlay} = require('./shared-request-unit-fixture.cjs').looseRevocation();
 
 // Static, source-verified wire fixtures; no Python import/extraction/bypass.
 // routes/web_asgi.py:320-380 omits all/default categories in this startup URL.

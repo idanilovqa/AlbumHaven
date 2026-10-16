@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {pathToFileURL} = require('node:url');
-const {createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome, repositoryRoot} = require('./loose-authority-harness.cjs');
+const {createLooseAuthorityFixture, looseRow, browsePayload, overlay, outcome, repositoryRoot} = require('./shared-request-unit-fixture.cjs').looseAuthority();
 const copy = value => JSON.parse(JSON.stringify(value));
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const freeze = value => {

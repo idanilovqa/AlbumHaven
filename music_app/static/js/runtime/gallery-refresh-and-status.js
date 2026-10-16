@@ -1423,21 +1423,27 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     : 0;
   let viewRendered = false;
   let requestStarted = false, settledApplied = false, settledError = null;
+  let cleanupWorkRetired = false, ownsCatchCleanup = null;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   const privateRequest = isPrivateSearchRequestUrl(apiUrl);
   let readScope = null;
-  const ownsForegroundSlot = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+  const ownsRequestSlot = () => state.ui.activeViewRequestId === requestId
     && state.ui.activeViewRequestController === controller
-    && state.ui.activeViewRequestUrl === apiUrl && !controller?.signal.aborted;
-  const ownsPreferenceResponse = () => ownsForegroundSlot()
+    && state.ui.activeViewRequestUrl === apiUrl;
+  const ownsForegroundContext = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+    && ownsRequestSlot();
+  const ownsForegroundSlot = () => ownsForegroundContext() && !controller?.signal.aborted;
+  const ownsPreferenceContext = () => ownsForegroundContext()
     && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
     && (!retainedPlaylistDraft
       || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true)
     && (!readScope || galleryReadScopeIsCurrent(readScope))
-    && ownsForegroundSlot();
+    && ownsForegroundContext();
+  const ownsPreferenceResponse = () => ownsForegroundSlot()
+    && ownsPreferenceContext() && ownsForegroundSlot();
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
@@ -1765,15 +1771,40 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     settledApplied = true;
     return true;
   } catch (error) {
-    if (!ownsPreferenceResponse()) {
+    // Cancellation cannot admit a payload, but the still-current request must
+    // finish its terminal startup bookkeeping. An interrupted old context has
+    // no cleanup authority over its successor.
+    const cancelled = error?.name === 'AbortError';
+    const errorView = state.view;
+    const errorViewStateRevision = readViewStateRevision();
+    const errorPendingRequest = state.ui.pendingViewRequest;
+    let errorStartupFollowup = state.ui.pendingStartupHydrationFollowup;
+    const ownsErrorWork = () => state.view === errorView
+      && readViewStateRevision() === errorViewStateRevision
+      && state.ui.pendingViewRequest === errorPendingRequest
+      && state.ui.pendingStartupHydrationFollowup === errorStartupFollowup;
+    const ownsErrorCleanup = () => ownsErrorWork()
+      && (cancelled ? ownsPreferenceContext() : ownsPreferenceResponse())
+      && ownsErrorWork();
+    if (!ownsErrorCleanup()) {
+      // An already-obsolete request may still release its unchanged current
+      // local view. A first-check observer that replaces work may not transfer
+      // that replacement to the old finally.
+      if (!ownsErrorWork()) cleanupWorkRetired = true;
       return false;
     }
-    if (error?.privateSearchRetired) {
+    ownsCatchCleanup = () => {
+      if (cleanupWorkRetired) return false;
+      if (!ownsErrorCleanup()) cleanupWorkRetired = true;
+      return !cleanupWorkRetired;
+    };
+    if (!cancelled && error?.privateSearchRetired) {
       settledError = error;
       if (typeof showToast === 'function') showToast('Search is no longer available. Start a fresh search.', 'error', 4800);
       return false;
     }
     finishPendingViewTransition(requestId, { restoreCurrentGallery: true });
+    if (!ownsCatchCleanup()) return false;
     const deferredUtilityRequest = state.ui.deferredUtilityViewRequest;
     const sameGenerationUtilityDeferralOwnsRetry = Boolean(
       deferredUtilityRequest?.url === apiUrl
@@ -1789,19 +1820,33 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     if (terminalFullStartupHydration && !sameGenerationUtilityDeferralOwnsRetry) {
       state.awaitingInitialDataRefresh = false;
     }
-    if (error?.name === 'AbortError') {
+    if (cancelled) {
       clearStartupHydrationFollowup();
+      errorStartupFollowup = null;
       return false;
     }
     clearStartupHydrationFollowup();
+    errorStartupFollowup = null;
     if (requestOptions.startupRefresh) window.AlbumHavenStartupProgress?.fail();
+    if (!ownsCatchCleanup()) return false;
     if (typeof clearPendingSidebarSelection === 'function') {
       clearPendingSidebarSelection();
+      if (!ownsCatchCleanup()) return false;
       renderSidebar();
     }
+    if (!ownsCatchCleanup()) return false;
     settledError = error;
     throw error;
   } finally {
+    // A catch that lost work ownership cannot reacquire its replacement merely
+    // because finally starts later. Physical slot release remains independent.
+    if (ownsCatchCleanup) ownsCatchCleanup();
+    // Capture before cleanup/paint callbacks: reentry may replace the view or
+    // queued intent without first claiming another network request.
+    const releasedView = state.view;
+    const releasedViewStateRevision = readViewStateRevision();
+    const pendingRequest = state.ui.pendingViewRequest;
+    const pendingStartupHydrationFollowup = state.ui.pendingStartupHydrationFollowup;
     if (
       albumDetailPrewarmSearchGeneration > 0
       && Number(state.ui?.albumDetailPrewarmSearchGeneration || 0)
@@ -1819,10 +1864,13 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
         familyPrefetchReconciliationGeneration,
       );
     }
-    if (requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
+    if (!cleanupWorkRetired && ownsForegroundContext()) {
       finishPendingViewTransition(requestId, { restoreCurrentGallery: true });
     }
-    if (state.ui.activeViewRequestId === requestId) {
+    if (ownsRequestSlot()) {
+      // Local filtering can retire the response revision while this request
+      // still owns the foreground slot. Cleanup follows the view at release,
+      // never the obsolete payload revision, and stops on any later reentry.
       state.ui.activeViewRequestController = null;
       state.ui.activeViewRequestTagEditMutationRevision = null;
       state.ui.activeViewRequestUrl = '';
@@ -1831,29 +1879,39 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       state.ui.activeViewRequestStartupHydrationTier = '';
       state.busy = false;
       state.ui.activeViewPayloadReady = false;
+      let releasedPendingRequest = pendingRequest;
+      let releasedStartupFollowup = pendingStartupHydrationFollowup;
+      const ownsReleasedSlot = () => state.ui.activeViewRequestId === requestId && !state.busy
+        && state.ui.activeViewRequestController === null
+        && state.ui.activeViewRequestUrl === ''
+        && state.view === releasedView
+        && readViewStateRevision() === releasedViewStateRevision;
+      const ownsReleasedWork = () => !cleanupWorkRetired && ownsReleasedSlot()
+        && state.ui.pendingViewRequest === releasedPendingRequest
+        && state.ui.pendingStartupHydrationFollowup === releasedStartupFollowup;
+      const ownsReleasedContext = () => ownsReleasedWork()
+        && galleryReadScopeIsCurrent(readScope) && ownsReleasedWork();
       if (
         !viewRendered
         && !retainsMountedSelectedViewState
         && requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+        && ownsReleasedContext()
       ) {
         renderRelated();
       }
-      const ownsReleasedSlot = () => state.ui.activeViewRequestId === requestId && !state.busy
-        && state.ui.activeViewRequestController === null
-        && requestOwnsCurrentViewState(requestId, requestViewStateRevision);
-      if (ownsReleasedSlot()) {
-        const pendingRequest = state.ui.pendingViewRequest;
-        const pendingStartupHydrationFollowup = state.ui.pendingStartupHydrationFollowup;
+      if (ownsReleasedWork()) {
         let pendingViewRequestDispatched = false;
         if (pendingRequest) {
           state.ui.pendingViewRequest = null;
+          releasedPendingRequest = null;
           const pendingOriginatingRevision = Number(
             pendingRequest.originatingViewStateRevision || 0,
           );
           if (pendingOriginatingRevision === readViewStateRevision()
             && (!pendingRequest.originatingReadScope || galleryReadScopeIsCurrent(pendingRequest.originatingReadScope))
-            && ownsReleasedSlot()) {
+            && ownsReleasedWork()) {
             clearStartupHydrationFollowup();
+            releasedStartupFollowup = null;
             pendingViewRequestDispatched = true;
             fetchAndRender(
               pendingRequest.url,
@@ -1865,17 +1923,16 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
         }
         if (pendingViewRequestDispatched) {
           // The current queued request owns the active slot.
-        } else if (!galleryReadScopeIsCurrent(readScope)
-          || !ownsReleasedSlot()) {
+        } else if (!ownsReleasedContext()) {
           // Cleanup may release this retired slot, but cannot initiate work for
           // the replacement identity or view.
         } else if (await dispatchPendingScanCompletionViewRefresh()) {
           // The one-shot post-scan refresh now owns the active request slot.
-        } else if (!ownsReleasedSlot()) {
+        } else if (!ownsReleasedContext()) {
           // Awaited recovery cannot continue after another foreground claim.
         } else if (await dispatchPendingCoverCompletionViewRefresh()) {
           // The one-shot post-cover refresh now owns the active request slot.
-        } else if (!ownsReleasedSlot()) {
+        } else if (!ownsReleasedContext()) {
           // The old finally does not schedule a successor's hydration.
         } else if (
           pendingStartupHydrationFollowup
@@ -1889,13 +1946,13 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
         }
         const utilityModal = document.getElementById('utility-modal');
         if (
-          ownsReleasedSlot()
+          ownsReleasedContext()
           && state.ui.deferredUtilityViewRequest?.url
           && Boolean(!utilityModal || utilityModal.hidden)
           && typeof resumeDeferredUtilityViewRequest === 'function'
         ) {
           Promise.resolve().then(() => {
-            if (ownsReleasedSlot()) resumeDeferredUtilityViewRequest();
+            if (ownsReleasedContext()) resumeDeferredUtilityViewRequest();
           });
         }
       }
@@ -1909,7 +1966,7 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
       ).catch(() => {});
     }
     if (
-      state.ui.activeViewRequestId === requestId
+      !cleanupWorkRetired && state.ui.activeViewRequestId === requestId
       && !state.busy
       && !state.ui.pendingViewRequest
       && !state.ui.scanPageReturnContext
@@ -1917,7 +1974,7 @@ async function fetchAndRender(url, push = true, options = {}, originatingOptions
     ) {
       resumeScanPageGalleryCoverLoads();
     }
-    if (requestStarted && state.ui.activeViewRequestId === requestId
+    if (!cleanupWorkRetired && requestStarted && state.ui.activeViewRequestId === requestId
       && !controller?.signal.aborted
       && galleryReadScopeIsCurrent(readScope)
       && state.ui.activeViewRequestId === requestId

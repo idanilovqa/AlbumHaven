@@ -490,7 +490,7 @@ function renderSidebar() {
   // This receipt contains only the existing safe native navigation projection.
   const privateSearchView = v.private_search === true ? v : null;
   if (el.dataset.sidebarStructureSignature === structureSignature
-    && el.albumHavenSidebarPrivateView === privateSearchView) {
+    && (el.albumHavenSidebarPrivateView ?? null) === privateSearchView) {
     applySidebarSelectionMarkup(el, sidebarRenderOptions);
   } else {
     el.innerHTML = buildSidebarHtml(v, sidebarArtists, sidebarRenderOptions);

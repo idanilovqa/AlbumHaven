@@ -1,5 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
-const {fixture, topPayload, abort, outcome, settle, F} = require('./album-tops-membership-fixtures/actual-request-fixture.cjs');
+const {fixture, topPayload, abort, outcome, settle, F} = require('./shared-request-unit-fixture.cjs').topRequest();
 const target = `/view-data?surface=album_tops&top_ref=${F.OTHER}`;
 const source = `/view-data?surface=album_tops&top_ref=${F.TOP}`;
 function countStart(h, counts) {return () => {counts.started++; h.events.push('start');};}

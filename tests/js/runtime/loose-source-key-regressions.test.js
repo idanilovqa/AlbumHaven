@@ -3,7 +3,7 @@
 const nodeTest = require('node:test');
 const test = (name, body) => nodeTest(name, {timeout: 5000}, body);
 const assert = require('node:assert/strict');
-const {fixture, albumRead, readKnown, looseRow, browsePayload, overlay} = require('./loose-revocation-regression-harness.cjs');
+const {fixture, albumRead, readKnown, looseRow, browsePayload, overlay} = require('./shared-request-unit-fixture.cjs').looseRevocation();
 function presentationFixture() {
   const f = fixture(); f.context.window.innerWidth = 390; f.context.virtualGrid = null;
   for (const file of ['gallery-main-state.js', 'gallery-display-preference-helpers.js', 'gallery-main-interactions.js']) f.loadRuntime(file);

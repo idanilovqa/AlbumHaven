@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {fixture,topPayload,settle,F,outcome}=require('./album-tops-membership-fixtures/actual-request-fixture.cjs');
+const {fixture,topPayload,settle,F,outcome}=require('./shared-request-unit-fixture.cjs').topRequest();
 for(const mode of ['abort','success','wrong-resource','http','network'])test(`same-ID local claim silently retires direct ${mode} completion`,{timeout:2000},async t=>{
   const h=fixture(t),settled=[],historyBefore=structuredClone(h.calls.history);let starts=0;
   const saved=h.context.AbortController;

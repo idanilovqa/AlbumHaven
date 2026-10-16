@@ -10,7 +10,7 @@ const {
 const {
   createHistoryFixture, historyPayload, captureLiveReceipt,
   assertNoPrivatePreferenceMetadata, assertDisplayPreserved,
-} = require('./loose-history-privacy-harness.cjs');
+} = require('./shared-request-unit-fixture.cjs').looseHistory();
 
 function assertSerializedView(write, payload, mode) {
   assert.equal(write.mode, mode);

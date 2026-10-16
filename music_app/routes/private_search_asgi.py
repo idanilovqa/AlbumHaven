@@ -12,13 +12,16 @@ from music_app.services.policy_evaluator import PolicyEvaluationConstraints
 from music_app.services.private_library_authority import require_private_action, PrivateLibraryAuthorityError
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
 from music_app.services.view_search import PrivateSearchError, normalize_private_search_request
-from music_app.services.private_search_postgres import PostgresPrivateSearchService, normalize_native_search_command
+from music_app.services.private_search_postgres import (
+    PostgresPrivateSearchService, normalize_native_search_command, normalize_native_search_batch_command,
+)
 from music_app.services.social_cursors import decode_search_cursor, SearchCursorScopeError
 
 _NO_STORE = {'Cache-Control': 'private, no-store'}
 _NATIVE_QUERY_KEYS = frozenset({'q', 'surface', 'artist', 'all_artists',
                               'search_presentation', 'gallery_scope', 'category'})
 _NATIVE_BODY_LIMIT = 1024
+_NATIVE_BATCH_BODY_LIMIT = 16 * 1024
 
 
 def _private_search_context(request):
@@ -62,25 +65,28 @@ def _native_object(pairs):
     return result
 
 
-async def _native_command(request):
+async def _native_command(request, *, batch=False):
+    limit = _NATIVE_BATCH_BODY_LIMIT if batch else _NATIVE_BODY_LIMIT
     if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
         raise PrivateSearchError()
     length = request.headers.get('content-length')
     if length is not None and (not length.isascii() or not length.isdecimal()
-                               or len(length) > 4 or int(length) > _NATIVE_BODY_LIMIT):
+                               or len(length) > len(str(limit)) or int(length) > limit):
         raise PrivateSearchError()
     body = bytearray()
     async for chunk in request.stream():
-        if len(body) + len(chunk) > _NATIVE_BODY_LIMIT:
+        if len(body) + len(chunk) > limit:
             raise PrivateSearchError()
         body.extend(chunk)
     try:
         command = json.loads(body.decode('utf-8'), object_pairs_hook=_native_object)
     except (ValueError, UnicodeError, RecursionError):
         raise PrivateSearchError() from None
-    if type(command) is not dict or set(command) != {'resource_ref', 'intent'}:
+    key = 'resource_refs' if batch else 'resource_ref'
+    if type(command) is not dict or set(command) != {key, 'intent'}:
         raise PrivateSearchError()
-    normalize_native_search_command(command['resource_ref'], command['intent'])
+    normalizer = normalize_native_search_batch_command if batch else normalize_native_search_command
+    normalizer(command[key], command['intent'])
     return command
 
 
@@ -97,6 +103,30 @@ async def private_search_native_target_response(request):
         if service is None:
             service = PostgresPrivateSearchService(request.app.state.config)
         payload = await run_in_threadpool(service.resolve_native_target, context, request=query,
+            context_ref=context_ref, cursor_secret=secret, constraints=constraints, **command)
+        return JSONResponse(payload, headers=_NO_STORE)
+    except PrivateLibraryAuthorityError:
+        error = PrivateSearchError('private_search_forbidden', 403)
+    except PrivateSearchError as caught:
+        error = caught
+    except Exception:
+        error = PrivateSearchError('private_search_unavailable', 503)
+    return _error_response(error)
+
+
+async def private_search_native_targets_response(request):
+    try:
+        if set(request.query_params) - _NATIVE_QUERY_KEYS:
+            raise PrivateSearchError()
+        query = normalize_private_search_request(request.query_params)
+        if query.presentation != 'tracks' or (query.artist is None) == (not query.all_artists):
+            raise PrivateSearchError()
+        context, context_ref, constraints, secret = _private_search_context(request)
+        command = await _native_command(request, batch=True)
+        service = getattr(request.app.state, 'private_search_service', None)
+        if service is None:
+            service = PostgresPrivateSearchService(request.app.state.config)
+        payload = await run_in_threadpool(service.resolve_native_targets, context, request=query,
             context_ref=context_ref, cursor_secret=secret, constraints=constraints, **command)
         return JSONResponse(payload, headers=_NO_STORE)
     except PrivateLibraryAuthorityError:

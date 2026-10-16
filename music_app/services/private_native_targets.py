@@ -90,6 +90,27 @@ class PrivateNativeTargets:
                     'album_title':row['album_title'],'duration_seconds':row['duration_seconds']}
         raise NativeTargetError()
 
+    def resolve_metadata_batch(self,connection,context,track_ids,*,constraints=None):
+        # Source owners prove membership first. Keep singleton metadata's exact
+        # native DTO and actor preference semantics, using one real inventory
+        # read on their connection. Preferences remain bounded per-track reads.
+        if (type(track_ids) not in {list,tuple} or len(track_ids)>100
+                or any(type(identity) is not int or not 0<identity<=9223372036854775807
+                       for identity in track_ids) or len(set(track_ids))!=len(track_ids)):
+            raise NativeTargetError('invalid_command',422)
+        ids=sorted(identity for identity in track_ids
+            if allows(context,'library.browse.read',ResourceScope('track',str(identity)),constraints))
+        if not ids:return {}
+        rows=inventory.inventory_rows(connection,context.library_id,ids,lock=True,config=self.config)
+        result={}
+        for identity in ids:
+            if identity not in rows:continue
+            try:
+                result[identity]=self._metadata_target(connection,context,identity,rows[identity],constraints)
+            except NativeTargetError as error:
+                if error.code not in {'forbidden','item_unavailable'}:raise
+        return result
+
     def resolve_play_queue(self,connection,context,track_ids,*,constraints=None):
         # All candidates originate in the locked Playlist membership query. Batch
         # inventory and file reads, then retain per-resource media authorization.

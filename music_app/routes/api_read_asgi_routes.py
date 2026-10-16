@@ -648,6 +648,12 @@ async def search_native_target(request: Request) -> JSONResponse:
     return await private_search_native_target_response(request)
 
 
+@router.post("/search/native-targets")
+async def search_native_targets(request: Request) -> JSONResponse:
+    from music_app.routes.private_search_asgi import private_search_native_targets_response
+    return await private_search_native_targets_response(request)
+
+
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     if str(request.query_params.get("surface") or "").strip().casefold() == "album_tops":

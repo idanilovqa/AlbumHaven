@@ -112,17 +112,24 @@ test('current can_select governs real source selection independently of readable
   assert.equal(lease.resolveRows([snapshot.result.tracks[0].rowKey]), null);
   const key = snapshot.result.tracks[1].rowKey;
   assert.deepEqual(plain(lease.resolveRows([key])), {rows: [{rowKey: key, track_ref: 'inventory-track:9:102'}], playlist_creation_source: null});
-  assert.equal(lease.canQueue([key]), false); assert.equal(await lease.captureQueue([key]), null);
+  assert.equal(lease.canQueue([snapshot.result.tracks[0].rowKey]), false);
+  assert.equal(await lease.captureQueue([snapshot.result.tracks[0].rowKey]), null);
+  assert.equal(lease.canQueue([key]), true);
+  const captures = await lease.captureQueue([key]); assert.equal(captures.length, 1);
+  assert.ok(['resolveMetadata', 'resolve', 'resolveDetails', 'resolvePlaylistItem', 'isCurrent']
+    .every(name => typeof captures[0][name] === 'function'));
+  assert.equal(h.requests.length, 1, 'capturing callbacks does not authorize or enqueue the row');
+  assert.equal(h.c.AlbumHavenExplicitQueue.getSnapshot().entries.length, 0);
   assert.equal(h.runtime().canOpenAlbum(snapshot, snapshot.result.tracks[0]), true);
   lease.dispose();
 });
 
-test('actual native selection opens the existing Playlist destination picker and omits Queue actions', async t => {
+test('actual native selection exposes existing Queue timings and preserves the Playlist destination picker', async t => {
   const h = await actionFixture(t, {entry: true}); await admit(h, ready({presentation: 'tracks'}));
   const row = h.host.querySelector('[data-cdt-row-key]'); h.dispatch(row, 'keydown', {key: ' ', ctrlKey: true});
   h.dispatch(row, 'contextmenu', {button: 2});
   const menu = h.document.querySelector('.settings-foobar-format-menu'); assert.ok(menu);
-  assert.match(menu.textContent, /Add to playlist/); assert.doesNotMatch(menu.textContent, /queue/i);
+  assert.match(menu.textContent, /Add to playlist/); assert.match(menu.textContent, /At end of queue/);
   h.click([...menu.querySelectorAll('button')].find(node => node.textContent.trim() === 'Add to playlist'));
   await h.flush();
   assert.equal(h.requests.at(-1).url, '/playlists/destinations');

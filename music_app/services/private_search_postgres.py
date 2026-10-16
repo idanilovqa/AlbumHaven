@@ -61,6 +61,21 @@ def normalize_native_search_command(resource_ref, intent):
     return kind, library_id, identifier
 
 
+def normalize_native_search_batch_command(resource_refs, intent):
+    """A bounded ordered candidate list, without retained authority or origins."""
+    if (type(resource_refs) is not list or not 1 <= len(resource_refs) <= MAX_WITNESSES
+            or type(intent) is not str or intent not in {'metadata', 'play'}):
+        raise PrivateSearchError()
+    candidates, seen = [], set()
+    for resource_ref in resource_refs:
+        kind, library_id, identifier = normalize_native_search_command(resource_ref, intent)
+        if kind != 'track' or resource_ref in seen:
+            raise PrivateSearchError()
+        seen.add(resource_ref)
+        candidates.append((library_id, identifier))
+    return candidates
+
+
 def _order_sql(kind):
     return ', '.join(name + (' nulls last' if name in _NULLABLE else '') for name in _ORDER[kind])
 
@@ -294,6 +309,22 @@ class _Read:
         elif kind in self.outer_hydrated:
             self.outer_hydrated[kind] += len(rows)
         return rows
+
+    def native_witnesses(self, track_ids):
+        """One exact-ID current witness read; no page scan, cursor or refill."""
+        if not track_ids:
+            return {}
+        ids = sorted(set(track_ids))
+        if len(ids) > MAX_WITNESSES:
+            raise PrivateSearchError()
+        params = {**self.params, 'native_track_ids': ids}
+        ctes = _inventory_ctes(inventory_filter='track_id=any(%(native_track_ids)s::bigint[])')
+        rows = self.connection.execute(ctes + '''select * from witnesses
+            where track_id=any(%(native_track_ids)s::bigint[]) order by track_id''', params).fetchall()
+        witnesses = {row['track_id']: row for row in rows}
+        if len(witnesses) != len(rows) or not set(witnesses) <= set(ids):
+            raise PrivateSearchError('private_search_unavailable', 503)
+        return witnesses
 
     def prime_cursor_tracks(self, cursors):
         """Reserve identity re-resolution before sidebar can consume the budget.
@@ -681,6 +712,72 @@ class PostgresPrivateSearchService:
             # checks before this return is allowed to leave the service.
             return {'status': 'ready', 'contract_version': 'own-love-native-v1',
                     'context_ref': context_ref, 'data': data}
+
+    def resolve_native_targets(self, context, *, request, context_ref, cursor_secret,
+                               resource_refs, intent, constraints=None):
+        """Re-prove bounded own-love candidates before using the actual native batch owner.
+
+        One authority transaction owns the entire batch, including its final
+        session/Browse checks. Per-item denial projects only the requested ref;
+        infrastructure or whole-operation uncertainty never becomes an empty
+        success. The metadata and Play HTTP phases are independent live reads.
+        """
+        candidates = normalize_native_search_batch_command(resource_refs, intent)
+        if (request.cursor is not None or request.sidebar_cursor is not None
+                or request.detail_album_ref is not None or request.sidebar_only
+                or request.presentation != 'tracks'
+                or (request.artist is None) == (not request.all_artists)):
+            raise PrivateSearchError()
+        with self._authorized(context, constraints) as (connection, live, _):
+            # Settings precede every candidate inventory lock, on this same
+            # connection. Even an all-unavailable batch retains real authority.
+            targets = self._native_targets(connection, live, intent=intent)
+            ids = sorted(identifier for library_id, identifier in candidates
+                         if library_id == live.library_id)
+            tracks = connection.execute('''select id,album_id from library.local_tracks
+                where library_id=%s and id=any(%s::bigint[]) order by id for update''',
+                (live.library_id, ids)).fetchall() if ids else []
+            parents = {row['id']: row['album_id'] for row in tracks if row['album_id'] is not None}
+            album_ids = sorted(set(parents.values()))
+            albums = connection.execute('''select id from library.local_albums
+                where library_id=%s and id=any(%s::bigint[]) order by id for share''',
+                (live.library_id, album_ids)).fetchall() if album_ids else []
+            current_albums = {row['id'] for row in albums}
+            read = _Read(connection, live, request, constraints, cursor_secret)
+            selected_artist_id = None
+            if request.artist is not None:
+                artists = read.matching_artist_rows(request.artist)
+                if len(artists) > 1:
+                    raise PrivateSearchError('private_search_forbidden', 403)
+                # A selected Artist can lose its last current Love witness.
+                # Keep that a nonmatching batch, never broaden to All Artists.
+                selected_artist_id = artists[0]['artist_id'] if artists else 0
+            witnesses = read.native_witnesses(list(parents))
+            proven = []
+            for identifier in ids:
+                row = witnesses.get(identifier)
+                if (row is None or row['album_id'] != parents.get(identifier)
+                        or row['album_id'] not in current_albums
+                        or selected_artist_id is not None and row['artist_id'] != selected_artist_id):
+                    continue
+                readable = read.readable(row)
+                if readable is None:
+                    raise PrivateSearchError('search_native_target_retry_required', 409)
+                if readable:
+                    proven.append(identifier)
+            try:
+                resolved = (targets.resolve_metadata_batch(connection, live, proven, constraints=constraints)
+                            if intent == 'metadata' else
+                            targets.resolve_play_queue(connection, live, proven, constraints=constraints))
+            except NativeTargetError as error:
+                raise PrivateSearchError(error.code, error.status_code) from None
+            results = []
+            for resource_ref, (library_id, identifier) in zip(resource_refs, candidates):
+                target = resolved.get(identifier) if library_id == live.library_id else None
+                results.append({'resource_ref': resource_ref, 'status': 'unavailable'} if target is None else
+                    {'resource_ref': resource_ref, 'status': 'ready', 'native_target': target})
+            return {'status': 'ready', 'contract_version': 'own-love-native-batch-v1',
+                    'context_ref': context_ref, 'data': {'intent': intent, 'results': results}}
 
     def _pending_selection(self, read, request, context_ref, selected, selection,
                            *, result_cursor=None, sidebar_cursor=None):

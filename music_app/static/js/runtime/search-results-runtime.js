@@ -479,6 +479,10 @@ const SearchResultsRuntime = (() => {
     const source = createPrivatePlaytableSource({scopeKey: context.scopeKey, rows, instance, revision, isCurrent: active,
       resolveRow: row => active() && candidate.result.tracks.includes(row) && row.selectable
         ? candidate.trackSources.get(row.rowKey) || null : null,
+      canQueueRow: row => active() && queueRowAllowed(candidate, row) && active(),
+      captureQueueRows: (selected, options) => active() && selected.length <= 100
+        && selected.every(row => queueRowAllowed(candidate, row)) && active()
+        ? captureQueueRows(candidate, selected, options) : null,
       subscribe: listener => {listeners.add(listener); return () => listeners.delete(listener);}});
     if (!active()) {source.dispose(); return null;}
     sources.add(source);
@@ -533,6 +537,31 @@ const SearchResultsRuntime = (() => {
       || data.resource_ref !== resourceRef || data.intent !== intent
       || trackDetails && data.parent_album_ref !== parentRef) throw nativeFailure('Search action identity changed.', 409);
     const target = data.native_target;
+    if (intent === 'metadata') {
+      const preference = target?.track_preference, canonical = target?.canonical_track_ref;
+      if (!exactKeys(target, ['inventory_track_ref', 'track_ref', 'canonical_track_ref', 'source_readable',
+        'title', 'artist', 'album_title', 'duration_seconds', 'availability', 'allowed_actions', 'playback_state', 'track_preference'])
+        || target.inventory_track_ref !== resourceRef || target.source_readable !== true
+        || canonical !== null && !reference(canonical) || target.track_ref !== canonical
+        || ['title', 'artist', 'album_title'].some(key => target[key] !== null && text(target[key]) === null)
+        || target.duration_seconds !== null && (!Number.isFinite(target.duration_seconds) || target.duration_seconds < 0)
+        || !['local', 'missing', 'unresolved', 'unknown'].includes(target.availability)
+        || !exactKeys(target.allowed_actions, ['can_read', 'can_play']) || target.allowed_actions.can_read !== true
+        || typeof target.allowed_actions.can_play !== 'boolean'
+        || !exactKeys(target.playback_state, ['can_start_here'])
+        || target.playback_state.can_start_here !== target.allowed_actions.can_play
+        || target.playback_state.can_start_here && target.availability !== 'local'
+        || (canonical === null ? preference !== null
+          : !exactKeys(preference, ['love_tier', 'rating', 'allowed_actions'])
+            || !TrackActionsRuntime.overlay(preference)
+            || !exactKeys(preference.allowed_actions, ['client_surface_class', 'can_rate', 'can_set_love_tier'])
+            || preference.allowed_actions.client_surface_class !== 'private_web'
+            || typeof preference.allowed_actions.can_rate !== 'boolean'
+            || typeof preference.allowed_actions.can_set_love_tier !== 'boolean')) {
+        throw nativeFailure('Invalid Search metadata target.', 409);
+      }
+      return freeze({...target, title: target.title || '', artist: target.artist || '', album_title: target.album_title || ''});
+    }
     if (intent === 'play') {
       if (!exactKeys(target, ['inventory_track_ref', 'track_ref', 'path', 'title', 'artist', 'album_title', 'duration_seconds'])
         || target.inventory_track_ref !== resourceRef || text(target.path) === null || !target.path
@@ -563,6 +592,133 @@ const SearchResultsRuntime = (() => {
     const target = assertNativeReply(reply, lease.resourceRef, intent, lease.albumRef);
     if (!current()) throw nativeStale();
     return target;
+  }
+  function assertNativeBatch(reply, leases, intent) {
+    if (!exactKeys(reply, ['status', 'contract_version', 'context_ref', 'data']) || reply.status !== 'ready'
+      || reply.contract_version !== 'own-love-native-batch-v1'
+      || !exactKeys(reply.data, ['intent', 'results']) || reply.data.intent !== intent
+      || !Array.isArray(reply.data.results) || reply.data.results.length !== leases.length) {
+      throw nativeFailure('Invalid Search batch response.', 409);
+    }
+    // Project the entire exact response before releasing any per-row callback.
+    // A truncated, reordered or malformed batch cannot partly admit preferences.
+    return reply.data.results.map((entry, index) => {
+      const lease = leases[index];
+      if (entry?.resource_ref !== lease.resourceRef) throw nativeFailure('Search batch identity changed.', 409);
+      if (entry.status === 'unavailable' && exactKeys(entry, ['resource_ref', 'status'])) return null;
+      if (entry.status !== 'ready' || !exactKeys(entry, ['resource_ref', 'status', 'native_target'])) {
+        throw nativeFailure('Invalid Search batch item.', 409);
+      }
+      return assertNativeReply({status: 'ready', contract_version: 'own-love-native-v1', context_ref: reply.context_ref,
+        data: {resource_ref: lease.resourceRef, intent, native_target: entry.native_target}}, lease.resourceRef, intent, lease.albumRef);
+    });
+  }
+  function queueBatchReader(capture, nativeUrl) {
+    const pending = new Map(), base = {capture}, url = nativeUrl.replace('/search/native-target?', '/search/native-targets?');
+    const live = () => nativeScopeCurrent(base);
+    return (lease, intent, {signal} = {}) => {
+      if (!live() || signal?.aborted || !['metadata', 'play'].includes(intent)) return Promise.reject(nativeStale());
+      // The real Queue gives each admission/refresh/start its own signal. A
+      // caller without one cannot accidentally join another operation's batch.
+      const requestSignal = signal || new AbortController().signal;
+      let modes = pending.get(requestSignal);
+      if (!modes) {modes = new Map(); pending.set(requestSignal, modes);}
+      let batch = modes.get(intent);
+      if (!batch) {
+        batch = {entries: new Map(), settled: false}; modes.set(intent, batch);
+        const detach = () => {
+          if (modes.get(intent) === batch) modes.delete(intent);
+          if (!modes.size && pending.get(requestSignal) === modes) pending.delete(requestSignal);
+        };
+        const current = () => !requestSignal.aborted && live();
+        const finish = (error, targets) => {
+          if (batch.settled) return;
+          batch.settled = true; detach(); requestSignal.removeEventListener('abort', cancel);
+          for (const [index, entry] of [...batch.entries.values()].entries()) {
+            for (const caller of entry.callers) {
+              if (!current()) caller.reject(nativeStale());
+              else if (error) caller.reject(error);
+              else if (!targets[index]) caller.reject(nativeFailure('This queued Search source is unavailable.'));
+              else caller.resolve(targets[index]);
+            }
+          }
+        };
+        const cancel = () => finish(nativeStale());
+        requestSignal.addEventListener('abort', cancel, {once: true});
+        Promise.resolve().then(async () => {
+          // Only calls already queued in this turn share this response. Later
+          // refreshes cannot consume a settled target or revive removed rows.
+          detach();
+          if (batch.settled) return;
+          if (!current()) {finish(nativeStale()); return;}
+          const leases = [...batch.entries.values()].map(entry => entry.lease);
+          if (!leases.length || leases.length > 100) {finish(nativeFailure('Invalid Search batch size.', 409)); return;}
+          try {
+            const reply = await capture.transport.request(url, {method: 'POST',
+              body: {resource_refs: leases.map(value => value.resourceRef), intent},
+              expected: capture.context, signal: requestSignal, isCurrent: current});
+            if (!current()) throw nativeStale();
+            const targets = assertNativeBatch(reply, leases, intent);
+            if (!current()) throw nativeStale();
+            finish(null, targets);
+          } catch (error) {finish(current() ? error : nativeStale());}
+        });
+      }
+      return new Promise((resolve, reject) => {
+        if (batch.settled || !live() || requestSignal.aborted) {reject(nativeStale()); return;}
+        let entry = batch.entries.get(lease.resourceRef);
+        if (!entry) {entry = {lease, callers: []}; batch.entries.set(lease.resourceRef, entry);}
+        entry.callers.push({resolve, reject});
+      });
+    };
+  }
+  function queueRowAllowed(candidate, row) {
+    return candidate.result.tracks.includes(row) && row.readable === true && row.selectable === true
+      && candidate.trackSources.has(row.rowKey)
+      && !candidate.nativeDenied.has(`${candidate.trackSources.get(row.rowKey).inventory_track_ref}:play`)
+      && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows?.('library.media.read') === true);
+  }
+  function captureQueueRows(candidate, selected, {signal} = {}) {
+    if (!owns(candidate) || signal?.aborted || !selected.length || selected.length > 100
+      || new Set(selected).size !== selected.length || !selected.every(row => queueRowAllowed(candidate, row))) return null;
+    const capture = candidate.capture, url = candidate.nativeUrl, batch = queueBatchReader(capture, url);
+    const captures = selected.map(row => {
+      // Keep no visible candidate/source owner in the transferred callbacks.
+      // Queue admission itself retains the original selection lifetime until
+      // append; a successfully admitted source survives Search navigation.
+      const lease = Object.freeze({capture, url, resourceRef: candidate.trackSources.get(row.rowKey).inventory_track_ref,
+        albumRef: row.albumRef});
+      const display = Object.freeze({title: row.title, artist: row.artist, album: row.album});
+      const current = () => nativeScopeCurrent(lease);
+      return Object.freeze({display, isCurrent: current,
+        resolveMetadata: options => batch(lease, 'metadata', options),
+        async resolve(options) {
+          const target = await batch(lease, 'play', options);
+          if (!current() || options?.signal?.aborted) throw nativeStale();
+          // These Queue-facing facts derive only from the exact fresh Play
+          // response, never from captured labels or a metadata availability bit.
+          return Object.freeze({...target, source_readable: true, availability: 'local',
+            allowed_actions: Object.freeze({can_read: true, can_play: true})});
+        },
+        async resolvePlaylistItem(options) {
+          const target = await batch(lease, 'metadata', options);
+          if (!current() || options?.signal?.aborted) throw nativeStale();
+          return Object.freeze({...target,
+            source_provenance: Object.freeze({kind: 'inventory', track_ref: lease.resourceRef})});
+        },
+        async resolveDetails(kind, {signal: detailSignal} = {}) {
+          // Queue probes both resource kinds. Unsupported Artist projection is
+          // not evidence that this independently readable track was revoked.
+          if (kind !== 'album') throw new Error('This queued Search source has no authorized Artist target.');
+          const active = () => !detailSignal?.aborted && current();
+          const target = await readNative(lease, 'details', {signal: detailSignal, isCurrent: active});
+          if (!active()) throw nativeStale();
+          return Object.freeze({target, data: Object.freeze({kind: 'album', ref: lease.albumRef,
+            title: display.album, artist: display.artist, metadata_state: 'last_known', source_label: 'Local library', tracks: null}),
+            isCurrent: current});
+        }});
+    });
+    return owns(candidate) && !signal?.aborted ? Object.freeze(captures) : null;
   }
   function nativeRejected(candidate, resourceRef, intent, error) {
     if (!owns(candidate) || error?.name === 'AbortError') return;

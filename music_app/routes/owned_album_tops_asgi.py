@@ -12,6 +12,7 @@ from music_app.services.owned_album_tops import (
     require_top_authority, top_uuid, normalize_top_publication_preview,
 )
 from music_app.services.owned_album_tops_postgres import PostgresOwnedAlbumTopsService
+from music_app.services.album_top_publication_sources import validate_request as validate_publication_source_request
 from music_app.services.policy import PolicyContext
 from music_app.services.policy_asgi import _deployment_mode, _request_origin
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
@@ -221,6 +222,27 @@ async def preview_album_top_publication(request: Request, top_ref: str):
         return _response(request, value)
     except JSONBodyTooLarge:
         return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+
+
+@router.get('/album-tops/{top_ref}/items/{item_ref}/publication-sources')
+def read_album_top_publication_sources(request: Request, top_ref: str, item_ref: str):
+    try:
+        params = request.query_params
+        if (set(params) - {'revision', 'cursor', 'limit'} or 'revision' not in params
+                or len(params.multi_items()) != len(params)):
+            raise AlbumTopError('invalid_query')
+        limit = params.get('limit', '50')
+        if not limit.isascii() or not limit.isdecimal() or len(limit) > 3 or not 1 <= int(limit) <= 100:
+            raise AlbumTopError('invalid_query')
+        context, constraints = _context(request, BROWSE)
+        options = validate_publication_source_request(top_ref=top_ref, item_ref=item_ref,
+            revision=params['revision'], context_ref=_context_ref(request),
+            cursor=params.get('cursor'), limit=int(limit))
+        value = _service(request).read_publication_sources(context,
+            cursor_secret=request.app.state.auth_policy_config['hmac']['secret'], constraints=constraints, **options)
+        return _response(request, value)
     except AlbumTopError as error:
         return _error(error)
 

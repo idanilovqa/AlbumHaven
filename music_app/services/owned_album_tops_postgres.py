@@ -440,6 +440,15 @@ class PostgresOwnedAlbumTopsService:
                     "artist": row["metadata"]["artist"], "year": row["metadata"]["year"],
                     "track_count": len(row["metadata"]["tracks"])} for row in captured["items"]]}
 
+    def read_publication_sources(self, context, *, top_ref, item_ref, revision,
+                                 context_ref, cursor_secret, cursor=None, limit=50, constraints=None):
+        from music_app.services.album_top_publication_sources import read_sources, validate_request
+        values = validate_request(top_ref=top_ref, item_ref=item_ref, revision=revision,
+                                  context_ref=context_ref, cursor=cursor, limit=limit)
+        with self._authorized(context, constraints) as (connection, live, _):
+            return read_sources(self, connection, live, constraints=constraints,
+                                cursor_secret=cursor_secret, **values)
+
     def read_sharing(self, context, top_ref, *, cursor_secret=None, cursor=None, constraints=None):
         ref = top_uuid(top_ref)
         with self._authorized(context, constraints) as (connection, live, _):

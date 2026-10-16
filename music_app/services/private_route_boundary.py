@@ -197,6 +197,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/album-tops/{top_ref}"): "library.browse.read",
     ("GET", "/album-tops/edit-requests"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/sharing"): "library.browse.read",
+    ("GET", "/album-tops/{top_ref}/items/{item_ref}/publication-sources"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/access-grants"): "library.album_tops.access.manage",
     ("GET", "/album-tops/{top_ref}/access-candidates"): "library.album_tops.access.manage",
     ("GET", "/album-tops"): "library.browse.read",

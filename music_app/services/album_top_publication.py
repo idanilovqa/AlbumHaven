@@ -87,7 +87,8 @@ def as_draft(rows):
            if row["selected_source_ref"] is not None else {})} for row in rows]
 
 
-def validate_draft(service, connection, live, top, items, current, constraints):
+def validate_draft_membership(items, current):
+    """Check saved/new identity without discovering alternate local editions."""
     by_ref = {str(row["ref"]): row for row in current}
     by_album = {str(row["catalog_ref"]): row for row in current}
     new_albums = []
@@ -100,6 +101,11 @@ def validate_draft(service, connection, live, top, items, current, constraints):
             raise AlbumTopError("items_changed", 409)
         else:
             new_albums.append(item["album_ref"])
+    return new_albums
+
+
+def validate_draft(service, connection, live, top, items, current, constraints):
+    new_albums = validate_draft_membership(items, current)
     # Any local row locking stays above the metadata barrier. Capture itself
     # revalidates exact selected bindings with ordinary reads beneath that barrier.
     service._catalog(connection, live, new_albums, constraints)

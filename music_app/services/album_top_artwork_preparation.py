@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 
 from music_app.services import album_top_publication as publication
 from music_app.services import album_top_publication_evidence as evidence
+from music_app.services import album_top_artwork_draft as artwork_draft
 from music_app.services.album_top_publication_authority import require_source_browse
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.owned_album_tops import (
@@ -151,7 +152,8 @@ class TopArtworkPreparationService:
             where ref=%s and top_ref=%s and library_id=%s and owner_account_id=%s
               and original_session_id=%s and context_ref=%s''',
             (ref, top['ref'], live.library_id, live.actor.account_id, live.actor.session_id, context_ref)).fetchone()
-        if (row is None or row['state'] == 'cancelled' or row['expires_at'] <= row['checked_at']
+        if (row is None or row['preparation_kind'] != 'saved'
+                or row['state'] == 'cancelled' or row['expires_at'] <= row['checked_at']
                 or row['top_revision'] != top['revision']):
             raise AlbumTopError('artwork_preparation_unavailable', 409)
         # Exact full saved membership, checked without loading image blobs or
@@ -279,6 +281,63 @@ class TopArtworkPreparationService:
                         resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
             self._final(live, top, scopes, [], constraints)
             return result
+
+    def start_draft(self, context, *, top_ref, payload, context_ref, constraints=None):
+        """Admit immutable typed local selections, without creating saved items.
+
+        This B2.1 entry cannot capture, review or publish a draft. Remote baseline
+        facts bind identity only; removing/replacing them needs no new remote
+        source admission. Every proposed local source is authorized afresh.
+        """
+        ref, context_ref = top_uuid(top_ref), _context(context_ref)
+        command = artwork_draft.normalize(payload)
+        draft = command['draft']
+        with self._authorized(context, constraints) as (connection, live, _):
+            top = self._top(connection, live, ref, draft['revision'], constraints, write=True)
+            current = publication.working_items(connection, top)
+            publication.validate_draft_membership(draft['items'], current)
+            # Every selected album, including excluded rows, is locked before
+            # the metadata barrier. Do not discover alternate catalog links:
+            # selection_source below proves the exact selected catalog/source
+            # and applies current album/source/root Browse authority.
+            selected_ids = sorted({item['selected_local_album_id'] for item in draft['items']})
+            for offset in range(0, len(selected_ids), 100):
+                self._lock_covers(connection, live, selected_ids[offset:offset + 100])
+            evidence.source_barrier(connection, live.library_id)
+            manifest, scopes = [], []
+            for position, (row_ref, item, included) in enumerate(zip(
+                    command['row_refs'], draft['items'], command['choices']), 1):
+                source, scope = evidence.selection_source(connection, live, item, constraints)
+                if source['title_origin'] != 'tag_metadata' or source['artist_origin'] != 'tag_metadata':
+                    raise AlbumTopError('evidence_unavailable', 409)
+                if included:
+                    require_private_action(live, _ARTWORK,
+                        resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
+                scopes.append(scope)
+                manifest.append(artwork_draft.manifest_row(row_ref, item, position, included, scope))
+            baseline = connection.execute('''select app.top_artwork_draft_baseline(%s,%s,%s,%s) as digest''',
+                (ref, live.library_id, live.actor.account_id, int(draft['revision']))).fetchone()['digest']
+            created = connection.execute('''select app.start_top_artwork_draft_preparation
+                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as ref''',
+                (str(uuid4()), ref, live.library_id, live.actor.account_id, live.actor.session_id,
+                 context_ref, int(draft['revision']), command['request_key'], command['request_generation'],
+                 command['draft_ref'], int(command['draft_revision']), baseline, Jsonb(manifest))).fetchone()['ref']
+            row = connection.execute('''select ref,revision,draft_ref,draft_revision,top_revision,
+                state,item_count,expires_at from app.album_top_artwork_preparations where ref=%s''',
+                (created,)).fetchone()
+            for item, included in zip(draft['items'], command['choices']):
+                if included:
+                    require_private_action(live, _ARTWORK,
+                        resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
+            self._final(live, top, scopes, [], constraints)
+            if connection.execute('select clock_timestamp()>=%s as expired',
+                    (row['expires_at'],)).fetchone()['expired']:
+                raise AlbumTopError('artwork_request_expired', 409)
+            return {'preparation_kind': 'draft', 'preparation_ref': str(row['ref']),
+                    'preparation_revision': str(row['revision']), 'draft_ref': str(row['draft_ref']),
+                    'draft_revision': str(row['draft_revision']), 'saved_top_revision': str(row['top_revision']),
+                    'state': row['state'], 'item_count': row['item_count'],
+                    'included_count': sum(command['choices']), 'expires_at': row['expires_at'].isoformat()}
 
     def cleanup(self, context, *, top_ref, top_revision_value, context_ref, constraints=None):
         """Explicit bounded owner-private reclamation; never called by reads.

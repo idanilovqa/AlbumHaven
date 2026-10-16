@@ -29,3 +29,28 @@
 .album-top-inline-edit .album-top-builder__identity input { width: 100%; min-width: 0; box-sizing: border-box; }
 .album-top-inline-edit .gallery-bar__actions { flex-wrap: nowrap; }
 .album-top-inline-edit__content { padding: 12px; min-width: 0; }
+/* Share keeps the canonical form, tabs, fields and buttons. These rules only
+   bound its nested lists and let subsection controls fit narrow viewports. */
+.album-top-share, .album-top-share :is(fieldset, .ui-choice, .ui-choice__control) { min-width: 0; max-width: 100%; }
+.album-top-share :is(.album-top-share__people, .album-top-share__public, .album-top-share__publication,
+  .album-top-share__saved-album, .album-top-share__source-chooser, .album-top-share__publication-preview) { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.album-top-share :is(.album-top-share__people, .album-top-share__public)[hidden] { display: none; }
+.album-top-share :is(.album-top-share__member-results, .album-top-share__source-results) {
+  height: min(18rem, 40vh); min-height: 8rem; overflow: auto; overscroll-behavior: contain;
+  min-width: 0; max-width: 100%; box-sizing: border-box; padding: 4px;
+}
+.album-top-share__saved-albums { display: grid; gap: 12px; max-height: 45vh; overflow: auto; margin: 0; padding: 4px 4px 4px 28px; min-width: 0; }
+.album-top-share__saved-album { padding: 4px; }
+.album-top-share__source-chooser { padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.album-top-share__source-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 0; min-width: 0; }
+.album-top-share :is(.album-top-share__text, .playlists__note, .album-top-share__member-label) { overflow-wrap: anywhere; min-width: 0; }
+.album-top-share :is(.playlists__actions, .album-top-share__member-actions) { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.album-top-share .playlists__share-person { flex-wrap: wrap; }
+.album-top-share__member-actions { display: flex; align-items: center; gap: 8px; }
+.album-top-share .album-top-share__page-actions { align-items: center; }
+@media (max-width: 520px) {
+  .album-top-share .playlists__share-person { align-items: flex-start; }
+  .album-top-share :is(.album-top-share__member-actions, .ui-choice__trigger) { max-width: 100%; }
+  .album-top-share__source-chooser { padding: 6px; }
+  .album-top-share__saved-albums { padding-left: 22px; }
+}

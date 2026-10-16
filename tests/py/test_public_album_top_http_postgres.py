@@ -40,8 +40,8 @@ def published(db):
                         (db.library, artist, album, f"{db.token}:{number}:{position}",
                          f"Approved Track {number}-{position}", position)).fetchone()["id"]
                     connection.execute("""insert into library.local_track_files
-                        (track_id,library_root_id,private_path,content_signature,metadata_source_ref,scan_cache_stale,metadata)
-                        values(%s,%s,%s,'synthetic',%s,false,'{"private_sentinel":"never-public"}')""",
+                        (track_id,library_root_id,private_path,content_signature,metadata_source_ref,metadata)
+                        values(%s,%s,%s,'synthetic',%s,'{"private_sentinel":"never-public"}')""",
                         (track, root, f"{container}/{position}.flac", source))
                 sources.append(source)
         top, _ = db.create(refs=db.album_refs[:2])

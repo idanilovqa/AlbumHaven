@@ -30,9 +30,24 @@ test('tabs cannot activate a disabled initial selection and escape supplied labe
   const html = buildInPageTabsHtml({ id: 'tabs', label: 'Sections', selectedKey: 'news', tabs: [
     { key: 'recent', label: '<Recent>', panelId: 'recent' }, { key: 'news', label: 'News', disabled: true },
   ] });
-  assert.match(html, /data-in-page-tab="recent" aria-selected="true" tabindex="0"/);
-  assert.match(html, /data-in-page-tab="news" aria-selected="false" tabindex="-1" disabled/);
-  assert.match(html, /&lt;Recent>/);
+  // Keep each assertion on its own button without depending on attribute order.
+  // Quoted attributes may contain ">", including the escaped supplied label.
+  const buttons = [...html.matchAll(/<button\b((?:[^>"']|"[^"]*"|'[^']*')*)>([\s\S]*?)<\/button>/g)];
+  assert.equal(buttons.length, 2);
+  const recent = buttons.find(([, attributes]) => /(?:^|\s)data-in-page-tab="recent"(?=\s|$)/.test(attributes));
+  const news = buttons.find(([, attributes]) => /(?:^|\s)data-in-page-tab="news"(?=\s|$)/.test(attributes));
+  assert.ok(recent);
+  assert.ok(news);
+  assert.match(recent[1], /(?:^|\s)aria-selected="true"(?=\s|$)/);
+  assert.match(recent[1], /(?:^|\s)tabindex="0"(?=\s|$)/);
+  assert.doesNotMatch(recent[1], /(?:^|\s)disabled(?:\s|=|$)/);
+  assert.match(news[1], /(?:^|\s)aria-selected="false"(?=\s|$)/);
+  assert.match(news[1], /(?:^|\s)tabindex="-1"(?=\s|$)/);
+  assert.match(news[1], /(?:^|\s)disabled(?:\s|=|$)/);
+  assert.match(news[1], /(?:^|\s)aria-disabled="true"(?=\s|$)/);
+  assert.match(recent[1], /(?:^|\s)data-tab-label="&lt;Recent>"(?=\s|$)/);
+  assert.match(recent[2], /^&lt;Recent>(?:<|$)/);
+  assert.doesNotMatch(recent[2], /<Recent>/);
 });
 test('three existing album layout values are preserved, including the original full artwork choice', () => {
   const { normalizeAlbumDetailsLayout } = load('album-details-components.js', ['normalizeAlbumDetailsLayout']);

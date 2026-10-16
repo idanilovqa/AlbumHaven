@@ -2837,20 +2837,33 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
-    const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
     if (!album.detail_loaded) {
-      await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()
-          || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
-      // A changed complete summary may have replaced the preview detail owner.
-      const current = getProblematicAlbumForTrackPath(trackPath);
-      if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
-        await state.utility.detailLoadPromises[current.key];
-        if (!ownsNavigation()
-            || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
+      while (album && !album.detail_loaded) {
+        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+        state.utility.selectedProblematicKey = album.key || '';
+        await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
+        if (!ownsNavigation()) return;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+          const current = getProblematicAlbumForTrackPath(trackPath);
+          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+            await state.utility.detailLoadPromises[current.key];
+            if (!ownsNavigation()) return;
+          }
+          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+            album = getProblematicAlbumForTrackPath(trackPath);
+            break;
+          }
+        }
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
+        if (!currentSummary || typeof currentSummary.then !== 'function') return;
+        await currentSummary;
+        if (!ownsNavigation()) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
       }
     }
-    if (!getProblematicAlbumForTrackPath(trackPath)) return;
+    if (!album) return;
+    state.utility.selectedProblematicKey = album.key || '';
     openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {

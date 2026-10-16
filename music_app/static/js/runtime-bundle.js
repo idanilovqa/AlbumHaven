@@ -1221,6 +1221,47 @@ function resolveMainGalleryCategorySelection(fallbackCategories = null) {
   );
 }
 
+// Private Search owns its result DTO. Native navigation receives only this
+// finite projection, never a response spread or a reusable row/source snapshot.
+function normalizePrivateSearchNavigation(payload, fallbackView = null) {
+  const base = isRuntimePlainObject(fallbackView) ? fallbackView : {};
+  const wire = payload.contract_version === 'own-love-v1';
+  const rows = wire ? payload.sidebar?.artists : payload.artists_sidebar;
+  const artists = (Array.isArray(rows) ? rows : []).filter(row =>
+    typeof row?.artist === 'string' && row.artist.trim()).map(row => ({
+    artist: row.artist,
+    artist_display: typeof row.artist_display === 'string' ? row.artist_display : row.artist,
+    ...(Number.isInteger(row.count) && row.count >= 0 ? {count: row.count} : {}),
+  }));
+  return {
+    ok: true,
+    surface: {active: 'albums'}, surface_request: 'albums',
+    private_search: true,
+    query: typeof payload.query === 'string' ? payload.query : '',
+    selected_artist: typeof payload.selected_artist === 'string' ? payload.selected_artist : '',
+    all_artists_active: wire ? payload.selection_state === 'all_artists' : payload.all_artists_active === true,
+    search_presentation: (wire ? payload.presentation : payload.search_presentation) === 'tracks' ? 'tracks' : 'albums',
+    artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
+    artists_sidebar: artists, related_artists: [], related_filter_artists: [],
+    search_filters: normalizeRuntimeSearchFilters(null),
+    // These are existing ordinary UI contracts, never properties of the private
+    // envelope. They do not parse or authorize the raw committed query.
+    search_filter_contract: normalizeRuntimeSearchFilterContract(base.search_filter_contract),
+    search_query_contract: normalizeRuntimeSearchQueryContract(base.search_query_contract),
+    visible_library_categories: normalizeVisibleLibraryCategorySelection(base.visible_library_categories),
+    search_context: null, ignored_version_keys: [], non_album_tracks: [],
+    non_album_exception_values: [], manual_version_links: {},
+    gallery_scope: normalizeRuntimeString(base.gallery_scope, 'all'),
+    gallery_display_mode: normalizeRuntimeGalleryDisplayMode(base.gallery_display_mode),
+    gallery_scale_percent: normalizeRuntimeGalleryScalePercent(base.gallery_scale_percent),
+    music_dir: normalizeRuntimeString(base.music_dir),
+    app_name: normalizeRuntimeString(base.app_name), app_version: normalizeRuntimeString(base.app_version),
+    album_count: 0, artist_count: artists.length,
+    show_all_artists_sidebar_link: wire || payload.show_all_artists_sidebar_link !== false, primary_filter_active: false,
+    initial_view_partial: false, payload_tier: 'full',
+  };
+}
+
 function normalizeViewPayload(payload, fallbackView = null) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
@@ -1230,6 +1271,13 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(isRuntimePlainObject(fallbackView) ? fallbackView : {}),
   };
   const source = isRuntimePlainObject(payload) ? payload : {};
+  if (source.private_search === true) return normalizePrivateSearchNavigation(source, base);
+  // A subsequent ordinary response must not inherit private routing from its
+  // fallback view. Its ordinary normalizer and response fields remain intact.
+  if (base.private_search === true) {
+    delete base.private_search;
+    delete base.search_presentation;
+  }
   const resolvedSurface = String(
     source?.surface?.active
       ?? source?.surface_request
@@ -1691,6 +1739,11 @@ function compactCurrentViewForIdle() {
 }
 
 function applyViewPayload(payload, options = {}) {
+  const ownsResponseApply = () => {
+    try { return typeof options.isCurrentResponse !== 'function' || options.isCurrentResponse() === true; }
+    catch (_error) { return false; }
+  };
+  if (!ownsResponseApply()) return null;
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }
@@ -1718,6 +1771,7 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  if (!ownsResponseApply()) return null;
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState
@@ -1803,12 +1857,20 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  const ownsAppliedView = () => ownsResponseApply() && state.view === nextView;
+  if (typeof window !== 'undefined') window.AlbumHavenSearchRuntime?.syncNativeView({isCurrentResponse: options.isCurrentResponse});
+  if (!ownsAppliedView()) return nextView;
   if (typeof selectLibrarySidebarMode === 'function' && previousView.surface?.active !== nextView.surface?.active
     && ['playlists', 'album_tops'].includes(nextView.surface?.active)) selectLibrarySidebarMode(nextView.surface.active);
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
+  if (!ownsAppliedView()) return nextView;
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
   }
@@ -1823,6 +1885,7 @@ function applyViewPayload(payload, options = {}) {
   } else if (typeof syncArtistsDrawerVisibility === 'function') {
     syncArtistsDrawerVisibility();
   }
+  if (!ownsAppliedView()) return nextView;
   if (
     nextSelectedArtist
   ) {
@@ -1854,6 +1917,7 @@ function applyViewPayload(payload, options = {}) {
   } else {
     resetPreSearchViewState();
   }
+  if (!ownsAppliedView()) return nextView;
   return nextView;
 }
 
@@ -1937,6 +2001,27 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 // END js/runtime/response-state-helpers.js
 
 // BEGIN js/runtime/view-state-helpers.js
+
+// Admission classification only. The server remains the sole grammar owner;
+// unsupported personal syntax must reach it unchanged, never ordinary fallback.
+function isPrivateSearchExpression(query) {
+  return typeof query === 'string' && query.split(/\s+/u).some(word =>
+    word.includes(':') || word.replace(/^-+/u, '').startsWith('@'));
+}
+
+function isPrivateSearchRequestUrl(value) {
+  const url = new URL(value, 'http://localhost');
+  const surface = String(url.searchParams.get('surface') || '');
+  if (surface.toLowerCase() === 'playlists' || surface.trim().toLowerCase() === 'album_tops') return false;
+  return url.searchParams.getAll('q').some(isPrivateSearchExpression)
+    || [...url.searchParams.keys()].some(key => key.startsWith('search_'));
+}
+
+function appendPrivateSearchPresentation(params, view) {
+  if (isPrivateSearchExpression(view.query) && ['albums', 'tracks'].includes(view.search_presentation)) {
+    params.set('search_presentation', view.search_presentation);
+  }
+}
 
 function appendSearchFilterParams(params, searchFilters) {
   const filters = searchFilters && typeof searchFilters === 'object' ? searchFilters : {};
@@ -2083,6 +2168,7 @@ function buildUrl(view) {
   }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
+  if (resolvedSurface === 'albums') appendPrivateSearchPresentation(params, view);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
@@ -2120,6 +2206,7 @@ function buildApiUrl(view, options = {}) {
   }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
+  if (resolvedSurface === 'albums') appendPrivateSearchPresentation(params, view);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
@@ -2162,6 +2249,8 @@ function parseUrlStateFromUrl(url, baseOrigin) {
     playlist_id: u.searchParams.get('playlist_id') || '',
     top_ref: u.searchParams.get('top_ref') || '',
     query: u.searchParams.get('q') || '',
+    ...(['albums', 'tracks'].includes(u.searchParams.get('search_presentation'))
+      ? {search_presentation: u.searchParams.get('search_presentation')} : {}),
     selected_artist: u.searchParams.get('artist') || '',
     page_mode: u.searchParams.get('page_mode') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
@@ -5775,11 +5864,21 @@ function renderSidebar() {
     allArtistsActiveOverride: effectiveAllArtistsActive,
   };
   const structureSignature = buildSidebarStructureSignature(sidebarArtists, sidebarRenderOptions);
-  if (el.dataset.sidebarStructureSignature === structureSignature) {
+  // Equal row labels cannot transfer an old private node to a new parent.
+  // This receipt contains only the existing safe native navigation projection.
+  const privateSearchView = v.private_search === true ? v : null;
+  if (el.dataset.sidebarStructureSignature === structureSignature
+    && el.albumHavenSidebarPrivateView === privateSearchView) {
     applySidebarSelectionMarkup(el, sidebarRenderOptions);
   } else {
     el.innerHTML = buildSidebarHtml(v, sidebarArtists, sidebarRenderOptions);
     el.dataset.sidebarStructureSignature = structureSignature;
+    el.albumHavenSidebarPrivateView = privateSearchView;
+    if (privateSearchView) {
+      for (const node of el.querySelectorAll('[data-sidebar-artist], [data-sidebar-all-artists="1"]')) {
+        node.albumHavenPrivateSearchView = privateSearchView;
+      }
+    }
   }
   el.albumHavenSidebarArtistsSource = sidebarArtists;
   el.albumHavenSidebarShowAllArtists = sidebarRenderOptions.showAllArtistsOverride !== null
@@ -7103,6 +7202,7 @@ function transitionGalleryMain(action) {
   if (action.type === 'set-view') {
     state.view.gallery_display_mode = nextState.view;
     persistCurrentGalleryDisplayPreferences(state.view);
+    window.AlbumHavenSearchRuntime?.syncPresentation?.();
   }
   if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
@@ -15806,6 +15906,15 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  const renderedView = state.view, renderedRequestId = Number(state.ui?.activeViewRequestId || 0);
+  const renderedRevision = Number(state.ui?.viewStateRevision || 0);
+  const ownsRender = () => state.view === renderedView
+    && renderedRequestId === Number(state.ui?.activeViewRequestId || 0)
+    && renderedRevision === Number(state.ui?.viewStateRevision || 0)
+    && (typeof options.isCurrentResponse !== 'function' || options.isCurrentResponse() === true)
+    && state.view === renderedView && renderedRequestId === Number(state.ui?.activeViewRequestId || 0)
+    && renderedRevision === Number(state.ui?.viewStateRevision || 0);
+  if (!ownsRender()) return;
   const preserveMountedSelectedViewNodes = Boolean(
     options.preserveMountedGalleryChildren === true
     && options.retainMountedSelectedViewState
@@ -15849,16 +15958,24 @@ function renderView(options = {}) {
   if (!preserveMountedSelectedViewNodes) {
     renderRelated();
   }
+  if (!ownsRender()) return;
   if (options.preserveMountedGallery !== true && !preserveMountedSelectedViewNodes) {
     renderArtistGroups(options);
   } else if (typeof updateGalleryMainChrome === 'function') {
     // Retained cards do not imply that search or artist context is unchanged.
     updateGalleryMainChrome();
   }
+  if (!ownsRender()) return;
   renderLibraryLoader(state.status);
+  if (!ownsRender()) return;
   scheduleSidebarRender();
+  if (!ownsRender()) return;
   if (typeof syncMobileHome === 'function') syncMobileHome();
+  if (!ownsRender()) return;
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
+  if (!ownsRender()) return;
+  window.AlbumHavenSearchRuntime?.syncVisibility();
+  if (!ownsRender()) return;
   if (isPagedRootGallery()) {
     scheduleBrowserAnimationFrame(() => {
       scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
@@ -16012,13 +16129,252 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
-async function readGalleryResponse(response, ownsResponse, preferenceRead = null) {
-  if (response.status === 401 || response.status === 403) preferenceRead?.revoke();
-  if (response.status === 401) {
-    if (ownsResponse()) window.location.assign('/login');
-    throw new Error('Sign in again to continue.');
+function captureGalleryReadScope() {
+  const shell = document.getElementById('app-shell');
+  const transport = typeof window === 'undefined' ? null : window.AlbumHavenPrivateUITransport;
+  let context = null, generation = null;
+  try {
+    generation = transport?.generation();
+    context = transport?.context() || null;
+  } catch (_error) { /* Ordinary Search remains available without continuity. */ }
+  const searchRuntime = typeof window === 'undefined' ? null : window.AlbumHavenSearchRuntime;
+  // Search records identity transitions the shared final-value transport cannot
+  // observe. This is continuity evidence inside the existing native read scope,
+  // not a new request or authorization owner. Absent Search keeps native behavior.
+  const searchIdentityOwner = typeof searchRuntime?.identityRevision === 'function' ? searchRuntime : null;
+  return {
+    transport, generation, context, searchIdentityOwner,
+    searchIdentityRevision: searchIdentityOwner?.identityRevision() ?? null,
+    actor: String(shell?.dataset?.nativeAccountId || ''),
+    library: String(shell?.dataset?.nativeLibraryId || ''),
+    stamp: String(shell?.dataset?.privateUiContext || ''),
+  };
+}
+
+// A captured request scope cannot recover from an observed identity boundary.
+// Weak identity retention avoids changing caller-visible scope data or keeping
+// completed scopes alive. New native captures remain independently usable.
+const retiredGalleryReadScopes = new WeakSet();
+function galleryReadScopeIsCurrent(scope) {
+  if (!scope || typeof scope !== 'object' || retiredGalleryReadScopes.has(scope)) return false;
+  const retire = () => {retiredGalleryReadScopes.add(scope); return false;};
+  const shell = document.getElementById('app-shell');
+  const transport = typeof window === 'undefined' ? null : window.AlbumHavenPrivateUITransport;
+  if (scope.transport !== transport
+    || scope.actor !== String(shell?.dataset?.nativeAccountId || '')
+    || scope.library !== String(shell?.dataset?.nativeLibraryId || '')
+    || scope.stamp !== String(shell?.dataset?.privateUiContext || '')) return retire();
+  const searchIdentityIsCurrent = () => !scope.searchIdentityOwner
+    || scope.searchIdentityOwner === (typeof window === 'undefined' ? null : window.AlbumHavenSearchRuntime)
+      && scope.searchIdentityOwner.identityRevision() === scope.searchIdentityRevision;
+  try {
+    if (!searchIdentityIsCurrent() || scope.transport?.generation() !== scope.generation) return retire();
+    // Generation listeners are synchronous and may change identity themselves.
+    const valid = searchIdentityIsCurrent()
+      && scope.transport === (typeof window === 'undefined' ? null : window.AlbumHavenPrivateUITransport)
+      && scope.actor === String(shell?.dataset?.nativeAccountId || '')
+      && scope.library === String(shell?.dataset?.nativeLibraryId || '')
+      && scope.stamp === String(shell?.dataset?.privateUiContext || '');
+    return valid || retire();
+  } catch (_error) { return retire(); }
+}
+
+function retireNativePrivateSearchView(isCurrent, reason = 'context', {beforeObservers} = {}) {
+  if (!isCurrent()) return false;
+  const requestId = state.ui.activeViewRequestId, revision = readViewStateRevision();
+  const wasPrivate = state.view?.private_search === true;
+  // Erase the native DTO projection before source-disposal or UI callbacks.
+  if (wasPrivate) {
+    state.view = normalizePrivateSearchNavigation({
+      private_search: true, query: state.view.query,
+      search_presentation: state.view.search_presentation,
+      selected_artist: '', all_artists_active: false, artists_sidebar: [],
+      show_all_artists_sidebar_link: false,
+    }, state.view);
+    clearPendingSidebarSelection();
+    if (state.gallery) {
+      state.gallery.sidebarArtistsOverride = null;
+      state.gallery.sidebarShowAllArtistsOverride = null;
+    }
   }
-  const data = await response.json();
+  const retiredView = state.view;
+  const ownsRetirement = () => requestOwnsCurrentViewState(requestId, revision) && state.view === retiredView;
+  // Scope capture belongs inside the bridge's publication transaction: a
+  // transport generation read can itself synchronously notify listeners.
+  const paint = () => {if (wasPrivate && ownsRetirement()) renderSidebar();};
+  const runtime = typeof window === 'undefined' ? null : window.AlbumHavenSearchRuntime;
+  if (runtime) runtime.retire(reason, {beforeObservers, beforeNotify: paint});
+  else {beforeObservers?.(); paint();}
+  return ownsRetirement();
+}
+
+function privateSearchPendingProgressIsValid(data, {
+  sidebarOnly = false, omitSidebar = false, resultCursor = null, sidebarCursor = null,
+} = {}) {
+  const usableCursor = value => typeof value === 'string' && value.length > 0 && value.length <= 4096;
+  if (data?.status !== 'pending' || data.selection_pending !== true
+    || data.selection_state !== 'selected' || typeof data.selected_artist !== 'string'
+    || !data.selected_artist.trim()) return false;
+  if (sidebarOnly) {
+    if (data.sidebar_only !== true || ['artist_groups', 'tracks', 'page'].some(key => Object.hasOwn(data, key))) return false;
+  } else {
+    if (Object.hasOwn(data, 'sidebar_only') || !Array.isArray(data.artist_groups) || data.artist_groups.length
+      || !Array.isArray(data.tracks) || data.tracks.length || !isRuntimePlainObject(data.page)
+      || !Number.isInteger(data.page.limit) || data.page.limit < 1 || data.page.limit > 100
+      || data.page.returned_count !== 0 || data.page.has_more !== true || !usableCursor(data.page.next_cursor)
+      || resultCursor !== null && data.page.next_cursor === resultCursor) return false;
+  }
+  if (omitSidebar) return !sidebarOnly && data.sidebar === null;
+  const leaf = data.sidebar;
+  return isRuntimePlainObject(leaf) && Array.isArray(leaf.artists) && leaf.artists.length === 0
+    && leaf.returned_count === 0 && leaf.has_more === true && usableCursor(leaf.next_cursor)
+    && (sidebarCursor === null || leaf.next_cursor !== sidebarCursor);
+}
+
+function privateSearchCriteriaIsValid(criteria) {
+  const exactKeys = (value, keys) => isRuntimePlainObject(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  const tiers = value => Array.isArray(value) && value.length <= 2
+    && value.every(tier => tier === 'loved' || tier === 'obsessed') && new Set(value).size === value.length;
+  return exactKeys(criteria, ['subject', 'predicate_domain', 'love', 'name_scopes'])
+    && criteria.subject === 'self' && criteria.predicate_domain === 'tracks'
+    && exactKeys(criteria.love, ['include', 'exclude'])
+    && tiers(criteria.love.include) && tiers(criteria.love.exclude)
+    && criteria.love.include.length + criteria.love.exclude.length > 0
+    && Array.isArray(criteria.name_scopes)
+    && JSON.stringify(criteria.name_scopes) === JSON.stringify(['artists', 'albums', 'tracks']);
+}
+
+function privateSearchInitialProgressIsValid(data, {resultCursor = null, sidebarCursor = null} = {}) {
+  const usableCursor = value => typeof value === 'string' && value.length > 0 && value.length <= 4096;
+  if (data?.status !== 'ready' || data.selection_state !== 'pending_page' || data.selected_artist !== null
+    || Object.hasOwn(data, 'selection_pending') || Object.hasOwn(data, 'sidebar_only')
+    || !Array.isArray(data.artist_groups) || data.artist_groups.length
+    || !Array.isArray(data.tracks) || data.tracks.length || !isRuntimePlainObject(data.page)
+    || !Number.isInteger(data.page.limit) || data.page.limit < 1 || data.page.limit > 100
+    || data.page.returned_count !== 0 || typeof data.page.has_more !== 'boolean'
+    || (data.page.has_more ? !usableCursor(data.page.next_cursor)
+      || resultCursor !== null && data.page.next_cursor === resultCursor : data.page.next_cursor !== null)) return false;
+  if (data.sidebar === null) return data.page.has_more === true;
+  const sidebar = data.sidebar;
+  return isRuntimePlainObject(sidebar) && Array.isArray(sidebar.artists) && sidebar.artists.length === 0
+    && sidebar.returned_count === 0 && sidebar.has_more === true && usableCursor(sidebar.next_cursor)
+    && (sidebarCursor === null || sidebar.next_cursor !== sidebarCursor);
+}
+
+function privateSearchResponseMatchesRequest(data, apiUrl) {
+  const url = new URL(apiUrl, 'http://localhost');
+  const selectedPending = data?.status === 'pending';
+  if (url.pathname !== '/view-data' || (url.searchParams.get('surface') || 'albums') !== 'albums'
+    || data?.private_search !== true || data.contract_version !== 'own-love-v1'
+    || !['ready', 'pending'].includes(data.status)
+    || (selectedPending ? data.selection_pending !== true : Object.hasOwn(data, 'selection_pending'))
+    || Object.hasOwn(data, 'sidebar_only') || typeof data.query !== 'string'
+    || data.query !== (url.searchParams.get('q') || '')
+    || !['albums', 'tracks'].includes(data.presentation)
+    || data.presentation !== (url.searchParams.get('search_presentation') || 'albums')
+    || !privateSearchCriteriaIsValid(data.criteria)
+    || !Array.isArray(data.artist_groups) || !Array.isArray(data.tracks)
+    || !data.page || typeof data.page !== 'object'
+    || data.sidebar !== null && !Array.isArray(data.sidebar?.artists)) return false;
+  if (data.sidebar === null && url.searchParams.get('omit_sidebar') !== '1') return false;
+  if (data.selection_state === 'selected') {
+    if (typeof data.selected_artist !== 'string' || !data.selected_artist.trim()) return false;
+  } else if (!['all_artists', 'empty', 'pending_page'].includes(data.selection_state)
+    || data.selected_artist !== null) return false;
+  const artist = url.searchParams.get('artist');
+  // Artist spelling/canonicalization belongs to the server. An explicit Artist
+  // can still be proving its first witness (ready pending_page), but can never
+  // become an all-artists response or an empty selection.
+  if (artist && !['selected', 'pending_page'].includes(data.selection_state)) return false;
+  if (url.searchParams.has('all_artists') && !['0', '1'].includes(url.searchParams.get('all_artists'))) return false;
+  const allArtists = url.searchParams.get('all_artists') === '1';
+  if (allArtists !== (data.selection_state === 'all_artists')) return false;
+  if (url.searchParams.has('search_cursor') && data.page.has_more
+    && data.page.next_cursor === url.searchParams.get('search_cursor')) return false;
+  if (url.searchParams.has('search_sidebar_cursor') && data.sidebar?.has_more
+    && data.sidebar.next_cursor === url.searchParams.get('search_sidebar_cursor')) return false;
+  if (data.selection_state === 'pending_page' && !privateSearchInitialProgressIsValid(data, {
+    resultCursor: url.searchParams.get('search_cursor'), sidebarCursor: url.searchParams.get('search_sidebar_cursor'),
+  })) return false;
+  if (selectedPending && (!artist || data.selected_artist !== artist || url.searchParams.has('all_artists')
+    || !privateSearchPendingProgressIsValid(data, {
+      omitSidebar: url.searchParams.get('omit_sidebar') === '1',
+      resultCursor: url.searchParams.get('search_cursor'), sidebarCursor: url.searchParams.get('search_sidebar_cursor'),
+    }))) return false;
+  return true;
+}
+
+async function readGalleryResponse(response, ownsResponse, preferenceRead = null, readOwner = null) {
+  const assertCurrent = () => {
+    if (!ownsResponse()) {
+      throw Object.assign(new Error('View request was superseded.'), {name: 'AbortError'});
+    }
+  };
+  assertCurrent();
+  const deniedStatus = response.status === 401 || response.status === 403;
+  if (readOwner?.privateRequest && deniedStatus) {
+    readOwner.retire();
+    assertCurrent();
+    preferenceRead?.revoke();
+    assertCurrent();
+    throw Object.assign(new Error('Private Search is no longer available.'), {
+      status: response.status, privateSearchRetired: true,
+    });
+  }
+  // Legacy status/continuation readers retain their existing ordinary path.
+  // Foreground raw Search must inspect the server envelope before deciding
+  // whether a denial belongs to private Search or ordinary login handling.
+  // Foreground receipt authority ends at current denied headers, even if JSON
+  // hangs or rejects. Check both stale callers and synchronous subscriber reentry.
+  if (deniedStatus) {
+    preferenceRead?.revoke();
+    assertCurrent();
+  }
+  if (!readOwner) {
+    if (response.status === 401) {
+      if (ownsResponse()) window.location.assign('/login');
+      throw new Error('Sign in again to continue.');
+    }
+  }
+  let data;
+  try { data = await response.json(); }
+  catch (error) {
+    assertCurrent();
+    if (readOwner?.privateRequest && response.ok) {
+      readOwner.retire();
+      assertCurrent();
+      throw Object.assign(new Error('Private Search is no longer available.'), {
+        status: response.status, privateSearchRetired: true,
+      });
+    }
+    if (readOwner && response.status === 401) {
+      window.location.assign('/login');
+      throw new Error('Sign in again to continue.');
+    }
+    throw error;
+  }
+  assertCurrent();
+  if (readOwner) {
+    const code = data?.error_code;
+    const privateDenial = ['private_search_forbidden', 'stale_context', 'search_selection_unavailable',
+      'search_cursor_restart_required'].includes(code);
+    if (privateDenial) {
+      readOwner.retire();
+      assertCurrent();
+      if (!deniedStatus) {
+        preferenceRead?.revoke();
+        assertCurrent();
+      }
+      throw Object.assign(new Error('Private Search is no longer available.'), {
+        status: response.status, code, privateSearchRetired: true,
+      });
+    }
+    if (response.status === 401) {
+      window.location.assign('/login');
+      throw new Error('Sign in again to continue.');
+    }
+  }
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || `View request failed: ${response.status}`);
   }
@@ -16027,8 +16383,104 @@ async function readGalleryResponse(response, ownsResponse, preferenceRead = null
     && (data.source_readable === false || data.readable === false
       || Object.hasOwn(data.allowed_actions || {}, 'can_read') && data.allowed_actions.can_read !== true)) {
     preferenceRead?.revoke();
+    assertCurrent();
   }
   return data;
+}
+
+// A Sidebar continuation is a typed native read, not a foreground navigation.
+// The admitted Search parent supplies its original scope and child lifetime;
+// this existing request owner retains URL, HTTP, response and continuity policy.
+function buildPrivateSearchSidebarUrl(view, parent, cursor) {
+  const url = new URL(buildApiUrl({
+    surface: {active: 'albums'}, surface_request: 'albums', private_search: true,
+    query: parent.query, selected_artist: parent.selected_artist || '',
+    all_artists_active: parent.selection_state === 'all_artists',
+    gallery_scope: view.gallery_scope, gallery_display_mode: view.gallery_display_mode,
+    gallery_scale_percent: view.gallery_scale_percent,
+    visible_library_categories: view.visible_library_categories,
+  }), window.location.href);
+  url.searchParams.set('search_presentation', parent.presentation);
+  url.searchParams.set('search_sidebar_only', '1');
+  url.searchParams.set('search_sidebar_cursor', cursor);
+  return `${url.pathname}${url.search}`;
+}
+
+function privateSearchSidebarResponseMatchesParent(data, parent, cursor) {
+  const selectedPending = data?.status === 'pending';
+  if (!isRuntimePlainObject(data) || data.private_search !== true
+    || data.contract_version !== 'own-love-v1' || !['ready', 'pending'].includes(data.status)
+    || data.sidebar_only !== true
+    || (selectedPending ? data.selection_pending !== true : Object.hasOwn(data, 'selection_pending'))
+    || ['artist_groups', 'tracks', 'page'].some(key => Object.hasOwn(data, key))
+    || data.query !== parent.query || data.presentation !== parent.presentation
+    || data.selection_state !== parent.selection_state || data.selected_artist !== parent.selected_artist
+    || !privateSearchCriteriaIsValid(data.criteria)
+    || JSON.stringify(data.criteria) !== JSON.stringify(parent.criteria)) return false;
+  if (selectedPending) return privateSearchPendingProgressIsValid(data, {sidebarOnly: true, sidebarCursor: cursor});
+  const leaf = data.sidebar;
+  if (!isRuntimePlainObject(leaf) || !Array.isArray(leaf.artists) || leaf.artists.length > 50
+    || leaf.returned_count !== leaf.artists.length || typeof leaf.has_more !== 'boolean'
+    || leaf.has_more && (typeof leaf.next_cursor !== 'string' || !leaf.next_cursor
+      || leaf.next_cursor.length > 4096 || leaf.next_cursor === cursor)
+    || !leaf.has_more && leaf.next_cursor !== null) return false;
+  return leaf.artists.every(row => isRuntimePlainObject(row)
+    && typeof row.artist === 'string' && row.artist.trim() && row.artist.length <= 4096
+    && (!Object.hasOwn(row, 'artist_display')
+      || typeof row.artist_display === 'string' && row.artist_display.length <= 4096)
+    && (!Object.hasOwn(row, 'count') || Number.isInteger(row.count) && row.count >= 0));
+}
+
+async function readPrivateSearchSidebarPage({view, parent, cursor, scope, signal, isCurrent, retire}) {
+  const ownsResponse = () => !signal?.aborted && isCurrent() === true
+    && galleryReadScopeIsCurrent(scope) && !signal?.aborted && isCurrent() === true;
+  const assertCurrent = () => {
+    if (!ownsResponse()) throw Object.assign(new Error('Sidebar request was superseded.'), {name: 'AbortError'});
+  };
+  assertCurrent();
+  if (!scope.context || typeof scope.transport?.accept !== 'function'
+    || !['selected', 'all_artists'].includes(parent.selection_state)
+    || typeof cursor !== 'string' || !cursor || cursor.length > 4096) {
+    throw new Error('Sidebar continuation is unavailable.');
+  }
+  const url = buildPrivateSearchSidebarUrl(view, parent, cursor);
+  assertCurrent();
+  let response;
+  try {
+    response = await fetch(url, {method: 'GET', credentials: 'same-origin', cache: 'no-store', signal,
+      headers: {Accept: 'application/json', 'X-AlbumHaven-Context': scope.context}});
+  } catch (error) {
+    assertCurrent();
+    throw error; // A current network failure belongs only to this child.
+  }
+  assertCurrent();
+  let data;
+  try {
+    data = await readGalleryResponse(response, ownsResponse, null, {
+      privateRequest: true,
+      retire: () => {if (ownsResponse()) retire('context');},
+    });
+  } catch (error) {
+    assertCurrent();
+    // Successful malformed JSON fails closed; retryable HTTP errors do not
+    // retire the admitted main page. Denial was already retired by the reader.
+    if (response.ok) retire('invalid');
+    throw error;
+  }
+  assertCurrent();
+  if (data?.context_ref !== scope.context || !privateSearchSidebarResponseMatchesParent(data, parent, cursor)) {
+    // Native projection and sources must disappear before transport listeners
+    // or Search subscribers can observe a rejected successful envelope.
+    retire(data?.context_ref !== scope.context ? 'context' : 'invalid');
+    throw new Error('Sidebar response is no longer available.');
+  }
+  scope.transport.accept(data, scope.context);
+  assertCurrent();
+  // Reuse the existing finite projection, but never install its main view.
+  return {artists: normalizePrivateSearchNavigation(data, view).artists_sidebar,
+    status: data.status,
+    hasMore: data.sidebar.has_more, returnedCount: data.sidebar.returned_count,
+    cursor: data.sidebar.next_cursor};
 }
 
 function rootGalleryRefreshCoverage(apiUrl, options) {
@@ -16102,15 +16554,16 @@ async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, own
   return null;
 }
 
-async function fetchAndRender(url, push = true, options = {}) {
+async function fetchAndRender(url, push = true, options = {}, originatingOptions = options) {
   const suppliedOptions = (options && typeof options === 'object') ? options : {};
+  const callbackOptions = (originatingOptions && typeof originatingOptions === 'object') ? originatingOptions : suppliedOptions;
   const nativeWindow = typeof window === 'undefined' ? null : window;
   const navigation = nativeWindow?.AlbumHavenSettingsNavigation?.instance;
   const retainedPlaylistDraft = suppliedOptions.retainedPlaylistDraft || navigation?.retainedPlaylistDraft?.()
     || (!push && nativeWindow?.history?.state?.playlistDraft) || null;
   if (retainedPlaylistDraft && !navigation?.isPlaylistDraftCurrent?.(retainedPlaylistDraft)) return false;
   if (push && !retainedPlaylistDraft && typeof deferAppFormPageReplacement === 'function') {
-    const deferred = deferAppFormPageReplacement(() => fetchAndRender(url, push, options));
+    const deferred = deferAppFormPageReplacement(() => fetchAndRender(url, push, options, callbackOptions));
     if (deferred) return deferred;
   }
   const requestOptions = retainedPlaylistDraft ? {...suppliedOptions, retainedPlaylistDraft} : suppliedOptions;
@@ -16124,8 +16577,11 @@ async function fetchAndRender(url, push = true, options = {}) {
   }
   const canInterruptCurrent = requestOptions.interruptCurrent !== false;
   const restartIfSameUrl = requestOptions.restartIfSameUrl === true;
+  const navigationUrl = new URL(url, 'http://localhost');
+  const privateNavigation = navigationUrl.pathname === '/' && isPrivateSearchRequestUrl(url);
   const apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
+    : privateNavigation ? `/view-data${navigationUrl.search}`
     : buildApiUrl(parseBrowserUrlState(url));
   const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
   const encodedCommittedQuery = String(
@@ -16170,7 +16626,10 @@ async function fetchAndRender(url, push = true, options = {}) {
         && activeController
         && typeof activeController.abort === 'function'
       ) {
+        const interruptedId = state.ui.activeViewRequestId, interruptedRevision = readViewStateRevision();
         activeController.abort();
+        if (state.ui.activeViewRequestId !== interruptedId || readViewStateRevision() !== interruptedRevision
+          || state.ui.activeViewRequestController !== activeController) return false;
       } else {
         state.ui.activeViewRequestPush = Boolean(state.ui.activeViewRequestPush || push);
         return false;
@@ -16178,13 +16637,22 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     const activeController = state.ui.activeViewRequestController;
     if (canInterruptCurrent && activeController && typeof activeController.abort === 'function') {
+      const interruptedId = state.ui.activeViewRequestId, interruptedRevision = readViewStateRevision();
       activeController.abort();
+      if (state.ui.activeViewRequestId !== interruptedId || readViewStateRevision() !== interruptedRevision
+        || state.ui.activeViewRequestController !== activeController) return false;
     } else {
+      const queuedOwnerId = state.ui.activeViewRequestId;
+      const queuedRevision = readViewStateRevision();
+      const originatingReadScope = captureGalleryReadScope();
+      if (state.ui.activeViewRequestId !== queuedOwnerId || readViewStateRevision() !== queuedRevision) return false;
       state.ui.pendingViewRequest = {
         url,
         push,
         options: requestOptions,
-        originatingViewStateRevision: readViewStateRevision(),
+        originatingViewStateRevision: queuedRevision,
+        originatingReadScope,
+        originatingOptions: callbackOptions,
       };
       return false;
     }
@@ -16214,6 +16682,17 @@ async function fetchAndRender(url, push = true, options = {}) {
   const requestViewStateRevision = readViewStateRevision();
   const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const privateRequest = isPrivateSearchRequestUrl(apiUrl);
+  let readScope = null;
+  const ownsForegroundSlot = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+    && state.ui.activeViewRequestController === controller
+    && state.ui.activeViewRequestUrl === apiUrl && !controller?.signal.aborted;
+  const ownsPreferenceResponse = () => ownsForegroundSlot()
+    && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+    && (!retainedPlaylistDraft
+      || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true)
+    && (!readScope || galleryReadScopeIsCurrent(readScope))
+    && ownsForegroundSlot();
   state.ui.activeViewRequestId = requestId;
   state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
@@ -16230,41 +16709,79 @@ async function fetchAndRender(url, push = true, options = {}) {
     requestOptions.retainMountedSelectedViewState
     && typeof requestOptions.retainMountedSelectedViewState === 'object'
   );
-  if (!retainsMountedSelectedViewState) {
-    renderRelated();
-  }
-  if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
-    || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
-    beginPendingViewTransition(requestId, requestOptions);
-  }
-  if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
-    state.ui.forceScanPageVisible = false;
-  }
-  if (requestOptions.preserveGalleryOptionsMenu !== true && !requestOptions.startupRefresh) {
-    hideGalleryOptionsMenu();
-  }
   try {
+    // A claimed foreground replacement revokes the accepted main result before
+    // render/onStart subscribers can observe it. Deferral/queue paths above
+    // preserve the current result. Reentry still passes through native finally.
+    retireNativePrivateSearchView(ownsForegroundSlot, 'replace', {
+      beforeObservers: () => {
+        if (!ownsForegroundSlot()) return;
+        // A fresh dispatch starts after older mutation records. A response must
+        // keep this receipt even when it is the first raw private Search read.
+        nativeWindow?.AlbumHavenSearchRuntime?.checkpointIdentity?.();
+        if (ownsForegroundSlot()) readScope = captureGalleryReadScope();
+      },
+    });
+    if (!ownsPreferenceResponse()) return false;
+    if (!retainsMountedSelectedViewState) {
+      renderRelated();
+      if (!ownsPreferenceResponse()) return false;
+    }
+    if (requestOptions.showSearchProgress || state.ui.pendingViewTransition
+      || (!requestOptions.preserveScroll && requestOptions.skipPendingViewTransition !== true)) {
+      beginPendingViewTransition(requestId, requestOptions);
+      if (!ownsPreferenceResponse()) return false;
+    }
+    if (!requestOptions.preserveScanPage && !state.ui.scanPageReturnContext) {
+      state.ui.forceScanPageVisible = false;
+    }
+    if (requestOptions.preserveGalleryOptionsMenu !== true && !requestOptions.startupRefresh) {
+      hideGalleryOptionsMenu();
+    }
+    if (!ownsPreferenceResponse()) return false;
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    const ownsPreferenceResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision)
-      && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
-      && (!retainedPlaylistDraft
-        || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true);
     if (typeof requestOptions.onStart === 'function') {
       if (!ownsPreferenceResponse() || controller?.signal.aborted
-        || requestOptions.onStart({requestId}) === false
+        || requestOptions.onStart({requestId}, callbackOptions) === false
         || !ownsPreferenceResponse() || controller?.signal.aborted) return false;
     }
     let preferenceRead = captureLooseTrackPreferenceRead(apiUrl, {
       signal: controller?.signal, isCurrent: ownsPreferenceResponse,
     });
+    if (!ownsPreferenceResponse()) return false;
     requestStarted = true;
     const response = await fetch(apiUrl, {
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json',
+        ...(readScope.context ? {'X-AlbumHaven-Context': readScope.context} : {}) },
+      ...(readScope.context ? {credentials: 'same-origin', cache: 'no-store'} : {}),
       signal: controller?.signal,
     });
-    let data = await readGalleryResponse(response, () => requestOwnsCurrentViewState(requestId, requestViewStateRevision), preferenceRead);
+    let data = await readGalleryResponse(response, ownsPreferenceResponse, preferenceRead, {
+      privateRequest,
+      retire: () => retireNativePrivateSearchView(ownsPreferenceResponse),
+    });
+    if (!ownsPreferenceResponse()) return false;
+    if (privateRequest && data?.private_search !== true) {
+      retireNativePrivateSearchView(ownsPreferenceResponse, 'invalid');
+      throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
+    }
+    if (data?.private_search === true || ['own-love-v1', 'listener-history-v1'].includes(data?.contract_version)) {
+      if (!privateRequest || !readScope.context || !/^[1-9]\d*$/.test(readScope.actor) || !/^[1-9]\d*$/.test(readScope.library)
+        || typeof readScope.transport?.accept !== 'function'
+        || !privateSearchResponseMatchesRequest(data, apiUrl)
+        || nativeWindow?.AlbumHavenSearchRuntime?.validate?.(data, readScope.library) !== true) {
+        retireNativePrivateSearchView(ownsPreferenceResponse);
+        throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
+      }
+      if (data.context_ref !== readScope.context) {
+        retireNativePrivateSearchView(ownsPreferenceResponse);
+        throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
+      }
+      readScope.transport.accept(data, readScope.context);
+      if (!ownsPreferenceResponse()) return false;
+    }
     if (rootRefreshCoverage > 0) {
       const ownsRefresh = () => {
         if (controller?.signal.aborted || !ownsPreferenceResponse()) return false;
@@ -16287,7 +16804,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       albumCount: Number(data?.album_count || 0),
       payloadTier: String(data?.payload_tier || ''),
     });
-    if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
+    if (!ownsPreferenceResponse()) {
       return false;
     }
     if (retainedPlaylistDraft && !nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft)) return false;
@@ -16303,6 +16820,7 @@ async function fetchAndRender(url, push = true, options = {}) {
         return false;
       }
       if (!shouldApplyResponse) return false;
+      if (!ownsPreferenceResponse()) return false;
     }
     const startupHydrationTier = String(requestOptions.startupHydrationTier || 'full');
     if (
@@ -16325,7 +16843,17 @@ async function fetchAndRender(url, push = true, options = {}) {
     )
       ? requestOptions.retainMountedSelectedViewState
       : null;
-    const payloadToApply = retainedMountedSelectedViewState
+    // Caller response hooks can run arbitrary synchronous native work. Recheck
+    // the same bounded projector after them, before even safe navigation writes.
+    if (data?.private_search === true
+      && (!privateSearchResponseMatchesRequest(data, apiUrl)
+        || nativeWindow?.AlbumHavenSearchRuntime?.validate?.(data, readScope.library) !== true)) {
+      retireNativePrivateSearchView(ownsPreferenceResponse, 'invalid');
+      throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
+    }
+    const payloadToApply = data?.private_search === true
+      ? normalizePrivateSearchNavigation(data, state.view)
+      : retainedMountedSelectedViewState
       ? {
         ...state.view,
         ...retainedMountedSelectedViewState,
@@ -16346,12 +16874,13 @@ async function fetchAndRender(url, push = true, options = {}) {
         ),
       }
       : data;
-    const responseApplyOptions = retainedMountedSelectedViewState
-      ? {
-        ...requestOptions,
-        preserveMountedGalleryChildren: true,
-      }
-      : requestOptions;
+    const responseApplyOptions = {
+      ...requestOptions,
+      ...(data?.private_search === true ? {preserveSidebarState: false, preserveMountedGalleryChildren: false,
+        completePageEntryBrowseContext: false, preserveGalleryBrowseLocationState: false}
+        : retainedMountedSelectedViewState ? {preserveMountedGalleryChildren: true} : {}),
+      isCurrentResponse: ownsPreferenceResponse,
+    };
     if (!retainedMountedSelectedViewState && typeof admitLooseTrackPreferenceRows === 'function') {
       admitLooseTrackPreferenceRows(payloadToApply, preferenceRead);
       // Both preference and receipt subscribers can synchronously navigate or
@@ -16364,14 +16893,38 @@ async function fetchAndRender(url, push = true, options = {}) {
         return false;
       }
     }
-    applyViewPayload(payloadToApply, responseApplyOptions);
+    if (!ownsPreferenceResponse()) return false;
+    const appliedView = applyViewPayload(payloadToApply, responseApplyOptions);
+    if (!ownsPreferenceResponse() || state.view !== appliedView) return false;
+    if (data?.private_search === true && nativeWindow?.AlbumHavenSearchRuntime) {
+      // Admission outlives foreground finally. The captured controller's abort
+      // bit remains relevant, but the active controller/URL slots are released
+      // by finally and therefore cannot be an accepted-result lease.
+      const ownsAcceptedIdentity = () => state.view === appliedView
+        && appliedView.private_search === true && appliedView.query === data.query
+        && appliedView.search_presentation === data.presentation
+        && requestOwnsCurrentViewState(requestId, requestViewStateRevision)
+        && requestTagEditMutationRevision === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+        && !controller?.signal.aborted;
+      const ownsAcceptedResult = () => ownsAcceptedIdentity()
+        && (!retainedPlaylistDraft
+          || nativeWindow?.AlbumHavenSettingsNavigation?.instance?.isPlaylistDraftCurrent?.(retainedPlaylistDraft) === true)
+        && galleryReadScopeIsCurrent(readScope) && ownsAcceptedIdentity();
+      if (nativeWindow.AlbumHavenSearchRuntime.accept(data, {isCurrent: ownsAcceptedResult}) !== true) {
+        if (ownsPreferenceResponse()) retireNativePrivateSearchView(ownsPreferenceResponse, 'invalid');
+        throw Object.assign(new Error('Search is no longer available. Start a fresh search.'), {privateSearchRetired: true});
+      }
+      if (!ownsPreferenceResponse() || state.view !== appliedView) return false;
+    }
     finishPendingViewTransition(requestId);
+    if (!ownsPreferenceResponse()) return false;
     markStartupFollowup('apply_complete', requestOptions, {
       artistCount: Number(state.view?.artist_count || 0),
       albumCount: Number(state.view?.album_count || 0),
     });
     markStartupFollowup('render_started', requestOptions);
     attachModalEvents();
+    if (!ownsPreferenceResponse()) return false;
     state.ui.activeViewPayloadReady = true;
     const mountedGalleryContainer = document.getElementById('artist-groups');
     const hasMountedGalleryContent = Boolean(
@@ -16390,6 +16943,7 @@ async function fetchAndRender(url, push = true, options = {}) {
       ...responseApplyOptions,
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
+    if (!ownsPreferenceResponse()) return false;
     if (
       requestOptions.preserveGalleryOptionsMenu === true
       && state.gallery?.menuOpen
@@ -16441,13 +16995,37 @@ async function fetchAndRender(url, push = true, options = {}) {
         },
       );
     }
-    if (state.ui.activeViewRequestPush) pushBrowserViewState(state.view, state.view, retainedPlaylistDraft);
+    if (!ownsPreferenceResponse()) return false;
+    if (state.ui.activeViewRequestPush) {
+      // The live native tree contains private server-projected Artist labels.
+      // Persist only navigation intent through the existing history owner.
+      const historySnapshot = data?.private_search === true ? {
+        surface: {active: 'albums'}, surface_request: 'albums',
+        private_search: true, search_presentation: state.view.search_presentation,
+        query: state.view.query, selected_artist: state.view.selected_artist,
+        all_artists_active: state.view.all_artists_active,
+        gallery_scope: state.view.gallery_scope,
+        gallery_display_mode: state.view.gallery_display_mode,
+        gallery_scale_percent: state.view.gallery_scale_percent,
+        visible_library_categories: [...state.view.visible_library_categories],
+        related_filter_artists: [...state.view.related_filter_artists],
+        primary_filter_active: state.view.primary_filter_active,
+        search_filters: normalizeRuntimeSearchFilters(state.view.search_filters),
+      } : state.view;
+      pushBrowserViewState(state.view, historySnapshot, retainedPlaylistDraft);
+    }
+    if (!ownsPreferenceResponse()) return false;
     recordSuccessfulCanonicalFullViewApply(data, requestOptions);
     consumePendingScanCompletionViewRefresh(requestId, data, requestOptions);
     settledApplied = true;
     return true;
   } catch (error) {
-    if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
+    if (!ownsPreferenceResponse()) {
+      return false;
+    }
+    if (error?.privateSearchRetired) {
+      settledError = error;
+      if (typeof showToast === 'function') showToast('Search is no longer available. Start a fresh search.', 'error', 4800);
       return false;
     }
     finishPendingViewTransition(requestId, { restoreCurrentGallery: true });
@@ -16515,47 +17093,66 @@ async function fetchAndRender(url, push = true, options = {}) {
       ) {
         renderRelated();
       }
-      const pendingRequest = state.ui.pendingViewRequest;
-      const pendingStartupHydrationFollowup = state.ui.pendingStartupHydrationFollowup;
-      let pendingViewRequestDispatched = false;
-      if (pendingRequest) {
-        state.ui.pendingViewRequest = null;
-        const pendingOriginatingRevision = Number(
-          pendingRequest.originatingViewStateRevision || 0,
-        );
-        if (pendingOriginatingRevision === readViewStateRevision()) {
-          clearStartupHydrationFollowup();
-          pendingViewRequestDispatched = true;
-          fetchAndRender(
-            pendingRequest.url,
-            pendingRequest.push,
-            pendingRequest.options,
-          ).catch(() => {});
+      const ownsReleasedSlot = () => state.ui.activeViewRequestId === requestId && !state.busy
+        && state.ui.activeViewRequestController === null
+        && requestOwnsCurrentViewState(requestId, requestViewStateRevision);
+      if (ownsReleasedSlot()) {
+        const pendingRequest = state.ui.pendingViewRequest;
+        const pendingStartupHydrationFollowup = state.ui.pendingStartupHydrationFollowup;
+        let pendingViewRequestDispatched = false;
+        if (pendingRequest) {
+          state.ui.pendingViewRequest = null;
+          const pendingOriginatingRevision = Number(
+            pendingRequest.originatingViewStateRevision || 0,
+          );
+          if (pendingOriginatingRevision === readViewStateRevision()
+            && (!pendingRequest.originatingReadScope || galleryReadScopeIsCurrent(pendingRequest.originatingReadScope))
+            && ownsReleasedSlot()) {
+            clearStartupHydrationFollowup();
+            pendingViewRequestDispatched = true;
+            fetchAndRender(
+              pendingRequest.url,
+              pendingRequest.push,
+              pendingRequest.options,
+              pendingRequest.originatingOptions || pendingRequest.options,
+            ).catch(() => {});
+          }
         }
-      }
-      if (pendingViewRequestDispatched) {
-        // The current queued request owns the active slot.
-      } else if (await dispatchPendingScanCompletionViewRefresh()) {
-        // The one-shot post-scan refresh now owns the active request slot.
-      } else if (await dispatchPendingCoverCompletionViewRefresh()) {
-        // The one-shot post-cover refresh now owns the active request slot.
-      } else if (
-        pendingStartupHydrationFollowup
-        && !String(state.view.query || '').trim()
-        && !String(state.view.selected_artist || '').trim()
-      ) {
-        dispatchStartupHydrationFollowup(
-          pendingStartupHydrationFollowup,
-          STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS,
-        );
-      }
-      const utilityModal = document.getElementById('utility-modal');
-      if (
-        state.ui.deferredUtilityViewRequest?.url
-        && Boolean(!utilityModal || utilityModal.hidden)
-        && typeof resumeDeferredUtilityViewRequest === 'function'
-      ) {
-        Promise.resolve().then(() => resumeDeferredUtilityViewRequest());
+        if (pendingViewRequestDispatched) {
+          // The current queued request owns the active slot.
+        } else if (!galleryReadScopeIsCurrent(readScope)
+          || !ownsReleasedSlot()) {
+          // Cleanup may release this retired slot, but cannot initiate work for
+          // the replacement identity or view.
+        } else if (await dispatchPendingScanCompletionViewRefresh()) {
+          // The one-shot post-scan refresh now owns the active request slot.
+        } else if (!ownsReleasedSlot()) {
+          // Awaited recovery cannot continue after another foreground claim.
+        } else if (await dispatchPendingCoverCompletionViewRefresh()) {
+          // The one-shot post-cover refresh now owns the active request slot.
+        } else if (!ownsReleasedSlot()) {
+          // The old finally does not schedule a successor's hydration.
+        } else if (
+          pendingStartupHydrationFollowup
+          && !String(state.view.query || '').trim()
+          && !String(state.view.selected_artist || '').trim()
+        ) {
+          dispatchStartupHydrationFollowup(
+            pendingStartupHydrationFollowup,
+            STARTUP_FOLLOWUP_VISIBLE_READY_DELAY_MS,
+          );
+        }
+        const utilityModal = document.getElementById('utility-modal');
+        if (
+          ownsReleasedSlot()
+          && state.ui.deferredUtilityViewRequest?.url
+          && Boolean(!utilityModal || utilityModal.hidden)
+          && typeof resumeDeferredUtilityViewRequest === 'function'
+        ) {
+          Promise.resolve().then(() => {
+            if (ownsReleasedSlot()) resumeDeferredUtilityViewRequest();
+          });
+        }
       }
     }
     if (
@@ -16567,7 +17164,8 @@ async function fetchAndRender(url, push = true, options = {}) {
       ).catch(() => {});
     }
     if (
-      !state.busy
+      state.ui.activeViewRequestId === requestId
+      && !state.busy
       && !state.ui.pendingViewRequest
       && !state.ui.scanPageReturnContext
       && !state.ui.forceScanPageVisible
@@ -16576,6 +17174,8 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (requestStarted && state.ui.activeViewRequestId === requestId
       && !controller?.signal.aborted
+      && galleryReadScopeIsCurrent(readScope)
+      && state.ui.activeViewRequestId === requestId
       && (settledApplied || requestOwnsCurrentViewState(requestId, requestViewStateRevision))) {
       try {requestOptions.onSettled?.({applied: settledApplied, error: settledError, requestId});}
       catch (_error) { /* An observer cannot change the request outcome. */ }
@@ -40535,6 +41135,10 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
 // BEGIN js/runtime/bootstrap-gallery-event-handlers.js
 
 function handleGalleryBootstrapClick(event) {
+  const privateSidebarNode = event.target.closest('[data-sidebar-artist], [data-sidebar-all-artists="1"]');
+  if (privateSidebarNode && (privateSidebarNode.albumHavenPrivateSearchView || state.view?.private_search === true)) {
+    return handlePrivateSearchSidebarNavigation(event, privateSidebarNode);
+  }
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
@@ -40951,9 +41555,32 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
   };
 }
 
+function handlePrivateSearchSidebarNavigation(event, node) {
+  event.preventDefault();
+  const runtime = window.AlbumHavenSearchRuntime;
+  if (runtime?.sidebarNodeIsCurrent(node) !== true) return true;
+  if (typeof deferAppFormPageReplacement === 'function'
+    && deferAppFormPageReplacement(() => handlePrivateSearchSidebarNavigation(event, node))) return true;
+  if (runtime.sidebarNodeIsCurrent(node) !== true) return true;
+  const allArtists = node.getAttribute('data-sidebar-all-artists') === '1';
+  const nextView = {...state.view, selected_artist: allArtists ? '' : node.getAttribute('data-sidebar-artist'),
+    all_artists_active: allArtists, related_filter_artists: [], primary_filter_active: false};
+  const url = new URL(buildApiUrl(nextView), window.location.href);
+  url.searchParams.set('search_presentation', state.view.search_presentation);
+  closeArtistsDrawer({restoreFocus: false});
+  if (runtime.sidebarNodeIsCurrent(node) !== true) return true;
+  // Both native handlers use this same current-node path. The native foreground
+  // owner obtains a fresh selected/all page; no prior cursor or source is reused.
+  fetchAndRender(`${url.pathname}${url.search}`, true);
+  return true;
+}
+
 function handleSidebarArtistSelectionClick(event) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
+  if (sidebarArtistLink.albumHavenPrivateSearchView || state.view?.private_search === true) {
+    return handlePrivateSearchSidebarNavigation(event, sidebarArtistLink);
+  }
 
   event.preventDefault();
   if (typeof deferAppFormPageReplacement === 'function'
@@ -41980,6 +42607,8 @@ function buildClearedSearchView() {
       },
       surface_request: restoredSelectedArtist ? 'albums' : 'home',
       query: '',
+      private_search: false,
+      search_presentation: undefined,
       selected_artist: restoredSelectedArtist,
       all_artists_active: false,
       gallery_scope: restoredSelectedArtist ? state.view.gallery_scope : '',
@@ -42007,6 +42636,8 @@ function buildClearedSearchView() {
   return {
     ...state.view,
     query: '',
+    private_search: false,
+    search_presentation: undefined,
     selected_artist: restoredSelectedArtist,
     all_artists_active: false,
     related_filter_artists: restoredSelectedArtist || pendingAllArtistsSelection
@@ -42677,7 +43308,7 @@ function syncSearchClear() {
 function handleGalleryBootstrapPopState(options = {}) {
   if (window.AlbumHavenPlaylistRuntime?.restoreDraftFromHistory?.()) return;
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
-  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
+  return fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }
 
 // END js/runtime/bootstrap-gallery-event-handlers.js
@@ -48098,6 +48729,585 @@ window.AlbumHavenAlbumTopsRuntime = AlbumTopsRuntime;
 window.dispatchEvent(new Event('albumhaven:album-tops-runtime-ready'));
 
 // END js/runtime/album-tops-react-bridge.js
+
+// BEGIN js/runtime/search-results-runtime.js
+
+/* Nonvisual adapter for already-admitted own-subject Search results. The native
+ * input/commit/fetch/read/apply pipeline remains the only query owner. */
+const SearchResultsRuntime = (() => {
+  const listeners = new Set(), sources = new Set();
+  let publicationDepth = 0, notificationPending = false, notifying = false;
+  let owner = null, serial = 0, rowSerial = 0, pending = null, galleryLease = null, visibilityScope = null;
+  let current = Object.freeze({visible: false, status: 'idle', actionable: false, presentation: 'albums',
+    result: null, resultId: 0, scopeKey: '', sourceIdentity: null, error: '',
+    galleryDisplayMode: normalizeGalleryView(state.view?.gallery_display_mode)});
+  const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const text = (value, maximum = 4096) => typeof value === 'string' && value.length <= maximum ? value : null;
+  const albumRef = value => typeof value === 'string' && /^inventory-album:[1-9]\d*:[1-9]\d*$/.test(value) ? value : null;
+  const trackRef = value => typeof value === 'string' && /^inventory-track:[1-9]\d*:[1-9]\d*$/.test(value) ? value : null;
+  const readable = value => value?.allowed_actions?.can_read === true;
+  const freeze = value => Array.isArray(value) ? Object.freeze(value.map(freeze))
+    : plain(value) ? Object.freeze(Object.fromEntries(Object.entries(value).map(([key, child]) => [key, freeze(child)]))) : value;
+  const installed = () => window.AlbumHavenSearchRuntime === SearchResultsRuntime;
+  function notify() {
+    notificationPending = true;
+    if (publicationDepth || notifying) return;
+    notifying = true;
+    try {
+      while (notificationPending && !publicationDepth) {
+        notificationPending = false;
+        const published = current;
+        for (const listener of [...listeners]) {
+          // Reentrant navigation owns the next publication, never the old one.
+          if (current !== published) {notificationPending = true; break;}
+          try {listener();} catch { /* Consumer errors cannot grant authority. */ }
+        }
+      }
+    } finally {notifying = false;}
+  }
+  function transaction(work) {
+    publicationDepth++;
+    try {return work();}
+    finally {publicationDepth--; if (!publicationDepth && notificationPending) notify();}
+  }
+  function syncVisibility() {
+    if (!installed()) return;
+    const host = document.getElementById('search-results-root'), gallery = document.getElementById('albums-scroll');
+    if (host) host.hidden = !current.visible;
+    if (!gallery) return;
+    if (current.visible && host) {
+      if (!galleryLease || galleryLease.node !== gallery) galleryLease = {node: gallery, hidden: gallery.hidden,
+        ariaHidden: gallery.getAttribute('aria-hidden')};
+      gallery.hidden = true; gallery.setAttribute('aria-hidden', 'true');
+    } else if (galleryLease) {
+      const lease = galleryLease; galleryLease = null;
+      if (lease.node === gallery && (state.view?.surface?.active || 'albums') === 'albums') {
+        gallery.hidden = lease.hidden;
+        if (lease.ariaHidden === null) gallery.removeAttribute('aria-hidden');
+        else gallery.setAttribute('aria-hidden', lease.ariaHidden);
+      }
+    }
+  }
+  function publish(next) {current = Object.freeze(next); syncVisibility(); notify();}
+  function owns(candidate) {
+    if (!candidate || owner !== candidate) return false;
+    try {return candidate.isCurrent() === true && owner === candidate
+      && galleryReadScopeIsCurrent(candidate.capture) && owner === candidate;}
+    catch {return false;}
+  }
+  function intentCurrent(request) {
+    return Boolean(request && pending === request && readViewStateRevision() === request.revision
+      && state.ui.gallerySearchGeneration === request.queryGeneration
+      && galleryReadScopeIsCurrent(request.capture) && pending === request);
+  }
+  function queuedIntent(request) {
+    const queued = state.ui.pendingViewRequest;
+    return intentCurrent(request) && request.requestId === null && queued?.url === request.url
+      && queued.originatingViewStateRevision === request.revision
+      && queued.options?.onStart === request.options?.onStart;
+  }
+  function startingIntent(request) {
+    return intentCurrent(request) && request.requestId === null
+      && state.ui.activeViewRequestUrl === request.url
+      && Number(state.ui.activeViewRequestId) > request.originRequestId;
+  }
+  function clearPending() {const request = pending; pending = null; request?.unsubscribe?.();}
+  function abortSidebar(candidate) {
+    if (!candidate) return;
+    const request = candidate.sidebarRead;
+    candidate.sidebarRead = null; candidate.sidebarCursor = null; candidate.sidebarHasMore = false;
+    // Detach before abort listeners can synchronously claim another parent.
+    request?.controller.abort();
+  }
+  function retireGalleryArtwork() {
+    if (!installed()) return;
+    // This bounded owner does not activate artwork or detail. Still erase old
+    // marked result pixels synchronously if a prior consumer left them mounted.
+    const host = document.getElementById('search-results-root');
+    // Conceal the previous native publication before disposal observers run.
+    // The consumer replaces its result subtree only after a fresh admission.
+    for (const content of host?.querySelectorAll('[data-search-results-content]') || []) {
+      content.hidden = true; content.setAttribute('inert', '');
+    }
+    for (const image of host?.querySelectorAll('img[data-search-artwork-owner]') || []) {
+      if (image.getAttribute('data-search-artwork-owner').startsWith('search-result-artwork-')) {
+        image.removeAttribute('src'); image.removeAttribute('srcset'); image.remove();
+      }
+    }
+  }
+  function retire(reason = 'context', {beforeObservers, beforeNotify} = {}) {
+    return transaction(() => {
+      const previous = owner, oldPending = pending, oldSources = [...sources];
+      const changed = Boolean(previous || pending || current.visible || current.result || current.actionable);
+      owner = null; sources.clear();
+      // Detach the readable snapshot before any disposal can call a consumer.
+      const next = changed ? Object.freeze(reason === 'replace' && current.visible
+        ? {...current, actionable: false, status: 'loading', error: '', result: null,
+          resultId: ++serial, scopeKey: '', sourceIdentity: null}
+        : {visible: false, status: 'idle', actionable: false, presentation: 'albums',
+          result: null, resultId: ++serial, scopeKey: '', sourceIdentity: null, error: '',
+          galleryDisplayMode: normalizeGalleryView(state.view?.gallery_display_mode)}) : current;
+      current = next;
+      // Replacement may have no bridge-issued pending intent (a raw native
+      // submit). Keep only continuity for hiding its loading shell on loss;
+      // this scope never grants a source, result or request.
+      visibilityScope = next.visible ? previous?.capture || visibilityScope : null;
+      retireGalleryArtwork(); previous?.unsubscribe?.();
+      abortSidebar(previous);
+      // The native request captures its existing scope after native erasure and
+      // bridge detachment, while any reentrant publication is still batched.
+      beforeObservers?.();
+      const keepPending = pending === oldPending && reason === 'replace' && startingIntent(oldPending);
+      if (!keepPending && pending === oldPending && current === next) clearPending();
+      if (installed() && current === next && owner === null) {
+        try {window.AlbumHavenSearchDetailUI?.retire?.(reason);} catch { /* Retirement remains fail closed. */ }
+      }
+      for (const source of oldSources) {
+        try {source.dispose();} catch { /* One disposal observer cannot retain other old sources. */ }
+      }
+      // Native retirement supplies the guarded Sidebar paint. All bridge
+      // notifications, including nested ones, wait for this cleanup boundary.
+      try {beforeNotify?.();}
+      finally {if (current === next && owner === null && changed) {syncVisibility(); notify();}}
+      return current === next && owner === null;
+    });
+  }
+  function retireAccepted(candidate, reason) {
+    if (owner !== candidate) return;
+    if (state.view === candidate.nativeView) {
+      retireNativePrivateSearchView(() => owner === candidate && state.view === candidate.nativeView, reason);
+    } else retire(reason);
+  }
+  function reconcileLifetime() {
+    const candidate = owner;
+    if (candidate && !owns(candidate)) retireAccepted(candidate, 'context');
+    const request = pending;
+    if (request && !galleryReadScopeIsCurrent(request.capture) && pending === request) {
+      retireNativePrivateSearchView(() => pending === request, 'context');
+    }
+    const scope = visibilityScope, snapshot = current;
+    if (!owner && snapshot.visible && scope && !galleryReadScopeIsCurrent(scope)
+      && !owner && current === snapshot && visibilityScope === scope) {
+      retireNativePrivateSearchView(() => !owner && current === snapshot && visibilityScope === scope, 'context');
+    }
+  }
+  function syncPresentation() {
+    reconcileLifetime();
+    const snapshot = current, galleryDisplayMode = normalizeGalleryView(state.view?.gallery_display_mode);
+    if (snapshot.galleryDisplayMode !== galleryDisplayMode) publish({...snapshot, galleryDisplayMode});
+    return current;
+  }
+  function syncNativeView({isCurrentResponse} = {}) {
+    const nativeView = state.view;
+    if (nativeView?.private_search !== true) {
+      if (owner || pending || current.visible) retire('navigation');
+      return;
+    }
+    // Only the actual guarded native response phase may install a new private
+    // navigation projection before bridge admission. Local/history/failure
+    // replay can retain intent, but cannot restore retired private Artist rows.
+    let responseOwned = false;
+    try {responseOwned = typeof isCurrentResponse === 'function' && isCurrentResponse() === true;}
+    catch { /* No private projection is admitted by a failed response guard. */ }
+    if (!responseOwned) {
+      retireNativePrivateSearchView(() => state.view === nativeView, 'navigation');
+      return;
+    }
+    if (state.view !== nativeView) return;
+    const candidate = owner;
+    if (candidate && !owns(candidate)) retireAccepted(candidate, 'navigation');
+  }
+  function pageProjection(page, expectedCount) {
+    if (!plain(page) || !Number.isInteger(page.limit) || page.limit < 1 || page.limit > 100
+      || !Number.isInteger(page.returned_count) || page.returned_count !== expectedCount
+      || expectedCount > page.limit || typeof page.has_more !== 'boolean'
+      || page.has_more && (!text(page.next_cursor, 4096) || !page.next_cursor)
+      || !page.has_more && page.next_cursor !== null) throw new Error('Invalid Search page.');
+    return {limit: page.limit, returnedCount: page.returned_count, hasMore: page.has_more};
+  }
+  function project(payload, library, allocateRows = true) {
+    const selectedPending = payload?.status === 'pending';
+    const initialPending = payload?.selection_state === 'pending_page';
+    if (payload?.private_search !== true || payload.contract_version !== 'own-love-v1'
+      || !['ready', 'pending'].includes(payload.status)
+      || (selectedPending ? !privateSearchPendingProgressIsValid(payload, {omitSidebar: payload.sidebar === null})
+        : Object.hasOwn(payload, 'selection_pending')) || Object.hasOwn(payload, 'sidebar_only')
+      || !['albums', 'tracks'].includes(payload.presentation) || text(payload.query) === null
+      || !privateSearchCriteriaIsValid(payload.criteria)
+      || !['selected', 'all_artists', 'empty', 'pending_page'].includes(payload.selection_state)
+      || initialPending && !privateSearchInitialProgressIsValid(payload)
+      || !Array.isArray(payload.artist_groups) || !Array.isArray(payload.tracks)) throw new Error('Invalid Search result.');
+    if (payload.selection_state === 'selected'
+      ? typeof payload.selected_artist !== 'string' || !payload.selected_artist.trim()
+      : payload.selected_artist !== null) throw new Error('Invalid Search selection.');
+    if (payload.selection_state === 'empty' && (payload.artist_groups.length || payload.tracks.length
+      || payload.page?.has_more || payload.sidebar?.has_more)) throw new Error('Invalid empty Search result.');
+    const albums = [], tracks = [], trackSources = new Map(), albumSources = new Map();
+    if (payload.artist_groups.length > 100 || payload.tracks.length > 100) throw new Error('Search result exceeds its bound.');
+    if (payload.presentation === 'albums' && payload.tracks.length || payload.presentation === 'tracks' && payload.artist_groups.length) {
+      throw new Error('Search presentation does not match its result.');
+    }
+    for (const group of payload.artist_groups) {
+      if (!plain(group) || text(group.artist) === null || !Array.isArray(group.albums)) throw new Error('Invalid Search group.');
+      for (const row of group.albums) {
+        const ref = albumRef(row?.album_ref);
+        if (!ref || ref.split(':')[1] !== library || albumSources.has(ref) || !readable(row) || text(row.name) === null
+          || row.matches_search !== true || albums.length >= 100) throw new Error('Invalid Search album.');
+        const safe = {albumRef: ref, name: row.name, artist: text(group.artist_display) ?? group.artist,
+          year: Number.isInteger(row.year) ? row.year : null, edition: text(row.edition) || '',
+          isSearchMatch: true,
+          canOpen: row.allowed_actions.can_view_details === true};
+        albums.push(safe); albumSources.set(ref, safe);
+      }
+    }
+    const seenTracks = new Set();
+    for (const row of payload.tracks) {
+      const ref = trackRef(row?.inventory_track_ref), parent = row?.parent_album, parentRef = albumRef(parent?.album_ref);
+      if (!ref || ref.split(':')[1] !== library || seenTracks.has(ref) || !parentRef || parentRef.split(':')[1] !== library
+        || !readable(row) || !readable(parent)
+        || text(row.title) === null || text(row.artist) === null || text(row.album) === null || text(parent.name) === null) {
+        throw new Error('Invalid Search track.');
+      }
+      seenTracks.add(ref);
+      const rowKey = allocateRows ? `search-row-${++rowSerial}` : '', safe = {rowKey, title: row.title, artist: row.artist, album: row.album,
+        durationSeconds: Number.isInteger(row.duration_seconds) && row.duration_seconds >= 0 ? row.duration_seconds : null,
+        trackNumber: Number.isInteger(row.track_number) && row.track_number > 0 ? row.track_number : null,
+        readable: true, selectable: row.allowed_actions.can_select === true, albumRef: parentRef};
+      tracks.push(safe);
+      // Only existing inventory identity is resolvable. Browse does not imply
+      // playback/edit grants, and arbitrary response properties stay private.
+      trackSources.set(rowKey, Object.freeze({inventory_track_ref: ref, source_readable: true,
+        allowed_actions: Object.freeze({can_read: true})}));
+      if (!albumSources.has(parentRef)) albumSources.set(parentRef, {albumRef: parentRef, name: parent.name,
+        artist: row.artist, year: Number.isInteger(parent.year) ? parent.year : null,
+        canOpen: parent.allowed_actions.can_view_details === true});
+    }
+    const count = payload.presentation === 'albums' ? albums.length : tracks.length;
+    const page = pageProjection(payload.page, count);
+    // First-witness progress is resumed through its bounded foreground cursor.
+    // The wire main page may have no cursor while its Sidebar proof advances.
+    if (initialPending) page.hasMore = true;
+    let sidebar = null;
+    if (payload.sidebar !== null && payload.sidebar !== undefined) {
+      const value = payload.sidebar;
+      if (!plain(value) || !Array.isArray(value.artists) || value.artists.length > 50
+        || value.returned_count !== value.artists.length || typeof value.has_more !== 'boolean'
+        || value.has_more && (!text(value.next_cursor, 4096) || !value.next_cursor)
+        || !value.has_more && value.next_cursor !== null) throw new Error('Invalid Search sidebar.');
+      const artists = new Set();
+      for (const row of value.artists) {
+        if (!plain(row) || text(row.artist) === null || !row.artist.trim() || artists.has(row.artist)
+          || Object.hasOwn(row, 'artist_display') && text(row.artist_display) === null
+          || Object.hasOwn(row, 'count') && (!Number.isInteger(row.count) || row.count < 0)) throw new Error('Invalid Search artist.');
+        artists.add(row.artist);
+      }
+      sidebar = {hasMore: value.has_more, returnedCount: value.returned_count};
+    }
+    return {result: freeze({albums, tracks, page, sidebar, selectionState: payload.selection_state}), trackSources, albumSources};
+  }
+  function accept(payload, {isCurrent} = {}) {
+    return transaction(() => {
+      if (typeof isCurrent !== 'function' || isCurrent() !== true) return false;
+      const before = current, previous = owner, capture = captureGalleryReadScope();
+      if (!capture.context || payload?.context_ref !== capture.context || isCurrent() !== true) return false;
+      let projection;
+      try {projection = project(payload, capture.library);} catch {return false;}
+      // Playlist contributes only the existing shell scope identity. Its
+      // visibility, feature permission and playback capability do not authorize
+      // Search browse. Its snapshot can synchronously notify other consumers.
+      const scopeKey = window.AlbumHavenPlaylistRuntime?.snapshot().scopeKey || '';
+      if (!scopeKey || current !== before || owner !== previous
+        || !galleryReadScopeIsCurrent(capture) || isCurrent() !== true
+        || current !== before || owner !== previous) return false;
+      const oldSources = [...sources]; sources.clear(); owner = null;
+      const detached = Object.freeze({...current, actionable: false, result: null,
+        resultId: ++serial, scopeKey: '', sourceIdentity: null});
+      current = detached;
+      retireGalleryArtwork(); previous?.unsubscribe?.();
+      abortSidebar(previous);
+      for (const source of oldSources) {
+        try {source.dispose();} catch { /* Disposal observers cannot restore an old grant. */ }
+      }
+      if (current !== detached || owner !== null || !galleryReadScopeIsCurrent(capture)
+        || isCurrent() !== true || current !== detached || owner !== null) return false;
+      // Pending owns only explicit resuming intent. It never creates even an
+      // empty private source grant or reuses the previous ready result lease.
+      const selectedPending = payload.status === 'pending' || payload.selection_state === 'pending_page';
+      const sourceIdentity = selectedPending ? null : Object.freeze({}), resultId = ++serial;
+      const next = {payload, ...projection, capture, isCurrent, resultId, sourceIdentity,
+        requestedArtist: new URL(state.ui.activeViewRequestUrl, window.location.href).searchParams.get('artist') || '',
+        nativeView: state.view, scopeKey, unsubscribe: null, sidebarRead: null,
+        sidebarCursor: payload.sidebar?.next_cursor || null, sidebarHasMore: payload.sidebar?.has_more === true,
+        sidebarArtists: state.view.artists_sidebar};
+      owner = next;
+      next.unsubscribe = capture.transport.subscribe(() => {
+        if (owner === next && !owns(next)) retireAccepted(next, 'context');
+      });
+      if (!owns(next)) {retireAccepted(next, 'context'); return false;}
+      // A native-owned queued intent has not started yet; current admission
+      // cannot discard the callbacks the native queue will eventually dispatch.
+      const oldPending = pending, keepPending = queuedIntent(oldPending);
+      if (!owns(next)) return false;
+      if (!keepPending && pending === oldPending) clearPending();
+      if (!owns(next)) return false;
+      visibilityScope = capture;
+      publish({visible: true, status: selectedPending ? 'pending' : 'ready', actionable: !selectedPending, presentation: payload.presentation,
+        result: projection.result, resultId, scopeKey, sourceIdentity, error: '',
+        galleryDisplayMode: normalizeGalleryView(state.view?.gallery_display_mode),
+        sidebar: Object.freeze({status: selectedPending && next.sidebarHasMore ? 'pending' : 'ready', hasMore: next.sidebarHasMore, error: ''})});
+      return owns(next);
+    });
+  }
+  function isCurrent(snapshot) {
+    const next = owner;
+    return Boolean(snapshot && snapshot.resultId === next?.resultId && snapshot.sourceIdentity === next.sourceIdentity
+      && snapshot.actionable && owns(next));
+  }
+  function publicationIsCurrent(snapshot) {
+    const candidate = owner;
+    return Boolean(candidate && snapshot && snapshot.resultId === candidate.resultId
+      && snapshot.sourceIdentity === candidate.sourceIdentity && owns(candidate));
+  }
+  function sidebarNodeIsCurrent(node) {
+    const candidate = owner, container = document.getElementById('sidebar-list');
+    return Boolean(candidate && node instanceof HTMLElement && node.isConnected
+      && node.albumHavenPrivateSearchView === candidate.nativeView
+      && node.closest('#sidebar-list') === container && container?.contains(node)
+      && owns(candidate) && owner === candidate && state.view === candidate.nativeView
+      && node.isConnected && container.contains(node));
+  }
+  function readSidebar(candidate) {
+    if (!owns(candidate) || candidate.sidebarRead || !candidate.sidebarHasMore
+      || !['selected', 'all_artists'].includes(candidate.payload.selection_state)
+      || !candidate.sidebarCursor) return false;
+    const request = {controller: new AbortController(), cursor: candidate.sidebarCursor};
+    candidate.sidebarRead = request;
+    const active = () => candidate.sidebarRead === request && !request.controller.signal.aborted
+      && owns(candidate) && candidate.sidebarRead === request;
+    const progress = (status, error = '') => {
+      if (owns(candidate)) publish({...current,
+        sidebar: Object.freeze({status, hasMore: candidate.sidebarHasMore, error})});
+    };
+    // HTTP and typed response policy remain with the existing native read owner.
+    const work = readPrivateSearchSidebarPage({view: candidate.nativeView, parent: candidate.payload,
+      cursor: request.cursor, scope: candidate.capture, signal: request.controller.signal,
+      isCurrent: active, retire: reason => {if (active()) retireAccepted(candidate, reason);}});
+    if (active()) progress('loading');
+    Promise.resolve(work).then(leaf => {
+      if (!active()) return;
+      candidate.sidebarCursor = leaf.cursor; candidate.sidebarHasMore = leaf.hasMore;
+      if (leaf.status === 'ready') {
+        const artists = [...candidate.sidebarArtists], seen = new Set(artists.map(row => row.artist));
+        for (const row of leaf.artists) if (!seen.has(row.artist)) {artists.push(row); seen.add(row.artist);}
+        candidate.sidebarArtists = artists;
+        state.gallery.sidebarArtistsOverride = artists;
+        state.gallery.sidebarShowAllArtistsOverride = candidate.nativeView.show_all_artists_sidebar_link !== false;
+        renderSidebar();
+      }
+      if (!active()) return;
+      candidate.sidebarRead = null;
+      progress(leaf.status);
+    }).catch(() => {
+      if (!active()) return;
+      candidate.sidebarRead = null;
+      progress('error', 'Sidebar could not be loaded. Try again.');
+    }).finally(() => {
+      // Old completion cannot unlock a newer child, even under subscriber reentry.
+      if (candidate.sidebarRead === request) candidate.sidebarRead = null;
+    });
+    return true;
+  }
+  function requestState(candidate, presentation, {cursor = null, sidebarCursor = null} = {}) {
+    const payload = candidate.payload;
+    // Reuse native URL construction, including category multivalue semantics.
+    const url = new URL(buildApiUrl({...state.view, query: payload.query,
+      selected_artist: payload.selection_state === 'pending_page' ? candidate.requestedArtist || '' : payload.selected_artist || '',
+      all_artists_active: payload.selection_state === 'all_artists', surface: {active: 'albums'}, surface_request: 'albums'}), window.location.href);
+    for (const key of ['gallery_cursor', 'gallery_page_size', 'search_cursor', 'search_sidebar_cursor', 'search_sidebar_only', 'search_detail_album_ref']) url.searchParams.delete(key);
+    url.searchParams.set('search_presentation', presentation);
+    url.searchParams.set('search_page_size', String(payload.page.limit));
+    if (cursor) {url.searchParams.set('search_cursor', cursor); url.searchParams.set('omit_sidebar', '1');}
+    if (sidebarCursor) url.searchParams.set('search_sidebar_cursor', sidebarCursor);
+    return `${url.pathname}${url.search}`;
+  }
+  function readPage(candidate, presentation, options = {}, restartIntent = null) {
+    const canStart = restartIntent
+      ? pending === restartIntent && !owner && intentCurrent(restartIntent)
+      : owns(candidate);
+    if (!canStart || !['albums', 'tracks'].includes(presentation)) return false;
+    // An explicit command queued from inside publication retains one intent;
+    // a second activation cannot replace its callback identity or native queue.
+    if (!restartIntent && pending?.parentResultId === candidate.resultId && intentCurrent(pending)) return false;
+    const url = requestState(candidate, presentation, options);
+    const request = {capture: candidate.capture, query: candidate.payload.query, payload: candidate.payload,
+      requestedArtist: candidate.requestedArtist || '',
+      parentResultId: candidate.resultId ?? null,
+      revision: readViewStateRevision(), queryGeneration: state.ui.gallerySearchGeneration, requestId: null,
+      originRequestId: Number(state.ui.activeViewRequestId || 0), url, presentation, options: null};
+    clearPending(); pending = request;
+    request.unsubscribe = request.capture.transport.subscribe(() => {
+      if (pending === request && !galleryReadScopeIsCurrent(request.capture)) {
+        retireNativePrivateSearchView(() => pending === request, 'context');
+      }
+    });
+    const active = () => intentCurrent(request) && request.requestId !== null
+      && request.requestId === state.ui.activeViewRequestId;
+    request.options = {preserveScroll: true, skipPendingViewTransition: true,
+      onStart({requestId}, optionsOrigin) {
+        if (optionsOrigin !== request.options || !startingIntent(request)
+          || requestId !== state.ui.activeViewRequestId) return false;
+        request.requestId = requestId;
+        // The existing request owner has already revoked native admission and
+        // retired sources. Only now may subscribers observe this loading intent.
+        publish({...current, status: 'loading', actionable: false, presentation, error: ''});
+        return active();
+      },
+      shouldApplyResponse(data) {
+        return active() && data?.private_search === true && data.contract_version === 'own-love-v1'
+          && data.query === request.query && data.presentation === presentation
+          && JSON.stringify(data.criteria) === JSON.stringify(candidate.payload.criteria)
+          && (candidate.payload.selection_state === 'pending_page'
+            || (data.selected_artist || '') === (candidate.payload.selected_artist || ''));
+      },
+      onSettled({applied, error, requestId}) {
+        if (!active() || requestId !== request.requestId || applied) return;
+        if (error) publish({...current, status: 'error', actionable: false, error: 'Search could not be loaded. Try a fresh search.'});
+      }};
+    // Never publish/retire before native fetchAndRender claims its slot. It may
+    // defer, queue or refuse this command under its existing navigation policy.
+    Promise.resolve(fetchAndRender(url, true, request.options)).then(applied => {
+      if (pending !== request || applied || queuedIntent(request)) return;
+      // Refusal before onStart has no loading state to undo. A superseded start
+      // likewise cannot retain an unused context subscription or retry intent.
+      if (request.requestId === null || !active()) clearPending();
+    }).catch(() => {
+      if (active()) publish({...current, status: 'error', actionable: false, error: 'Search could not be loaded. Try a fresh search.'});
+      else if (pending === request && !queuedIntent(request)) clearPending();
+    });
+    return true;
+  }
+  function sourceFor({rows, context, instance, revision, isCurrent: consumerCurrent}) {
+    const candidate = owner;
+    if (!owns(candidate) || candidate.payload.status !== 'ready' || !candidate.sourceIdentity
+      || context?.scopeKey !== candidate.scopeKey || context.resultId !== candidate.resultId
+      || instance !== candidate.sourceIdentity || revision !== instance || typeof consumerCurrent !== 'function' || !Array.isArray(rows)
+      || rows.some(row => !candidate.result.tracks.includes(row))) return null;
+    const active = () => {
+      try {return owns(candidate) && consumerCurrent() === true && owns(candidate);}
+      catch {return false;}
+    };
+    const source = createPrivatePlaytableSource({scopeKey: context.scopeKey, rows, instance, revision, isCurrent: active,
+      resolveRow: row => active() && candidate.result.tracks.includes(row) && row.selectable
+        ? candidate.trackSources.get(row.rowKey) || null : null,
+      subscribe: listener => {listeners.add(listener); return () => listeners.delete(listener);}});
+    if (!active()) {source.dispose(); return null;}
+    sources.add(source);
+    return Object.freeze({...source, dispose() {sources.delete(source); source.dispose();}});
+  }
+  function action(method, packet, lifetime, adapter, anchor, options) {
+    const candidate = owner;
+    try {
+      if (!owns(candidate) || candidate.payload.status !== 'ready' || !candidate.sourceIdentity
+        || !lifetime?.isCurrent?.() || !owns(candidate)
+        || adapter?.snapshot?.()?.scopeKey !== candidate.scopeKey || !owns(candidate)) return false;
+    } catch {return false;}
+    return window.AlbumHavenPlaytableUI?.[method]?.(packet, lifetime, adapter, anchor, options) ?? false;
+  }
+  // Native navigation retires sources in the event turn, before consumer cleanup.
+  window.addEventListener('popstate', () => {
+    if (installed()) retireNativePrivateSearchView(installed, 'navigation');
+  }, true);
+  const shell = document.getElementById('app-shell');
+  const identityAttributes = ['data-native-account-id', 'data-native-library-id', 'data-private-ui-context'];
+  let identityObserver = null, identityRevision = 0;
+  function rememberIdentityTransitions(records) {
+    // Final DOM equality does not erase an A-to-B-to-A boundary. A same-value
+    // rewrite has only old values equal to the final value and stays benign.
+    if (records.some(record => record.type === 'attributes' && record.target === shell
+      && identityAttributes.includes(record.attributeName)
+      && record.oldValue !== shell.getAttribute(record.attributeName))) identityRevision++;
+  }
+  function checkpointIdentity() {
+    // A newly claimed native dispatch consumes historical records after old
+    // source retirement. Passive revision reads also checkpoint, but explicitly
+    // queue reconciliation below. Neither path issues new source authority.
+    rememberIdentityTransitions(identityObserver?.takeRecords() || []);
+    return identityRevision;
+  }
+  let identityReconciliationQueued = false;
+  function readIdentityRevision() {
+    const before = identityRevision;
+    checkpointIdentity();
+    // Reading continuity must observe same-turn A-B-A transitions too. Taking
+    // observer records may suppress its callback, so retain the existing UI
+    // retirement path in one queued turn, never synchronously inside a guard.
+    if (identityRevision !== before && !identityReconciliationQueued) {
+      identityReconciliationQueued = true;
+      Promise.resolve().then(() => {
+        identityReconciliationQueued = false;
+        reconcileLifetime();
+      });
+    }
+    return identityRevision;
+  }
+  if (shell && typeof MutationObserver === 'function') {
+    identityObserver = new MutationObserver(records => {
+      rememberIdentityTransitions(records);
+      // Existing exact owner/scope checks protect a successor admitted during
+      // synchronous retirement callbacks from cleanup for this older batch.
+      reconcileLifetime();
+    });
+    identityObserver.observe(shell,
+      {attributes: true, attributeOldValue: true, attributeFilter: identityAttributes});
+  }
+  const native = window.AlbumHavenHomeRuntime;
+  return Object.freeze({snapshot() {reconcileLifetime(); return current;}, subscribe(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+    validate(payload, library) {try {project(payload, library, false); return true;} catch {return false;}},
+    accept, retire, syncNativeView, syncVisibility, syncPresentation, isCurrent, createPlaytableSource: sourceFor,
+    checkpointIdentity, identityRevision: readIdentityRevision, sidebarNodeIsCurrent,
+    selectPresentation(snapshot, value) {return isCurrent(snapshot) && value !== snapshot.presentation ? readPage(owner, value) : false;},
+    continueResults(snapshot) {
+      if (!publicationIsCurrent(snapshot)) return false;
+      const candidate = owner;
+      if (candidate.payload.selection_state === 'pending_page') {
+        const sidebarCursor = candidate.payload.sidebar?.next_cursor;
+        return sidebarCursor ? readPage(candidate, snapshot.presentation, {sidebarCursor})
+          : candidate.payload.page.has_more ? readPage(candidate, snapshot.presentation, {cursor: candidate.payload.page.next_cursor}) : false;
+      }
+      return ['selected', 'all_artists'].includes(candidate.payload.selection_state) && candidate.payload.page.has_more
+        ? readPage(candidate, snapshot.presentation, {cursor: candidate.payload.page.next_cursor}) : false;
+    },
+    // Pending may resume its own bounded progress but can never grant actions.
+    // A child owns no foreground slot and cannot renew the main result lease.
+    continueSidebar(snapshot) {return publicationIsCurrent(snapshot) ? readSidebar(owner) : false;},
+    restart(snapshot) {
+      // Native same-URL dedupe cannot protect a bridge intent replaced before
+      // onStart. Leave the exact live request and its callbacks untouched.
+      if (current.status === 'loading') return false;
+      if (publicationIsCurrent(snapshot)) return readPage(owner, snapshot.presentation);
+      // An error cannot revive old actions. Restart explicitly returns to the
+      // native request owner, which obtains a fresh context and response.
+      const request = pending;
+      if (snapshot !== current || !intentCurrent(request) || snapshot !== current) return false;
+      // Keep the selected Artist, raw query and presentation from this explicit
+      // native intent. Restart carries no old result or Sidebar progress token.
+      return readPage({payload: request.payload, capture: request.capture, requestedArtist: request.requestedArtist}, request.presentation, {}, request);
+    },
+    openPlaylistAction: (...args) => action('open', ...args),
+    openPlaytableContext: (...args) => action('context', ...args),
+    trackColumns: () => albumTrackTableColumns({showLove: false}),
+    albumTrackRow: (track, index) => buildAlbumTrackTableRow(track, index, {readOnly: true, selection: 'multiple'}),
+    tableHtml: config => native.tableHtml(config), galleryCardHtml: config => native.galleryCardHtml(config),
+    tabsHtml: config => native.tabsHtml(config), mountTabs: host => native.mountTabs(host),
+    buttonHtml: config => native.buttonHtml(config), actionHtml: config => native.actionHtml(config),
+    alertHtml: config => native.alertHtml(config), artboxHtml: config => native.artboxHtml(config),
+    openChoice: (anchor, options) => native.openChoice(anchor, options), escapeHtml: value => native.escapeHtml(value),
+  });
+})();
+window.AlbumHavenSearchRuntime = SearchResultsRuntime;
+window.dispatchEvent(new Event('albumhaven:search-runtime-ready'));
+
+// END js/runtime/search-results-runtime.js
 
 // BEGIN js/runtime/bootstrap-event-handlers.js
 

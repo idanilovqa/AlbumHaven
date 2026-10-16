@@ -10509,20 +10509,25 @@ def _problematic_files_sql(
     if duplicate_sources_only:
         physical_file_ctes = ""
         selected_active_track_file_rows_sql = """
-        selected_active_track_file_rows as (
-          select files.track_id, files.private_path,
-            files.library_root_id as file_library_root_id,
-            files.metadata ->> 'library_root_category' as file_library_root_category,
-            files.metadata #> '{scan_cache,file_entry}' as file_entry
-          from library.local_track_files files
-          join selected_tracks on selected_tracks.id = files.track_id
-          join library.library_roots roots
-            on roots.id = files.library_root_id
-           and roots.library_id = selected_tracks.library_id
-           and roots.is_active is true
-          where files.scan_cache_stale is false
-            and library.local_path_key(files.private_path) <> ''
-            and coalesce((files.metadata #>> '{scan_cache,stale}')::boolean, false) is false
+        selected_active_track_file_rows as materialized (
+          select selected_track_file.*
+          from selected_tracks
+          cross join lateral (
+            select files.track_id, files.private_path,
+              files.library_root_id as file_library_root_id,
+              files.metadata ->> 'library_root_category' as file_library_root_category,
+              files.metadata #> '{scan_cache,file_entry}' as file_entry
+            from library.local_track_files files
+            join library.library_roots roots
+              on roots.id = files.library_root_id
+             and roots.library_id = selected_tracks.library_id
+            where files.track_id = selected_tracks.id
+              and roots.is_active is true
+              and files.scan_cache_stale is false
+              and library.local_path_key(files.private_path) <> ''
+              and coalesce((files.metadata #>> '{scan_cache,stale}')::boolean, false) is false
+            offset 0
+          ) as selected_track_file
         ),
         """
     elif candidate_summary:

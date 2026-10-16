@@ -483,7 +483,9 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
             *,
             query_params=None,
             library_state=None,
+            sidebar_only=False,
         ):
+            assert sidebar_only is True
             payload = web_asgi._build_empty_initial_view(
                 config=self.config,
                 query_raw="",

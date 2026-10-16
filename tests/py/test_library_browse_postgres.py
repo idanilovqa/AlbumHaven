@@ -11152,6 +11152,27 @@ def test_duplicate_sources_only_projection_preserves_candidates_without_problem_
     assert "ignored_versions" not in slim
 
 
+def test_duplicate_sources_only_projection_drives_active_file_lookup_from_selected_tracks():
+    from music_app.services.library_browse_postgres import _problematic_files_sql
+
+    sql = " ".join(
+        _problematic_files_sql(
+            duplicate_candidates=True,
+            duplicate_sources_only=True,
+        ).split()
+    ).lower()
+
+    assert "selected_active_track_file_rows as materialized (" in sql
+    active_file_lookup = sql.split(
+        "selected_active_track_file_rows as materialized (",
+        1,
+    )[1].split("), active_track_files as", 1)[0]
+    assert "from selected_tracks cross join lateral (" in active_file_lookup
+    assert "where files.track_id = selected_tracks.id" in active_file_lookup
+    assert "offset 0 ) as selected_track_file" in active_file_lookup
+    assert "from library.local_track_files files join selected_tracks" not in active_file_lookup
+
+
 def test_duplicate_compact_candidates_use_domain_unicode_artist_title_year_identity():
     from music_app.services.library_browse_postgres import _duplicate_candidate_ids_from_index, _duplicate_candidate_index_from_rows
 

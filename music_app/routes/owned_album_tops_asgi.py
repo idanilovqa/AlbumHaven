@@ -1,8 +1,10 @@
 """Authenticated Album Top transport; playback authority stays independent."""
 import hmac
+from html import escape
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
@@ -17,11 +19,15 @@ from music_app.services.policy import PolicyContext
 from music_app.services.policy_asgi import _deployment_mode, _request_origin
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
+from music_app.services.private_route_boundary import album_top_working_request_path
+from music_app.services.public_album_tops import public_ref
 from music_app.services.playlist_read_seams import build_view_surface_payload
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 
 router = APIRouter()
 _NO_STORE = {"Cache-Control": "private, no-store"}
+_WORKING_HEADERS = {**_NO_STORE, "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
+                    "Vary": "Sec-Fetch-Dest"}
 
 
 def _context(request, action):
@@ -105,6 +111,49 @@ def list_album_tops(request: Request):
         return _response(request, value)
     except AlbumTopError as error:
         return _error(error)
+
+
+def _working_link_error(request, error, share_ref=None):
+    if request.headers.get("sec-fetch-dest") == "document":
+        back = ('<p><a href="' + escape("/public/album-tops/" + share_ref, quote=True)
+                + '">Back to published Top</a></p>') if share_ref is not None else ""
+        response = HTMLResponse('<!doctype html><html lang="en"><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<title>Album Top unavailable</title><body><main><h1>Album Top unavailable</h1>'
+            '<p>This working Album Top is unavailable for your current account.</p>' + back
+            + '</main></body></html>', status_code=error.status_code, headers=_WORKING_HEADERS)
+    else:
+        response = JSONResponse({"ok": False, "error": error.code},
+                                status_code=error.status_code, headers=_WORKING_HEADERS)
+    if request.method == "HEAD":
+        response.body = b""
+    return response
+
+
+@router.api_route("/album-tops/public-link/{share_ref}", methods=["GET", "HEAD"])
+async def open_public_album_top_working(request: Request, share_ref: str):
+    ref = None
+    try:
+        ref = public_ref(share_ref)
+        if request.scope.get("query_string", b"") != b"" or request.query_params:
+            raise AlbumTopError("invalid_query", 400)
+        path = album_top_working_request_path(request)
+        if path is None:
+            raise AlbumTopError("unavailable", 404)
+        context, constraints = _context(request, BROWSE)
+        _context_ref(request)
+        top_ref = await run_in_threadpool(_service(request).resolve_public_link, context,
+                                         share_ref=ref, constraints=constraints)
+        if album_top_working_request_path(request) != path:
+            raise AlbumTopError("unavailable", 404)
+        # Only the current authorized canonical result reaches this fixed local
+        # destination. It carries navigation intent, never a reusable grant.
+        target = "/?" + urlencode({"surface": "album_tops", "top_ref": public_ref(top_ref)})
+        return RedirectResponse(target, status_code=303, headers=_WORKING_HEADERS)
+    except AlbumTopError as error:
+        return _working_link_error(request, error, ref)
+    except Exception:
+        return _working_link_error(request, AlbumTopError("unavailable", 503), ref)
 
 
 def _page_query(request, *, query=False, limit=True):

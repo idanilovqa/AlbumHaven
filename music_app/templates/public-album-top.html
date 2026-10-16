@@ -23,6 +23,14 @@
       <h1>{{ payload.data.title if payload is not none and payload.kind == 'top' else page_title }}</h1>
       {% if payload is not none and payload.kind == 'top' and payload.data.description %}<p class="public-album-top__description">{{ payload.data.description }}</p>{% endif %}
       {% if payload is not none %}<p class="public-album-top__notice">Published album and track metadata. Audio and listening progress aren't included.</p>{% endif %}
+      {% if payload is not none %}
+      {% if working_path %}
+      <p>{{ ui_link('Open in AlbumHaven', working_path, size='small') }}</p>
+      <p class="public-album-top__notice">The working Top uses your current account's access and may differ from this published snapshot.</p>
+      {% else %}
+      <p class="public-album-top__notice">Working Top navigation isn't available from this page.</p>
+      {% endif %}
+      {% endif %}
     </header>
     {% if payload is not none %}
     <div id="public-album-top-content" class="public-album-top__content"><p role="status">Loading published metadata…</p></div>

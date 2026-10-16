@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import hashlib
 import hmac
 import re
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -28,10 +29,16 @@ _PUBLIC_SHARE_REF = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 _PUBLIC_SHARE_PATH = re.compile(
     rf"/public/album-tops/{_PUBLIC_SHARE_REF}(?:/items/{_PUBLIC_SHARE_REF})?", re.ASCII
 )
+_TOP_WORKING_ROUTE = "/album-tops/public-link/{share_ref}"
+_TOP_WORKING_PATH = re.compile(rf"/album-tops/public-link/({_PUBLIC_SHARE_REF})", re.ASCII)
+_TOP_WORKING_HEADERS = {"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer",
+                        "X-Content-Type-Options": "nosniff", "Vary": "Sec-Fetch-Dest"}
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
+    ("GET", _TOP_WORKING_ROUTE): "library.browse.read",
+    ("HEAD", _TOP_WORKING_ROUTE): "library.browse.read",
     ("GET", "/account/goals/view"): "account.self.goals.read",
     ("GET", "/account/goals"): "account.self.goals.read",
     ("GET", "/account/goals/attention"): "account.self.goals.read",
@@ -271,6 +278,12 @@ def install_private_route_boundary(app: FastAPI) -> None:
         try:
             return await _require_private_authentication(request, call_next)
         except Exception:
+            if _matched_route_path(app, request) == _TOP_WORKING_ROUTE:
+                response = JSONResponse({"ok": False, "error": "unavailable"}, status_code=503,
+                                        headers=_TOP_WORKING_HEADERS)
+                if request.method == "HEAD":
+                    response.body = b""
+                return response
             if request.url.path == "/account/goals" or request.url.path.startswith("/account/goals/"):
                 return JSONResponse({"ok": False, "error": "goals_unavailable"}, status_code=503,
                                     headers={"Cache-Control": "private, no-store"})
@@ -288,6 +301,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
             action = "library.loops.media.read"
         private_top_view = route_path == "/view-data" and str(request.query_params.get("surface") or "").strip().casefold() == "album_tops"
         preference_headers = (
+            dict(_TOP_WORKING_HEADERS) if route_path == _TOP_WORKING_ROUTE else
             {"Cache-Control": "private, no-store"}
             if private_top_view or route_path in {"/view-data", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue", "/playlists/creation-source/artist-popular", "/playlists/creation-source/artist-popular/regenerate", "/playlists/creation-source/artist-popular/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")) else
             {"Cache-Control": "no-store, max-age=0"}
@@ -309,6 +323,15 @@ def install_private_route_boundary(app: FastAPI) -> None:
                     _refresh_session_csrf_cookie(request, artwork)
                     return artwork
         except HTTPException as exc:
+            if (exc.status_code == 401 and request.method == "GET"
+                    and route_path == _TOP_WORKING_ROUTE
+                    and request.headers.get("sec-fetch-dest") == "document"):
+                target = album_top_working_request_path(request)
+                if target is not None:
+                    # Authentication still denied. No resolver/service has run;
+                    # only this exact same-origin document can preserve its return.
+                    return RedirectResponse("/login?" + urlencode({"return_to": target}),
+                                            status_code=303, headers=_TOP_WORKING_HEADERS)
             if (
                 exc.status_code == 401
                 and request.method.upper() in _READ_METHODS
@@ -327,11 +350,14 @@ def install_private_route_boundary(app: FastAPI) -> None:
                     "Action not permitted.", status_code=403,
                     headers={**(exc.headers or {}), "Cache-Control": "no-store, max-age=0"},
                 )
-            return JSONResponse(
+            response = JSONResponse(
                 {"detail": exc.detail},
                 status_code=exc.status_code,
                 headers={**(exc.headers or {}), **preference_headers},
             )
+            if route_path == _TOP_WORKING_ROUTE and request.method == "HEAD":
+                response.body = b""
+            return response
         csrf_mode = csrf_mode_for_route(request.method, route_path)
         if csrf_mode == "session_header" and not _valid_session_csrf(request):
             return JSONResponse(
@@ -442,6 +468,43 @@ def public_share_request_origin(request: Request) -> str | None:
 
 def _is_public_share_request(request: Request) -> bool:
     return public_share_request_origin(request) is not None
+
+
+def album_top_working_link_path(request: Request, share_ref: str) -> str | None:
+    """Same-origin navigation offer only; never an authentication exemption."""
+    config = getattr(request.app.state, "config", None)
+    auth = getattr(request.app.state, "auth_policy_config", None)
+    if (not isinstance(config, Mapping) or not isinstance(auth, Mapping)
+            or config.get("ALBUM_HAVEN_PUBLIC_SHARING_ENABLED") is not True
+            or request.method not in _READ_METHODS
+            or type(share_ref) is not str or not re.fullmatch(_PUBLIC_SHARE_REF, share_ref, re.ASCII)):
+        return None
+    origin = config.get("ALBUM_HAVEN_PUBLIC_SHARING_ORIGIN")
+    app_base = auth.get("public_base_url")
+    if type(origin) is not str or type(app_base) is not str:
+        return None
+    try:
+        admitted = build_public_sharing_config({"ALBUM_HAVEN_PUBLIC_SHARING_ENABLED": "true",
+            "ALBUM_HAVEN_PUBLIC_BASE_URL": config.get("ALBUM_HAVEN_PUBLIC_BASE_URL", origin)})
+        request_origin = validate_public_base_url(f"{request.url.scheme}://{request.url.netloc}")
+        canonical_app = validate_public_base_url(app_base)
+    except (TypeError, ValueError):
+        return None
+    if (origin != admitted["origin"] or origin != request_origin
+            or origin != canonical_app or app_base != canonical_app):
+        return None
+    return "/album-tops/public-link/" + share_ref
+
+
+def album_top_working_request_path(request: Request) -> str | None:
+    """Exact private document shape, independent of the public route predicate."""
+    match = _TOP_WORKING_PATH.fullmatch(request.url.path)
+    if match is None or request.scope.get("query_string", b"") != b"" or request.query_params:
+        return None
+    raw_path = request.scope.get("raw_path")
+    if type(raw_path) is not bytes or raw_path != request.url.path.encode("ascii"):
+        return None
+    return album_top_working_link_path(request, match.group(1))
 
 
 def private_action_for_route(method: str, route_path: str) -> str | None:

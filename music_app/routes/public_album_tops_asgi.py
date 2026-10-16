@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from music_app.services.owned_album_tops import AlbumTopError
 from music_app.services.policy import RequestOrigin
-from music_app.services.private_route_boundary import public_share_request_origin
+from music_app.services.private_route_boundary import public_share_request_origin, album_top_working_link_path
 from music_app.services.public_album_tops import normalize_public_top_query, public_ref
 from music_app.services.public_album_tops_postgres import PostgresPublicAlbumTopsService
 
@@ -111,6 +111,7 @@ def _html_response(request, value, status, *, share_ref=None, item_ref=None, pag
                                      else "This shared Album Top is unavailable."),
                    "top_path": _page_path(share_ref) if share_ref is not None and item_ref is not None else None,
                    "first_page": first_page, "next_page": next_page,
+                   "working_path": album_top_working_link_path(request, share_ref) if payload is not None else None,
                    "runtime_asset_version": getattr(request.app.state, "runtime_asset_version", "missing")}
         templates = getattr(request.app.state, "templates", _TEMPLATES)
         return templates.TemplateResponse(request, "public-album-top.html", context,

@@ -274,6 +274,40 @@ class PostgresOwnedAlbumTopsService:
                 "top_viewer_overlay": {**progress.read_overlay(connection, live, top), "activity": state},
                 "items": [{**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]}
 
+    def resolve_public_link(self, context, *, share_ref, constraints=None):
+        """Resolve an active share only for an independently permitted working reader.
+
+        Discovery grants nothing. Publication and working ACL checks share the
+        existing account/owner-membership/Top/link lock order and final session
+        fence. The native destination must still make its ordinary current read.
+        """
+        from music_app.services.public_album_tops import public_ref, snapshot_ref
+        from music_app.services.public_album_tops_postgres import PostgresPublicAlbumTopsService
+
+        share_ref = public_ref(share_ref)
+        self._require(context, (BROWSE,), constraints)
+        reader = PostgresPublicAlbumTopsService(self._config, connect=self._connect, clock=self._clock)
+        reader._enabled()
+        with reader._errors():
+            # The lookup takes no row locks and cannot authorize a redirect.
+            with self._connect(self._url) as lookup:
+                discovered = reader._discover(lookup, share_ref)
+            with self._authorized(context, constraints,
+                    target_account_id=discovered["owner_account_id"]) as (connection, live, _):
+                if discovered["library_id"] != live.library_id:
+                    raise AlbumTopError("unavailable", 404)
+                published_top, retained = reader._locked_publication(connection, discovered, share_ref, constraints)
+                ref = snapshot_ref(published_top["ref"])
+                # Publication Browse alone is insufficient: _top reads actual
+                # named grants only after the parent lock and checks visibility.
+                top = self._top(connection, live, ref)
+                if any(top[key] != published_top[key] for key in ("ref", "owner_account_id", "library_id")):
+                    raise AlbumTopError("unavailable", 404)
+                self._require(live, (BROWSE,), constraints, top)
+                _, sources = reader._manifest(connection, published_top, retained)
+                reader._owner(connection, published_top, sources, constraints)
+                return ref
+
     def execute(self, context, command: AlbumTopCommand, *, constraints=None):
         from psycopg.types.json import Jsonb
         if not isinstance(command, AlbumTopCommand):

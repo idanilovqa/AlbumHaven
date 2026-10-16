@@ -644,6 +644,7 @@ def test_source_import_and_codec_operations_have_no_native_or_owner_io(monkeypat
     # Read source before installing I/O traps; then evaluate only when tests are authorized.
     text = Path(codec.__file__).read_text(encoding='utf-8')
     original_import = builtins.__import__
+    original_open = builtins.open
     imports = []
 
     def guarded_import(name, *args, **kwargs):
@@ -658,10 +659,18 @@ def test_source_import_and_codec_operations_have_no_native_or_owner_io(monkeypat
     name = '_isolated_artwork_proof_codec_test'
     module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader=None))
     monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.setattr(builtins, '__import__', guarded_import)
-    monkeypatch.setattr(builtins, 'open', no_io)
-    exec(compile(text, '<pure-artwork-codec>', 'exec'), module.__dict__)
-    assert imports == ['dataclasses', 'hashlib', 'json', 're']
-    descriptor = source(bound=True)
-    assert module.bind_inventory(descriptor, inventory())
-    assert module.validate_pair(descriptor, acquisition(descriptor))
+    # Trap only the isolated module; pytest and unrelated modules keep their own
+    # normal builtins, including while an exception is being reported.
+    module_builtins = dict(vars(builtins), __import__=guarded_import, open=no_io)
+    module.__dict__['__builtins__'] = module_builtins
+    try:
+        exec(compile(text, '<pure-artwork-codec>', 'exec'), module.__dict__)
+        assert imports == ['dataclasses', 'hashlib', 'json', 're']
+        descriptor = source(bound=True)
+        assert module.bind_inventory(descriptor, inventory())
+        assert module.validate_pair(descriptor, acquisition(descriptor))
+    finally:
+        # Functions created by exec retain this dictionary. Restore its entries
+        # before control returns to pytest, on success and on every failure path.
+        module_builtins['__import__'] = original_import
+        module_builtins['open'] = original_open

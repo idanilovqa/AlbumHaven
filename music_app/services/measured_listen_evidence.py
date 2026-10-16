@@ -129,6 +129,11 @@ def _pairs(value, limit):
 def normalize_checkpoint(payload, metadata):
     """Reject noncanonical shape; do not silently sort, merge or discard input."""
     _metadata(metadata)
+    return _normalize_checkpoint(payload, metadata.sample_rate, metadata.total_frames)
+
+
+def _normalize_checkpoint(payload, sample_rate, maximum_extent):
+    """Shared shape checks; maximum_extent is a bound, not verified media length."""
     if not isinstance(payload, dict) or set(payload) != _FIELDS:
         raise EvidenceError("invalid_fields")
     if payload["version"] != VERSION:
@@ -136,10 +141,10 @@ def normalize_checkpoint(payload, metadata):
     device, session = _uuid(payload["device_id"]), _uuid(payload["session_id"])
     sequence = _integer(payload["checkpoint_sequence"])
     rate = _integer(payload["sample_rate"], 8000, 192000)
-    if rate != metadata.sample_rate:
+    if rate != sample_rate:
         raise EvidenceError("metadata_mismatch")
     frames = _integer(payload["rendered_frames"])
-    extent = _integer(payload["max_observed_frame"], 0, metadata.total_frames)
+    extent = _integer(payload["max_observed_frame"], 0, maximum_extent)
     width = _integer(payload["histogram_bin_frames"], 1)
     if width != bin_width(rate, extent):
         raise EvidenceError("invalid_resolution")
@@ -248,11 +253,17 @@ def _added_coverage(previous, incoming):
 def compare_checkpoint(previous, incoming, metadata, scope):
     """Decide latest/replay/stale without persisting or manufacturing receipts."""
     digest = checkpoint_digest(incoming, metadata, scope)
+    previous_digest = (checkpoint_digest(previous, metadata, scope)
+                       if previous is not None else None)
+    return _compare_normalized_checkpoints(previous, incoming, digest, previous_digest)
+
+
+def _compare_normalized_checkpoints(previous, incoming, digest, previous_digest):
+    """Shared progression rules; callers validate both checkpoints and digests."""
     if previous is None:
         if incoming.checkpoint_sequence != 0:
             raise EvidenceError("sequence_gap")
         return Decision("accept", digest)
-    previous_digest = checkpoint_digest(previous, metadata, scope)
     if (previous.device_id, previous.session_id, previous.sample_rate) != (
             incoming.device_id, incoming.session_id, incoming.sample_rate):
         raise EvidenceError("identity_changed")

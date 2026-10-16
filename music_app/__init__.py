@@ -245,6 +245,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.api_read_asgi_routes import router as api_read_asgi_router
     from music_app.routes.owned_playlists_asgi import router as owned_playlists_asgi_router
     from music_app.routes.owned_album_tops_asgi import router as owned_album_tops_asgi_router
+    from music_app.routes.public_album_tops_asgi import router as public_album_tops_asgi_router
     from music_app.routes.listening_goals_asgi import router as listening_goals_asgi_router
     from music_app.routes.playlist_complete_sources_asgi import router as playlist_complete_sources_router
     from music_app.routes.home_activity_asgi_routes import router as home_activity_asgi_router
@@ -377,6 +378,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(api_read_asgi_router)
     app.include_router(owned_playlists_asgi_router)
     app.include_router(owned_album_tops_asgi_router)
+    app.include_router(public_album_tops_asgi_router)
     app.include_router(listening_goals_asgi_router)
     app.include_router(playlist_complete_sources_router)
     app.include_router(home_activity_asgi_router)

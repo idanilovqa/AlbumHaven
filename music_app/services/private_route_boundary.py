@@ -413,20 +413,20 @@ def _is_public(method: str, path: str) -> bool:
     return False
 
 
-def _is_public_share_request(request: Request) -> bool:
-    """Reserve only exact metadata reads on the explicitly enabled origin."""
+def public_share_request_origin(request: Request) -> str | None:
+    """Return the admitted origin for only the existing exact metadata perimeter."""
 
     config = getattr(request.app.state, "config", None)
     if (not isinstance(config, Mapping)
             or config.get("ALBUM_HAVEN_PUBLIC_SHARING_ENABLED") is not True
             or request.method.upper() not in _READ_METHODS):
-        return False
+        return None
     path = request.url.path
     if not _PUBLIC_SHARE_PATH.fullmatch(path):
-        return False
+        return None
     raw_path = request.scope.get("raw_path")
     if raw_path is not None and raw_path != path.encode("ascii"):
-        return False
+        return None
     origin = config.get("ALBUM_HAVEN_PUBLIC_SHARING_ORIGIN")
     try:
         validated = build_public_sharing_config({
@@ -435,8 +435,12 @@ def _is_public_share_request(request: Request) -> bool:
         })
         request_origin = validate_public_base_url(f"{request.url.scheme}://{request.url.netloc}")
     except ValueError:
-        return False
-    return origin == validated["origin"] == request_origin
+        return None
+    return origin if origin == validated["origin"] == request_origin else None
+
+
+def _is_public_share_request(request: Request) -> bool:
+    return public_share_request_origin(request) is not None
 
 
 def private_action_for_route(method: str, route_path: str) -> str | None:

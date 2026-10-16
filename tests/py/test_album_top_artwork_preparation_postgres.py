@@ -731,6 +731,34 @@ def test_real_budget_limits_rollback_prior_assets_in_the_same_batch(artwork, sco
     assert not case.snapshot()["album_top_artwork_assets"]
 
 
+def test_sql_failed_completion_reaches_publication_sum_without_asset_alias_ambiguity(artwork):
+    # Exercise the actual runtime wrapper and saved implementation even when no
+    # pixels are ready. Existing successful capture assertions remain unchanged.
+    case = artwork.build(1)
+    before_publication = case.publication_state()
+    started = case.start()
+    key, lease, chosen = case.claim(started)
+    assert len(chosen) == 1
+    case.complete(started, key, lease,
+                  [{"item_ref": str(chosen[0]), "status": "failed", "error_code": "artwork_unavailable"}],
+                  [None])
+    snapshot = case.snapshot()
+    preparation = snapshot["album_top_artwork_preparations"][0]
+    assert preparation["revision"] == int(started["preparation_revision"]) + 1
+    assert preparation["state"] == "preparing"
+    assert str(preparation["completed_request_key"]) == key
+    assert preparation["completed_from_revision"] == int(started["preparation_revision"])
+    assert all(preparation[field] is None for field in
+               ("lease_ref", "lease_expires_at", "batch_request_key", "batch_from_revision", "batch_items"))
+    item = snapshot["album_top_artwork_preparation_items"][0]
+    assert (item["status"], item["error_code"], item["asset_ref"]) == ("failed", "artwork_unavailable", None)
+    assert snapshot["album_top_artwork_assets"] == []
+    assert len(snapshot["album_top_artwork_budgets"]) == 2
+    assert all(row["byte_count"] == row["asset_count"] == 0
+               for row in snapshot["album_top_artwork_budgets"])
+    assert case.publication_state() == before_publication
+
+
 def test_sql_completion_rejects_reordered_claim_results_without_counter_or_asset_leaks(artwork):
     case = artwork.build(2)
     started = case.start()

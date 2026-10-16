@@ -43771,7 +43771,7 @@ function buildInPageTabsHtml({ id, label, tabs = [], selectedKey } = {}) {
     || tabs.find(tab => !tab.disabled);
   return `<div class="in-page-tabs" id="${escapeHtml(id)}" role="tablist" aria-label="${escapeHtml(label)}">${tabs.map(tab => {
     const active = tab === selected;
-    return `<button type="button" role="tab" id="${escapeHtml(id)}-${escapeHtml(tab.key)}" data-in-page-tab="${escapeHtml(tab.key)}" aria-selected="${active}" tabindex="${active ? 0 : -1}"${tab.panelId ? ` aria-controls="${escapeHtml(tab.panelId)}"` : ''}${tab.disabled ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(tab.label)}</button>`;
+    return `<button type="button" role="tab" id="${escapeHtml(id)}-${escapeHtml(tab.key)}" data-in-page-tab="${escapeHtml(tab.key)}" data-tab-label="${escapeHtml(tab.label)}" aria-selected="${active}" tabindex="${active ? 0 : -1}"${tab.panelId ? ` aria-controls="${escapeHtml(tab.panelId)}"` : ''}${tab.disabled ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(tab.label)}<span class="in-page-tabs__attention" aria-hidden="true" hidden></span></button>`;
   }).join('')}</div>`;
 }
 const mountedInPageTabs = new WeakMap();
@@ -43804,7 +43804,16 @@ function mountInPageTabs(tablist) {
     select(enabled[next]);
     enabled[next].focus();
   };
-  const owner = {dispose() {
+  const owner = {setAttention(key, value) {
+    if (disposed) return;
+    const button = buttons().find(node => node.dataset.inPageTab === key);
+    if (!button) return;
+    const attention = value === 'red' || value === 'blue' ? value : 'none';
+    const marker = button.querySelector('.in-page-tabs__attention');
+    if (marker) {marker.hidden = attention === 'none'; marker.dataset.attention = attention;}
+    if (attention === 'none') button.removeAttribute('aria-label');
+    else button.setAttribute('aria-label', `${button.dataset.tabLabel}, ${attention === 'red' ? 'reset needed' : 'new weekly goals'}`);
+  }, dispose() {
     if (disposed) return;
     disposed = true;
     tablist.removeEventListener('click', click);
@@ -46076,7 +46085,7 @@ const HomeFriendsRuntime = (() => {
     return Object.freeze({
       kind: choice(value.kind, ['albums', 'tracks', 'artists'], 'albums'),
       kindExplicit: ['albums', 'tracks', 'artists'].includes(value.kind) && value.kindExplicit !== false,
-      homeSection: choice(value.homeSection, ['recent', 'queue'], 'recent'),
+      homeSection: choice(value.homeSection, ['recent', 'queue', 'goals'], 'recent'),
       period: choice(value.period, ['week', 'month', 'six', 'year', 'all'], 'week'),
       views: views(value.views),
       friendKind: choice(value.friendKind, ['albums', 'tracks', 'artists'], 'tracks'),
@@ -46961,6 +46970,7 @@ const HomeFriendsRuntime = (() => {
     actionHtml: config => ButtonComponent.renderActionButton(config),
     iconHtml: name => ButtonComponent.renderIconSvg(name),
     alertHtml: config => buildOnPageAlertHtml(config),
+    showOwnedToast: (message, variant) => showToast(message, variant, undefined, {placement:'top-center'}),
     galleryBarHtml: config => buildGalleryBarHtml(config),
     tableHtml: config => buildCompactDataTable(config),
     galleryCardHtml: config => buildGalleryCardHtml(config),

@@ -64,6 +64,37 @@ class ReleaseGroupEvidence:
         return int(self.first_release_date[:4]) if self.first_release_date else None
 
 
+def release_group_facts_digest(*, release_group_id, title, artist_display,
+                               first_release_date, primary_type):
+    """Validate normalized fields and reproduce the original v1 fact digest.
+
+    This checks bounded facts, never provider provenance or account authority.
+    Stored summaries already have credited display text, not raw artist credits.
+    """
+    ref = canonical_release_group_id(release_group_id)
+    title = _text(title)
+    artist = _text(artist_display)
+    released = _release_date(first_release_date)
+    # Persisted normalized facts use None, not the provider's empty date string.
+    if released != first_release_date or primary_type not in (None, "Album", "Single", "EP", "Broadcast", "Other"):
+        raise RemoteAlbumEvidenceError("invalid_provider_metadata")
+    encoded = json.dumps([1, "musicbrainz", "release-group", ref, title, artist,
+                          released, primary_type], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_release_group_evidence(value):
+    """Reject forged/mutated adapter outputs; a valid value is still no grant."""
+    if type(value) is not ReleaseGroupEvidence:
+        raise RemoteAlbumEvidenceError("invalid_provider_metadata")
+    digest = release_group_facts_digest(release_group_id=value.release_group_id,
+        title=value.title, artist_display=value.artist_display,
+        first_release_date=value.first_release_date, primary_type=value.primary_type)
+    if type(value.digest) is not str or value.digest != digest:
+        raise RemoteAlbumEvidenceError("invalid_provider_metadata")
+    return value
+
+
 def project_release_group_evidence(payload, *, requested_id):
     """Project an exact release-group lookup, preserving credited join phrases.
 
@@ -94,7 +125,7 @@ def project_release_group_evidence(payload, *, requested_id):
         names.append(_text(credit.get("name")) + _text(credit.get("joinphrase", ""), blank=True))
     artist = _text("".join(names))
     released = _release_date(payload.get("first-release-date"))
-    encoded = json.dumps([1, "musicbrainz", "release-group", actual, title, artist,
-                          released, primary], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    digest = release_group_facts_digest(release_group_id=actual, title=title,
+        artist_display=artist, first_release_date=released, primary_type=primary)
     return ReleaseGroupEvidence(actual, title, artist, released, primary,
-                                hashlib.sha256(encoded).hexdigest())
+                                digest)

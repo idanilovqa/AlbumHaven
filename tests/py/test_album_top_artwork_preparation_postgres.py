@@ -20,6 +20,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 import pytest
 
+from tests.py.postgres_runtime_role_contract import assert_runtime_role
+
 from music_app.services import album_top_artwork_preparation as preparation_module
 from music_app.services.album_top_artwork_preparation import TopArtworkPreparationService
 from music_app.services.owned_album_tops import ACCESS, BROWSE, ITEMS, MANAGE
@@ -218,7 +220,7 @@ def artwork(db, tmp_path):
     with db.connect() as connection:
         assert connection.execute("select rolsuper from pg_roles where rolname=current_user").fetchone()["rolsuper"] is False
     with psycopg.connect(db.app_url, row_factory=dict_row) as connection:
-        assert connection.execute("select current_user as role").fetchone()["role"] == "album_haven_app"
+        assert_runtime_role(connection, db)
     try:
         yield ArtworkCase(db, tmp_path)
     finally:
@@ -725,34 +727,36 @@ def test_sql_completion_rejects_reordered_claim_results_without_counter_or_asset
 def test_runtime_grants_are_real_minimum_privileges_and_definers_have_fixed_search_path(artwork):
     case = artwork.build(1)
     with psycopg.connect(case.db.app_url, row_factory=dict_row) as connection:
-        role = connection.execute("select current_user as name,rolsuper from pg_roles where rolname=current_user").fetchone()
-        assert role == {"name": "album_haven_app", "rolsuper": False}
+        runtime_role = assert_runtime_role(connection, case.db)
     with case.db.connect() as connection:
         assert connection.execute("select rolsuper from pg_roles where rolname=current_user").fetchone()["rolsuper"] is False
         for name in RELATIONS:
             relation = "app." + name
             for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
                 row = connection.execute("""select has_table_privilege('album_haven_app',%s,%s) as runtime,
+                    has_table_privilege(%s,%s,%s) as connected,
                     has_table_privilege('album_haven_readonly',%s,%s) as readonly""",
-                    (relation, privilege, relation, privilege)).fetchone()
-                assert row == {"runtime": privilege == "SELECT", "readonly": False}, (relation, privilege)
+                    (relation, privilege, runtime_role, relation, privilege, relation, privilege)).fetchone()
+                assert row == {"runtime": privilege == "SELECT", "connected": privilege == "SELECT", "readonly": False}, (relation, privilege)
             assert connection.execute("""select count(*) as n from pg_class c cross join lateral
                 aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a
                 where c.oid=%s::regclass and a.grantee=0""", (relation,)).fetchone()["n"] == 0
         for signature in (START_SIGNATURE, CLAIM_SIGNATURE, COMPLETE_SIGNATURE):
             row = connection.execute("""select p.prosecdef,p.proconfig,r.rolsuper,
                 has_function_privilege('album_haven_app',p.oid,'EXECUTE') as runtime,
+                has_function_privilege(%s,p.oid,'EXECUTE') as connected,
                 has_function_privilege('album_haven_readonly',p.oid,'EXECUTE') as readonly
-                from pg_proc p join pg_roles r on r.oid=p.proowner where p.oid=%s::regprocedure""", (signature,)).fetchone()
+                from pg_proc p join pg_roles r on r.oid=p.proowner where p.oid=%s::regprocedure""", (runtime_role, signature)).fetchone()
             assert row == {"prosecdef": True, "proconfig": ["search_path=pg_catalog"],
-                           "rolsuper": False, "runtime": True, "readonly": False}
+                           "rolsuper": False, "runtime": True, "connected": True, "readonly": False}
             assert connection.execute("""select count(*) as n from pg_proc p cross join lateral
                 aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
                 where p.oid=%s::regprocedure and a.grantee=0""", (signature,)).fetchone()["n"] == 0
         for signature in ("app.guard_top_artwork_asset()", "app.guard_top_artwork_item()",
                           "app.lock_top_artwork_scope(uuid,bigint,bigint,bigint)"):
-            assert connection.execute("select has_function_privilege('album_haven_app',%s,'EXECUTE') as allowed",
-                                      (signature,)).fetchone()["allowed"] is False
+            for role in dict.fromkeys(('album_haven_app', runtime_role)):
+                assert connection.execute("select has_function_privilege(%s,%s,'EXECUTE') as allowed",
+                                          (role, signature)).fetchone()["allowed"] is False
 
 
 @pytest.mark.parametrize("target,action", [("asset", "update"), ("asset", "delete"),

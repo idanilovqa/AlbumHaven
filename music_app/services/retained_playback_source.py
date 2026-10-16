@@ -125,6 +125,35 @@ class WindowsReaders:
 
 
 class RetainedPlaybackSource:
+    @classmethod
+    def from_rooted_lease(cls, lease, *, original_suffix):
+        """Transfer ownership after validation; dormant, never pathname-backed.
+
+        On validation failure the caller still owns lease. Launch integration is
+        deliberately blocked until child-use ownership through reap is wired.
+        """
+        if (type(original_suffix) is not str or len(original_suffix) > 32
+                or (original_suffix and not original_suffix.startswith('.'))
+                or any(c in original_suffix for c in ('/', '\\', '\x00', ':'))):
+            raise SourceUnavailable('source_suffix_invalid')
+        observation = lease.check()
+        if original_suffix.lower() != lease.original_suffix.lower():
+            raise SourceUnavailable('source_suffix_changed')
+        platform = getattr(observation, 'platform', None)
+        if platform not in ('posix', 'win32'):
+            raise SourceUnavailable('source_platform_invalid')
+        source = cls.__new__(cls)
+        source.original_suffix = original_suffix.lower()
+        # Only transport methods are reused. No native initialization or path open.
+        source.backend = (WindowsReaders.__new__(WindowsReaders)
+                          if platform == 'win32' else PosixReaders())
+        source._closed = source._failed = source._launching = False
+        source._cleanup_task = None
+        source.observation = observation
+        lease.claim_adapter()
+        source._rooted_lease = lease
+        return source
+
     def __init__(self, path, *, backend=None, fstat=os.fstat, path_stat=None):
         self.path = Path(path).absolute()
         self.original_suffix = self.path.suffix.lower()
@@ -145,6 +174,19 @@ class RetainedPlaybackSource:
             raise
 
     def check(self):
+        if hasattr(self, '_rooted_lease'):
+            if self._closed:
+                raise SourceUnavailable('source_closed')
+            if self._failed:
+                raise SourceUnavailable('source_failed')
+            try:
+                observation = self._rooted_lease.check()
+                if self._closed or self._failed:
+                    raise SourceUnavailable('source_closed' if self._closed else 'source_failed')
+                return observation
+            except BaseException:
+                self._failed = True
+                raise
         if self._closed or self._anchor is None:
             raise SourceUnavailable('source_closed')
         if self._failed:
@@ -162,6 +204,19 @@ class RetainedPlaybackSource:
         return self.observation
 
     def reader(self):
+        if hasattr(self, '_rooted_lease'):
+            self.check()
+            reader = None
+            try:
+                reader = self._rooted_lease.independent_reader()
+                if self._closed or self._failed:
+                    raise SourceUnavailable('source_closed' if self._closed else 'source_failed')
+                return reader
+            except BaseException:
+                self._failed = True
+                if reader is not None:
+                    reader.close()
+                raise
         self.check()
         reader = None
         try:
@@ -181,6 +236,9 @@ class RetainedPlaybackSource:
             raise SourceUnavailable('source_launch_in_progress')
         if not self._closed:
             self._closed = True
+            if hasattr(self, '_rooted_lease'):
+                self._rooted_lease.close()
+                return
             if self._anchor is not None:
                 self._anchor.close()
 
@@ -203,6 +261,8 @@ async def start_retained_process(source, capability, before_input, after_input, 
     must obey that same ownership contract. No process is started on unavailable
     capability. Future callers may then choose ordinary playback explicitly.
     """
+    if hasattr(source, '_rooted_lease'):
+        raise SourceUnavailable('rooted_launch_not_integrated')
     if source._launching or source._cleanup_task is not None and not source._cleanup_task.done():
         raise SourceUnavailable('source_launch_in_progress')
     if (not capability.available or not probe.matches(capability) or

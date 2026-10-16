@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 import stat
 
+from music_app.services.rooted_local_file import PosixDirectoryChain
+
 from music_app.services.artwork_pixels import (
     ArtworkPixelsUnavailable, sanitize_artwork_pixels,
 )
@@ -130,33 +132,10 @@ def _file_observation(info):
                                   info.st_mtime_ns, info.st_ctime_ns)
 
 
-class _DirectoryChain:
+class _DirectoryChain(PosixDirectoryChain):
     """Retain every traversed directory and verify exact parent/name bindings."""
     def __init__(self, stack, root):
-        self.stack = stack
-        self.links = []
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-        self.fd = os.open("/", flags)
-        stack.callback(os.close, self.fd)
-        _directory_identity(os.fstat(self.fd))
-        for part in root.parts[1:]:
-            self.descend(part)
-
-    def descend(self, part):
-        parent = self.fd
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-        child = os.open(part, flags, dir_fd=parent)
-        self.stack.callback(os.close, child)
-        identity = _directory_identity(os.fstat(child))
-        self.links.append((parent, part, child, identity))
-        self.fd = child
-
-    def check(self):
-        for parent, name, child, expected in self.links:
-            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            if (_directory_identity(current) != expected
-                    or _directory_identity(os.fstat(child)) != expected):
-                raise ArtworkAcquisitionUnavailable("artwork_source_changed")
+        super().__init__(stack, root, ArtworkAcquisitionUnavailable)
 
 
 def describe_artwork_source(*, library_id, local_album_id, artwork_root_id,

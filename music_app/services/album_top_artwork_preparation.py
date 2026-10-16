@@ -46,7 +46,10 @@ def _context(value):
 
 
 def _normalize_start(payload):
-    if type(payload) is not dict or set(payload) != {'revision', 'items', 'request_key'}:
+    if type(payload) is not dict or set(payload) != {'revision', 'items', 'request_key', 'request_generation'}:
+        raise AlbumTopError('invalid_command')
+    generation = payload['request_generation']
+    if type(generation) is not int or not 1 <= generation <= 253402300799:
         raise AlbumTopError('invalid_command')
     rows = payload['items']
     if type(rows) is not list or len(rows) > 5000:
@@ -60,7 +63,7 @@ def _normalize_start(payload):
     normalized = normalize_top_publication_preview({'revision': payload['revision'], 'items': plain})
     if any(item['item_ref'] is None for item in normalized['items']):
         raise AlbumTopError('invalid_command')
-    return normalized, choices, top_uuid(payload['request_key'])
+    return normalized, choices, top_uuid(payload['request_key']), generation
 
 
 def _source_item(row):
@@ -114,6 +117,10 @@ class TopArtworkPreparationService:
             if code in {'23514', '55000', '22003'}:
                 if constraint == 'top_artwork_request_conflict':
                     raise AlbumTopError('request_key_conflict', 409) from None
+                if constraint == 'top_artwork_request_expired':
+                    raise AlbumTopError('artwork_request_expired', 409) from None
+                if constraint == 'top_artwork_retention_limit':
+                    raise AlbumTopError('artwork_retention_limit', 409) from None
                 if constraint == 'top_artwork_publication_budget' or constraint.startswith('album_top_artwork_budgets_'):
                     raise AlbumTopError('artwork_limit', 409) from None
                 raise AlbumTopError('artwork_preparation_unavailable', 409) from None
@@ -237,7 +244,7 @@ class TopArtworkPreparationService:
 
     def start(self, context, *, top_ref, payload, context_ref, constraints=None):
         ref, context_ref = top_uuid(top_ref), _context(context_ref)
-        draft, choices, key = _normalize_start(payload)
+        draft, choices, key, generation = _normalize_start(payload)
         with self._authorized(context, constraints) as (connection, live, _):
             top = self._top(connection, live, ref, draft['revision'], constraints, write=True)
             current = publication.working_items(connection, top)
@@ -258,12 +265,12 @@ class TopArtworkPreparationService:
                 scopes.append(scope)
                 manifest.append({'item_ref': item['item_ref'], 'catalog_ref': item['album_ref'], 'position': position,
                     **scope, 'included': included})
-            digest = evidence.digest(['private-top-artwork-preparation-v1', ref, live.library_id,
-                live.actor.account_id, live.actor.session_id, context_ref, draft['revision'], manifest])
+            digest = evidence.digest(['private-top-artwork-preparation-v2', ref, live.library_id,
+                live.actor.account_id, live.actor.session_id, context_ref, draft['revision'], generation, manifest])
             created = connection.execute('''select app.start_top_artwork_preparation
-                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as ref''',
+                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as ref''',
                 (str(uuid4()), ref, live.library_id, live.actor.account_id, live.actor.session_id, context_ref,
-                 int(draft['revision']), key, digest, Jsonb(manifest))).fetchone()['ref']
+                 int(draft['revision']), key, digest, Jsonb(manifest), generation)).fetchone()['ref']
             preparation = self._load(connection, live, top, str(created), context_ref)
             result = self._checked_status(connection, live, top, preparation, constraints)
             for item, included in zip(draft['items'], choices):
@@ -271,6 +278,29 @@ class TopArtworkPreparationService:
                     require_private_action(live, _ARTWORK,
                         resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
             self._final(live, top, scopes, [], constraints)
+            return result
+
+    def cleanup(self, context, *, top_ref, top_revision_value, context_ref, constraints=None):
+        """Explicit bounded owner-private reclamation; never called by reads.
+
+        No pixels, source paths or resolver work is needed to discard expired or
+        cancelled staging. A normal start also performs one bounded SQL pass
+        after its replay check. An admission failure rolls that entire pass back;
+        this separate operation lets authorized callers make durable progress.
+        """
+        ref, revision = top_uuid(top_ref), top_revision(top_revision_value)
+        _context(context_ref)
+        with self._authorized(context, constraints) as (connection, live, _):
+            # Deleted parents still own retained quota. Only this reclamation
+            # operation admits them; ordinary read/start/advance stay closed.
+            top = self.owner._top(connection, live, ref, write=True, allow_deleted=True)
+            self.owner._require(live, _ACTIONS, constraints, top, owner_only=True)
+            if str(top['revision']) != str(revision):
+                raise AlbumTopError('revision_conflict', 409)
+            result = connection.execute('''select app.cleanup_top_artwork_preparations
+                (%s,%s,%s,%s) as result''',
+                (ref, live.library_id, live.actor.account_id, int(revision))).fetchone()['result']
+            self._final(live, top, [], [], constraints)
             return result
 
     def advance(self, context, *, top_ref, preparation_ref, top_revision_value,

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import timedelta
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
 from PIL import Image
@@ -38,7 +38,7 @@ RELATIONS = (
     "album_top_artwork_preparations", "album_top_artwork_preparation_items",
     "album_top_artwork_assets", "album_top_artwork_budgets",
 )
-START_SIGNATURE = "app.start_top_artwork_preparation(uuid,uuid,bigint,bigint,bigint,text,bigint,uuid,text,jsonb)"
+START_SIGNATURE = "app.start_top_artwork_preparation(uuid,uuid,bigint,bigint,bigint,text,bigint,uuid,text,jsonb,bigint)"
 CLAIM_SIGNATURE = "app.claim_top_artwork_batch(uuid,bigint,bigint,text,bigint,uuid,uuid)"
 COMPLETE_SIGNATURE = "app.complete_top_artwork_batch(uuid,bigint,bigint,text,bigint,uuid,uuid,jsonb,bytea[])"
 
@@ -113,12 +113,16 @@ class ArtworkCase:
                                    (str(cover), album))
                 source = str(uuid4())
                 container = self.metadata_path / f"album-{number}"
+                # Record the producer's actual path semantics. This metadata
+                # admission does not make descriptor acquisition portable.
+                path_flavor = "windows" if isinstance(container, PureWindowsPath) else "posix"
                 connection.execute("""insert into library.album_metadata_sources
                     (ref,library_id,local_album_id,library_root_id,container_identity,path_flavor,
                      capture_builder_version,state,title,artist,year,title_origin,artist_origin)
-                    values(%s,%s,%s,%s,%s,'posix',1,'active',%s,'Synthetic artist',2000,
+                    values(%s,%s,%s,%s,%s,%s,1,'active',%s,'Synthetic artist',2000,
                            'tag_metadata','tag_metadata')""",
-                    (source, db.library, album, self.metadata_root, str(container), f"Artwork album {number}"))
+                    (source, db.library, album, self.metadata_root, str(container), path_flavor,
+                     f"Artwork album {number}"))
                 track = connection.execute("""insert into library.local_tracks
                     (library_id,artist_id,album_id,track_key,title,disc_number,track_number,
                      duration_seconds,title_origin,artist_origin)
@@ -142,10 +146,17 @@ class ArtworkCase:
                        "selected_local_album_id": album, "selected_source_ref": source,
                        "include_artwork": number not in excluded}
                       for number, (row, album, source) in enumerate(zip(rows, self.album_ids, self.source_refs))]
-        self.payload = {"revision": self.top["revision"], "request_key": str(uuid4()), "items": self.items}
+        with db.connect() as connection:
+            generation = connection.execute("select floor(extract(epoch from clock_timestamp()))::bigint as value").fetchone()["value"]
+        self.payload = {"revision": self.top["revision"], "request_key": str(uuid4()), "items": self.items,
+                        "request_generation": generation}
         return self
 
     def start(self, **options):
+        # Keep the original issued-at for exact retries, including the explicit
+        # alternate-Top payload used by the retained deduplication assertion.
+        if "payload" in options:
+            options["payload"] = {"request_generation": self.payload["request_generation"], **options["payload"]}
         return self.service.start(self.db.context(), **{
             "top_ref": self.top["top_ref"], "payload": self.payload, "context_ref": CONTEXT, **options})
 
@@ -674,7 +685,14 @@ def test_dedup_is_within_top_and_retained_budgets_only_count_new_assets(artwork)
     renewed = case.advance(case.advance(renewed))
     assert renewed["state"] == "ready"
     assert case.snapshot()["album_top_artwork_assets"] == assets
-    assert case.snapshot()["album_top_artwork_budgets"] == rows["album_top_artwork_budgets"]
+    # A successor reserves its own bounded staging manifest. Preserve equality
+    # of every original retained-asset budget field; new staging accounting is
+    # covered independently by the retention contract tests.
+    staging_fields = {"preparation_count", "item_count", "proof_bytes", "cleanup_asset_after"}
+    assert [{key: value for key, value in row.items() if key not in staging_fields}
+            for row in case.snapshot()["album_top_artwork_budgets"]] == [
+        {key: value for key, value in row.items() if key not in staging_fields}
+        for row in rows["album_top_artwork_budgets"]]
     other, _ = case.db.create(refs=case.catalog_refs[:1])
     item = case.db.read(other)["items"][0]
     payload = {"revision": other["revision"], "request_key": str(uuid4()), "items": [
@@ -700,10 +718,11 @@ def test_real_budget_limits_rollback_prior_assets_in_the_same_batch(artwork, sco
     _, first_png = case.results([case.items[0]["item_ref"]])
     permitted = 1 if field == "asset_count" else len(first_png[0])
     with case.db.connect() as connection:
-        connection.execute("insert into app.album_top_artwork_budgets(owner_account_id,scope_ref) values(%s,%s)",
-                           (case.db.owner.account_id, ZERO))
-        connection.execute("""insert into app.album_top_artwork_budgets(owner_account_id,scope_ref,top_ref,library_id)
-            values(%s,%s,%s,%s)""", (case.db.owner.account_id, case.top["top_ref"], case.top["top_ref"], case.db.library))
+        # Start already reserved both budget rows. Reuse them without touching
+        # the independent staging counters/proof reservation.
+        assert connection.execute("""select count(*) as n from app.album_top_artwork_budgets
+            where owner_account_id=%s and scope_ref=any(%s::uuid[])""",
+            (case.db.owner.account_id, [ZERO, case.top["top_ref"]])).fetchone()["n"] == 2
         connection.execute(f"update app.album_top_artwork_budgets set {field}=%s where owner_account_id=%s and scope_ref=%s",
             (maximum - permitted, case.db.owner.account_id, case.top["top_ref"] if scope == "top" else ZERO))
     before = case.durable()
@@ -907,3 +926,29 @@ def test_current_cover_selection_stays_locked_through_final_runtime_status(artwo
         concurrent.execute("update library.local_albums set cover_path=%s where id=%s",
                            (str(alternate), case.album_ids[0]))
     assert_error(lambda: case.read(ready), "artwork_source_changed", 409)
+
+
+@pytest.mark.parametrize("mismatched", [False, True])
+def test_metadata_path_flavor_matches_its_producer_without_acquisition(artwork, monkeypatch, mismatched):
+    case = artwork.build(1, excluded={0})
+    expected = "windows" if isinstance(case.metadata_path, PureWindowsPath) else "posix"
+    with case.db.connect() as connection:
+        row = connection.execute("""select path_flavor,container_identity from library.album_metadata_sources
+            where ref=%s""", (case.source_refs[0],)).fetchone()
+        assert row == {"path_flavor": expected, "container_identity": str(case.metadata_path / "album-0")}
+        if mismatched:
+            connection.execute("update library.album_metadata_sources set path_flavor=%s where ref=%s",
+                ("posix" if expected == "windows" else "windows", case.source_refs[0]))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Metadata-only admission must not describe or acquire artwork")
+    monkeypatch.setattr(case.service, "describe", forbidden)
+    monkeypatch.setattr(case.service, "capture", forbidden)
+    before = case.snapshot()
+    if mismatched:
+        assert_error(case.start, "evidence_unavailable", 409)
+        assert case.snapshot() == before
+    else:
+        started = case.start()
+        assert started["state"] == "ready" and started["included_count"] == started["ready_count"] == 0
+        retained = case.snapshot()
+        assert case.read(started) == started and case.snapshot() == retained

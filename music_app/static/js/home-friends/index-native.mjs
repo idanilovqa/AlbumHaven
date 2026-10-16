@@ -15,6 +15,7 @@ import {mountPlaylistActionSession} from '../playlists/native-selection-actions.
 import {mountAlbumTops} from '../album-tops/index.mjs';
 import {createAlbumTopBackendProviders} from '../album-tops/backend-providers.mjs';
 import {mountLibraryNavigation} from './library-navigation.mjs';
+import {mountSearchResults} from '../search-results/native.mjs';
 
 let requestedProviders = null, providers = {}, providerGeneration = 0, activeController = null, homeOwner = null, mountedRuntime = null;
 let friendNotifications = null, ownedHomeProviders = null, presencePublisher = null, notificationsView = null;
@@ -371,3 +372,23 @@ function mountAlbumTopSurface() {
 window.addEventListener('albumhaven:album-tops-runtime-ready', mountAlbumTopSurface);
 window.addEventListener('albumhaven:playlist-runtime-ready', mountAlbumTopSurface);
 mountAlbumTopSurface();
+
+let searchMount = null, searchMountRuntime = null, searchMountHost = null;
+function mountSearchSurface() {
+  const runtime = window.AlbumHavenSearchRuntime, host = document.getElementById('search-results-root');
+  if (!runtime || !host) return;
+  if (searchMount && searchMountRuntime === runtime && searchMountHost === host) return;
+  const previous = searchMount;
+  searchMount = null; searchMountRuntime = null; searchMountHost = null;
+  previous?.dispose();
+  // Disposal may synchronously install a successor. Never overwrite its owner.
+  if (searchMount || window.AlbumHavenSearchRuntime !== runtime
+    || document.getElementById('search-results-root') !== host) return;
+  const mounted = mountSearchResults({host, runtime});
+  if (window.AlbumHavenSearchRuntime !== runtime || document.getElementById('search-results-root') !== host) {
+    mounted?.dispose(); return;
+  }
+  searchMount = mounted; searchMountRuntime = runtime; searchMountHost = host;
+}
+window.addEventListener('albumhaven:search-runtime-ready', mountSearchSurface);
+mountSearchSurface();

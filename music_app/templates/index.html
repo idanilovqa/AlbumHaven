@@ -155,6 +155,7 @@
         {{ action_button('Open library navigation', id='collection-library-navigation-button', icon='filters', attributes={'data-toggle-artists-drawer': '1', 'aria-controls': 'shell-navigation-rail'}) }}
       </div>
       <section id="album-tops-root" class="gallery-scrollbar" aria-label="Album Tops" hidden></section>
+      <section id="search-results-root" class="gallery-scrollbar" aria-label="Search results" hidden></section>
       {% if shell_main.content_kind == 'discovery_center_page' and discovery_center_page %}
       <section class="discovery-center-page" id="discovery-center-page" data-discovery-center-page-kind="{{ discovery_center_page.page_kind or 'discovery_center' }}" data-discovery-center-active-tab="{{ discovery_center_page.active_tab or 'inbox' }}" data-discovery-center-active-source="{{ discovery_center_page.active_source or 'all' }}">
         <header class="discovery-center-page-header">

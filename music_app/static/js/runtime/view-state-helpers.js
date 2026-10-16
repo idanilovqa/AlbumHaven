@@ -1,3 +1,24 @@
+// Admission classification only. The server remains the sole grammar owner;
+// unsupported personal syntax must reach it unchanged, never ordinary fallback.
+function isPrivateSearchExpression(query) {
+  return typeof query === 'string' && query.split(/\s+/u).some(word =>
+    word.includes(':') || word.replace(/^-+/u, '').startsWith('@'));
+}
+
+function isPrivateSearchRequestUrl(value) {
+  const url = new URL(value, 'http://localhost');
+  const surface = String(url.searchParams.get('surface') || '');
+  if (surface.toLowerCase() === 'playlists' || surface.trim().toLowerCase() === 'album_tops') return false;
+  return url.searchParams.getAll('q').some(isPrivateSearchExpression)
+    || [...url.searchParams.keys()].some(key => key.startsWith('search_'));
+}
+
+function appendPrivateSearchPresentation(params, view) {
+  if (isPrivateSearchExpression(view.query) && ['albums', 'tracks'].includes(view.search_presentation)) {
+    params.set('search_presentation', view.search_presentation);
+  }
+}
+
 function appendSearchFilterParams(params, searchFilters) {
   const filters = searchFilters && typeof searchFilters === 'object' ? searchFilters : {};
   const appendRepeated = (key, values) => {
@@ -143,6 +164,7 @@ function buildUrl(view) {
   }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
+  if (resolvedSurface === 'albums') appendPrivateSearchPresentation(params, view);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
@@ -180,6 +202,7 @@ function buildApiUrl(view, options = {}) {
   }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
+  if (resolvedSurface === 'albums') appendPrivateSearchPresentation(params, view);
   if (view.selected_artist) params.set('artist', view.selected_artist);
   if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
@@ -222,6 +245,8 @@ function parseUrlStateFromUrl(url, baseOrigin) {
     playlist_id: u.searchParams.get('playlist_id') || '',
     top_ref: u.searchParams.get('top_ref') || '',
     query: u.searchParams.get('q') || '',
+    ...(['albums', 'tracks'].includes(u.searchParams.get('search_presentation'))
+      ? {search_presentation: u.searchParams.get('search_presentation')} : {}),
     selected_artist: u.searchParams.get('artist') || '',
     page_mode: u.searchParams.get('page_mode') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),

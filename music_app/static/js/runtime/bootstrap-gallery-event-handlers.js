@@ -1,4 +1,8 @@
 function handleGalleryBootstrapClick(event) {
+  const privateSidebarNode = event.target.closest('[data-sidebar-artist], [data-sidebar-all-artists="1"]');
+  if (privateSidebarNode && (privateSidebarNode.albumHavenPrivateSearchView || state.view?.private_search === true)) {
+    return handlePrivateSearchSidebarNavigation(event, privateSidebarNode);
+  }
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
@@ -415,9 +419,32 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
   };
 }
 
+function handlePrivateSearchSidebarNavigation(event, node) {
+  event.preventDefault();
+  const runtime = window.AlbumHavenSearchRuntime;
+  if (runtime?.sidebarNodeIsCurrent(node) !== true) return true;
+  if (typeof deferAppFormPageReplacement === 'function'
+    && deferAppFormPageReplacement(() => handlePrivateSearchSidebarNavigation(event, node))) return true;
+  if (runtime.sidebarNodeIsCurrent(node) !== true) return true;
+  const allArtists = node.getAttribute('data-sidebar-all-artists') === '1';
+  const nextView = {...state.view, selected_artist: allArtists ? '' : node.getAttribute('data-sidebar-artist'),
+    all_artists_active: allArtists, related_filter_artists: [], primary_filter_active: false};
+  const url = new URL(buildApiUrl(nextView), window.location.href);
+  url.searchParams.set('search_presentation', state.view.search_presentation);
+  closeArtistsDrawer({restoreFocus: false});
+  if (runtime.sidebarNodeIsCurrent(node) !== true) return true;
+  // Both native handlers use this same current-node path. The native foreground
+  // owner obtains a fresh selected/all page; no prior cursor or source is reused.
+  fetchAndRender(`${url.pathname}${url.search}`, true);
+  return true;
+}
+
 function handleSidebarArtistSelectionClick(event) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
+  if (sidebarArtistLink.albumHavenPrivateSearchView || state.view?.private_search === true) {
+    return handlePrivateSearchSidebarNavigation(event, sidebarArtistLink);
+  }
 
   event.preventDefault();
   if (typeof deferAppFormPageReplacement === 'function'
@@ -1444,6 +1471,8 @@ function buildClearedSearchView() {
       },
       surface_request: restoredSelectedArtist ? 'albums' : 'home',
       query: '',
+      private_search: false,
+      search_presentation: undefined,
       selected_artist: restoredSelectedArtist,
       all_artists_active: false,
       gallery_scope: restoredSelectedArtist ? state.view.gallery_scope : '',
@@ -1471,6 +1500,8 @@ function buildClearedSearchView() {
   return {
     ...state.view,
     query: '',
+    private_search: false,
+    search_presentation: undefined,
     selected_artist: restoredSelectedArtist,
     all_artists_active: false,
     related_filter_artists: restoredSelectedArtist || pendingAllArtistsSelection
@@ -2141,5 +2172,5 @@ function syncSearchClear() {
 function handleGalleryBootstrapPopState(options = {}) {
   if (window.AlbumHavenPlaylistRuntime?.restoreDraftFromHistory?.()) return;
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
-  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
+  return fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }

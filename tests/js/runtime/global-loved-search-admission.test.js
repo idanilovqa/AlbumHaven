@@ -1,11 +1,11 @@
 'use strict';
-// Additive contracts at existing production fetch/read boundaries. No absent
-// Search module imports; no substitute implementation of admission or parsing.
+// Existing behavioral assertions at the actual connected fetch/read boundaries.
+// The additive adapter composes real owners without replacing admission or apply.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   fixture, browsePayload, outcome,
-} = require('./album-tops-membership-fixtures/actual-request-fixture.cjs');
+} = require('./search-native-fixtures/existing-admission-adapter.cjs');
 
 const A = 'a'.repeat(64), B = 'b'.repeat(64);
 const forms = [':loved', 'love:loved', ':obsessed', 'love:obsessed'];
@@ -163,12 +163,44 @@ test('bounded empty personal page keeps its pending witness continuation', async
   const h = setup(t), data = packet(':loved', {selected_artist: null, selection_state: 'pending_page',
     artist_groups: [], page: {limit: 50, returned_count: 0, has_more: true, next_cursor: 'opaque-result'},
     sidebar: {artists: [], returned_count: 0, has_more: true, next_cursor: 'opaque-sidebar'}});
+  await h.mount();
   const pending = h.read(url(':loved'));
   h.respond(0, data); await pending;
   assert.equal(h.applied.length, 1);
-  assert.deepEqual(plain(h.applied[0].payload.page), data.page);
-  assert.equal(h.applied[0].payload.selection_state, 'pending_page');
+  const navigation = h.applied[0].payload;
+  for (const key of ['page', 'next_cursor', 'search_cursor', 'search_sidebar_cursor',
+    'sidebar', 'context_ref', 'receipt', 'snapshot_ref', 'selection_state']) {
+    assert.equal(Object.hasOwn(navigation, key), false, `${key} must stay outside applied navigation`);
+  }
+  for (const secret of [A, 'opaque-result', 'opaque-sidebar']) {
+    assert.equal(JSON.stringify(navigation).includes(secret), false, 'private continuation data cannot enter navigation');
+  }
+  const snapshot = h.runtime().snapshot();
+  assert.equal(snapshot.status, 'pending');
+  assert.equal(snapshot.actionable, false);
+  assert.equal(snapshot.sourceIdentity, null);
+  assert.equal(snapshot.result.selectionState, 'pending_page');
+  assert.deepEqual(plain(snapshot.result.page), {limit: 50, returnedCount: 0, hasMore: true});
+  assert.deepEqual(plain(snapshot.result.albums), []);
+  assert.deepEqual(plain(snapshot.result.tracks), []);
+  assert.equal(h.runtime().createPlaytableSource({rows: [],
+    context: {scopeKey: snapshot.scopeKey, resultId: snapshot.resultId},
+    instance: snapshot.sourceIdentity, revision: snapshot.sourceIdentity, isCurrent: () => true}), null,
+  'pending progress cannot grant a native action source');
+  await h.flush();
   assert.equal(h.requests.length, 1, 'acceptance must not hide an unbounded autofill loop');
+  h.click(h.button(/^Continue$/));
+  assert.equal(h.requests.length, 2, 'only explicit Continue resumes one bounded witness read');
+  const continuation = new URL(h.requests[1].url, h.location);
+  assert.equal(continuation.searchParams.get('q'), ':loved');
+  assert.equal(continuation.searchParams.get('search_sidebar_cursor'), 'opaque-sidebar');
+  assert.equal(continuation.searchParams.get('search_cursor'), null, 'first-witness Sidebar proof has priority');
+  assert.equal(continuation.searchParams.get('search_sidebar_only'), null, 'progress resumes the foreground result');
+  assert.equal(h.requests[1].options.headers['X-AlbumHaven-Context'], A);
+  h.respond(1, packet()); await h.invocations.at(-1).outcome;
+  assert.equal(h.runtime().snapshot().status, 'ready');
+  assert.equal(h.runtime().continueResults(snapshot), false, 'retired progress cannot replay its cursor');
+  assert.equal(h.requests.length, 2, 'completion cannot start another automatic scan');
 });
 
 test('unsupported mixed text is surfaced without a broader fallback request', async t => {

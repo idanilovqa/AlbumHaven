@@ -54,3 +54,21 @@
   .album-top-share__source-chooser { padding: 6px; }
   .album-top-share__saved-albums { padding-left: 22px; }
 }
+
+/* Search composes existing native controls, cards and the measured flat table.
+   Match paint remains exclusively with the shared gallery-card modifier. */
+#search-results-root { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; }
+#search-results-root[hidden], #search-results-root [hidden] { display: none; }
+.search-results { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: var(--text); }
+.search-results :is(.search-results__panel, .search-results__body, .search-results__tracks, .album-track-table) { min-width: 0; }
+.search-results__panel, .search-results__sidebar-progress { display: flex; flex-direction: column; gap: 12px; }
+.search-results__actions, .search-results__table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.search-results__table-actions { justify-content: flex-end; margin-bottom: 8px; }
+.search-results__albums { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); gap: 12px; }
+.search-results__albums > .album-card { min-width: 0; }
+.search-results__albums[data-gallery-display="covers"] { grid-template-columns: repeat(auto-fill, minmax(min(145px, 100%), 1fr)); }
+.search-results__albums[data-gallery-display="list"] { grid-template-columns: minmax(0, 1fr); }
+.search-results__albums[data-gallery-display="list"] > .album-card { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; }
+.search-results__tracks .compact-data-table { width: 100%; }
+.search-results__status { min-width: 0; overflow-wrap: anywhere; }
+

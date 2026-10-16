@@ -880,6 +880,47 @@ function resolveMainGalleryCategorySelection(fallbackCategories = null) {
   );
 }
 
+// Private Search owns its result DTO. Native navigation receives only this
+// finite projection, never a response spread or a reusable row/source snapshot.
+function normalizePrivateSearchNavigation(payload, fallbackView = null) {
+  const base = isRuntimePlainObject(fallbackView) ? fallbackView : {};
+  const wire = payload.contract_version === 'own-love-v1';
+  const rows = wire ? payload.sidebar?.artists : payload.artists_sidebar;
+  const artists = (Array.isArray(rows) ? rows : []).filter(row =>
+    typeof row?.artist === 'string' && row.artist.trim()).map(row => ({
+    artist: row.artist,
+    artist_display: typeof row.artist_display === 'string' ? row.artist_display : row.artist,
+    ...(Number.isInteger(row.count) && row.count >= 0 ? {count: row.count} : {}),
+  }));
+  return {
+    ok: true,
+    surface: {active: 'albums'}, surface_request: 'albums',
+    private_search: true,
+    query: typeof payload.query === 'string' ? payload.query : '',
+    selected_artist: typeof payload.selected_artist === 'string' ? payload.selected_artist : '',
+    all_artists_active: wire ? payload.selection_state === 'all_artists' : payload.all_artists_active === true,
+    search_presentation: (wire ? payload.presentation : payload.search_presentation) === 'tracks' ? 'tracks' : 'albums',
+    artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
+    artists_sidebar: artists, related_artists: [], related_filter_artists: [],
+    search_filters: normalizeRuntimeSearchFilters(null),
+    // These are existing ordinary UI contracts, never properties of the private
+    // envelope. They do not parse or authorize the raw committed query.
+    search_filter_contract: normalizeRuntimeSearchFilterContract(base.search_filter_contract),
+    search_query_contract: normalizeRuntimeSearchQueryContract(base.search_query_contract),
+    visible_library_categories: normalizeVisibleLibraryCategorySelection(base.visible_library_categories),
+    search_context: null, ignored_version_keys: [], non_album_tracks: [],
+    non_album_exception_values: [], manual_version_links: {},
+    gallery_scope: normalizeRuntimeString(base.gallery_scope, 'all'),
+    gallery_display_mode: normalizeRuntimeGalleryDisplayMode(base.gallery_display_mode),
+    gallery_scale_percent: normalizeRuntimeGalleryScalePercent(base.gallery_scale_percent),
+    music_dir: normalizeRuntimeString(base.music_dir),
+    app_name: normalizeRuntimeString(base.app_name), app_version: normalizeRuntimeString(base.app_version),
+    album_count: 0, artist_count: artists.length,
+    show_all_artists_sidebar_link: wire || payload.show_all_artists_sidebar_link !== false, primary_filter_active: false,
+    initial_view_partial: false, payload_tier: 'full',
+  };
+}
+
 function normalizeViewPayload(payload, fallbackView = null) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
@@ -889,6 +930,13 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(isRuntimePlainObject(fallbackView) ? fallbackView : {}),
   };
   const source = isRuntimePlainObject(payload) ? payload : {};
+  if (source.private_search === true) return normalizePrivateSearchNavigation(source, base);
+  // A subsequent ordinary response must not inherit private routing from its
+  // fallback view. Its ordinary normalizer and response fields remain intact.
+  if (base.private_search === true) {
+    delete base.private_search;
+    delete base.search_presentation;
+  }
   const resolvedSurface = String(
     source?.surface?.active
       ?? source?.surface_request
@@ -1350,6 +1398,11 @@ function compactCurrentViewForIdle() {
 }
 
 function applyViewPayload(payload, options = {}) {
+  const ownsResponseApply = () => {
+    try { return typeof options.isCurrentResponse !== 'function' || options.isCurrentResponse() === true; }
+    catch (_error) { return false; }
+  };
+  if (!ownsResponseApply()) return null;
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }
@@ -1377,6 +1430,7 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  if (!ownsResponseApply()) return null;
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState
@@ -1462,12 +1516,20 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  const ownsAppliedView = () => ownsResponseApply() && state.view === nextView;
+  if (typeof window !== 'undefined') window.AlbumHavenSearchRuntime?.syncNativeView({isCurrentResponse: options.isCurrentResponse});
+  if (!ownsAppliedView()) return nextView;
   if (typeof selectLibrarySidebarMode === 'function' && previousView.surface?.active !== nextView.surface?.active
     && ['playlists', 'album_tops'].includes(nextView.surface?.active)) selectLibrarySidebarMode(nextView.surface.active);
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
+  if (!ownsAppliedView()) return nextView;
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
   }
@@ -1482,6 +1544,7 @@ function applyViewPayload(payload, options = {}) {
   } else if (typeof syncArtistsDrawerVisibility === 'function') {
     syncArtistsDrawerVisibility();
   }
+  if (!ownsAppliedView()) return nextView;
   if (
     nextSelectedArtist
   ) {
@@ -1513,6 +1576,7 @@ function applyViewPayload(payload, options = {}) {
   } else {
     resetPreSearchViewState();
   }
+  if (!ownsAppliedView()) return nextView;
   return nextView;
 }
 

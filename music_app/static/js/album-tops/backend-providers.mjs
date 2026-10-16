@@ -1,5 +1,6 @@
 // All network replies are bound to the authenticated native context and caller scope.
 import {isProgressRevision, isManualProgress, isTopActivity, projectCompleteTopProgress} from './progress.mjs';
+import {isPublicationRevision, projectOwnerPublication, projectPublicationReceipt} from './publication.mjs';
 
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const revision = value => typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value);
@@ -32,6 +33,20 @@ function top(value) {
 }
 const cursorValue = value => value === null || typeof value === 'string' && value.length > 0 && value.length <= 4096;
 const localId = value => Number.isSafeInteger(value) && value > 0;
+function sourceLabel(value) {
+  if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)) return false;
+  const characters = Array.from(value);
+  return characters.length <= 1000 && characters.every(character => {
+    const code = character.codePointAt(0); return code < 0xd800 || code > 0xdfff;
+  });
+}
+function publicationSource(value) {
+  if (!localId(value?.selected_local_album_id) || !uuid(value.selected_source_ref)
+    || !sourceLabel(value.title) || !sourceLabel(value.artist)
+    || value.year !== null && (!Number.isInteger(value.year) || value.year < 1 || value.year > 9999)) throw fail('Invalid Album Top publication source.');
+  return {selected_local_album_id: value.selected_local_album_id, selected_source_ref: value.selected_source_ref,
+    title: value.title, artist: value.artist, year: value.year};
+}
 function albumSummary(value) {
   if (!localId(value?.local_album_id) || value.album_ref !== null && !uuid(value.album_ref)
     || typeof value.title !== 'string' || typeof value.artist !== 'string'
@@ -147,17 +162,38 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
           return {...items[index], title: row.title, artist: row.artist, year: row.year, track_count: row.track_count};
         })};
     },
+    async readPublicationSources(ref, itemRef, options) {
+      const {albumRef, revision: expectedRevision, cursor} = options, limit = options.limit === undefined ? 100 : options.limit;
+      if (!uuid(ref) || !uuid(itemRef) || !uuid(albumRef) || !isPublicationRevision(expectedRevision)
+        || !Number.isInteger(limit) || limit < 1 || limit > 100
+        || cursor != null && !cursorValue(cursor)) throw fail('Invalid Album Top publication source query.');
+      const params = new URLSearchParams({revision: expectedRevision, limit: String(limit)});
+      if (cursor) params.set('cursor', cursor);
+      const data = await request('/album-tops/' + ref + '/items/' + itemRef + '/publication-sources?' + params.toString(), options);
+      if (data.top_ref !== ref || data.item_ref !== itemRef || data.album_ref !== albumRef || data.revision !== expectedRevision
+        || !Array.isArray(data.sources) || data.sources.length > limit || !cursorValue(data.next_cursor)
+        || data.next_cursor !== null && data.next_cursor === cursor) throw fail('Invalid Album Top publication source page.');
+      const sources = data.sources.map(publicationSource), seen = new Set();
+      for (let index = 0; index < sources.length; index++) {
+        const row = sources[index], previous = sources[index - 1];
+        if (seen.has(row.selected_source_ref) || previous && (previous.selected_local_album_id > row.selected_local_album_id
+          || previous.selected_local_album_id === row.selected_local_album_id && previous.selected_source_ref >= row.selected_source_ref)) throw fail('Invalid Album Top publication source order.');
+        seen.add(row.selected_source_ref);
+      }
+      return {top_ref: ref, revision: data.revision, item_ref: itemRef, album_ref: data.album_ref, sources, next_cursor: data.next_cursor};
+    },
     async readSharing(ref, options) {
       if (!uuid(ref)) throw fail('Invalid Album Top identity.');
       const data = await request(pagePath('/album-tops/' + ref + '/sharing', options, {limit: false}), options);
-      if (data.top_ref !== ref || !revision(data.revision) || !['private', 'server_shared'].includes(data.visibility)
+      if (data.top_ref !== ref || !isPublicationRevision(data.revision) || !['private', 'server_shared'].includes(data.visibility)
         || !['can_manage', 'can_request_edit', 'can_copy'].every(key => Object.hasOwn(data, key) && typeof data[key] === 'boolean')
         || !['none', 'pending', 'approved', 'declined'].includes(data.request_status) || !cursorValue(data.next_pending_cursor)) throw fail('Invalid Album Top sharing.');
       const pending_requests = rows(data.pending_requests, editRequest, 'request_ref');
       if (pending_requests.some(row => row.top_ref !== ref) || !data.can_manage && (pending_requests.length || data.next_pending_cursor)) throw fail('Invalid Album Top request scope.');
       return {top_ref: ref, revision: data.revision, visibility: data.visibility, can_manage: data.can_manage,
         can_request_edit: data.can_request_edit, can_copy: data.can_copy, request_status: data.request_status,
-        pending_requests, next_pending_cursor: data.next_pending_cursor};
+        pending_requests, next_pending_cursor: data.next_pending_cursor,
+        ...(Object.hasOwn(data, 'publication') ? {publication: projectOwnerPublication(data.publication)} : {})};
     },
     readAccessGrants: (ref, options) => access(ref, options, false),
     readAccessCandidates: (ref, options) => access(ref, options, true),
@@ -213,7 +249,17 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
     },
     async execute(action, command, options) {
       const {top_ref, ...body} = command;
-      if (!uuid(body.request_key) || !['create', 'save', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion', 'set_activity'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
+      if (!uuid(body.request_key) || !['create', 'save', 'enable_external', 'revoke_external', 'add', 'remove', 'reorder', 'delete', 'visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'request_edit', 'decide_edit_request', 'copy', 'set_manual_completion', 'set_activity'].includes(action) || action !== 'create' && !uuid(top_ref)) throw fail('Invalid Album Top command.');
+      if (action === 'enable_external' || action === 'revoke_external') {
+        const keys = action === 'enable_external' ? ['request_key', 'revision', 'items', 'evidence_revision'] : ['request_key', 'revision'];
+        if (!isPublicationRevision(body.revision) || Object.keys(body).length !== keys.length
+          || !keys.every(key => Object.hasOwn(body, key))) throw fail('Invalid Album Top publication command.');
+        if (action === 'enable_external') {
+          if (typeof body.evidence_revision !== 'string' || !/^[0-9a-f]{64}$/.test(body.evidence_revision)) throw fail('Invalid Album Top publication evidence.');
+          body.items = draftItems(body.items);
+          if (body.items.some(row => row.item_ref === null || !row.selected_source_ref)) throw fail('Invalid Album Top saved publication selection.');
+        }
+      }
       if (action === 'set_manual_completion' && (!uuid(body.album_ref) || !isProgressRevision(body.progress_revision)
         || typeof body.completed !== 'boolean' || Object.keys(body).length !== 4)) throw fail('Invalid Album Top progress command.');
       if (action === 'set_activity' && (!isTopActivity(body) || Object.keys(body).length !== 3)) throw fail('Invalid Album Top activity command.');
@@ -236,8 +282,13 @@ export function createAlbumTopBackendProviders({transport, acceptsScope}) {
       }
       if (!uuid(data.top_ref) || !revision(data.revision) || data.action !== action || data.request_key !== body.request_key || !['create', 'copy'].includes(action) && data.top_ref !== top_ref
         || action === 'copy' && (data.source_top_ref !== top_ref || data.source_revision !== body.revision || data.top_ref === top_ref)) throw fail('Album Top write was not acknowledged.', 502);
+      const publication = Object.hasOwn(data, 'publication') ? projectPublicationReceipt(data.publication) : undefined;
+      if ((action === 'enable_external' || action === 'revoke_external')
+        && (!isPublicationRevision(data.revision) || BigInt(data.revision) !== BigInt(body.revision) + 1n
+          || publication?.state !== (action === 'enable_external' ? 'enabled' : 'revoked'))) throw fail('Album Top publication was not acknowledged.', 502);
       return {top_ref: data.top_ref, revision: data.revision, action, request_key: data.request_key,
-        ...(action === 'copy' ? {source_top_ref: data.source_top_ref, source_revision: data.source_revision} : {})};
+        ...(action === 'copy' ? {source_top_ref: data.source_top_ref, source_revision: data.source_revision} : {}),
+        ...(publication ? {publication} : {})};
     },
     dispose() {disposed = true;},
   };

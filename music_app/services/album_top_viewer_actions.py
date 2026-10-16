@@ -124,7 +124,16 @@ def mutate(owner, connection, context, command, top, constraints, *, locked_targ
     raise AlbumTopError('invalid_command')
 
 
-def copy_top(connection, context, command, top):
+def copy_top(connection, context, command, top, *, service=None, constraints=None,
+             context_ref=None, remote_sources=None):
+    from music_app.services import album_top_remote_membership
+    if remote_sources is None:
+        remote_sources = album_top_remote_membership.bindings(connection, top)
+    if remote_sources:
+        if service is None:
+            raise AlbumTopError('remote_membership_unavailable', 409)
+        return album_top_remote_membership.copy_top(service, connection, context, command, top,
+            constraints, context_ref, remote_sources)
     # The locked artifact is the authorized snapshot. Inventory admission and
     # playback eligibility are unrelated to keeping a personal catalog-only copy.
     rows = connection.execute('''select catalog_ref,original_position,curator_position

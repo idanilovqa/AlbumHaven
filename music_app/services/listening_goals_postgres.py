@@ -445,30 +445,13 @@ class PostgresListeningGoalsService:
 
     @staticmethod
     def _catalog(connection, evidence):
-        identity = ('musicbrainz', 'release-group', evidence['external_id'])
-        query = '''select catalog_ref from catalog.release_group_provider_identities
-            where provider=%s and entity_kind=%s and external_id=%s'''
-        row = connection.execute(query, identity).fetchone()
-        if row:
-            return str(row['catalog_ref'])
-        candidate = str(uuid4())
-        # A losing cross-account race rolls back its candidate catalog record;
-        # it must not strand a catalog UUID or retry the whole Goal command.
+        from music_app.services.remote_album_catalog import (
+            RemoteCatalogIdentityConflict, map_release_group_catalog,
+        )
         try:
-            with connection.transaction():
-                connection.execute('''insert into catalog.release_groups(ref,title,artist_display,release_year)
-                    values(%s,%s,%s,%s)''', (candidate, evidence['title'], evidence['artist_display'],
-                        int(evidence['first_release_date'][:4]) if evidence['first_release_date'] else None))
-                connection.execute('''insert into catalog.release_group_provider_identities
-                    (provider,entity_kind,external_id,catalog_ref) values(%s,%s,%s,%s)''', (*identity, candidate))
-            return candidate
-        except Exception as error:
-            if getattr(error, 'sqlstate', None) != '23505':
-                raise
-            row = connection.execute(query, identity).fetchone()
-            if row is None:
-                raise GoalsError('identity_conflict', 409) from None
-            return str(row['catalog_ref'])
+            return map_release_group_catalog(connection, evidence)
+        except RemoteCatalogIdentityConflict:
+            raise GoalsError('identity_conflict', 409) from None
 
     @staticmethod
     def _persist(connection, account, before, after, *, evidence, now, revision, exists, top_admission=None):

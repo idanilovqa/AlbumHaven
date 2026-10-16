@@ -16,6 +16,7 @@ from music_app.services import album_top_progress as progress
 from music_app.services import album_top_activity_postgres as activity
 from music_app.services import album_top_publication as publication
 from music_app.services import album_top_publication_evidence as publication_evidence
+from music_app.services import album_top_remote_membership as remote_membership
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import encode_social_cursor
 from music_app.services.private_library_authority import (
@@ -33,10 +34,11 @@ class PostgresOwnedAlbumTopsService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     @contextmanager
-    def _authorized(self, context, constraints, *, target_account_id=None):
+    def _authorized(self, context, constraints, *, target_account_id=None, target_account_ids=()):
         try:
             with current_library_transaction(self._url, context, constraints=constraints,
-                    connect=self._connect, clock=self._clock, target_account_id=target_account_id) as transaction:
+                    connect=self._connect, clock=self._clock, target_account_id=target_account_id,
+                    target_account_ids=target_account_ids) as transaction:
                 yield transaction
                 connection, live, _ = transaction
                 # A database lock may outlive the session expiry checked on entry.
@@ -250,7 +252,7 @@ class PostgresOwnedAlbumTopsService:
         if authorized_refs != required_refs:
             raise AlbumTopError("forbidden", 403)
 
-    def read(self, context, *, top_ref, constraints=None):
+    def read(self, context, *, top_ref, constraints=None, context_ref=None):
         ref = top_uuid(top_ref)
         with self._authorized(context, constraints) as (connection, live, _):
             top = self._top(connection, live, ref)
@@ -259,20 +261,35 @@ class PostgresOwnedAlbumTopsService:
                 c.title,c.artist_display,c.release_year from app.album_list_items i
                 join catalog.release_groups c on c.ref=i.catalog_ref
                 where i.top_ref=%s order by i.curator_position""", (ref,)).fetchall()
+            remote = remote_membership.bindings(connection, top)
+            if remote:
+                remote_membership.require_context(context_ref)
+                remote_membership.lock_read_sources(connection, top, remote)
             state = activity.read_activity(connection, live, [ref])[ref]
             actions = self._actions(live, constraints, top, active=state["active"])
             edit = {}
             if actions.get('can_edit'):
                 working = publication.working_items(connection, top)
                 link = publication.lock_link(connection, top)
-                edit['edit_draft'] = {'items': publication.as_draft(working),
+                edit['edit_draft'] = {
+                    **({'item_selections': remote_membership.typed_draft(working, remote)} if remote
+                       else {'items': publication.as_draft(working)}),
                     'publication_preview_required': top['owner_account_id'] == live.actor.account_id
                         and link is not None and link['state'] == 'enabled'}
+            overlay = {**progress.read_overlay(connection, live, top), "activity": state}
+            if remote:
+                # Working-source, link and overlay reads can wait while the
+                # resolver changes. Only current editors receive typed sources.
+                actions = self._actions(live, constraints, top, active=state["active"])
+                self._require(live, (BROWSE,), constraints, top)
+                if not actions.get('can_edit'):
+                    edit = {}
             return {"top_ref": ref, "title": top["title"], "description": top["description"],
                 "revision": str(top["revision"]), "visibility": top["visibility"],
                 "allowed_actions": actions, **edit,
-                "top_viewer_overlay": {**progress.read_overlay(connection, live, top), "activity": state},
-                "items": [{**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]}
+                "top_viewer_overlay": overlay,
+                "items": remote_membership.project_items(rows, remote) if remote else [
+                    {**row, "ref": str(row["ref"]), "catalog_ref": str(row["catalog_ref"])} for row in rows]}
 
     def resolve_public_link(self, context, *, share_ref, constraints=None):
         """Resolve an active share only for an independently permitted working reader.
@@ -308,7 +325,7 @@ class PostgresOwnedAlbumTopsService:
                 reader._owner(connection, published_top, sources, constraints)
                 return ref
 
-    def execute(self, context, command: AlbumTopCommand, *, constraints=None):
+    def execute(self, context, command: AlbumTopCommand, *, constraints=None, context_ref=None):
         from psycopg.types.json import Jsonb
         if not isinstance(command, AlbumTopCommand):
             raise AlbumTopError("invalid_command")
@@ -316,9 +333,46 @@ class PostgresOwnedAlbumTopsService:
             raise AlbumTopError("invalid_command")
         command = normalize_top_command(command.action,
             {**command.data, "request_key": command.request_key}, top_ref=command.top_ref)
+        typed = remote_membership.typed_command(command)
+        if typed:
+            context_ref = remote_membership.require_context(context_ref)
         manual_progress = command.action == "set_manual_completion"
         private_state = manual_progress or command.action == "set_activity"
         lock_target = command.data.get("account_id")
+        discovered_owner = None
+        copied_actor_ids = ()
+        copy_receipt_seen = False
+        if command.action in {'add', 'save'} and (typed or context_ref is not None):
+            self._require(context, (BROWSE,), constraints)
+            # Retention charges the destination owner. Discover before taking
+            # ANY account or Top lock; recheck against the locked Top below.
+            with self._connect(self._url) as lookup:
+                discovered = lookup.execute('''select owner_account_id from app.album_lists
+                    where ref=%s and library_id=%s''', (command.top_ref, context.library_id)).fetchone()
+                if discovered is None:
+                    raise AlbumTopError('top_unavailable', 404)
+                discovered_owner = lock_target = discovered['owner_account_id']
+        if command.action == 'copy' and context_ref is not None:
+            remote_membership.require_context(context_ref)
+            self._require(context, (BROWSE,), constraints)
+            # Original initiating accounts remain FK lineage in an independent
+            # copy. Discover the bounded exact-source set before ANY account or
+            # Top lock; it is untrusted until checked under the source Top lock.
+            with self._connect(self._url) as lookup:
+                copy_receipt_seen = lookup.execute('''select request_key from app.album_list_operations
+                    where actor_account_id=%s and library_id=%s and request_key=%s''',
+                    (context.actor.account_id, context.library_id, command.request_key)).fetchone() is not None
+                if not copy_receipt_seen:
+                    discovered = lookup.execute('''select a.initiating_actor_account_id
+                        from app.album_list_item_remote_sources r
+                        join app.album_top_remote_admissions a on a.ref=r.admission_ref and a.top_ref=r.top_ref
+                          and a.library_id=r.library_id and a.owner_account_id=r.owner_account_id and a.catalog_ref=r.catalog_ref
+                        where r.top_ref=%s and r.library_id=%s
+                        order by r.item_ref limit %s''',
+                        (command.top_ref, context.library_id, MAX_TOP_ITEMS + 1)).fetchall()
+                    if len(discovered) > MAX_TOP_ITEMS:
+                        raise AlbumTopError('source_too_large', 413)
+                    copied_actor_ids = tuple(sorted({row['initiating_actor_account_id'] for row in discovered}))
         if command.action == "decide_edit_request":
             self._require(context, (BROWSE,), constraints)
             # Discover the target before taking ANY account/parent locks. The
@@ -328,7 +382,8 @@ class PostgresOwnedAlbumTopsService:
                     where ref=%s and top_ref=%s and library_id=%s""",
                     (command.data["request_ref"], command.top_ref, context.library_id)).fetchone()
                 lock_target = request["requester_account_id"] if request else None
-        with self._authorized(context, constraints, target_account_id=lock_target) as (connection, live, now):
+        with self._authorized(context, constraints, target_account_id=lock_target,
+                              target_account_ids=copied_actor_ids) as (connection, live, now):
             # Actor lock held by current_library_transaction serializes operation keys.
             prior = connection.execute("""select command_digest,receipt,top_ref,required_actions,publication_ref from app.album_list_operations
                 where actor_account_id=%s and library_id=%s and request_key=%s""",
@@ -351,10 +406,25 @@ class PostgresOwnedAlbumTopsService:
                 # cannot duplicate a landed copy, including from a new session.
                 if command.action in {"create", "copy"} and retained["owner_account_id"] != live.actor.account_id:
                     raise AlbumTopError("top_unavailable", 404)
+                remote_replay = command.action in {'save', 'copy'} and (
+                    prior['receipt'].get('remote_membership') is True
+                    or remote_membership.bindings(connection, retained))
+                if remote_replay:
+                    remote_membership.require_context(context_ref)
                 if manual_progress:
                     progress.require_member(connection, live, retained, command.data["album_ref"])
                 publication.replay(self, connection, live, command, retained, prior, constraints)
+                if typed or remote_replay:
+                    self._require(live, (BROWSE,), constraints, retained)
+                    self._require(live, tuple(prior['required_actions']) or command_actions(command), constraints,
+                        retained if command.action not in {'create', 'copy'} else None,
+                        owner_only=prior['publication_ref'] is not None)
                 return dict(prior["receipt"])
+            if copy_receipt_seen:
+                # A discovered receipt is never authority or permission to
+                # omit required locks for a new command. A disappeared receipt
+                # requires a fresh attempt; landed replay never reads source ACL.
+                raise AlbumTopError('concurrent_change', 409)
             if command.action == "create":
                 self._require(live, command_actions(command), constraints)
                 ref = str(uuid4())
@@ -366,6 +436,8 @@ class PostgresOwnedAlbumTopsService:
                 # Private activity/progress share the parent lock with other viewers while
                 # excluding content/visibility edits through the existing owner.
                 top = self._top(connection, live, command.top_ref, write=not private_state)
+                if discovered_owner is not None and top['owner_account_id'] != discovered_owner:
+                    raise AlbumTopError('top_unavailable', 404)
                 if private_state:
                     # Sample event time only after the parent wait; stale entry
                     # time must not reach progress/activity domain transitions.
@@ -377,14 +449,30 @@ class PostgresOwnedAlbumTopsService:
                 if not private_state and str(top["revision"]) != command.data["revision"]:
                     raise AlbumTopError("revision_conflict", 409)
             required_actions = command_actions(command)
-            if command.action in {"save", "enable_external", "revoke_external"}:
+            remote = remote_membership.bindings(connection, top) if command.action in {
+                'add', 'save', 'copy', 'remove', 'reorder', 'enable_external'} else {}
+            if remote and command.action in {'add', 'save', 'copy', 'remove', 'reorder', 'enable_external'}:
+                remote_membership.require_context(context_ref)
+            if command.action == 'copy' and remote and not {
+                    row['initiating_actor_account_id'] for row in remote.values()
+                    } <= {live.actor.account_id, *copied_actor_ids}:
+                # A source changed during discovery. Never acquire a newly
+                # discovered account lock after the source Top lock.
+                raise AlbumTopError('concurrent_change', 409)
+            if command.action in {'create', 'add'} and typed:
+                receipt = remote_membership.add(self, connection, live, command, top, now, constraints, context_ref)
+            elif command.action in {'save', 'enable_external'} and (typed or remote):
+                receipt, required_actions = remote_membership.save(
+                    self, connection, live, command, top, now, constraints, context_ref, remote)
+            elif command.action in {"save", "enable_external", "revoke_external"}:
                 receipt, required_actions = publication.save(self, connection, live, command, top, now, constraints)
             elif command.action == "set_activity":
                 receipt = activity.set_activity(connection, live, command, top, now)
             elif manual_progress:
                 receipt = progress.set_manual_completion(connection, live, command, top, now)
             elif command.action == "copy":
-                receipt = viewers.copy_top(connection, live, command, top)
+                receipt = viewers.copy_top(connection, live, command, top, service=self,
+                    constraints=constraints, context_ref=context_ref, remote_sources=remote)
             else:
                 receipt = self._mutate(connection, live, command, top, now, constraints,
                                        locked_target=lock_target)
@@ -393,6 +481,15 @@ class PostgresOwnedAlbumTopsService:
                 values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (live.actor.account_id, live.library_id,
                 command.request_key, live.actor.session_id, command.action, receipt["top_ref"], command.digest,
                 Jsonb(receipt), list(required_actions), receipt.get("publication", {}).get("publication_ref")))
+            if typed or remote:
+                # The operation receipt INSERT can itself wait. Re-evaluate
+                # resolver policy after all writes; _authorized then rechecks
+                # the actual session immediately before commit.
+                if command.action == 'copy':
+                    self._require(live, (BROWSE,), constraints, top)
+                self._require(live, required_actions, constraints,
+                    top if command.action not in {'create', 'copy'} else None,
+                    owner_only=receipt.get('publication', {}).get('publication_ref') is not None)
             return receipt
 
     def _mutate(self, connection, live, command, top, now, constraints, *, locked_target=None):

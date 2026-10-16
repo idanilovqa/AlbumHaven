@@ -115,6 +115,115 @@ def _draft_items(value, *, require_sources=False):
     return items
 
 
+def _remote_top_ref(value):
+    ref = top_uuid(value)
+    if ref == "00000000-0000-0000-0000-000000000000":
+        raise AlbumTopError("invalid_command")
+    return ref
+
+
+def _remote_selection(value, *, allow_retained=True):
+    if type(value) is not dict or type(value.get("kind")) is not str:
+        raise AlbumTopError("invalid_command")
+    # The remote module imports this module's errors/UUID helpers. Keep this
+    # import local, after both modules can finish their pure definitions.
+    from music_app.services.album_top_remote_sources import (
+        normalize_pending_remote_selector, remote_context_ref,
+    )
+    if value["kind"] == "remote_acquisition":
+        return normalize_pending_remote_selector(value)
+    if (allow_retained and value["kind"] == "remote_retained"
+            and set(value) == {"kind", "admission_ref", "evidence_version"}):
+        return {"kind": "remote_retained",
+                "admission_ref": _remote_top_ref(value["admission_ref"]),
+                "evidence_version": remote_context_ref(value["evidence_version"])}
+    raise AlbumTopError("invalid_command")
+
+
+def _remote_selection_key(value):
+    field = "acquisition_ref" if value["kind"] == "remote_acquisition" else "admission_ref"
+    # A second version for one selector is still a duplicate request member.
+    return value["kind"], value[field]
+
+
+def _top_selections(value, *, allow_retained):
+    if type(value) is not list or not 1 <= len(value) <= MAX_TOP_ITEMS:
+        raise AlbumTopError("invalid_command")
+    selections, seen, remote = [], set(), False
+    for row in value:
+        if type(row) is not dict or type(row.get("kind")) is not str:
+            raise AlbumTopError("invalid_command")
+        if row["kind"] == "local_catalog":
+            if set(row) != {"kind", "album_ref"}:
+                raise AlbumTopError("invalid_command")
+            selection = {"kind": "local_catalog", "album_ref": top_uuid(row["album_ref"])}
+            identity = selection["kind"], selection["album_ref"]
+        else:
+            selection = _remote_selection(row, allow_retained=allow_retained)
+            identity = _remote_selection_key(selection)
+            remote = True
+        if identity in seen:
+            raise AlbumTopError("invalid_command")
+        seen.add(identity)
+        selections.append(selection)
+    if not remote:
+        raise AlbumTopError("invalid_command")
+    return selections
+
+
+def _draft_selection_source(value):
+    if type(value) is not dict or type(value.get("kind")) is not str:
+        raise AlbumTopError("invalid_command")
+    if value["kind"] == "unselected" and set(value) == {"kind"}:
+        return {"kind": "unselected"}
+    if value["kind"] == "local" and set(value) == {
+            "kind", "selected_local_album_id", "selected_source_ref"}:
+        local = value["selected_local_album_id"]
+        if type(local) is not int or not 0 < local <= 9223372036854775807:
+            raise AlbumTopError("invalid_command")
+        return {"kind": "local", "selected_local_album_id": local,
+                "selected_source_ref": top_uuid(value["selected_source_ref"])}
+    return _remote_selection(value)
+
+
+def _draft_item_selections(value):
+    if type(value) is not list or len(value) > MAX_TOP_ITEMS:
+        raise AlbumTopError("invalid_command")
+    items, albums, retained, remote_sources = [], set(), set(), set()
+    for row in value:
+        if type(row) is not dict or type(row.get("kind")) is not str:
+            raise AlbumTopError("invalid_command")
+        kind = row["kind"]
+        expected = {"existing": {"kind", "item_ref", "album_ref", "source"},
+                    "new_local": {"kind", "album_ref", "source"},
+                    "new_remote": {"kind", "source"}}
+        if kind not in expected or set(row) != expected[kind]:
+            raise AlbumTopError("invalid_command")
+        item = {"kind": kind}
+        if kind == "existing":
+            item["item_ref"] = top_uuid(row["item_ref"])
+            if item["item_ref"] in retained:
+                raise AlbumTopError("invalid_command")
+            retained.add(item["item_ref"])
+        if kind != "new_remote":
+            item["album_ref"] = top_uuid(row["album_ref"])
+            if item["album_ref"] in albums:
+                raise AlbumTopError("invalid_command")
+            albums.add(item["album_ref"])
+        source = _draft_selection_source(row["source"])
+        remote = source["kind"] in {"remote_acquisition", "remote_retained"}
+        if kind == "new_remote" and not remote or kind == "new_local" and remote:
+            raise AlbumTopError("invalid_command")
+        if remote:
+            identity = _remote_selection_key(source)
+            if identity in remote_sources:
+                raise AlbumTopError("invalid_command")
+            remote_sources.add(identity)
+        item["source"] = source
+        items.append(item)
+    return items
+
+
 def normalize_top_publication_preview(payload):
     if type(payload) is not dict or set(payload) != {"revision", "items"}:
         raise AlbumTopError("invalid_command")
@@ -124,11 +233,11 @@ def normalize_top_publication_preview(payload):
 
 def normalize_top_command(action: str, payload: object, *, top_ref: object = None) -> AlbumTopCommand:
     fields = {
-        "create": {"request_key", "title", "description", "album_refs"},
-        "save": {"request_key", "revision", "title", "description", "items", "evidence_revision"},
+        "create": {"request_key", "title", "description", "album_refs", "draft_ref", "selections"},
+        "save": {"request_key", "revision", "title", "description", "items", "item_selections", "evidence_revision"},
         "enable_external": {"request_key", "revision", "title", "description", "items", "evidence_revision"},
         "revoke_external": {"request_key", "revision"},
-        "add": {"request_key", "revision", "album_refs"},
+        "add": {"request_key", "revision", "album_refs", "selections"},
         "remove": {"request_key", "revision", "item_refs"},
         "reorder": {"request_key", "revision", "item_order"},
         "delete": {"request_key", "revision"},
@@ -149,6 +258,16 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
     key = top_uuid(payload.get("request_key"))
     if action == "create":
         if top_ref is not None:
+            raise AlbumTopError("invalid_command")
+        if "selections" in payload:
+            if "album_refs" in payload:
+                raise AlbumTopError("invalid_command")
+            data = {"title": _text(payload.get("title"), 100, title=True),
+                    "description": _text(payload.get("description", ""), 1000),
+                    "draft_ref": _remote_top_ref(payload.get("draft_ref")),
+                    "selections": _top_selections(payload["selections"], allow_retained=False)}
+            return AlbumTopCommand(action, None, key, data)
+        if "draft_ref" in payload:
             raise AlbumTopError("invalid_command")
         data = {"title": _text(payload.get("title"), 100, title=True),
                 "description": _text(payload.get("description", ""), 1000),
@@ -201,6 +320,10 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
             data["title"] = _text(payload["title"], 100, title=True)
         if "description" in payload:
             data["description"] = _text(payload["description"], 1000)
+        if "item_selections" in payload:
+            if "items" in payload:
+                raise AlbumTopError("invalid_command")
+            data["item_selections"] = _draft_item_selections(payload["item_selections"])
         if "items" in payload:
             data["items"] = _draft_items(payload["items"])
         if "evidence_revision" in payload or action == "enable_external":
@@ -209,8 +332,13 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
                 raise AlbumTopError("invalid_command")
             data["evidence_revision"] = evidence
     elif action in {"add", "remove", "reorder"}:
-        field = {"add": "album_refs", "remove": "item_refs", "reorder": "item_order"}[action]
-        data[field] = _refs(payload.get(field), empty=action == "reorder")
+        if action == "add" and "selections" in payload:
+            if "album_refs" in payload:
+                raise AlbumTopError("invalid_command")
+            data["selections"] = _top_selections(payload["selections"], allow_retained=True)
+        else:
+            field = {"add": "album_refs", "remove": "item_refs", "reorder": "item_order"}[action]
+            data[field] = _refs(payload.get(field), empty=action == "reorder")
     return AlbumTopCommand(action, target, key, data)
 
 

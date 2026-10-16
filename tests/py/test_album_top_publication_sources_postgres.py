@@ -112,12 +112,18 @@ def test_read_has_one_authorization_connection_no_writes_capture_or_inventory_sc
     monkeypatch.setattr(inventory_sources, 'reconcile_album_metadata_sources', forbidden)
     connect = db.service._connect
     opened, statements = [], []
+    # Admit only the existing ordered account-lock SELECT CTE, not arbitrary
+    # WITH statements, which could contain a data-modifying CTE.
+    account_lock = ('with locked_accounts as ( select id from app.accounts '
+                    'where id in (%s, %s) order by id for update ) '
+                    'select id from locked_accounts')
     class ReadConnection:
         def __init__(self, connection):
             self.connection = connection
         def execute(self, sql, params=None):
             statement = str(sql).strip().lower()
-            assert statement.startswith(('select ', 'set ', 'lock table ')), statement
+            assert (statement.startswith(('select ', 'set ', 'lock table '))
+                    or ' '.join(statement.split()) == account_lock), statement
             statements.append(statement)
             return self.connection.execute(sql, params)
         def __getattr__(self, name):
@@ -130,6 +136,7 @@ def test_read_has_one_authorization_connection_no_writes_capture_or_inventory_sc
     monkeypatch.setattr(db.service, '_connect', observed)
     assert len(read(choices)['sources']) == 3
     assert len(opened) == 1
+    assert [' '.join(sql.split()) for sql in statements].count(account_lock) == 1
     assert any('lock_public_metadata_source' in sql for sql in statements)
     assert not any('from library.local_track_files' in sql or 'from library.local_tracks' in sql for sql in statements)
     assert retained(db) == before

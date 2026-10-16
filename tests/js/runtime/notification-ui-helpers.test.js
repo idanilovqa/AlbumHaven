@@ -86,6 +86,7 @@ function createContext(storage = new Map()) {
           innerHTML: '',
           addEventListener(type, callback) { this[type] = callback; },
           parentElement: null,
+          get isConnected() { return this.parentElement === layer; },
           remove() {
             const index = toasts.indexOf(toast);
             if (index >= 0) toasts.splice(index, 1);
@@ -100,6 +101,8 @@ function createContext(storage = new Map()) {
       },
     },
     scheduleBrowserAnimationFrame() {},
+    cancelBrowserAnimationFrame() {},
+    clearBrowserTimeout() {},
     scheduleBrowserTimeout(callback, duration) {
       scheduledTimeouts.push({ callback, duration });
       return scheduledTimeouts.length;

@@ -102,6 +102,9 @@ WATCHER_RECOVERY_MIGRATION = (
 WATCHER_SESSION_MIGRATION = (
     MIGRATIONS_DIR / "0108_create_watcher_runtime_sessions.sql"
 )
+WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION = (
+    MIGRATIONS_DIR / "0109_preserve_full_scan_progress_on_restart.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -131,6 +134,15 @@ def _watcher_session_function_sql(name: str) -> str:
     marker = f"create or replace function {name}("
     assert marker in sql, f"missing watcher session function {name}"
     return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def _watcher_preserved_attempt_restart_sql() -> str:
+    assert WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION.is_file(), (
+        "missing additive watcher preserved-attempt restart migration 0109"
+    )
+    return _normalized_sql(
+        WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION.read_text(encoding="utf-8")
+    )
 
 
 def test_0108_is_additive_and_keeps_released_0107_bytes():
@@ -300,16 +312,50 @@ def test_0108_denies_direct_dml_to_every_runtime_role():
             assert f"revoke all on table {relation} from {role}" in sql
 
 
-def test_0108_is_the_exact_ordered_migration_successor():
+def test_0109_is_the_exact_ordered_successor_to_unchanged_0108():
     migration_names = sorted(
         path.name
         for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
     assert migration_names[-2:] == [
-        "0107_create_durable_watcher_recovery.sql",
         "0108_create_watcher_runtime_sessions.sql",
+        "0109_preserve_full_scan_progress_on_restart.sql",
     ]
+    released_0108 = WATCHER_SESSION_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(released_0108).hexdigest() == (
+        "c42e0f839996eecf12f5b76b48ad9383ddbba7e106148cff63521d0411d44aa0"
+    )
+
+
+def test_0109_only_redefines_the_hardened_scan_intent_sync_contract():
+    sql = _watcher_preserved_attempt_restart_sql()
+    function_names = re.findall(
+        r"create (?:or replace )?function ([a-z0-9_.]+)\(", sql
+    )
+    assert function_names == ["library.sync_scan_intent_job_state"]
+    assert re.findall(
+        r"\b(?:create|alter|drop) (?:index|schema|sequence|table|trigger|type)\b",
+        sql,
+    ) == []
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "set search_path = pg_catalog, " not in sql
+
+    preserved_attempt = (
+        "when old.state = 'running' and new.state = 'retry_wait' "
+        "and new.attempt_count = old.attempt_count - 1 then null "
+        "else intent.execution_attempt end"
+    )
+    assert "if new.kind = 'full_scan'" in sql
+    assert preserved_attempt in sql
+    for progress_field in (
+        "progress_current",
+        "progress_total",
+        "progress_phase",
+        "current_path",
+    ):
+        assert progress_field not in sql
 
 
 def test_0108_creates_only_the_approved_schema_objects_and_overloads():

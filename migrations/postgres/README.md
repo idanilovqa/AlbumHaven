@@ -256,6 +256,18 @@ flush, and finish its session before deploying old code. If shutdown or rollback
 cannot prove a clean finish, leave the session row, participant rows, and
 additive schema intact so the next compatible startup can recover them.
 
+`0109_preserve_full_scan_progress_on_restart.sql` keeps a gracefully drained
+full-scan intent retryable without discarding its visible progress. It clears
+only the execution-attempt fence when the job moves from `running` to
+attempt-preserving `retry_wait`; the existing trigger, lock order, privileges,
+monotonic checkpoint guards, and targeted-reconciliation behavior remain
+unchanged. Apply it after `0108` before restarting a drained full scan. Mixed
+versions remain safe because older workers claim the same preserved job attempt
+through the existing lease boundary. Roll application code back first; retain
+`0109` during rollback so retryable intents cannot remain fenced to the stopped
+worker attempt. If function rollback is operationally required, restore the
+`0092` definition only after all full-scan jobs have left `retry_wait`.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 `0081_grant_move_policy_settings_delete.sql` grants the application role the scoped `DELETE` privilege required when root-setting saves replace move-policy rows in one transaction.

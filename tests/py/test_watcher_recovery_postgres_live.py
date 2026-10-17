@@ -3471,6 +3471,223 @@ def test_retry_wait_repair_fences_overlapping_generation_dispatch(
     }
 
 
+def test_graceful_restart_reclaims_linked_full_scan_and_finalizes_watcher_repair(
+    live_watcher_database,
+):
+    scope = live_watcher_database
+    now = datetime.now(timezone.utc)
+    seeded = _seed_claimed_linked_full_scan(
+        scope,
+        now=now,
+        request_origin_ref="watcher:graceful-restart-repair",
+        worker_id="watcher-before-graceful-restart",
+    )
+    accepted = seeded.app_repository.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-a", "accepted-during-restart.mp3"),
+        accepted_at=now + timedelta(seconds=1),
+    )
+    assert seeded.worker_scans.checkpoint_claimed_full_scan(
+        intent_id=seeded.intent.intent_id,
+        job_id=seeded.claim.job_id,
+        attempt=seeded.claim.attempt,
+        worker_id=seeded.claim.worker_id,
+        lease_token=seeded.claim.lease_token,
+        current=3,
+        total=4,
+        current_path="accepted-before-graceful-restart.mp3",
+        phase="indexing",
+        now=now + timedelta(seconds=1),
+    ) is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        before_restart = connection.execute(
+            "select state, completed_at from library.watcher_repairs where id = %s",
+            (seeded.repair_id,),
+        ).fetchone()
+    assert before_restart == {"state": "scanning", "completed_at": None}
+
+    assert seeded.jobs.finish(
+        seeded.claim,
+        JobTransitionResult(
+            JobState.RETRY_WAIT,
+            "full_scan_worker_shutdown",
+            scheduled_at=now + timedelta(seconds=5),
+            preserve_attempt=True,
+        ),
+        now=now + timedelta(seconds=2),
+    ) is True
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        retry_wait_intent = connection.execute(
+            """
+            select state, progress_current, progress_total, progress_phase,
+                   current_path, execution_attempt
+            from library.full_scan_intents
+            where id = %s
+            """,
+            (seeded.intent.intent_id,),
+        ).fetchone()
+    assert retry_wait_intent == {
+        "state": "retry_wait",
+        "progress_current": 3,
+        "progress_total": 4,
+        "progress_phase": "indexing",
+        "current_path": "accepted-before-graceful-restart.mp3",
+        "execution_attempt": None,
+    }
+
+    replacement = seeded.jobs.claim(
+        worker_id="watcher-after-graceful-restart",
+        now=now + timedelta(seconds=6),
+        lease_seconds=300,
+        kinds=(JobKind.FULL_SCAN,),
+    )
+    assert replacement is not None
+    assert replacement.job_id == seeded.claim.job_id
+    assert replacement.attempt == seeded.claim.attempt
+
+    replacement_intent = seeded.worker_scans.load_claimed_full_scan(
+        job_id=replacement.job_id,
+        worker_id=replacement.worker_id,
+        lease_token=replacement.lease_token,
+    )
+    replacement_scope = seeded.worker_scans.load_claimed_full_scan_scope(
+        intent_id=replacement_intent.intent_id,
+        library_id=scope.library_id,
+        job_id=replacement.job_id,
+        attempt=replacement.attempt,
+        worker_id=replacement.worker_id,
+        lease_token=replacement.lease_token,
+        now=now + timedelta(seconds=6),
+    )
+    assert seeded.worker_scans.checkpoint_claimed_full_scan(
+        intent_id=replacement_intent.intent_id,
+        job_id=replacement.job_id,
+        attempt=replacement.attempt,
+        worker_id=replacement.worker_id,
+        lease_token=replacement.lease_token,
+        current=0,
+        total=1,
+        current_path="",
+        phase="indexing",
+        now=now + timedelta(seconds=6),
+    ) is True
+    publication = seeded.worker_scans.publish_claimed_full_scan(
+        claim=replacement,
+        intent_id=replacement_intent.intent_id,
+        expected_inventory_mutation_revision=(
+            replacement_intent.inventory_mutation_revision
+        ),
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        observed_root_ids=[root["id"] for root in replacement_scope.roots],
+        now=now + timedelta(seconds=7),
+    )
+    assert publication["publication_won"] is True
+    assert seeded.jobs.finish(
+        replacement,
+        JobTransitionResult(JobState.SUCCEEDED, "full_scan_completed"),
+        now=now + timedelta(seconds=8),
+    ) is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        after_publication = connection.execute(
+            """
+            select repair.state, repair.completed_at,
+                   lane.successor_generation_id
+            from library.watcher_repairs as repair
+            join library.watcher_repair_roots as repair_root
+              on repair_root.repair_id = repair.id
+            join library.watcher_lanes as lane
+              on lane.library_id = repair_root.library_id
+             and lane.root_id = repair_root.root_id
+            where repair.id = %s
+            """,
+            (seeded.repair_id,),
+        ).fetchone()
+    assert after_publication == {
+        "state": "catch_up",
+        "completed_at": None,
+        "successor_generation_id": accepted.generation_id,
+    }
+
+    assert seeded.worker_repository.reconcile_due(
+        now=now + timedelta(seconds=9),
+        limit=32,
+    ) == (accepted.generation_id,)
+    catch_up_claim = seeded.jobs.claim(
+        worker_id="watcher-after-restart-catch-up",
+        now=now + timedelta(seconds=10),
+        lease_seconds=300,
+        kinds=(JobKind.TARGETED_RECONCILIATION,),
+    )
+    assert catch_up_claim is not None
+    generation = seeded.worker_repository.claim_generation(
+        claim=catch_up_claim,
+        now=now + timedelta(seconds=10),
+    )
+    assert generation is not None
+    assert generation.generation_id == accepted.generation_id
+    _publish_claimed_watcher_generation(
+        scope,
+        catch_up_claim,
+        accepted.generation_id,
+        now=now + timedelta(seconds=11),
+    )
+    assert seeded.jobs.finish(
+        catch_up_claim,
+        JobTransitionResult(JobState.SUCCEEDED, "scan_completed"),
+        now=now + timedelta(seconds=12),
+    ) is True
+
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        completed = connection.execute(
+            """
+            select repair.id as repair_id, repair.state, repair.completed_at,
+                   repair.inventory_revision, incident.resolved_at,
+                   lane.accepted_sequence, lane.applied_sequence,
+                   lane.dirty_generation, lane.repaired_dirty_generation,
+                   lane.running_generation_id, lane.running_job_id,
+                   lane.successor_generation_id,
+                   intent.watcher_repair_id,
+                   intent.committed_inventory_revision
+            from library.watcher_repairs as repair
+            join library.watcher_repair_roots as repair_root
+              on repair_root.repair_id = repair.id
+            join library.watcher_incidents as incident
+              on incident.incident_id = repair_root.incident_id
+            join library.watcher_lanes as lane
+              on lane.library_id = repair_root.library_id
+             and lane.root_id = repair_root.root_id
+            join library.full_scan_intents as intent
+              on intent.id = %s
+            where repair.id = %s
+            """,
+            (replacement_intent.intent_id, seeded.repair_id),
+        ).fetchone()
+    assert completed["repair_id"] == seeded.repair_id
+    assert completed["watcher_repair_id"] == seeded.repair_id
+    assert completed["state"] == "complete"
+    assert completed["completed_at"] is not None
+    assert completed["resolved_at"] is not None
+    assert completed["accepted_sequence"] == accepted.participants[0].accepted_sequence_upper
+    assert completed["applied_sequence"] == completed["accepted_sequence"]
+    assert completed["dirty_generation"] == accepted.participants[0].dirty_generation
+    assert completed["repaired_dirty_generation"] == completed["dirty_generation"]
+    assert completed["inventory_revision"] == publication["inventory_mutation_revision"]
+    assert completed["committed_inventory_revision"] == publication[
+        "inventory_mutation_revision"
+    ]
+    assert completed["running_generation_id"] is None
+    assert completed["running_job_id"] is None
+    assert completed["successor_generation_id"] is None
+
+
 def _wait_for_blocked_backend(
     observer,
     *,

@@ -60,6 +60,79 @@ test(`new search resets the viewport only when full results apply (equivalent to
 });
 }
 
+test('same-query preserve-scroll response retains mounted children for scroll deferral', async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  const previousGroups = [{
+    artist: 'Neal Morse',
+    albums: [
+      { key: 'neal::testimony', name: 'Testimony' },
+      { key: 'neal::one', name: 'One' },
+    ],
+  }];
+  context.state.view = {
+    ...context.state.view,
+    query: 'Neal Morse',
+    artist_groups: previousGroups,
+  };
+
+  const refresh = context.fetchAndRender('/view-data?q=Neal%20Morse', false, {
+    preserveScroll: true,
+    restartIfSameUrl: true,
+  });
+  pendingRequests[0].resolveWith({
+    query: 'Neal Morse',
+    artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [{ key: 'neal::testimony', name: 'Testimony' }],
+    }],
+    payload_tier: 'full',
+  });
+  await refresh;
+
+  assert.equal(calls.renderView.length, 1);
+  assert.equal(calls.renderView[0].preserveMountedGallery, undefined);
+  assert.equal(calls.renderView[0].preserveMountedGalleryChildren, true);
+});
+
+test('post-scan search refresh rejects a transient active-scan snapshot', async () => {
+  const { context, calls, pendingRequests } = createSearchOwnerContext();
+  const scheduledRetries = [];
+  const previousGroups = [{
+    artist: 'Neal Morse',
+    albums: [
+      { key: 'neal::testimony', name: 'Testimony' },
+      { key: 'neal::one', name: 'One' },
+    ],
+  }];
+  context.scheduleBrowserTimeout = (callback, delayMs) => {
+    scheduledRetries.push({ callback, delayMs });
+    return scheduledRetries.length;
+  };
+  context.state.view = {
+    ...context.state.view,
+    query: 'Neal Morse',
+    selected_artist: 'Neal Morse',
+    artist_groups: previousGroups,
+    album_count: 2,
+  };
+  context.state.ui.pendingScanCompletionViewRefresh = true;
+
+  const refresh = context.dispatchPendingScanCompletionViewRefresh();
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    query: 'Neal Morse',
+    artist_groups: [],
+    album_count: 0,
+    view_data_source: 'transient_scan_state',
+  });
+  await refresh;
+
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(context.state.view.artist_groups, previousGroups);
+  assert.equal(context.state.ui.pendingScanCompletionViewRefresh, true);
+  assert.deepEqual(scheduledRetries.map(({ delayMs }) => delayMs), [1000]);
+});
+
 for (const initialContext of ['root', 'requested_artist', 'mobile_utility']) {
 test(`repeated Enter while search is pending preserves the active result owner (${initialContext})`, async () => {
   const { context, calls, pendingRequests } = createSearchOwnerContext();
@@ -7187,6 +7260,26 @@ test('refresh endpoint lookup exhausts missing artists once without replacing th
     '/view-data?surface=albums', ['Earlier', 'Target', 'Target'], new AbortController(), () => true,
   ), /previously viewed gallery artists are unavailable/);
   assert.deepEqual(requested, ['Target', 'Earlier']);
+  assertBoundedRootRefreshUnapplied(f);
+});
+
+test('refresh endpoint lookup caps consecutive missing retained artist probes', async () => {
+  const f = boundedRootRefreshFixture();
+  const requested = [];
+  const retainedArtists = Array.from({ length: 20 }, (_, index) => `Missing ${index}`);
+  f.context.fetch = async url => {
+    requested.push(new URL(url, 'http://localhost').searchParams.get('gallery_anchor_artist'));
+    return {
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'Gallery artist anchor is unavailable.' }),
+    };
+  };
+
+  await assert.rejects(f.context.resolveRootGalleryRefreshEndpoint(
+    '/view-data?surface=albums', retainedArtists, new AbortController(), () => true,
+  ), /previously viewed gallery artists are unavailable/i);
+  assert.deepEqual(requested, retainedArtists.slice().reverse().slice(0, 8));
   assertBoundedRootRefreshUnapplied(f);
 });
 

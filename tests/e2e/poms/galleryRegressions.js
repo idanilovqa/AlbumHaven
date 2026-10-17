@@ -1,4 +1,70 @@
+export function keepWheelActiveUntilResponseBoundary(
+  ui,
+  page,
+  responseAt,
+  onWheel,
+  { timeoutMs = 15_000 } = {},
+) {
+  const stepCompleted = Symbol('step-completed');
+  const stoppedResult = Symbol('stopped');
+  let stopped = false;
+  let stopBoundary;
+  const boundary = new Promise((resolve, reject) => {
+    let settled = false;
+    let timeoutId;
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      callback(value);
+    };
+    stopBoundary = () => settle(resolve, stoppedResult);
+    timeoutId = setTimeout(() => {
+      settle(reject, new Error(
+        `Gallery response boundary was not observed within ${timeoutMs}ms.`,
+      ));
+    }, timeoutMs);
+    responseAt.then(
+      value => settle(resolve, value),
+      error => settle(reject, error),
+    );
+  });
+  const runStep = step => Promise.race([
+    boundary,
+    Promise.resolve().then(step).then(() => stepCompleted),
+  ]);
+  const completion = (async () => {
+    while (true) {
+      const wheelResult = await runStep(async () => {
+        await page.mouse.wheel(0, 1);
+        onWheel?.(1);
+      });
+      if (wheelResult !== stepCompleted) {
+        return wheelResult === stoppedResult ? undefined : wheelResult;
+      }
+      const frameResult = await runStep(() => ui.waitForAnimationFrame());
+      if (frameResult !== stepCompleted) {
+        return frameResult === stoppedResult ? undefined : frameResult;
+      }
+    }
+  })();
+  return {
+    completion,
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      stopBoundary();
+    },
+  };
+}
+
 export function analyzeNativeScrollGesture(samples, direction) {
+  const visibleCoordinate = sample => {
+    const viewportOffset = Number(sample?.viewportOffset);
+    return Number.isFinite(viewportOffset)
+      ? -viewportOffset
+      : Number(sample?.scrollTop);
+  };
   const anchorReplacementIndexes = samples
     .map((sample, index) => sample.anchorGeneration !== 0 ? index : -1)
     .filter(index => index >= 0);
@@ -8,16 +74,25 @@ export function analyzeNativeScrollGesture(samples, direction) {
     ))
     .filter(index => index >= 0);
   const firstMovementIndex = samples.findIndex((sample, index) => (
-    index > 0 && Math.abs(Number(sample.scrollTop) - Number(samples[index - 1].scrollTop)) >= 0.5
+    index > 0
+    && Math.abs(visibleCoordinate(sample) - visibleCoordinate(samples[index - 1])) >= 0.5
   ));
   const signedStepDeltas = firstMovementIndex < 0 ? [] : samples.slice(firstMovementIndex)
     .map((sample, index) => (
-      (Number(sample.scrollTop) - Number(samples[firstMovementIndex + index - 1].scrollTop)) * direction
+      (
+        visibleCoordinate(sample)
+        - visibleCoordinate(samples[firstMovementIndex + index - 1])
+      ) * direction
     ));
   const movementStart = firstMovementIndex < 0 ? null : samples[firstMovementIndex - 1];
   const signedTotalDisplacement = movementStart
-    ? (Number(samples.at(-1).scrollTop) - Number(movementStart.scrollTop)) * direction
+    ? (visibleCoordinate(samples.at(-1)) - visibleCoordinate(movementStart)) * direction
     : 0;
+  const maxReverseVisibleDrift = Math.max(
+    0,
+    ...signedStepDeltas.map(delta => Math.max(0, -Number(delta))),
+  );
+  const maxForwardVisibleStep = Math.max(0, ...signedStepDeltas.map(Number));
   const initialCoordinate = Number(samples[0]?.contentCoordinate);
   const maxContentDrift = Math.max(0, ...samples.map(sample => (
     Math.abs(Number(sample.contentCoordinate) - initialCoordinate)
@@ -27,26 +102,37 @@ export function analyzeNativeScrollGesture(samples, direction) {
     originalNodeReplacementIndexes,
     firstMovementIndex,
     maxContentDrift,
+    maxForwardVisibleStep,
+    maxReverseVisibleDrift,
     signedStepDeltas,
     signedTotalDisplacement,
   };
 }
 
-// Pinned Chrome CDP touch gestures can land four CSS pixels short while scrollTop remains fractional.
-const NATIVE_SCROLL_DISPLACEMENT_TOLERANCE_PX = 4;
-
 export function nativeScrollDisplacementMatchesCommand(actualDistance, commandedDistance) {
   const actual = Number(actualDistance);
   const commanded = Math.abs(Number(commandedDistance));
   return Number.isFinite(actual) && Number.isFinite(commanded)
-    && Math.abs(actual - commanded) <= NATIVE_SCROLL_DISPLACEMENT_TOLERANCE_PX;
+    && actual === commanded;
 }
 
-export function nativeOverlapWheelDelta(remaining, viewport, prefetchViewports) {
-  const distanceToThreshold = Number(remaining)
-    - Number(viewport) * Number(prefetchViewports);
-  if (!Number.isFinite(distanceToThreshold) || distanceToThreshold <= 0) return 1;
-  return Math.min(32, Math.max(1, Math.floor(distanceToThreshold) + 1));
+export function normalizeCdpResponseEpoch(responseTime) {
+  const value = Number(responseTime);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return value < 1e12 ? value * 1000 : value;
+}
+
+export function nativeScrollStepsMatchCommand(signedStepDeltas, maximumForwardStep) {
+  const maximum = Number(maximumForwardStep);
+  return Array.isArray(signedStepDeltas)
+    && signedStepDeltas.length > 0
+    && Number.isFinite(maximum)
+    && maximum >= 0
+    && signedStepDeltas.every(delta => (
+      Number.isFinite(Number(delta))
+      && Number(delta) >= 0
+      && Number(delta) <= maximum
+    ));
 }
 
 function observeArtistPlacement({ targetArtist, headingSelector, observe = false }) {
@@ -64,13 +150,14 @@ function observeArtistPlacement({ targetArtist, headingSelector, observe = false
       return { rendered: false, chromeMatches: false, rowsAligned: false, firstCardUncut: false };
     }
     const scrollRect = scroll.getBoundingClientRect();
+      const scrollContentTop = scrollRect.top + scroll.clientTop;
     const rowsRect = rows.getBoundingClientRect();
     const firstCardRect = firstCard.getBoundingClientRect();
     return {
       rendered: true,
       chromeMatches: chromeName.textContent.trim() === targetArtist,
-      rowsAligned: Math.abs(rowsRect.top - scrollRect.top) <= 1,
-      firstCardUncut: firstCardRect.top >= scrollRect.top - 1,
+        rowsAligned: rowsRect.top === scrollContentTop,
+        firstCardUncut: firstCardRect.top >= scrollContentTop,
     };
 
   };
@@ -134,6 +221,32 @@ export class GalleryRegressions {
     this.library=page.getByRole('button',{name:'Library status',exact:true});
     this.openScan=page.locator('[data-status-action="go-to-scan-page"]:visible');
   }
+
+  waitForAnimationFrame() {
+    // parity-check: allow-read-only-measurement-evaluate -- synchronize one native input per observed frame
+    return this.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => resolve())));
+  }
+  async waitForNativeScrollSettled({ stableFrames = 2, maximumFrames = 60 } = {}) {
+    let previous = await this.galleryScroll.evaluate(scroll => Number(scroll.scrollTop || 0));
+    let stable = 0;
+    for (let frame = 0; frame < maximumFrames; frame += 1) {
+      await this.waitForAnimationFrame();
+      const current = await this.galleryScroll.evaluate(scroll => Number(scroll.scrollTop || 0));
+      if (current === previous) {
+        stable += 1;
+        if (stable >= stableFrames) return;
+      } else {
+        stable = 0;
+      }
+      previous = current;
+    }
+    throw new Error('Native gallery scroll did not settle within the frame budget.');
+  }
+
+  readBrowserEpoch() {
+    // parity-check: allow-read-only-measurement-evaluate -- compare input and diagnostics on one browser clock
+    return this.page.evaluate(() => performance.timeOrigin + performance.now());
+  }
   async readArtistJumpPlacement(artist) {
     // parity-check: allow-read-only-measurement-evaluate -- assert rendered artist content and chrome placement
     return this.page.evaluate(observeArtistPlacement, {
@@ -170,6 +283,18 @@ export class GalleryRegressions {
   albumOpenTriggerByKey(key) {
     return this.albumCardByKey(key).locator('[data-open-tracklist="1"][data-album-key]').first();
   }
+  async renderedAlbumKeys() {
+    const triggers = this.page.locator(
+      '#artist-groups [data-open-tracklist="1"][data-album-key]',
+    );
+    const keys = [];
+    const count = await triggers.count();
+    for (let index = 0; index < count; index += 1) {
+      const key = String(await triggers.nth(index).getAttribute('data-album-key') || '').trim();
+      if (key && !keys.includes(key)) keys.push(key);
+    }
+    return keys;
+  }
   get mobileAlbum() { return this.page.locator('#mobile-page-outlet #track-modal'); }
   get mobileBack() { return this.page.locator('#mobile-back-button'); }
   async longPressArtist(row) {
@@ -185,16 +310,43 @@ export class GalleryRegressions {
   }
   async readArtistJumpOwnership(artist) {
     // parity-check: allow-read-only-measurement-evaluate -- retain authoritative anchor ownership on placement failure
-    return this.page.evaluate(requestedArtist => ({
-      requestedArtist,
-      anchorArtist: state.view?.gallery_page?.anchor_artist || null,
-      anchorGroupArtist: state.view?.gallery_page?.anchor_group_artist || null,
-      offset: state.view?.gallery_page?.offset ?? null,
-      sidebarCount: (state.view?.artists_sidebar || []).length,
-      loadedArtists: (state.view?.artist_groups || []).map(group => group.artist),
-      renderedArtists: [...document.querySelectorAll('[data-scroll-artist]')]
-        .map(element => element.getAttribute('data-scroll-artist')),
-    }), artist);
+    return this.page.evaluate(requestedArtist => {
+      const scroll = document.getElementById('albums-scroll');
+      const heading = [...document.querySelectorAll('[data-scroll-artist]')]
+        .find(element => element.getAttribute('data-scroll-artist') === requestedArtist);
+      const section = heading?.closest('.artist-section');
+      const rows = section?.querySelector('.artist-rows');
+      const firstCard = section?.querySelector('.album-card');
+      const scrollRect = scroll?.getBoundingClientRect();
+      const rowsRect = rows?.getBoundingClientRect();
+      const firstCardRect = firstCard?.getBoundingClientRect();
+      const grid = globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ || null;
+      return {
+        requestedArtist,
+        anchorArtist: state.view?.gallery_page?.anchor_artist || null,
+        anchorGroupArtist: state.view?.gallery_page?.anchor_group_artist || null,
+        offset: state.view?.gallery_page?.offset ?? null,
+        sidebarCount: (state.view?.artists_sidebar || []).length,
+        loadedArtists: (state.view?.artist_groups || []).map(group => group.artist),
+        renderedArtists: [...document.querySelectorAll('[data-scroll-artist]')]
+          .map(element => element.getAttribute('data-scroll-artist')),
+        geometry: {
+          scrollTop: scroll?.scrollTop ?? null,
+          scrollClientTop: scroll?.clientTop ?? null,
+          scrollRectTop: scrollRect?.top ?? null,
+          scrollContentTop: scrollRect ? scrollRect.top + Number(scroll?.clientTop || 0) : null,
+          rowsTop: rowsRect?.top ?? null,
+          firstCardTop: firstCardRect?.top ?? null,
+          containerTranslate: document.getElementById('artist-groups')?.style.translate || '',
+          visualPhase: grid?.visualPhase ?? grid?._scrollAnchorVisualPhase ?? null,
+          renderGeneration: grid?.latestRender?.renderGeneration
+            ?? grid?._renderGeneration
+            ?? null,
+          measurement: grid?.latestMeasurement || null,
+          latestScroll: grid?.latestScroll || null,
+        },
+      };
+    }, artist);
   }
   albumCardByKey(key) {
     return this.cards.filter({
@@ -321,6 +473,7 @@ export class GalleryRegressions {
       let frame = 0;
       let observed = saved;
       let anchorGeneration = 0;
+      let lastGridEventSequence = 0;
       const readIdentity = card => ({
         albumKey: card?.querySelector('[data-open-tracklist="1"][data-album-key]')
           ?.getAttribute('data-album-key') || '',
@@ -374,6 +527,11 @@ export class GalleryRegressions {
         }
         const viewport = scroll?.getBoundingClientRect();
         const rect = card?.getBoundingClientRect();
+        const gridEvents = (window.__ALBUM_HAVEN_VIRTUAL_GRID__?.events || [])
+          .filter(event => event.sequence > lastGridEventSequence);
+        if (gridEvents.length) {
+          lastGridEventSequence = gridEvents[gridEvents.length - 1].sequence;
+        }
         samples.push({
           at: performance.now(),
           anchorGeneration,
@@ -388,10 +546,11 @@ export class GalleryRegressions {
           contentCoordinate: rect && viewport
             ? rect.top - viewport.top + Number(scroll.scrollTop || 0)
             : null,
+          gridEvents,
         });
         frame = requestAnimationFrame(sample);
       };
-      frame = requestAnimationFrame(sample);
+      sample();
       return {
         finish() {
           cancelAnimationFrame(frame);
@@ -497,6 +656,7 @@ export class GalleryRegressions {
               ?.getAttribute('data-album-key') === targetKey;
         });
       const trigger = card?.querySelector('[data-open-tracklist="1"][data-album-key]');
+      const row = card?.closest('.album-row') || card?.parentElement;
       const artist = card?.closest('.artist-section')
         ?.querySelector('.family-artist-header[data-scroll-artist]')
         ?.getAttribute('data-scroll-artist') || '';
@@ -504,6 +664,7 @@ export class GalleryRegressions {
         albumKey: trigger?.getAttribute('data-album-key') || '',
         artist,
         top: card?.getBoundingClientRect().top ?? null,
+        layoutTop: row?.getBoundingClientRect().top ?? null,
       };
     }, albumKey);
   }
@@ -517,11 +678,16 @@ export class GalleryRegressions {
       const card = [...(section?.querySelectorAll('.album-card') || [])]
         .find(item => item.querySelector('[data-open-tracklist="1"][data-album-key]')
           ?.getAttribute('data-album-key') === saved.albumKey);
+      const row = card?.closest('.album-row') || card?.parentElement;
+      const cardDelta = card?.isConnected && saved.top !== null
+        ? card.getBoundingClientRect().top - saved.top
+        : null;
+      const rowDelta = card?.isConnected && Number.isFinite(saved.layoutTop)
+        ? row?.getBoundingClientRect().top - saved.layoutTop
+        : null;
       return {
         connected: Boolean(card?.isConnected),
-        delta: card?.isConnected && saved.top !== null
-          ? card.getBoundingClientRect().top - saved.top
-          : null,
+        delta: cardDelta === 0 ? rowDelta : cardDelta,
       };
     }, anchor);
   }
@@ -548,22 +714,25 @@ export class GalleryRegressions {
           .find(item => item.querySelector('[data-open-tracklist="1"][data-album-key]')
             ?.getAttribute('data-album-key') === saved.albumKey);
         const connected = Boolean(card?.isConnected);
-        const delta = connected && saved.top !== null
-          ? card.getBoundingClientRect().top - saved.top
-          : null;
         if (originalCard === undefined) originalCard = card || null;
         const scroller = document.querySelector('#albums-scroll');
         const scrollRect = scroller?.getBoundingClientRect();
         const cardRect = card?.getBoundingClientRect();
         const row = card?.closest('.album-row') || card?.parentElement;
         const rowRect = row?.getBoundingClientRect();
+        const cardDelta = connected && saved.top !== null
+          ? cardRect.top - saved.top
+          : null;
+        const delta = connected && Number.isFinite(saved.layoutTop)
+          ? rowRect?.top - saved.layoutTop
+          : null;
         const gridEvents = (window.__ALBUM_HAVEN_VIRTUAL_GRID__?.events || [])
           .filter(event => event.sequence > lastGridEventSequence);
         if (gridEvents.length) lastGridEventSequence = gridEvents[gridEvents.length - 1].sequence;
         samples.push({
           at: performance.now(), epoch: performance.timeOrigin + performance.now(),
           gridEvents,
-          connected, delta, stable: connected && delta === 0,
+          connected, delta, cardDelta, stable: connected && delta === 0 && cardDelta === 0,
           originalConnected: Boolean(originalCard?.isConnected), sameNode: card === originalCard,
           scrollTop: scroller?.scrollTop, scrollHeight: scroller?.scrollHeight,
           viewportTop: cardRect?.top,

@@ -2372,6 +2372,7 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     'desktop Cards > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
     'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
     'real continuation response during held touch keeps gallery coordinates stable',
+    'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
     'real continuation response during wheel sequence keeps gallery coordinates stable',
   ];
   const parsedTestResults = titles.map(testName => ({
@@ -2383,9 +2384,9 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     expectedCasePatterns: target.casePatterns || [target.casePattern],
     parsedTestResults,
   };
-  assert.equal(target.casePatterns.length, 21);
-  assert.equal(new Set(target.casePatterns).size, 21);
-  assert.equal(target.casePatterns.some((pattern) => pattern.includes('›')), false);
+  assert.equal(target.casePatterns.length, 22);
+  assert.equal(new Set(target.casePatterns).size, 22);
+  assert.equal(target.casePatterns.some((pattern) => pattern.includes('›')), true);
   assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');
   for (const incomplete of [
     parsedTestResults.slice(0, 2),

@@ -8746,11 +8746,15 @@
     "test": "tests/e2e/syntheticLargeLibrary/galleryNativeResponseOverlap.spec.js",
     "case": "FTC-GALLERY-NAV-035 synthetic-large native response overlap › desktop Cards › full preserve-scroll response during wheel sequence keeps gallery coordinates stable",
     "profile": "synthetic-large-library",
-    "setupScope": "suite",
-    "stateMode": "read-only",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
     "databaseScenarios": ["large-library:artist-tree-scroll-navigation"],
-    "filesystemScenarios": ["media:synthetic-large-library"],
+    "filesystemScenarios": ["media:synthetic-large-library", "media-copy:gallery-native-response-overlap"],
     "expectedContracts": ["real-full-gallery-refresh-response-overlap", "native-wheel-scroll-monotonicity", "desktop-gallery-layout-coordinate-stability"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:gallery-native-response-overlap-watcher",
+      "filesystemCopy": "media/cases/gallery-native-response-overlap"
+    },
     "ownerApproval": "approved"
   },
   {

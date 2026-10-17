@@ -14830,6 +14830,7 @@ function formatLogHistoryTimestamp(value) {
 // of albums. Continuations never own the foreground/search request slot.
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
+const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -14894,6 +14895,12 @@ async function loadNextRootGalleryPage() {
       > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
     viewRevision: readViewStateRevision(),
     url: buildRootGalleryPageUrl(view),
     cursor: page.next_cursor,
@@ -14923,6 +14930,14 @@ async function loadNextRootGalleryPage() {
     let recoveryEndArtist = '';
     let recoveryArtists = [];
     if (response.status === 409) {
+      let recoveryRequestCount = 1;
+      const fetchRecoveryResponse = async () => {
+        if (recoveryRequestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+          throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+        }
+        recoveryRequestCount += 1;
+        return fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      };
       const conflict = await response.json();
       if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
       // Catalog changes invalidate the cursor. Recover the retained window
@@ -14937,7 +14952,7 @@ async function loadNextRootGalleryPage() {
       if (recoveryStartArtist && (scroll.scrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
         url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
       }
-      response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      response = await fetchRecoveryResponse();
       for (let index = 1; response.status === 400 && url.searchParams.has('gallery_anchor_artist'); index += 1) {
         const failure = await response.json();
         if (!ownsRootBrowseIdentity()) return false;
@@ -14948,7 +14963,7 @@ async function loadNextRootGalleryPage() {
         recoveryStartArtist = String(retainedGroups[index]?.artist || '').trim();
         if (!recoveryStartArtist) throw new Error(message);
         url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
-        response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+        response = await fetchRecoveryResponse();
       }
       restarted = true;
     }
@@ -14995,7 +15010,12 @@ async function loadNextRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    const renderOptions = { preserveScroll: true, preserveMountedGalleryChildren: true };
+    const renderOptions = {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    };
     if (restarted) renderView(renderOptions);
     else renderArtistGroups(renderOptions);
     // Fill only the visible buffer, including a short initial page. Rechecking
@@ -15023,6 +15043,12 @@ async function loadPreviousRootGalleryPage() {
 
   const request = {
     controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
     cursor: page.previous_cursor,
     revision: page.revision,
     viewRevision: Number(state.ui.viewStateRevision || 0),
@@ -15068,7 +15094,12 @@ async function loadPreviousRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    renderArtistGroups({ preserveScroll: true, preserveMountedGalleryChildren: true });
+    renderArtistGroups({
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    });
     return true;
   } catch (error) {
     if (error?.name !== 'AbortError') {
@@ -15352,6 +15383,7 @@ async function performPendingScanCompletionViewRefresh() {
     const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
       preserveScroll: true,
       restartIfSameUrl: true,
+      shouldApplyResponse: data => data?.view_data_source !== 'transient_scan_state',
     });
     if (!refreshApplied) {
       throw new Error('The post-scan gallery refresh lost view-state ownership before it could apply.');
@@ -15854,7 +15886,12 @@ async function recoverRootGalleryRefreshFirstPage(
   let currentResponse = response;
   let currentUrl = apiUrl;
   let restarted = false;
+  let requestCount = currentResponse ? 1 : 0;
   const fetchArtist = async artist => {
+    if (requestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+      throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+    }
+    requestCount += 1;
     const url = new URL(apiUrl, 'http://localhost');
     url.searchParams.delete('gallery_cursor');
     url.searchParams.set('gallery_page_size', '50');
@@ -16325,6 +16362,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     );
     renderView({
       ...responseApplyOptions,
+      ...(responseApplyOptions.preserveScroll === true && hasMountedGalleryContent
+        ? { preserveMountedGalleryChildren: true }
+        : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;
@@ -35292,7 +35332,7 @@ class VirtualArtistGrid {
     this.layoutConfig = CARD_GALLERY_LAYOUT_CONFIG;
     this.columnGap = 14;
     this.rowGap = 14;
-    this.sectionHeaderHeight = 54;
+    this.sectionHeaderHeight = 42;
     this.showArtistSectionHeaders = true;
     this.sectionMarginBottom = 28;
     this.labelHeight = 40;
@@ -35337,6 +35377,8 @@ class VirtualArtistGrid {
     this._measureTimeout = 0;
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
+    this._touchScrollGestureTarget = null;
+    this._scrollAnchorVisualPhase = 0;
     this._userScrollIntentGeneration = 0;
     this._deferredSetGroups = null;
     this._deferredArtistTreeSettlement = false;
@@ -35379,6 +35421,13 @@ class VirtualArtistGrid {
   }
 
   recordDiagnosticEvent(type, details = {}) {
+    const epoch = (
+      typeof performance !== 'undefined'
+      && Number.isFinite(Number(performance.timeOrigin))
+      && typeof performance.now === 'function'
+    )
+      ? Number(performance.timeOrigin) + performance.now()
+      : Date.now();
     const event = {
       sequence: ++this._diagnosticSequence,
       type: String(type || 'unknown'),
@@ -35387,6 +35436,7 @@ class VirtualArtistGrid {
       renderRafOwner: Number(this._activeRenderRafOwner || this._raf || 0),
       measureRafOwner: Number(this._activeMeasureRafOwner || this._measureRaf || 0),
       ...details,
+      epoch,
     };
     this.diagnostics.events.push(event);
     if (this.diagnostics.events.length > this.diagnostics.maxEvents) {
@@ -35426,6 +35476,7 @@ class VirtualArtistGrid {
       document.removeEventListener('touchend', this.onTouchScrollEnd, { capture: true });
       document.removeEventListener('touchcancel', this.onTouchScrollEnd, { capture: true });
     }
+    this.clearTouchScrollGestureTarget();
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('album-haven:artist-tree-settled', this.onArtistTreeSettled);
     if (this._scrollRestoreRaf) {
@@ -35640,6 +35691,22 @@ class VirtualArtistGrid {
     };
   }
 
+  applyScrollAnchorVisualPhase(nextPhase) {
+    const normalizedPhase = Math.round((Number(nextPhase) || 0) * 64) / 64;
+    this._scrollAnchorVisualPhase = normalizedPhase;
+    this.containerEl.style.translate = normalizedPhase ? `0 ${normalizedPhase}px` : '';
+  }
+
+  applyAnchoredScrollTop(requestedScrollTop) {
+    const previousScrollTop = Number(this.scrollEl.scrollTop || 0);
+    const requestedScrollDelta = Number(requestedScrollTop || 0) - previousScrollTop;
+    this.scrollEl.scrollTop = requestedScrollTop;
+    const appliedScrollDelta = Number(this.scrollEl.scrollTop || 0) - previousScrollTop;
+    this.applyScrollAnchorVisualPhase(
+      Number(this._scrollAnchorVisualPhase || 0) + appliedScrollDelta - requestedScrollDelta,
+    );
+  }
+
   getUserScrollIntentGeneration() {
     return this._userScrollIntentGeneration;
   }
@@ -35649,6 +35716,7 @@ class VirtualArtistGrid {
     this.scrollEl.scrollLeft = Number(anchor.scrollLeft || 0);
     // At the root, hydration must preserve the top rather than follow a preview card.
     if (Number(anchor.scrollTop || 0) <= 0) {
+      this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
       return;
     }
@@ -35702,12 +35770,14 @@ class VirtualArtistGrid {
       const resolvedAnchorCardTrigger = anchorCardTrigger || renamedKeyTrigger || fallbackAlbumTrigger;
       if (resolvedAnchorCardTrigger instanceof HTMLElement && typeof this.scrollEl.getBoundingClientRect === 'function') {
         const scrollRect = this.scrollEl.getBoundingClientRect();
-        const anchorElement = anchor.anchorBox === 'card'
-          ? resolvedAnchorCardTrigger.closest?.('.album-card') || resolvedAnchorCardTrigger
-          : resolvedAnchorCardTrigger;
+        const anchorElement = anchor.anchorBox === 'row'
+          ? resolvedAnchorCardTrigger.closest?.('.album-row') || resolvedAnchorCardTrigger
+          : anchor.anchorBox === 'card'
+            ? resolvedAnchorCardTrigger.closest?.('.album-card') || resolvedAnchorCardTrigger
+            : resolvedAnchorCardTrigger;
         const anchorRect = anchorElement.getBoundingClientRect();
         const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
-        this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
+        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta);
         return;
       }
       if (sectionOccurrenceKey && anchorAlbumName) {
@@ -35738,7 +35808,9 @@ class VirtualArtistGrid {
           const modeledSectionTop = Number(modeledSection.top);
           if (Number.isFinite(modeledBlockOffset) && Number.isFinite(modeledSectionTop)) {
             const modeledCardTop = modeledSectionTop + this.sectionHeaderHeight + modeledBlockOffset;
-            this.scrollEl.scrollTop = Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0));
+            this.applyAnchoredScrollTop(
+              Math.max(0, modeledCardTop - Number(anchor.offsetTop || 0)),
+            );
             return;
           }
         }
@@ -35761,7 +35833,16 @@ class VirtualArtistGrid {
     const scrollRect = this.scrollEl.getBoundingClientRect();
     const anchorRect = anchorRow.getBoundingClientRect();
     const delta = (anchorRect.top - scrollRect.top) - Number(anchor.offsetTop || 0);
-    this.scrollEl.scrollTop = Number(this.scrollEl.scrollTop || 0) + delta;
+    this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + delta);
+  }
+
+  restoreOwnedScrollAnchor(anchor) {
+    this.restoreScrollAnchor(anchor);
+    this._pendingStabilizationScroll = {
+      generation: this._stabilizeGeneration,
+      scrollLeft: Number(this.scrollEl?.scrollLeft || 0),
+      scrollTop: Number(this.scrollEl?.scrollTop || 0),
+    };
   }
 
   scrollToArtist(artist) {
@@ -35779,10 +35860,11 @@ class VirtualArtistGrid {
     this._absoluteScrollRestore = null;
     this.invalidateScrollStabilization();
     this._resetScrollAfterMeasure = false;
-    this.scrollEl.scrollTop = Math.max(
+    this.applyScrollAnchorVisualPhase(0);
+    this.applyAnchoredScrollTop(Math.max(
       0,
       Number(section.top || 0) + Number(this.sectionHeaderHeight || 0),
-    );
+    ));
     this.lastKey = '';
     this.render(true);
     const renderedHeader = Array.from(this.containerEl.querySelectorAll('[data-scroll-artist]')).find((candidate) => (
@@ -35792,8 +35874,12 @@ class VirtualArtistGrid {
       ? renderedHeader.parentElement?.querySelector?.('.artist-rows')
       : null;
     if (renderedRows instanceof HTMLElement) {
-      const renderedDelta = renderedRows.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top;
-      if (Math.abs(renderedDelta) > 0.5) this.scrollEl.scrollTop += renderedDelta;
+      const scrollRect = this.scrollEl.getBoundingClientRect();
+      const scrollContentTop = scrollRect.top + Number(this.scrollEl.clientTop || 0);
+      const renderedDelta = renderedRows.getBoundingClientRect().top - scrollContentTop;
+      if (Math.abs(renderedDelta) >= (1 / 64)) {
+        this.applyAnchoredScrollTop(Number(this.scrollEl.scrollTop || 0) + renderedDelta);
+      }
     }
     return true;
   }
@@ -35872,7 +35958,11 @@ class VirtualArtistGrid {
       && options.resetScrollForUserArtistSelection !== true
       && options.preserveAbsoluteScroll !== true
       && !this._absoluteScrollRestore
-      && (this._touchScrollGestureActive || !this.isScrollSettled)
+      && (
+        this._touchScrollGestureActive
+        || !this.isScrollSettled
+        || !this.hasMeasurableScrollSurface()
+      )
     );
     if (shouldDeferMountedGroupUpdate) {
       this._deferredSetGroups = {
@@ -36050,6 +36140,7 @@ class VirtualArtistGrid {
     this.lastKey = '';
     this.recalculate();
     if (!preserveScroll && this.scrollEl) {
+      this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
     }
     if (preservedAbsoluteScroll && this.scrollEl) {
@@ -36100,6 +36191,7 @@ class VirtualArtistGrid {
     if (!preserveScroll && this.scrollEl) {
       const resetScroll = () => {
         if (renderGeneration !== this._renderGeneration) return;
+        this.applyScrollAnchorVisualPhase(0);
         this.scrollEl.scrollTop = 0;
         this.primeVisibleCoverImages();
       };
@@ -36187,8 +36279,25 @@ class VirtualArtistGrid {
     return `row:${this.columns}:${albumKey}`;
   }
 
+  hasMeasurableScrollSurface() {
+    const rect = this.scrollEl?.getBoundingClientRect?.();
+    if (!rect) return true;
+    const width = Number(rect.width);
+    const height = Number(rect.height);
+    return !(
+      Number.isFinite(width)
+      && Number.isFinite(height)
+      && (width <= 0 || height <= 0)
+    );
+  }
+
+  hasDeferredMountedGroupUpdate() {
+    return Boolean(this._deferredSetGroups);
+  }
+
   recalculate(options = {}) {
-    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 54 : 0;
+    if (!this.hasMeasurableScrollSurface()) return false;
+    this.sectionHeaderHeight = this.showArtistSectionHeaders ? 42 : 0;
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
     const width = Math.max(1, this.scrollEl.clientWidth - 4);
@@ -36219,7 +36328,7 @@ class VirtualArtistGrid {
     if (!options.preserveColumnGeometry) {
       this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
       this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-        ? (width - (this.columns - 1) * this.columnGap) / this.columns
+        ? Math.floor((width - (this.columns - 1) * this.columnGap) / this.columns)
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
@@ -36232,8 +36341,18 @@ class VirtualArtistGrid {
       this.cardTrackWidth = mobileGeometry.cardTrackWidth;
     }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
+    const measuredRowHeight = this.sections.flatMap((section) => (
+      section.rowGeometryKey === rowGeometryKey
+        ? (section.blockHeights || []).filter((_height, index) => {
+          const measureKey = String(section.blockMeasureKeys?.[index] || '');
+          return measureKey.startsWith('row:')
+            && String(section.measuredBlockKeys?.[index] || '') === measureKey;
+        })
+        : []
+    )).find(height => Number(height) > 0);
     const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
-      || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);
+      || (displayMode === 'covers' ? this.cardTrackWidth : measuredRowHeight)
+      || this.collapsedRowHeight;
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -36258,22 +36377,17 @@ class VirtualArtistGrid {
       const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
       const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
       section.blocksData = blocks;
-      if (!Array.isArray(section.blockHeights) || section.blockHeights.length !== blocks.length) {
-        const previousBlockHeights = Array.isArray(section.blockHeights)
-          ? section.blockHeights
-          : [];
-        section.blockHeights = blocks.map((block, index) => {
-          if (block.kind === 'subheading') return this.subsectionLabelHeight;
-          const previousHeight = Number(previousBlockHeights[index] || 0);
-          return previousHeight > 0 ? previousHeight : estimatedRowHeight;
-        });
-      } else {
-        section.blockHeights = blocks.map((block, index) => (
-          block.kind === 'subheading'
-            ? this.subsectionLabelHeight
-            : (section.blockHeights[index] || estimatedRowHeight)
-        ));
-      }
+      const previousBlockHeights = Array.isArray(section.blockHeights)
+        ? section.blockHeights
+        : [];
+      section.blockHeights = blocks.map((block, index) => {
+        if (block.kind === 'subheading') return this.subsectionLabelHeight;
+        const measureKey = nextMeasureKeys[index];
+        const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
+          && previousMeasuredKeys[index] === measureKey
+          && Number(previousBlockHeights[index]) > 0;
+        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : estimatedRowHeight;
+      });
       section.blockMeasureKeys = nextMeasureKeys;
       section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
         previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
@@ -36320,6 +36434,9 @@ class VirtualArtistGrid {
       this._absoluteScrollRestore,
     );
     const isOwnedStabilizationScroll = this.isPendingStabilizationScroll();
+    if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore) {
+      this._userScrollIntentGeneration += 1;
+    }
     if (!isOwnedStabilizationScroll && !ownsPendingAbsoluteRestore
       && typeof loadNextRootGalleryPage === 'function') {
       if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
@@ -36375,9 +36492,17 @@ class VirtualArtistGrid {
     this.updateScrollDiagnostic(renderRafOwner);
   }
 
+  clearTouchScrollGestureTarget() {
+    const target = this._touchScrollGestureTarget;
+    this._touchScrollGestureTarget = null;
+    if (!target || typeof target.removeEventListener !== 'function') return;
+    target.removeEventListener('touchend', this.onTouchScrollEnd);
+    target.removeEventListener('touchcancel', this.onTouchScrollEnd);
+  }
+
   onUserScrollIntent(event) {
     if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
-    this._userScrollIntentGeneration += 1;
+    if (event?.type !== 'touchstart') this._userScrollIntentGeneration += 1;
     if (event?.type === 'wheel') {
       if (this._measureRaf) {
         cancelBrowserAnimationFrame(this._measureRaf);
@@ -36387,6 +36512,19 @@ class VirtualArtistGrid {
       this.scheduleSettledMeasurement();
     }
     if (event?.type === 'touchstart') {
+      const touchTarget = event.target;
+      if (touchTarget !== this._touchScrollGestureTarget) {
+        this.clearTouchScrollGestureTarget();
+        if (
+          touchTarget
+          && touchTarget !== this.scrollEl
+          && typeof touchTarget.addEventListener === 'function'
+        ) {
+          this._touchScrollGestureTarget = touchTarget;
+          touchTarget.addEventListener('touchend', this.onTouchScrollEnd, { passive: true });
+          touchTarget.addEventListener('touchcancel', this.onTouchScrollEnd, { passive: true });
+        }
+      }
       const pendingMeasurement = Boolean(this._measureRaf || this._measureTimeout);
       if (this._measureRaf) {
         cancelBrowserAnimationFrame(this._measureRaf);
@@ -36405,6 +36543,7 @@ class VirtualArtistGrid {
 
   onTouchScrollEnd(event) {
     if (Number(event?.touches?.length || 0) > 0) return;
+    this.clearTouchScrollGestureTarget();
     if (!this._touchScrollGestureActive) return;
     const hadScroll = this._touchScrollGestureHadScroll;
     this._touchScrollGestureActive = false;
@@ -36488,6 +36627,18 @@ class VirtualArtistGrid {
   }
 
   onResize(options = {}) {
+    const deferredSetGroups = this._deferredSetGroups;
+    if (deferredSetGroups && this.hasMeasurableScrollSurface()) {
+      this._deferredSetGroups = null;
+      this.setGroups(
+        deferredSetGroups.primaryGroups,
+        deferredSetGroups.familyGroups,
+        deferredSetGroups.fallbackGroups,
+        deferredSetGroups.options,
+        deferredSetGroups.layoutConfig,
+      );
+      return;
+    }
     if (this._touchScrollGestureActive || !this.isScrollSettled) {
       this._deferredResizeOptions = { ...options };
       this.recordDiagnosticEvent('resize-deferred', {
@@ -36500,7 +36651,7 @@ class VirtualArtistGrid {
       ?.classList?.contains?.('is-transitioning');
     if (artistTreeTransitioning && !options.preserveCardTrackWidth) return;
     this.lastKey = '';
-    this.recalculate(options);
+    if (this.recalculate(options) === false) return;
     this.render(true);
     this.scheduleMeasureRows(true);
   }
@@ -37092,6 +37243,7 @@ class VirtualArtistGrid {
         || renderGeneration !== this._renderGeneration
       ) return;
       if (resetScroll) {
+        this.applyScrollAnchorVisualPhase(0);
         this.scrollEl.scrollTop = 0;
       } else if (
         preservedAbsoluteScroll
@@ -37122,6 +37274,7 @@ class VirtualArtistGrid {
   }
 
   measureRenderedRows() {
+    if (!this.hasMeasurableScrollSurface()) return;
     const absoluteScrollActive = (
       this._absoluteScrollRestore?.renderGeneration === this._renderGeneration
     );
@@ -37146,7 +37299,7 @@ class VirtualArtistGrid {
         });
         return;
       }
-      const measured = Math.ceil(rowEl.getBoundingClientRect().height);
+      const measured = rowEl.getBoundingClientRect().height;
       rowMeasurements.push({
         blockIndex,
         measureKeyPresent: Boolean(measureKey),
@@ -37159,7 +37312,7 @@ class VirtualArtistGrid {
         section.measuredBlockKeys = [];
       }
       section.measuredBlockKeys[blockIndex] = measureKey;
-      if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) > 1) {
+      if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) >= (1 / 64)) {
         section.blockHeights[blockIndex] = measured;
         changed = true;
       }
@@ -43438,16 +43591,15 @@ function captureMobileParentGalleryAnchorArtist() {
  const rows = section?.querySelector('.artist-rows');
  const firstCard = section?.querySelector('.album-card');
  if (!scroll || !rows || !firstCard) return '';
- const scrollTop = scroll.getBoundingClientRect().top;
- return Math.abs(rows.getBoundingClientRect().top - scrollTop) <= 1
- && firstCard.getBoundingClientRect().top >= scrollTop - 1
+  const scrollTop = scroll.getBoundingClientRect().top + Number(scroll.clientTop || 0);
+  return rows.getBoundingClientRect().top === scrollTop
+    && firstCard.getBoundingClientRect().top >= scrollTop
  ? requestedArtist
  : '';
 }
 function mobileGalleryParentIsSettled() {
   return !state.busy && !state.ui?.pendingInventoryMutationViewRefresh
-    && !state.ui?.activeViewRequestController && !state.ui?.pendingViewRequest
-    && (typeof rootGalleryPageRequest === 'undefined' || !rootGalleryPageRequest);
+    && !state.ui?.activeViewRequestController && !state.ui?.pendingViewRequest;
 }
 function restoreMobileGalleryParent(descriptor) {
   const parentPosition = descriptor?.parentPosition;
@@ -43459,12 +43611,16 @@ function restoreMobileGalleryParent(descriptor) {
     : '';
   const liveParent = descriptor && mobileLiveGalleryParents.get(descriptor);
   const canReuseLiveParent = atParent && liveParent && mobileGalleryParentIsSettled()
-    && liveParent.view === state.view && liveParent.groups === state.view?.artist_groups
     && liveParent.revision === state.status?.inventory_mutation_revision
-    && descriptor.parentViewUrl === buildUrl(state.view);
+    && descriptor.parentViewUrl === buildUrl(state.view)
+    && (
+      typeof virtualGrid === 'undefined'
+      || !virtualGrid?.hasDeferredMountedGroupUpdate?.()
+    );
   let jumpScrollAnchor = null;
   if (
     galleryAnchorArtist
+    && !descriptor?.parentScrollAnchor
     && typeof state !== 'undefined'
     && galleryAnchorArtist === String(state.view?.gallery_page?.anchor_artist || '').trim()
   ) {
@@ -43476,17 +43632,20 @@ function restoreMobileGalleryParent(descriptor) {
       && virtualGrid?.scrollToArtist?.(mountedGalleryArtist)
     ) {
       stabilizeRootGalleryArtistAlignment(mountedGalleryArtist);
-      if (canReuseLiveParent) return;
+      if (canReuseLiveParent) {
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+        return;
+      }
       jumpScrollAnchor = virtualGrid?.captureScrollAnchor?.() || null;
     }
   }
   const semanticScrollAnchor = atParent
-    ? jumpScrollAnchor || (!galleryAnchorArtist ? descriptor?.parentScrollAnchor : null)
+    ? descriptor?.parentScrollAnchor || jumpScrollAnchor
     : null;
   const position = semanticScrollAnchor
     ? null
     : atParent && !galleryAnchorArtist ? descriptor?.parentScrollPosition : null;
-  const preserveParentScroll = !galleryAnchorArtist || Boolean(jumpScrollAnchor);
+  const preserveParentScroll = !galleryAnchorArtist || Boolean(semanticScrollAnchor);
   const options = {
     preserveScroll: preserveParentScroll,
     preserveMountedGalleryChildren: preserveParentScroll,
@@ -43518,16 +43677,30 @@ function restoreMobileGalleryParent(descriptor) {
   if (
     semanticScrollAnchor
     && typeof virtualGrid !== 'undefined'
-    && typeof virtualGrid?.restoreScrollAnchor === 'function'
+    && typeof virtualGrid?.restoreOwnedScrollAnchor === 'function'
   ) {
     virtualGrid.render(true);
-    virtualGrid.restoreScrollAnchor(semanticScrollAnchor);
+    virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+    const ownerGeneration = options.semanticScrollOwnerGeneration;
+    if (Number.isSafeInteger(ownerGeneration) && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        if (
+          mobilePageState.pages.length
+          || virtualGrid?.getUserScrollIntentGeneration?.() !== ownerGeneration
+        ) return;
+        virtualGrid.restoreOwnedScrollAnchor(semanticScrollAnchor);
+        if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+      });
+    }
     semanticScrollPositionApplied = true;
   }
   if (
     canReuseLiveParent
     && (semanticScrollPositionApplied || (position && options.absoluteScrollPositionApplied))
-  ) return;
+  ) {
+    if (typeof updateGalleryMainChrome === 'function') updateGalleryMainChrome();
+    return;
+  }
   handleGalleryBootstrapPopState(options);
 }
 function presentMobilePage(descriptor) {

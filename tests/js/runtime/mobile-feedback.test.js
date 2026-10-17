@@ -14,8 +14,14 @@ function load(name, globals = {}) {
 const mobileParentFreshnessScenarios = [
   { name: 'unchanged live gallery', refreshes: 0, change() {} },
   { name: 'advanced inventory revision', refreshes: 1, change(state) { state.status.inventory_mutation_revision += 1; } },
-  { name: 'replaced gallery view', refreshes: 1, change(state) { state.view = { ...state.view }; } },
-  { name: 'replaced gallery groups', refreshes: 1, change(state) { state.view.artist_groups = [...state.view.artist_groups]; } },
+  { name: 'same-revision continuation replaced gallery view', refreshes: 0,
+    change(state) { state.view = { ...state.view }; } },
+  { name: 'same-revision continuation replaced gallery groups', refreshes: 0,
+    change(state) { state.view.artist_groups = [...state.view.artist_groups]; } },
+  { name: 'deferred hidden-gallery group update', refreshes: 1,
+    change(_state, context) {
+      context.virtualGrid.hasDeferredMountedGroupUpdate = () => true;
+    } },
   { name: 'changed parent route', refreshes: 1, change(state, context) { context.buildUrl = () => '/?surface=home'; } },
   { name: 'unknown inventory freshness', refreshes: 1,
     before(state) { delete state.status.inventory_mutation_revision; }, change() {} },
@@ -25,7 +31,7 @@ const mobileParentFreshnessScenarios = [
   { name: 'pending inventory reconciliation', refreshes: 1, change(state) { state.ui.pendingInventoryMutationViewRefresh = true; } },
   { name: 'pending view request', refreshes: 1, change(state) { state.ui.pendingViewRequest = { url: '/?surface=albums' }; } },
   { name: 'active view request', refreshes: 1, change(state) { state.ui.activeViewRequestController = {}; } },
-  { name: 'active root gallery page request', refreshes: 1, change(_state, context) {
+  { name: 'active append-only root gallery continuation', refreshes: 0, change(_state, context) {
     vm.runInContext('var rootGalleryPageRequest = { controller: {} };', context);
   } },
   { name: 'reconstructed history descriptor', refreshes: 1, change(_state, context) {
@@ -34,10 +40,11 @@ const mobileParentFreshnessScenarios = [
 ];
 
 for (const scenario of mobileParentFreshnessScenarios) {
-test(`Back safely aligns an exact jump anchor with ${scenario.name}`, () => {
+  test(`Back safely aligns an exact jump anchor with ${scenario.name}`, () => {
   const scroll = { scrollTop: 1200, scrollLeft: 0, getBoundingClientRect: () => ({ top: 0, width: 390, height: 600 }) };
   const aligned = [];
-  let refreshes = 0;
+    let refreshes = 0;
+    let chromeUpdates = 0;
   const outlet = { dataset: {} };
   const context = load('mobile-navigation.js', {
     state: { view: { surface: 'albums', gallery_page: { anchor_artist: 'B', anchor_group_artist: 'B' },
@@ -54,7 +61,8 @@ test(`Back safely aligns an exact jump anchor with ${scenario.name}`, () => {
       captureScrollAnchor: () => null,
       scrollToArtist: artist => { aligned.push(artist); return true; },
     },
-    stabilizeRootGalleryArtistAlignment() {},
+      stabilizeRootGalleryArtistAlignment() {},
+      updateGalleryMainChrome() { chromeUpdates += 1; },
     handleGalleryBootstrapPopState: () => { refreshes += 1; },
     closeArtistsDrawer() {}, closeGalleryMainSurface() {}, requestAnimationFrame() {},
   });
@@ -69,16 +77,19 @@ test(`Back safely aligns an exact jump anchor with ${scenario.name}`, () => {
   context.window.history.state = { albumHavenNavigationPosition: 2, mobilePages: [] };
   assert.equal(context.handleMobilePagePopState(), true);
   assert.deepEqual(aligned, ['B']);
-  assert.equal(refreshes, scenario.refreshes, 'reuse only a fresh descriptor while reconciling every stale parent');
+    assert.equal(refreshes, scenario.refreshes, 'reuse only a fresh descriptor while reconciling every stale parent');
+    assert.equal(chromeUpdates, scenario.refreshes ? 0 : 1,
+      'a reused gallery parent must synchronize its chrome before return');
 });
 }
 
 for (const scenario of mobileParentFreshnessScenarios) {
-test(`Back restores the departure anchor with ${scenario.name}`, () => {
+  test(`Back restores the departure anchor with ${scenario.name}`, () => {
   const anchor = { scrollTop: 1200, scrollLeft: 0, albumKey: 'b-album', sectionOccurrenceKey: 'artist:B', offsetTop: 16 };
   const scroll = { scrollTop: 1200, scrollLeft: 0, getBoundingClientRect: () => ({ top: 0, width: 390, height: 600 }) };
   const restored = [];
-  let refreshes = 0;
+    let refreshes = 0;
+    let chromeUpdates = 0;
   const outlet = { dataset: {} };
   const context = load('mobile-navigation.js', {
     state: { view: { surface: 'albums', artist_groups: [{ artist: 'B', albums: [{ key: 'b-album' }] }] },
@@ -91,12 +102,13 @@ test(`Back restores the departure anchor with ${scenario.name}`, () => {
       captureScrollAnchor: () => anchor,
       restoreOwnedAbsoluteScrollPosition: position => { scroll.scrollTop = position.scrollTop; return true; },
       render() {},
-      restoreScrollAnchor: value => {
+      restoreOwnedScrollAnchor: value => {
         restored.push(value);
         scroll.scrollTop = value.scrollTop;
       },
     },
-    handleGalleryBootstrapPopState: () => { refreshes += 1; },
+      updateGalleryMainChrome() { chromeUpdates += 1; },
+      handleGalleryBootstrapPopState: () => { refreshes += 1; },
     closeArtistsDrawer() {}, closeGalleryMainSurface() {}, requestAnimationFrame() {},
   });
   context.syncMobilePageShell = () => {};
@@ -111,7 +123,9 @@ test(`Back restores the departure anchor with ${scenario.name}`, () => {
   assert.equal(context.handleMobilePagePopState(), true);
   assert.equal(scroll.scrollTop, 1200);
   assert.equal(restored.at(-1).albumKey, 'b-album');
-  assert.equal(refreshes, scenario.refreshes, 'reuse unchanged content without suppressing required reconciliation');
+    assert.equal(refreshes, scenario.refreshes, 'reuse unchanged content without suppressing required reconciliation');
+    assert.equal(chromeUpdates, scenario.refreshes ? 0 : 1,
+      'a reused departure anchor must synchronize gallery chrome before return');
 });
 }
 
@@ -526,7 +540,7 @@ test('mobile album return restores the captured gallery anchor before refreshing
         return true;
       },
       render: force => calls.push(['render', force]),
-      restoreScrollAnchor: value => calls.push(['anchor', value]),
+      restoreOwnedScrollAnchor: value => calls.push(['anchor', value]),
       getUserScrollIntentGeneration: () => 7,
     },
     handleGalleryBootstrapPopState: options => calls.push(['request', options]),
@@ -548,12 +562,73 @@ test('mobile album return restores the captured gallery anchor before refreshing
   assert.equal(calls[2][1].preserveMountedGalleryChildren, true);
 });
 
+test('mobile album return re-applies the semantic anchor after the gallery layout frame', () => {
+  const frames = [];
+  const restored = [];
+  let chromeUpdates = 0;
+  const anchor = {
+    albumKey: 'album-at-viewport-top',
+    sectionOccurrenceKey: 'artist:example',
+    offsetTop: 12.375,
+    scrollTop: 720,
+    scrollLeft: 0,
+  };
+  const context = load('mobile-navigation.js', {
+    requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
+    virtualGrid: {
+      render() {},
+      restoreOwnedScrollAnchor: value => restored.push(value),
+      getUserScrollIntentGeneration: () => 7,
+    },
+    updateGalleryMainChrome() { chromeUpdates += 1; },
+    handleGalleryBootstrapPopState() {},
+  });
+
+  context.restoreMobileGalleryParent({ parentScrollAnchor: anchor });
+
+  assert.deepEqual(restored, [anchor]);
+  assert.equal(chromeUpdates, 0);
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.deepEqual(restored, [anchor, anchor]);
+  assert.equal(chromeUpdates, 1,
+    'the final semantic-anchor frame must synchronize chrome to the restored artist');
+});
+
+test('mobile album return does not re-apply the semantic anchor after user scroll ownership changes', () => {
+  const frames = [];
+  const restored = [];
+  let userScrollGeneration = 7;
+  const anchor = {
+    albumKey: 'album-at-viewport-top',
+    sectionOccurrenceKey: 'artist:example',
+    offsetTop: 12.375,
+    scrollTop: 720,
+    scrollLeft: 0,
+  };
+  const context = load('mobile-navigation.js', {
+    requestAnimationFrame: callback => { frames.push(callback); return frames.length; },
+    virtualGrid: {
+      render() {},
+      restoreOwnedScrollAnchor: value => restored.push(value),
+      getUserScrollIntentGeneration: () => userScrollGeneration,
+    },
+    handleGalleryBootstrapPopState() {},
+  });
+
+  context.restoreMobileGalleryParent({ parentScrollAnchor: anchor });
+  userScrollGeneration += 1;
+  frames.shift()();
+
+  assert.deepEqual(restored, [anchor]);
+});
+
 test('mobile album return does not restore a stale anchor at another history position', () => {
   const calls = [];
   const context = load('mobile-navigation.js', {
     window: { history: { state: { albumHavenNavigationPosition: 8 } } },
     virtualGrid: {
-      restoreScrollAnchor: value => calls.push(['anchor', value]),
+      restoreOwnedScrollAnchor: value => calls.push(['anchor', value]),
     },
     handleGalleryBootstrapPopState: options => calls.push(['request', options]),
   });
@@ -733,7 +808,7 @@ test('mobile parent restoration retains the transient root gallery anchor outsid
         return true;
       },
       render: force => calls.push(['render', force]),
-      restoreScrollAnchor: value => calls.push(['anchor', value]),
+      restoreOwnedScrollAnchor: value => calls.push(['anchor', value]),
     },
     handleGalleryBootstrapPopState: options => calls.push(options),
   });
@@ -743,17 +818,23 @@ test('mobile parent restoration retains the transient root gallery anchor outsid
     parentScrollPosition: position,
     parentScrollAnchor: scrollAnchor,
   });
-  assert.equal(calls[0].parentViewUrl, '/?surface=albums&all_artists=1');
-  assert.equal(calls[0].galleryAnchorArtist, 'Battlelore');
-  assert.equal(calls[0].preserveScroll, false);
-  assert.equal(calls[0].preserveAbsoluteScroll, undefined);
-  assert.equal(calls[0].absoluteScrollPosition, undefined);
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.slice(0, 2), [
+    ['render', true],
+    ['anchor', scrollAnchor],
+  ]);
+  assert.equal(calls[2].parentViewUrl, '/?surface=albums&all_artists=1');
+  assert.equal(calls[2].galleryAnchorArtist, 'Battlelore');
+  assert.equal(calls[2].preserveScroll, true);
+  assert.equal(calls[2].semanticScrollAnchor, scrollAnchor);
+  assert.equal(calls[2].preserveAbsoluteScroll, undefined);
+  assert.equal(calls[2].absoluteScrollPosition, undefined);
+  assert.equal(calls.length, 3);
 });
 
 test('mobile album capture drops a transient jump anchor after ordinary gallery scrolling', () => {
-  let rowsTop = 96;
+  let rowsTop = 98;
   const scroll = {
+    clientTop: 2,
     getBoundingClientRect: () => ({ top: 96, bottom: 780 }),
   };
   const section = {
@@ -780,8 +861,63 @@ test('mobile album capture drops a transient jump anchor after ordinary gallery 
   });
 
   assert.equal(context.captureMobileParentGalleryAnchorArtist(), 'Battlelore');
+  rowsTop = 99;
+  assert.equal(context.captureMobileParentGalleryAnchorArtist(), '',
+    'one pixel of user-owned movement must end transient jump ownership');
   rowsTop = 240;
   assert.equal(context.captureMobileParentGalleryAnchorArtist(), '');
+});
+
+test('mobile Back restores the exact departure anchor after one-pixel movement from a jump', () => {
+  const calls = [];
+  const departureAnchor = {
+    albumKey: 'album-after-one-pixel-scroll',
+    sectionOccurrenceKey: 'artist:battlelore',
+    offsetTop: 1,
+    scrollTop: 321,
+    scrollLeft: 0,
+  };
+  const jumpAnchor = {
+    albumKey: 'battlelore-album',
+    sectionOccurrenceKey: 'artist:battlelore',
+    offsetTop: 0,
+    scrollTop: 320,
+    scrollLeft: 0,
+  };
+  const context = load('mobile-navigation.js', {
+    state: {
+      view: {
+        gallery_page: {
+          anchor_artist: 'Battlelore',
+          anchor_group_artist: 'Battlelore',
+        },
+      },
+    },
+    virtualGrid: {
+      scrollToArtist: artist => {
+        calls.push(['align', artist]);
+        return true;
+      },
+      captureScrollAnchor: () => jumpAnchor,
+      render: force => calls.push(['render', force]),
+      restoreOwnedScrollAnchor: anchor => calls.push(['anchor', anchor]),
+      getUserScrollIntentGeneration: () => 9,
+    },
+    stabilizeRootGalleryArtistAlignment: artist => calls.push(['stabilize', artist]),
+    handleGalleryBootstrapPopState: options => calls.push(['request', options]),
+  });
+
+  context.restoreMobileGalleryParent({
+    parentViewUrl: '/?surface=albums&all_artists=1',
+    parentGalleryAnchorArtist: 'Battlelore',
+    parentScrollPosition: { scrollTop: 321, scrollLeft: 0 },
+    parentScrollAnchor: departureAnchor,
+  });
+
+  const restored = calls.find(call => call[0] === 'anchor');
+  const request = calls.find(call => call[0] === 'request');
+  assert.equal(restored[1], departureAnchor);
+  assert.equal(request[1].semanticScrollAnchor, departureAnchor);
 });
 
 test('mobile Back reconciles an unproven transient artist after optimistic alignment', () => {

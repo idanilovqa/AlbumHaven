@@ -161,7 +161,14 @@ test('performance runner mirrors the reviewed target inventory and approved fixt
   for (const [name, contractTarget] of contractTargets) {
     const runnerTarget = runnerTargets.get(name);
     assert.equal(runnerTarget.fixtureProfile, contractTarget.fixtureProfile, name);
-    assert.equal(runnerTarget.specPath, contractTarget.cases[0].test, name);
+    for (const ownedCase of contractTarget.cases) {
+      assert.equal(
+        ownedCase.test === runnerTarget.specPath
+          || ownedCase.test.startsWith(`${runnerTarget.specPath}/`),
+        true,
+        `${name}: ${ownedCase.test}`,
+      );
+    }
   }
 });
 test('every discovered performance case has reviewed ownership selected by its runner target', () => {

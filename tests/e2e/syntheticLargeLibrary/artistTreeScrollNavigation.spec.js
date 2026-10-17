@@ -197,28 +197,43 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       // parity-check: allow-read-only-measurement-evaluate -- reject reverse-scroll prepend jumps
       const continuity = await ui.readVisibleCardAnchorContinuity(before);
       await before.dispose();
-      if (continuity.connected && continuity.delta !== null) {
-        stableAnchorComparisons += 1;
-        if (continuity.delta < -2 || continuity.delta > 220) {
-          const diagnosticsAfter = await galleryActions.readVirtualGridDiagnostics();
-          await testInfo.attach('reverse-scroll-displacement', {
-            body: JSON.stringify({
-              step,
-              wheelDeltaY: -160,
-              continuity,
-              gridEvents: (diagnosticsAfter?.events || []).filter(
-                event => Number(event.sequence || 0) > diagnosticSequenceBefore,
-              ),
-              latestScroll: diagnosticsAfter?.latestScroll || null,
-              latestRender: diagnosticsAfter?.latestRender || null,
-              latestMeasurement: diagnosticsAfter?.latestMeasurement || null,
-            }),
-            contentType: 'application/json',
-          });
-        }
-        expect(continuity.delta).toBeGreaterThanOrEqual(-2);
-        expect(continuity.delta).toBeLessThanOrEqual(220);
+      const diagnosticsAfter = await galleryActions.readVirtualGridDiagnostics();
+      const renderGenerationChanged = Number(diagnosticsAfter?.latestRender?.renderGeneration || 0)
+        !== Number(diagnosticsBefore?.latestRender?.renderGeneration || 0);
+      const gridEvents = (diagnosticsAfter?.events || []).filter(
+        event => Number(event.sequence || 0) > diagnosticSequenceBefore,
+      );
+      const coordinateRestore = gridEvents
+        .filter(event => event.type === 'scroll-restore-settled')
+        .at(-1) || null;
+      const restoredWheelDelta = coordinateRestore
+        ? Number(diagnosticsAfter?.latestScroll?.scrollTop || 0)
+          - Number(coordinateRestore.scrollTop || 0)
+        : null;
+      const visibleDrift = Math.abs(Number(continuity.delta) - 160);
+    if (
+      !continuity.connected
+        || visibleDrift !== 0
+    ) {
+      await testInfo.attach('reverse-scroll-displacement', {
+        body: JSON.stringify({
+          step,
+          wheelDeltaY: -160,
+          continuity,
+          renderGenerationChanged,
+            coordinateRestore,
+            restoredWheelDelta,
+            gridEvents,
+          latestScroll: diagnosticsAfter?.latestScroll || null,
+          latestRender: diagnosticsAfter?.latestRender || null,
+          latestMeasurement: diagnosticsAfter?.latestMeasurement || null,
+        }),
+        contentType: 'application/json',
+      });
       }
+    expect(continuity.connected).toBe(true);
+    expect(visibleDrift).toBe(0);
+    stableAnchorComparisons += 1;
       upwardArtists.add(await ui.galleryContextName.textContent());
     }
     // parity-check: allow-read-only-measurement-evaluate -- diagnose reverse-page ownership and boundary state

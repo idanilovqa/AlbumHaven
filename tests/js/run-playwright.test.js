@@ -3621,6 +3621,37 @@ test('managed isolated restart controller keeps control files under the runner-o
   }
 });
 
+test('managed restart control accepts only the shard-owned prepared profile root', () => {
+  const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-profile-control-'));
+  const profileRoot = path.join(
+    runnerTemp,
+    'album-haven-performance-shard-scroll',
+    'prepared-profile',
+  );
+  fs.mkdirSync(profileRoot, { recursive: true });
+
+  try {
+    assert.equal(
+      _private.resolveManagedRestartControlRoot({
+        RUNNER_TEMP: runnerTemp,
+        ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION: '1',
+        ALBUM_HAVEN_E2E_TEMP_ROOT: profileRoot,
+      }),
+      path.resolve(profileRoot),
+    );
+    assert.throws(
+      () => _private.resolveManagedRestartControlRoot({
+        RUNNER_TEMP: runnerTemp,
+        ALBUM_HAVEN_PERFORMANCE_PROFILE_SESSION: '1',
+        ALBUM_HAVEN_E2E_TEMP_ROOT: path.join(os.tmpdir(), 'outside-profile'),
+      }),
+      /runner-owned performance profile/i,
+    );
+  } finally {
+    fs.rmSync(runnerTemp, { recursive: true, force: true });
+  }
+});
+
 test('managed isolated restart request stops the old child and acknowledges only a ready replacement', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-request-'));
   const oldChild = createFakeChildProcess(5662);
@@ -3706,13 +3737,29 @@ test('managed watcher cleanup derives its only path from runner media ownership'
     assert.deepEqual(calls[0].args, ['-m', 'tests.e2e.support.watcherFixture', '--owned-root', path.join(ownedRoot, 'media', 'cases', 'watcher-reconciliation')]);
     assert.equal(calls[0].options.env, environment);
     assert.ok(calls[0].options.timeout > 0);
+    calls.length = 0;
+    await _private.cleanupManagedWatcherFixture(environment, {
+      ownedDirectoryName: 'gallery-native-response-overlap',
+      runCommandFn(command, args, options) {
+        calls.push({ command, args, options });
+        return { status: 0, signal: null };
+      },
+    });
+    assert.deepEqual(calls[0].args, [
+      '-m', 'tests.e2e.support.watcherFixture', '--owned-root',
+      path.join(ownedRoot, 'media', 'cases', 'gallery-native-response-overlap'),
+    ]);
+    await assert.rejects(
+      _private.cleanupManagedWatcherFixture(environment, { ownedDirectoryName: 'not-runner-owned' }),
+      /owned directory/i,
+    );
     await assert.rejects(_private.cleanupManagedWatcherFixture(environment, { runCommandFn() {
       return { status: 1, stderr: 'private database/path detail must not enter the error' };
     } }), (error) => error.message === 'Runner-owned watcher inventory cleanup failed; evidence retained.');
   } finally { fs.rmSync(ownedRoot, { recursive: true, force: true }); }
 });
 
-test('managed watcher cleanup rejects a request-supplied path before stopping or touching inventory', async () => {
+test('managed watcher cleanup rejects a request-supplied path or unknown directory before touching inventory', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-request-'));
   let controller;
   try {
@@ -3726,7 +3773,12 @@ test('managed watcher cleanup rejects a request-supplied path before stopping or
     fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({
       nonce: 'untrusted-path', operation: 'watcher-cleanup', ownedRoot: path.join(ownedRoot, 'outside'),
     }));
-    await assert.rejects(controller.processPendingRequest(), /fixed runner-owned operation/);
+    await assert.rejects(controller.processPendingRequest(), /runner-owned directory identity/);
+    assert.equal(controller.getCurrentChild().pid, 5564);
+    fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({
+      nonce: 'untrusted-directory', operation: 'watcher-cleanup', ownedDirectoryName: 'outside',
+    }));
+    await assert.rejects(controller.processPendingRequest(), /owned directory/i);
     assert.equal(controller.getCurrentChild().pid, 5564);
   } finally { await controller?.close(); fs.rmSync(ownedRoot, { recursive: true, force: true }); }
 });

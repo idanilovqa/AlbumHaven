@@ -2,6 +2,7 @@
 // of albums. Continuations never own the foreground/search request slot.
 let rootGalleryPageRequest = null;
 const ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT = 8;
+const ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT = 8;
 
 function isPagedRootGallery(view = state.view) {
   const surface = typeof resolveViewSurface === 'function'
@@ -66,6 +67,12 @@ async function loadNextRootGalleryPage() {
       > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
     viewRevision: readViewStateRevision(),
     url: buildRootGalleryPageUrl(view),
     cursor: page.next_cursor,
@@ -95,6 +102,14 @@ async function loadNextRootGalleryPage() {
     let recoveryEndArtist = '';
     let recoveryArtists = [];
     if (response.status === 409) {
+      let recoveryRequestCount = 1;
+      const fetchRecoveryResponse = async () => {
+        if (recoveryRequestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+          throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+        }
+        recoveryRequestCount += 1;
+        return fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      };
       const conflict = await response.json();
       if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
       // Catalog changes invalidate the cursor. Recover the retained window
@@ -109,7 +124,7 @@ async function loadNextRootGalleryPage() {
       if (recoveryStartArtist && (scroll.scrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
         url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
       }
-      response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+      response = await fetchRecoveryResponse();
       for (let index = 1; response.status === 400 && url.searchParams.has('gallery_anchor_artist'); index += 1) {
         const failure = await response.json();
         if (!ownsRootBrowseIdentity()) return false;
@@ -120,7 +135,7 @@ async function loadNextRootGalleryPage() {
         recoveryStartArtist = String(retainedGroups[index]?.artist || '').trim();
         if (!recoveryStartArtist) throw new Error(message);
         url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
-        response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
+        response = await fetchRecoveryResponse();
       }
       restarted = true;
     }
@@ -167,7 +182,12 @@ async function loadNextRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    const renderOptions = { preserveScroll: true, preserveMountedGalleryChildren: true };
+    const renderOptions = {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    };
     if (restarted) renderView(renderOptions);
     else renderArtistGroups(renderOptions);
     // Fill only the visible buffer, including a short initial page. Rechecking
@@ -195,6 +215,12 @@ async function loadPreviousRootGalleryPage() {
 
   const request = {
     controller: new AbortController(),
+    semanticScrollAnchor: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.captureScrollAnchor?.() || null,
+    semanticScrollOwnerGeneration: typeof virtualGrid === 'undefined'
+      ? null
+      : virtualGrid?.getUserScrollIntentGeneration?.(),
     cursor: page.previous_cursor,
     revision: page.revision,
     viewRevision: Number(state.ui.viewStateRevision || 0),
@@ -240,7 +266,12 @@ async function loadPreviousRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    renderArtistGroups({ preserveScroll: true, preserveMountedGalleryChildren: true });
+    renderArtistGroups({
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    });
     return true;
   } catch (error) {
     if (error?.name !== 'AbortError') {
@@ -524,6 +555,7 @@ async function performPendingScanCompletionViewRefresh() {
     const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
       preserveScroll: true,
       restartIfSameUrl: true,
+      shouldApplyResponse: data => data?.view_data_source !== 'transient_scan_state',
     });
     if (!refreshApplied) {
       throw new Error('The post-scan gallery refresh lost view-state ownership before it could apply.');
@@ -1026,7 +1058,12 @@ async function recoverRootGalleryRefreshFirstPage(
   let currentResponse = response;
   let currentUrl = apiUrl;
   let restarted = false;
+  let requestCount = currentResponse ? 1 : 0;
   const fetchArtist = async artist => {
+    if (requestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
+      throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+    }
+    requestCount += 1;
     const url = new URL(apiUrl, 'http://localhost');
     url.searchParams.delete('gallery_cursor');
     url.searchParams.set('gallery_page_size', '50');
@@ -1497,6 +1534,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     );
     renderView({
       ...responseApplyOptions,
+      ...(responseApplyOptions.preserveScroll === true && hasMountedGalleryContent
+        ? { preserveMountedGalleryChildren: true }
+        : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
     });
     const currentModalAlbum = state.modalReleases?.[state.modalReleaseIndex] || null;

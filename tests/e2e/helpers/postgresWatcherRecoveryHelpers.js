@@ -292,6 +292,7 @@ export async function waitForWatcherRecoverySnapshot(predicate, options = {}) {
   }
   let observed = null;
   const readSnapshot = options.readSnapshot || readWatcherRecoverySnapshot;
+  const pollMessage = options.message || 'Expected watcher recovery state was not observed.';
   try {
     await expect.poll(async () => {
     observed = await readSnapshot(options.roots, options);
@@ -299,24 +300,35 @@ export async function waitForWatcherRecoverySnapshot(predicate, options = {}) {
   }, {
     timeout: options.timeout || 120000,
     intervals: options.intervals || [100, 250, 500, 1000, 2000],
-    message: options.message || 'Expected watcher recovery state was not observed.',
+    message: pollMessage,
     }).toBe(true);
   } catch (error) {
-    if (error?.matcherResult && typeof options.timeoutDiagnostic === 'function') {
-      const diagnostic = options.timeoutDiagnostic(observed) || {};
-      const numberPair = (value) => ({
-        baseline: finiteNumber(value?.baseline),
-        current: finiteNumber(value?.current),
-      });
-      error.watcherRecoveryDiagnostic = Object.hasOwn(diagnostic, 'repairMatched')
-        ? sanitizeRepairWatermarkDiagnostic(diagnostic)
-        : {
-          incidentMatched: diagnostic.incidentMatched === true,
-          inventoryRevision: numberPair(diagnostic.inventoryRevision),
-          healthyAcceptedSequence: numberPair(diagnostic.healthyAcceptedSequence),
-          healthyAppliedSequence: numberPair(diagnostic.healthyAppliedSequence),
-        };
-      error.message += `\nWATCHER_RECOVERY_DIAGNOSTIC=${JSON.stringify(error.watcherRecoveryDiagnostic)}`;
+    const isPollTimeout = Boolean(error?.matcherResult) || (
+      typeof error?.message === 'string'
+      && error.message.includes(pollMessage)
+      && error.message.includes('expect(received).toBe(expected)')
+    );
+    if (isPollTimeout && typeof options.timeoutDiagnostic === 'function') {
+      try {
+        const diagnostic = options.timeoutDiagnostic(observed) || {};
+        const numberPair = (value) => ({
+          baseline: finiteNumber(value?.baseline),
+          current: finiteNumber(value?.current),
+        });
+        const sanitizedDiagnostic = Object.hasOwn(diagnostic, 'repairMatched')
+          ? sanitizeRepairWatermarkDiagnostic(diagnostic)
+          : {
+            incidentMatched: diagnostic.incidentMatched === true,
+            inventoryRevision: numberPair(diagnostic.inventoryRevision),
+            healthyAcceptedSequence: numberPair(diagnostic.healthyAcceptedSequence),
+            healthyAppliedSequence: numberPair(diagnostic.healthyAppliedSequence),
+          };
+        const serializedDiagnostic = JSON.stringify(sanitizedDiagnostic);
+        error.watcherRecoveryDiagnostic = sanitizedDiagnostic;
+        error.message += `\nWATCHER_RECOVERY_DIAGNOSTIC=${serializedDiagnostic}`;
+      } catch {
+        // Diagnostics must never mask the original polling failure.
+      }
     }
     throw error;
   }

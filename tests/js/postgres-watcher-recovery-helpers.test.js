@@ -212,6 +212,98 @@ test('watcher recovery polling retains only its closed path-free timeout diagnos
   );
 });
 
+test('watcher recovery polling attaches its diagnostic to an assertion-shaped rejection without matcherResult', async () => {
+  const { waitForWatcherRecoverySnapshot } = await import(
+    '../e2e/helpers/postgresWatcherRecoveryHelpers.js'
+  );
+  const message = 'Expected the unavailable-root incident and independent healthy-root progress.';
+  const assertionError = new Error([
+    message,
+    '',
+    'expect(received).toBe(expected) // Object.is equality',
+  ].join('\n'));
+
+  await assert.rejects(
+    waitForWatcherRecoverySnapshot(() => {
+      throw assertionError;
+    }, {
+      roots: { failureRootId: 'failure-root', healthyRootId: 'healthy-root' },
+      timeout: 5,
+      intervals: [1],
+      message,
+      readSnapshot: async () => ({}),
+      timeoutDiagnostic: () => WATCHER_TIMEOUT_DIAGNOSTIC,
+    }),
+    (error) => {
+      assert.equal(error.matcherResult, undefined);
+      return assertClosedPathFreeTimeoutDiagnostic(error, []);
+    },
+  );
+});
+
+test('watcher recovery polling leaves unrelated snapshot read errors untouched', async () => {
+  const { waitForWatcherRecoverySnapshot } = await import(
+    '../e2e/helpers/postgresWatcherRecoveryHelpers.js'
+  );
+  const readError = new Error('Watcher recovery snapshot read failed.');
+  let diagnosticCalls = 0;
+
+  await assert.rejects(
+    waitForWatcherRecoverySnapshot(() => false, {
+      readSnapshot: async () => {
+        throw readError;
+      },
+      timeoutDiagnostic: () => {
+        diagnosticCalls += 1;
+        return WATCHER_TIMEOUT_DIAGNOSTIC;
+      },
+    }),
+    (error) => {
+      assert.strictEqual(error, readError);
+      assert.equal(diagnosticCalls, 0);
+      assert.equal(Object.hasOwn(error, 'watcherRecoveryDiagnostic'), false);
+      return true;
+    },
+  );
+});
+
+test('watcher recovery polling preserves its assertion error when diagnostic generation fails', async () => {
+  const { waitForWatcherRecoverySnapshot } = await import(
+    '../e2e/helpers/postgresWatcherRecoveryHelpers.js'
+  );
+  const message = 'Expected the unavailable-root incident and independent healthy-root progress.';
+  const assertionError = new Error([
+    message,
+    '',
+    'expect(received).toBe(expected) // Object.is equality',
+  ].join('\n'));
+  const diagnosticError = new Error('diagnostic-private-text');
+  let diagnosticCalls = 0;
+
+  await assert.rejects(
+    waitForWatcherRecoverySnapshot(() => {
+      throw assertionError;
+    }, {
+      message,
+      readSnapshot: async () => ({}),
+      timeoutDiagnostic: () => {
+        diagnosticCalls += 1;
+        throw diagnosticError;
+      },
+    }),
+    (error) => {
+      assert.strictEqual(error, assertionError);
+      assert.equal(diagnosticCalls, 1);
+      assert.doesNotMatch(
+        `${error.message}\n${error.stack || ''}\n${error.cause?.message || ''}`,
+        /diagnostic-private-text/u,
+      );
+      assert.equal(Object.hasOwn(error, 'watcherRecoveryDiagnostic'), false);
+      return true;
+    },
+  );
+});
+
 test('watcher recovery action throws the final four-conjunct timeout projection', async () => {
   const [
     { LibraryFilesystemWatcherActions },

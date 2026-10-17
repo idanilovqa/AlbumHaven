@@ -1177,6 +1177,11 @@ test('Cover Lookup performance setup enters the target artist before album selec
   assert.ok(galleryReadyIndex >= 0, 'cold setup must wait for the startup overlay to clear');
   assert.ok(galleryReadyIndex < selectedArtistIndex, 'startup readiness must precede artist selection');
   assert.match(source, /waitForSelectedArtistGallery\(TARGET\.artist/u);
+  assert.match(
+    source,
+    /await coverLookupActions\.closeModal\(\);\s+await trackModalActions\.close\(\);/u,
+    'cleanup must close the foreground Cover Lookup modal before Album Details',
+  );
 });
 
 test('buildRunnerArgs preserves focused utility problematic-files target metadata when selected by spec path', () => {

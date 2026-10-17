@@ -93,6 +93,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     expect(reopened.source).toBe('SPOTIFY');
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
 
+    await coverLookupActions.closeModal();
     await trackModalActions.close();
 
     const metrics = {

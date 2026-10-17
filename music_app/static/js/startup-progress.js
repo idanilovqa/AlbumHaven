@@ -62,9 +62,12 @@
     show,
     finish() {
       if (completed) return;
-      show(100);
       completed = true;
-      if (reducedMotion || percent === 100) finishHide();
+      targetPercent = 100;
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
+      render(100);
+      finishHide();
     },
     fail() {
       if (completed || root.hidden) return;

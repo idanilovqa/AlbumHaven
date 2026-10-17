@@ -1391,6 +1391,7 @@ test('library-home navigation clears active search state before opening All arti
   const { context, calls } = createContext();
   context.state.view.query = 'slow search';
   context.state.view.search_context = { kind: 'text' };
+  context.state.view.artists_sidebar = [{ artist: 'The Flower Kings', count: 1 }];
 
   const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
   context.handleGalleryBootstrapClick(event);
@@ -1400,6 +1401,7 @@ test('library-home navigation clears active search state before opening All arti
   assert.equal(context.state.ui.searchDraftQuery, '');
   assert.equal(calls.buildApiUrl.at(-1).query, '');
   assert.equal(calls.buildApiUrl.at(-1).search_context, null);
+  assert.deepEqual(calls.buildApiUrlOptions.at(-1), {});
 });
 
 test('library-home navigation already at the root responds by scrolling to the top without fetching', () => {

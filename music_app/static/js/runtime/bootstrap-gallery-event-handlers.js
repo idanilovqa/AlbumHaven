@@ -388,9 +388,8 @@ function handleGalleryBootstrapClick(event) {
       return;
     }
     renderSidebar();
-    Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-      omitSidebar: true,
-    }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
+    Promise.resolve(fetchAndRender(buildApiUrl(nextView), true))
+      .then(resumeCoverLoads, () => resumeCoverLoads(true, true));
     return;
   }
 

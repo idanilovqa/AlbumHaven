@@ -25,6 +25,12 @@ _ISOLATED_RUNTIME_DATABASE_URL = os.environ.get(
 _ISOLATED_SETUP_DATABASE_URL = os.environ.get(
     "ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL", ""
 ).strip()
+_COVER_CONSISTENCY_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "migrations"
+    / "postgres"
+    / "0110_close_cover_consistency.sql"
+)
 
 
 class FakeCursor:
@@ -61,6 +67,17 @@ class StructuralTagEditConnection:
         normalized_sql = _normalized_sql(sql)
         if "bootstrap_context_ready" in normalized_sql:
             return FakeCursor([{"bootstrap_context_ready": 1}])
+        if "library.persist_authorized_structural_tag_edit_noncover(" in normalized_sql:
+            return FakeCursor([self.result_row])
+        if (
+            "inventory_mutation_revision" in normalized_sql
+            and "library.read_cover_mutation_revision" in normalized_sql
+        ):
+            return FakeCursor([{
+                "library_id": 7,
+                "inventory_mutation_revision": 7,
+                "cover_mutation_revision": 0,
+            }])
         if "source_album_track_file_count" in normalized_sql:
             return FakeCursor([self.result_row])
         if "library.retire_vacated_structural_album_siblings(" in normalized_sql:
@@ -76,6 +93,42 @@ class StructuralTagEditConnection:
 
 def _normalized_sql(sql: str) -> str:
     return " ".join(sql.casefold().split())
+
+
+def _structural_noncover_function_sql() -> str:
+    assert _COVER_CONSISTENCY_MIGRATION.is_file(), (
+        "missing additive cover consistency migration 0110"
+    )
+    sql = _normalized_sql(
+        _COVER_CONSISTENCY_MIGRATION.read_text(encoding="utf-8")
+    )
+    marker = (
+        "create or replace function "
+        "library.persist_authorized_structural_tag_edit_noncover("
+    )
+    assert marker in sql
+    return sql.split(marker, 1)[1].split("create or replace function", 1)[0]
+
+
+def _structural_noncover_call(
+    connection: StructuralTagEditConnection,
+) -> tuple[str, dict[str, object]]:
+    calls = [
+        (sql, params)
+        for sql, params in connection.executed
+        if "library.persist_authorized_structural_tag_edit_noncover("
+        in _normalized_sql(sql)
+    ]
+    assert len(calls) == 1
+    runtime_sql, params = calls[0]
+    normalized_runtime_sql = _normalized_sql(runtime_sql)
+    assert normalized_runtime_sql.startswith(
+        "select * from library.persist_authorized_structural_tag_edit_noncover("
+    )
+    for operation in ("insert into", "update", "delete from"):
+        for table in ("library.local_albums", "library.local_track_files"):
+            assert f"{operation} {table}" not in normalized_runtime_sql
+    return _structural_noncover_function_sql(), params
 
 
 def _entries(album: str = "New Album"):
@@ -255,21 +308,46 @@ def test_postgres_album_rename_is_targeted_and_never_round_trips_a_snapshot(monk
         "inventory_mutation_revision": 8,
         "destination_album_id": 41,
     }
-    mutation_calls = [
-        (sql, params)
-        for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
-    ]
-    assert len(mutation_calls) == 1
-    mutation_sql, mutation_params = mutation_calls[0]
+    _function_sql, mutation_params = _structural_noncover_call(connection)
+    mutation_sql = next(
+        sql
+        for sql, _params in connection.executed
+        if "library.persist_authorized_structural_tag_edit_noncover("
+        in _normalized_sql(sql)
+    )
     normalized_sql = _normalized_sql(mutation_sql)
-    assert "unnest(%(changed_paths)s::text[])" in normalized_sql
-    assert "library.local_track_files.private_path" in normalized_sql
-    assert "update library.local_tracks" in normalized_sql
-    assert "update library.local_track_files" in normalized_sql
-    assert "update library.libraries" in normalized_sql
-    assert "inventory_mutation_revision" in normalized_sql
-    assert mutation_params["changed_paths"] == sorted(paths)
+    assert normalized_sql.startswith(
+        "select * from library.persist_authorized_structural_tag_edit_noncover("
+    )
+    for argument in (
+        "requested_library_id",
+        "requested_track_paths",
+        "expected_inventory_revision",
+        "input_rows",
+        "destination_state",
+        "changed_field_names",
+        "observed_at",
+    ):
+        assert f"%({argument})s" in normalized_sql
+    assert mutation_params["requested_library_id"] == 7
+    assert mutation_params["requested_track_paths"] == sorted(paths)
+    assert mutation_params["expected_inventory_revision"] == 7
+    assert mutation_params["changed_field_names"] == ["album"]
+    assert set(mutation_params["destination_state"]) == {
+        "destination_album_key",
+        "destination_artist_key",
+        "destination_artist_name",
+        "destination_artist_metadata",
+        "destination_album_title",
+        "destination_release_year",
+        "destination_release_date",
+        "destination_edition",
+        "destination_separate_release_key",
+        "destination_is_explicit_separate",
+        "updates_release_year",
+        "source",
+    }
+    assert mutation_params["observed_at"] is not None
     assert unrelated_path not in repr(mutation_params)
     retirement_calls = [
         params for sql, params in connection.executed
@@ -366,7 +444,7 @@ def test_postgres_album_rename_rejects_partial_mixed_or_unresolved_scope(
     assert connection.commit_calls == 0
 
 
-def test_postgres_album_split_inserts_covered_destination_and_moves_only_selected_path(
+def test_postgres_album_split_inserts_noncover_destination_and_moves_only_selected_path(
     monkeypatch,
 ):
     paths, previous, updated = _entries()
@@ -386,23 +464,25 @@ def test_postgres_album_split_inserts_covered_destination_and_moves_only_selecte
     assert result["album_rows_updated"] == 1
     assert result["track_rows_updated"] == 1
     assert result["track_file_rows_updated"] == 1
-    mutation_sql, mutation_params = next(
-        (sql, params)
+    mutation_params = next(
+        params
         for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
+        if "library.persist_authorized_structural_tag_edit_noncover("
+        in _normalized_sql(sql)
     )
-    normalized_sql = _normalized_sql(mutation_sql)
+    normalized_sql = _structural_noncover_function_sql()
     inserted_destination = normalized_sql.split(
         "inserted_destination_album as (", 1
     )[1].split("destination_album as materialized", 1)[0]
     assert "insert into library.local_albums" in normalized_sql
-    assert "validated_source_album.cover_path" in normalized_sql
+    assert "validated_source_album.cover_path" not in normalized_sql
+    assert "cover_path" not in inserted_destination
     assert "validated_source_album.metadata" in normalized_sql
     assert "else validated_source_album.release_year" in inserted_destination
     assert "insert into library.local_album_featured_artists" in normalized_sql
     assert "selection_scope.input_path_count <" in normalized_sql
     assert "update library.local_tracks" in normalized_sql
-    assert mutation_params["changed_paths"] == [selected_path]
+    assert mutation_params["requested_track_paths"] == [selected_path]
 
     validation_connection = StructuralTagEditConnection(result_row)
     validation_adapter = _adapter(monkeypatch, validation_connection)
@@ -415,21 +495,21 @@ def test_postgres_album_split_inserts_covered_destination_and_moves_only_selecte
 
 
 def test_album_edit_restores_display_date_when_watcher_precreates_destination():
-    from music_app.services import scan_cache_persistence
-
-    normalized_sql = _normalized_sql(
-        scan_cache_persistence._persist_structural_album_tag_edit_sql()
-    )
+    normalized_sql = _structural_noncover_function_sql()
 
     assert "normalized_existing_destination_album as" in normalized_sql
-    assert "not %(updates_release_year)s::boolean" in normalized_sql
+    assert (
+        "not coalesce((destination_state ->> 'updates_release_year')::boolean, false)"
+        in normalized_sql
+    )
     assert "has_display_year_override" in normalized_sql
     assert "#>> '{scan_cache,file_entry,year}'" in normalized_sql
-    destination_sql = normalized_sql.split("normalized_existing_destination_album as (", 1)[1].split(
-        "updated_album_ratings as (", 1
-    )[0]
+    destination_sql = normalized_sql.split(
+        "normalized_existing_destination_album as (", 1
+    )[1].split("updated_album_ratings as (", 1)[0]
     assert (
-        "when not %(updates_release_year)s::boolean "
+        "when not coalesce((destination_state ->> "
+        "'updates_release_year')::boolean, false)::boolean "
         "and validated_source_album.has_display_year_override "
         "and nullif(btrim(library.local_albums.metadata ->> 'release_date'), '') is null "
         "then validated_source_album.release_year else library.local_albums.release_year"
@@ -1391,12 +1471,8 @@ def test_postgres_album_split_reuses_legacy_key_with_same_release_identity(
         changed_field_names={"year"},
     )
 
-    mutation_sql, mutation_params = next(
-        (sql, params)
-        for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
-    )
-    normalized_sql = _normalized_sql(mutation_sql)
+    normalized_sql, mutation_params = _structural_noncover_call(connection)
+    destination_state = mutation_params["destination_state"]
     locked_album_scope = normalized_sql.split(
         "locked_album_scope as materialized (", 1
     )[1].split("existing_destination_album as materialized", 1)[0]
@@ -1404,18 +1480,20 @@ def test_postgres_album_split_reuses_legacy_key_with_same_release_identity(
         "copied_album_ratings as (", 1
     )[1].split("copied_featured_artists as (", 1)[0]
 
-    assert mutation_params["destination_album_key"].endswith("::year::2000")
-    assert mutation_params["destination_release_year"] == 2000
-    assert mutation_params["destination_edition"] == ""
-    assert mutation_params["updates_release_year"] is True
+    assert mutation_params["requested_track_paths"] == [selected_path]
+    assert destination_state["destination_album_key"].endswith("::year::2000")
+    assert destination_state["destination_release_year"] == 2000
+    assert destination_state["destination_edition"] == ""
+    assert destination_state["updates_release_year"] is True
     assert (
         "library.local_albums.artist_id is not distinct from "
         "source_album_identity.artist_id"
     ) in locked_album_scope
     assert (
         "library.local_albums.release_year is not distinct from "
-        "case when %(updates_release_year)s::boolean "
-        "then %(destination_release_year)s "
+        "case when coalesce((destination_state ->> "
+        "'updates_release_year')::boolean, false)::boolean "
+        "then nullif(destination_state ->> 'destination_release_year', '')::integer "
         "else source_album_identity.release_year end"
     ) in locked_album_scope
     assert "library.local_albums.metadata ->> 'edition'" in locked_album_scope
@@ -1440,17 +1518,14 @@ def test_postgres_year_split_uses_year_identity_and_persists_only_selected_file_
     )
 
     assert result["album_rows_updated"] == 1
-    mutation_sql, mutation_params = next(
-        (sql, params)
-        for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
-    )
-    normalized_sql = _normalized_sql(mutation_sql)
-    assert mutation_params["destination_album_key"].endswith("::year::2014")
-    assert mutation_params["destination_album_title"] == "Old Album"
-    assert mutation_params["destination_release_year"] == 2014
-    assert mutation_params["destination_release_date"] == "2014"
-    assert mutation_params["updates_release_year"] is True
+    normalized_sql, mutation_params = _structural_noncover_call(connection)
+    destination_state = mutation_params["destination_state"]
+    assert mutation_params["requested_track_paths"] == [selected_path]
+    assert destination_state["destination_album_key"].endswith("::year::2014")
+    assert destination_state["destination_album_title"] == "Old Album"
+    assert destination_state["destination_release_year"] == 2014
+    assert destination_state["destination_release_date"] == "2014"
+    assert destination_state["updates_release_year"] is True
     assert mutation_params["input_rows"] == [
         {
             "private_path": selected_path,
@@ -1463,10 +1538,10 @@ def test_postgres_year_split_uses_year_identity_and_persists_only_selected_file_
     renamed_source = normalized_sql.split(
         "renamed_source_album as (", 1
     )[1].split("inserted_destination_album as (", 1)[0]
-    assert "%(destination_release_year)s" in inserted_destination
-    assert "%(destination_release_date)s" in inserted_destination
-    assert "then %(destination_release_year)s" in renamed_source
-    assert "%(destination_release_date)s" in renamed_source
+    assert "destination_state ->> 'destination_release_year'" in inserted_destination
+    assert "destination_state ->> 'destination_release_date'" in inserted_destination
+    assert "destination_state ->> 'destination_release_year'" in renamed_source
+    assert "destination_state ->> 'destination_release_date'" in renamed_source
     assert (
         "(select input_path_count from selection_scope) = "
         "( select count(*) from source_album_track_files"
@@ -1533,12 +1608,7 @@ def test_postgres_album_rename_preserves_row_identity_cover_and_unrelated_metada
 
     _persist_album_rename(adapter, previous, updated)
 
-    mutation_sql = next(
-        sql
-        for sql, _params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
-    )
-    normalized_sql = _normalized_sql(mutation_sql)
+    normalized_sql, _mutation_params = _structural_noncover_call(connection)
     assert "set album_id =" in normalized_sql
     assert "set album_key =" in normalized_sql
     assert "where library.local_tracks.id =" in normalized_sql
@@ -1584,33 +1654,30 @@ def test_postgres_album_only_rename_never_overwrites_current_album_metadata(
 
     _persist_album_rename(adapter, previous, updated)
 
-    mutation_sql, mutation_params = next(
-        (sql, params)
-        for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
-    )
-    normalized_sql = _normalized_sql(mutation_sql)
+    normalized_sql, mutation_params = _structural_noncover_call(connection)
+    destination_state = mutation_params["destination_state"]
     destination_album_update = normalized_sql.split(
         "renamed_source_album as (", 1
     )[1].split("inserted_destination_album as (", 1)[0]
 
     assert "set album_key = case" in destination_album_update
     assert (
-        "when %(destination_is_explicit_separate)s::boolean"
+        "when coalesce((destination_state ->> "
+        "'destination_is_explicit_separate')::boolean, false)"
         in destination_album_update
     )
-    assert "else %(destination_album_key)s" in destination_album_update
-    assert "title = %(destination_album_title)s" in destination_album_update
-    assert "last_seen_at = now()" in destination_album_update
-    assert mutation_params["updates_release_year"] is False
-    assert mutation_params["destination_is_explicit_separate"] is False
+    assert "else (destination_state ->> 'destination_album_key')" in destination_album_update
+    assert "title = (destination_state ->> 'destination_album_title')" in destination_album_update
+    assert "last_seen_at = observed_at" in destination_album_update
+    assert destination_state["updates_release_year"] is False
+    assert destination_state["destination_is_explicit_separate"] is False
     assert "else library.local_albums.release_year" in destination_album_update
     assert "cover_path =" not in destination_album_update
     assert "metadata = case" in destination_album_update
     assert "else library.local_albums.metadata end" in destination_album_update
     assert "'{release_date}'" in destination_album_update
     assert "%(destination_album_metadata)s" not in destination_album_update
-    assert "destination_album_metadata" not in mutation_params
+    assert "destination_album_metadata" not in destination_state
 
 
 def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_rows(
@@ -1652,11 +1719,7 @@ def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_row
 
     _persist_album_rename(adapter, previous, updated)
 
-    _sql, mutation_params = next(
-        (sql, params)
-        for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
-    )
+    _function_sql, mutation_params = _structural_noncover_call(connection)
     input_file_entries = [
         row["file_entry"]
         for row in mutation_params["input_rows"]
@@ -1667,7 +1730,7 @@ def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_row
     )
     assert all(file_entry["mtime"] == 2.0 for file_entry in input_file_entries)
     assert all(file_entry["size"] == 200 for file_entry in input_file_entries)
-    assert "destination_album_metadata" not in mutation_params
+    assert "destination_album_metadata" not in mutation_params["destination_state"]
 
 
 def test_postgres_album_rename_merges_full_source_into_existing_destination(monkeypatch):
@@ -1678,14 +1741,10 @@ def test_postgres_album_rename_merges_full_source_into_existing_destination(monk
     result = _persist_album_rename(adapter, previous, updated)
 
     assert result["track_file_rows_updated"] == 2
-    mutation_sql, mutation_params = next(
-        (sql, params)
-        for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
-    )
-    normalized_sql = _normalized_sql(mutation_sql)
+    normalized_sql, mutation_params = _structural_noncover_call(connection)
+    destination_state = mutation_params["destination_state"]
 
-    assert mutation_params["destination_separate_release_key"] == "artist::new album"
+    assert destination_state["destination_separate_release_key"] == "artist::new album"
     assert "destination_conflict as materialized" not in normalized_sql
     assert "existing_destination_album as materialized" in normalized_sql
     assert "copied_album_ratings as (" in normalized_sql
@@ -1696,7 +1755,10 @@ def test_postgres_album_rename_merges_full_source_into_existing_destination(monk
     assert "vacated_source_album as materialized (" in normalized_sql
     assert "deleted_destination_separate_release as (" in normalized_sql
     assert "delete from library.separate_releases" in normalized_sql
-    assert "release_key = %(destination_separate_release_key)s" in normalized_sql
+    assert (
+        "release_key = (destination_state ->> 'destination_separate_release_key')"
+        in normalized_sql
+    )
     assert "select count(*) from updated_tracks" in normalized_sql
     assert "select count(*) from updated_track_files" in normalized_sql
     assert (
@@ -1983,7 +2045,7 @@ def test_structural_album_tag_save_runs_reconciliation_before_transaction_exit(m
     mutation_index = next(
         index
         for index, sql in enumerate(executed_sql)
-        if "source_album_track_file_count" in sql
+        if "library.persist_authorized_structural_tag_edit_noncover(" in sql
     )
     reconciliation_indexes = [
         executed_sql.index(_normalized_sql(statement))

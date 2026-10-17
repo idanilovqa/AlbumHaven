@@ -105,6 +105,9 @@ WATCHER_SESSION_MIGRATION = (
 WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION = (
     MIGRATIONS_DIR / "0109_preserve_full_scan_progress_on_restart.sql"
 )
+COVER_CONSISTENCY_MIGRATION = (
+    MIGRATIONS_DIR / "0110_close_cover_consistency.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -145,8 +148,23 @@ def _watcher_preserved_attempt_restart_sql() -> str:
     )
 
 
+def _cover_consistency_sql() -> str:
+    assert COVER_CONSISTENCY_MIGRATION.is_file(), (
+        "missing additive cover consistency migration 0110"
+    )
+    return _normalized_sql(COVER_CONSISTENCY_MIGRATION.read_text(encoding="utf-8"))
+
+
+def _cover_consistency_function_sql(name: str) -> str:
+    sql = _cover_consistency_sql()
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing cover consistency function {name}"
+    return sql.split(marker, 1)[1].split("create or replace function", 1)[0]
+
+
 def test_0108_is_additive_and_keeps_released_0107_bytes():
-    assert hashlib.sha256(WATCHER_RECOVERY_MIGRATION.read_bytes()).hexdigest() == (
+    released_0107 = WATCHER_RECOVERY_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(released_0107).hexdigest() == (
         "c7a968f87b2d9841b5958cce16e6caca32ecb1e5a5b9708e2efa8046246a6ae6"
     )
     assert WATCHER_SESSION_MIGRATION.name == (
@@ -318,7 +336,10 @@ def test_0109_is_the_exact_ordered_successor_to_unchanged_0108():
         for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
-    assert migration_names[-2:] == [
+    predecessor_index = migration_names.index(
+        "0108_create_watcher_runtime_sessions.sql"
+    )
+    assert migration_names[predecessor_index : predecessor_index + 2] == [
         "0108_create_watcher_runtime_sessions.sql",
         "0109_preserve_full_scan_progress_on_restart.sql",
     ]
@@ -356,6 +377,248 @@ def test_0109_only_redefines_the_hardened_scan_intent_sync_contract():
         "current_path",
     ):
         assert progress_field not in sql
+
+
+def test_0110_is_the_exact_ordered_successor_to_0109():
+    migration_names = sorted(
+        path.name
+        for path in MIGRATIONS_DIR.iterdir()
+        if path.is_file() and path.suffix.casefold() == ".sql"
+    )
+
+    assert migration_names[-3:] == [
+        "0108_create_watcher_runtime_sessions.sql",
+        "0109_preserve_full_scan_progress_on_restart.sql",
+        "0110_close_cover_consistency.sql",
+    ]
+
+
+def test_cover_consistency_migration_is_additive_and_least_privilege():
+    sql = _cover_consistency_sql()
+
+    assert "create table if not exists library.cover_mutation_state" in sql
+    assert "cover_mutation_revision bigint not null default 0" in sql
+    assert "check (cover_mutation_revision >= 0)" in sql
+    assert "primary key (library_id)" in sql
+    for role in (
+        "public",
+        "album_haven_app",
+        "album_haven_worker",
+        "album_haven_readonly",
+    ):
+        assert (
+            f"revoke all on table library.cover_mutation_state from {role}"
+            in sql
+        )
+    assert "grant execute on function library.commit_cover_selection" in sql
+    assert "grant execute on function library.recover_cover_mutation" in sql
+    assert (
+        "grant execute on function library.read_cover_mutation_revision(bigint)"
+        in sql
+    )
+    assert "library.local_albums, library.local_track_files" in sql
+    assert "from album_haven_app" in sql
+    assert "from album_haven_worker" in sql
+    assert "persist_authorized_structural_tag_edit_noncover" in sql
+    assert "drop table" not in sql
+
+
+def test_cover_consistency_migration_preserves_job_limits_and_durable_digest():
+    sql = _cover_consistency_sql()
+
+    assert "add column if not exists artifact_sha256 varchar(64)" in sql
+    assert "artifact_sha256 is null or artifact_sha256 ~ '^[0-9a-f]{64}$'" in sql
+    assert "add column if not exists authority_cover_mutation_revision bigint" in sql
+    assert (
+        "authority_cover_mutation_revision is null or "
+        "authority_cover_mutation_revision >= 0"
+    ) in sql
+    for clause in (
+        "kind = 'full_scan' and max_attempts = 2",
+        "kind = 'targeted_reconciliation' and max_attempts = 3",
+        "kind = 'post_scan_cover_refresh' and max_attempts = 2",
+        "kind = 'cover_lookup' and max_attempts = 2",
+        "kind = 'cover_bulk_refresh' and max_attempts = 2",
+        "kind = 'cover_remote_save' and max_attempts >= 1",
+        "kind = 'lastfm_scrobble_retry' and max_attempts = 1",
+        "kind = 'auth_welcome_delivery' and max_attempts = 3",
+        "kind = 'auth_invitation_delivery' and max_attempts = 1",
+        "kind = 'auth_password_reset_delivery' and max_attempts = 1",
+    ):
+        assert clause in sql
+    assert "next_artifact_key uuid, next_artifact_sha256 text" in sql
+    assert (
+        "artifact_sha256 = coalesce(next_artifact_sha256, "
+        "checkpoint.artifact_sha256)"
+    ) in sql
+    assert "next_artifact_sha256 !~ '^[0-9a-f]{64}$'" in sql
+
+
+def test_cover_consistency_migration_revokes_every_new_public_execution_surface():
+    compact_sql = re.sub(r"\s+", "", _cover_consistency_sql())
+    signatures = (
+        "ops.checkpoint_claimed_cover_remote_save"
+        "(bigint,bigint,integer,text,text,timestamptz,bigint,text,uuid,text,text,text)",
+        "ops.load_claimed_cover_finalization(bigint,integer,text,text,timestamptz)",
+        "ops.advance_claimed_cover_finalization"
+        "(bigint,bigint,integer,text,text,bigint,text,timestamptz)",
+        "ops.retry_claimed_cover_finalization"
+        "(bigint,integer,text,text,timestamptz,text,timestamptz)",
+        "ops.requeue_expired_cover_finalization(timestamptz)",
+        "ops.reconcile_stale_job_leases(timestamptz,integer)",
+        "library.apply_scanned_cover_observations(bigint,bigint,jsonb,timestamptz)",
+        "library.persist_authorized_structural_tag_edit_noncover"
+        "(bigint,text[],bigint,jsonb,jsonb,text[],timestamptz)",
+        "library.publish_claimed_full_scan"
+        "(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz)",
+        "library.publish_claimed_targeted_reconciliation"
+        "(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz)",
+    )
+
+    for signature in signatures:
+        assert f"revokeallonfunction{signature}frompublic" in compact_sql
+
+
+def test_cover_consistency_migration_fences_scan_publication():
+    sql = _cover_consistency_sql()
+
+    assert "captured_cover_mutation_revision" in sql
+    lock = "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))"
+    assert lock in sql
+    assert sql.count(f"perform {lock};") >= 4
+    assert (
+        "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'),"
+        not in sql
+    )
+    assert "expected_cover_mutation_revision" in sql
+    assert "cover_publication_stale" in sql
+
+
+def test_cover_consistency_migration_captures_revision_at_every_intent_table_boundary():
+    sql = _cover_consistency_sql()
+    trigger_function = _cover_consistency_function_sql(
+        "library.capture_scan_intent_cover_revision"
+    )
+
+    assert "returns trigger" in trigger_function
+    assert "if new.captured_cover_mutation_revision is null" in trigger_function
+    assert "values (new.library_id)" in trigger_function
+    assert "into new.captured_cover_mutation_revision" in trigger_function
+    assert "state.library_id = new.library_id" in trigger_function
+    for table, trigger_name in (
+        (
+            "library.full_scan_intents",
+            "full_scan_intents_capture_cover_revision",
+        ),
+        (
+            "library.targeted_reconciliation_intents",
+            "targeted_reconciliation_intents_capture_cover_revision",
+        ),
+    ):
+        assert (
+            f"create trigger {trigger_name} before insert on {table} "
+            "for each row execute function "
+            "library.capture_scan_intent_cover_revision()"
+        ) in sql
+
+    # Keep creator coverage: the trigger is the common boundary for direct and
+    # nested creators, but every effective creator must still insert an intent.
+    full_creator = _cover_consistency_function_sql(
+        "library.create_full_scan_intent"
+    )
+    assert "insert into library.full_scan_intents" in full_creator
+
+    creator_insert_counts = {
+        "library.create_targeted_reconciliation_intent": 1,
+        "library.mark_watcher_roots_dirty": 1,
+        "library.accept_watcher_event": 1,
+        "library.try_complete_watcher_repairs": 2,
+        "library.fail_claimed_watcher_generation": 1,
+        "library.reconcile_due_watcher_generations": 1,
+    }
+    for function_name, insert_count in creator_insert_counts.items():
+        body = _cover_consistency_function_sql(function_name)
+        assert body.count(
+            "insert into library.targeted_reconciliation_intents"
+        ) == insert_count
+
+
+def test_cover_consistency_migration_backfills_only_nonterminal_intents():
+    sql = _cover_consistency_sql()
+
+    for table in (
+        "library.full_scan_intents",
+        "library.targeted_reconciliation_intents",
+    ):
+        statements = [
+            statement
+            for statement in sql.split(";")
+            if f"update {table} as intent" in statement
+            and "captured_cover_mutation_revision" in statement
+        ]
+        assert len(statements) == 1
+        statement = statements[0]
+        assert "from library.cover_mutation_state as state" in statement
+        assert "state.library_id = intent.library_id" in statement
+        assert "intent.state in ('accepted', 'running', 'retry_wait')" in statement
+        assert "intent.captured_cover_mutation_revision is null" in statement
+        assert "'succeeded'" not in statement
+        assert "'failed'" not in statement
+        assert "'canceled'" not in statement
+
+
+def test_cover_consistency_migration_returns_nonnegative_captured_revision_from_both_claims():
+    sql = _cover_consistency_sql()
+
+    assert sql.count(
+        "add column if not exists captured_cover_mutation_revision bigint"
+    ) == 2
+    assert sql.count(
+        "captured_cover_mutation_revision is null or "
+        "captured_cover_mutation_revision >= 0"
+    ) >= 2
+    for loader in (
+        "library.load_claimed_full_scan_intent_v3",
+        "library.load_claimed_targeted_reconciliation_intent_v2",
+    ):
+        body = _cover_consistency_function_sql(loader)
+        assert "captured_cover_mutation_revision bigint" in body
+        assert "intent.captured_cover_mutation_revision" in body
+        assert "intent.captured_cover_mutation_revision is not null" in body
+
+
+def test_cover_consistency_structural_tag_function_is_typed_noncover_authority():
+    sql = _cover_consistency_sql()
+    compact_sql = re.sub(r"\s+", "", sql)
+    signature = (
+        "library.persist_authorized_structural_tag_edit_noncover"
+        "(bigint,text[],bigint,jsonb,jsonb,text[],timestamptz)"
+    )
+    body = _cover_consistency_function_sql(
+        "library.persist_authorized_structural_tag_edit_noncover"
+    )
+
+    assert f"createorreplacefunction{signature}" in compact_sql
+    assert "security definer" in body
+    assert "set search_path = pg_catalog" in body
+    for marker in (
+        "updated_albums",
+        "updated_tracks",
+        "updated_track_files",
+        "inventory_mutation_revision",
+    ):
+        assert marker in body
+    assert "changed_field_names" in body
+    assert "cover_path" in body
+    assert "remote_cover_" in body
+    assert not re.search(r"set\s+cover_path\s*=", body)
+    assert not re.search(
+        r"insert into library\.local_albums\s*\([^)]*\bcover_path\b",
+        body,
+    )
+    assert "validated_source_album.cover_path" not in body
+    assert "sql_fragment" not in body
+    assert "column_name" not in body
 
 
 def test_0108_creates_only_the_approved_schema_objects_and_overloads():
@@ -957,15 +1220,16 @@ def test_0107_claim_failure_completion_and_publication_use_generic_job_lease():
         "complete_watcher_generation",
     ):
         assert f"function library.{function_name}(" in sql
+        function_sql = _watcher_function_sql(f"library.{function_name}")
+        for predicate in (
+            "job.attempt_count = p_attempt",
+            "job.lease_owner = p_worker_id",
+            "job.lease_token = p_lease_token",
+            "job.lease_expires_at > pg_catalog.clock_timestamp()",
+        ):
+            assert predicate in function_sql
+        assert "job.lease_expires_at > p_now" not in function_sql
     assert "function library.heartbeat_watcher_generation(" not in sql
-    for predicate in (
-        "job.attempt_count = p_attempt",
-        "job.lease_owner = p_worker_id",
-        "job.lease_token = p_lease_token",
-        "job.lease_expires_at > pg_catalog.clock_timestamp()",
-    ):
-        assert predicate in sql
-    assert "job.lease_expires_at > p_now" not in sql
     for reason in (
         "root_unavailable",
         "overflow",
@@ -1769,7 +2033,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-69:] == [
+    assert migration_names[-71:] == [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -1839,6 +2103,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0106_retire_vacated_structural_album.sql",
         "0107_create_durable_watcher_recovery.sql",
         "0108_create_watcher_runtime_sessions.sql",
+        "0109_preserve_full_scan_progress_on_restart.sql",
+        "0110_close_cover_consistency.sql",
     ]
 
 

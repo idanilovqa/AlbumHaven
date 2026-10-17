@@ -134,6 +134,9 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0105_validate_durable_worker_startup.sql
 0106_retire_vacated_structural_album.sql
 0107_create_durable_watcher_recovery.sql
+0108_create_watcher_runtime_sessions.sql
+0109_preserve_full_scan_progress_on_restart.sql
+0110_close_cover_consistency.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -267,6 +270,16 @@ through the existing lease boundary. Roll application code back first; retain
 `0109` during rollback so retryable intents cannot remain fenced to the stopped
 worker attempt. If function rollback is operationally required, restore the
 `0092` definition only after all full-scan jobs have left `retry_wait`.
+
+`0110_close_cover_consistency.sql` adds a per-library cover-mutation revision,
+path-private album identity resolution, revision-fenced cover commits and scan
+observations, and durable post-authority finalization checkpoints. Apply it
+after `0109`. The migration is additive: old workers may drain through the
+legacy checkpoint overload, while new app and worker processes use only named
+security-definer functions. During rollback, stop new cover claims and drain
+owned leases before reverting application code; retain the revision rows,
+intent fences, artifact digests, and finalization evidence. Do not drop the
+schema or decrement revisions during rollback.
 
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 

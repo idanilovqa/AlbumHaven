@@ -9,6 +9,14 @@ import pytest
 from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
 
 
+_COVER_CONSISTENCY_MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "migrations"
+    / "postgres"
+    / "0110_close_cover_consistency.sql"
+)
+
+
 class FakeCursor:
     def __init__(self, rows=None):
         self._rows = list(rows or [])
@@ -20,7 +28,24 @@ class FakeCursor:
         return self._rows[0] if self._rows else None
 
 
-def test_inventory_publication_load_excludes_legacy_timestamp_recovery(monkeypatch):
+def _structural_noncover_function_sql() -> str:
+    assert _COVER_CONSISTENCY_MIGRATION.is_file(), (
+        "missing additive cover consistency migration 0110"
+    )
+    sql = " ".join(
+        _COVER_CONSISTENCY_MIGRATION.read_text(encoding="utf-8")
+        .casefold()
+        .split()
+    )
+    marker = (
+        "create or replace function "
+        "library.persist_authorized_structural_tag_edit_noncover("
+    )
+    assert marker in sql
+    return sql.split(marker, 1)[1].split("create or replace function", 1)[0]
+
+
+def test_inventory_publication_load_projects_both_revisions_in_one_query(monkeypatch):
     from contextlib import nullcontext
     from music_app.services import scan_cache_persistence as persistence
 
@@ -32,7 +57,10 @@ def test_inventory_publication_load_excludes_legacy_timestamp_recovery(monkeypat
     statements = []
     connection = SimpleNamespace(execute=lambda sql: (
         statements.append(sql) or FakeCursor([{
-            "inventory_mutation_revision": 41, "manual_scan_recovery": marker,
+            "library_id": 7,
+            "inventory_mutation_revision": 41,
+            "cover_mutation_revision": 13,
+            "manual_scan_recovery": marker,
         }])
     ))
     monkeypatch.setattr(persistence, "_ensure_bootstrap_context", lambda _connection: None)
@@ -40,9 +68,13 @@ def test_inventory_publication_load_excludes_legacy_timestamp_recovery(monkeypat
     monkeypatch.setattr(adapter, "_connect_to_database", lambda: nullcontext(connection))
 
     assert adapter.load_inventory_publication() == {
+        "library_id": 7,
         "inventory_mutation_revision": 41,
+        "cover_mutation_revision": 13,
     }
+    assert len(statements) == 1
     assert "manual_scan_recovery" not in statements[0]
+    assert "library.read_cover_mutation_revision" in statements[0]
 
 
 def test_load_separate_release_keys_accepts_dict_rows():
@@ -1346,11 +1378,7 @@ def test_set_based_track_file_upsert_skips_unchanged_conflict_rows():
 
 
 def test_structural_album_edit_scopes_selection_and_completeness_to_active_track_files():
-    from music_app.services import scan_cache_persistence
-
-    sql = _normalized_sql(
-        scan_cache_persistence._persist_structural_album_tag_edit_sql()
-    )
+    sql = _structural_noncover_function_sql()
 
     assert sql.count(
         "library.local_track_files.metadata #>> '{scan_cache,stale}'"

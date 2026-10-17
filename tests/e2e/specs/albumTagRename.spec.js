@@ -5,6 +5,10 @@ import {
 } from '../helpers/physicalTagHelpers.js';
 import { temporarilyRevokeRuntimeDeletePrivileges } from '../helpers/postgresPrivilegeHelpers.js';
 import { holdStructuralSavePersistence } from '../helpers/structuralSavePollWindowHelpers.js';
+import {
+  expectTimingBudget,
+  performanceTimingBudget,
+} from '../helpers/timingBudget.js';
 
 const FIXTURE_ARTIST = 'E2E Rarity Artist';
 const ORIGINAL_ALBUM = 'Queued Album Rename Fixture';
@@ -40,6 +44,24 @@ const EXPECTED_SPLIT_TRACK_TITLES = Array.from(
   { length: FIXTURE_TRACK_COUNT },
   (_, index) => `Split Track ${index + 1}`,
 );
+const POST_EDIT_SEARCH_BUDGET = performanceTimingBudget(
+  'search-browse.searchBrowseReadyMs',
+);
+const POST_EDIT_TREE_SELECTION_BUDGET = performanceTimingBudget(
+  'artist-family.treeNealSelectionMs',
+);
+const POST_EDIT_TREE_GALLERY_BUDGET = performanceTimingBudget(
+  'artist-family-local-managed-chrome.treeNealGalleryReadyMs',
+);
+const POST_EDIT_DEGRADATION_GRACE_MS = 400;
+
+const median = (values) => {
+  const sorted = [...values].sort((left, right) => left - right);
+  const midpoint = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[midpoint]
+    : (sorted[midpoint - 1] + sorted[midpoint]) / 2;
+};
 
 test('FTC-TAGS-008 completes an album rename before reporting the save task complete', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
@@ -844,6 +866,7 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
 test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', { tag: '@area:problematic-files' }, async ({
   freshBrowserSession,
   galleryActions,
+  navigationPanelActions,
   page,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -892,6 +915,80 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
   let firstMoveCompletionSettled = false;
   let firstMovePersistenceGate = null;
   const topologyObservations = [];
+  const postEditTimings = [];
+
+  const verifyPostEditBrowseAndArtistTree = async (editNumber) => {
+    await expect(tagEditorActions.tagEditor.repairAlert).toBeHidden({ timeout: 3500 });
+    await trackModalActions.closeIfOpen();
+
+    let searchSubmittedAt = 0;
+    await searchToolbarActions.search(NAVIGATION_FIXTURE_ALBUM, {
+      submitWithEnter: true,
+      recordSubmissionBoundary() {
+        searchSubmittedAt = performance.now();
+      },
+    });
+    await searchToolbarActions.waitForQuery(NAVIGATION_FIXTURE_ALBUM);
+    const searchReadyMs = performance.now() - searchSubmittedAt;
+    expectTimingBudget(
+      expect,
+      searchReadyMs,
+      POST_EDIT_SEARCH_BUDGET,
+      `Post-edit ${editNumber} search browse`,
+    );
+    await galleryActions.waitForSelectedArtistGallery(NAVIGATION_FIXTURE_ARTIST, {
+      queryValue: NAVIGATION_FIXTURE_ALBUM,
+    });
+    await galleryActions.waitForAlbumVisible(NAVIGATION_FIXTURE_ALBUM);
+    await galleryActions.clickAlbumDetailsByAlbumName(NAVIGATION_FIXTURE_ALBUM);
+    await trackModalActions.waitForInteractiveSummary();
+    await trackModalActions.close();
+
+    await searchToolbarActions.clearSearchWithEnter();
+    await galleryActions.waitForGalleryReady();
+    await navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true });
+    await galleryActions.waitForGalleryReady();
+    await navigationPanelActions.selectSidebarArtistByName(FIXTURE_ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(FIXTURE_ARTIST);
+    await galleryActions.waitForAlbumVisibleUnderHeading(
+      FIXTURE_ARTIST,
+      SPLIT_ORIGINAL_ALBUM,
+    );
+
+    const treeSelectionStartedAt = performance.now();
+    await navigationPanelActions.clickVisibleSidebarArtistByName(
+      NAVIGATION_FIXTURE_ARTIST,
+    );
+    await navigationPanelActions.waitForSidebarSelection(NAVIGATION_FIXTURE_ARTIST);
+    const treeSelectionMs = performance.now() - treeSelectionStartedAt;
+    expectTimingBudget(
+      expect,
+      treeSelectionMs,
+      POST_EDIT_TREE_SELECTION_BUDGET,
+      `Post-edit ${editNumber} artist-tree selection`,
+    );
+
+    const treeGalleryStartedAt = performance.now();
+    await galleryActions.waitForAlbumVisibleUnderHeading(
+      NAVIGATION_FIXTURE_ARTIST,
+      NAVIGATION_FIXTURE_ALBUM,
+    );
+    const treeGalleryReadyMs = performance.now() - treeGalleryStartedAt;
+    expectTimingBudget(
+      expect,
+      treeGalleryReadyMs,
+      POST_EDIT_TREE_GALLERY_BUDGET,
+      `Post-edit ${editNumber} artist-tree gallery`,
+    );
+
+    await navigationPanelActions.selectSidebarArtistByName(FIXTURE_ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(FIXTURE_ARTIST);
+    await galleryActions.waitForAlbumVisibleUnderHeading(
+      FIXTURE_ARTIST,
+      SPLIT_ORIGINAL_ALBUM,
+    );
+    postEditTimings.push({ searchReadyMs, treeGalleryReadyMs, treeSelectionMs });
+  };
 
   await stepLogger.step('Open the source album and verify its exact track order', async () => {
     await galleryActions.goto(ARTIST_VIEW_URL);
@@ -1181,6 +1278,10 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
     await trackModalActions.close();
   });
 
+  await stepLogger.step('Browse and open artists after the overlapping edits settle', async () => {
+    await verifyPostEditBrowseAndArtistTree(2);
+  });
+
   await stepLogger.step('Verify effective source numbering and the incomplete-order diagnosis', async () => {
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('problematic-files');
@@ -1243,7 +1344,9 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
       });
       await tagEditorActions.selectTrackByFilename(selectedFilename);
       await tagEditorActions.setAlbumName(SPLIT_RENAMED_ALBUM);
-      const result = await tagEditorActions.applyAndWaitForSavedFiles();
+      const { result } = await tagEditorActions.observeTaskNotificationLifecycleDuring(
+        () => tagEditorActions.applyAndWaitForSavedFiles(),
+      );
       expect(String(result.save_task_id || '').trim()).not.toBe('');
       await trackModalActions.closeIfOpen();
       await galleryActions.scrollToAlbumUnderHeading(
@@ -1314,6 +1417,20 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
       );
       await tagEditorActions.close();
       await trackModalActions.close();
+
+      await verifyPostEditBrowseAndArtistTree(movedTrackCount);
+    }
+  });
+
+  await stepLogger.step('Reject progressive post-edit search or artist-tree slowdown', async () => {
+    expect(postEditTimings).toHaveLength(4);
+    for (const metric of ['searchReadyMs', 'treeSelectionMs', 'treeGalleryReadyMs']) {
+      const earlyMedianMs = median(postEditTimings.slice(0, 2).map((sample) => sample[metric]));
+      const lateMedianMs = median(postEditTimings.slice(-2).map((sample) => sample[metric]));
+      expect(
+        lateMedianMs - earlyMedianMs,
+        `${metric} degraded from ${Math.round(earlyMedianMs)} ms to ${Math.round(lateMedianMs)} ms across repeated tag edits.`,
+      ).toBeLessThanOrEqual(POST_EDIT_DEGRADATION_GRACE_MS);
     }
   });
 

@@ -1293,7 +1293,9 @@ class VirtualArtistGrid {
     if (!options.preserveColumnGeometry) {
       this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
       this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-        ? Math.floor((width - (this.columns - 1) * this.columnGap) / this.columns)
+        ? Math.floor(
+          ((width - (this.columns - 1) * this.columnGap) / this.columns) * 1000,
+        ) / 1000
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);

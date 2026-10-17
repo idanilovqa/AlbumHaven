@@ -2867,6 +2867,8 @@ async function openUtilityModalForTrack(trackPath) {
         state.utility.selectedProblematicKey = album.key || '';
         await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
         if (!ownsNavigation()) return;
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
           const current = getProblematicAlbumForTrackPath(trackPath);
           if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
@@ -2875,12 +2877,17 @@ async function openUtilityModalForTrack(trackPath) {
           }
           if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
             album = getProblematicAlbumForTrackPath(trackPath);
-            break;
+            if (album?.detail_loaded
+                || !currentSummary
+                || typeof currentSummary.then !== 'function') break;
           }
         }
-        const currentSummary = state.utility.completeLoadPromise
-          || state.utility.initialLoadPromise;
-        if (!currentSummary || typeof currentSummary.then !== 'function') return;
+        if (!currentSummary || typeof currentSummary.then !== 'function') {
+          if (!state.utility.loaded) return;
+          album = getProblematicAlbumForTrackPath(trackPath);
+          if (!album) return;
+          continue;
+        }
         await currentSummary;
         if (!ownsNavigation()) return;
         album = getProblematicAlbumForTrackPath(trackPath);

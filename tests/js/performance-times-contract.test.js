@@ -88,8 +88,8 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       ci: [1000, 400, 1400],
     },
     'artist-tree-scroll-navigation.jumpAlignedMs': {
-      local: [2000, 400, 2400],
-      ci: [2000, 400, 2400],
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
     },
     'utility-problematic-files-isolated-postgres.coldProblematicApiMs': {
       local: [1000, 200, 1200],
@@ -124,12 +124,12 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       ci: [800, 400, 1200],
     },
     'artist-family.treeNealSelectionMs': {
-      local: [450, 200, 650],
-      ci: [650, 200, 850],
+      local: [100, 200, 300],
+      ci: [100, 200, 300],
     },
     'all-artists-local-managed-chrome.selectedArtistSelectionMs': {
-      local: [350, 200, 550],
-      ci: [600, 200, 800],
+      local: [100, 200, 300],
+      ci: [100, 200, 300],
     },
     'all-artists.startupPreviewSidebarMs': {
       local: [881, 200, 1081],
@@ -140,8 +140,8 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       ci: [1800, 400, 2200],
     },
     'selected-artist.albumDetailsOpenMs': {
-      local: [1000, 400, 1400],
-      ci: [1000, 400, 1400],
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
     },
     'selected-artist.tagEditorFocusMs': {
       local: [600, 300, 900],
@@ -164,8 +164,8 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       ci: [500, 300, 800],
     },
     'selected-artist.galleryReturnMs': {
-      local: [1000, 400, 1400],
-      ci: [1000, 400, 1400],
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
     },
     'root-album-browse.rootAlbumBrowseApiMs': {
       local: [6000, 400, 6400],
@@ -198,9 +198,9 @@ test('checked-in timing authority contains the approved local and CI triplets', 
     {
       contractName: 'local',
       metricId: 'search-all-artists.allArtistsSelectionMs',
-      targetMaximum: 2500,
-      graceMs: 400,
-      hardCeiling: 2900,
+      targetMaximum: 100,
+      graceMs: 200,
+      hardCeiling: 300,
     },
   );
   assert.deepEqual(
@@ -208,9 +208,9 @@ test('checked-in timing authority contains the approved local and CI triplets', 
     {
       contractName: 'ci',
       metricId: 'search-all-artists.allArtistsSelectionMs',
-      targetMaximum: 2500,
-      graceMs: 400,
-      hardCeiling: 2900,
+      targetMaximum: 100,
+      graceMs: 200,
+      hardCeiling: 300,
     },
   );
 });
@@ -240,7 +240,7 @@ test('every checked-in timing metric declares explicit local and CI contracts', 
   }
 });
 
-test('CI differs from local for exactly the five owner-approved metrics', () => {
+test('CI differs from local only for owner-approved environment-specific metrics', () => {
   const { loadPerformanceTimesContract } = loadAuthority();
   const contract = loadPerformanceTimesContract();
   const differingMetricIds = Object.entries(contract)
@@ -249,9 +249,7 @@ test('CI differs from local for exactly the five owner-approved metrics', () => 
     .sort();
 
   assert.deepEqual(differingMetricIds, [
-    'all-artists-local-managed-chrome.selectedArtistSelectionMs',
     'app-open-all-artists.visibleUiReadyMs',
-    'artist-family.treeNealSelectionMs',
     'playback-start.maximumStartMs',
   ].sort());
 });

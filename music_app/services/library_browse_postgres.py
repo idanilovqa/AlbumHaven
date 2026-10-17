@@ -2128,12 +2128,17 @@ class PostgresLibraryBrowseRepository:
                 + (perf_counter() - search_rows_started_at) * 1000
             )
         grouping_family_started_at = perf_counter()
+        grouping_subphase_started_at = grouping_family_started_at
         rows = (
             canonical_search_rows
             if canonical_search_rows is not None
             else _canonicalize_artist_rows(search_rows, alias_to_canonical)
         )
         artist_groups = _search_artist_groups(rows, query=query)
+        phase_ms["grouping_search_rows"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         _merge_missing_albums_into_artist_groups(
             artist_groups,
             _missing_album_projection_payloads(
@@ -2145,15 +2150,27 @@ class PostgresLibraryBrowseRepository:
             ),
             alias_to_canonical=alias_to_canonical,
         )
+        phase_ms["grouping_missing_albums"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         artist_groups.sort(key=lambda group: _search_artist_group_sort_key(
             str(group.get("artist") or ""), query=query,
         ))
+        phase_ms["grouping_sort"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         _queue_display_cover_variants_for_groups(
             self._config,
             artist_groups,
             limit=1,
             priority="interactive",
         )
+        phase_ms["grouping_cover_queue"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         selected_artist = "" if requested_all_artists else _top_search_selected_artist(artist_groups, query=query)
         family_context = _selected_artist_family_context_from_state(
             selected_artist,
@@ -2167,6 +2184,10 @@ class PostgresLibraryBrowseRepository:
             "alias_to_canonical": {},
             "canonical_to_aliases": {},
         }
+        phase_ms["grouping_family_context"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         family_artists = list(family_context["family_artists"])
         family_preview_rows = (
             self._load_artist_preview_rows(
@@ -2182,6 +2203,10 @@ class PostgresLibraryBrowseRepository:
             if selected_artist and family_artists
             else []
         )
+        phase_ms["grouping_family_preview"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         primary_artist_groups = (
             _selected_artist_groups_from_existing_groups(
                 selected_artist,
@@ -2222,6 +2247,10 @@ class PostgresLibraryBrowseRepository:
             if selected_artist and not requested_all_artists
             else artist_groups
         )
+        phase_ms["grouping_family_render"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         self._attach_duplicate_sources(
             _album_payloads_from_groups([
                 *rendered_artist_groups,
@@ -2231,6 +2260,10 @@ class PostgresLibraryBrowseRepository:
             connection=connection,
             defer_on_cache_miss=True,
         )
+        phase_ms["grouping_duplicate_overlay"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         self._apply_private_album_rating_overlays(
             _album_payloads_from_groups(
                 [*rendered_artist_groups, *primary_artist_groups, *family_artist_groups]
@@ -2239,6 +2272,10 @@ class PostgresLibraryBrowseRepository:
             connection=connection,
             ensure_gallery_summary=True,
         )
+        phase_ms["grouping_rating_overlay"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         non_album_scope_artists = (
             _expanded_artist_name_list(
                 [selected_artist, *family_artists],
@@ -2277,6 +2314,10 @@ class PostgresLibraryBrowseRepository:
             non_album_entries,
             config=self._config,
         )
+        phase_ms["grouping_non_album"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
+        grouping_subphase_started_at = perf_counter()
         direct_match_artists = [str(group.get("artist") or "").strip() for group in artist_groups]
         album_count = (
             len(_selected_artist_included_album_payloads(primary_artist_groups, family_artist_groups))
@@ -2302,6 +2343,9 @@ class PostgresLibraryBrowseRepository:
                 )
             ],
         )
+        phase_ms["grouping_context"] = (
+            perf_counter() - grouping_subphase_started_at
+        ) * 1000
         phase_ms["grouping_family"] = (
             perf_counter() - grouping_family_started_at
         ) * 1000

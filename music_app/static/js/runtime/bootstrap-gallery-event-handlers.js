@@ -759,6 +759,21 @@ function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
   return true;
 }
 
+function applyImmediateExactSearchArtistSelection(query) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  if (!normalizedQuery) return false;
+  const matches = Array.from(
+    document.querySelectorAll('#sidebar-list [data-sidebar-artist]'),
+  ).filter((link) => (
+    String(link.getAttribute?.('data-sidebar-artist') || '')
+      .trim()
+      .toLocaleLowerCase() === normalizedQuery
+  ));
+  if (matches.length !== 1) return false;
+  const artist = String(matches[0].getAttribute?.('data-sidebar-artist') || '').trim();
+  return Boolean(artist && applyImmediateSidebarArtistSelection(matches[0], artist));
+}
+
 function handleGalleryBootstrapWheel(event) {
   if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
   const lightboxImage = event.target.closest('#image-lightbox-image');
@@ -1298,6 +1313,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else {

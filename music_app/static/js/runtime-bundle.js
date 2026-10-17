@@ -21148,6 +21148,8 @@ async function openUtilityModalForTrack(trackPath) {
         state.utility.selectedProblematicKey = album.key || '';
         await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
         if (!ownsNavigation()) return;
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
         if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
           const current = getProblematicAlbumForTrackPath(trackPath);
           if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
@@ -21156,12 +21158,17 @@ async function openUtilityModalForTrack(trackPath) {
           }
           if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
             album = getProblematicAlbumForTrackPath(trackPath);
-            break;
+            if (album?.detail_loaded
+                || !currentSummary
+                || typeof currentSummary.then !== 'function') break;
           }
         }
-        const currentSummary = state.utility.completeLoadPromise
-          || state.utility.initialLoadPromise;
-        if (!currentSummary || typeof currentSummary.then !== 'function') return;
+        if (!currentSummary || typeof currentSummary.then !== 'function') {
+          if (!state.utility.loaded) return;
+          album = getProblematicAlbumForTrackPath(trackPath);
+          if (!album) return;
+          continue;
+        }
         await currentSummary;
         if (!ownsNavigation()) return;
         album = getProblematicAlbumForTrackPath(trackPath);
@@ -36365,7 +36372,9 @@ class VirtualArtistGrid {
     if (!options.preserveColumnGeometry) {
       this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
       this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-        ? Math.floor((width - (this.columns - 1) * this.columnGap) / this.columns)
+        ? Math.floor(
+          ((width - (this.columns - 1) * this.columnGap) / this.columns) * 1000,
+        ) / 1000
         : targetCardTrackWidth;
     }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
@@ -41904,6 +41913,21 @@ function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
   return true;
 }
 
+function applyImmediateExactSearchArtistSelection(query) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  if (!normalizedQuery) return false;
+  const matches = Array.from(
+    document.querySelectorAll('#sidebar-list [data-sidebar-artist]'),
+  ).filter((link) => (
+    String(link.getAttribute?.('data-sidebar-artist') || '')
+      .trim()
+      .toLocaleLowerCase() === normalizedQuery
+  ));
+  if (matches.length !== 1) return false;
+  const artist = String(matches[0].getAttribute?.('data-sidebar-artist') || '').trim();
+  return Boolean(artist && applyImmediateSidebarArtistSelection(matches[0], artist));
+}
+
 function handleGalleryBootstrapWheel(event) {
   if (event.target?.closest?.('#albums-scroll')) cancelRootGalleryArtistAlignment();
   const lightboxImage = event.target.closest('#image-lightbox-image');
@@ -42443,6 +42467,7 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
+  applyImmediateExactSearchArtistSelection(nextQuery);
   const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else {

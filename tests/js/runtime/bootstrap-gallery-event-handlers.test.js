@@ -2606,6 +2606,37 @@ test('album context Edit Tags closes the menu before opening the full-album edit
   assert.deepEqual({ ...order[1].options }, { tracksMode: 'all' });
 });
 
+test('exact artist search immediately highlights the unique rendered sidebar artist', () => {
+  const unresolvedRequest = new Promise(() => {});
+  const sidebarArtists = [
+    { artist: 'A.C.T', count: 1 },
+    { artist: 'Neal Morse', count: 13 },
+  ];
+  const { context, calls } = createContext({
+    searchInputValue: 'neal morse',
+    fetchAndRenderResult: unresolvedRequest,
+  });
+  const selection = createImmediateSidebarArtistEvent(sidebarArtists, 'Neal Morse');
+  context.state.gallery.sidebarArtistsOverride = sidebarArtists;
+  context.document.querySelectorAll = (selector) => (
+    selector === '#sidebar-list [data-sidebar-artist]'
+      ? [selection.selectedLink]
+      : []
+  );
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(selection.previousLink.active, false);
+  assert.equal(selection.previousLink.ariaCurrent, '');
+  assert.equal(selection.selectedLink.active, true);
+  assert.equal(selection.selectedLink.ariaCurrent, 'true');
+  assert.equal(context.state.ui.pendingSidebarSelectedArtist, 'Neal Morse');
+  assert.equal(calls.buildApiUrl.length, 1);
+  assert.equal(calls.buildApiUrl[0].query, 'neal morse');
+  assert.equal(calls.buildApiUrl[0].selected_artist, '');
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
 test('search submit abandons Scan Page before dispatching an unfiltered query request', () => {
   const unresolvedRequest = new Promise(() => {});
   const { context, calls } = createContext({

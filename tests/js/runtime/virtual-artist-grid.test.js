@@ -4921,7 +4921,7 @@ test('narrower viewport drops a column without exceeding the 100-scale card widt
       galleryScalePercent: 100,
       wide: {
         columns: 3,
-        gridTemplate: 'repeat(3, minmax(0, 242px))',
+        gridTemplate: 'repeat(3, minmax(0, 242.666px))',
       },
       narrow: {
         columns: 2,
@@ -4960,7 +4960,7 @@ test('selected gallery scale controls the breakpoint while cards fill available 
       galleryScalePercent: 125,
       wide: {
         columns: 3,
-        gridTemplate: 'repeat(3, minmax(0, 302px))',
+        gridTemplate: 'repeat(3, minmax(0, 302.666px))',
       },
       narrow: {
         columns: 2,
@@ -4970,13 +4970,13 @@ test('selected gallery scale controls the breakpoint while cards fill available 
   );
 });
 
-test('responsive gallery uses one integral track width for its model and rendered rows', () => {
+test('responsive gallery uses one precise track width for its model and rendered rows', () => {
   const { scrollEl, section, virtualGrid } = createResponsiveGalleryScenario(100, 760);
   const gridTemplate = extractFirstGridTemplate(
     virtualGrid.renderSection(section, 0, Number.POSITIVE_INFINITY),
   );
 
-  assert.equal(Number.isInteger(virtualGrid.cardTrackWidth), true);
+  assert.equal(virtualGrid.cardTrackWidth, 242.666);
   assert.equal(
     gridTemplate,
     `repeat(${virtualGrid.columns}, minmax(0, ${virtualGrid.cardTrackWidth}px))`,
@@ -4988,7 +4988,19 @@ test('responsive gallery uses one integral track width for its model and rendere
   );
 });
 
-test('Artist Tree settlement adds a column with integral tracks and bounded unused width', () => {
+test('responsive gallery full rows leave at most one pixel unused', () => {
+  const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 760);
+  const availableWidth = scrollEl.clientWidth - 4;
+  const usedWidth = virtualGrid.cardTrackWidth * virtualGrid.columns
+    + virtualGrid.columnGap * (virtualGrid.columns - 1);
+
+  assert.ok(
+    Math.abs(availableWidth - usedWidth) <= 1,
+    `expected full row to fill ${availableWidth}px, used ${usedWidth}px`,
+  );
+});
+
+test('Artist Tree settlement adds a column with precise tracks and bounded unused width', () => {
   const { scrollEl, virtualGrid } = createResponsiveGalleryScenario(100, 1672, 32);
   const initialCardTrackWidth = virtualGrid.cardTrackWidth;
 
@@ -5000,7 +5012,7 @@ test('Artist Tree settlement adds a column with integral tracks and bounded unus
   const usedWidth = virtualGrid.cardTrackWidth * virtualGrid.columns
     + virtualGrid.columnGap * (virtualGrid.columns - 1);
   assert.ok(usedWidth <= 1844);
-  assert.ok(1844 - usedWidth < virtualGrid.columns);
+  assert.ok(1844 - usedWidth <= 1);
 });
 
 test('row height reconciliation retains both ordinary and Artist Tree settled column geometry', () => {

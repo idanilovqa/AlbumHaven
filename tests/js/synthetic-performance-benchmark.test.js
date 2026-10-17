@@ -1,29 +1,52 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-test('approved search and gallery budgets reject delays above 2 seconds plus grace', async () => {
+test('search auto-selection highlights within the 100 ms target and 300 ms ceiling', async () => {
   const benchmarks = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
   const contracts = require('../ci/performance-times.json');
   const cases = [
     [benchmarks.ARTIST_FAMILY_LOCAL_BENCHMARK, 'searchAutoSelectionMs', benchmarks.evaluateArtistFamilyLocalBenchmark],
     [benchmarks.SEARCH_ALL_ARTISTS_LOCAL_BENCHMARK, 'searchAutoSelectionMs', benchmarks.evaluateSearchAllArtistsLocalBenchmark],
-    [benchmarks.SEARCH_ALL_ARTISTS_LOCAL_BENCHMARK, 'bi2GalleryReadyMs', benchmarks.evaluateSearchAllArtistsLocalBenchmark],
   ];
   for (const [benchmark, key, evaluate] of cases) {
     const metricId = `${benchmark.id}.${key}`;
     for (const environment of ['local', 'ci']) {
       assert.deepEqual(contracts[metricId][environment], {
-        targetMs: 2000, graceMs: 400, hardCeilingMs: 2400,
+        targetMs: 100, graceMs: 200, hardCeilingMs: 300,
       }, `${metricId} ${environment}`);
     }
     const expectation = benchmark.expectations.find((entry) => entry.key === key);
-    assert.equal(expectation.targetMaximum, 2000, metricId);
-    assert.equal(expectation.graceMs, 400, metricId);
-    assert.equal(expectation.maxAllowed, 2400, metricId);
-    for (const [elapsed, expectedPassed] of [[2000, true], [2400, true], [2401, false]]) {
+    assert.equal(expectation.targetMaximum, 100, metricId);
+    assert.equal(expectation.graceMs, 200, metricId);
+    assert.equal(expectation.maxAllowed, 300, metricId);
+    for (const [elapsed, expectedPassed] of [[100, true], [300, true], [301, false]]) {
       const result = evaluate({ [key]: elapsed }).results.find((entry) => entry.key === key);
       assert.equal(result.passed, expectedPassed, `${metricId} at ${elapsed} ms`);
     }
+  }
+});
+
+test('every selected-artist tree gallery uses the search-speed 800 ms target and 1200 ms ceiling', async () => {
+  const benchmarks = await import('../../tests/e2e/helpers/syntheticPerformanceBenchmark.js');
+  const contracts = require('../ci/performance-times.json');
+  const cases = [
+    [benchmarks.ALL_ARTISTS_LOCAL_BENCHMARK, 'selectedArtistGalleryMs'],
+    [benchmarks.ARTIST_FAMILY_LOCAL_BENCHMARK, 'treeCosmicGalleryReadyMs'],
+    [benchmarks.ARTIST_FAMILY_LOCAL_BENCHMARK, 'treeNealGalleryReadyMs'],
+    [benchmarks.SEARCH_ALL_ARTISTS_LOCAL_BENCHMARK, 'bi2GalleryReadyMs'],
+  ];
+
+  for (const [benchmark, key] of cases) {
+    const metricId = `${benchmark.id}.${key}`;
+    for (const environment of ['local', 'ci']) {
+      assert.deepEqual(contracts[metricId][environment], {
+        targetMs: 800, graceMs: 400, hardCeilingMs: 1200,
+      }, `${metricId} ${environment}`);
+    }
+    const expectation = benchmark.expectations.find((entry) => entry.key === key);
+    assert.equal(expectation.targetMaximum, 800, metricId);
+    assert.equal(expectation.graceMs, 400, metricId);
+    assert.equal(expectation.maxAllowed, 1200, metricId);
   }
 });
 
@@ -51,9 +74,9 @@ test('shared millisecond benchmarks enforce ordinary grace limits', async () => 
 
   const selectedArtistSelection = benchmarks.ALL_ARTISTS_LOCAL_BENCHMARK.expectations
     .find((expectation) => expectation.key === 'selectedArtistSelectionMs');
-  assert.equal(selectedArtistSelection.targetMaximum, 350);
+  assert.equal(selectedArtistSelection.targetMaximum, 100);
   assert.equal(selectedArtistSelection.graceMs, 200);
-  assert.equal(selectedArtistSelection.maxAllowed, 550);
+  assert.equal(selectedArtistSelection.maxAllowed, 300);
 });
 
 test('local real-data benchmark evaluation passes when metrics stay within the documented ceilings', async () => {
@@ -68,10 +91,10 @@ test('local real-data benchmark evaluation passes when metrics stay within the d
       coversMs: 128,
     },
     initialMemory: { peakBytes: 17267052 },
-    selectedArtistSelectionMs: 208,
-    selectedArtistGalleryMs: 3200,
-    allArtistsSelectionMs: 1177,
-    allArtistsFirstAlbumsMs: 3500,
+    selectedArtistSelectionMs: 100,
+    selectedArtistGalleryMs: 800,
+    allArtistsSelectionMs: 100,
+    allArtistsFirstAlbumsMs: 800,
     allArtistsCoversMs: 2500,
     allArtistsReturnMemory: {
       peakBytes: 17545328,
@@ -81,11 +104,11 @@ test('local real-data benchmark evaluation passes when metrics stay within the d
         { bytes: 17545328 },
       ],
     },
-    jumpScroll: { jumpSettledMs: 2255 },
+    jumpScroll: { jumpSettledMs: 800 },
     jumpScrollMemory: { peakBytes: 18458576 },
     jumpScrollCoversReadyMs: 2432,
-    albumDetailsOpenMs: 1800,
-    albumDetailsCloseMs: 2000,
+    albumDetailsOpenMs: 800,
+    albumDetailsCloseMs: 100,
     finalMemory: { peakBytes: 35502996 },
   });
 
@@ -109,10 +132,10 @@ test('local real-data benchmark evaluation reports a clear failure when one metr
       coversMs: 128,
     },
     initialMemory: { peakBytes: 17267052 },
-    selectedArtistSelectionMs: 208,
-    selectedArtistGalleryMs: 3200,
-    allArtistsSelectionMs: 1177,
-    allArtistsFirstAlbumsMs: 3500,
+    selectedArtistSelectionMs: 100,
+    selectedArtistGalleryMs: 800,
+    allArtistsSelectionMs: 100,
+    allArtistsFirstAlbumsMs: 800,
     allArtistsCoversMs: 2500,
     allArtistsReturnMemory: {
       peakBytes: 17545328,
@@ -122,11 +145,11 @@ test('local real-data benchmark evaluation reports a clear failure when one metr
         { bytes: 17545328 },
       ],
     },
-    jumpScroll: { jumpSettledMs: 2255 },
+    jumpScroll: { jumpSettledMs: 800 },
     jumpScrollMemory: { peakBytes: 18458576 },
     jumpScrollCoversReadyMs: 2432,
-    albumDetailsOpenMs: 1800,
-    albumDetailsCloseMs: 2000,
+    albumDetailsOpenMs: 800,
+    albumDetailsCloseMs: 100,
     finalMemory: { peakBytes: 35502996 },
   });
 
@@ -167,10 +190,10 @@ test('local real-data benchmark ignores a one-sample return-memory spike when la
       coversMs: 128,
     },
     initialMemory: { peakBytes: 17267052 },
-    selectedArtistSelectionMs: 208,
-    selectedArtistGalleryMs: 3200,
-    allArtistsSelectionMs: 1177,
-    allArtistsFirstAlbumsMs: 3500,
+    selectedArtistSelectionMs: 100,
+    selectedArtistGalleryMs: 800,
+    allArtistsSelectionMs: 100,
+    allArtistsFirstAlbumsMs: 800,
     allArtistsCoversMs: 2500,
     allArtistsReturnMemory: {
       peakBytes: 28431392,
@@ -180,11 +203,11 @@ test('local real-data benchmark ignores a one-sample return-memory spike when la
         { bytes: 17462816 },
       ],
     },
-    jumpScroll: { jumpSettledMs: 2255 },
+    jumpScroll: { jumpSettledMs: 800 },
     jumpScrollMemory: { peakBytes: 18458576 },
     jumpScrollCoversReadyMs: 2432,
-    albumDetailsOpenMs: 1800,
-    albumDetailsCloseMs: 2000,
+    albumDetailsOpenMs: 800,
+    albumDetailsCloseMs: 100,
     finalMemory: { peakBytes: 35502996 },
   });
 
@@ -206,10 +229,10 @@ test('local real-data benchmark fails when return-memory stays above the ceiling
       coversMs: 128,
     },
     initialMemory: { peakBytes: 17267052 },
-    selectedArtistSelectionMs: 208,
-    selectedArtistGalleryMs: 3200,
-    allArtistsSelectionMs: 1177,
-    allArtistsFirstAlbumsMs: 3500,
+    selectedArtistSelectionMs: 100,
+    selectedArtistGalleryMs: 800,
+    allArtistsSelectionMs: 100,
+    allArtistsFirstAlbumsMs: 800,
     allArtistsCoversMs: 2500,
     allArtistsReturnMemory: {
       peakBytes: 28431392,
@@ -219,11 +242,11 @@ test('local real-data benchmark fails when return-memory stays above the ceiling
         { bytes: 17462816 },
       ],
     },
-    jumpScroll: { jumpSettledMs: 2255 },
+    jumpScroll: { jumpSettledMs: 800 },
     jumpScrollMemory: { peakBytes: 18458576 },
     jumpScrollCoversReadyMs: 2432,
-    albumDetailsOpenMs: 1800,
-    albumDetailsCloseMs: 2000,
+    albumDetailsOpenMs: 800,
+    albumDetailsCloseMs: 100,
     finalMemory: { peakBytes: 35502996 },
   });
 
@@ -246,10 +269,10 @@ test('benchmark validation payload keeps retained threshold overlay fields for a
       coversMs: 128,
     },
     initialMemory: { peakBytes: 17267052 },
-    selectedArtistSelectionMs: 208,
-    selectedArtistGalleryMs: 3200,
-    allArtistsSelectionMs: 1177,
-    allArtistsFirstAlbumsMs: 3500,
+    selectedArtistSelectionMs: 100,
+    selectedArtistGalleryMs: 800,
+    allArtistsSelectionMs: 100,
+    allArtistsFirstAlbumsMs: 800,
     allArtistsCoversMs: 2500,
     allArtistsReturnMemory: {
       peakBytes: 17545328,
@@ -259,11 +282,11 @@ test('benchmark validation payload keeps retained threshold overlay fields for a
         { bytes: 17545328 },
       ],
     },
-    jumpScroll: { jumpSettledMs: 2255 },
+    jumpScroll: { jumpSettledMs: 800 },
     jumpScrollMemory: { peakBytes: 18458576 },
     jumpScrollCoversReadyMs: 2432,
-    albumDetailsOpenMs: 1800,
-    albumDetailsCloseMs: 2000,
+    albumDetailsOpenMs: 800,
+    albumDetailsCloseMs: 100,
     finalMemory: { peakBytes: 35502996 },
   });
 
@@ -317,10 +340,10 @@ test('benchmark validation payload keeps retained threshold overlay fields for a
   assert.equal(payload.benchmarkId, 'artist-family-local-managed-chrome');
   assert.equal(payload.benchmarkVersion, '2026-06-05-managed-chrome-neal-morse-clear-search-root-restore');
   assert.ok(clearSearch);
-  assert.equal(clearSearch.targetMaximum, 6000);
+  assert.equal(clearSearch.targetMaximum, 800);
   assert.equal(clearSearch.graceMs, 400);
-  assert.equal(clearSearch.allowedMaximum, 6400);
-  assert.equal(clearSearch.allowedText, '6400 ms');
+  assert.equal(clearSearch.allowedMaximum, 1200);
+  assert.equal(clearSearch.allowedText, '1200 ms');
 });
 
 test('benchmark validation payload keeps retained threshold overlay fields for search-all-artists evaluations', async () => {
@@ -349,10 +372,10 @@ test('benchmark validation payload keeps retained threshold overlay fields for s
   assert.equal(payload.benchmarkId, 'search-all-artists-local-managed-chrome');
   assert.equal(payload.benchmarkVersion, '2026-07-07-managed-chrome-search-follow-up-selection-calibration-1');
   assert.ok(searchAutoSelection);
-  assert.equal(searchAutoSelection.targetMaximum, 2000);
-  assert.equal(searchAutoSelection.graceMs, 400);
-  assert.equal(searchAutoSelection.allowedMaximum, 2400);
-  assert.equal(searchAutoSelection.allowedText, '2400 ms');
+  assert.equal(searchAutoSelection.targetMaximum, 100);
+  assert.equal(searchAutoSelection.graceMs, 200);
+  assert.equal(searchAutoSelection.allowedMaximum, 300);
+  assert.equal(searchAutoSelection.allowedText, '300 ms');
 });
 
 test('artist-family benchmark labels its synthetic correlated evidence without real-data claims', async () => {

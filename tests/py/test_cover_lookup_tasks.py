@@ -138,6 +138,42 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
     assert len(json.dumps(summary).encode("utf-8")) < 4_096
 
 
+def test_task_list_uses_compact_persisted_summaries(monkeypatch):
+    from music_app.services import cover_lookup_tasks as task_service
+
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notification_summaries",
+        lambda config: [
+            {
+                "id": "compact-persisted-task",
+                "status": "completed",
+                "album": "Compact Album",
+                "possible_match_count": 8,
+                "notification_action_taken": False,
+            }
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notifications",
+        lambda config: (_ for _ in ()).throw(
+            AssertionError("task lists must not load full persisted notification payloads")
+        ),
+    )
+
+    assert task_service.list_cover_lookup_task_summaries(config={}) == [
+        {
+            "id": "compact-persisted-task",
+            "status": "completed",
+            "album": "Compact Album",
+            "possible_match_count": 8,
+            "notification_action_taken": False,
+        }
+    ]
+
+
 def test_live_terminal_completion_beats_stale_persisted_running_timestamp():
     created_at = "2026-07-21T14:18:16.697629+00:00"
     finished_at = "2026-07-21T14:18:34.401339+00:00"

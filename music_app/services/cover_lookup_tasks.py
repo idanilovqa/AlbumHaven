@@ -13,6 +13,7 @@ from music_app.services.cover_provider_candidates import (
 )
 from music_app.services.cover_lookup_notifications import (
     delete_cover_lookup_notifications,
+    load_cover_lookup_notification_summaries,
     load_cover_lookup_notifications,
     save_cover_lookup_notifications,
     upsert_cover_lookup_notification,
@@ -178,12 +179,17 @@ def summarize_cover_lookup_task_for_list(
     }
     matches = serialized.get("possible_matches")
     if is_terminal_cover_lookup_task(serialized):
-        summary["possible_match_count"] = sum(
-            1
-            for match in (matches or [])
-            if isinstance(match, Mapping)
-            and str(match.get("art_kind") or "cover") == "cover"
-        )
+        if not isinstance(matches, list) and "possible_match_count" in serialized:
+            summary["possible_match_count"] = max(
+                0, int(serialized.get("possible_match_count") or 0)
+            )
+        else:
+            summary["possible_match_count"] = sum(
+                1
+                for match in (matches or [])
+                if isinstance(match, Mapping)
+                and str(match.get("art_kind") or "cover") == "cover"
+            )
     elif isinstance(matches, list):
         summary["possible_matches"] = matches
     album_payload = serialized.get("album_payload")
@@ -398,10 +404,52 @@ def list_cover_lookup_tasks(*, config: Mapping[str, object] | None = None) -> li
 def list_cover_lookup_task_summaries(
     *, config: Mapping[str, object] | None = None
 ) -> list[dict[str, object]]:
-    return [
-        summarize_cover_lookup_task_for_list(task)
-        for task in list_cover_lookup_tasks(config=config)
+    with _COVER_LOOKUP_TASKS_LOCK:
+        live_items = [
+            {
+                key: value
+                for key, value in task.items()
+                if key
+                not in {
+                    "cancel_event",
+                    "updated_albums",
+                    "updated_problematic_album",
+                    "service_job_result",
+                }
+            }
+            for task in _COVER_LOOKUP_TASKS.values()
+        ]
+    live_items = [
+        serialized
+        for serialized in (
+            serialize_cover_lookup_task_payload(item) for item in live_items
+        )
+        if serialized is not None and not bool(serialized.get("internal"))
     ]
+    persisted_items = (
+        load_cover_lookup_notification_summaries(dict(config))
+        if config is not None
+        else []
+    )
+    persisted_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in persisted_items
+        if str(item.get("id") or "").strip()
+    }
+    summaries: list[dict[str, object]] = []
+    for item in live_items:
+        task_id = str(item.get("id") or "").strip()
+        merged = _merge_cover_lookup_task_with_notification(
+            item, persisted_by_id.pop(task_id, None)
+        )
+        if merged is not None:
+            summaries.append(summarize_cover_lookup_task_for_list(merged))
+    summaries.extend(
+        summarize_cover_lookup_task_for_list(item)
+        for item in persisted_by_id.values()
+    )
+    summaries.sort(key=_sort_cover_lookup_task_key, reverse=True)
+    return summaries
 
 
 def update_cover_lookup_task(

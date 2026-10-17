@@ -20,6 +20,16 @@ def load_cover_lookup_notifications(config: dict[str, object]) -> list[dict[str,
     )
 
 
+def load_cover_lookup_notification_summaries(
+    config: dict[str, object],
+) -> list[dict[str, object]]:
+    adapter = _cover_lookup_notifications_adapter(config)
+    load_summaries = getattr(adapter, "load_notification_summaries", None)
+    if callable(load_summaries):
+        return _filter_notification_tasks(load_summaries())
+    return _filter_notification_tasks(adapter.load_notifications())
+
+
 def save_cover_lookup_notifications(config: dict[str, object], tasks: list[dict[str, object]]) -> None:
     filtered_tasks = _filter_notification_tasks(tasks)
     _cover_lookup_notifications_adapter(config).save_notifications(filtered_tasks)

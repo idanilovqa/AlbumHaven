@@ -5693,17 +5693,19 @@ test('Featured On subheading renders singular and plural album counts', () => {
     assert.match(html, /artist-subsection-label/);
     assert.match(
       html,
-      new RegExp(`Featured On[\\s\\S]*gallery-divider__line[\\s\\S]*artist-subsection-separator[^>]*>•[\\s\\S]*${label}`),
+      new RegExp(`Featured On[\\s\\S]*gallery-divider__line[\\s\\S]*artist-subsection-count[^>]*>${label}`),
     );
+    assert.doesNotMatch(html, /artist-subsection-separator|>•</);
   }
   const subsectionRule = galleryCssSource.match(/\.artist-subsection-label\s*\{([^}]*)\}/)?.[1] || '';
   assert.match(subsectionRule, /display\s*:\s*grid/);
   assert.match(
     subsectionRule,
-    /grid-template-columns\s*:\s*max-content\s+minmax\(0,\s*1fr\)\s+max-content\s+max-content/,
+    /grid-template-columns\s*:\s*max-content\s+minmax\(0,\s*1fr\)\s+max-content\s*;/,
   );
   assert.match(subsectionRule, /margin\s*:\s*2px\s+0\s+-2px\s+28px/);
   assert.match(subsectionRule, /font-size\s*:\s*0\.68rem/);
+  assert.doesNotMatch(galleryCssSource, /\.artist-subsection-separator\s*\{/);
 });
 
 for (const rowGap of [14, 23]) {

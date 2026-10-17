@@ -818,6 +818,235 @@ def test_full_scan_handler_stops_cooperatively_before_publication(mutation, reas
     assert len(repository.checkpoints) == 1
 
 
+@pytest.mark.parametrize(
+    ("interruption", "expected_state", "expected_reason", "preserve_attempt"),
+    (
+        (
+            "shutdown",
+            JobState.RETRY_WAIT,
+            "full_scan_worker_shutdown",
+            True,
+        ),
+        (
+            "cancel",
+            JobState.CANCELED,
+            "full_scan_canceled",
+            False,
+        ),
+    ),
+)
+def test_full_scan_handler_distinguishes_resumable_shutdown_from_cancel(
+    interruption, expected_state, expected_reason, preserve_attempt
+):
+    from music_app.jobs.worker import ExecutionContext
+    from music_app.services.jobs.authorization import AuthorizationDecision
+
+    context = ExecutionContext(
+        _full_claim(),
+        authorization_service=SimpleNamespace(
+            authorize=lambda _claim, _now: AuthorizationDecision(True, "authorized")
+        ),
+        clock=lambda: NOW,
+    )
+    request_interruption = (
+        context.request_shutdown
+        if interruption == "shutdown"
+        else context.request_cancellation
+    )
+
+    outcome = _full_handler(
+        _FullScanRepository(),
+        _FullScanner(before_publish=request_interruption),
+    )(replace(_full_claim(), attempt=1, max_attempts=1), context)
+
+    assert outcome.next_state is expected_state
+    assert outcome.reason_code == expected_reason
+    assert outcome.scheduled_at == (
+        NOW + timedelta(seconds=5)
+        if expected_state is JobState.RETRY_WAIT
+        else None
+    )
+    assert outcome.preserve_attempt is preserve_attempt
+
+
+@pytest.mark.parametrize(
+    ("interruption", "expected_reason"),
+    (
+        ("cancel", "full_scan_canceled"),
+        ("lease", "full_scan_lease_lost"),
+        ("authority", "full_scan_authority_revoked"),
+    ),
+)
+def test_full_scan_terminal_interruption_outranks_concurrent_worker_shutdown(
+    interruption, expected_reason
+):
+    from music_app.jobs.worker import ExecutionContext
+    from music_app.services.jobs.authorization import AuthorizationDecision
+
+    allowed = True
+
+    def authorize(_claim, _now):
+        return AuthorizationDecision(allowed, "authorized" if allowed else "revoked")
+
+    context = ExecutionContext(
+        _full_claim(),
+        authorization_service=SimpleNamespace(authorize=authorize),
+        clock=lambda: NOW,
+    )
+
+    def interrupt():
+        nonlocal allowed
+        context.request_shutdown()
+        if interruption == "cancel":
+            context.request_cancellation()
+        elif interruption == "lease":
+            context.mark_lease_lost()
+        else:
+            allowed = False
+
+    outcome = _full_handler(
+        _FullScanRepository(),
+        _FullScanner(before_publish=interrupt),
+    )(replace(_full_claim(), attempt=1, max_attempts=1), context)
+
+    assert outcome == JobTransitionResult(JobState.CANCELED, expected_reason)
+
+
+@pytest.mark.parametrize(
+    ("interruption", "expected_reason"),
+    (
+        ("cancel", "full_scan_canceled"),
+        ("lease", "full_scan_lease_lost"),
+        ("authority", "full_scan_authority_revoked"),
+    ),
+)
+@pytest.mark.parametrize("completion", ("raises", "returns"))
+def test_full_scan_terminal_interruption_after_observed_shutdown_outranks_shutdown(
+    interruption, expected_reason, completion
+):
+    from music_app.jobs.worker import ExecutionContext
+    from music_app.services.jobs.authorization import AuthorizationDecision
+    from music_app.services.library_indexing import ScanCancelled
+
+    allowed = True
+
+    def authorize(_claim, _now):
+        return AuthorizationDecision(allowed, "authorized" if allowed else "revoked")
+
+    context = ExecutionContext(
+        _full_claim(),
+        authorization_service=SimpleNamespace(authorize=authorize),
+        clock=lambda: NOW,
+    )
+
+    class InterruptedScanner:
+        @staticmethod
+        def run(_intent, *, should_cancel, **_kwargs):
+            nonlocal allowed
+            context.request_shutdown()
+            assert should_cancel() is True
+            if interruption == "cancel":
+                context.request_cancellation()
+            elif interruption == "lease":
+                context.mark_lease_lost()
+            else:
+                allowed = False
+            if completion == "raises":
+                raise ScanCancelled("Library indexing cancelled")
+            return SimpleNamespace(canceled=True)
+
+    outcome = _full_handler(
+        _FullScanRepository(),
+        InterruptedScanner(),
+    )(_full_claim(), context)
+
+    assert outcome == JobTransitionResult(JobState.CANCELED, expected_reason)
+
+
+def test_full_scan_uses_interruption_observed_by_cancellation_predicate():
+    from music_app.jobs.worker import ExecutionContext
+    from music_app.services.jobs.authorization import AuthorizationDecision
+    from music_app.services.library_indexing import ScanCancelled
+
+    context = ExecutionContext(
+        _full_claim(),
+        authorization_service=SimpleNamespace(
+            authorize=lambda _claim, _now: AuthorizationDecision(True, "authorized")
+        ),
+        clock=lambda: NOW,
+    )
+
+    class InterruptedScanner:
+        @staticmethod
+        def run(_intent, *, should_cancel, **_kwargs):
+            context.mark_lease_lost()
+            assert should_cancel() is True
+            context.request_shutdown()
+            raise ScanCancelled("Library indexing cancelled")
+
+    outcome = _full_handler(
+        _FullScanRepository(),
+        InterruptedScanner(),
+    )(_full_claim(), context)
+
+    assert outcome == JobTransitionResult(JobState.CANCELED, "full_scan_lease_lost")
+
+
+def test_full_scan_does_not_reclassify_unobserved_scan_cancel_as_late_shutdown():
+    from music_app.jobs.worker import ExecutionContext
+    from music_app.services.jobs.authorization import AuthorizationDecision
+    from music_app.services.library_indexing import ScanCancelled
+
+    context = ExecutionContext(
+        _full_claim(),
+        authorization_service=SimpleNamespace(
+            authorize=lambda _claim, _now: AuthorizationDecision(True, "authorized")
+        ),
+        clock=lambda: NOW,
+    )
+
+    class UnexpectedCancellationScanner:
+        @staticmethod
+        def run(_intent, **_kwargs):
+            context.request_shutdown()
+            raise ScanCancelled("unrelated executor cancellation")
+
+    outcome = _full_handler(
+        _FullScanRepository(),
+        UnexpectedCancellationScanner(),
+    )(_full_claim(), context)
+
+    assert outcome == JobTransitionResult(JobState.FAILED, "full_scan_failed")
+
+
+def test_full_scan_does_not_reclassify_unrelated_cancel_after_shutdown_checkpoint():
+    from music_app.jobs.worker import ExecutionContext
+    from music_app.services.jobs.authorization import AuthorizationDecision
+    from music_app.services.library_indexing import ScanCancelled
+
+    context = ExecutionContext(
+        _full_claim(),
+        authorization_service=SimpleNamespace(
+            authorize=lambda _claim, _now: AuthorizationDecision(True, "authorized")
+        ),
+        clock=lambda: NOW,
+    )
+
+    class UnexpectedCancellationScanner:
+        @staticmethod
+        def run(_intent, *, checkpoint, **_kwargs):
+            context.request_shutdown()
+            checkpoint(current=1, total=2)
+            raise ScanCancelled("unrelated executor cancellation")
+
+    outcome = _full_handler(
+        _FullScanRepository(),
+        UnexpectedCancellationScanner(),
+    )(_full_claim(), context)
+
+    assert outcome == JobTransitionResult(JobState.FAILED, "full_scan_failed")
+
+
 @pytest.mark.parametrize("mutation", ("cancel", "lease", "authority"))
 def test_full_scan_handler_treats_committed_publication_as_success(mutation):
     repository = _FullScanRepository()

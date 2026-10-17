@@ -12,6 +12,7 @@ import psycopg
 
 from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import ClaimedJob, JobKind, JobState, JobTransitionResult
+from music_app.services.library_indexing import ScanCancelled
 
 
 _STORAGE_RETRY_DELAY = timedelta(seconds=5)
@@ -357,6 +358,16 @@ def build_full_scan_handler(
         if intent_id is None or claim.library_id is None:
             return JobTransitionResult(JobState.CANCELED, "full_scan_scope_invalid")
 
+        def interruption_outcome(reason: str) -> JobTransitionResult:
+            if reason == "full_scan_worker_shutdown":
+                return JobTransitionResult(
+                    JobState.RETRY_WAIT,
+                    reason,
+                    scheduled_at=now() + _STORAGE_RETRY_DELAY,
+                    preserve_attempt=True,
+                )
+            return JobTransitionResult(JobState.CANCELED, reason)
+
         def stop_reason() -> str | None:
             if context.cancel_requested:
                 return "full_scan_canceled"
@@ -369,11 +380,13 @@ def build_full_scan_handler(
                 return "full_scan_canceled"
             if not context.lease_active:
                 return "full_scan_lease_lost"
+            if getattr(context, "shutdown_requested", False):
+                return "full_scan_worker_shutdown"
             return None
 
         reason = stop_reason()
         if reason is not None:
-            return JobTransitionResult(JobState.CANCELED, reason)
+            return interruption_outcome(reason)
         try:
             intent = scan_repository.load_claimed_full_scan(
                 job_id=claim.job_id,
@@ -418,6 +431,26 @@ def build_full_scan_handler(
             return JobTransitionResult(JobState.CANCELED, "full_scan_root_invalid")
 
         checkpoint_failed = False
+        checkpoint_stop_reason: str | None = None
+        cancellation_stop_reason: str | None = None
+
+        def completion_stop_reason() -> str | None:
+            current_reason = stop_reason()
+            observed_reasons = (
+                cancellation_stop_reason,
+                checkpoint_stop_reason,
+                current_reason,
+            )
+            return next(
+                (
+                    reason
+                    for reason in observed_reasons
+                    if reason not in {None, "full_scan_worker_shutdown"}
+                ),
+                current_reason
+                or cancellation_stop_reason
+                or checkpoint_stop_reason,
+            )
 
         def checkpoint(
             *, current: int, total: int, current_path: str = "",
@@ -426,10 +459,12 @@ def build_full_scan_handler(
             files_per_second: float = 0.0,
             album_folders_processed: int = 0, album_folders_total: int = 0,
         ) -> None:
-            nonlocal checkpoint_failed
+            nonlocal checkpoint_failed, checkpoint_stop_reason
             reason = stop_reason()
             if reason is not None:
                 checkpoint_failed = True
+                if checkpoint_stop_reason is None:
+                    checkpoint_stop_reason = reason
                 return
             accepted = scan_repository.checkpoint_claimed_full_scan(
                 intent_id=intent_id,
@@ -450,9 +485,15 @@ def build_full_scan_handler(
             )
             if accepted is not True:
                 checkpoint_failed = True
+                if checkpoint_stop_reason is None:
+                    checkpoint_stop_reason = "full_scan_lease_lost"
 
         def should_cancel() -> bool:
-            return checkpoint_failed or stop_reason() is not None
+            nonlocal cancellation_stop_reason
+            reason = stop_reason() or checkpoint_stop_reason
+            if reason is not None and cancellation_stop_reason is None:
+                cancellation_stop_reason = reason
+            return reason is not None
 
         try:
             bind_claim = getattr(scan_executor, "bind_claim", None)
@@ -469,6 +510,9 @@ def build_full_scan_handler(
                 expected_revision=intent.inventory_mutation_revision,
             )
         except Exception as exc:
+            if isinstance(exc, ScanCancelled) and cancellation_stop_reason is not None:
+                reason = completion_stop_reason() or cancellation_stop_reason
+                return interruption_outcome(reason)
             reason_code = _classify_full_scan_failure(exc)
             log(f"Full scan execution failed ({reason_code}).")
             if reason_code in {
@@ -482,11 +526,11 @@ def build_full_scan_handler(
             result, "publication_won", False
         ):
             return JobTransitionResult(JobState.SUCCEEDED, "full_scan_completed")
-        reason = stop_reason()
+        reason = completion_stop_reason()
         if checkpoint_failed and reason is None:
             reason = "full_scan_lease_lost"
         if reason is not None:
-            return JobTransitionResult(JobState.CANCELED, reason)
+            return interruption_outcome(reason)
         if getattr(result, "canceled", False):
             return JobTransitionResult(JobState.CANCELED, "full_scan_canceled")
         return JobTransitionResult(JobState.SUCCEEDED, "full_scan_completed")

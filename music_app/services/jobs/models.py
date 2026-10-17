@@ -102,6 +102,7 @@ class JobTransitionResult:
     reason_code: str
     scheduled_at: datetime | None = None
     details: Mapping[str, Any] = field(default_factory=dict)
+    preserve_attempt: bool = False
 
 
 @dataclass(frozen=True)

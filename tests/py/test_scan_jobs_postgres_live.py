@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import threading
 from urllib.parse import urlparse
 
 import pytest
@@ -862,6 +863,232 @@ def test_live_job_trigger_checkpoint_and_bounded_orphan_repair_contracts(
         "failed",
     ]
     assert orphan_states[recent_id] == "accepted"
+
+
+def test_live_graceful_full_scan_shutdown_is_reclaimable_without_weakening_cancel(
+    live_scan_database,
+):
+    from music_app.jobs.dispatch import JobHandlerRegistry
+    from music_app.jobs.scan_handlers import build_full_scan_handler
+    from music_app.jobs.worker import ExecutionContext, Worker
+    from music_app.services.jobs.authorization import AuthorizationDecision
+    from music_app.services.library_indexing import ScanCancelled
+
+    setup_url, runtime_url, worker_url = live_scan_database
+    account_id, library_id = _seed_scope(setup_url, "shutdown-retry")
+    now = datetime.now(timezone.utc)
+    arguments = _full_scan_arguments(account_id, library_id, "shutdown-retry")
+    arguments["scheduled_at"] = now - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set attempt_count = 1 where id = %s",
+            (accepted.job_id,),
+        )
+    repository = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    entered = threading.Event()
+
+    class Authorization:
+        @staticmethod
+        def authorize(_claim, _now):
+            return AuthorizationDecision(True, "authorized")
+
+    class InterruptedScan:
+        @staticmethod
+        def run(_intent, *, should_cancel, **_kwargs):
+            entered.set()
+            while not should_cancel():
+                threading.Event().wait(0.01)
+            raise ScanCancelled("Library indexing cancelled")
+
+    authorization = Authorization()
+    handler = build_full_scan_handler(
+        scan_repository=_scan_repository(worker_url),
+        scan_executor=InterruptedScan(),
+        clock=lambda: now,
+    )
+    handlers = JobHandlerRegistry()
+    handlers.register(JobKind.FULL_SCAN, handler)
+    stop = threading.Event()
+    errors = []
+
+    def run_worker():
+        try:
+            Worker(
+                repository=repository,
+                authorization_service=authorization,
+                handlers=handlers,
+                worker_id="scan-shutdown-worker",
+                lease_seconds=300,
+                heartbeat_seconds=30,
+                poll_seconds=1,
+                max_idle_backoff_seconds=2,
+                drain_seconds=2,
+                clock=lambda: now,
+                claim_kinds=(JobKind.FULL_SCAN.value,),
+            ).run(stop)
+        except BaseException as exc:
+            errors.append(exc)
+
+    runner = threading.Thread(target=run_worker, name="scan-shutdown-live-worker")
+    try:
+        runner.start()
+        assert entered.wait(5)
+        stop.set()
+        runner.join(5)
+        assert not runner.is_alive()
+        assert errors == []
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            interrupted = connection.execute(
+                """
+                select state, outcome_code, attempt_count, max_attempts
+                  from ops.jobs
+                 where id = %s
+                """,
+                (accepted.job_id,),
+            ).fetchone()
+        assert dict(interrupted) == {
+            "state": "retry_wait",
+            "outcome_code": "full_scan_worker_shutdown",
+            "attempt_count": 1,
+            "max_attempts": 2,
+        }
+        with isolatedPostgres._connect(setup_url) as connection:
+            transition = connection.execute(
+                """
+                select attempt_count
+                  from ops.job_transitions
+                 where job_id = %s
+                   and reason_code = 'full_scan_worker_shutdown'
+                 order by id desc
+                 limit 1
+                """,
+                (accepted.job_id,),
+            ).fetchone()
+        assert dict(transition) == {"attempt_count": 2}
+
+        replacement_now = now + timedelta(seconds=6)
+        replacement = repository.claim(
+            worker_id="scan-replacement-worker",
+            now=replacement_now,
+            lease_seconds=300,
+            kinds=(JobKind.FULL_SCAN,),
+        )
+        assert replacement is not None
+        assert replacement.job_id == accepted.job_id
+        assert replacement.attempt == 2
+
+        cancel_context = ExecutionContext(
+            replacement,
+            authorization_service=authorization,
+            clock=lambda: replacement_now,
+        )
+        cancel_context.request_cancellation()
+        cancel_outcome = handler(replacement, cancel_context)
+        assert cancel_outcome == JobTransitionResult(
+            JobState.CANCELED,
+            "full_scan_canceled",
+        )
+        assert repository.finish(
+            replacement,
+            cancel_outcome,
+            now=replacement_now,
+        )
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            canceled = connection.execute(
+                "select state, outcome_code from ops.jobs where id = %s",
+                (accepted.job_id,),
+            ).fetchone()
+        assert dict(canceled) == {
+            "state": "canceled",
+            "outcome_code": "full_scan_canceled",
+        }
+    finally:
+        stop.set()
+        runner.join(5)
+
+
+def test_live_cancel_committed_before_shutdown_retry_finish_is_terminal(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    account_id, library_id = _seed_scope(setup_url, "cancel-before-shutdown-finish")
+    claimed_at = datetime.now(timezone.utc)
+    arguments = _full_scan_arguments(
+        account_id,
+        library_id,
+        "cancel-before-shutdown-finish",
+    )
+    arguments["scheduled_at"] = claimed_at - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    worker_repository = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    app_repository = PostgresJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claimed = worker_repository.claim(
+        worker_id="cancel-before-shutdown-finish-worker",
+        now=claimed_at,
+        lease_seconds=300,
+        kinds=(JobKind.FULL_SCAN,),
+    )
+    assert claimed is not None and claimed.job_id == accepted.job_id
+
+    cancel_result = app_repository.request_cancel(
+        claimed.job_id,
+        actor_account_id=account_id,
+        now=claimed_at + timedelta(seconds=1),
+    )
+    assert cancel_result.disposition is JobCancellationDisposition.RUNNING_REQUESTED
+    assert worker_repository.finish(
+        claimed,
+        JobTransitionResult(
+            JobState.RETRY_WAIT,
+            "full_scan_worker_shutdown",
+            scheduled_at=claimed_at + timedelta(seconds=5),
+            preserve_attempt=True,
+        ),
+        now=claimed_at + timedelta(seconds=2),
+    )
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        job = connection.execute(
+            """
+            select state, outcome_code, cancel_requested_at
+              from ops.jobs
+             where id = %s
+            """,
+            (claimed.job_id,),
+        ).fetchone()
+        transition = connection.execute(
+            """
+            select prior_state, next_state, reason_code, retry_decision, next_due_at
+              from ops.job_transitions
+             where job_id = %s and prior_state = 'running'
+             order by id desc
+             limit 1
+            """,
+            (claimed.job_id,),
+        ).fetchone()
+
+    assert job["state"] == "canceled"
+    assert job["cancel_requested_at"] is not None
+    assert job["outcome_code"] != "full_scan_worker_shutdown"
+    assert dict(transition) == {
+        "prior_state": "running",
+        "next_state": "canceled",
+        "reason_code": job["outcome_code"],
+        "retry_decision": "none",
+        "next_due_at": None,
+    }
 
 
 @pytest.mark.parametrize(

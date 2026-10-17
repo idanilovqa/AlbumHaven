@@ -99,6 +99,7 @@ class ExecutionContext:
         self._lock = threading.Lock()
         self._lease_active = True
         self._cancel_requested = False
+        self._shutdown_requested = False
         self._finalization_claimed = False
         self._authorization_indeterminate = False
 
@@ -111,6 +112,11 @@ class ExecutionContext:
     def cancel_requested(self) -> bool:
         with self._lock:
             return self._cancel_requested
+
+    @property
+    def shutdown_requested(self) -> bool:
+        with self._lock:
+            return self._shutdown_requested
 
     @property
     def authorization_retry_required(self) -> bool:
@@ -131,6 +137,10 @@ class ExecutionContext:
     def request_cancellation(self) -> None:
         with self._lock:
             self._cancel_requested = True
+
+    def request_shutdown(self) -> None:
+        with self._lock:
+            self._shutdown_requested = True
 
     def reauthorize(self) -> AuthorizationDecision:
         """Recheck current authority at a handler's protected checkpoint."""
@@ -364,6 +374,8 @@ class Worker:
         self._due_reconciliation_failures = 0
         self._due_reconciliation_consecutive_failures = 0
         self._contexts_lock = threading.Lock()
+        self._draining = False
+        self._forced_invalidation = False
         self._active_contexts: set[ExecutionContext] = set()
         self._owned_threads_lock = threading.Lock()
         self._owned_threads: set[threading.Thread] = set()
@@ -390,6 +402,9 @@ class Worker:
         return self._due_reconciliation_failures
 
     def run_once(self) -> bool:
+        with self._contexts_lock:
+            if self._draining:
+                return False
         claim_arguments = {
             "worker_id": self._worker_id,
             "now": self._clock(),
@@ -421,6 +436,11 @@ class Worker:
             clock=self._clock,
         )
         with self._contexts_lock:
+            if self._draining:
+                context.request_shutdown()
+            if self._forced_invalidation:
+                context.request_cancellation()
+                context.mark_lease_lost()
             self._active_contexts.add(context)
         heartbeat_stop = threading.Event()
         heartbeat = threading.Thread(
@@ -534,7 +554,7 @@ class Worker:
             execution_failed = True
             stop_event.set()
         finally:
-            self._request_active_cancellation()
+            self._request_active_shutdown()
             now = self._clock()
             deadline = now + timedelta(seconds=self._drain_seconds)
             monotonic_deadline = time.monotonic() + self._drain_seconds
@@ -679,18 +699,19 @@ class Worker:
             if stop_event.wait(self._heartbeat_seconds):
                 return
 
-    def _request_active_cancellation(self) -> None:
+    def _request_active_shutdown(self) -> None:
         with self._contexts_lock:
-            contexts = tuple(self._active_contexts)
-        for context in contexts:
-            context.request_cancellation()
+            self._draining = True
+            for context in self._active_contexts:
+                context.request_shutdown()
 
     def _invalidate_active_contexts(self) -> None:
         with self._contexts_lock:
-            contexts = tuple(self._active_contexts)
-        for context in contexts:
-            context.request_cancellation()
-            context.mark_lease_lost()
+            self._forced_invalidation = True
+            for context in self._active_contexts:
+                context.request_shutdown()
+                context.request_cancellation()
+                context.mark_lease_lost()
 
     def _record_draining(self, now: datetime, deadline: datetime) -> None:
         if self._worker_instances is not None:

@@ -610,6 +610,44 @@ def test_retry_finish_requires_a_due_time_and_remaining_attempt():
         )
 
 
+def test_shutdown_retry_releases_final_attempt_without_consuming_retry_budget():
+    connection = _RecordingConnection([_Result(one={"job_id": 41})])
+    repository, _ = _repository(connection)
+    claim = ClaimedJob(**_claim_row(attempt=1, max_attempts=1))
+    outcome = JobTransitionResult(
+        JobState.RETRY_WAIT,
+        "full_scan_worker_shutdown",
+        scheduled_at=NOW + timedelta(seconds=5),
+        preserve_attempt=True,
+    )
+
+    assert repository.finish(claim, outcome, now=NOW) is True
+
+    sql = _normalized(connection.executed[0][0])
+    parameters = connection.executed[0][1]
+    assert "attempt_count = attempt_count - 1" in sql
+    assert "%(attempt)s as transition_attempt_count" in sql
+    assert "transition_attempt_count" in sql
+    assert parameters["attempt"] == 1
+
+
+def test_attempt_preservation_is_valid_only_for_retry_wait():
+    repository, connector = _repository(_RecordingConnection())
+
+    with pytest.raises(ValueError, match="preserve|attempt|retry"):
+        repository.finish(
+            ClaimedJob(**_claim_row()),
+            JobTransitionResult(
+                JobState.FAILED,
+                "handler_failed",
+                preserve_attempt=True,
+            ),
+            now=NOW,
+        )
+
+    assert connector.urls == []
+
+
 def test_stale_reconciliation_is_bounded_locked_and_registry_driven():
     rows = [{"retried_count": 1, "failed_count": 1, "ambiguous_count": 1, "canceled_count": 1}]
     connection = _RecordingConnection([_Result(one=rows[0])])

@@ -7,6 +7,7 @@ import pytest
 
 from music_app.jobs.dispatch import JobHandlerRegistry
 from music_app.jobs.worker import (
+    ExecutionContext,
     PostgresWorkerInstanceRepository,
     Worker,
     combine_due_reconcilers,
@@ -636,6 +637,24 @@ def test_cancellation_seen_by_heartbeat_is_exposed_to_execution_context():
     assert repository.finishes[0][1].next_state is JobState.CANCELED
 
 
+def test_execution_context_distinguishes_shutdown_from_explicit_cancellation():
+    context = ExecutionContext(
+        claim(),
+        authorization_service=Authorization(),
+        clock=lambda: NOW,
+    )
+
+    context.request_shutdown()
+
+    assert context.shutdown_requested is True
+    assert context.cancel_requested is False
+
+    context.request_cancellation()
+
+    assert context.shutdown_requested is True
+    assert context.cancel_requested is True
+
+
 def test_run_applies_exponential_idle_backoff_capped_by_configuration():
     repository = Repository()
     waits = []
@@ -1018,7 +1037,7 @@ def test_shutdown_stops_new_claims_and_drains_active_handler_without_lingering_t
     )
 
 
-def test_single_concurrency_shutdown_cancels_managed_handler_within_drain_bound():
+def test_single_concurrency_shutdown_requests_resumable_handler_drain():
     repository = Repository([claim()])
     entered = threading.Event()
     release = threading.Event()
@@ -1026,10 +1045,10 @@ def test_single_concurrency_shutdown_cancels_managed_handler_within_drain_bound(
 
     def handler(_, context):
         entered.set()
-        while not context.cancel_requested and not release.wait(0.01):
+        while not context.shutdown_requested and not release.wait(0.01):
             pass
-        observed.append(context.cancel_requested)
-        return JobTransitionResult(JobState.CANCELED, "cancel_requested")
+        observed.append((context.shutdown_requested, context.cancel_requested))
+        return JobTransitionResult(JobState.RETRY_WAIT, "worker_shutdown")
 
     stop = threading.Event()
     finished = threading.Event()
@@ -1058,8 +1077,205 @@ def test_single_concurrency_shutdown_cancels_managed_handler_within_drain_bound(
 
     assert stopped_before_manual_release
     assert not errors
-    assert observed == [True]
-    assert repository.finishes[0][1].next_state is JobState.CANCELED
+    assert observed == [(True, False)]
+    assert repository.finishes[0][1].next_state is JobState.RETRY_WAIT
+
+
+def test_shutdown_reaches_context_registered_after_drain_begins():
+    authorization_entered = threading.Event()
+    allow_authorization = threading.Event()
+    drain_started = threading.Event()
+    handler_entered = threading.Event()
+    allow_handler_completion = threading.Event()
+
+    class BlockingAuthorization(Authorization):
+        def authorize(self, claimed, now):
+            authorization_entered.set()
+            assert allow_authorization.wait(2)
+            return super().authorize(claimed, now)
+
+    class SignalingWorkerInstances(WorkerInstances):
+        def record_draining(self, **kwargs):
+            super().record_draining(**kwargs)
+            drain_started.set()
+
+    def handler(_, context):
+        handler_entered.set()
+        if context.shutdown_requested:
+            return JobTransitionResult(
+                JobState.RETRY_WAIT,
+                "full_scan_worker_shutdown",
+                preserve_attempt=True,
+            )
+        assert allow_handler_completion.wait(2)
+        return JobTransitionResult(JobState.CANCELED, "forced_invalidation")
+
+    repository = Repository([claim()])
+    runtime = worker(
+        repository,
+        authorization=BlockingAuthorization(),
+        handlers=registry(handler),
+        worker_instances=SignalingWorkerInstances(),
+        drain_seconds=0.25,
+    )
+    stop = threading.Event()
+    errors = []
+
+    def run_worker():
+        try:
+            runtime.run(stop)
+        except BaseException as exc:
+            errors.append(exc)
+
+    runner = threading.Thread(target=run_worker, name="test-late-context-runner")
+    runner.start()
+    try:
+        assert authorization_entered.wait(2)
+        stop.set()
+        assert drain_started.wait(2)
+        allow_authorization.set()
+        assert handler_entered.wait(2)
+        runner.join(1)
+    finally:
+        allow_authorization.set()
+        allow_handler_completion.set()
+        runner.join(2)
+        for owned in tuple(runtime._owned_threads):
+            owned.join(2)
+        runtime.close()
+
+    assert not runner.is_alive()
+    assert errors == []
+    assert len(repository.finishes) == 1
+    assert repository.finishes[0][1] == JobTransitionResult(
+        JobState.RETRY_WAIT,
+        "full_scan_worker_shutdown",
+        preserve_attempt=True,
+    )
+
+
+def test_claim_admission_stays_concurrent_and_closes_atomically_for_drain():
+    claims_entered = threading.Event()
+    release_claims = threading.Event()
+    drain_committed = threading.Event()
+
+    class BlockingRepository(Repository):
+        def __init__(self):
+            super().__init__()
+            self._claim_lock = threading.Lock()
+            self.claim_count = 0
+
+        def claim(self, **kwargs):
+            with self._claim_lock:
+                self.claim_count += 1
+                if self.claim_count == 2:
+                    claims_entered.set()
+            assert not drain_committed.is_set()
+            assert release_claims.wait(2)
+            return None
+
+    repository = BlockingRepository()
+    runtime = worker(repository, concurrency=2)
+    results = []
+    runners = [
+        threading.Thread(
+            target=lambda: results.append(runtime.run_once()),
+            name=f"test-claim-admission-{index}",
+        )
+        for index in range(2)
+    ]
+    drainer = threading.Thread(
+        target=lambda: (runtime._request_active_shutdown(), drain_committed.set()),
+        name="test-claim-admission-drain",
+    )
+    try:
+        for runner in runners:
+            runner.start()
+        assert claims_entered.wait(2)
+        drainer.start()
+        assert drain_committed.wait(2)
+
+        assert runtime.run_once() is False
+        assert repository.claim_count == 2
+    finally:
+        release_claims.set()
+        for runner in runners:
+            runner.join(2)
+        drainer.join(2)
+        runtime.close()
+
+    assert all(not runner.is_alive() for runner in runners)
+    assert not drainer.is_alive()
+    assert results == [False, False]
+
+
+def test_drain_timeout_invalidates_context_registered_after_worker_failure():
+    authorization_entered = threading.Event()
+    allow_authorization = threading.Event()
+    handler_entered = threading.Event()
+    observed = []
+
+    class BlockingAuthorization(Authorization):
+        def authorize(self, claimed, now):
+            authorization_entered.set()
+            assert allow_authorization.wait(2)
+            return super().authorize(claimed, now)
+
+    def handler(_, context):
+        observed.append(
+            (
+                context.shutdown_requested,
+                context.cancel_requested,
+                context.lease_active,
+            )
+        )
+        handler_entered.set()
+        return JobTransitionResult(
+            JobState.RETRY_WAIT,
+            "full_scan_worker_shutdown",
+            preserve_attempt=True,
+        )
+
+    repository = Repository([claim()])
+    runtime = worker(
+        repository,
+        authorization=BlockingAuthorization(),
+        handlers=registry(handler),
+        drain_seconds=0,
+    )
+    stop = threading.Event()
+    errors = []
+
+    def run_worker():
+        try:
+            runtime.run(stop)
+        except BaseException as exc:
+            errors.append(exc)
+
+    runner = threading.Thread(target=run_worker, name="test-late-timeout-runner")
+    runner.start()
+    try:
+        assert authorization_entered.wait(2)
+        stop.set()
+        runner.join(2)
+        assert not runner.is_alive()
+        assert [str(error) for error in errors] == [
+            "durable jobs worker drain timed out"
+        ]
+
+        allow_authorization.set()
+        assert handler_entered.wait(2)
+        for owned in tuple(runtime._owned_threads):
+            owned.join(2)
+    finally:
+        allow_authorization.set()
+        for owned in tuple(runtime._owned_threads):
+            owned.join(2)
+        runner.join(2)
+        runtime.close()
+
+    assert observed == [(True, True, False)]
+    assert repository.finishes == []
 
 
 def test_worker_instance_heartbeat_failure_is_propagated_without_threading_excepthook():

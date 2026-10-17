@@ -15,6 +15,7 @@ from .models import (
     JobCancellationDisposition,
     JobCancellationResult,
     JobHeartbeatResult,
+    RecoveryPolicy,
     JobState,
     JobStatusSnapshot,
     JobTransitionResult,
@@ -427,25 +428,60 @@ class PostgresJobRepository:
         _require_reason_code(outcome.reason_code)
 
         is_retry = next_state is JobState.RETRY_WAIT
+        preserve_attempt = outcome.preserve_attempt
+        if preserve_attempt and not is_retry:
+            raise ValueError("attempt preservation requires a retry outcome")
+        if (
+            preserve_attempt
+            and policy_for(claim.kind).recovery_policy is not RecoveryPolicy.RETRY_SAFE
+        ):
+            raise ValueError("attempt preservation requires a retry-safe job policy")
         if is_retry:
             if outcome.scheduled_at is None:
                 raise ValueError("retry outcome requires scheduled_at")
             _require_aware_datetime("retry scheduled_at", outcome.scheduled_at)
-            if claim.attempt >= claim.max_attempts:
+            if claim.attempt >= claim.max_attempts and not preserve_attempt:
                 raise ValueError("retry outcome exceeds the attempt limit")
         elif outcome.scheduled_at is not None:
             raise ValueError("terminal outcome cannot include retry scheduled_at")
 
         state_value = next_state.value
-        retry_decision = "scheduled" if is_retry else "none"
         completed_at = None if is_retry else now
+        if preserve_attempt:
+            state_update = (
+                "case when cancel_requested_at is not null "
+                "then 'canceled' else 'retry_wait' end"
+            )
+            attempt_update = (
+                "attempt_count = attempt_count - 1 + "
+                "case when cancel_requested_at is not null then 1 else 0 end,"
+            )
+            scheduled_at_update = (
+                "case when cancel_requested_at is not null then scheduled_at "
+                "else coalesce(%(scheduled_at)s, scheduled_at) end"
+            )
+            completed_at_update = (
+                "case when cancel_requested_at is not null then %(now)s else null end"
+            )
+            outcome_code_update = (
+                "case when cancel_requested_at is not null "
+                "then coalesce(cancel_reason_code, 'cancel_requested') "
+                "else %(reason_code)s end"
+            )
+        else:
+            state_update = f"'{state_value}'"
+            attempt_update = ""
+            scheduled_at_update = "coalesce(%(scheduled_at)s, scheduled_at)"
+            completed_at_update = "%(completed_at)s"
+            outcome_code_update = "%(reason_code)s"
         statement = f"""
             with updated as (
               update ops.jobs
-                 set state = '{state_value}',
-                     scheduled_at = coalesce(%(scheduled_at)s, scheduled_at),
-                     completed_at = %(completed_at)s,
-                     outcome_code = %(reason_code)s,
+                 set state = {state_update},
+                     {attempt_update}
+                     scheduled_at = {scheduled_at_update},
+                     completed_at = {completed_at_update},
+                     outcome_code = {outcome_code_update},
                      lease_owner = null,
                      lease_token = null,
                      lease_expires_at = null,
@@ -457,14 +493,21 @@ class PostgresJobRepository:
                  and lease_token = %(lease_token)s
                  and lease_owner = %(worker_id)s
                  and lease_expires_at > %(now)s
-              returning id as job_id, attempt_count
+              returning id as job_id, %(attempt)s as transition_attempt_count,
+                        state as transition_state,
+                        outcome_code as transition_reason_code,
+                        case when state = 'retry_wait' then scheduled_at end
+                          as transition_due_at
             ), transitioned as (
               insert into ops.job_transitions (
                 job_id, prior_state, next_state, attempt_count, reason_code,
                 retry_decision, next_due_at, worker_instance_id, transitioned_at
               )
-              select job_id, 'running', '{state_value}', attempt_count,
-                     %(reason_code)s, '{retry_decision}', %(scheduled_at)s,
+              select job_id, 'running', transition_state, transition_attempt_count,
+                     transition_reason_code,
+                     case when transition_state = 'retry_wait'
+                          then 'scheduled' else 'none' end,
+                     transition_due_at,
                      %(worker_id)s, %(now)s
                 from updated
               returning job_id

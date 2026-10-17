@@ -21,7 +21,7 @@ create or replace function app.guard_top_artwork_draft_item() returns trigger
 language plpgsql set search_path=pg_catalog as $$ begin
   if TG_OP='UPDATE' and current_user=(select pg_get_userbyid(relowner) from pg_class
       where oid='app.album_top_artwork_draft_items'::regclass)
-     and OLD.status is null and NEW.status=case when OLD.included then 'pending' else 'excluded' end
+     and OLD.status is null and NEW.status=(case when OLD.included then 'pending' else 'excluded' end)
      and (to_jsonb(NEW)-'status')=(to_jsonb(OLD)-'status') then return NEW; end if;
   raise exception using errcode='55000',constraint='top_artwork_draft_immutable',message='Artwork draft is immutable';
 end $$;
@@ -48,7 +48,7 @@ language plpgsql set search_path=pg_catalog as $$ begin
   if TG_OP='INSERT' then
     -- 0130 admission remains byte-for-byte immutable and omits new columns.
     if NEW.status is null then NEW.status:=case when NEW.included then 'pending' else 'excluded' end; end if;
-    if NEW.status=case when NEW.included then 'pending' else 'excluded' end
+    if NEW.status=(case when NEW.included then 'pending' else 'excluded' end)
        and NEW.asset_ref is null and NEW.source_stamp is null
        and NEW.acquisition_stamp is null and NEW.error_code is null then return NEW; end if;
   elsif TG_OP='DELETE' then

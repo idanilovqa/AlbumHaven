@@ -33,7 +33,7 @@ CUTOFF_SHA256 = "437d7cf3722e313b112106c0919d6a28403e2fa769daab9f735b6c59435ffdf
 POST_CUTOFF = {CONSUMPTION: "c433536b1600e706dd61fcda3fec9b8936cdccd9f1cb1b23acddac410c8d76bc"}
 # Exact reviewed repository tail, required on disk but never installed here.
 KNOWN_FOLLOWING_TAIL = {
-    "0134_private_top_artwork_draft_capture.sql": "eeee1d79b0c8d7b96cabe5fc3bf9f5e569590df9682c5e86d2f52aaaf3874bbc",
+    "0134_private_top_artwork_draft_capture.sql": "a2226a26b9732d70a17af35d0054fba05e0306156dbed94d2c02e2b4c8c6c87e",
 }
 INPUTS = {
     "0127_private_top_remote_acquisition.sql": "b849fdb42550fe549561c9199eb87a3af3622003edb187ec08128e28ada99d65",

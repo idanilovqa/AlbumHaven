@@ -16910,3 +16910,59 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
     assert not projections.relation_projection_stale_reason(after)
     assert not projections.artist_search_projection_stale_reason(after)
     assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']
+
+
+def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
+    from music_app.services import library_browse_postgres as browse_module
+
+    selected_path = r"D:\Music\Artist\Album\01 Song.flac"
+    executed: dict[str, object] = {}
+
+    class Cursor:
+        def fetchall(self):
+            return [
+                {
+                    "file_private_path": selected_path,
+                    "file_entry": {
+                        "cover_path": r"D:\Music\Artist\Album\cover.jpg",
+                        "cover_revision": "revision-1",
+                        "remote_cover_url": "https://images.example/cover.jpg",
+                    },
+                }
+            ]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def execute(self, sql, params):
+            executed["sql"] = " ".join(str(sql).split()).lower()
+            executed["params"] = params
+            return Cursor()
+
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: Connection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+
+    entries = repository.build_cover_state_entries_by_paths({selected_path})
+
+    assert entries == {
+        selected_path: {
+            "cover_path": r"D:\Music\Artist\Album\cover.jpg",
+            "cover_revision": "revision-1",
+            "remote_cover_url": "https://images.example/cover.jpg",
+            "path": selected_path,
+        }
+    }
+    assert executed["params"] == {"track_paths": [selected_path]}
+    sql = str(executed["sql"])
+    assert "library.local_track_files.private_path = any(%(track_paths)s::text[])" in sql
+    assert "matched_album_ids" not in sql
+    assert "ignored_repair_rollup" not in sql
+    assert "library.ignored_repairs" not in sql
+

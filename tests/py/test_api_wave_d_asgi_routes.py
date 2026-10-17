@@ -490,7 +490,7 @@ def test_asgi_cover_lookup_notification_routes_use_asgi_config_without_flask_bri
 def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
-        PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+        PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
         lambda _self, _paths: {},
     )
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
@@ -738,7 +738,7 @@ def test_asgi_cover_lookup_gallery_reads_saved_snapshot_without_task_or_provider
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
-        PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+        PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
         lambda _self, _paths: {},
     )
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
@@ -986,7 +986,7 @@ def test_asgi_cover_lookup_gallery_fails_closed_without_searching_on_snapshot_er
 ):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     monkeypatch.setattr(
-        PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+        PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
         lambda _self, _paths: {},
     )
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
@@ -3320,7 +3320,7 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
         loads.append(set(paths))
         return {str(track_path): dict(entry)}
 
-    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths", selected_entries)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", selected_entries)
     repository = SimpleNamespace(get_for_album_context=lambda **kwargs: {})
     monkeypatch.setattr(routes, "_resolved_snapshot_album_context", lambda *args: (repository, 41, None))
     status, _, body = _run_asgi_request(

@@ -2747,6 +2747,29 @@ class PostgresLibraryBrowseRepository:
                     entries[path] = file_entry
         return entries
 
+    def build_cover_state_entries_by_paths(
+        self,
+        track_paths: set[str],
+    ) -> dict[str, dict[str, object]]:
+        normalized_paths = _normalized_track_paths(track_paths)
+        if not normalized_paths:
+            return {}
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                _cover_state_rows_by_track_paths_sql(),
+                {"track_paths": sorted(normalized_paths)},
+            ).fetchall()
+        entries: dict[str, dict[str, object]] = {}
+        for row in rows:
+            row_payload = _row_mapping(row)
+            path = str(row_payload.get("file_private_path") or "").strip()
+            if path not in normalized_paths:
+                continue
+            file_entry = dict(_row_json_mapping(row_payload.get("file_entry")))
+            file_entry["path"] = path
+            entries[path] = file_entry
+        return entries
+
     def build_utility_rules_payload(self) -> dict[str, object]:
         kind = "rules"
         cached_payload = self._get_cached_utility_projection(kind)
@@ -9618,6 +9641,37 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
             search_result_rows.album_title,
             search_result_rows.album_key,
             search_result_rows.track_id;
+    """
+
+
+def _cover_state_rows_by_track_paths_sql() -> str:
+    return """
+        with bootstrap_context as (
+            select library.libraries.id as library_id
+            from app.bootstrap_owners
+            join library.libraries
+              on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+             and library.libraries.name = 'Local Library'
+             and library.libraries.library_kind = 'local'
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+            limit 1
+        )
+        select
+            library.local_track_files.private_path as file_private_path,
+            coalesce(
+                library.local_track_files.metadata #> '{scan_cache,file_entry}',
+                '{}'::jsonb
+            ) as file_entry
+        from library.local_track_files
+        join library.local_tracks
+          on library.local_tracks.id = library.local_track_files.track_id
+        join bootstrap_context
+          on bootstrap_context.library_id = library.local_tracks.library_id
+        where coalesce(
+            (library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean,
+            false
+        ) is false
+          and library.local_track_files.private_path = any(%(track_paths)s::text[])
     """
 
 

@@ -1481,7 +1481,7 @@ async function clearCoverLookupTaskNotification(taskId) {
   }
 }
 
-function buildCoverLookupCard(item, kind = 'local') {
+function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
   const isPastedKind = kind === 'pasted';
@@ -1548,9 +1548,11 @@ function buildCoverLookupCard(item, kind = 'local') {
     ? `data-cover-lookup-open-lightbox="1" data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`
     : `data-cover-src="${escapeHtml(fullImageUrl)}" data-cover-alt="${previewAlt}"`;
   const previewButtonLabel = 'Open full-size cover art';
-  const previewLoadingAttrs = isRemoteKind
+  const previewLoadingAttrs = isRemoteKind && !prioritizeRemotePreview
     ? 'loading="lazy" fetchpriority="low"'
-    : 'loading="eager"';
+    : isRemoteKind
+      ? 'loading="eager" fetchpriority="high"'
+      : 'loading="eager"';
   const actionLabel = kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
@@ -1741,7 +1743,7 @@ function renderCoverLookupModal() {
     : '';
   const possibleMatchesMarkup = possibleMatches.length
     ? `
-        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
+        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item, index) => buildCoverLookupCard(item, 'remote', index < 4)).join('')}</div>` : ''}
         ${groupedDiscogsMatches.length ? `<div class="cover-lookup-subsection-title">Discogs</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="discogs">${groupedDiscogsMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${groupedArchiveMatches.length ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="cover_art_archive">${groupedArchiveMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${manualLinkMatches.length ? `<div class="cover-lookup-subsection-title">MANUAL LINKS</div><div class="cover-lookup-gallery">${manualLinkMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}

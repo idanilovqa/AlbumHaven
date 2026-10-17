@@ -3508,3 +3508,19 @@ require('node:test')('publishing album artwork advances the cover mutation revis
 
   assert.equal(context.state.ui.albumCoverMutationRevision, 1);
 });
+
+require('node:test')('visible service cover previews receive eager browser priority', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  const candidate = {
+    id: 'service-candidate',
+    source: 'spotify',
+    album: 'Provider fixture',
+    thumbnail_url: 'https://images.example/thumbnail.jpg',
+  };
+
+  const visible = context.buildCoverLookupCard(candidate, 'remote', true);
+  const deferred = context.buildCoverLookupCard(candidate, 'remote', false);
+
+  assert.match(visible, /loading="eager" fetchpriority="high"/);
+  assert.match(deferred, /loading="lazy" fetchpriority="low"/);
+});

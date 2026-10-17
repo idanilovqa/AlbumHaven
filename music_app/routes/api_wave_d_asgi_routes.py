@@ -218,7 +218,7 @@ async def _serialize_cover_gallery_from_asgi(
         from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
         selected_entries = await run_in_threadpool(
-            PostgresLibraryBrowseRepository(config).build_track_file_entries_by_paths,
+            PostgresLibraryBrowseRepository(config).build_cover_state_entries_by_paths,
             missing_paths,
         )
         file_cache = {**file_cache, **selected_entries}

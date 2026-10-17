@@ -5,6 +5,7 @@ non-superuser/inherited roles. This fixture never creates roles/databases, drops
 schemas, widens grants, rewrites migration history or disables a trigger.
 It installs exact checked-in migrations through 0131, permits old-writer seeds,
 then installs exact 0132 and the separately approved 0133 on explicit requests.
+The exact known following 0134 is verified on disk but never applied here.
 Each transition case requires its own root-supplied empty database invocation.
 """
 from hashlib import sha256
@@ -28,8 +29,12 @@ CUTOFF = "0132_private_top_remote_preparations.sql"
 PREVIOUS = "0131_top_artwork_completion_alias.sql"
 CONSUMPTION = "0133_private_top_remote_consumption.sql"
 CUTOFF_SHA256 = "437d7cf3722e313b112106c0919d6a28403e2fa769daab9f735b6c59435ffdfb"
-# Exact parent-reviewed B migration; no unreviewed post-A tail is admitted.
+# Only this exact B migration belongs to the legacy transition apply list.
 POST_CUTOFF = {CONSUMPTION: "c433536b1600e706dd61fcda3fec9b8936cdccd9f1cb1b23acddac410c8d76bc"}
+# Exact reviewed repository tail, required on disk but never installed here.
+KNOWN_FOLLOWING_TAIL = {
+    "0134_private_top_artwork_draft_capture.sql": "eeee1d79b0c8d7b96cabe5fc3bf9f5e569590df9682c5e86d2f52aaaf3874bbc",
+}
 INPUTS = {
     "0127_private_top_remote_acquisition.sql": "b849fdb42550fe549561c9199eb87a3af3622003edb187ec08128e28ada99d65",
     "0128_private_top_remote_membership.sql": "4b1147d3cc9e6d5071cb2867e496376361506c1ebba9143e36534dc84a34f639",
@@ -201,9 +206,12 @@ def cutoff_transition():
     prefix, cutoff, tail = migrations[:index], migrations[index], migrations[index + 1:]
     assert prefix and prefix[-1].name == PREVIOUS
     assert sha256(cutoff.read_bytes()).hexdigest() == CUTOFF_SHA256
-    assert [path.name for path in tail] == list(POST_CUTOFF), 'Re-review any unapproved post-A migration tail'
+    expected_tail = {**POST_CUTOFF, **KNOWN_FOLLOWING_TAIL}
+    assert [path.name for path in tail] == list(expected_tail), 'Re-review any unapproved post-A migration tail'
     for path in tail:
-        assert sha256(path.read_bytes()).hexdigest() == POST_CUTOFF[path.name]
+        assert sha256(path.read_bytes()).hexdigest() == expected_tail[path.name]
+    # Exact full-tail validation above precedes slicing; only 0133 can enter the case.
+    post_cutoff = tail[:len(POST_CUTOFF)]
     for name, checksum in INPUTS.items():
         assert sha256((ROOT / "migrations" / "postgres" / name).read_bytes()).hexdigest() == checksum
     with isolatedPostgres._connect(setup) as connection:
@@ -227,7 +235,7 @@ def cutoff_transition():
         actor = database.actor(connection)
         database.library = database.library_for(connection, actor)
         database.owner = database.member(connection, actor, database.library)
-    case = CutoffCase(database, cutoff, prefix, tail)
+    case = CutoffCase(database, cutoff, prefix, post_cutoff)
     try:
         yield case
     finally:

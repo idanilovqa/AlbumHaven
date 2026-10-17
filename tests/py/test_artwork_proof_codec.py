@@ -649,7 +649,7 @@ def test_source_import_and_codec_operations_have_no_native_or_owner_io(monkeypat
 
     def guarded_import(name, *args, **kwargs):
         imports.append(name)
-        if name not in ('dataclasses', 'hashlib', 'json', 're'):
+        if name not in ('collections', 'dataclasses', 'hashlib', 'json', 're', 'types', 'weakref'):
             raise AssertionError('unexpected codec import: ' + name)
         return original_import(name, *args, **kwargs)
 
@@ -665,12 +665,496 @@ def test_source_import_and_codec_operations_have_no_native_or_owner_io(monkeypat
     module.__dict__['__builtins__'] = module_builtins
     try:
         exec(compile(text, '<pure-artwork-codec>', 'exec'), module.__dict__)
-        assert imports == ['dataclasses', 'hashlib', 'json', 're']
+        assert imports == ['collections', 'dataclasses', 'hashlib', 'json', 're', 'types', 'weakref']
         descriptor = source(bound=True)
         assert module.bind_inventory(descriptor, inventory())
         assert module.validate_pair(descriptor, acquisition(descriptor))
+        assert module.bind_prepared_inventory(descriptor, module.prepare_inventory_binding(inventory()))
     finally:
         # Functions created by exec retain this dictionary. Restore its entries
         # before control returns to pytest, on success and on every failure path.
         module_builtins['__import__'] = original_import
         module_builtins['open'] = original_open
+
+
+# Prepared-inventory additions compose with the published module-local harness.
+# Its allowlist/order includes only the three additional pure standard modules.
+UNICODE_INVENTORY_BYTES = (
+    b'{"inventory_version":1,"library_id":1,"platform":"posix",'
+    b'"resolver_contract":"artwork-posix-bounded-selection-v1","roots":['
+    b'{"browse_eligible":true,"root_id":3,"root_path":"/music"},'
+    br'{"browse_eligible":false,"root_id":4,"root_path":"/\u00e9/\ud83c\udfb5/\"\\\b\f\n\r\t\u0001\u007f"}]}'
+)
+# Independently hashed from literal shell input with the published domain + NUL.
+UNICODE_INVENTORY_DIGEST = 'b842686fb2b473bcab0e78df9ca1dc0dd79cd8cb7ba92e53981d9cebcd0d6b10'
+
+
+def _published_inventory_binding(descriptor, current):
+    """Test-only copy of the pre-change binding predicates, for differential cases."""
+    descriptor = codec.source_object(descriptor)
+    current = codec.inventory_object(current)
+    if 'descriptor_version' not in descriptor:
+        raise codec.InvalidArtworkProof()
+    context = descriptor['selection_context']
+    if (descriptor['library_id'] != current['library_id']
+            or descriptor['platform'] != current['platform']
+            or context['resolver_contract'] != current['resolver_contract']
+            or context['inventory_digest'] != codec.inventory_digest(current)):
+        raise codec.InvalidArtworkProof()
+    selected = next((root for root in current['roots']
+                     if root['root_id'] == descriptor['artwork_root_id']), None)
+    if (selected is None or not selected['browse_eligible']
+            or selected['root_path'] != descriptor['artwork_root_path']):
+        raise codec.InvalidArtworkProof()
+    return descriptor, current
+
+
+def _binding_outcome(function, descriptor, current):
+    try:
+        return ('accepted', function(descriptor, current))
+    except codec.InvalidArtworkProof as error:
+        return ('rejected', str(error))
+
+
+def _existing_api_objects(descriptor, current):
+    parsed_source, parsed_inventory = codec.bind_inventory(descriptor, current)
+    assert type(parsed_source) is codec.SourceProof
+    assert type(parsed_inventory) is codec.InventoryProof
+    return codec.source_object(parsed_source), codec.inventory_object(parsed_inventory)
+
+
+def _prepared_api_objects(descriptor, current):
+    prepared = codec.prepare_inventory_binding(current)
+    bound = codec.bind_prepared_inventory(descriptor, prepared)
+    assert type(bound) is codec.SourceProof
+    return codec.source_object(bound), codec.inventory_object(current)
+
+
+def _codec_input(value, kind, form):
+    if form == 'object':
+        return deepcopy(value)
+    if form == 'text':
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    if form == 'bytes':
+        return json.dumps(value, ensure_ascii=False, indent=2).encode('utf-8')
+    return getattr(codec, 'parse_' + kind)(value)
+
+
+@pytest.mark.parametrize('platform', ['posix', 'win32'])
+@pytest.mark.parametrize('source_form', ['object', 'text', 'bytes', 'wrapper'])
+@pytest.mark.parametrize('inventory_form', ['object', 'text', 'bytes', 'wrapper'])
+def test_prepared_binding_preserves_all_published_input_forms(platform, source_form, inventory_form):
+    descriptor = _codec_input(source(platform, bound=True), 'source', source_form)
+    current = _codec_input(inventory(platform), 'inventory', inventory_form)
+    expected = _binding_outcome(_published_inventory_binding, descriptor, current)
+    assert expected[0] == 'accepted'
+    assert _binding_outcome(_existing_api_objects, descriptor, current) == expected
+    assert _binding_outcome(_prepared_api_objects, descriptor, current) == expected
+
+
+@pytest.mark.parametrize('case', [
+    'source_library', 'source_local', 'source_root_id', 'source_root_path',
+    'source_platform', 'source_resolver', 'source_context_version', 'source_digest',
+    'source_version', 'source_legacy', 'source_boolean_id', 'source_extra_key',
+    'inventory_library', 'inventory_platform', 'inventory_resolver', 'inventory_version',
+    'inventory_extra_key', 'inventory_boolean_id', 'inventory_root_boolean',
+    'inventory_root_missing', 'inventory_root_denied', 'inventory_root_path',
+    'inventory_root_duplicate', 'inventory_root_order', 'inventory_root_overflow',
+    'inventory_root_bad_text', 'inventory_unselected_spelling',
+    'inventory_new_root_stale_digest', 'inventory_new_root_fresh_digest',
+])
+def test_prepared_and_existing_binding_match_published_predicates(case):
+    descriptor = source(bound=True)
+    current = inventory()
+    fresh_digest = False
+    if case == 'source_library':
+        descriptor['library_id'] = 2
+    elif case == 'source_local':
+        descriptor['local_album_id'] = 99  # The inventory never binds local_album_id.
+    elif case == 'source_root_id':
+        descriptor['artwork_root_id'] = 4
+    elif case == 'source_root_path':
+        descriptor.update(artwork_root_path='/other', resolved_cover_path='/other/album/cover.jpg')
+    elif case == 'source_platform':
+        descriptor = source('win32', bound=True)
+    elif case == 'source_resolver':
+        descriptor['selection_context']['resolver_contract'] = WINDOWS
+    elif case == 'source_context_version':
+        descriptor['selection_context']['version'] = 2
+    elif case == 'source_digest':
+        descriptor['selection_context']['inventory_digest'] = 'f' * 64
+    elif case == 'source_version':
+        descriptor['descriptor_version'] = 1
+    elif case == 'source_legacy':
+        descriptor = deepcopy(LEGACY_SOURCE)
+    elif case == 'source_boolean_id':
+        descriptor['library_id'] = True
+    elif case == 'source_extra_key':
+        descriptor['extra'] = 1
+    elif case == 'inventory_library':
+        current['library_id'] = 2
+        fresh_digest = True
+    elif case == 'inventory_platform':
+        current = inventory('win32')
+        fresh_digest = True
+    elif case == 'inventory_resolver':
+        current['resolver_contract'] = WINDOWS
+    elif case == 'inventory_version':
+        current['inventory_version'] = 2
+    elif case == 'inventory_extra_key':
+        current['extra'] = 1
+    elif case == 'inventory_boolean_id':
+        current['library_id'] = True
+    elif case == 'inventory_root_boolean':
+        current['roots'][0]['browse_eligible'] = 1
+    elif case == 'inventory_root_missing':
+        current['roots'] = []
+        fresh_digest = True
+    elif case == 'inventory_root_denied':
+        current['roots'][0]['browse_eligible'] = False
+        fresh_digest = True
+    elif case == 'inventory_root_path':
+        current['roots'][0]['root_path'] = '/other'
+        fresh_digest = True
+    elif case == 'inventory_root_duplicate':
+        current['roots'].append(deepcopy(current['roots'][0]))
+    elif case == 'inventory_root_order':
+        current['roots'].append({'root_id': 2, 'root_path': '/other', 'browse_eligible': True})
+    elif case == 'inventory_root_overflow':
+        current['roots'] = [{'root_id': number, 'root_path': '/music', 'browse_eligible': True}
+                            for number in range(1, 1026)]
+    elif case == 'inventory_root_bad_text':
+        current['roots'][0]['root_path'] = '/bad\x00root'
+    else:
+        path = '/a//b/' if case == 'inventory_unselected_spelling' else '/other'
+        current['roots'].append({'root_id': 4, 'root_path': path, 'browse_eligible': False})
+        fresh_digest = case != 'inventory_new_root_stale_digest'
+    if fresh_digest:
+        descriptor['selection_context']['inventory_digest'] = codec.inventory_digest(current)
+    expected = _binding_outcome(_published_inventory_binding, descriptor, current)
+    assert _binding_outcome(_existing_api_objects, descriptor, current) == expected
+    assert _binding_outcome(_prepared_api_objects, descriptor, current) == expected
+    assert expected[0] == ('accepted' if case in (
+        'source_local', 'inventory_unselected_spelling', 'inventory_new_root_fresh_digest')
+        else 'rejected')
+
+
+@pytest.mark.parametrize('current', [
+    None, True, 1, (), [], codec.InventoryProof(None), codec.SourceProof(None),
+    b'\xff', b'\xef\xbb\xbf{}', '{', 'null', '[]',
+    '{"inventory_version":1,"inventory_version":1}',
+])
+def test_prepare_inventory_preserves_untrusted_input_rejections(current):
+    rejected(codec.parse_inventory, current)
+    rejected(codec.prepare_inventory_binding, current)
+
+
+def test_prepare_rejects_prepared_input_and_does_not_change_legacy_pair():
+    prepared = codec.prepare_inventory_binding(inventory())
+    rejected(codec.prepare_inventory_binding, prepared)
+    rejected(codec.parse_inventory, prepared)
+    rejected(lambda value: codec.bind_inventory(source(bound=True), value), prepared)
+    rejected(lambda value: codec.bind_prepared_inventory(value, prepared), LEGACY_SOURCE)
+    left, right = codec.validate_pair(LEGACY_SOURCE, LEGACY_ACQUISITION)
+    assert codec.source_object(left) == LEGACY_SOURCE
+    assert codec.acquisition_object(right) == LEGACY_ACQUISITION
+
+
+def test_prepared_digest_summary_goldens_and_exact_unicode_spelling():
+    prepared = codec.prepare_inventory_binding(INVENTORY_BYTES)
+    assert (prepared.digest, prepared.library_id, prepared.platform,
+            prepared.resolver_contract, prepared.root_count) == (
+                INVENTORY_DIGEST, 1, 'posix', POSIX, 1)
+    unicode_inventory = inventory()
+    unicode_inventory['roots'].append({
+        'root_id': 4, 'root_path': '/é/🎵/"\\\b\f\n\r\t\x01\x7f', 'browse_eligible': False,
+    })
+    assert codec.canonical_inventory_bytes(unicode_inventory) == UNICODE_INVENTORY_BYTES
+    assert codec.inventory_digest(unicode_inventory) == UNICODE_INVENTORY_DIGEST
+    assert codec.prepare_inventory_binding(unicode_inventory).digest == UNICODE_INVENTORY_DIGEST
+    assert hashlib.sha256(b'AlbumHaven/artwork-root-inventory/v1\0'
+                          + UNICODE_INVENTORY_BYTES).hexdigest() == UNICODE_INVENTORY_DIGEST
+    changed = deepcopy(unicode_inventory)
+    changed['roots'][1]['root_path'] = changed['roots'][1]['root_path'].replace('é', 'e\u0301')
+    assert codec.prepare_inventory_binding(changed).digest != UNICODE_INVENTORY_DIGEST
+    assert codec.canonical_source_bytes(source()) == SOURCE_BYTES
+    assert codec.canonical_source_bytes(source('win32')) == WINDOWS_SOURCE_BYTES
+
+
+def test_prepare_enforces_existing_canonical_inventory_cap_once(monkeypatch):
+    monkeypatch.setattr(codec, 'INVENTORY_LIMIT', len(INVENTORY_BYTES))
+    assert codec.prepare_inventory_binding(inventory()).digest == INVENTORY_DIGEST
+    monkeypatch.setattr(codec, 'INVENTORY_LIMIT', len(INVENTORY_BYTES) - 1)
+    rejected(codec.prepare_inventory_binding, inventory())
+    rejected(codec.parse_inventory, inventory())
+
+
+def test_prepared_immutable_copy_and_each_source_is_reparsed():
+    current = inventory()
+    descriptor = source(bound=True)
+    prepared = codec.prepare_inventory_binding(current)
+    old_source, old_inventory = codec.bind_inventory(descriptor, current)
+    current['roots'][0]['root_path'] = '/changed'
+    current['roots'][0]['browse_eligible'] = False
+    current['roots'].clear()
+    current['library_id'] = 99
+    assert prepared.digest == INVENTORY_DIGEST
+    assert prepared.root_count == 1
+    bound = codec.bind_prepared_inventory(descriptor, prepared)
+    descriptor['root']['inode'] = '99'
+    assert codec.source_object(bound)['root']['inode'] == '42'
+    assert codec.source_object(old_source)['root']['inode'] == '42'
+    assert codec.inventory_object(old_inventory) == inventory()
+    assert codec.source_object(codec.bind_prepared_inventory(descriptor, prepared))['root']['inode'] == '99'
+    descriptor['selection_context']['inventory_digest'] = 'f' * 64
+    rejected(lambda value: codec.bind_prepared_inventory(value, prepared), descriptor)
+
+
+def test_prepared_context_has_no_public_constructor_dictionary_or_setter():
+    for args, kwargs in (((), {}), ((inventory(),), {}),
+                         ((), {'digest': INVENTORY_DIGEST}),
+                         ((), {'already_validated': True})):
+        rejected(lambda _ignored: codec.PreparedInventoryBinding(*args, **kwargs), None)
+    prepared = codec.prepare_inventory_binding(inventory())
+    assert not hasattr(prepared, '__dict__')
+    for name in ('digest', 'library_id', 'platform', 'resolver_contract', 'root_count',
+                 '_state', '_state_identity', '_roots_identity', 'extra'):
+        rejected(lambda _ignored, name=name: setattr(prepared, name, None), None)
+        rejected(lambda _ignored, name=name: delattr(prepared, name), None)
+    with pytest.raises(TypeError):
+        prepared._state.roots[3] = None
+    with pytest.raises(AttributeError):
+        prepared._state.digest = 'f' * 64
+    with pytest.raises(AttributeError):
+        prepared._state.roots[3].root_path = '/changed'
+
+
+def test_fabricated_empty_subclass_and_borrowed_state_contexts_reject():
+    class Subclass(codec.PreparedInventoryBinding):
+        pass
+
+    prepared = codec.prepare_inventory_binding(inventory())
+    values = [None, inventory(), INVENTORY_BYTES, INVENTORY_BYTES.decode(),
+              codec.parse_inventory(inventory()), codec.parse_source(source(bound=True)),
+              prepared._state, lambda: prepared,
+              object.__new__(codec.PreparedInventoryBinding), object.__new__(Subclass)]
+    borrowed = object.__new__(codec.PreparedInventoryBinding)
+    for slot in ('_state', '_state_identity', '_roots_identity'):
+        object.__setattr__(borrowed, slot, getattr(prepared, slot))
+    values.append(borrowed)
+    for malformed in values:
+        rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), malformed)
+    rejected(lambda _ignored: Subclass(), None)
+    for slot in ('_state', '_state_identity', '_roots_identity'):
+        malformed = codec.prepare_inventory_binding(inventory())
+        object.__delattr__(malformed, slot)
+        rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), malformed)
+        rejected(lambda value: value.digest, malformed)
+
+
+def test_prepared_raw_state_replacement_and_exact_state_shape_reject():
+    prepared = codec.prepare_inventory_binding(inventory())
+    replacement = prepared._state._replace(digest='f' * 64)
+    object.__setattr__(prepared, '_state', replacement)
+    rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), prepared)
+    for malformed in (None, {}, (), lambda: None,
+                      tuple.__new__(codec._PreparedInventoryState, ()),
+                      tuple.__new__(codec._PreparedInventoryState, (None,) * 9)):
+        prepared = codec.prepare_inventory_binding(inventory())
+        object.__setattr__(prepared, '_state', malformed)
+        object.__setattr__(prepared, '_state_identity', malformed)
+        rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), prepared)
+
+
+@pytest.mark.parametrize('field,bad', [
+    ('marker', None), ('owner', None), ('owner', lambda: None),
+    ('library_id', True), ('library_id', 0), ('library_id', 1 << 63),
+    ('platform', 'POSIX'), ('platform', None), ('resolver_contract', WINDOWS),
+    ('digest', 'A' * 64), ('digest', ''), ('digest', None),
+    ('root_count', True), ('root_count', -1), ('root_count', 1025), ('root_count', 0),
+    ('roots', {}), ('roots', None), ('roots', lambda: None),
+])
+def test_prepared_defensive_scalar_checks_reject_whitebox_corruption(field, bad):
+    # Deliberately rewrite private state to exercise defensive checks. This is not
+    # a claim of security against a caller that rewrites valid private codec state.
+    prepared = codec.prepare_inventory_binding(inventory())
+    state = prepared._state._replace(**{field: bad})
+    object.__setattr__(prepared, '_state', state)
+    object.__setattr__(prepared, '_state_identity', state)
+    rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), prepared)
+
+
+def test_prepared_misuse_never_invokes_arbitrary_mapping_or_callback():
+    class Tripwire:
+        def __getitem__(self, key):
+            raise AssertionError('untrusted index access')
+
+        def __iter__(self):
+            raise AssertionError('untrusted index iteration')
+
+        def __len__(self):
+            raise AssertionError('untrusted index length')
+
+        def __getattr__(self, name):
+            raise AssertionError('untrusted attribute access')
+
+        def __call__(self):
+            raise AssertionError('untrusted callback')
+
+    attack = Tripwire()
+    for bad_state in (attack, {'digest': INVENTORY_DIGEST}, lambda: None):
+        prepared = codec.prepare_inventory_binding(inventory())
+        object.__setattr__(prepared, '_state', bad_state)
+        object.__setattr__(prepared, '_state_identity', bad_state)
+        rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), prepared)
+    for bad_index in (attack, {}, codec.MappingProxyType(attack)):
+        prepared = codec.prepare_inventory_binding(inventory())
+        state = prepared._state._replace(roots=bad_index)
+        object.__setattr__(prepared, '_state', state)
+        object.__setattr__(prepared, '_state_identity', state)
+        rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), prepared)
+    prepared = codec.prepare_inventory_binding(inventory())
+    state = prepared._state._replace(owner=codec.ref(prepared, lambda _value: None))
+    object.__setattr__(prepared, '_state', state)
+    object.__setattr__(prepared, '_state_identity', state)
+    rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), prepared)
+
+
+@pytest.mark.parametrize('entry', [
+    None, {}, (3, '/music', True),
+    codec._PreparedRoot(True, '/music', True), codec._PreparedRoot(4, '/music', True),
+    codec._PreparedRoot(0, '/music', True), codec._PreparedRoot(1 << 63, '/music', True),
+    codec._PreparedRoot(3, None, True), codec._PreparedRoot(3, '/bad\x00root', True),
+    codec._PreparedRoot(3, '/bad\ud800root', True), codec._PreparedRoot(3, '/' + 'x' * 8192, True),
+    codec._PreparedRoot(3, '/music', 1), codec._PreparedRoot(3, '/music', False),
+    codec._PreparedRoot(3, '/other', True),
+    tuple.__new__(codec._PreparedRoot, (3, '/music', True, 'extra')),
+])
+def test_prepared_binding_defensively_checks_exact_selected_immutable_entry(entry, monkeypatch):
+    # Defect injection inside the factory verifies the selected-entry check itself.
+    # A caller has no public index setter or mutable backing dictionary.
+    monkeypatch.setattr(codec, '_prepared_root_index', lambda roots: codec.MappingProxyType({3: entry}))
+    prepared = codec.prepare_inventory_binding(inventory())
+    rejected(lambda value: codec.bind_prepared_inventory(source(bound=True), value), prepared)
+
+
+def test_prepared_contexts_are_distinct_and_drop_without_a_reference_cycle():
+    first = codec.prepare_inventory_binding(inventory())
+    second = codec.prepare_inventory_binding(inventory())
+    assert first is not second
+    assert first._state is not second._state
+    assert first._state.roots is not second._state.roots
+    assert first.digest == second.digest
+    first_reference = codec.ref(first)
+    second_reference = codec.ref(second)
+    del first
+    assert first_reference() is None
+    assert codec.bind_prepared_inventory(source(bound=True), second)
+    del second
+    assert second_reference() is None
+
+
+def test_5000_prepared_bindings_1024_roots_have_constant_complete_inventory_work(monkeypatch, record_property):
+    import time
+    import tracemalloc
+
+    current = inventory()
+    current['roots'] = [{'root_id': number, 'root_path': '/music', 'browse_eligible': True}
+                        for number in range(1, 1025)]
+    counts = dict(validation=0, encoding=0, hashing=0, copying=0, indexing=0,
+                  indexed_roots=0, source_parse=0, lookup=0,
+                  root_id_access=0, root_path_access=0, browse_eligible_access=0)
+    original_inventory = codec._inventory
+    original_canonical = codec._canonical
+    original_hash = codec.hashlib.sha256
+    original_freeze = codec._freeze
+    original_index = codec._prepared_root_index
+    original_source = codec.parse_source
+    original_lookup = codec._selected_prepared_root
+
+    def checked_inventory(value):
+        counts['validation'] += 1
+        return original_inventory(value)
+
+    def checked_canonical(value, limit):
+        if type(value) is dict and 'inventory_version' in value:
+            counts['encoding'] += 1
+        return original_canonical(value, limit)
+
+    def checked_hash(value=b'', *args, **kwargs):
+        if type(value) is bytes and value.startswith(codec._INVENTORY_DOMAIN):
+            counts['hashing'] += 1
+        return original_hash(value, *args, **kwargs)
+
+    def checked_freeze(value):
+        if type(value) is dict and 'inventory_version' in value:
+            counts['copying'] += 1
+        return original_freeze(value)
+
+    def checked_index(roots):
+        counts['indexing'] += 1
+        counts['indexed_roots'] += len(roots)
+        return original_index(roots)
+
+    def checked_source(value):
+        counts['source_parse'] += 1
+        return original_source(value)
+
+    def checked_lookup(state, root_id):
+        counts['lookup'] += 1
+        return original_lookup(state, root_id)
+
+    def forbidden_whole_inventory_helper(*args, **kwargs):
+        raise AssertionError('public whole-inventory helper used by prepared binding')
+
+    monkeypatch.setattr(codec, '_inventory', checked_inventory)
+    monkeypatch.setattr(codec, '_canonical', checked_canonical)
+    monkeypatch.setattr(codec.hashlib, 'sha256', checked_hash)
+    monkeypatch.setattr(codec, '_freeze', checked_freeze)
+    monkeypatch.setattr(codec, '_prepared_root_index', checked_index)
+    monkeypatch.setattr(codec, 'parse_source', checked_source)
+    monkeypatch.setattr(codec, '_selected_prepared_root', checked_lookup)
+    for name in ('parse_inventory', 'inventory_object', 'inventory_digest', 'canonical_inventory_bytes'):
+        monkeypatch.setattr(codec, name, forbidden_whole_inventory_helper)
+    for name in ('root_id', 'root_path', 'browse_eligible'):
+        getter = getattr(codec._PreparedRoot, name)
+
+        def counted_getter(root, name=name, getter=getter):
+            counts[name + '_access'] += 1
+            return getter.__get__(root, type(root))
+
+        monkeypatch.setattr(codec._PreparedRoot, name, property(counted_getter))
+    tracing_owned = not tracemalloc.is_tracing()
+    if tracing_owned:
+        tracemalloc.start()
+    wall_started = time.perf_counter()
+    cpu_started = time.process_time()
+    try:
+        prepared = codec.prepare_inventory_binding(current)
+        descriptor = source()
+        descriptor['selection_context']['inventory_digest'] = prepared.digest
+        for number in range(5000):
+            descriptor['local_album_id'] = number + 1
+            descriptor['artwork_root_id'] = number % 1024 + 1
+            assert type(codec.bind_prepared_inventory(descriptor, prepared)) is codec.SourceProof
+        python_current, python_peak = tracemalloc.get_traced_memory()
+        record_property('prepared_5000_1024_wall_seconds', time.perf_counter() - wall_started)
+        record_property('prepared_5000_1024_cpu_seconds', time.process_time() - cpu_started)
+        record_property('prepared_5000_1024_python_current_bytes', python_current)
+        record_property('prepared_5000_1024_python_peak_bytes', python_peak)
+    finally:
+        if tracing_owned:
+            tracemalloc.stop()
+    try:
+        import resource
+    except ImportError:
+        record_property('prepared_process_peak_rss_bytes', 'unavailable_on_this_platform')
+    else:
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        record_property('prepared_process_peak_rss_bytes', peak if sys.platform == 'darwin' else peak * 1024)
+    # Codec-only CPU/Python-memory/process-RSS observations do not establish DB-held
+    # time, an isolated RSS delta, or acceptable thresholds; the owner measures those.
+    assert counts == dict(validation=1, encoding=1, hashing=1, copying=1, indexing=1,
+                          indexed_roots=1024, source_parse=5000, lookup=5000,
+                          root_id_access=10000, root_path_access=10000,
+                          browse_eligible_access=10000)

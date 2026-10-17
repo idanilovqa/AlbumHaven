@@ -18,8 +18,13 @@ from psycopg.types.json import Jsonb
 from music_app.services import album_top_publication as publication
 from music_app.services import album_top_publication_evidence as evidence
 from music_app.services import album_top_artwork_draft as artwork_draft
+from music_app.services import _top_artwork_saved as saved_artwork
+from music_app.services import _top_artwork_preparation_phases as preparation_phases
+from music_app.services import _top_artwork_draft_proof as draft_proof
+from music_app.services import artwork_proof_codec as proof_codec
 from music_app.services.album_top_publication_authority import require_source_browse
 from music_app.services.library_roots import resolve_configured_media_path
+from music_app.services.library_roots import resolve_typed_artwork_observations
 from music_app.services.owned_album_tops import (
     AlbumTopError, BROWSE, MANAGE, ITEMS, ACCESS, normalize_top_publication_preview,
     top_uuid, top_revision,
@@ -144,70 +149,6 @@ class TopArtworkPreparationService:
             where library_id=%s and id=any(%s::bigint[]) order by id for share''',
             (live.library_id, sorted(set(album_ids)))).fetchall()
 
-    def _load(self, connection, live, top, ref, context_ref):
-        # The existing parent Top SHARE/UPDATE lock protects this read. Every
-        # admitted SQL mutator takes that same Top UPDATE lock before the prep
-        # row; runtime intentionally has SELECT only on private staging tables.
-        row = connection.execute('''select *,clock_timestamp() as checked_at from app.album_top_artwork_preparations
-            where ref=%s and top_ref=%s and library_id=%s and owner_account_id=%s
-              and original_session_id=%s and context_ref=%s''',
-            (ref, top['ref'], live.library_id, live.actor.account_id, live.actor.session_id, context_ref)).fetchone()
-        if (row is None or row['preparation_kind'] != 'saved'
-                or row['state'] == 'cancelled' or row['expires_at'] <= row['checked_at']
-                or row['top_revision'] != top['revision']):
-            raise AlbumTopError('artwork_preparation_unavailable', 409)
-        # Exact full saved membership, checked without loading image blobs or
-        # unbounded private path stamps. No new/removed/reordered item is hidden.
-        check = connection.execute('''select count(*) as total,
-            count(*) filter(where i.ref is not null and i.catalog_ref=p.catalog_ref
-                and i.curator_position=p.position and i.library_id=p.library_id) as matching
-            from app.album_top_artwork_preparation_items p left join app.album_list_items i
-              on i.ref=p.item_ref and i.top_ref=p.top_ref where p.preparation_ref=%s''', (ref,)).fetchone()
-        current = connection.execute('select count(*) as total from app.album_list_items where top_ref=%s',
-                                     (top['ref'],)).fetchone()
-        if check['total'] != row['item_count'] or check['matching'] != row['item_count'] or current['total'] != row['item_count']:
-            raise AlbumTopError('items_changed', 409)
-        selected = connection.execute('''select selected_local_album_id
-            from app.album_top_artwork_preparation_items where preparation_ref=%s and included''', (ref,)).fetchall()
-        self._lock_covers(connection, live, [item['selected_local_album_id'] for item in selected])
-        return dict(row)
-
-    def _metadata(self, connection, live, item, constraints):
-        source, scope = evidence.selection_source(connection, live, _source_item(item), constraints)
-        if (source['title_origin'] != 'tag_metadata' or source['artist_origin'] != 'tag_metadata'
-                or source['library_root_id'] != item['selected_library_root_id']):
-            raise AlbumTopError('evidence_unavailable', 409)
-        return scope
-
-    def _artwork(self, connection, live, item, constraints):
-        require_private_action(live, _ARTWORK,
-            resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
-        row = connection.execute('''select case when octet_length(cover_path)<=16384 then cover_path end as cover_path
-            from library.local_albums where library_id=%s and id=%s''',
-            (live.library_id, item['selected_local_album_id'])).fetchone()
-        roots = connection.execute('''select id,case when octet_length(root_path)<=8192 then root_path end as root_path
-            from library.library_roots where library_id=%s and is_active is true order by id limit %s''',
-            (live.library_id, _MAX_ROOTS + 1)).fetchall()
-        if row is None or not row['cover_path'] or not roots or len(roots) > _MAX_ROOTS or any(r['root_path'] is None for r in roots):
-            raise ArtworkAcquisitionUnavailable('artwork_unavailable')
-        # Explicit current-library roots avoid the resolver's global settings
-        # loader/nested DB path. The descriptor supplies the open-time guarantee.
-        paths = tuple(Path(root['root_path']) for root in roots)
-        path = self.resolver(self.owner._config, row['cover_path'], configured_root_paths=paths,
-                             require_file=False, require_exists=False)
-        if path is None:
-            raise ArtworkAcquisitionUnavailable('artwork_unavailable')
-        matches = [root for root in roots if path.is_relative_to(Path(root['root_path']))]
-        if not matches:
-            raise ArtworkAcquisitionUnavailable('artwork_unavailable')
-        # The most-specific active root owns an overlap. A deny on that root
-        # cannot be bypassed by selecting a broader permitted ancestor.
-        actual = max(matches, key=lambda root: (len(Path(root['root_path']).parts), -root['id']))
-        require_private_action(live, BROWSE, resource=ResourceScope('library_root', str(actual['id'])), constraints=constraints)
-        return self.describe(library_id=live.library_id, local_album_id=item['selected_local_album_id'],
-            artwork_root_id=actual['id'], artwork_root_path=Path(actual['root_path']),
-            stored_cover_path=row['cover_path'], resolved_cover_path=path)
-
     def _final(self, live, top, scopes, sources, constraints):
         # Mutable resolvers may change during later rows/SQL waits. Recheck all
         # scopes used in this operation, then existing _authorized rechecks the
@@ -247,40 +188,8 @@ class TopArtworkPreparationService:
     def start(self, context, *, top_ref, payload, context_ref, constraints=None):
         ref, context_ref = top_uuid(top_ref), _context(context_ref)
         draft, choices, key, generation = _normalize_start(payload)
-        with self._authorized(context, constraints) as (connection, live, _):
-            top = self._top(connection, live, ref, draft['revision'], constraints, write=True)
-            current = publication.working_items(connection, top)
-            if [(str(row['ref']), str(row['catalog_ref'])) for row in current] != [
-                    (item['item_ref'], item['album_ref']) for item in draft['items']]:
-                raise AlbumTopError('items_changed', 409)
-            self._lock_covers(connection, live, [item['selected_local_album_id']
-                for item, included in zip(draft['items'], choices) if included])
-            evidence.source_barrier(connection, live.library_id)
-            manifest, scopes = [], []
-            for position, (item, included) in enumerate(zip(draft['items'], choices), 1):
-                source, scope = evidence.selection_source(connection, live, item, constraints)
-                if source['title_origin'] != 'tag_metadata' or source['artist_origin'] != 'tag_metadata':
-                    raise AlbumTopError('evidence_unavailable', 409)
-                if included:
-                    require_private_action(live, _ARTWORK,
-                        resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
-                scopes.append(scope)
-                manifest.append({'item_ref': item['item_ref'], 'catalog_ref': item['album_ref'], 'position': position,
-                    **scope, 'included': included})
-            digest = evidence.digest(['private-top-artwork-preparation-v2', ref, live.library_id,
-                live.actor.account_id, live.actor.session_id, context_ref, draft['revision'], generation, manifest])
-            created = connection.execute('''select app.start_top_artwork_preparation
-                (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as ref''',
-                (str(uuid4()), ref, live.library_id, live.actor.account_id, live.actor.session_id, context_ref,
-                 int(draft['revision']), key, digest, Jsonb(manifest), generation)).fetchone()['ref']
-            preparation = self._load(connection, live, top, str(created), context_ref)
-            result = self._checked_status(connection, live, top, preparation, constraints)
-            for item, included in zip(draft['items'], choices):
-                if included:
-                    require_private_action(live, _ARTWORK,
-                        resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
-            self._final(live, top, scopes, [], constraints)
-            return result
+        return saved_artwork.start(self, context, ref, draft, choices, key, generation,
+                                   context_ref, constraints)
 
     def start_draft(self, context, *, top_ref, payload, context_ref, constraints=None):
         """Admit immutable typed local selections, without creating saved items.
@@ -367,88 +276,44 @@ class TopArtworkPreparationService:
         ref, preparation_ref = top_uuid(top_ref), top_uuid(preparation_ref)
         revision, prep_revision = top_revision(top_revision_value), top_revision(preparation_revision)
         key, context_ref = top_uuid(request_key), _context(context_ref)
-        # No queue and no DB claim while busy. The one process gate is shared by
-        # all service instances and retained until commit/drop of temporary bytes.
-        if not _DECODE_REQUESTS.acquire(blocking=False):
-            raise AlbumTopError('artwork_busy', 409)
+        identity = {'context': context, 'top_ref': ref, 'preparation_ref': preparation_ref,
+                    'top_revision': revision, 'context_ref': context_ref}
+        return preparation_phases.advance(self, identity, kind='saved',
+            preparation_revision=prep_revision, request_key=key, constraints=constraints)
+
+    def _capture_rows(self, rows, sources, *, kind):
+        """One synchronous sequential image loop for both fixed row kinds."""
+        if kind not in ('saved', 'draft') or not 1 <= len(rows) <= _BATCH:
+            raise AlbumTopError('artwork_preparation_unavailable', 409)
+        field = 'item_ref' if kind == 'saved' else 'row_ref'
+        captured, total_bytes, total_pixels, result = {}, 0, 0, None
         try:
-            lease, sources, rows = str(uuid4()), {}, []
-            with self._authorized(context, constraints) as (connection, live, _):
-                top = self._top(connection, live, ref, revision, constraints, write=True)
-                preparation = self._load(connection, live, top, preparation_ref, context_ref)
-                evidence.source_barrier(connection, live.library_id)
-                chosen = connection.execute('''select app.claim_top_artwork_batch(%s,%s,%s,%s,%s,%s,%s) as items''',
-                    (preparation_ref, live.actor.account_id, live.actor.session_id, context_ref,
-                     int(prep_revision), key, lease)).fetchone()['items']
-                if not chosen:
-                    return self._checked_status(connection, live, top, preparation, constraints)
-                rows = connection.execute('''select * from app.album_top_artwork_preparation_items
-                    where preparation_ref=%s and item_ref=any(%s::uuid[]) order by position''',
-                    (preparation_ref, chosen)).fetchall()
-                if not 1 <= len(rows) <= _BATCH or len(rows) != len(chosen):
-                    raise AlbumTopError('artwork_preparation_unavailable', 409)
-                scopes = []
-                for item in rows:
-                    scopes.append(self._metadata(connection, live, item, constraints))
-                    try:
-                        sources[str(item['item_ref'])] = self._artwork(connection, live, item, constraints)
-                    except ArtworkAcquisitionUnavailable:
-                        sources[str(item['item_ref'])] = None
-                self._final(live, top, scopes, [value for value in sources.values() if value is not None], constraints)
-            # No connection, account/Top/source lock or provider fetch here.
-            captured, total_bytes, total_pixels = {}, 0, 0
             for item in rows:
-                item_ref = str(item['item_ref'])
-                source = sources[item_ref]
+                row_ref = str(item[field])
+                source = sources[row_ref]
                 if source is None:
-                    captured[item_ref] = None
+                    captured[row_ref] = None
                     continue
                 try:
                     result = self.capture(source)
                 except ArtworkAcquisitionUnavailable:
-                    captured[item_ref] = None
+                    captured[row_ref] = None
+                    result = None
                     continue
                 _capture_valid(result, source)
                 total_bytes += result.input_bytes
                 total_pixels += result.input_pixels
                 if total_bytes > _BATCH * MAX_INPUT_BYTES or total_pixels > _BATCH * MAX_INPUT_PIXELS:
                     raise AlbumTopError('artwork_limit', 409)
-                captured[item_ref] = result
-            with self._authorized(context, constraints) as (connection, live, _):
-                top = self._top(connection, live, ref, revision, constraints, write=True)
-                self._load(connection, live, top, preparation_ref, context_ref)
-                evidence.source_barrier(connection, live.library_id)
-                scopes, current_sources, results, pngs = [], [], [], []
-                for item in rows:
-                    item_ref, result = str(item['item_ref']), captured[str(item['item_ref'])]
-                    scopes.append(self._metadata(connection, live, item, constraints))
-                    try:
-                        current = self._artwork(connection, live, item, constraints)
-                    except ArtworkAcquisitionUnavailable:
-                        current = None
-                    if current is not None:
-                        current_sources.append(current)
-                    if result is None:
-                        results.append({'item_ref': item_ref, 'status': 'failed', 'error_code': 'artwork_unavailable'})
-                        pngs.append(None)
-                    elif current != result.source:
-                        raise AlbumTopError('artwork_source_changed', 409)
-                    else:
-                        results.append({'item_ref': item_ref, 'status': 'ready', 'asset_ref': str(uuid4()),
-                            'content_digest': result.content_digest, 'width': result.width, 'height': result.height,
-                            'source_stamp': _stamp(result.source), 'acquisition_stamp': {
-                                'file': asdict(result.file_observation), 'input_bytes': result.input_bytes,
-                                'input_pixels': result.input_pixels}})
-                        pngs.append(result.png)
-                connection.execute('''select app.complete_top_artwork_batch(%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-                    (preparation_ref, live.actor.account_id, live.actor.session_id, context_ref,
-                     int(prep_revision), key, lease, Jsonb(results), pngs)).fetchone()
-                preparation = self._load(connection, live, top, preparation_ref, context_ref)
-                response = self._checked_status(connection, live, top, preparation, constraints)
-                self._final(live, top, scopes, current_sources, constraints)
-                return response
-        finally:
-            _DECODE_REQUESTS.release()
+                captured[row_ref] = result
+                result = None
+            return captured
+        except BaseException as error:
+            captured.clear()
+            result = None
+            error.__context__ = None
+            error.__cause__ = None
+            raise error.with_traceback(None)
 
     def read(self, context, *, top_ref, preparation_ref, top_revision_value,
              context_ref, after=0, limit=100, constraints=None):
@@ -456,37 +321,109 @@ class TopArtworkPreparationService:
         revision, context_ref = top_revision(top_revision_value), _context(context_ref)
         if type(after) is not int or not 0 <= after <= 5000 or type(limit) is not int or not 1 <= limit <= 100:
             raise AlbumTopError('invalid_query')
-        with self._authorized(context, constraints) as (connection, live, _):
-            top = self._top(connection, live, ref, revision, constraints)
-            preparation = self._load(connection, live, top, prep, context_ref)
-            return self._checked_status(connection, live, top, preparation, constraints, after=after, limit=limit)
+        identity = {'context': context, 'top_ref': ref, 'preparation_ref': prep,
+                    'top_revision': revision, 'context_ref': context_ref}
+        return preparation_phases.read(self, identity, kind='saved', after=after, limit=limit,
+                                       constraints=constraints)
 
-    def _checked_status(self, connection, live, top, preparation, constraints, *, after=0, limit=100):
-        rows = connection.execute('''select * from app.album_top_artwork_preparation_items
-            where preparation_ref=%s and position>%s order by position limit %s''', (preparation['ref'], after, limit)).fetchall()
-        evidence.source_barrier(connection, live.library_id)
-        scopes, sources = [], []
-        for item in rows:
-            scopes.append(self._metadata(connection, live, item, constraints))
-            if item['included']:
+    def _draft_snapshot(self, connection, live, top, ref, context_ref, draft_ref,
+                        draft_revision, constraints):
+        try:
+            return artwork_draft.load_snapshot(self, connection, live, top, ref, context_ref,
+                                                draft_ref, draft_revision, constraints)
+        except proof_codec.InvalidArtworkProof:
+            raise AlbumTopError('artwork_source_changed', 409) from None
+
+    def _draft_finish(self, connection, live, top, snapshot, observations, constraints, *, lease=None):
+        # Response/mutation queries precede policy. The clock follows all policy
+        # callbacks so their cost cannot outlive the original claim deadlines.
+        for scope in snapshot['scopes']:
+            require_source_browse(live, scope, constraints)
+        for row in snapshot['rows']:
+            if row['included']:
                 require_private_action(live, _ARTWORK,
-                    resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
-            if item['status'] == 'ready':
-                try:
-                    source = self._artwork(connection, live, item, constraints)
-                except ArtworkAcquisitionUnavailable:
-                    raise AlbumTopError('artwork_source_changed', 409) from None
-                if _stamp(source) != item['source_stamp']:
-                    raise AlbumTopError('artwork_source_changed', 409)
-                sources.append(source)
-        response = self._status(connection, preparation, after=after, limit=limit)
-        for item in rows:
-            if item['included']:
-                require_private_action(live, _ARTWORK,
-                    resource=ResourceScope('album', str(item['selected_local_album_id'])), constraints=constraints)
-        self._final(live, top, scopes, sources, constraints)
-        # The database owns preparation/lease time. Recheck after source/status
-        # work as well; a slow read must not release an expired private handle.
-        if connection.execute('select clock_timestamp() as now').fetchone()['now'] >= preparation['expires_at']:
+                    resource=ResourceScope('album', str(row['selected_local_album_id'])), constraints=constraints)
+        for observed, _ in observations.values():
+            require_private_action(live, BROWSE,
+                resource=ResourceScope('library_root', str(observed.root_id)), constraints=constraints)
+        self.owner._require(live, _ACTIONS, constraints, top, owner_only=True)
+        now = connection.execute('select clock_timestamp() as now').fetchone()['now']
+        header = snapshot['header']
+        if (now >= header['expires_at'] or lease is not None
+                and (header['lease_expires_at'] is None or now >= header['lease_expires_at'])):
             raise AlbumTopError('artwork_preparation_unavailable', 409)
-        return response
+        # Only the existing authorized owner's held-session exit fence follows.
+
+    @staticmethod
+    def _draft_probe(snapshot):
+        request = artwork_draft.request(snapshot)
+        try:
+            result = resolve_typed_artwork_observations(request)
+        except artwork_draft.resolution.ResolutionInputInvalid:
+            raise AlbumTopError('artwork_source_invalid', 409) from None
+        observations = draft_proof.checked_observations(result, request)
+        try:
+            for observed, root in observations.values():
+                # The resolver's primitive supports a broader descendant bound
+                # than the persisted producer. Check EVERY row outside DB,
+                # discarding each descriptor/proof immediately, before any claim.
+                if snapshot['kind'] == 'saved':
+                    draft_proof.saved_source_base(snapshot['header']['library_id'], observed, root)
+                else:
+                    draft_proof.observation_source(snapshot['header']['library_id'], observed, root,
+                        snapshot['inventory_digest'])
+        except (proof_codec.InvalidArtworkProof, ArtworkAcquisitionUnavailable):
+            raise AlbumTopError('artwork_source_changed', 409) from None
+        return observations
+
+    @staticmethod
+    def _draft_claim(connection, live, preparation_ref, prep_revision, key, lease,
+                     context_ref, draft_ref, draft_revision):
+        return connection.execute('''select app.claim_top_artwork_draft_batch
+            (%s,%s,%s,%s,%s,%s,%s,%s,%s) as items''',
+            (preparation_ref, live.actor.account_id, live.actor.session_id, context_ref,
+             int(prep_revision), key, lease, draft_ref, int(draft_revision))).fetchone()['items']
+
+    @staticmethod
+    def _draft_refresh_header(connection, snapshot):
+        header = connection.execute('''select * from app.album_top_artwork_preparations where ref=%s''',
+            (snapshot['header']['ref'],)).fetchone()
+        if header is None:
+            raise AlbumTopError('artwork_preparation_unavailable', 409)
+        snapshot['header'] = dict(header)
+        snapshot['digest'] = artwork_draft.fingerprint(snapshot['header'], snapshot['source_digest'])
+
+    @staticmethod
+    def _draft_lease(snapshot, prep_revision, key, lease, chosen):
+        header = snapshot['header']
+        if (header['state'] != 'preparing' or header['revision'] != int(prep_revision)
+                or header['batch_from_revision'] != int(prep_revision)
+                or str(header['batch_request_key']) != key or str(header['lease_ref']) != lease
+                or [str(value) for value in (header['batch_items'] or [])] != chosen):
+            raise AlbumTopError('artwork_preparation_unavailable', 409)
+
+    def read_draft(self, context, *, top_ref, preparation_ref, top_revision_value,
+                   draft_ref, draft_revision, context_ref, after=0, limit=100, constraints=None):
+        ref, prep = artwork_draft._identity(top_ref), artwork_draft._identity(preparation_ref)
+        draft_ref, context_ref = artwork_draft._identity(draft_ref), _context(context_ref)
+        revision, draft_revision = top_revision(top_revision_value), top_revision(draft_revision)
+        if type(after) is not int or not 0 <= after <= 5000 or type(limit) is not int or not 1 <= limit <= 100:
+            raise AlbumTopError('invalid_query')
+        identity = {'context': context, 'top_ref': ref, 'preparation_ref': prep,
+                    'top_revision': revision, 'context_ref': context_ref,
+                    'draft_ref': draft_ref, 'draft_revision': draft_revision}
+        return preparation_phases.read(self, identity, kind='draft', after=after, limit=limit,
+                                       constraints=constraints)
+
+    def advance_draft(self, context, *, top_ref, preparation_ref, top_revision_value,
+                      draft_ref, draft_revision, preparation_revision, request_key,
+                      context_ref, constraints=None):
+        ref, prep = artwork_draft._identity(top_ref), artwork_draft._identity(preparation_ref)
+        draft_ref, key = artwork_draft._identity(draft_ref), artwork_draft._identity(request_key)
+        revision, prep_revision = top_revision(top_revision_value), top_revision(preparation_revision)
+        draft_revision, context_ref = top_revision(draft_revision), _context(context_ref)
+        identity = {'context': context, 'top_ref': ref, 'preparation_ref': prep,
+                    'top_revision': revision, 'context_ref': context_ref,
+                    'draft_ref': draft_ref, 'draft_revision': draft_revision}
+        return preparation_phases.advance(self, identity, kind='draft',
+            preparation_revision=prep_revision, request_key=key, constraints=constraints)

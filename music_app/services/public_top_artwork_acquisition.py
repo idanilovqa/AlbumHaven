@@ -180,6 +180,40 @@ def _validate_descriptor(source):
     return root, relative
 
 
+def artwork_source_from_observation(*, library_id, observation, root_observation):
+    """Pure POSIX adapter; no describe/probe/open or authority is performed."""
+    from music_app.services._top_artwork_resolution import RowObservation, RootObservation
+    from music_app.services.rooted_local_file import PosixRootStamp
+    if (type(observation) is not RowObservation or type(root_observation) is not RootObservation
+            or type(root_observation.initial) is not PosixRootStamp
+            or type(root_observation.final) is not PosixRootStamp
+            or root_observation.initial != root_observation.final
+            or type(observation.relative_parts) is not tuple
+            or not 1 <= len(observation.relative_parts) <= 256):
+        raise ArtworkAcquisitionUnavailable('artwork_source_invalid')
+    stamp = root_observation.initial
+    if (type(stamp.platform) is not str or stamp.platform != 'posix'
+            or any(type(value) is not int or not 0 <= value <= (1 << 64) - 1
+                   for value in (stamp.device, stamp.inode))):
+        raise ArtworkAcquisitionUnavailable('artwork_source_invalid')
+    for value, maximum in ((observation.root_path, 8192),
+                           (observation.stored_cover_path, 16384),
+                           (observation.resolved_cover_path, 16384)):
+        if type(value) is not str or not 1 <= len(value) <= maximum:
+            raise ArtworkAcquisitionUnavailable('artwork_source_invalid')
+    if any(type(part) is not str or not 1 <= len(part) <= 16384
+           for part in observation.relative_parts):
+        raise ArtworkAcquisitionUnavailable('artwork_source_invalid')
+    key = ('posix', observation.root_id, observation.root_path)
+    if observation.root_ledger_key != key or root_observation.root_ledger_key != key:
+        raise ArtworkAcquisitionUnavailable('artwork_source_invalid')
+    source = ArtworkSourceDescriptor(library_id, observation.local_album_id, observation.root_id,
+        observation.root_path, observation.stored_cover_path, observation.resolved_cover_path,
+        observation.relative_parts, stamp.device, stamp.inode)
+    _validate_descriptor(source)
+    return source
+
+
 def _read_bounded(fd):
     chunks = []
     count = 0

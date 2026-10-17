@@ -742,3 +742,138 @@ def test_all_selected_rows_lock_in_sorted_hundred_row_pages_before_source_barrie
     assert [row['selected_local_album_id'] for row in rows] == source_reads
     assert [row['included'] for row in rows] == [row['include_artwork'] for row in payload['rows']]
     assert case.publication_state() == public
+
+
+@pytest.mark.parametrize('included', [False, True])
+def test_batched_exact_projection_preserves_actual_null_item_and_cover_choice(draft_case, included):
+    from music_app.services import album_top_publication_evidence as evidence
+    case = draft_case.build(2)
+    selections = [{'row_ref': str(uuid4()), 'item_ref': None, 'album_ref': item['album_ref'],
+        'selected_local_album_id': item['selected_local_album_id'],
+        'selected_source_ref': item['selected_source_ref'],
+        'selected_library_root_id': case.metadata_root, 'include_artwork': included}
+        for item in case.items]
+    with case.service._authorized(case.db.context(), None) as (connection, live, _):
+        # Exact IDs, deterministic locks, then the shared metadata barrier.
+        ids = sorted(row['selected_local_album_id'] for row in selections)
+        connection.execute('select id from library.local_albums where library_id=%s and id=any(%s::bigint[]) order by id for share',
+            (live.library_id, ids)).fetchall()
+        evidence.source_barrier(connection, live.library_id)
+        projected = evidence.artwork_selection_page(connection, live, selections, None)
+        assert len(projected) == 2
+        for selection, (source, scope), cover in zip(selections, projected, case.cover_paths):
+            assert selection['item_ref'] is None
+            assert source['local_album_id'] == selection['selected_local_album_id']
+            assert str(source['ref']) == selection['selected_source_ref']
+            assert scope['selected_library_root_id'] == case.metadata_root
+            assert source['cover_path'] == (str(cover) if included else None)
+
+
+@pytest.mark.parametrize('wrong', ['catalog', 'source', 'local', 'metadata_root'])
+def test_batched_projection_never_substitutes_a_sibling(draft_case, wrong):
+    from music_app.services import album_top_publication_evidence as evidence
+    case = draft_case.build(2)
+    item, sibling = case.items
+    selected = {'row_ref': str(uuid4()), 'item_ref': None, 'album_ref': item['album_ref'],
+        'selected_local_album_id': item['selected_local_album_id'],
+        'selected_source_ref': item['selected_source_ref'],
+        'selected_library_root_id': case.metadata_root, 'include_artwork': False}
+    if wrong == 'catalog': selected['album_ref'] = sibling['album_ref']
+    if wrong == 'source': selected['selected_source_ref'] = sibling['selected_source_ref']
+    if wrong == 'local': selected['selected_local_album_id'] = sibling['selected_local_album_id']
+    if wrong == 'metadata_root': selected['selected_library_root_id'] = case.artwork_root
+    with case.service._authorized(case.db.context(), None) as (connection, live, _):
+        assert_error(lambda: evidence.artwork_selection_page(connection, live, [selected], None),
+            'evidence_unavailable', 409)
+
+
+@pytest.mark.parametrize('included', [False, True])
+def test_saved_admission_projection_discovers_exact_root_without_cover(draft_case, included):
+    from music_app.services import album_top_publication_evidence as evidence
+    case = draft_case.build(2)
+    wanted = [{'row_ref': str(uuid4()), 'item_ref': item['item_ref'],
+        'album_ref': item['album_ref'], 'selected_local_album_id': item['selected_local_album_id'],
+        'selected_source_ref': item['selected_source_ref'], 'include_artwork': included}
+        for item in case.items]
+    with case.db.connect() as connection:
+        connection.execute('update library.local_albums set cover_path=%s where id=any(%s::bigint[])',
+            ('x' * 16385, case.album_ids))
+    with case.service._authorized(case.db.context(), None) as (connection, live, _):
+        ids = sorted(case.album_ids)
+        connection.execute('select id from library.local_albums where library_id=%s and id=any(%s::bigint[]) order by id for share',
+            (live.library_id, ids)).fetchall()
+        evidence.source_barrier(connection, live.library_id)
+        admitted = evidence.artwork_admission_page(connection, live, wanted, None)
+        selected = evidence.artwork_selection_page(connection, live,
+            [{**item, 'selected_library_root_id': case.metadata_root, 'include_artwork': False}
+             for item in wanted], None)
+        assert admitted == selected
+        for source, scope in admitted:
+            assert source['cover_path'] is None
+            assert scope['selected_library_root_id'] == case.metadata_root
+        assert all('selected_library_root_id' not in item for item in wanted)
+        assert all(item['include_artwork'] is included for item in wanted)
+
+
+@pytest.mark.parametrize('wrong', ['catalog', 'source', 'local', 'missing', 'duplicate', 'invented_root'])
+def test_saved_admission_projection_keeps_exact_scope_and_input_shape(draft_case, wrong):
+    from music_app.services import album_top_publication_evidence as evidence
+    case = draft_case.build(2)
+    item, sibling = case.items
+    wanted = {'row_ref': str(uuid4()), 'item_ref': item['item_ref'], 'album_ref': item['album_ref'],
+        'selected_local_album_id': item['selected_local_album_id'],
+        'selected_source_ref': item['selected_source_ref'], 'include_artwork': False}
+    if wrong == 'catalog': wanted['album_ref'] = sibling['album_ref']
+    if wrong == 'source': wanted['selected_source_ref'] = sibling['selected_source_ref']
+    if wrong == 'local': wanted['selected_local_album_id'] = sibling['selected_local_album_id']
+    if wrong == 'missing': wanted['selected_source_ref'] = str(uuid4())
+    if wrong == 'invented_root': wanted['selected_library_root_id'] = case.metadata_root
+    inputs = [wanted, dict(wanted)] if wrong == 'duplicate' else [wanted]
+    with case.service._authorized(case.db.context(), None) as (connection, live, _):
+        error = ('invalid_command', 422) if wrong in ('duplicate', 'invented_root') else ('evidence_unavailable', 409)
+        assert_error(lambda: evidence.artwork_admission_page(connection, live, inputs, None), *error)
+
+
+@pytest.mark.parametrize('resource_kind', ['album', 'album_metadata_source', 'library_root'])
+def test_saved_admission_projection_preserves_selected_current_browse(draft_case, resource_kind):
+    from music_app.services import album_top_publication_evidence as evidence
+    case = draft_case.build(2)
+    item = case.items[0]
+    wanted = {'row_ref': str(uuid4()), 'item_ref': item['item_ref'], 'album_ref': item['album_ref'],
+        'selected_local_album_id': item['selected_local_album_id'],
+        'selected_source_ref': item['selected_source_ref'], 'include_artwork': False}
+    resource = {'album': item['selected_local_album_id'],
+        'album_metadata_source': item['selected_source_ref'], 'library_root': case.metadata_root}[resource_kind]
+    denied = foundation.deny_resource(resource_kind, resource)
+    with case.service._authorized(case.db.context(), None) as (connection, live, _):
+        assert_error(lambda: evidence.artwork_admission_page(connection, live, [wanted], denied), 'forbidden', 403)
+
+
+def test_saved_admission_does_not_enumerate_alternate_local_editions(draft_case, monkeypatch):
+    from music_app.services import album_top_publication_evidence as evidence
+    case = draft_case.build(1)
+    item = case.items[0]
+    with case.db.connect() as connection:
+        artist = connection.execute('select artist_id from library.local_albums where id=%s',
+            (item['selected_local_album_id'],)).fetchone()['artist_id']
+        siblings = connection.execute('''insert into library.local_albums
+            (library_id,artist_id,album_key,title,metadata)
+            select %s,%s,%s||n::text,'Alternate','{}' from generate_series(1,251) n returning id''',
+            (case.db.library, artist, 'saved-admission-sibling:' + case.db.token + ':')).fetchall()
+        ids = [row['id'] for row in siblings]
+        connection.execute('''insert into library.catalog_album_links(library_id,local_album_id,catalog_ref)
+            select %s,unnest(%s::bigint[]),%s''', (case.db.library, ids, item['album_ref']))
+    wanted = {'row_ref': str(uuid4()), 'item_ref': item['item_ref'], 'album_ref': item['album_ref'],
+        'selected_local_album_id': item['selected_local_album_id'],
+        'selected_source_ref': item['selected_source_ref'], 'include_artwork': True}
+    statements = []
+    foundation.observe_owner_connection(case, monkeypatch, lambda statement, params: statements.append(statement))
+    with case.service._authorized(case.db.context(), None) as (connection, live, _):
+        result = evidence.artwork_admission_page(connection, live, [wanted], None)
+        assert len(result) == 1 and result[0][1]['selected_local_album_id'] == case.album_ids[0]
+        with case.db.connect() as concurrent:
+            locked = concurrent.execute('select id from library.local_albums where id=any(%s::bigint[]) for update nowait',
+                (ids,)).fetchall()
+            assert len(locked) == 251
+    queries = [sql for sql in statements if 'library.catalog_album_links' in sql]
+    assert len(queries) == 1 and 'exists(select 1' in queries[0] and 'limit 101' in queries[0]

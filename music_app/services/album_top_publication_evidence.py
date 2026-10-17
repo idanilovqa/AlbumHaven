@@ -90,6 +90,11 @@ def selection_source(connection, context, item, constraints):
         join library.catalog_album_links c on c.local_album_id=s.local_album_id and c.library_id=s.library_id
         where s.ref=%s and s.library_id=%s and s.local_album_id=%s and c.catalog_ref=%s""",
         (item["selected_source_ref"], context.library_id, item["selected_local_album_id"], item["album_ref"])).fetchone()
+    return _validated_selection_source(context, item, source, constraints)
+
+
+def _validated_selection_source(context, item, source, constraints):
+    """Shared lexical/current-policy validation; no SQL or filesystem work."""
     if (source is None or source["state"] != "active" or source["capture_builder_version"] != CAPTURE_VERSION
             or source["is_active"] is not True or source["root_path"] is None):
         raise AlbumTopError("evidence_unavailable", 409)
@@ -103,6 +108,102 @@ def selection_source(connection, context, item, constraints):
              "selected_source_ref": str(source["ref"]), "selected_library_root_id": source["library_root_id"]}
     require_source_browse(context, scope, constraints)
     return source, scope
+
+
+def artwork_selection_page(connection, context, selections, constraints):
+    """Fixed retained-root selection projection, at most 100 rows."""
+    _check_artwork_page(selections, retain_root=True)
+    rows = _artwork_page_rows(connection, context, selections)
+    for item, row in zip(selections, rows):
+        if row['library_root_id'] != item['selected_library_root_id']:
+            raise AlbumTopError('evidence_unavailable', 409)
+    return _artwork_page_facts(context, selections, rows, constraints)
+
+
+def artwork_admission_page(connection, context, selections, constraints):
+    """Fixed initial selected-source admission; no cover text is projected.
+
+    The exact metadata source supplies its actual root. No fabricated retained
+    root, alternate link discovery, or caller-selected projection is accepted.
+    """
+    _check_artwork_page(selections, retain_root=False)
+    # These copies are internal query input. Included artwork authority remains
+    # the preparation owner's job; admission never materializes artwork paths.
+    wanted = [{**item, 'include_artwork': False} for item in selections]
+    rows = _artwork_page_rows(connection, context, wanted)
+    return _artwork_page_facts(context, selections, rows, constraints)
+
+
+def _check_artwork_page(selections, *, retain_root):
+    from music_app.services.owned_album_tops import top_uuid
+    keys = {'row_ref', 'item_ref', 'album_ref', 'selected_local_album_id',
+            'selected_source_ref', 'include_artwork'}
+    if retain_root:
+        keys.add('selected_library_root_id')
+    if type(selections) not in (list, tuple) or not 1 <= len(selections) <= 100:
+        raise AlbumTopError('invalid_command')
+    refs = set()
+    for item in selections:
+        if type(item) is not dict or set(item) != keys or type(item['include_artwork']) is not bool:
+            raise AlbumTopError('invalid_command')
+        for key in ('row_ref', 'album_ref', 'selected_source_ref'):
+            if (type(item[key]) is not str or top_uuid(item[key]) != item[key]
+                    or item[key] == '00000000-0000-0000-0000-000000000000'):
+                raise AlbumTopError('invalid_command')
+        if item['item_ref'] is not None and (type(item['item_ref']) is not str
+                or top_uuid(item['item_ref']) != item['item_ref']
+                or item['item_ref'] == '00000000-0000-0000-0000-000000000000'):
+            raise AlbumTopError('invalid_command')
+        if any(type(item[key]) is not int or not 1 <= item[key] <= 9223372036854775807
+               for key in (('selected_local_album_id', 'selected_library_root_id')
+                           if retain_root else ('selected_local_album_id',))):
+            raise AlbumTopError('invalid_command')
+        if item['row_ref'] in refs:
+            raise AlbumTopError('invalid_command')
+        refs.add(item['row_ref'])
+
+
+def _artwork_page_rows(connection, context, selections):
+    return connection.execute('''with wanted as (
+        select value,ordinality from jsonb_array_elements(%s::jsonb) with ordinality
+        ) select w.value->>'row_ref' as row_ref,s.ref,s.library_id,s.local_album_id,
+          s.library_root_id,s.path_flavor,s.capture_builder_version,s.state,
+          s.title_origin,s.artist_origin,r.is_active,a.id as actual_local_album_id,
+          case when octet_length(s.container_identity)<=16384 then s.container_identity end as container_identity,
+          case when octet_length(r.root_path)<=8192 then r.root_path end as root_path,
+          case when (w.value->>'include_artwork')::boolean and octet_length(a.cover_path)<=16384
+            then a.cover_path end as cover_path,
+          exists(select 1 from library.catalog_album_links c
+            where c.library_id=%s and c.local_album_id=(w.value->>'selected_local_album_id')::bigint
+              and c.catalog_ref=(w.value->>'album_ref')::uuid) as link_exists
+        from wanted w
+        left join library.album_metadata_sources s on s.ref=(w.value->>'selected_source_ref')::uuid
+          and s.library_id=%s and s.local_album_id=(w.value->>'selected_local_album_id')::bigint
+        left join library.local_albums a on a.id=s.local_album_id and a.library_id=s.library_id
+        left join library.library_roots r on r.id=s.library_root_id and r.library_id=s.library_id
+        order by w.ordinality limit 101''', (Jsonb(list(selections)), context.library_id,
+                                           context.library_id)).fetchall()
+
+
+def _artwork_page_facts(context, selections, rows, constraints):
+    if len(rows) != len(selections) or [row['row_ref'] for row in rows] != [i['row_ref'] for i in selections]:
+        raise AlbumTopError('evidence_unavailable', 409)
+    result = []
+    for item, row in zip(selections, rows):
+        if (row['ref'] is None or row['link_exists'] is not True
+                or row['actual_local_album_id'] != item['selected_local_album_id']
+                or str(row['ref']) != item['selected_source_ref']
+                or row['library_id'] != context.library_id
+                or row['local_album_id'] != item['selected_local_album_id']
+                or row['container_identity'] is None):
+            raise AlbumTopError('evidence_unavailable', 409)
+        source, scope = _validated_selection_source(context, item, row, constraints)
+        # Tag-origin policy remains preparation-specific, not a new restriction
+        # on unrelated callers of the legacy selection_source entry.
+        if source['title_origin'] != 'tag_metadata' or source['artist_origin'] != 'tag_metadata':
+            raise AlbumTopError('evidence_unavailable', 409)
+        result.append((dict(source), scope))
+    return tuple(result)
 
 
 def _source_files(connection, source):

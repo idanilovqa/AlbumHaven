@@ -980,3 +980,29 @@ def test_metadata_path_flavor_matches_its_producer_without_acquisition(artwork, 
         assert started["state"] == "ready" and started["included_count"] == started["ready_count"] == 0
         retained = case.snapshot()
         assert case.read(started) == started and case.snapshot() == retained
+
+
+@pytest.mark.parametrize('kind,field', [('saved','item_ref'),('draft','row_ref')])
+def test_shared_sequential_capture_loop_keeps_fixed_identity_and_failure_semantics(kind, field):
+    from music_app.services.public_top_artwork_acquisition import ArtworkAcquisitionUnavailable
+    calls = []
+    sources = {str(uuid4()): object() for _ in range(4)}
+    rows = [{field: ref} for ref in sources]
+    def unavailable(source):
+        calls.append(source)
+        raise ArtworkAcquisitionUnavailable('artwork_unavailable')
+    service = TopArtworkPreparationService(object(), capture=unavailable)
+    result = service._capture_rows(rows, sources, kind=kind)
+    assert calls == list(sources.values())
+    assert result == dict.fromkeys(sources)
+    # This loop is synchronous and never owns a second admission semaphore.
+    assert service.capture is unavailable
+
+
+def test_shared_capture_loop_rejects_unknown_kind_and_oversized_batch_before_io():
+    def forbidden(*args):
+        raise AssertionError('Invalid batch cannot call capture')
+    service = TopArtworkPreparationService(object(), capture=forbidden)
+    for rows, kind in [([], 'saved'), ([{}] * 5, 'draft'), ([{}], 'other')]:
+        assert_error(lambda: service._capture_rows(rows, {}, kind=kind),
+            'artwork_preparation_unavailable', 409)

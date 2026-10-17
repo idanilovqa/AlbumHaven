@@ -5,10 +5,13 @@ only version 2 and inventories have this module's canonical byte representation.
 PostgreSQL jsonb::text size checks remain the future persistence owner's obligation.
 """
 
+from collections import namedtuple
 from dataclasses import dataclass
 import hashlib
 import json
 import re
+from types import MappingProxyType
+from weakref import ref
 
 
 SOURCE_LIMIT = 65536
@@ -73,6 +76,57 @@ class AcquisitionProof:
 @dataclass(frozen=True)
 class InventoryProof:
     _tree: _Object
+
+
+# These immutable implementation records are never accepted as public inputs.
+# The marker/owner/identity checks detect ordinary fabricated or replaced wrappers;
+# they are construction invariants, not credentials against privileged Python code.
+_PREPARED_MARKER = object()
+_PreparedRoot = namedtuple('_PreparedRoot', 'root_id root_path browse_eligible')
+_PreparedInventoryState = namedtuple(
+    '_PreparedInventoryState',
+    'marker owner library_id platform resolver_contract digest root_count roots',
+)
+
+
+class PreparedInventoryBinding:
+    """Phase-local validated inventory facts, never authorization or persisted input.
+
+    Construct only with prepare_inventory_binding. There is no supported raw-state
+    constructor, setter, cache, or cross-request use. Python callers that rewrite
+    private implementation state are outside this object's immutability guarantee.
+    """
+
+    __slots__ = ('_state', '_state_identity', '_roots_identity', '__weakref__')
+
+    def __new__(cls, *args, **kwargs):
+        _fail()
+
+    def __setattr__(self, name, value):
+        _fail()
+
+    def __delattr__(self, name):
+        _fail()
+
+    @property
+    def digest(self):
+        return _prepared_state(self).digest
+
+    @property
+    def library_id(self):
+        return _prepared_state(self).library_id
+
+    @property
+    def platform(self):
+        return _prepared_state(self).platform
+
+    @property
+    def resolver_contract(self):
+        return _prepared_state(self).resolver_contract
+
+    @property
+    def root_count(self):
+        return _prepared_state(self).root_count
 
 
 @dataclass(frozen=True)
@@ -317,7 +371,7 @@ def _inventory(value):
         previous = root['root_id']
         # Hash exact stored spelling, even where selection will reject its syntax.
         _text(root['root_path'], 8192)
-    _canonical(value, INVENTORY_LIMIT)
+    return _canonical(value, INVENTORY_LIMIT)
 
 
 def _canonical(value, limit):
@@ -502,24 +556,108 @@ def inventory_digest(value):
     return hashlib.sha256(_INVENTORY_DOMAIN + canonical_inventory_bytes(value)).hexdigest()
 
 
-def bind_inventory(source, inventory):
-    """Verify claimed context against complete validated inventory, not authority."""
-    source = source_object(source)
-    inventory = inventory_object(inventory)
+def _prepared_root_index(roots):
+    # This dictionary is newly owned here, never supplied by or returned to callers.
+    return MappingProxyType({root['root_id']: _PreparedRoot(
+        root['root_id'], root['root_path'], root['browse_eligible']) for root in roots})
+
+
+def _prepare_inventory_binding(inventory):
+    inventory = _decode(inventory, INVENTORY_LIMIT, InventoryProof)
+    # One complete schema validation and canonical encoding, not a public helper
+    # that reparses/re-encodes the inventory. Retain neither bytes nor raw input.
+    canonical = _inventory(inventory)
+    digest = hashlib.sha256(_INVENTORY_DOMAIN + canonical).hexdigest()
+    del canonical
+    validated = InventoryProof(_freeze(inventory))
+    roots = _prepared_root_index(inventory['roots'])
+    prepared = object.__new__(PreparedInventoryBinding)
+    state = _PreparedInventoryState(
+        _PREPARED_MARKER, ref(prepared), inventory['library_id'], inventory['platform'],
+        inventory['resolver_contract'], digest, len(roots), roots,
+    )
+    object.__setattr__(prepared, '_state', state)
+    object.__setattr__(prepared, '_state_identity', state)
+    object.__setattr__(prepared, '_roots_identity', roots)
+    return prepared, validated
+
+
+def prepare_inventory_binding(inventory):
+    """Validate/copy/index complete untrusted inventory once for this operation.
+
+    Accepts exactly parse_inventory's input forms, never a prepared-context shortcut.
+    The digest uses the unchanged inventory domain and canonical bytes. The private
+    read-only index retains exact stored spelling, including nonselected roots.
+    """
+    return _prepare_inventory_binding(inventory)[0]
+
+
+def _prepared_state(prepared):
+    if type(prepared) is not PreparedInventoryBinding:
+        _fail()
+    try:
+        state = object.__getattribute__(prepared, '_state')
+        identity = object.__getattribute__(prepared, '_state_identity')
+        roots_identity = object.__getattribute__(prepared, '_roots_identity')
+    except AttributeError:
+        raise InvalidArtworkProof() from None
+    if (type(state) is not _PreparedInventoryState or len(state) != 8
+            or state is not identity or state.marker is not _PREPARED_MARKER
+            or type(state.owner) is not ref or state.owner.__callback__ is not None
+            or state.owner() is not prepared):
+        _fail()
+    # Fixed scalar checks and O(1) index metadata, never an inventory traversal.
+    _integer(state.library_id, 1, _MAX_ID)
+    _platform(state.platform)
+    _resolver(state.platform, state.resolver_contract)
+    _hex(state.digest, 256)
+    _integer(state.root_count, 0, 1024)
+    if (state.roots is not roots_identity or type(state.roots) is not MappingProxyType
+            or len(state.roots) != state.root_count):
+        _fail()
+    return state
+
+
+def _selected_prepared_root(state, root_id):
+    selected = state.roots.get(root_id)
+    if type(selected) is not _PreparedRoot or len(selected) != 3:
+        _fail()
+    _integer(selected.root_id, 1, _MAX_ID)
+    _text(selected.root_path, 8192)
+    if selected.root_id != root_id or type(selected.browse_eligible) is not bool:
+        _fail()
+    return selected
+
+
+def _bind_prepared_source(source, state):
+    # The sole inventory-binding predicate owner for both public APIs. Its source
+    # has just passed the existing strict source parser independently on each call.
     if 'descriptor_version' not in source:
         _fail()
     context = source['selection_context']
-    if (source['library_id'] != inventory['library_id']
-            or source['platform'] != inventory['platform']
-            or context['resolver_contract'] != inventory['resolver_contract']
-            or context['inventory_digest'] != inventory_digest(inventory)):
+    if (source['library_id'] != state.library_id
+            or source['platform'] != state.platform
+            or context['resolver_contract'] != state.resolver_contract
+            or context['inventory_digest'] != state.digest):
         _fail()
-    selected = next((root for root in inventory['roots']
-                     if root['root_id'] == source['artwork_root_id']), None)
-    if (selected is None or not selected['browse_eligible']
-            or selected['root_path'] != source['artwork_root_path']):
+    selected = _selected_prepared_root(state, source['artwork_root_id'])
+    if (not selected.browse_eligible
+            or selected.root_path != source['artwork_root_path']):
         _fail()
-    return SourceProof(_freeze(source)), InventoryProof(_freeze(inventory))
+    return SourceProof(_freeze(source))
+
+
+def bind_prepared_inventory(source, prepared):
+    """Strictly bind one source using this phase's codec-created inventory index."""
+    source = source_object(source)
+    return _bind_prepared_source(source, _prepared_state(prepared))
+
+
+def bind_inventory(source, inventory):
+    """Verify claimed context against complete validated inventory, not authority."""
+    source = source_object(source)
+    prepared, inventory = _prepare_inventory_binding(inventory)
+    return _bind_prepared_source(source, _prepared_state(prepared)), inventory
 
 
 def validate_pair(source, acquisition):

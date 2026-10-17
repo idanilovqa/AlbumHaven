@@ -473,8 +473,8 @@ def test_provider_storage_policy_seed_gates_the_owned_performance_album(
             recorded["params"] = params
             return SimpleNamespace(rowcount=rowcount)
 
-    monkeypatch.setattr(
-        isolatedLibraryApp,
+    monkeypatch.setitem(
+        sys.modules,
         "psycopg",
         SimpleNamespace(connect=lambda _database_url: FakeConnection()),
     )

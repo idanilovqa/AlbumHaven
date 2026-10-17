@@ -1172,6 +1172,10 @@ test('Cover Lookup performance setup enters the target artist before album selec
     source,
     /galleryActions\.goto\(`\/\?surface=albums&artist=\$\{encodeURIComponent\(TARGET\.artist\)\}`\)/u,
   );
+  const galleryReadyIndex = source.indexOf('galleryActions.waitForGalleryReady(');
+  const selectedArtistIndex = source.indexOf('galleryActions.waitForSelectedArtistGallery(TARGET.artist');
+  assert.ok(galleryReadyIndex >= 0, 'cold setup must wait for the startup overlay to clear');
+  assert.ok(galleryReadyIndex < selectedArtistIndex, 'startup readiness must precede artist selection');
   assert.match(source, /waitForSelectedArtistGallery\(TARGET\.artist/u);
 });
 

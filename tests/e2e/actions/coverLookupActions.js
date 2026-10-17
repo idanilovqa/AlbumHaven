@@ -508,6 +508,11 @@ export class CoverLookupActions {
   async selectRemoteCandidateByIdAndSave(candidateId, options = {}) {
     const timeout = options.timeout || 30000;
     await this.selectRemoteCandidateById(candidateId, { timeout });
+    return this.saveSelectedRemoteCandidate({ timeout });
+  }
+
+  async saveSelectedRemoteCandidate(options = {}) {
+    const timeout = options.timeout || 30000;
     const responsePromise = this.coverLookup.page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/utilities/cover-lookup/save-remote'

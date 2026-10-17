@@ -317,6 +317,22 @@ const PERFORMANCE_TARGETS = {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
   },
+  'cover-lookup': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local app Cover Lookup open, candidate rendering, selection, and Save acceptance through Postgres-backed production routes.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js',
+    grep: 'FTC-COVERS-019P',
+    aliasNames: ['cover-lookup', 'covers', 'cover-lookup-interactions'],
+    reportId: 'coverLookupLocal',
+    casePattern: 'FTC-COVERS-019P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
   'search-browse': {
     kind: 'synthetic',
     fixtureProfile: 'synthetic-large-library',
@@ -1383,6 +1399,9 @@ function resolveDisplaySuiteName(target) {
   }
   if (targetName === 'selected-artist') {
     return 'Selected Artist Browse';
+  }
+  if (targetName === 'cover-lookup') {
+    return 'Cover Lookup';
   }
   if (targetName === 'search-browse') {
     return 'Search Browse';
@@ -2572,7 +2591,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group library-browse|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, cover-lookup, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
   console.log('Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

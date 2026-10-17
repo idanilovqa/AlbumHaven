@@ -349,6 +349,31 @@ function buildSelectedArtistFocusedLocalSummaryCards(_checkpoints, metricsPayloa
   ];
 }
 
+function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    {
+      label: 'Modal Visible',
+      value: `${Math.round(Number(metricsPayload?.modalVisibleMs || 0))} ms`,
+      note: 'Album Details action to interactive Cover Lookup modal',
+    },
+    {
+      label: 'Candidate Ready',
+      value: `${Math.round(Number(metricsPayload?.candidateReadyMs || 0))} ms`,
+      note: 'Cover Lookup action to decoded provider candidate',
+    },
+    {
+      label: 'Selection Feedback',
+      value: `${Math.round(Number(metricsPayload?.candidateSelectionMs || 0))} ms`,
+      note: String(metricsPayload?.selectedCandidateSource || 'unknown source'),
+    },
+    {
+      label: 'Save Accepted',
+      value: `${Math.round(Number(metricsPayload?.saveAcceptedMs || 0))} ms`,
+      note: 'Save action to accepted response and closed modal',
+    },
+  ];
+}
+
 function buildSearchBrowseFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
   return [
     {
@@ -1050,6 +1075,23 @@ export const test = base.extend({
         'selected-artist.notificationDrawerOpenMs',
         'selected-artist.notificationDrawerCloseMs',
         'selected-artist.galleryReturnMs',
+      ],
+    });
+  },
+
+  coverLookupLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'cover-lookup-local',
+      reportId: 'coverLookupLocal',
+      caseId: 'FTC-COVERS-019P',
+      title: 'Cover Lookup Interaction Benchmark',
+      intro: 'This synthetic performance report measures modal visibility, decoded candidate readiness, selection feedback, and Save acceptance through the production Cover Lookup path.',
+      buildSummaryCards: buildCoverLookupLocalSummaryCards,
+      expectedTimingMetricIds: [
+        'cover-lookup.modalVisibleMs',
+        'cover-lookup.candidateReadyMs',
+        'cover-lookup.candidateSelectionMs',
+        'cover-lookup.saveAcceptedMs',
       ],
     });
   },

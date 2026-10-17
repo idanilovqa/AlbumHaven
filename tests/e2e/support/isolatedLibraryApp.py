@@ -2955,6 +2955,8 @@ def persist_provider_storage_policy_candidates(
     setup_database_url: str,
     provider_port: int,
     provider_spec: dict[str, object] | None,
+    *,
+    include_performance_target: bool = False,
 ) -> None:
     if provider_spec is None:
         raise RuntimeError("The provider storage-policy fixture requires a cover spec.")
@@ -2981,28 +2983,6 @@ def persist_provider_storage_policy_candidates(
         ("youtube_music", "YouTube Music", "https://music.youtube.com/browse/fixture-10"),
         ("spotify", "Spotify", "https://open.spotify.com/album/fixture10"),
     )
-    live_candidates = [
-        cover_candidate_to_lookup_match(
-            CoverCandidate(
-                source=source,
-                url=f"{image_url}?provider={source}",
-                width=900,
-                height=900,
-                score=0.99 - (index * 0.01),
-                matched_artist="Mastodon",
-                matched_album="Crack The Skye",
-                matched_year=2009,
-                debug_payload={
-                    "source_label": source_label,
-                    "thumbnail_url": f"{image_url}?provider={source}",
-                    "album_url": album_url,
-                    "variant": "isolated-provider-storage-policy",
-                },
-            ),
-            lookup_group="services",
-        )
-        for index, (source, source_label, album_url) in enumerate(provider_contracts)
-    ]
     persisted_candidate_fields = {
         "id",
         "source",
@@ -3021,10 +3001,45 @@ def persist_provider_storage_policy_candidates(
         "art_label",
         "display_only",
     }
-    candidates = [
-        {key: value for key, value in candidate.items() if key in persisted_candidate_fields}
-        for candidate in live_candidates
-    ]
+
+    def build_candidates(
+        matched_artist: str,
+        matched_album: str,
+        matched_year: int,
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                key: value
+                for key, value in cover_candidate_to_lookup_match(
+                    CoverCandidate(
+                        source=source,
+                        url=f"{image_url}?provider={source}",
+                        width=900,
+                        height=900,
+                        score=0.99 - (index * 0.01),
+                        matched_artist=matched_artist,
+                        matched_album=matched_album,
+                        matched_year=matched_year,
+                        debug_payload={
+                            "source_label": source_label,
+                            "thumbnail_url": f"{image_url}?provider={source}",
+                            "album_url": album_url,
+                            "variant": "isolated-provider-storage-policy",
+                        },
+                    ),
+                    lookup_group="services",
+                ).items()
+                if key in persisted_candidate_fields
+            }
+            for index, (source, source_label, album_url) in enumerate(provider_contracts)
+        ]
+
+    storage_policy_candidates = build_candidates("Mastodon", "Crack The Skye", 2009)
+    performance_candidates = build_candidates(
+        "Synthetic Scale Artist 0464",
+        "Synthetic Scale Album 00444",
+        2001,
+    )
 
     with psycopg.connect(setup_database_url) as connection:
         result = connection.execute(
@@ -3047,17 +3062,30 @@ def persist_provider_storage_policy_candidates(
               'manual',
               'completed',
               1,
-              %s::jsonb,
-              %s,
+                case
+                    when library.local_artists.name = 'Mastodon' then %s::jsonb
+                    else %s::jsonb
+                end,
+                case
+                    when library.local_artists.name = 'Mastodon' then %s
+                    else %s
+                end,
               now(),
               now(),
               now()
             from library.local_albums
             join library.local_artists
               on library.local_artists.id = library.local_albums.artist_id
-            where library.local_artists.name = 'Mastodon'
+            where (
+              library.local_artists.name = 'Mastodon'
               and library.local_albums.title = 'Crack The Skye'
               and library.local_albums.release_year = 2009
+            ) or (
+              %s
+              and library.local_artists.name = 'Synthetic Scale Artist 0464'
+              and library.local_albums.title = 'Synthetic Scale Album 00444'
+              and library.local_albums.release_year = 2001
+            )
             on conflict (album_id) do update
             set candidates = excluded.candidates,
                 best_candidate_id = excluded.best_candidate_id,
@@ -3066,11 +3094,19 @@ def persist_provider_storage_policy_candidates(
                 updated_at = excluded.updated_at,
                 finished_at = excluded.finished_at;
             """,
-            (json.dumps(candidates), candidates[0]["id"]),
+            (
+                json.dumps(storage_policy_candidates),
+                json.dumps(performance_candidates),
+                storage_policy_candidates[0]["id"],
+                performance_candidates[0]["id"],
+                include_performance_target,
+            ),
         )
-        if result.rowcount != 1:
+        expected_row_count = 2 if include_performance_target else 1
+        if result.rowcount != expected_row_count:
             raise RuntimeError(
-                "The provider storage-policy fixture must resolve exactly one local album."
+                "The provider storage-policy fixture must resolve "
+                f"{expected_row_count} owned local album(s); resolved {result.rowcount}."
             )
 
 
@@ -5218,20 +5254,21 @@ def main() -> None:
             database_preparation_started = True
             prepare_isolated_database(setup_database_url, runtime_database_url)
             persist_fixture_inventory(setup_database_url, library_root, file_cache)
-            if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
-                provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
-                persist_provider_storage_policy_candidates(
-                    setup_database_url,
-                    provider_port,
-                    provider_storage_policy_spec,
-                )
             materialize_rating_scan_discovery_track(library_root, loop_source)
             seed_fixture_lastfm_timezone()
-        elif (
-            not is_preloaded_fixture
-            and fixture_profile_requires_provider_storage_policy_fixture(fixture_profile)
-        ):
-            ensure_provider_storage_policy_cover_spec(cover_specs)
+
+        if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
+            provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
+            persist_provider_storage_policy_candidates(
+                setup_database_url,
+                provider_port,
+                provider_storage_policy_spec,
+                include_performance_target=(
+                    fixture_profile == "synthetic-large-library"
+                    and os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET")
+                    == "production-calibration"
+                ),
+            )
 
         configure_performance_auth_environment(args.port)
         provision_performance_auth_owner(runtime_database_url, seed_expanded_artist_tree=True)

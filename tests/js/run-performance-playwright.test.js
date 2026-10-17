@@ -9,6 +9,10 @@ const { _private } = performanceRunner;
 const REAL_APP_ENV = {
   ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
 };
+const CALIBRATED_REAL_APP_ENV = {
+  ...REAL_APP_ENV,
+  ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+};
 const BROAD_UTILITY_PROBLEMATIC_FILES_REAL_APP_ENV = {
   ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
   ALBUM_HAVEN_E2E_FIXTURE_PROFILE: 'utility-problematic-files',
@@ -315,6 +319,11 @@ test('configured suite default entry selects a fixture-compatible released libra
     targets.some((target) => target.aliasNames[0] === 'gallery-artwork-diversity'),
     false,
     'the separately provisioned derived target must not inherit the released fixture',
+  );
+  assert.equal(
+    targets.some((target) => target.aliasNames[0] === 'cover-lookup'),
+    false,
+    'the production-calibration target must not join the smaller released fixture group',
   );
 });
 
@@ -661,6 +670,7 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['utility-problematic-files'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['utility-rules'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['selected-artist'], 'real-app-library-browse-load');
+  assert.equal(classesByTarget['cover-lookup'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['search-browse'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['root-album-browse'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['artist-tree-scroll-navigation'], 'real-app-library-browse-load');
@@ -672,7 +682,7 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['scan-add-album'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-metadata'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-page'], 'scanner-index-cache');
-  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 13);
+  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 14);
   assert.equal(classesByTarget['paired-search-calibration'], 'real-app-library-browse-load');
 });
 
@@ -1126,6 +1136,16 @@ test('buildRunnerArgs preserves app-open All Artists target metadata when select
 
   assert.equal(target.aliasNames[0], 'app-open-all-artists');
   assert.deepEqual(target.env, REAL_APP_ENV);
+});
+
+test('Cover Lookup target requires the production-calibration fixture', () => {
+  const target = _private.resolvePerformanceTarget(
+    'tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js',
+  );
+
+  assert.equal(target.aliasNames[0], 'cover-lookup');
+  assert.equal(target.casePattern, 'FTC-COVERS-019P');
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
 test('buildRunnerArgs preserves focused utility problematic-files target metadata when selected by spec path', () => {

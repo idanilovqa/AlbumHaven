@@ -15066,24 +15066,25 @@ def test_problematic_singleflight_exception_releases_waiter(monkeypatch):
         assert cache_key not in module._UTILITY_PROJECTION_SINGLEFLIGHT
 
 
-def test_invalidated_problematic_prewarm_cannot_repopulate_stale_payload(monkeypatch):
+@pytest.mark.parametrize("old_build_fails", [False, True])
+def test_invalidated_problematic_prewarm_replays_latest_generation(monkeypatch, old_build_fails):
     from music_app.services import library_browse_postgres as module
 
     database_url = "postgresql://album_haven_app@localhost/prewarm-race"
     cache_key = (database_url, "problematic-files")
     old_build_started = Event()
     release_old_build = Event()
+    fresh_build_finished = Event()
     current_key = "old"
     build_count = 0
     repository = module.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
-        connect=lambda _database_url: None,
     )
     with module._UTILITY_PROJECTION_CACHE_LOCK:
         module._UTILITY_PROJECTION_CACHE.pop(cache_key, None)
         module._UTILITY_PROJECTION_SINGLEFLIGHT.pop(cache_key, None)
         module._UTILITY_PROJECTION_GENERATIONS.pop(cache_key, None)
-        module._UTILITY_PROJECTION_PREWARM_INFLIGHT.add(cache_key)
+        module._UTILITY_PROJECTION_PREWARM_INFLIGHT.discard(cache_key)
 
     def build_payload():
         nonlocal build_count
@@ -15092,25 +15093,31 @@ def test_invalidated_problematic_prewarm_cannot_repopulate_stale_payload(monkeyp
         if build_count == 1:
             old_build_started.set()
             assert release_old_build.wait(timeout=2)
+            if old_build_fails:
+                raise RuntimeError("stale prewarm failed")
+        else:
+            fresh_build_finished.set()
         return {"items": [{"key": payload_key}], "count": 1}
 
     monkeypatch.setattr(repository, "_build_problematic_files_payload_uncached", build_payload)
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        old_prewarm = executor.submit(repository._run_utility_projection_prewarm, "problematic-files", cache_key)
+        monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", executor)
+        repository.queue_utility_projection_prewarm("problematic-files")
         assert old_build_started.wait(timeout=2)
+        repository.queue_utility_projection_prewarm("problematic-files")
         module.invalidate_postgres_utility_projection_cache(
             database_url=database_url,
             kinds=("problematic-files",),
         )
         current_key = "fresh"
+        repository.queue_utility_projection_prewarm("problematic-files")
         release_old_build.set()
-        old_prewarm.result(timeout=2)
+        assert fresh_build_finished.wait(timeout=2)
 
     with module._UTILITY_PROJECTION_CACHE_LOCK:
-        assert cache_key not in module._UTILITY_PROJECTION_CACHE
+        assert module._UTILITY_PROJECTION_CACHE[cache_key]["items"][0]["key"] == "fresh"
         assert cache_key not in module._UTILITY_PROJECTION_PREWARM_INFLIGHT
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "fresh"
     assert build_count == 2
 
 

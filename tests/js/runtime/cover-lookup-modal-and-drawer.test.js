@@ -76,6 +76,40 @@ require('node:test')('completed lookup counts covers while retaining every other
   }
 });
 
+require('node:test')('notification thumbnails defer loading and decoding', () => {
+  const { context, bodyElement } = createDrawerHarness({
+    buildAlbumDisplayCoverUrl: () => '/images/notification-cover.jpg',
+  });
+  context.state.coverLookup.tasks = [{
+    id: 'thumbnail-task', status: 'completed', artist: 'Artist', album: 'Album', album_payload: {},
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(
+    bodyElement.innerHTML,
+    /class="cover-lookup-task-cover"[^>]*loading="lazy"[^>]*decoding="async"/,
+  );
+});
+
+require('node:test')('interrupted notification stops looking active and remains retryable', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  context.state.coverLookup.tasks = [{
+    id: 'interrupted-task',
+    status: 'failed',
+    result_kind: 'interrupted',
+    artist: 'Perelandra',
+    album: 'Eden',
+    album_payload: { key: 'perelandra::eden' },
+  }];
+
+  context.renderCoverLookupDrawer();
+
+  assert.match(bodyElement.innerHTML, />Lookup interrupted</);
+  assert.match(bodyElement.innerHTML, /data-retry-cover-lookup-task="interrupted-task"/);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cancel-cover-lookup-task=/);
+});
+
 require('node:test')('polling preserves a pressed task before selection exists and resumes after release', () => {
   const { context, bodyElement } = createDrawerHarness();
   const task = { id: 'pressed-task', status: 'running', artist: 'Artist', album: 'Album' };

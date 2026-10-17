@@ -29041,7 +29041,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
         ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
         : 0;
     const statusLabel = status === 'failed'
-      ? 'Lookup failed'
+      ? (String(task?.result_kind || '') === 'interrupted' ? 'Lookup interrupted' : 'Lookup failed')
       : status === 'canceled'
       ? 'Canceled'
       : isNoResult
@@ -29069,7 +29069,7 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
       ? String(buildAlbumDisplayCoverUrl(task?.album_payload || {}) || '').trim()
       : '';
     const coverMarkup = coverUrl
-      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="">`
+      ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return `
       <div class="cover-lookup-task-card ${taskStateClass}">

@@ -133,8 +133,9 @@ def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
         "album_artist": "Artist",
         "year": 2001,
         "cover_path": "C:/Music/Artist/Album/cover.jpg",
-        "tracks": [{"path": "C:/Music/Artist/Album/01.flac"}],
     }
+    assert "tracks" not in summary["album_payload"]
+    assert "01.flac" not in json.dumps(summary)
     assert len(json.dumps(summary).encode("utf-8")) < 4_096
 
 
@@ -172,6 +173,42 @@ def test_task_list_uses_compact_persisted_summaries(monkeypatch):
             "notification_action_taken": False,
         }
     ]
+
+
+def test_task_list_terminalizes_stale_persisted_running_task(monkeypatch):
+    from music_app.services import cover_lookup_tasks as task_service
+
+    stale_task = {
+        "id": "orphaned-task",
+        "status": "running",
+        "artist": "Perelandra",
+        "album": "Eden",
+        "progress": 45,
+        "updated_at": "2020-01-01T00:00:00+00:00",
+        "album_payload": {"key": "perelandra::eden"},
+    }
+    persisted = []
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notification_summaries",
+        lambda config: [stale_task],
+    )
+    monkeypatch.setattr(
+        task_service,
+        "upsert_cover_lookup_notification",
+        lambda config, task, *, persistence_revision: persisted.append(
+            (task, persistence_revision)
+        ),
+    )
+
+    summaries = task_service.list_cover_lookup_task_summaries(config={})
+
+    assert summaries[0]["status"] == "failed"
+    assert summaries[0]["result_kind"] == "interrupted"
+    assert summaries[0]["progress_label"] == "Interrupted"
+    assert "stopped before it could finish" in summaries[0]["message"].casefold()
+    assert persisted[0][0]["id"] == "orphaned-task"
+    assert persisted[0][0]["notification_action_taken"] is False
 
 
 def test_live_terminal_completion_beats_stale_persisted_running_timestamp():

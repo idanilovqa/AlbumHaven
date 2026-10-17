@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from threading import Event, Lock
 import uuid
@@ -28,6 +28,7 @@ _COVER_LOOKUP_FUTURES: dict[str, set[Future]] = {}
 _COVER_LOOKUP_TASK_REVISIONS: dict[str, int] = {}
 _COVER_LOOKUP_PERSISTENCE_LOCKS: dict[str, Lock] = {}
 _TERMINAL_COVER_LOOKUP_STATUSES = {"completed", "failed", "canceled"}
+_STALE_COVER_LOOKUP_TIMEOUT = timedelta(minutes=15)
 MAX_ACTIVE_COVER_LOOKUP_MATCHES = 64
 ACTIVE_COVER_LOOKUP_MATCH_FIELDS = frozenset(CURRENT_USE_LOOKUP_MATCH_FIELDS - {"debug"})
 MAX_ACTIVE_COVER_LOOKUP_STRING_CHARS = 2_048
@@ -166,6 +167,42 @@ def is_terminal_cover_lookup_task(task_payload: dict[str, object] | None) -> boo
     return status in _TERMINAL_COVER_LOOKUP_STATUSES
 
 
+def _interrupt_stale_cover_lookup_task(
+    task_payload: dict[str, object],
+    *,
+    now: datetime,
+) -> dict[str, object]:
+    status = str(task_payload.get("status") or "").strip().casefold()
+    if status not in {"pending", "running"}:
+        return task_payload
+    raw_updated_at = str(
+        task_payload.get("updated_at")
+        or task_payload.get("started_at")
+        or task_payload.get("created_at")
+        or ""
+    ).strip()
+    try:
+        updated_at = datetime.fromisoformat(raw_updated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return task_payload
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    if now - updated_at.astimezone(timezone.utc) < _STALE_COVER_LOOKUP_TIMEOUT:
+        return task_payload
+    interrupted_at = now.isoformat()
+    return {
+        **task_payload,
+        "status": "failed",
+        "result_kind": "interrupted",
+        "progress_label": "Interrupted",
+        "message": "Cover lookup stopped before it could finish. Retry when ready.",
+        "finished_at": interrupted_at,
+        "updated_at": interrupted_at,
+        "notification_action_taken": False,
+        "notification_completed_at": interrupted_at,
+    }
+
+
 def summarize_cover_lookup_task_for_list(
     task_payload: dict[str, object] | None,
 ) -> dict[str, object]:
@@ -199,11 +236,6 @@ def summarize_cover_lookup_task_for_list(
             for field in _COVER_LOOKUP_LIST_ALBUM_FIELDS
             if field in album_payload
         }
-        compact_album["tracks"] = [
-            {"path": str(track.get("path") or "")}
-            for track in (album_payload.get("tracks") or [])
-            if isinstance(track, Mapping) and str(track.get("path") or "").strip()
-        ]
         summary["album_payload"] = compact_album
     return summary
 
@@ -431,6 +463,17 @@ def list_cover_lookup_task_summaries(
         if config is not None
         else []
     )
+    if config is not None:
+        now = datetime.now(timezone.utc)
+        recovered_items = []
+        for item in persisted_items:
+            recovered = _interrupt_stale_cover_lookup_task(item, now=now)
+            if recovered is not item:
+                upsert_cover_lookup_notification(
+                    dict(config), recovered, persistence_revision=1
+                )
+            recovered_items.append(recovered)
+        persisted_items = recovered_items
     persisted_by_id = {
         str(item.get("id") or "").strip(): item
         for item in persisted_items

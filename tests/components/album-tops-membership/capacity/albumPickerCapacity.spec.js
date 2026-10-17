@@ -1,0 +1,24 @@
+const {test,expect}=require('@playwright/test');
+const {mount}=require('./browser-fixture.cjs');
+test('actual All picker bounds DOM while real5000-item draft explains capacity, disables Select only and recovers after removal',async({page})=>{
+  const observed=await mount(page),search=page.getByRole('searchbox');
+  expect(await page.evaluate(()=>pickerFixture.draft.getSnapshot().items.length)).toBe(5000);expect(await page.evaluate(()=>pickerFixture.draft.getSnapshot().tab)).toBe('all');
+  await expect(page.locator('[data-album-draft-key]')).toHaveCount(0);await expect(search).toBeEnabled();
+  const limit=page.getByRole('status').filter({hasText:/(?:limit|maximum|max)[\s\S]*5,?000|5,?000[\s\S]*(?:limit|maximum|max)/i});await expect(limit.first()).toBeVisible();
+  await search.fill('Found');const select=page.getByRole('button',{name:/Select.*Found edition/i});await expect(select).toBeDisabled();await expect(select).toHaveAttribute('aria-disabled','true');
+  await expect(page.locator('[data-gallery-card-intent="select"]')).toHaveCount(1);const card=await select.elementHandle();
+  const disabled=await select.evaluate(node=>({cursor:getComputedStyle(node).cursor,opacity:Number(getComputedStyle(node).opacity)}));expect(disabled.cursor).not.toBe('pointer');
+  await select.evaluate(node=>node.click());expect(await page.evaluate(()=>pickerFixture.calls.admit)).toEqual([]);expect(await page.evaluate(()=>pickerFixture.calls.writes)).toEqual([]);
+  expect(await page.evaluate(()=>pickerFixture.draft.canEditMembership())).toBe(true);
+  await page.getByRole('button',{name:'Swap first two through draft API',exact:true}).click();
+  expect(await page.evaluate(()=>pickerFixture.draft.getSnapshot().items[0].album_ref)).toBe('00000000-0000-4000-8000-000000020001');
+  await page.getByRole('button',{name:'Remove one through draft API',exact:true}).click();
+  expect(await page.evaluate(()=>pickerFixture.draft.getSnapshot().items.length)).toBe(4999);await expect(limit).toHaveCount(0);await expect(search).toHaveValue('Found');
+  await expect(select).toBeEnabled();await expect(select).toHaveAttribute('aria-disabled','false');expect(await select.evaluate((node,before)=>node===before,card)).toBe(true);
+  const enabled=await select.evaluate(node=>({cursor:getComputedStyle(node).cursor,opacity:Number(getComputedStyle(node).opacity)}));expect(enabled.cursor).toBe('pointer');expect(disabled.opacity).toBeLessThan(enabled.opacity);
+  await select.click();await expect.poll(()=>page.evaluate(()=>pickerFixture.draft.getSnapshot().items.length)).toBe(5000);await expect(limit.first()).toBeVisible();
+  expect(await page.evaluate(()=>pickerFixture.calls.admit)).toEqual([13]);expect(await page.evaluate(()=>pickerFixture.calls.writes)).toEqual([]);
+  expect(await page.evaluate(()=>pickerFixture.getPersisted().items.length)).toBe(5000);
+  expect(await page.evaluate(()=>JSON.stringify(pickerFixture.getPersisted().edit_draft)===JSON.stringify(pickerFixture.original.edit_draft))).toBe(true);
+  await expect(page.locator('[data-album-draft-key]')).toHaveCount(0);expect(observed.errors).toEqual([]);expect(observed.consoleMessages.filter(row=>row.type==='error')).toEqual([]);
+});

@@ -2141,7 +2141,8 @@ async function watchSaveTask(taskId, context = {}) {
               );
               if (viewRefreshed && restoresAllSearchResults && canReconcileOriginView()) {
                 window.history.replaceState(
-                  { ...window.history.state, ...state.view }, '', buildUrl(state.view),
+                  window.AlbumHavenSettingsNavigation.sanitizeHistorySnapshot({ ...window.history.state, ...state.view }),
+                  '', buildUrl(state.view),
                 );
               }
               if (viewRefreshed && finalizedAlbums.length) {

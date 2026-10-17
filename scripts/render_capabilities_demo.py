@@ -133,6 +133,9 @@ def migrate(connection) -> None:
                 (bootstrap.name, hashlib.sha256(bootstrap.read_bytes()).hexdigest()),
             )
     applied = dict(connection.execute('select migration_name, checksum from ops.schema_migrations').fetchall())
+    from scripts.postgres_migration_compatibility import validate_applied_migrations
+
+    validate_applied_migrations(connection, ROOT / 'migrations' / 'postgres', applied)
     for path in files:
         checksum = hashlib.sha256(path.read_bytes()).hexdigest()
         if path.name in applied:

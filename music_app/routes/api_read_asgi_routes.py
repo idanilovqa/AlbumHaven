@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.private_ui_context import private_ui_context_ref
+
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.log_history import history_scope_for_request, normalize_log_history_query, export_log_history, LogHistoryQueryError
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
@@ -7,8 +9,9 @@ from music_app.services.loops import project_loop_for_client, project_loop_order
 import logging
 import time
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -39,10 +42,24 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.library_browse_postgres import (
     PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
 )
+from music_app.services.library_inventory_postgres import (
+    MAX_NON_ALBUM_CANDIDATE_LIMIT,
+    PostgresLibraryInventoryRepository,
+)
+from music_app.services.track_preferences import (
+    build_track_preference_overlay_lookup,
+    default_track_preference_overlay,
+    track_preference_can_edit,
+    track_preference_scope,
+)
+from music_app.services.track_preferences_postgres import TrackPreferenceScopeError
+from music_app.services.track_stats import normalize_track_ref
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.policy import ResourceScope
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -499,6 +516,113 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
     }
 
 
+def _loose_preference_source_readable(source: Mapping[str, object]) -> bool:
+    actions = source.get("allowed_actions")
+    return not (
+        source.get("read_only_subject")
+        or source.get("source_readable") is False
+        or source.get("readable") is False
+        or isinstance(actions, Mapping) and "can_read" in actions and actions["can_read"] is not True
+    )
+
+
+def _private_browse_response(
+    request: Request, payload: dict[str, object], *, transient: bool = False,
+) -> JSONResponse:
+    """Finalize ordinary browse data without personalizing shared producers."""
+    headers = {"Cache-Control": "private, no-store"}
+    try:
+        # The private middleware authenticates and caches this typed actor before
+        # the synchronous handler runs. No owner or subject fallback is valid.
+        account_id, library_id = track_preference_scope(getattr(request.state, "current_actor", None))
+        payload = deepcopy(payload)
+        client_surface = _client_surface_class_from_asgi(request)
+        rows = [row for row in (payload.get("non_album_tracks") or []) if isinstance(row, dict)]
+        rows_by_path: dict[str, list[dict[str, object]]] = {}
+        for row in rows:
+            row["track_preference_state"] = "unavailable"
+            row["track_preference"] = default_track_preference_overlay(client_surface_class=client_surface)
+            row["can_edit_preferences"] = False
+            row.pop("track_preference_overlay", None)
+            row.pop("inventory_track_ref", None)
+            row.pop("canonical_track_ref", None)
+            path = normalize_track_ref(row.get("path")) if isinstance(row.get("path"), str) else ""
+            if path:
+                rows_by_path.setdefault(path, []).append(row)
+
+        # This bounded slice deliberately leaves larger displayed sets unknown.
+        # Preserve every displayed row; never issue an unrestricted inventory read.
+        readable_paths = [
+            path for path, aliases in rows_by_path.items()
+            if any(_loose_preference_source_readable(row) for row in aliases)
+        ] if (_loose_preference_source_readable(payload)
+              and len(rows_by_path) <= MAX_NON_ALBUM_CANDIDATE_LIMIT) else []
+        if readable_paths:
+            repository = PostgresLibraryInventoryRepository(_app_config(request))
+            inventory_library_id = repository.load_inventory_library_id()
+            if type(inventory_library_id) is int and inventory_library_id == library_id:
+                candidates = repository.load_non_album_candidates(
+                    private_paths=readable_paths, limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+                )
+                candidate_ids: dict[str, set[int | None]] = {path: set() for path in readable_paths}
+                for candidate in candidates:
+                    if not isinstance(candidate, Mapping):
+                        continue
+                    path = normalize_track_ref(candidate.get("private_path"))
+                    if path in candidate_ids:
+                        identity = candidate.get("track_id")
+                        candidate_ids[path].add(identity if type(identity) is int and identity > 0 else None)
+                expected_track_ids = {}
+                for path, identities in candidate_ids.items():
+                    if len(identities) != 1 or None in identities:
+                        continue
+                    identity = next(iter(identities))
+                    if any(
+                        ("track_id" in row and (type(row["track_id"]) is not int or row["track_id"] != identity))
+                        or ("track_ref" in row and (
+                            not isinstance(row["track_ref"], str) or normalize_track_ref(row["track_ref"]) != path
+                        ))
+                        for row in rows_by_path[path]
+                    ):
+                        continue
+                    if allowed_actions_for_request(
+                        request, ("library.browse.read",), resource=ResourceScope("track", str(identity)),
+                    ).allows("library.browse.read"):
+                        expected_track_ids[path] = identity
+
+                if expected_track_ids:
+                    def can_manage(track_id: int) -> bool:
+                        return allowed_actions_for_request(
+                            request, ("library.track_preferences.manage",),
+                            resource=ResourceScope("track", str(track_id)),
+                        ).allows("library.track_preferences.manage")
+
+                    receipts: dict[str, dict[str, object]] = {}
+                    build_track_preference_overlay_lookup(
+                        _app_config(request), account_id=account_id, library_id=library_id,
+                        track_refs=list(expected_track_ids), expected_track_ids=expected_track_ids,
+                        require_active_paths=True, client_surface_class=client_surface,
+                        preference_action_resolver=can_manage, read_receipts=receipts,
+                    )
+                    for path, identity in expected_track_ids.items():
+                        receipt = receipts.get(path)
+                        if not receipt or receipt["inventory_track_ref"] != f"inventory-track:{library_id}:{identity}":
+                            continue
+                        for row in rows_by_path[path]:
+                            if not _loose_preference_source_readable(row):
+                                continue
+                            row.update(deepcopy(receipt))
+                            row["track_preference_state"] = "available"
+                            row["can_edit_preferences"] = track_preference_can_edit(row["track_preference"])
+    except TrackPreferenceScopeError as error:
+        return JSONResponse({"ok": False, "error": str(error)}, status_code=403, headers=headers)
+
+    if transient:
+        _apply_transient_scan_album_rating_overlays(request, _transient_view_album_payloads(payload))
+    _project_missing_album_actions_for_request(request, payload)
+    return JSONResponse(payload, headers=headers)
+
+
 def _transient_scan_view_response(
     request: Request, browse_state: Mapping[str, object], page_params: Mapping[str, object] | None = None
 ) -> JSONResponse:
@@ -514,17 +638,34 @@ def _transient_scan_view_response(
         payload = build_transient_root_gallery_page(
             payload, page_params, scan_generation=int(browse_state.get("scan_generation") or 0)
         )
-    _apply_transient_scan_album_rating_overlays(
-        request,
-        _transient_view_album_payloads(payload),
-    )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    return _private_browse_response(request, payload, transient=True)
+
+
+@router.post("/search/native-target")
+async def search_native_target(request: Request) -> JSONResponse:
+    from music_app.routes.private_search_asgi import private_search_native_target_response
+    return await private_search_native_target_response(request)
+
+
+@router.post("/search/native-targets")
+async def search_native_targets(request: Request) -> JSONResponse:
+    from music_app.routes.private_search_asgi import private_search_native_targets_response
+    return await private_search_native_targets_response(request)
 
 
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
+    if str(request.query_params.get("surface") or "").strip().casefold() == "album_tops":
+        from music_app.routes.owned_album_tops_asgi import album_top_view_response
+        return album_top_view_response(request)
+    if str(request.query_params.get("surface") or "").casefold() == "playlists":
+        from music_app.routes.owned_playlists_asgi import playlist_view_response
+        return playlist_view_response(request)
+    from music_app.services.view_search import is_private_search_request
+    if is_private_search_request(request.query_params):
+        from music_app.routes.private_search_asgi import private_search_view_response
+        return private_search_view_response(request)
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
     if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:
@@ -552,8 +693,7 @@ def view_data(request: Request) -> JSONResponse:
             restart = "restart required" in str(error)
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
                                 status_code=409 if restart else 400)
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
 
     if _should_use_transient_scan_browse_state(library_state, browse_state):
         return _transient_scan_view_response(request, browse_state)
@@ -562,8 +702,7 @@ def view_data(request: Request) -> JSONResponse:
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
             query_params=request.query_params,
         )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
     if _is_postgres_selected_artist_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         payload = repository.build_selected_artist_payload(
@@ -574,8 +713,9 @@ def view_data(request: Request) -> JSONResponse:
             root_sidebar_payload = repository.build_root_sidebar_payload(
                 query_params=request.query_params,
             )
-            payload.update(
-                {
+            payload = {
+                **payload,
+                **{
                     field: root_sidebar_payload[field]
                     for field in (
                         "artists_sidebar",
@@ -583,10 +723,9 @@ def view_data(request: Request) -> JSONResponse:
                         "show_all_artists_sidebar_link",
                     )
                     if field in root_sidebar_payload
-                }
-            )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+                },
+            }
+        return _private_browse_response(request, payload)
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -602,14 +741,12 @@ def view_data(request: Request) -> JSONResponse:
             library_state=_postgres_browse_library_state(request),
         )
         _log_view_data_request_from_asgi(request, payload, request_started_at)
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
     if _is_postgres_root_album_browse_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
             query_params=request.query_params,
         )
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse(payload)
+        return _private_browse_response(request, payload)
     unsupported_selected_artist_response = _unsupported_postgres_selected_artist_browse_response(request)
     if unsupported_selected_artist_response is not None:
         return unsupported_selected_artist_response
@@ -631,8 +768,7 @@ def view_data(request: Request) -> JSONResponse:
         client_surface_class=_client_surface_class_from_asgi(request),
     )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse(payload)
+    return _private_browse_response(request, payload)
 
 
 def _is_postgres_root_sidebar_request(request: Request) -> bool:
@@ -861,11 +997,28 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
 
 @router.get("/home-data")
 async def home_data(request: Request) -> JSONResponse:
-    _hydrate_cached_library_for_asgi(request)
+    actor = await current_actor_from_request(request)
+    if not actor.is_authenticated:
+        raise HTTPException(401, "Authentication required.", headers={"Cache-Control": "private, no-store"})
+    if (any(type(value) is not int or value <= 0 for value in (actor.account_id, actor.current_library_id))
+            or not any(relationship.library_id == actor.current_library_id
+                       for relationship in actor.library_relationships)):
+        raise HTTPException(403, "Action not permitted.", headers={"Cache-Control": "private, no-store"})
     request_started_at = time.perf_counter()
+    await run_in_threadpool(_hydrate_cached_library_for_asgi, request)
+
+    def album_actions(album):
+        return allowed_actions_for_request(
+            request, ("library.browse.read", "library.media.read"),
+            resource=ResourceScope("album", str(album["id"])),
+        )
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    payload = build_home_payload(
+    payload = await run_in_threadpool(
+        build_home_payload,
+        account_id=actor.account_id,
+        library_id=actor.current_library_id,
+        allowed_actions_for_album=album_actions,
         query_args=_AsgiQueryArgs(request.query_params),
         config=_app_config(request),
         logger=_app_logger(request),
@@ -906,7 +1059,7 @@ async def home_data(request: Request) -> JSONResponse:
                 }
             )
     _log_view_data_request_from_asgi(request, payload, request_started_at)
-    return JSONResponse(payload)
+    return JSONResponse({**payload, "context_ref": private_ui_context_ref(request)}, headers={"Cache-Control": "private, no-store"})
 
 
 @router.get("/album-details")
@@ -927,31 +1080,55 @@ async def album_details(request: Request) -> JSONResponse:
         or request.headers.get("X-Album-Haven-Client-Surface")
         or request.headers.get("X-Album-Haven-Client-Surface-Class")
     )
+    try:
+        account_id, library_id = track_preference_scope(await current_actor_from_request(request))
+    except TrackPreferenceScopeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+
+    def preference_action_resolver(track_id: int) -> bool:
+        return allowed_actions_for_request(
+            request, ("library.track_preferences.manage",),
+            resource=ResourceScope("track", str(track_id)),
+        ).allows("library.track_preferences.manage")
+
+    taste_scope = {
+        "account_id": account_id, "library_id": library_id,
+        "preference_action_resolver": preference_action_resolver,
+    }
     browse_state = resolve_active_scan_browse_state(_library_state(request))
 
     if _should_use_postgres_album_detail_path(request, browse_state=browse_state):
-        payload = PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload(
-            album_key,
-            client_surface_class=client_surface_class,
-        )
+        try:
+            payload = await run_in_threadpool(
+                PostgresLibraryBrowseRepository(_app_config(request)).build_album_detail_payload,
+                album_key, client_surface_class=client_surface_class, **taste_scope,
+            )
+        except TrackPreferenceScopeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
         _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse({"ok": True, "album": payload})
+        return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
 
     _hydrate_cached_library_for_asgi(request)
-    payload = build_album_detail_payload(
-        album_key,
-        client_surface_class=client_surface_class,
-        config=_app_config(request),
-        library_state=browse_state,
+    inventory_library_id = await run_in_threadpool(
+        PostgresLibraryInventoryRepository(_app_config(request)).load_inventory_library_id,
     )
+    try:
+        payload = await run_in_threadpool(
+            build_album_detail_payload, album_key,
+            client_surface_class=client_surface_class, config=_app_config(request),
+            library_state=browse_state, inventory_library_id=inventory_library_id,
+            **taste_scope,
+        )
+    except TrackPreferenceScopeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
     if payload is None:
         return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
     if browse_state.get("scan_in_progress"):
         _apply_transient_scan_album_rating_overlays(request, [payload])
     _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse({"ok": True, "album": payload})
+    return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
 
 
 def _should_use_postgres_album_detail_path(

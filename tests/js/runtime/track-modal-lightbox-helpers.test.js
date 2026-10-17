@@ -493,6 +493,21 @@ test('player Album Details takes foreground without closing Settings or its draf
   assert.equal(context.state.ui.trackModalCoverLightboxGallery, true);
 });
 
+test('closing Album Details notifies the browser selection owner only after native cleanup', () => {
+  const {context, trackModal} = loadHelper();
+  const events = [];
+  context.Event = class {constructor(type) {this.type = type;}};
+  context.window = {dispatchEvent(event) {
+    assert.equal(trackModal.hidden, true);
+    assert.equal(context.state.modalReleases.length, 0);
+    assert.equal(context.getTrackModalSourcePageOwner(), null);
+    events.push(event.type);
+  }};
+  context.openTrackModal({key: 'alpha', name: 'Album Alpha', tracks: []});
+  context.closeTrackModal();
+  assert.deepEqual(events, ['albumhaven:resource-selection-available']);
+});
+
 test('Settings reopening stays above a player details request that hydrates later', async () => {
   let resolveDetails;
   const preview = { key: 'alpha', name: 'Album Alpha', preview_only: true, tracks: [] };

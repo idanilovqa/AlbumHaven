@@ -65,6 +65,8 @@ _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="album
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
 _MBID_ASSERTION_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-mbid")
+_POPULARITY_REFRESH_LOCK = threading.Lock()
+_POPULARITY_REFRESH_PENDING = set()
 _BULK_COVER_JOB_WORKERS = 1
 _SCAN_FILE_ERROR_HISTORY_LIMIT = 50
 
@@ -294,6 +296,7 @@ def hydrate_runtime_library_state_on_startup(app) -> bool:
         )
     if hydrated:
         _migrate_startup_album_exclusions(app)
+        queue_library_popularity_refresh(app.config, logger=app.logger)
         app.logger.info(
             "Startup scan-cache hydration completed files=%s albums=%s",
             len(app.library_state.get("file_cache") or {}),
@@ -915,7 +918,7 @@ def refresh_library_for_state(
             config,
             logger,
         ),
-        queue_mbid_assertion_follow_up=lambda library_state, *, previous_albums: queue_post_scan_artist_mbid_assertion_follow_up(
+        queue_mbid_assertion_follow_up=lambda library_state, *, previous_albums: _queue_post_scan_enrichment(
             library_state,
             previous_albums=previous_albums,
             config=config,
@@ -1055,3 +1058,73 @@ def _run_mbid_assertion_follow_up(logger, kwargs: dict[str, object]) -> None:
     except Exception:
         if logger is not None:
             logger.exception("Post-scan MBID assertion follow-up failed")
+
+
+def _queue_post_scan_enrichment(library_state, *, previous_albums, config, submit_follow_up):
+    queued = queue_post_scan_artist_mbid_assertion_follow_up(
+        library_state, previous_albums=previous_albums, config=config,
+        submit_follow_up=submit_follow_up)
+    queue_library_popularity_refresh(config)
+    return queued
+
+
+def queue_library_popularity_refresh(config, *, library_id=None, logger=None, complete=False):
+    """Reuse the serialized enrichment executor; one bounded job per scope."""
+    from music_app.services.library_popularity_jobs import (
+        request_refresh, pending_refresh_delay, refresh_is_configured,
+    )
+    from music_app.services.runtime_shutdown import runtime_shutdown_requested
+    if not refresh_is_configured(config):
+        return False
+    key = (config["ALBUM_HAVEN_APP_DATABASE_URL"], library_id)
+    with _POPULARITY_REFRESH_LOCK:
+        if runtime_shutdown_requested():
+            return False
+        if complete:
+            request_refresh(config, library_id)
+        if key in _POPULARITY_REFRESH_PENDING:
+            return False
+        _POPULARITY_REFRESH_PENDING.add(key)
+    def run(demand_only=complete):
+        from music_app.services.library_popularity_refresh import refresh_library_popularity
+        next_batch_in = None
+        try:
+            result = refresh_library_popularity(config, library_id=library_id,
+                                                demand_only=demand_only)
+            next_batch_in = result.get("next_batch_in")
+        except Exception:
+            # Never log provider payloads, credential-bearing request URLs or paths.
+            if logger is not None:
+                logger.warning("Library popularity refresh is unavailable; cached values retained")
+        finally:
+            with _POPULARITY_REFRESH_LOCK:
+                if refresh_is_configured(config) and not runtime_shutdown_requested() and library_id is not None:
+                    try:
+                        pending = pending_refresh_delay(config, library_id)
+                        next_batch_in = max(next_batch_in or 1.0, pending) if pending is not None else None
+                    except Exception:
+                        next_batch_in = None
+                if (next_batch_in is not None and refresh_is_configured(config)
+                        and not runtime_shutdown_requested()):
+                    timer = threading.Timer(max(1.0, next_batch_in), submit_next)
+                    timer.daemon = True
+                    timer.start()
+                else:
+                    _POPULARITY_REFRESH_PENDING.discard(key)
+    def submit_next():
+        if runtime_shutdown_requested():
+            with _POPULARITY_REFRESH_LOCK:
+                _POPULARITY_REFRESH_PENDING.discard(key)
+            return
+        try:
+            _MBID_ASSERTION_EXECUTOR.submit(run, True)
+        except RuntimeError:
+            with _POPULARITY_REFRESH_LOCK:
+                _POPULARITY_REFRESH_PENDING.discard(key)
+    try:
+        _MBID_ASSERTION_EXECUTOR.submit(run)
+    except RuntimeError:
+        with _POPULARITY_REFRESH_LOCK:
+            _POPULARITY_REFRESH_PENDING.discard(key)
+        return False
+    return True

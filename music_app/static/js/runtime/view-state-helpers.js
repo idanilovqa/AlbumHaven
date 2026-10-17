@@ -1,3 +1,24 @@
+// Admission classification only. The server remains the sole grammar owner;
+// unsupported personal syntax must reach it unchanged, never ordinary fallback.
+function isPrivateSearchExpression(query) {
+  return typeof query === 'string' && query.split(/\s+/u).some(word =>
+    word.includes(':') || word.replace(/^-+/u, '').startsWith('@'));
+}
+
+function isPrivateSearchRequestUrl(value) {
+  const url = new URL(value, 'http://localhost');
+  const surface = String(url.searchParams.get('surface') || '');
+  if (surface.toLowerCase() === 'playlists' || surface.trim().toLowerCase() === 'album_tops') return false;
+  return url.searchParams.getAll('q').some(isPrivateSearchExpression)
+    || [...url.searchParams.keys()].some(key => key.startsWith('search_'));
+}
+
+function appendPrivateSearchPresentation(params, view) {
+  if (isPrivateSearchExpression(view.query) && ['albums', 'tracks'].includes(view.search_presentation)) {
+    params.set('search_presentation', view.search_presentation);
+  }
+}
+
 function appendSearchFilterParams(params, searchFilters) {
   const filters = searchFilters && typeof searchFilters === 'object' ? searchFilters : {};
   const appendRepeated = (key, values) => {
@@ -72,8 +93,8 @@ function resolveViewSurface(view = {}) {
   const selectedArtist = String(view.selected_artist || '').trim();
   const query = String(view.query || '').trim();
   const allArtistsActive = Boolean(view.all_artists_active);
-  if (normalizedSurface === 'playlists') {
-    return 'playlists';
+  if (normalizedSurface === 'playlists' || normalizedSurface === 'album_tops') {
+    return normalizedSurface;
   }
   if (normalizedSurface === 'home') {
     if (!selectedArtist && !query && !allArtistsActive) {
@@ -88,6 +109,25 @@ function resolveViewSurface(view = {}) {
     return 'albums';
   }
   return 'home';
+}
+
+function resolveSelectedArtistPageMode(view = {}) {
+  const selectedArtist = String(view.selected_artist || '').trim();
+  if (!selectedArtist || resolveViewSurface(view) !== 'albums' || view.private_search === true) {
+    return 'gallery';
+  }
+  let pageMode = view.page_mode;
+  if (Object.prototype.hasOwnProperty.call(view, 'artist_page')) {
+    const artistPage = view.artist_page;
+    // A response descriptor, when present, takes precedence over request state.
+    if (!artistPage || typeof artistPage !== 'object' || Array.isArray(artistPage)
+      || typeof artistPage.artist_ref !== 'string'
+      || artistPage.artist_ref.trim() !== selectedArtist) {
+      return 'gallery';
+    }
+    pageMode = artistPage.active_page_mode;
+  }
+  return String(pageMode || '').trim().toLowerCase() === 'info' ? 'info' : 'gallery';
 }
 
 function resolvePlaylistId(view = {}) {
@@ -111,6 +151,11 @@ function appendPlaylistStateParams(params, view, resolvedSurface) {
 function buildUrl(view) {
   const params = new URLSearchParams();
   const resolvedSurface = resolveViewSurface(view);
+  if (resolvedSurface === 'album_tops') {
+    params.set('surface', resolvedSurface);
+    if (view.top_ref) params.set('top_ref', String(view.top_ref));
+    return `/?${params}`;
+  }
   if (resolvedSurface === 'home') {
     return '/';
   }
@@ -119,7 +164,9 @@ function buildUrl(view) {
   }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
+  if (resolvedSurface === 'albums') appendPrivateSearchPresentation(params, view);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -149,9 +196,15 @@ function buildApiUrl(view, options = {}) {
   }
   const params = new URLSearchParams();
   params.set('surface', resolvedSurface);
+  if (resolvedSurface === 'album_tops') {
+    if (view.top_ref) params.set('top_ref', String(view.top_ref));
+    return `/view-data?${params}`;
+  }
   appendPlaylistStateParams(params, view, resolvedSurface);
   if (view.query) params.set('q', view.query);
+  if (resolvedSurface === 'albums') appendPrivateSearchPresentation(params, view);
   if (view.selected_artist) params.set('artist', view.selected_artist);
+  if (resolveSelectedArtistPageMode(view) === 'info') params.set('page_mode', 'info');
   if (view.all_artists_active) params.set('all_artists', '1');
   if (view.gallery_scope) params.set('gallery_scope', view.gallery_scope);
   const galleryDisplayMode = normalizeGalleryDisplayMode(view.gallery_display_mode);
@@ -187,11 +240,15 @@ function buildApiUrl(view, options = {}) {
 
 function parseUrlStateFromUrl(url, baseOrigin) {
   const u = new URL(url, baseOrigin);
-  return {
+  const view = {
     surface_request: u.searchParams.get('surface') || '',
     playlist_id: u.searchParams.get('playlist_id') || '',
+    top_ref: u.searchParams.get('top_ref') || '',
     query: u.searchParams.get('q') || '',
+    ...(['albums', 'tracks'].includes(u.searchParams.get('search_presentation'))
+      ? {search_presentation: u.searchParams.get('search_presentation')} : {}),
     selected_artist: u.searchParams.get('artist') || '',
+    page_mode: u.searchParams.get('page_mode') || '',
     all_artists_active: ['1', 'true', 'yes', 'on'].includes((u.searchParams.get('all_artists') || '').toLowerCase()),
     gallery_scope: u.searchParams.get('gallery_scope') || 'all',
     gallery_display_mode: normalizeGalleryDisplayMode(u.searchParams.get('gallery_display')),
@@ -208,6 +265,12 @@ function parseUrlStateFromUrl(url, baseOrigin) {
       }
       : {}),
   };
+  if (String(view.selected_artist || '').trim() && resolveViewSurface(view) === 'albums') {
+    view.page_mode = resolveSelectedArtistPageMode(view);
+  } else {
+    delete view.page_mode;
+  }
+  return view;
 }
 
 function parseUrlState(url) {

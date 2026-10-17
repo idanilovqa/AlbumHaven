@@ -1,19 +1,52 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from copy import deepcopy
 
 _MIN_REQUEST_INTERVAL_SECONDS = 1.05
 _MAX_ATTEMPTS = 3
 _SUCCESS_CACHE_TTL_SECONDS = 60 * 60 * 6
 _MISS_CACHE_TTL_SECONDS = 60 * 15
 _BLOCK_COOLDOWN_SECONDS = 60 * 15
+STRICT_EVIDENCE_POLICY = "musicbrainz-release-group-v1"
+_STRICT_SUCCESS_MAX_BYTES = 256 * 1024
+_STRICT_ERROR_MAX_BYTES = 16 * 1024
+_STRICT_RELEASE_GROUP_URL = re.compile(
+    r"https://musicbrainz\.org/ws/2/release-group/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"\?inc=artist-credits&fmt=json"
+)
+
+
+def _strict_release_group_search_url(url):
+    """Only the bounded official candidate-search shape, never a general URL."""
+    if type(url) is not str or len(url) > 3000:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        if (parts.scheme != 'https' or parts.netloc != 'musicbrainz.org'
+                or parts.path != '/ws/2/release-group/' or parts.fragment):
+            return False
+        pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True,
+                                      strict_parsing=True, errors='strict', max_num_fields=3)
+        if [key for key, _ in pairs] != ['query', 'fmt', 'limit']:
+            return False
+        query, fmt, limit = (value for _, value in pairs)
+        if (not 1 <= len(query) <= 450 or fmt != 'json' or limit != '10'
+                or any(ord(char) < 32 or ord(char) == 127 for char in query)):
+            return False
+        return url == 'https://musicbrainz.org/ws/2/release-group/?' + urllib.parse.urlencode(pairs)
+    except (ValueError, UnicodeError):
+        return False
 
 _REQUEST_LOCK = threading.Lock()
 _STATE_LOCK = threading.Lock()
@@ -23,39 +56,87 @@ _BLOCKED_UNTIL = 0.0
 _BLOCK_REASON = ""
 _CACHE_MISS = object()
 _URL_CACHE: dict[str, dict[str, object]] = {}
+# Strict entries can only be produced by this bounded, non-redirecting path.
+# Legacy cache successes and misses never qualify as acquisition evidence.
+_STRICT_EVIDENCE_URL_CACHE: dict[str, dict[str, object]] = {}
+
+
+class _StrictEvidenceError(ValueError):
+    pass
+
+
+class _StrictEvidenceHTTPErrorProcessor(urllib.request.HTTPErrorProcessor):
+    """Reject every 3xx before urllib dispatches any redirect handler.
+
+    Redirect handlers can drain an unbounded response before opening the next
+    URL. Intercepting the response here rejects same-host redirects as well as
+    cross-origin redirects without following or draining either response.
+    """
+
+    def http_response(self, request, response):
+        if 300 <= response.code < 400:
+            response.close()
+            raise _StrictEvidenceError("redirect_rejected")
+        return super().http_response(request, response)
+
+    https_response = http_response
+
+
+def _strict_success_bytes(response) -> bytes:
+    # One sentinel byte distinguishes an exact-limit response from an overrun.
+    body = response.read(_STRICT_SUCCESS_MAX_BYTES + 1)
+    if len(body) > _STRICT_SUCCESS_MAX_BYTES:
+        raise _StrictEvidenceError("response_too_large")
+    return body
+
+
+def _success_meta(status: str, *, strict_evidence: bool, attempt: int | None = None) -> dict[str, object]:
+    meta: dict[str, object] = {"status": status, "cache_hit": status == "cache"}
+    if attempt is not None:
+        meta["attempt"] = attempt
+    if strict_evidence:
+        meta["evidence_policy"] = STRICT_EVIDENCE_POLICY
+    return meta
 
 
 def _cache_key(url: str, accept: str) -> str:
     return f"{accept}::{str(url or '').strip()}"
 
 
-def _get_cached_value(url: str, accept: str) -> object | None:
+def _get_cached_value(url: str, accept: str, *, strict_evidence: bool = False) -> object | None:
     cache_key = _cache_key(url, accept)
+    cache = _STRICT_EVIDENCE_URL_CACHE if strict_evidence else _URL_CACHE
     now = time.time()
     with _CACHE_LOCK:
-        entry = _URL_CACHE.get(cache_key)
+        entry = cache.get(cache_key)
         if not isinstance(entry, dict):
+            return None
+        if strict_evidence and entry.get("evidence_policy") != STRICT_EVIDENCE_POLICY:
+            cache.pop(cache_key, None)
             return None
         updated_at = float(entry.get("updated_at") or 0.0)
         ok = bool(entry.get("ok"))
         ttl = _SUCCESS_CACHE_TTL_SECONDS if ok else _MISS_CACHE_TTL_SECONDS
         if not updated_at or now - updated_at > ttl:
-            _URL_CACHE.pop(cache_key, None)
+            cache.pop(cache_key, None)
             return None
         payload = entry.get("payload")
         if ok and isinstance(payload, dict):
-            return dict(payload)
+            return deepcopy(payload) if strict_evidence else dict(payload)
         return _CACHE_MISS
 
 
-def _set_cached_value(url: str, accept: str, payload: dict | None) -> None:
+def _set_cached_value(url: str, accept: str, payload: dict | None, *, strict_evidence: bool = False) -> None:
     cache_key = _cache_key(url, accept)
+    cache = _STRICT_EVIDENCE_URL_CACHE if strict_evidence else _URL_CACHE
     with _CACHE_LOCK:
-        _URL_CACHE[cache_key] = {
+        cache[cache_key] = {
             "updated_at": time.time(),
             "ok": isinstance(payload, dict),
-            "payload": dict(payload) if isinstance(payload, dict) else None,
+            "payload": (deepcopy(payload) if strict_evidence else dict(payload)) if isinstance(payload, dict) else None,
         }
+        if strict_evidence:
+            cache[cache_key]["evidence_policy"] = STRICT_EVIDENCE_POLICY
 
 
 def _set_block(reason: str, *, cooldown_seconds: float = _BLOCK_COOLDOWN_SECONDS) -> None:
@@ -130,28 +211,41 @@ def get_json(
     timeout: float = 15.0,
     context: str = "",
     should_cancel: Callable[[], bool] | None = None,
+    strict_evidence: bool = False,
 ) -> tuple[dict | None, dict[str, object]]:
+    """Use the shared pacing/retry owner; strict evidence is explicitly opt-in.
+
+    Strict mode admits only fixed official release-group lookup/search shapes,
+    default JSON accept and no additional headers. It does not install a global
+    opener or change the default transport/cache behavior of existing callers.
+    """
     del context
     if callable(should_cancel) and should_cancel():
         return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
-    cached = _get_cached_value(url, accept)
+    if strict_evidence and (
+        type(url) is not str or (_STRICT_RELEASE_GROUP_URL.fullmatch(url) is None
+                                and not _strict_release_group_search_url(url))
+        or accept != "application/json" or extra_headers
+    ):
+        return None, {"status": "invalid_evidence_request", "cache_hit": False, "attempt": 0}
+    cached = _get_cached_value(url, accept, strict_evidence=strict_evidence)
     if cached is _CACHE_MISS:
         return None, {"status": "cached_miss", "cache_hit": True}
     if isinstance(cached, dict):
-        return cached, {"status": "cache", "cache_hit": True}
+        return cached, _success_meta("cache", strict_evidence=strict_evidence)
 
     with _REQUEST_LOCK:
         if callable(should_cancel) and should_cancel():
             return None, {"status": "canceled", "cache_hit": False, "attempt": 0}
-        cached = _get_cached_value(url, accept)
+        cached = _get_cached_value(url, accept, strict_evidence=strict_evidence)
         if cached is _CACHE_MISS:
             return None, {"status": "cached_miss", "cache_hit": True}
         if isinstance(cached, dict):
-            return cached, {"status": "cache", "cache_hit": True}
+            return cached, _success_meta("cache", strict_evidence=strict_evidence)
 
         blocked, retry_after_seconds, blocked_reason = _blocked_state()
         if blocked:
-            _set_cached_value(url, accept, None)
+            _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
             return None, {
                 "status": "blocked",
                 "cache_hit": False,
@@ -175,34 +269,53 @@ def get_json(
                 return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
             request = urllib.request.Request(url, headers=headers)
             try:
-                with urllib.request.urlopen(request, timeout=float(timeout or 15.0)) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                if strict_evidence:
+                    # This is urllib within the existing request lock, not an
+                    # alternate network owner or a process-wide opener change.
+                    opener = urllib.request.build_opener(_StrictEvidenceHTTPErrorProcessor())
+                    response_context = opener.open(request, timeout=float(timeout or 15.0))
+                else:
+                    response_context = urllib.request.urlopen(request, timeout=float(timeout or 15.0))
+                with response_context as response:
+                    body = _strict_success_bytes(response) if strict_evidence else response.read()
+                    payload = json.loads(body.decode("utf-8"))
                 _mark_request_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 if isinstance(payload, dict):
-                    _set_cached_value(url, accept, payload)
-                    return payload, {"status": "network", "cache_hit": False, "attempt": attempt}
-                _set_cached_value(url, accept, None)
+                    _set_cached_value(url, accept, payload, strict_evidence=strict_evidence)
+                    return payload, _success_meta("network", strict_evidence=strict_evidence, attempt=attempt)
+                _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
                 return None, {"status": "invalid_payload", "cache_hit": False, "attempt": attempt}
+            except _StrictEvidenceError as exc:
+                _mark_request_complete()
+                if callable(should_cancel) and should_cancel():
+                    return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
+                _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
+                # A redirect or body overrun is terminal; no retry can silently
+                # convert a rejected acquisition into usable provider evidence.
+                return None, {"status": str(exc), "cache_hit": False, "attempt": attempt}
             except urllib.error.HTTPError as exc:
                 body = b""
                 try:
-                    body = exc.read()
+                    body = exc.read(_STRICT_ERROR_MAX_BYTES) if strict_evidence else exc.read()
                 except Exception:
                     body = b""
+                finally:
+                    if strict_evidence:
+                        exc.close()
                 _mark_request_complete()
                 if callable(should_cancel) and should_cancel():
                     return None, {"status": "canceled", "cache_hit": False, "attempt": attempt}
                 block_reason = _block_reason_from_http_error(int(getattr(exc, "code", 0) or 0), body)
                 if block_reason:
                     _set_block(block_reason)
-                    _set_cached_value(url, accept, None)
+                    _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
                     return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
                 if _is_retryable_http_status(int(getattr(exc, "code", 0) or 0)) and attempt < _MAX_ATTEMPTS:
                     time.sleep(_backoff_delay(attempt))
                     continue
-                _set_cached_value(url, accept, None)
+                _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
                 return None, {"status": f"http_{int(getattr(exc, 'code', 0) or 0)}", "cache_hit": False, "attempt": attempt}
             except (urllib.error.URLError, ssl.SSLError, TimeoutError, socket.timeout) as exc:
                 _mark_request_complete()
@@ -211,12 +324,12 @@ def get_json(
                 block_reason = _block_reason_from_exception(getattr(exc, "reason", exc))
                 if block_reason:
                     _set_block(block_reason)
-                    _set_cached_value(url, accept, None)
+                    _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
                     return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
                 if attempt < _MAX_ATTEMPTS:
                     time.sleep(_backoff_delay(attempt))
                     continue
-                _set_cached_value(url, accept, None)
+                _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
                 return None, {"status": "connection_error", "cache_hit": False, "attempt": attempt}
             except Exception as exc:
                 _mark_request_complete()
@@ -225,15 +338,15 @@ def get_json(
                 block_reason = _block_reason_from_exception(exc)
                 if block_reason:
                     _set_block(block_reason)
-                    _set_cached_value(url, accept, None)
+                    _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
                     return None, {"status": "blocked", "cache_hit": False, "attempt": attempt, "blocked_reason": block_reason}
                 if attempt < _MAX_ATTEMPTS:
                     time.sleep(_backoff_delay(attempt))
                     continue
-                _set_cached_value(url, accept, None)
+                _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
                 return None, {"status": type(exc).__name__, "cache_hit": False, "attempt": attempt}
 
-    _set_cached_value(url, accept, None)
+    _set_cached_value(url, accept, None, strict_evidence=strict_evidence)
     return None, {"status": "exhausted", "cache_hit": False}
 
 

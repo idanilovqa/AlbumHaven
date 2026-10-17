@@ -24,7 +24,13 @@ test('tag editor footer uses quiet Cancel and affirmative Apply buttons', () => 
 test('Cancel actions use the shared hollow Button presentation', () => {
   const quietClass = /class="[^"]*ui-button--quiet[^"]*"[^>]*>Cancel<\/button>/g;
   const primaryModals = read('music_app/templates/partials/primary-modals.html');
-  const confirmModals = read('music_app/templates/partials/confirm-modals.html');
+  const confirmSource = read('music_app/templates/partials/confirm-modals.html');
+  const formSource = read('music_app/templates/partials/app-form-modal.html');
+  const formInclude = '{% include "partials/app-form-modal.html" %}';
+  const formImport = "{% from 'partials/button.html' import action_button %}";
+  assert.equal(confirmSource.split(formInclude).length, 2, 'one canonical form include');
+  assert.equal(formSource.split(formImport).length, 2, 'one canonical macro import');
+  const confirmModals = confirmSource.replace(formInclude, formSource.replace(formImport, ''));
   const versionPicker = read('music_app/static/js/runtime/modal-and-overlay-helpers.js');
   const selectionAccent = read('music_app/static/js/selection-accent.js');
 

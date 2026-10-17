@@ -50,23 +50,50 @@ def normalize_measurement(entry, *, account_id, library_id):
     return item
 
 
+def measured_identity(account_id, library_id, device_id, session_id):
+    """Existing lock namespace; callers validate their own input contract."""
+    return f"{account_id}:{library_id}:{device_id}:{session_id}"
+
+
+def lock_measured_identity(connection, identity):
+    lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
+    connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
+
+
+def resolve_measured_track(connection, library_id, path):
+    """Preserve the ordinary measured ledger's exact existing lookup SQL."""
+    return connection.execute("""select t.id,t.track_key from library.local_tracks t
+            join library.local_track_files f on f.track_id=t.id
+            where t.library_id=%s and f.private_path=%s""", (library_id, path)).fetchone()
+
+
+def lock_measured_track_file(connection, library_id, path):
+    """Admission-only lookup; never changes ordinary append's lock behavior."""
+    return connection.execute("""select t.id,t.track_key,f.id as file_id
+        from library.local_tracks t join library.local_track_files f on f.track_id=t.id
+        where t.library_id=%s and f.private_path=%s for share of t,f""",
+        (library_id, path)).fetchone()
+
+
 def append_measured(adapter, entry, *, account_id, library_id):
     from psycopg.types.json import Jsonb
+    from music_app.services.admin_authority import lock_admin_accounts
     item = normalize_measurement(entry, account_id=account_id, library_id=library_id)
-    identity = f"{account_id}:{library_id}:{item['device_id']}:{item['session_id']}"
+    identity = measured_identity(account_id, library_id, item['device_id'], item['session_id'])
     item["id"] = hashlib.sha256(identity.encode()).hexdigest()
     server_fields = {"id", "recorded_at", "scrobbled", "scrobble_error", "scrobble_retryable", "sync_problem"}
     def submitted_fields(value):
         return {key: item for key, item in value.items() if key not in server_fields and not key.startswith("scrobble_")}
     with adapter._connect_to_database() as connection:
+        # Match admission's account -> identity order before the INSERT's FK
+        # can request an account lock. Keep this on the same inner connection;
+        # the outer provider guard must never hold this account lock for us.
+        lock_admin_accounts(connection, account_id, account_id)
         # The transaction-scoped identity lock also serializes first-row creation.
-        lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
-        connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
+        lock_measured_identity(connection, identity)
         path = str(item.get("path") or item.get("track_ref") or "")
         claimed = str((item.get("canonical_match") or {}).get("library_track_id") or "")
-        track = connection.execute("""select t.id,t.track_key from library.local_tracks t
-            join library.local_track_files f on f.track_id=t.id
-            where t.library_id=%s and f.private_path=%s""", (library_id, path)).fetchone()
+        track = resolve_measured_track(connection, library_id, path)
         if track is None or (claimed and claimed != str(track["id"])):
             raise MeasuredListenError("Listen track does not belong to the current library")
         current = connection.execute("""select * from integration.listen_history

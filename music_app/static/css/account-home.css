@@ -1,0 +1,4 @@
+/* Privacy suspension must override the shared Home root's display layout. */
+#account-home[hidden] {
+  display: none !important;
+}

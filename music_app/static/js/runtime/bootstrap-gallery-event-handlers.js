@@ -1,4 +1,8 @@
 function handleGalleryBootstrapClick(event) {
+  const privateSidebarNode = event.target.closest('[data-sidebar-artist], [data-sidebar-all-artists="1"]');
+  if (privateSidebarNode && (privateSidebarNode.albumHavenPrivateSearchView || state.view?.private_search === true)) {
+    return handlePrivateSearchSidebarNavigation(event, privateSidebarNode);
+  }
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
@@ -95,38 +99,6 @@ function handleGalleryBootstrapClick(event) {
     return;
   }
 
-  const albumAction = event.target.closest('[data-album-card-action]');
-  if (albumAction) {
-    event.preventDefault();
-    const action = albumAction.getAttribute('data-album-card-action') || '';
-    const menu = document.getElementById('album-card-context-menu');
-    const album = getIndexedAlbum(menu?.dataset.albumKey || '');
-
-    hideAlbumCardContextMenu();
-
-    if (action === 'open-explorer') {
-      openAlbumInExplorer(album);
-      return;
-    }
-
-    if (action === 'move_to_hoard' || action === 'move_to_library') {
-      performAlbumMove(album, action);
-      return;
-    }
-
-    if (action === 'mark-version') {
-      openVersionPickerModal(album);
-      return;
-    }
-
-    if (action === 'unmark-version') {
-      unmarkAlbumVersion(album?.key || '');
-      return;
-    }
-
-    return;
-  }
-
   const versionPickerOption = event.target.closest('[data-version-picker-target]');
   if (versionPickerOption) {
     event.preventDefault();
@@ -164,6 +136,8 @@ function handleGalleryBootstrapClick(event) {
   const lightboxTrigger = event.target.closest('[data-open-lightbox="1"]');
   if (lightboxTrigger) {
     event.preventDefault();
+    if (typeof getTrackModalContentRoot === 'function' && getTrackModalContentRoot()?.contains(lightboxTrigger)
+      && typeof canViewTrackModalArtwork === 'function' && !canViewTrackModalArtwork()) return;
     const items = lightboxTrigger.getAttribute('data-lightbox-gallery') === 'visible'
       ? getLightboxGalleryItems()
       : [];
@@ -268,6 +242,8 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
+    if (typeof deferAppFormPageReplacement === 'function'
+      && deferAppFormPageReplacement(() => handleGalleryBootstrapClick(event))) return;
     const activeSearchQuery = String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -443,11 +419,36 @@ function getStableLightboxZoomOrigin(lightboxImage, clientX, clientY) {
   };
 }
 
+function handlePrivateSearchSidebarNavigation(event, node) {
+  event.preventDefault();
+  const runtime = window.AlbumHavenSearchRuntime;
+  if (runtime?.sidebarNodeIsCurrent(node) !== true) return true;
+  if (typeof deferAppFormPageReplacement === 'function'
+    && deferAppFormPageReplacement(() => handlePrivateSearchSidebarNavigation(event, node))) return true;
+  if (runtime.sidebarNodeIsCurrent(node) !== true) return true;
+  const allArtists = node.getAttribute('data-sidebar-all-artists') === '1';
+  const nextView = {...state.view, selected_artist: allArtists ? '' : node.getAttribute('data-sidebar-artist'),
+    all_artists_active: allArtists, related_filter_artists: [], primary_filter_active: false};
+  const url = new URL(buildApiUrl(nextView), window.location.href);
+  url.searchParams.set('search_presentation', state.view.search_presentation);
+  closeArtistsDrawer({restoreFocus: false});
+  if (runtime.sidebarNodeIsCurrent(node) !== true) return true;
+  // Both native handlers use this same current-node path. The native foreground
+  // owner obtains a fresh selected/all page; no prior cursor or source is reused.
+  fetchAndRender(`${url.pathname}${url.search}`, true);
+  return true;
+}
+
 function handleSidebarArtistSelectionClick(event) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
+  if (sidebarArtistLink.albumHavenPrivateSearchView || state.view?.private_search === true) {
+    return handlePrivateSearchSidebarNavigation(event, sidebarArtistLink);
+  }
 
   event.preventDefault();
+  if (typeof deferAppFormPageReplacement === 'function'
+    && deferAppFormPageReplacement(() => handleSidebarArtistSelectionClick(event))) return true;
   if (
     state.ui.scanPageReturnContext
     || state.ui.forceScanPageVisible
@@ -677,6 +678,78 @@ function ensureRecentSearchState() {
   return state.ui;
 }
 
+let recentSearchTransport = null;
+let unsubscribeRecentSearchTransport = null;
+let recentSearchShell = null;
+let recentSearchObserver = null;
+
+// Shell identity and transport stamps provide continuity, not authorization.
+function getRecentSearchScope() {
+  const shell = document.getElementById('app-shell');
+  const account = shell?.dataset?.nativeAccountId;
+  const library = shell?.dataset?.nativeLibraryId;
+  if (!account || !library || !recentSearchTransport) return null;
+  try {
+    const context = recentSearchTransport.context();
+    const identity = JSON.stringify([account, library, context]);
+    return {storageKey: `${RECENT_SEARCH_STORAGE_KEY}:${identity}`,
+      continuity: JSON.stringify([identity, recentSearchTransport.generation()])};
+  } catch (_error) {
+    return null;
+  }
+}
+
+function syncRecentSearchScope(records = []) {
+  const ui = ensureRecentSearchState();
+  if (!ui) return null;
+  // Install only when the existing history owner is used: the shared transport
+  // is declared later in the production bundle.
+  const transport = window.AlbumHavenPrivateUITransport || null;
+  const shell = document.getElementById('app-shell');
+  let retired = transport !== recentSearchTransport || shell !== recentSearchShell;
+  if (transport !== recentSearchTransport) {
+    unsubscribeRecentSearchTransport?.();
+    recentSearchTransport = transport;
+    unsubscribeRecentSearchTransport = transport?.subscribe(syncRecentSearchScope) || null;
+  }
+  if (shell !== recentSearchShell) {
+    recentSearchObserver?.disconnect();
+    recentSearchShell = shell;
+    recentSearchObserver = shell && typeof MutationObserver === 'function'
+      ? new MutationObserver(syncRecentSearchScope) : null;
+    recentSearchObserver?.observe(shell, {attributes: true, attributeOldValue: true,
+      attributeFilter: ['data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
+  }
+  // Drain already-observed transitions before admitting another intent. A batched
+  // A-to-B-to-A transition must retire A even when its final stamp is unchanged.
+  const mutations = [...records, ...(recentSearchObserver?.takeRecords?.() || [])];
+  retired ||= mutations.some(record => record.oldValue !== record.target.getAttribute(record.attributeName));
+  const scope = getRecentSearchScope();
+  const continuity = scope?.continuity || null;
+  if (retired || !Object.prototype.hasOwnProperty.call(ui, 'recentSearchScope')
+      || (ui.recentSearchScope?.continuity || null) !== continuity) {
+    const previous = ui.recentSearchScope;
+    ui.recentSearchScope = scope;
+    ui.recentSearchQueries = [];
+    ui.recentSearchesLoaded = false;
+    ui.recentSearchPopoverOpen = false;
+    ui.recentSearchActiveIndex = -1;
+    const {input, popover} = getRecentSearchElements();
+    if (popover) {popover.innerHTML = ''; popover.hidden = true;}
+    input?.setAttribute('aria-expanded', 'false');
+    input?.removeAttribute('aria-activedescendant');
+    if (typeof galleryMainSurfaceController !== 'undefined'
+        && galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
+      closeGalleryMainSurface(false);
+    }
+    if (previous && ui.pendingRecentSearchCommitScope === previous) {
+      clearPendingGallerySearchCommit();
+      releasePendingGallerySearchSuspensions();
+    }
+  }
+  return ui.recentSearchScope;
+}
+
 function normalizeRecentSearchQueries(queries) {
   const normalized = [];
   const seen = new Set();
@@ -693,16 +766,17 @@ function normalizeRecentSearchQueries(queries) {
 
 function readRecentSearchQueries() {
   const ui = ensureRecentSearchState();
-  if (!ui) return [];
+  const scope = syncRecentSearchScope();
+  if (!ui || !scope) return [];
   if (!ui.recentSearchesLoaded) {
-    const storedValue = getSessionStorageItem(RECENT_SEARCH_STORAGE_KEY, '');
+    const storedValue = getSessionStorageItem(scope.storageKey, '');
     if (storedValue) {
       try {
         ui.recentSearchQueries = normalizeRecentSearchQueries(JSON.parse(storedValue));
       } catch (_error) {
         ui.recentSearchQueries = [];
         if (typeof removeSessionStorageItem === 'function') {
-          removeSessionStorageItem(RECENT_SEARCH_STORAGE_KEY);
+          removeSessionStorageItem(scope.storageKey);
         }
       }
     }
@@ -715,13 +789,14 @@ function recordRecentSearchQuery(query) {
   const value = String(query || '').trim();
   if (!value) return false;
   const ui = ensureRecentSearchState();
-  if (!ui) return false;
+  const scope = syncRecentSearchScope();
+  if (!ui || !scope) return false;
   const key = value.toLocaleLowerCase();
   ui.recentSearchQueries = [
     value,
     ...readRecentSearchQueries().filter((item) => item.toLocaleLowerCase() !== key),
   ].slice(0, RECENT_SEARCH_LIMIT);
-  setSessionStorageItem(RECENT_SEARCH_STORAGE_KEY, JSON.stringify(ui.recentSearchQueries));
+  setSessionStorageItem(scope.storageKey, JSON.stringify(ui.recentSearchQueries));
   return true;
 }
 
@@ -789,7 +864,7 @@ function closeRecentSearchPopover() {
 function selectRecentSearchQuery(query) {
   const { input } = getRecentSearchElements();
   const value = String(query || '').trim();
-  if (!input || !value) return false;
+  if (!input || !value || !readRecentSearchQueries().includes(value)) return false;
   input.value = value;
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
@@ -813,6 +888,7 @@ function handleGalleryBootstrapSearchClick(event) {
   if (option) {
     event.preventDefault();
     const queries = readRecentSearchQueries();
+    if (!getRecentSearchElements().popover?.contains(option)) return false;
     return selectRecentSearchQuery(queries[Number(option.getAttribute('data-recent-search-index'))]);
   }
   if (event.target.closest('#search-input')) {
@@ -899,6 +975,7 @@ function clearPendingGallerySearchCommit() {
   if (!state.ui || typeof state.ui !== 'object') return;
   clearBrowserTimeout(state.ui.pendingSearchCommitTimer);
   state.ui.pendingSearchCommitTimer = 0;
+  state.ui.pendingRecentSearchCommitScope = null;
 }
 
 function beginAlbumDetailPrewarmSearchSuspension() {
@@ -989,6 +1066,8 @@ function releasePendingGallerySearchSuspensions() {
 }
 
 function scheduleGallerySearchCommit(nextQuery, options = {}) {
+  const recentSearchScope = options.recordRecentSearch === true
+    ? syncRecentSearchScope() : undefined;
   const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
   let committedQuery = String(state.view?.query || '');
   const pendingQuery = state.busy
@@ -1026,8 +1105,12 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
   }
   clearPendingGallerySearchCommit();
   const commitSearch = () => {
+    if (options.recordRecentSearch === true
+        && recentSearchScope !== (syncRecentSearchScope())) return;
     state.ui.pendingSearchCommitTimer = 0;
+    state.ui.pendingRecentSearchCommitScope = null;
     commitGallerySearchQuery(normalizedQuery, {
+      recentSearchScope,
       recordRecentSearch: options.recordRecentSearch === true,
       scanPageAbandonHandled: options.scanPageAbandonHandled === true,
     });
@@ -1036,6 +1119,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
     commitSearch();
     return true;
   }
+  state.ui.pendingRecentSearchCommitScope = recentSearchScope;
   state.ui.pendingSearchCommitTimer = scheduleBrowserTimeout(
     commitSearch,
     SEARCH_COMMIT_DEBOUNCE_MS,
@@ -1131,6 +1215,11 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
+  const currentRecentSearchScope = options.recordRecentSearch === true
+    ? syncRecentSearchScope() : undefined;
+  const recentSearchScope = Object.prototype.hasOwnProperty.call(options, 'recentSearchScope')
+    ? options.recentSearchScope : currentRecentSearchScope;
+  if (options.recordRecentSearch === true && recentSearchScope !== currentRecentSearchScope) return;
   const mobileLeaveConfirmed = options.mobileLeaveConfirmed === true;
   if (mobileLeaveConfirmed) {
     beginAlbumDetailPrewarmSearchSuspension();
@@ -1138,7 +1227,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     beginSearchWaveformPeakLoadSuspension();
   }
   if (typeof prepareMobileGallerySearch === 'function'
-    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
+    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, recentSearchScope, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
     releasePendingGallerySearchSuspensions();
     return;
   }
@@ -1382,6 +1471,8 @@ function buildClearedSearchView() {
       },
       surface_request: restoredSelectedArtist ? 'albums' : 'home',
       query: '',
+      private_search: false,
+      search_presentation: undefined,
       selected_artist: restoredSelectedArtist,
       all_artists_active: false,
       gallery_scope: restoredSelectedArtist ? state.view.gallery_scope : '',
@@ -1409,6 +1500,8 @@ function buildClearedSearchView() {
   return {
     ...state.view,
     query: '',
+    private_search: false,
+    search_presentation: undefined,
     selected_artist: restoredSelectedArtist,
     all_artists_active: false,
     related_filter_artists: restoredSelectedArtist || pendingAllArtistsSelection
@@ -2077,6 +2170,7 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
+  if (window.AlbumHavenPlaylistRuntime?.restoreDraftFromHistory?.()) return;
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
-  fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
+  return fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);
 }

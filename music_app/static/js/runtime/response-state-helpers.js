@@ -86,6 +86,10 @@ function normalizeRuntimeGalleryDisplayMode(value, fallback = 'cards') {
   return normalized === 'covers' || normalized === 'list' ? normalized : 'cards';
 }
 
+function normalizeRuntimeArtistPageMode(value) {
+  return normalizeRuntimeString(value, '').trim().toLowerCase() === 'info' ? 'info' : 'gallery';
+}
+
 function normalizeRuntimeSelectedArtistFamilyDisplayMode(value, fallback = 'grouped') {
   const normalized = normalizeRuntimeString(value, fallback).trim().toLowerCase();
   return normalized === 'chronological' ? 'chronological' : 'grouped';
@@ -583,15 +587,6 @@ function compactRuntimeArtistGroupPayload(group) {
   };
 }
 
-function compactRuntimeNonAlbumTrackPayload(track) {
-  if (!isRuntimePlainObject(track)) {
-    return track;
-  }
-  return {
-    ...track,
-  };
-}
-
 function runtimeAlbumPayloadIsFull(album) {
   return isRuntimePlainObject(album)
     && !album.preview_only
@@ -631,7 +626,8 @@ function compactRuntimeViewPayload(view) {
     artist_groups: (Array.isArray(normalizedView.artist_groups) ? normalizedView.artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
     primary_artist_groups: (Array.isArray(normalizedView.primary_artist_groups) ? normalizedView.primary_artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
     family_artist_groups: (Array.isArray(normalizedView.family_artist_groups) ? normalizedView.family_artist_groups : []).map((group) => compactRuntimeArtistGroupPayload(group)),
-    non_album_tracks: (Array.isArray(normalizedView.non_album_tracks) ? normalizedView.non_album_tracks : []).map((track) => compactRuntimeNonAlbumTrackPayload(track)),
+    // Preference receipts belong to exact response rows, never reconstructed copies.
+    non_album_tracks: cloneRuntimeArray(normalizedView.non_album_tracks),
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
@@ -719,6 +715,11 @@ function isReusableSelectedArtistBrowseViewCandidate(view) {
   return resolvedSurface === 'albums'
     && String(view?.query || '').trim()
     && String(view?.selected_artist || '').trim()
+    // Info requests and responses require a fresh selected-Artist read, even
+    // when a parsed request has no server descriptor yet.
+    && view?.private_search !== true
+    && normalizeRuntimeArtistPageMode(view?.page_mode) !== 'info'
+    && normalizeRuntimeArtistPageMode(view?.artist_page?.active_page_mode) !== 'info'
     && !(Array.isArray(view?.related_filter_artists) && view.related_filter_artists.length)
     && !Boolean(view?.primary_filter_active);
 }
@@ -879,6 +880,47 @@ function resolveMainGalleryCategorySelection(fallbackCategories = null) {
   );
 }
 
+// Private Search owns its result DTO. Native navigation receives only this
+// finite projection, never a response spread or a reusable row/source snapshot.
+function normalizePrivateSearchNavigation(payload, fallbackView = null) {
+  const base = isRuntimePlainObject(fallbackView) ? fallbackView : {};
+  const wire = payload.contract_version === 'own-love-v1';
+  const rows = wire ? payload.sidebar?.artists : payload.artists_sidebar;
+  const artists = (Array.isArray(rows) ? rows : []).filter(row =>
+    typeof row?.artist === 'string' && row.artist.trim()).map(row => ({
+    artist: row.artist,
+    artist_display: typeof row.artist_display === 'string' ? row.artist_display : row.artist,
+    ...(Number.isInteger(row.count) && row.count >= 0 ? {count: row.count} : {}),
+  }));
+  return {
+    ok: true,
+    surface: {active: 'albums'}, surface_request: 'albums',
+    private_search: true,
+    query: typeof payload.query === 'string' ? payload.query : '',
+    selected_artist: typeof payload.selected_artist === 'string' ? payload.selected_artist : '',
+    all_artists_active: wire ? payload.selection_state === 'all_artists' : payload.all_artists_active === true,
+    search_presentation: (wire ? payload.presentation : payload.search_presentation) === 'tracks' ? 'tracks' : 'albums',
+    artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
+    artists_sidebar: artists, related_artists: [], related_filter_artists: [],
+    search_filters: normalizeRuntimeSearchFilters(null),
+    // These are existing ordinary UI contracts, never properties of the private
+    // envelope. They do not parse or authorize the raw committed query.
+    search_filter_contract: normalizeRuntimeSearchFilterContract(base.search_filter_contract),
+    search_query_contract: normalizeRuntimeSearchQueryContract(base.search_query_contract),
+    visible_library_categories: normalizeVisibleLibraryCategorySelection(base.visible_library_categories),
+    search_context: null, ignored_version_keys: [], non_album_tracks: [],
+    non_album_exception_values: [], manual_version_links: {},
+    gallery_scope: normalizeRuntimeString(base.gallery_scope, 'all'),
+    gallery_display_mode: normalizeRuntimeGalleryDisplayMode(base.gallery_display_mode),
+    gallery_scale_percent: normalizeRuntimeGalleryScalePercent(base.gallery_scale_percent),
+    music_dir: normalizeRuntimeString(base.music_dir),
+    app_name: normalizeRuntimeString(base.app_name), app_version: normalizeRuntimeString(base.app_version),
+    album_count: 0, artist_count: artists.length,
+    show_all_artists_sidebar_link: wire || payload.show_all_artists_sidebar_link !== false, primary_filter_active: false,
+    initial_view_partial: false, payload_tier: 'full',
+  };
+}
+
 function normalizeViewPayload(payload, fallbackView = null) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
@@ -888,6 +930,13 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(isRuntimePlainObject(fallbackView) ? fallbackView : {}),
   };
   const source = isRuntimePlainObject(payload) ? payload : {};
+  if (source.private_search === true) return normalizePrivateSearchNavigation(source, base);
+  // A subsequent ordinary response must not inherit private routing from its
+  // fallback view. Its ordinary normalizer and response fields remain intact.
+  if (base.private_search === true) {
+    delete base.private_search;
+    delete base.search_presentation;
+  }
   const resolvedSurface = String(
     source?.surface?.active
       ?? source?.surface_request
@@ -895,7 +944,7 @@ function normalizeViewPayload(payload, fallbackView = null) {
       ?? base?.surface_request
       ?? '',
   ).trim().toLowerCase();
-  const isPlaylistSurface = resolvedSurface === 'playlists';
+  const isCollectionSurface = resolvedSurface === 'playlists' || resolvedSurface === 'album_tops';
   const playbackContext = normalizeRuntimePlaybackContext(source.playback_context, base.playback_context);
   const hasSelectedArtistFamilyDisplayMode = Object.prototype.hasOwnProperty.call(source, 'selected_artist_family_display_mode')
     || Object.prototype.hasOwnProperty.call(base, 'selected_artist_family_display_mode')
@@ -924,28 +973,28 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...base,
     ...source,
     artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.artist_groups,
-      isPlaylistSurface ? [] : base.artist_groups,
+      isCollectionSurface ? [] : source.artist_groups,
+      isCollectionSurface ? [] : base.artist_groups,
     ),
     primary_artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.primary_artist_groups),
-      isPlaylistSurface ? [] : base.primary_artist_groups,
+      isCollectionSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.primary_artist_groups),
+      isCollectionSurface ? [] : base.primary_artist_groups,
     ),
     family_artist_groups: cloneRuntimeArray(
-      isPlaylistSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.family_artist_groups),
-      isPlaylistSurface ? [] : base.family_artist_groups,
+      isCollectionSurface ? [] : (resetSelectedArtistScopedGroups ? [] : source.family_artist_groups),
+      isCollectionSurface ? [] : base.family_artist_groups,
     ),
     artists_sidebar: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.artists_sidebar,
-      isPlaylistSurface ? [] : base.artists_sidebar,
+      isCollectionSurface ? [] : source.artists_sidebar,
+      isCollectionSurface ? [] : base.artists_sidebar,
     ),
     related_artists: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.related_artists,
-      isPlaylistSurface ? [] : base.related_artists,
+      isCollectionSurface ? [] : source.related_artists,
+      isCollectionSurface ? [] : base.related_artists,
     ),
     related_filter_artists: cloneRuntimeArray(
-      isPlaylistSurface ? [] : source.related_filter_artists,
-      isPlaylistSurface ? [] : base.related_filter_artists,
+      isCollectionSurface ? [] : source.related_filter_artists,
+      isCollectionSurface ? [] : base.related_filter_artists,
     ).map((artist) => String(artist || '')),
     search_filters: normalizeRuntimeSearchFilters(source.search_filters, base.search_filters),
     search_filter_contract: normalizeRuntimeSearchFilterContract(source.search_filter_contract, base.search_filter_contract),
@@ -966,8 +1015,8 @@ function normalizeViewPayload(payload, fallbackView = null) {
     manual_version_links: cloneRuntimeObject(source.manual_version_links, base.manual_version_links),
     query: normalizeRuntimeString(source.query, base.query),
     selected_artist: normalizeRuntimeString(
-      isPlaylistSurface ? '' : source.selected_artist,
-      isPlaylistSurface ? '' : base.selected_artist,
+      isCollectionSurface || explicitlyClearsSelectedArtist ? '' : source.selected_artist,
+      isCollectionSurface ? '' : base.selected_artist,
     ),
     gallery_scope: normalizeRuntimeString(source.gallery_scope, base.gallery_scope),
     gallery_display_mode: normalizeRuntimeGalleryDisplayMode(source.gallery_display_mode, base.gallery_display_mode),
@@ -978,16 +1027,16 @@ function normalizeViewPayload(payload, fallbackView = null) {
     album_count: normalizeRuntimeNumber(source.album_count, base.album_count),
     artist_count: normalizeRuntimeNumber(source.artist_count, base.artist_count),
     all_artists_active: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.all_artists_active,
-      isPlaylistSurface ? false : base.all_artists_active,
+      isCollectionSurface ? false : source.all_artists_active,
+      isCollectionSurface ? false : base.all_artists_active,
     ),
     show_all_artists_sidebar_link: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.show_all_artists_sidebar_link,
-      isPlaylistSurface ? false : base.show_all_artists_sidebar_link,
+      isCollectionSurface ? false : source.show_all_artists_sidebar_link,
+      isCollectionSurface ? false : base.show_all_artists_sidebar_link,
     ),
     primary_filter_active: normalizeRuntimeBoolean(
-      isPlaylistSurface ? false : source.primary_filter_active,
-      isPlaylistSurface ? false : base.primary_filter_active,
+      isCollectionSurface ? false : source.primary_filter_active,
+      isCollectionSurface ? false : base.primary_filter_active,
     ),
     initial_view_partial: normalizeRuntimeBoolean(
       source.initial_view_partial,
@@ -996,13 +1045,36 @@ function normalizeViewPayload(payload, fallbackView = null) {
     ...(selectedArtistFamilyDisplayMode ? { selected_artist_family_display_mode: selectedArtistFamilyDisplayMode } : {}),
     ...(playbackContext ? { playback_context: playbackContext } : {}),
   };
+  // Only a local non-identity patch may retain the previous descriptor. A new
+  // browse response must carry its own canonical Artist presentation, including
+  // a full response for the same Artist; request mode is not read admission.
+  const replacesArtistPage = [
+    'surface', 'surface_request', 'selected_artist', 'query', 'page_mode',
+    'artist_groups', 'primary_artist_groups', 'family_artist_groups', 'payload_tier',
+    'gallery_scope', 'visible_library_categories', 'related_filter_artists',
+    'primary_filter_active', 'search_filters', 'private_search',
+  ].some((key) => Object.prototype.hasOwnProperty.call(source, key));
+  const artistPage = Object.prototype.hasOwnProperty.call(source, 'artist_page')
+    ? source.artist_page
+    : replacesArtistPage ? null : base.artist_page;
+  const selectedArtist = normalizedView.selected_artist.trim();
+  if (selectedArtist && (!resolvedSurface || resolvedSurface === 'albums')
+    && normalizedView.private_search !== true && isRuntimePlainObject(artistPage)
+    && typeof artistPage.artist_ref === 'string' && artistPage.artist_ref.trim() === selectedArtist) {
+    const pageMode = normalizeRuntimeArtistPageMode(artistPage.active_page_mode);
+    normalizedView.artist_page = { ...artistPage, artist_ref: selectedArtist, active_page_mode: pageMode };
+    normalizedView.page_mode = pageMode;
+  } else {
+    delete normalizedView.artist_page;
+    delete normalizedView.page_mode;
+  }
   // A replacement search/artist payload must not inherit a root page cursor.
-  if (isPlaylistSurface || normalizedView.query || normalizedView.selected_artist
+  if (isCollectionSurface || normalizedView.query || normalizedView.selected_artist
     || (Array.isArray(source.artist_groups) && !Object.prototype.hasOwnProperty.call(source, 'gallery_page'))) {
     delete normalizedView.gallery_page;
     delete normalizedView.gallery_page_scope;
   }
-  if (isPlaylistSurface) {
+  if (isCollectionSurface) {
     delete normalizedView.artist_family_filters;
     delete normalizedView.artist_page;
     delete normalizedView.playback_context;
@@ -1013,6 +1085,16 @@ function normalizeViewPayload(payload, fallbackView = null) {
     if (!isRuntimePlainObject(source.playlist_index)) {
       delete normalizedView.playlist_index;
     }
+  }
+  if (resolvedSurface !== 'album_tops') delete normalizedView.top_ref;
+  if (resolvedSurface === 'album_tops') {
+    normalizedView.top_ref = typeof source.top_ref === 'string' ? source.top_ref : null;
+    delete normalizedView.playlist_detail;
+    delete normalizedView.playlist_index;
+    delete normalizedView.playlist_sidebar;
+    delete normalizedView.playlist_creation_source;
+    delete normalizedView.playlist_actions;
+    delete normalizedView.search_context;
   }
   return normalizedView;
 }
@@ -1316,6 +1398,11 @@ function compactCurrentViewForIdle() {
 }
 
 function applyViewPayload(payload, options = {}) {
+  const ownsResponseApply = () => {
+    try { return typeof options.isCurrentResponse !== 'function' || options.isCurrentResponse() === true; }
+    catch (_error) { return false; }
+  };
+  if (!ownsResponseApply()) return null;
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }
@@ -1343,6 +1430,7 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  if (!ownsResponseApply()) return null;
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState
@@ -1428,7 +1516,20 @@ function applyViewPayload(payload, options = {}) {
       : '';
   }
   state.view = nextView;
+  const ownsAppliedView = () => ownsResponseApply() && state.view === nextView;
+  if (typeof window !== 'undefined') window.AlbumHavenSearchRuntime?.syncNativeView({isCurrentResponse: options.isCurrentResponse});
+  if (!ownsAppliedView()) return nextView;
+  if (typeof selectLibrarySidebarMode === 'function' && previousView.surface?.active !== nextView.surface?.active
+    && ['playlists', 'album_tops'].includes(nextView.surface?.active)) selectLibrarySidebarMode(nextView.surface.active);
+  if (!ownsAppliedView()) return nextView;
+  if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
+  if (!ownsAppliedView()) return nextView;
+  if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
+  if (!ownsAppliedView()) return nextView;
+  if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
+  if (!ownsAppliedView()) return nextView;
   if (typeof syncGalleryMainStateFromView === 'function') syncGalleryMainStateFromView(previousView, nextView);
+  if (!ownsAppliedView()) return nextView;
   if (options.completePageEntryBrowseContext) {
     state.ui.pageEntryBrowseContextPending = false;
   }
@@ -1443,6 +1544,7 @@ function applyViewPayload(payload, options = {}) {
   } else if (typeof syncArtistsDrawerVisibility === 'function') {
     syncArtistsDrawerVisibility();
   }
+  if (!ownsAppliedView()) return nextView;
   if (
     nextSelectedArtist
   ) {
@@ -1474,6 +1576,7 @@ function applyViewPayload(payload, options = {}) {
   } else {
     resetPreSearchViewState();
   }
+  if (!ownsAppliedView()) return nextView;
   return nextView;
 }
 

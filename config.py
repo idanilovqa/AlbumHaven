@@ -4,6 +4,7 @@ import logging
 import sys
 from pathlib import Path
 
+from music_app.services.auth_config import build_public_sharing_config
 from music_app.services.musicbrainz_http import default_user_agent
 from music_app.services.cover_provider_groups import (
     normalize_cover_provider_groups,
@@ -217,6 +218,9 @@ def _library_browse_bases():
 
 class Config:
     ALBUM_HAVEN_DEPLOYMENT_MODE = os.environ.get("ALBUM_HAVEN_DEPLOYMENT_MODE", "self_hosted")
+    _public_sharing = build_public_sharing_config(os.environ)
+    ALBUM_HAVEN_PUBLIC_SHARING_ENABLED = _public_sharing["enabled"]
+    ALBUM_HAVEN_PUBLIC_SHARING_ORIGIN = _public_sharing["origin"]
     ALBUM_HAVEN_LIBRARY_BROWSE_BASES = _library_browse_bases()
     _configured_music_dir = str(os.environ.get("MUSIC_DIR") or "").strip()
     MUSIC_DIR = _resolved_path(Path(_configured_music_dir)) if _configured_music_dir else None

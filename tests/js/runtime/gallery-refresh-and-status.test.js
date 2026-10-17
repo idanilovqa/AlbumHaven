@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const {installRequestClassification} = require('./shared-request-unit-fixture.cjs');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
@@ -137,6 +138,26 @@ test('failed search preserves the view', async () => {
   await assert.rejects(request, /search failed/);
   assert.equal(context.state.view, previousView);
   assert.equal(calls.applyViewPayload.length, 0);
+});
+
+test('ordinary gallery refresh works without a browser host or optional draft navigation services', async () => {
+  for (const browserHost of [undefined, {}]) {
+    const {context, calls, pendingRequests} = createContext();
+    assert.equal(typeof context.window, 'undefined', 'the isolated gallery owner does not require window');
+    if (browserHost) context.window = browserHost;
+    const refresh = context.fetchAndRender('/view-data', false, {preserveScroll: true});
+    assert.equal(pendingRequests.length, 1);
+    pendingRequests[0].resolveWith({artist_groups: []});
+    assert.equal(await refresh, true);
+    assert.equal(calls.applyViewPayload.length, 1);
+  }
+});
+
+test('a retained draft request without its native owner fails closed before transport', async () => {
+  const {context, pendingRequests} = createContext();
+  assert.equal(await context.fetchAndRender('/view-data', false,
+    {retainedPlaylistDraft: {token: 'expired:draft', scopeKey: 'expired:scope'}}), false);
+  assert.equal(pendingRequests.length, 0);
 });
 
 test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
@@ -427,10 +448,11 @@ function createContext() {
     },
     applyViewPayload(payload) {
       calls.applyViewPayload.push(payload);
-      context.state.view = {
+      const appliedView = context.state.view = {
         ...context.state.view,
         ...payload,
       };
+      return appliedView;
     },
     attachModalEvents() {},
     renderRelated() {
@@ -549,6 +571,7 @@ function createContext() {
   };
 
   vm.createContext(context);
+  installRequestClassification(context, path.dirname(helperPath));
   vm.runInContext(helperSource, context, { filename: helperPath });
   const runtimeRenderView = context.renderView;
   context.renderView = function renderViewStub(options) {
@@ -3746,12 +3769,13 @@ test('pollStatus refreshes a selected artist after pending sidebar navigation se
   context.buildApiUrl = (view) => `/view-data?artist=${encodeURIComponent(String(view?.selected_artist || ''))}`;
   context.applyViewPayload = (payload) => {
     calls.applyViewPayload.push(payload);
-    context.state.view = {
+    const appliedView = context.state.view = {
       ...context.state.view,
       ...payload,
     };
     context.state.ui.pendingSidebarSelectedArtist = '';
     context.state.ui.pendingSidebarAllArtistsActive = false;
+    return appliedView;
   };
 
   const sidebarPromise = context.fetchAndRender('/view-data?artist=A.C.T', true);
@@ -4118,12 +4142,13 @@ test('deferred scan completion refresh handles rejection and retries without los
   context.state.ui.pendingSidebarSelectedArtist = 'A.C.T';
   context.buildApiUrl = (view) => `/view-data?artist=${encodeURIComponent(String(view?.selected_artist || ''))}`;
   context.applyViewPayload = (payload) => {
-    context.state.view = {
+    const appliedView = context.state.view = {
       ...context.state.view,
       ...payload,
     };
     context.state.ui.pendingSidebarSelectedArtist = '';
     context.state.ui.pendingSidebarAllArtistsActive = false;
+    return appliedView;
   };
 
   const sidebarPromise = context.fetchAndRender('/view-data?artist=A.C.T', true);

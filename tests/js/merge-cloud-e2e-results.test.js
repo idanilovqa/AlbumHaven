@@ -949,4 +949,3 @@ mergerTest('authenticated inventory retains structured E2E results for 14 days a
     ...inventory.debugArtifacts.map((entry) => entry.name),
   ]).size, 28);
 });
-

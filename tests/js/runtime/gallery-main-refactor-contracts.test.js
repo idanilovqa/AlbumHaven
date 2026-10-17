@@ -5,6 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const runtimeRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime');
+// Production appearance-bootstrap loads this canonical primitive before deferred runtime.
+const ButtonComponent = require(path.join(runtimeRoot, '..', 'button-component.js'));
 const proposedRuntimeFiles = [
   'album-artbox.js',
   'gallery-main-components.js',
@@ -123,6 +125,7 @@ test('app-bar dropdown surfaces use Settings panel text and hover tokens after p
 
 function loadRuntime(overrides = {}) {
   const context = {
+    ButtonComponent,
     escapeHtml: (value) => String(value ?? '')
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -241,7 +244,19 @@ test('reusable GalleryBar, switch, panel, info overlay, divider, and artist head
   assert.match(bar, /Neal Morse family/);
   assert.match(bar, /3 artists/);
   assert.match(bar, /12 albums/);
-  assert.equal((bar.match(/data-gallery-bar-action=/g) || []).length, 3);
+  const actions = [...bar.matchAll(/data-gallery-bar-action="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(actions.length, 4);
+  const originalActions = actions.filter(action => action !== 'popular-tracks');
+  assert.equal(originalActions.length, 3);
+  assert.deepEqual(originalActions, ['artist-family', 'view', 'album-types']);
+  assert.equal(actions[0], 'popular-tracks');
+  const popularButton = bar.match(/<button\b[^>]*data-gallery-bar-action="popular-tracks"[^>]*>[\s\S]*?<\/button>/)?.[0];
+  assert.equal(popularButton, ButtonComponent.renderActionButton({
+    icon: 'play', ariaLabel: 'Play most popular tracks', presentation: 'bare',
+    className: 'gallery-action-button',
+    attributes: {'data-gallery-bar-action': 'popular-tracks', hidden: ''},
+  }));
+  assert.match(popularButton, /<button\b[^>]*\shidden(?:="")?(?=\s|>)/);
   assert.match(bar, /data-gallery-bar-action="artist-family"/);
   assert.match(bar, /data-gallery-bar-action="view"/);
   assert.match(bar, /data-gallery-bar-action="album-types"/);
@@ -1457,12 +1472,12 @@ test('family rows use available album art and retain independent pressed states'
 });
 
 
-test('Home keeps its context through density refreshes and returns to Gallery on a wide viewport', () => {
+test('explicit Home keeps its context through density and viewport changes before returning to Gallery', () => {
   const name = { textContent: '' }, summary = { textContent: '' };
   const bar = { hidden: false, offsetHeight: 54, dataset: {},
     querySelector: selector => selector === '[data-gallery-context-name]' ? name
       : selector === '[data-gallery-context-summary]' ? summary : null };
-  const context = loadRuntime({ URL, window: { innerWidth: 390, location: { href: 'https://albumhaven.example/' } },
+  const context = loadRuntime({ URL, window: { innerWidth: 390, location: { href: 'https://albumhaven.example/?surface=home' } },
     state: { gallery: {}, ui: {}, view: { query: '', selected_artist: '', artist_groups: [], artist_count: 4, album_count: 8 } },
     document: {
     querySelectorAll: () => [],
@@ -1483,7 +1498,15 @@ test('Home keeps its context through density refreshes and returns to Gallery on
   assert.equal(bar.dataset.galleryContextKind, 'home');
   context.window.innerWidth = 1180;
   context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Rendref');
+  assert.equal(bar.dataset.galleryContextKind, 'home');
+  context.window.location.href = 'https://albumhaven.example/?surface=albums';
+  context.updateGalleryMainChrome();
   assert.equal(name.textContent, 'Gallery');
+  assert.equal(bar.dataset.galleryContextKind, 'gallery');
+  context.window.innerWidth = 390;
+  context.updateGalleryMainChrome();
+  assert.equal(name.textContent, 'Gallery', 'narrow layout alone cannot select the Home surface');
   assert.equal(bar.dataset.galleryContextKind, 'gallery');
 });
 

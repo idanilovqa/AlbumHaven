@@ -105,6 +105,11 @@ class PolicyEvaluator:
             context.action, context.client_surface_class, administrator=administrator
         ):
             return False, "client_surface_denied"
+        if (
+            context.action.startswith("library.")
+            or context.action in LIBRARY_SHELL_ACTIONS
+        ) and (type(context.library_id) is not int or context.library_id <= 0):
+            return False, "library_required"
         if actor.is_bootstrap_owner:
             return True, "bootstrap_owner"
         if context.action == "auth.session.logout" and actor.session_id is not None:

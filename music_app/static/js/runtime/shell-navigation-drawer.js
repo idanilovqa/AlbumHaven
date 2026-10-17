@@ -13,10 +13,17 @@ function isArtistsDrawerElement(value) {
 
 function getArtistsDrawerElements() {
   return {
-    button: document.getElementById('artists-drawer-button'),
+    button: ['playlists', 'album_tops'].includes(String(state.view?.surface?.active || ''))
+      ? getLibraryDrawerTrigger() : document.getElementById('artists-drawer-button'),
     rail: document.getElementById('shell-navigation-rail'),
     backdrop: document.getElementById('shell-navigation-rail-backdrop'),
   };
+}
+function getLibraryDrawerTrigger() {
+  const surface = String(state.view?.surface?.active || '');
+  return ['playlists', 'album_tops'].includes(surface)
+    ? document.getElementById('collection-library-navigation-button')
+    : document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button');
 }
 
 function getArtistTreeFoldElements() {
@@ -38,7 +45,30 @@ function getArtistsDrawerNavigationContentKind(view = state.view || {}) {
 }
 
 function canUseArtistsDrawerForCurrentView() {
-  return getArtistsDrawerNavigationContentKind() === 'artists_sidebar';
+  return ['artists_sidebar', 'playlist_sidebar', 'album_tops_sidebar'].includes(getArtistsDrawerNavigationContentKind());
+}
+
+// Sidebar choice is shell presentation. Only opening a resource navigates.
+function getLibrarySidebarMode() {
+  if (['albums', 'playlists', 'album_tops'].includes(state.ui.librarySidebarMode)) return state.ui.librarySidebarMode;
+  const surface = String(state.view?.surface?.active || '');
+  return ['playlists', 'album_tops'].includes(surface) ? surface : 'albums';
+}
+function syncLibrarySidebarMode() {
+  const mode = getLibrarySidebarMode();
+  const folded = Boolean(!isArtistsDrawerMobileViewport() && state.ui.artistTreeFolded);
+  document.getElementById('sidebar-list')?.toggleAttribute('hidden', folded || mode !== 'albums');
+  document.getElementById('playlist-sidebar-root')?.toggleAttribute('hidden', mode !== 'playlists');
+  document.getElementById('album-tops-sidebar-root')?.toggleAttribute('hidden', mode !== 'album_tops');
+  const surface = String(state.view?.surface?.active || '');
+  document.getElementById('collection-library-navigation')?.toggleAttribute('hidden', !['playlists', 'album_tops'].includes(surface));
+}
+function selectLibrarySidebarMode(mode) {
+  if (!['albums', 'playlists', 'album_tops'].includes(mode)) return false;
+  state.ui.librarySidebarMode = mode;
+  syncLibrarySidebarMode();
+  window.dispatchEvent(new Event('albumhaven:library-sidebar-change'));
+  return true;
 }
 
 function isArtistsDrawerMobileViewport() {
@@ -115,6 +145,7 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (expandedTree) expandedTree.hidden = isFolded;
   if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
   if (list) list.hidden = isFolded;
+  syncLibrarySidebarMode();
   document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '240px');
   if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
   return isFolded;
@@ -197,7 +228,7 @@ function openArtistsDrawer() {
     return false;
   }
   const rail = document.getElementById('shell-navigation-rail');
-  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button') });
+  if (typeof activateTriggerSurface === 'function') activateTriggerSurface(rail, () => closeArtistsDrawer({ restoreFocus: false }), { anchor: getLibraryDrawerTrigger() });
   state.ui.artistsDrawerOpen = true;
   syncArtistsDrawerVisibility();
   document.querySelector?.('#artist-tree-expanded [data-close-artists-drawer]')?.focus?.({ preventScroll: true });
@@ -210,7 +241,7 @@ function closeArtistsDrawer(options = {}) {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(document.getElementById('shell-navigation-rail'));
   syncArtistsDrawerVisibility();
   if (wasOpen && options.restoreFocus !== false) {
-    (document.getElementById('mobile-library-button') || document.getElementById('artists-drawer-button'))?.focus?.({ preventScroll: true });
+    getLibraryDrawerTrigger()?.focus?.({ preventScroll: true });
   }
   return wasOpen;
 }

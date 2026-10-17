@@ -32,6 +32,9 @@ function buildFilterPillHtml(config = {}) {
 }
 
 function buildGalleryBarHtml(config = {}) {
+  if (config.contextKind === 'recent') {
+    return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span>${escapeHtml(config.title || 'Recent')}</span></div></div><div class="gallery-bar__actions">${String(config.actionsHtml || '')}</div>`;
+  }
   const isSingleArtist = config.contextKind === 'single-artist';
   const isArtist = config.contextKind === 'artist' || isSingleArtist;
   const isFamily = config.contextKind === 'family';
@@ -42,6 +45,7 @@ function buildGalleryBarHtml(config = {}) {
   const info = isArtist ? `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.artist || '')}" aria-label="Information about ${escapeHtml(config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>` : '';
   return `<div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>${escapeHtml(title)}</span>${info}<span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>${escapeHtml(summary)}</span></div>
     <div class="gallery-bar__actions">
+      ${ButtonComponent.renderActionButton({icon: 'play', ariaLabel: 'Play most popular tracks', presentation: 'bare', className: 'gallery-action-button', attributes: {'data-gallery-bar-action': 'popular-tracks', hidden: ''}})}
       <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
       <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="list" aria-label="Rows" title="Rows"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M9 3v7M9 14v7"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action" type="button" tabindex="-1" data-gallery-view-choice="covers" aria-label="No info" title="No info"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m5 17 5-5 3 3 2-2 4 4"/></svg></button><button class="gallery-view-choice action-button unfolding-action-button__action is-active" type="button" data-gallery-bar-action="view" data-gallery-view-choice="cards" aria-label="Cards" title="Cards" aria-controls="gallery-view-cluster-options" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18M7 18h6"/></svg></button></div>
       <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
@@ -49,6 +53,16 @@ function buildGalleryBarHtml(config = {}) {
 }
 
 function buildArtistFamilyPanelHtml(config = {}) {
+  if (config.presentation === 'navigation') {
+    const title = String(config.title || 'Artist Family');
+    const rows = (Array.isArray(config.members) ? config.members : []).map(member => window.NavigationTree.renderItem({
+      variant: 'wide', action: true, key: member.artistRef, label: member.label,
+      count: member.albumCount, artworkHtml: member.artworkHtml || '',
+      selected: member.artistRef === config.currentArtist,
+      attributes: {'data-artist-page-family': member.artistRef},
+    })).join('');
+    return `<section class="artist-family-panel artist-family-panel--navigation" aria-label="${escapeHtml(title)}"><header><h2>${escapeHtml(title)}</h2></header><div class="artist-family-panel__body navigation-tree">${rows}</div></section>`;
+  }
   const combineSwitch = buildGallerySwitchHtml({
     id: 'artist-family-combine-similar',
     label: 'Combine similar artists',
@@ -62,6 +76,11 @@ function buildGalleryEmptySelectionHtml() {
 }
 
 function buildArtistInfoOverlayHtml(config = {}) {
+  if (config.presentation === 'embedded') {
+    const image = config.imageUrl ? buildAlbumArtboxHtml({state: 'ready', label: `${String(config.artist || 'Artist')} artwork`,
+      coverHtml: `<img src="${escapeHtml(config.imageUrl)}" alt="" loading="lazy" decoding="async">`}) : '';
+    return `<section class="artist-info-overlay artist-info-overlay--embedded" role="region" aria-label="Information about ${escapeHtml(config.artist || 'Artist')}"><header>${image}<div class="artist-info-overlay__identity"><span>Artist</span><h2>${escapeHtml(config.artist || 'Unknown artist')}</h2>${config.metadata ? `<p>${escapeHtml(config.metadata)}</p>` : ''}</div></header><div class="artist-info-overlay__body"><p>${escapeHtml(config.summary || 'No information was supplied.')}</p>${config.sourceLabel ? `<p>${escapeHtml(`Source: ${config.sourceLabel}`)}</p>` : ''}</div></section>`;
+  }
   const image = config.imageUrl ? `<img class="artist-info-overlay__image" src="${escapeHtml(config.imageUrl)}" alt="">` : '<div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div>';
   const readMore = config.readMoreUrl ? `<a href="${escapeHtml(config.readMoreUrl)}">Read more</a>` : '<button type="button" data-artist-info-read-more>Read more</button>';
   const wikipedia = config.wikipediaUrl ? `<a href="${escapeHtml(config.wikipediaUrl)}" rel="noreferrer">Wikipedia</a>` : '';
@@ -82,7 +101,8 @@ function buildGalleryRatingHtml(config = {}) {
   const points = Array.from({ length: maximum }, (_unused, index) => (index < value
     ? '<span class="star filled">&#9733;</span>'
     : '<span class="star">&#9734;</span>')).join('');
-  return `<div class="rating-row" data-rating-value="${value}"><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
+  const compactEmpty = config.compact === true && value === 0;
+  return `<div class="rating-row${compactEmpty ? ' rating-row--compact-empty' : ''}" data-rating-value="${value}"${compactEmpty ? ` style="--rating-star-interval-count: ${maximum}"` : ''}><div class="stars" role="img" aria-label="${escapeHtml(config.label || `Rated ${value} out of ${maximum}`)}">${points}</div>${value ? `<div class="rating-text">${value}/${maximum}</div>` : ''}</div>`;
 }
 
 function buildGalleryCardInfoHtml(config = {}) {
@@ -91,5 +111,8 @@ function buildGalleryCardInfoHtml(config = {}) {
   const title = config.openAttributes
     ? `<button class="album-open-trigger album-title-button" type="button" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
     : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+  const summary = config.listeningSummaryHtml === undefined
+    ? `<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div>`
+    : String(config.listeningSummaryHtml || '');
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${String(config.ratingHtml || '')}${summary}</div>`;
 }

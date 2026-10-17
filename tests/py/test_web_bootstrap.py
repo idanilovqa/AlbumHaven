@@ -1743,3 +1743,60 @@ def test_paged_startup_sidebar_markup_is_bounded_without_truncating_metadata():
     assert 'Artist 039' in markup and 'Artist 040' not in markup
     assert len(view["artists_sidebar"]) == 51
     assert '>51<' in markup
+
+
+@pytest.mark.parametrize("changed_path", [
+    "app.js", "js/runtime-bundle.js", "js/home-friends/index-native.mjs",
+    "js/playlists/nested/owner.mjs", "css/runtime/layout.css",
+])
+def test_default_runtime_asset_digest_covers_native_modules_and_existing_assets(
+    tmp_path, monkeypatch, changed_path,
+):
+    from music_app.routes import web_asgi
+
+    package = tmp_path / "music_app"
+    routes = package / "routes"
+    routes.mkdir(parents=True)
+    static = package / "static"
+    paths = ["app.js", "js/runtime-bundle.js", "js/home-friends/index-native.mjs",
+             "js/playlists/nested/owner.mjs", "css/runtime/layout.css"]
+    fixed_mtime_ns = 1_800_000_000_000_000_000
+    for relative in paths:
+        target = static / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"asset-one")
+        os.utime(target, ns=(fixed_mtime_ns, fixed_mtime_ns))
+    # Exercise the real default discovery path in an isolated asset directory.
+    # The actual imported owner and its hash implementation remain unchanged.
+    monkeypatch.setattr(web_asgi, "__file__", str(routes / "web_asgi.py"))
+    explicit_paths = (static / "app.js",
+                      *sorted(static / path for path in paths if path.startswith("js/")),
+                      static / "css/runtime/layout.css")
+    before = web_asgi._runtime_asset_version()
+    assert before != "missing"
+    assert before == web_asgi._runtime_asset_version(explicit_paths)
+    changed = static / changed_path
+    changed.write_bytes(b"asset-two")
+    os.utime(changed, ns=(fixed_mtime_ns, fixed_mtime_ns))
+    assert web_asgi._runtime_asset_version() != before
+    assert web_asgi._runtime_asset_version() == web_asgi._runtime_asset_version(explicit_paths)
+
+
+@pytest.mark.parametrize("path", [
+    "/static/js/home-friends/index-native.mjs",
+    "/static/js/playlists/native-track-table.mjs",
+])
+@pytest.mark.parametrize("version_query", ["current", "missing", "wrong", "duplicate"])
+def test_nested_native_module_delivery_stays_no_store(asgi_app, path, version_query):
+    current = asgi_app.state.runtime_asset_version
+    query = {
+        "current": {"v": current},
+        "missing": None,
+        "wrong": {"v": current + "-stale"},
+        "duplicate": {"v": [current, current]},
+    }[version_query]
+    status, headers, body = run_asgi_request(asgi_app, "GET", path, query=query)
+    assert status == 200
+    assert headers["cache-control"] == "no-store, max-age=0"
+    assert headers["content-type"].split(";", 1)[0] in ("text/javascript", "application/javascript")
+    assert b"export " in body

@@ -265,3 +265,60 @@ def test_actor_repr_omits_session_and_contact_secrets(actors):
     assert RAW_SESSION not in rendered
     assert "contact_email" not in rendered
     assert "session_token" not in rendered
+
+
+@pytest.mark.parametrize("bootstrap", [False, True])
+def test_null_library_keeps_live_account_authority_without_fabricating_library(actors, bootstrap):
+    sessions = Sessions(_resolved())
+    connection = Connection((_row(
+        is_bootstrap_owner=bootstrap, current_library_id=None,
+        library_relationships=[], capability_grants=[],
+    ),))
+    actor = _resolver(actors, sessions, connection).resolve(RAW_SESSION)
+    assert sessions.received == [RAW_SESSION]
+    assert actor.state is actors.ActorState.ACTIVE
+    assert actor.is_authenticated is True
+    assert actor.account_id == 41
+    assert actor.session_id == 8
+    assert actor.current_library_id is None
+    assert actor.library_relationships == ()
+    assert actor.capability_grants == ()
+    assert actor.is_bootstrap_owner is bootstrap
+    assert len(connection.operations) == 1
+    assert connection.operations[0][1] == (41,)
+
+
+@pytest.mark.parametrize("value", [False, True, 0, -1, "", "invalid", [], {}])
+def test_non_null_invalid_current_library_still_fails_closed(actors, value):
+    row = _row(current_library_id=value, library_relationships=[])
+    with pytest.raises(RuntimeError, match="current library"):
+        _resolver(actors, Sessions(_resolved()), Connection((row,))).resolve(RAW_SESSION)
+
+
+@pytest.mark.parametrize("bootstrap", [False, True])
+def test_null_library_does_not_revive_disabled_account(actors, bootstrap):
+    row = _row(is_bootstrap_owner=bootstrap, current_library_id=None,
+               library_relationships=[], is_active=False, disabled_at=NOW)
+    actor = _resolver(actors, Sessions(_resolved()), Connection((row,))).resolve(RAW_SESSION)
+    assert actor.state is actors.ActorState.INACTIVE
+    assert actor.is_authenticated is False
+    assert actor.current_library_id is None
+    assert actor.library_relationships == ()
+    assert actor.capability_grants == ()
+
+
+def test_null_library_does_not_bypass_missing_session(actors):
+    sessions = Sessions(None)
+    connection = Connection((_row(current_library_id=None, library_relationships=[]),))
+    actor = _resolver(actors, sessions, connection).resolve(RAW_SESSION)
+    assert actor.state is actors.ActorState.ANONYMOUS
+    assert actor.is_authenticated is False
+    assert sessions.received == [RAW_SESSION]
+    assert connection.operations == []
+
+
+def test_missing_current_library_column_still_fails_closed(actors):
+    row = _row()
+    del row["current_library_id"]
+    with pytest.raises(RuntimeError, match="current library"):
+        _resolver(actors, Sessions(_resolved()), Connection((row,))).resolve(RAW_SESSION)

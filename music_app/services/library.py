@@ -503,6 +503,8 @@ def _strip_private_track_payloads(track_payloads: object) -> list[dict[str, obje
         sanitized_track["track_preference_overlay"] = None
         sanitized_track["track_preference"] = default_track_preference_overlay()
         sanitized_track["can_edit_preferences"] = False
+        sanitized_track["track_preference_state"] = "unavailable"
+        sanitized_track.pop("canonical_track_ref", None)
         sanitized_track["playback_state_overlay"] = None
         sanitized_track["track_scrobble_count"] = None
         sanitized_track["track_popularity"] = _hidden_track_popularity_payload()
@@ -596,9 +598,7 @@ def strip_private_album_preference_overlays(album_payload: dict[str, object]) ->
         for duplicate_source in duplicate_sources:
             if not isinstance(duplicate_source, dict):
                 continue
-            sanitized_source = dict(duplicate_source)
-            sanitized_source["tracks"] = _strip_private_track_payloads(sanitized_source.get("tracks"))
-            sanitized_sources.append(sanitized_source)
+            sanitized_sources.append(strip_private_album_preference_overlays(duplicate_source))
         sanitized_payload["duplicate_sources"] = sanitized_sources
 
     return sanitized_payload

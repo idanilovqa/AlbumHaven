@@ -8,6 +8,34 @@
   const historyPositionKey = 'albumHavenNavigationPosition';
   const historyPosition = (state) => Number.isSafeInteger(state?.[historyPositionKey])
     ? state[historyPositionKey] : null;
+  const privatePreferenceHistoryKeys = new Set([
+    'canonical_track_ref', 'inventory_track_ref', 'track_preference',
+    'track_preference_state', 'can_edit_preferences', 'track_preference_overlay',
+  ]);
+  function sanitizeHistorySnapshot(snapshot) {
+    const visit = (value, remove, seen = new Set()) => {
+      if (!value || typeof value !== 'object' || seen.has(value)) return false;
+      seen.add(value);
+      let found = false;
+      const inspect = child => { if (visit(child, remove, seen)) found = true; };
+      const type = Object.prototype.toString.call(value);
+      if (type === '[object Map]') value.forEach((entry, key) => { inspect(key); inspect(entry); });
+      else if (type === '[object Set]') value.forEach(inspect);
+      for (const key of Object.keys(value)) {
+        if (privatePreferenceHistoryKeys.has(key)) {
+          found = true;
+          if (remove) delete value[key];
+        } else inspect(value[key]);
+      }
+      return found;
+    };
+    // Keep exact live receipt rows private. Clone only contaminated snapshots;
+    // native cloning preserves aliases, cycles and ordinary history value types.
+    if (!visit(snapshot, false)) return snapshot;
+    const serialized = structuredClone(snapshot);
+    visit(serialized, true);
+    return serialized;
+  }
 
   function create({ document, window, fetch, DOMParser }) {
     const host = document.querySelector('[data-settings-host]');
@@ -48,7 +76,7 @@
     const error = document.querySelector('[data-settings-navigation-error]');
     let currentUrl = window.location.href;
     let currentPosition = historyPosition(window.history.state) ?? 0;
-    window.history.replaceState({ ...window.history.state, [historyPositionKey]: currentPosition }, '', currentUrl);
+    window.history.replaceState(sanitizeHistorySnapshot({ ...window.history.state, [historyPositionKey]: currentPosition }), '', currentUrl);
     let currentHistoryState = window.history.state;
     let restoringPosition = null;
     let libraryUrl = library ? currentUrl : null;
@@ -59,6 +87,43 @@
     let disposeContent = () => {};
     let destroyed = false;
     let navigationPending = false;
+    let collectionDraft = null, draftDeparture = null, retainedDraft = null;
+    const draftMarker = owner => owner ? {token: owner.token, scopeKey: owner.scopeKey} : null;
+    const ownsDraft = (owner, snapshot) => {
+      if (!owner) return false;
+      if (owner.playlist) return snapshot?.playlistDraft?.token === owner.token && snapshot.playlistDraft.scopeKey === owner.scopeKey;
+      try {return owner.ownsHistoryEntry(snapshot, window.location.href) === true;} catch {return false;}
+    };
+    const liveDraft = () => {
+      const owner = collectionDraft;
+      if (owner && owner.isCurrent() !== true) {
+        collectionDraft = null; draftDeparture = null; owner.discard();
+      }
+      return collectionDraft;
+    };
+    const setDraftOwner = (owner, playlist) => {
+      if (destroyed || !owner || typeof owner.token !== 'string' || !owner.token || typeof owner.scopeKey !== 'string'
+        || typeof owner.isCurrent !== 'function' || typeof owner.confirmLeave !== 'function' || typeof owner.discard !== 'function'
+        || !playlist && typeof owner.ownsHistoryEntry !== 'function' || liveDraft()) return false;
+      const registered = {...owner, playlist};
+      collectionDraft = registered;
+      return () => {if (collectionDraft === registered) {collectionDraft = null; draftDeparture = null;}};
+    };
+    const deferCollectionDraftNavigation = callback => {
+      const owner = liveDraft();
+      if (!owner || retainedDraft === owner) return false;
+      if (draftDeparture) return Promise.resolve(false);
+      const position = historyPosition(window.history.state), url = window.location.href;
+      const departure = {owner}; draftDeparture = departure;
+      return Promise.resolve().then(() => owner.confirmLeave()).catch(() => false).then(accepted => {
+        if (draftDeparture !== departure) return false;
+        draftDeparture = null;
+        if (accepted !== true || liveDraft() !== owner || position !== historyPosition(window.history.state)
+          || url !== window.location.href) return false;
+        collectionDraft = null; owner.discard();
+        return callback?.();
+      });
+    };
     const urlFor = (value) => {
       try {
         const url = new URL(value, window.location.href);
@@ -75,13 +140,29 @@
         error.hidden = false;
       }
     };
-    const updateHistory = (url, mode, stateSnapshot = null) => {
+    const updateHistory = (url, mode, stateSnapshot) => {
       const position = historyPosition(window.history.state) ?? currentPosition;
-      if (mode === 'push') window.history.pushState({ ...stateSnapshot, [historyPositionKey]: position + 1 }, '', url);
-      else if (mode === 'replace') window.history.replaceState({ ...window.history.state, [historyPositionKey]: position }, '', url);
+      if (mode === 'push') window.history.pushState(sanitizeHistorySnapshot({ ...stateSnapshot, [historyPositionKey]: position + 1 }), '', url);
+      else if (mode === 'replace') {
+        // Settings POST omits its snapshot; public replacement supplies one.
+        const snapshot = stateSnapshot === undefined ? window.history.state : stateSnapshot;
+        window.history.replaceState(sanitizeHistorySnapshot({ ...snapshot, [historyPositionKey]: position }), '', url);
+      }
       currentPosition = historyPosition(window.history.state) ?? position;
       currentHistoryState = window.history.state;
       currentUrl = url;
+    };
+    const commitLibraryHistory = (url, mode, stateSnapshot) => {
+      // A cached library selection can commit without starting another fetch.
+      // Its history entry still supersedes any older Settings response/body.
+      ++sequence;
+      navigationPending = false;
+      pending?.abort();
+      pending = null;
+      updateHistory(new URL(url, window.location.href).href, mode, stateSnapshot);
+      libraryUrl = currentUrl;
+      libraryHistoryState = currentHistoryState;
+      libraryTitle = document.title;
     };
     const restoreHistory = () => {
       const position = historyPosition(window.history.state);
@@ -92,7 +173,7 @@
         // Legacy entries lack a position; retain the existing URL fallback and
         // the displayed view's snapshot instead of replacing its state with null.
         restoringPosition = null;
-        window.history.replaceState(currentHistoryState, '', currentUrl);
+        window.history.replaceState(sanitizeHistorySnapshot(currentHistoryState), '', currentUrl);
       }
     };
     const mountContent = () => {
@@ -132,6 +213,14 @@
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
       if (destroyed || restoringPosition !== null || !url || (!isSettingsPath(url.pathname) && !posting && !returning)) return false;
+      if (historyMode !== 'none' && window.deferAppFormPageReplacement) {
+        const deferred = window.deferAppFormPageReplacement(() => navigate(value, {historyMode, method, body, leaveConfirmed, hierarchy}));
+        if (deferred) return deferred;
+      }
+      if (historyMode !== 'none') {
+        const deferred = deferCollectionDraftNavigation(() => navigate(value, {historyMode, method, body, leaveConfirmed, hierarchy}));
+        if (deferred) return deferred;
+      }
       const ownSequence = ++sequence;
       pending?.abort();
       navigationPending = false;
@@ -225,6 +314,13 @@
       const link = event.target?.closest?.('a[href]');
       if (!link || link.hasAttribute('download') || (link.target && link.target !== '_self')) return;
       const url = urlFor(link.href);
+      if (url && library && host.hidden && link.classList?.contains('app-bar-brand') && link.getAttribute('href') === '/'
+        && (window.getActiveAppFormPage?.() || window.isMobileFormReturning?.() || liveDraft())) {
+        event.preventDefault();
+        const navigateRoot = () => window.location.assign(url.href);
+        if (!window.deferAppFormPageReplacement?.(navigateRoot)) deferCollectionDraftNavigation(navigateRoot);
+        return;
+      }
       if (!url || (!isSettingsPath(url.pathname) && !(library && !host.hidden && url.pathname === '/'))) return;
       event.preventDefault();
       void navigate(url.href, { hierarchy: link.hasAttribute('data-settings-parent') || url.pathname === '/' });
@@ -242,6 +338,17 @@
     const onPopState = (event) => {
       const url = urlFor(window.location.href);
       if (!url) return;
+      window.cancelSupersededMobileFormReturn?.();
+      const form = window.getActiveAppFormPage?.();
+      const pages = window.history.state?.mobilePages;
+      if (form && !(Array.isArray(pages) && pages.some(page => page.kind === 'form' && page.formToken === form.token))) {
+        event.stopImmediatePropagation();
+        window.handleMobilePagePopState(() => {
+          onPopState(event);
+          if (!isSettingsPath(window.location.pathname) && !window.handleMobilePagePopState()) window.handleGalleryBootstrapPopState?.();
+        });
+        return;
+      }
       if (restoringPosition !== null) {
         event.stopImmediatePropagation();
         if (historyPosition(window.history.state) === restoringPosition) {
@@ -250,6 +357,30 @@
           if (library && host.hidden) libraryUrl = url.href;
         } else restoreHistory();
         return;
+      }
+      const owner = liveDraft();
+      if (owner && !ownsDraft(owner, window.history.state)) {
+        event.stopImmediatePropagation();
+        // Native history remains the sole stack. A later traversal supersedes
+        // this prompt, and cancellation returns to the displayed entry.
+        draftDeparture = null;
+        const destination = window.location.href, position = historyPosition(window.history.state);
+        const departure = {owner}; draftDeparture = departure;
+        ++sequence; pending?.abort(); navigationPending = false;
+        void Promise.resolve().then(() => owner.confirmLeave()).catch(() => false).then(accepted => {
+          if (draftDeparture !== departure) return;
+          draftDeparture = null;
+          if (liveDraft() !== owner || destination !== window.location.href || position !== historyPosition(window.history.state)) return;
+          if (accepted !== true) {restoreHistory(); return;}
+          collectionDraft = null; owner.discard();
+          onPopState(event);
+          if (!isSettingsPath(window.location.pathname) && !window.handleMobilePagePopState?.()) window.handleGalleryBootstrapPopState?.();
+        });
+        return;
+      }
+      if (!owner && window.history.state?.playlistDraft) {
+        const snapshot = {...window.history.state}; delete snapshot.playlistDraft;
+        window.history.replaceState(sanitizeHistorySnapshot(snapshot), '', window.location.href);
       }
       // A pop changes the address before prompting. Invalidate an older fetch
       // even when this navigation is cancelled and its entry is restored.
@@ -297,22 +428,37 @@
     if (!host.hidden) mountContent();
     return {
       navigate,
+      setCollectionDraftOwner: owner => setDraftOwner(owner, false),
+      setPlaylistDraftOwner: owner => setDraftOwner(owner, true),
+      deferCollectionDraftNavigation,
+      deferPlaylistDraftNavigation: deferCollectionDraftNavigation,
+      isCollectionDraftDeparturePending(token) {
+        const owner = liveDraft();
+        return Boolean(owner && owner.token === token && (draftDeparture?.owner === owner || restoringPosition !== null));
+      },
+      retainPlaylistDraftNavigation(token, callback) {
+        const owner = liveDraft();
+        if (!owner?.playlist || owner.token !== token || typeof callback !== 'function') return false;
+        const previous = retainedDraft; retainedDraft = owner;
+        try {return callback();} finally {retainedDraft = previous;}
+      },
+      retainedPlaylistDraft() {const owner = liveDraft(); return owner?.playlist && retainedDraft === owner ? draftMarker(owner) : null;},
+      isPlaylistDraftCurrent(marker) {const owner = liveDraft(); return Boolean(owner?.playlist && ownsDraft(owner, {playlistDraft: marker}));},
+      writeLibraryHistory(value, stateSnapshot, { mode } = {}) {
+        const url = urlFor(value);
+        if (destroyed || restoringPosition !== null || !url
+          || url.protocol !== window.location.protocol || (mode !== 'push' && mode !== 'replace')) return;
+        commitLibraryHistory(url.href, mode, stateSnapshot ?? null);
+      },
       pushLibraryHistory(url, stateSnapshot) {
-        // A cached library selection can commit without starting another fetch.
-        // Its history entry still supersedes any older Settings response/body.
-        ++sequence;
-        navigationPending = false;
-        pending?.abort();
-        pending = null;
-        updateHistory(new URL(url, window.location.href).href, 'push', stateSnapshot);
-        libraryUrl = currentUrl;
-        libraryHistoryState = currentHistoryState;
-        libraryTitle = document.title;
+        // Native callers commit their view before writing and ignore the result.
+        commitLibraryHistory(url, 'push', stateSnapshot);
       },
       destroy() {
         destroyed = true;
         ++sequence;
         pending?.abort();
+        const owner = collectionDraft; collectionDraft = null; draftDeparture = null; owner?.discard();
         disposeContent();
         disposeDismissal?.();
         document.removeEventListener('album-haven:surface-opening', onSurfaceOpening);
@@ -324,7 +470,7 @@
       },
     };
   }
-  window.AlbumHavenSettingsNavigation = { create };
+  window.AlbumHavenSettingsNavigation = { create, sanitizeHistorySnapshot };
   if (typeof document !== 'undefined') {
     window.AlbumHavenSettingsNavigation.instance = create({ document, window, fetch: window.fetch.bind(window), DOMParser: window.DOMParser });
   }

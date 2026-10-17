@@ -154,12 +154,14 @@ function registerFloatingNotification(node, options = {}) {
 
 function unregisterFloatingNotification(node) {
   if (!floatingNotifications.has(node)) return;
+  const entry = floatingNotifications.get(node);
   floatingNotificationCleanup?.resize.unobserve(node);
   floatingNotifications.delete(node);
   node?.classList?.remove('floating-notification-positioned');
   node?.removeAttribute?.('data-notification-deferred');
   if (!floatingNotifications.size) { floatingNotificationCleanup?.dispose(); floatingNotificationCleanup = null; }
   else scheduleFloatingNotificationPlacement();
+  entry.onRetired?.();
 }
 
 let libraryWatcherWarning = null;
@@ -273,12 +275,12 @@ function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', 
 
 function showToast(message, variant = 'success', duration = 3600, options = {}) {
   const layer = document.getElementById('toast-layer');
-  if (!layer) return;
+  if (!layer) return null;
   const errorKey = isNotificationErrorVariant(variant)
     ? String(options.errorKey || message || '')
     : '';
   if (errorKey && activeErrorToasts.get(errorKey)?.parentElement) {
-    return;
+    return null;
   }
   const toast = document.createElement('div');
   toast.className = [
@@ -289,17 +291,57 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
-    scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
-    scheduleBrowserTimeout(() => {
-      toast.classList.remove('is-visible');
-      scheduleBrowserTimeout(() => {
-        unregisterFloatingNotification(toast);
-        toast.remove();
-        if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
-      }, 260);
-    }, duration);
-  } });
+  let disposed = false;
+  let presented = false;
+  const pending = new Set();
+  const cancel = task => {
+    if (!pending.delete(task)) return;
+    if (task.id !== null) task.clear(task.id);
+  };
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    for (const task of pending) cancel(task);
+    try {
+      unregisterFloatingNotification(toast);
+    } finally {
+      toast.remove();
+      if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
+    }
+  };
+  const current = () => {
+    if (disposed) return false;
+    if (toast.parentElement !== layer || !toast.isConnected) { dispose(); return false; }
+    return true;
+  };
+  // A scheduling helper may call back synchronously when browser APIs are absent.
+  const schedule = (enqueue, clear, callback, delay) => {
+    const task = { id: null, clear };
+    pending.add(task);
+    task.id = enqueue(() => {
+      if (!pending.delete(task) || !current()) return;
+      callback();
+    }, delay);
+    return task;
+  };
+  const owner = Object.freeze({ dispose });
+  try {
+    registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onRetired: dispose, onPlaced() {
+      if (presented || !current()) return;
+      presented = true;
+      const frame = schedule(scheduleBrowserAnimationFrame, cancelBrowserAnimationFrame,
+        () => toast.classList.add('is-visible'));
+      schedule(scheduleBrowserTimeout, clearBrowserTimeout, () => {
+        cancel(frame);
+        toast.classList.remove('is-visible');
+        schedule(scheduleBrowserTimeout, clearBrowserTimeout, dispose, 260);
+      }, duration);
+    } });
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+  return owner;
 }
 
 function showRepairAlert(message, variant = 'success', duration = 2000, options = {}) {

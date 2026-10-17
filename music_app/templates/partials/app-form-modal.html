@@ -1,0 +1,15 @@
+{% from 'partials/button.html' import action_button %}
+  <div class="confirm-modal" id="app-form-modal" hidden>
+    <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="app-form-title" aria-describedby="app-form-error">
+      <div class="confirm-modal-header">
+        <h3 class="confirm-modal-title" id="app-form-title"></h3>
+        {{ action_button('Close dialog', id='app-form-close', icon='close', hidden=true) }}
+      </div>
+      <div id="app-form-content"></div>
+      <p id="app-form-error" role="alert"></p>
+      <div class="confirm-modal-actions">
+      <button class="button ui-button ui-button--quiet ui-button--medium" type="button" id="app-form-cancel">Cancel</button>
+        <button class="button ui-button ui-button--primary ui-button--medium" type="button" id="app-form-submit">Apply</button>
+      </div>
+    </div>
+  </div>

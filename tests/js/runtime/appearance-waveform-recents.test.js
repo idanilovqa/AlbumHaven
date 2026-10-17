@@ -155,6 +155,7 @@ for(const [from,to] of [
   const {controller}=setup(); controller.setPlayerColor('background','#112233'); controller.setPlayerColor('fill','#345678');
   const before=controller.getState().draft; let guards=0,renders=0;
   const context=vm.createContext({state:{utility:{appearanceKey:from},coverLookup:{}},document:{querySelectorAll:()=>[]},console,
+    closeTagEditorExceptionMenu(){},
     closeUtilityLoopSettingMenu(){},confirmBackgroundAppearanceLeave:()=>{guards++;return false;},renderUtilityModalContent:()=>{renders++;}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../../music_app/static/js/runtime/bootstrap-utility-event-handlers.js'),'utf8'),context);
   const button={getAttribute:()=>to};

@@ -342,6 +342,7 @@ const PERFORMANCE_TARGETS = {
     casePattern: 'FTC-TAGS-026P',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'cover-lookup': {

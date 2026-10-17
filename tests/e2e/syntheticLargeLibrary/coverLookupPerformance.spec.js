@@ -27,8 +27,8 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     trackModalActions,
   }) => {
     await stepLogger.step('Open the fixture album through the production gallery and Album Details controls', async () => {
-      await galleryActions.goto();
-      await galleryActions.waitForGalleryReady();
+      await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TARGET.artist)}`);
+      await galleryActions.waitForSelectedArtistGallery(TARGET.artist);
       expect(await galleryActions.selectAlbumDetailsByIdentity(TARGET)).toEqual(TARGET);
       await trackModalActions.waitForLoadedSummary();
     });

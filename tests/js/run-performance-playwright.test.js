@@ -1148,6 +1148,33 @@ test('Cover Lookup target requires the production-calibration fixture', () => {
   assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
+test('post-edit performance target requires the production-calibration fixture', () => {
+  const target = _private.resolvePerformanceTarget(
+    'tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js',
+  );
+
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
+});
+
+test('Cover Lookup performance setup enters the target artist before album selection', () => {
+  const source = fs.readFileSync(
+    path.join(
+      __dirname,
+      '..',
+      'e2e',
+      'syntheticLargeLibrary',
+      'coverLookupPerformance.spec.js',
+    ),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /galleryActions\.goto\(`\/\?surface=albums&artist=\$\{encodeURIComponent\(TARGET\.artist\)\}`\)/u,
+  );
+  assert.match(source, /waitForSelectedArtistGallery\(TARGET\.artist/u);
+});
+
 test('buildRunnerArgs preserves focused utility problematic-files target metadata when selected by spec path', () => {
   const target = _private.resolvePerformanceTarget('tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js');
 

@@ -379,7 +379,6 @@ test('new cover run explicit zero discards previous completed count', () => {
   })));
   assert.deepEqual(normalized, {
     artist_groups: [{ artist: 'Broadcast' }],
-    gallery_page: null,
     primary_artist_groups: [],
     family_artist_groups: [],
     artists_sidebar: [],
@@ -671,7 +670,6 @@ test('new cover run explicit zero discards previous completed count', () => {
   })));
   assert.deepEqual(normalized, {
     view: {
-      gallery_page: null,
       artist_groups: [],
       primary_artist_groups: [],
       family_artist_groups: [],

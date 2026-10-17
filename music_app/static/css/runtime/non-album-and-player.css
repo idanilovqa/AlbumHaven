@@ -109,7 +109,7 @@ box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
 display: flex;
 flex-direction: column;
 height: 100%;
-transition: border-color 240ms ease, box-shadow 280ms ease, transform 240ms ease;
+    transition: border-color 240ms ease, box-shadow 280ms ease;
 }
 .album-card::before {
 content: "";
@@ -147,7 +147,6 @@ transform: scale(1.03);
 .album-card:focus-within {
 border-color: var(--gallery-artbox-hover-frame, rgba(233, 223, 198, 0.6));
 box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
-transform: translateY(-1px);
 }
 .album-card:hover::after,
 .album-card:focus-within::after {
@@ -261,6 +260,8 @@ gap: 8px;
 align-items: start;
 }
 .artist-subsection-label {
+  /* Match the virtual block height so mounting a divider does not move later rows. */
+  min-height: 26px;
   margin: 2px 0 -2px 28px;
   color: #d6c8ab;
   display: grid;

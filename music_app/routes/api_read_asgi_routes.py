@@ -556,6 +556,7 @@ def _transient_scan_view_response(
         payload = build_transient_root_gallery_page(
             payload, page_params, scan_generation=int(browse_state.get("scan_generation") or 0)
         )
+    payload["view_data_source"] = "transient_scan_state"
     _apply_transient_scan_album_rating_overlays(
         request,
         _transient_view_album_payloads(payload),

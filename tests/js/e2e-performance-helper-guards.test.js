@@ -1049,7 +1049,7 @@ test('reload continuity E2E measures explicit Play startup and a long uninterrup
   const spec = readRepoFile('tests/e2e/specs/playerReloadAutoplayAllowed.spec.js');
 
   assert.match(spec, /LONG_SUSTAINED_PLAYBACK_SECONDS = 60/);
-  assert.match(spec, /PLAYBACK_START_TIMING_BUDGET\.hardCeiling/);
+  assert.match(spec, /expectTimingBudget\([\s\S]*PLAYBACK_START_TIMING_BUDGET/);
   assert.match(spec, /const explicitPlayMark = await playbackEvidence\.playbackMark\(\)/);
   assert.match(spec, /const explicitPlayStartedAtMs = await page\.evaluate/);
   assert.match(spec, /evidence\.observedAtMs - explicitPlayStartedAtMs/);

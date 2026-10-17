@@ -27,6 +27,7 @@ function mountedHarness(utility = {}) {
   mount(); document.activeElement = mounted.row;
   const els = { overlay: { hidden: false }, detail: {} };
   const c = vm.createContext({ console, Date, Intl, URLSearchParams, document,
+    closeTagEditorExceptionMenu() {}, getTagEditorElements: () => ({ form: null }),
     state: { utility: { activeTab: 'appearance', appearanceKey: 'backgrounds', selectedRuleKey: 'problem-exclusions', loops: [], ...utility }, coverLookup: {} },
     getUtilityModalElements: () => els, renderUtilityModalContent: mount,
     loadUtilityRules() {}, loadUtilityLoops() {}, loadUtilityLogHistory() {}, loadUtilityIntegrations() {}, loadProblematicFiles() {},
@@ -267,6 +268,7 @@ function keyedNavigationHarness(kind) {
   };
   const els = { overlay: { hidden: false }, list, detail, count: {}, search: {} };
   const c = vm.createContext({ console, document,
+    closeTagEditorExceptionMenu() {},
     state: { coverLookup: {}, utility: { activeTab: kind, appearanceKey: keys[0], selectedRuleKey: keys[0],
       rules: keys.map(key => ({ key, title: key })), appearanceSearchQuery: '', rulesSearchQuery: '' } },
     getUtilityModalElements: () => els,

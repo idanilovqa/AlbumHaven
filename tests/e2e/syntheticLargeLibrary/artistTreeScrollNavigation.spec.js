@@ -138,7 +138,7 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     galleryActions,
     navigationPanelActions,
     page,
-  }) => {
+  }, testInfo) => {
     const ui = new GalleryRegressions(page);
     const htmlTiming = await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
     const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
@@ -150,7 +150,26 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       [0.1, 0.72, 0.24, 0.9, 0.16],
     );
     expect(farTargets).toHaveLength(5);
-    for (const artist of farTargets) await jumpToArtist(ui, artist);
+    for (const [index, artist] of farTargets.entries()) {
+      await jumpToArtist(ui, artist);
+      if (index !== 0) continue;
+      const ownership = await ui.readArtistJumpOwnership(artist);
+      const renderedArtist = ownership.anchorGroupArtist || artist;
+      const observation = await ui.startArtistJumpPlacementObservation(renderedArtist);
+      let samples;
+      try {
+        // Observe delayed refresh and layout work; this delay is not a readiness condition.
+        await page.waitForTimeout(15000);
+      } finally {
+        samples = await observation.finish();
+        await testInfo.attach('first-artist-jump-delayed-stability', {
+          body: JSON.stringify({ requestedArtist: artist, renderedArtist, samples }),
+          contentType: 'application/json',
+        });
+      }
+      expect(samples.length).toBeGreaterThan(30);
+      expect(samples.filter(sample => !sample.stable)).toEqual([]);
+    }
 
     const consecutiveTargets = [farTargets[1], farTargets[2]];
     await jumpToArtist(ui, consecutiveTargets[0]);
@@ -166,6 +185,11 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     for (let step = 0; step < 200 && upwardArtists.size < 20; step += 1) {
       // parity-check: allow-read-only-measurement-evaluate -- capture a visible card across slow native wheel input
       const before = await ui.captureVisibleCardAnchor();
+      const diagnosticsBefore = await galleryActions.readVirtualGridDiagnostics();
+      const diagnosticSequenceBefore = Math.max(
+        0,
+        ...(diagnosticsBefore?.events || []).map(event => Number(event.sequence || 0)),
+      );
       const box = await ui.galleryScroll.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, -160);
@@ -173,11 +197,43 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
       // parity-check: allow-read-only-measurement-evaluate -- reject reverse-scroll prepend jumps
       const continuity = await ui.readVisibleCardAnchorContinuity(before);
       await before.dispose();
-      if (continuity.connected && continuity.delta !== null) {
-        stableAnchorComparisons += 1;
-        expect(continuity.delta).toBeGreaterThanOrEqual(-2);
-        expect(continuity.delta).toBeLessThanOrEqual(220);
+      const diagnosticsAfter = await galleryActions.readVirtualGridDiagnostics();
+      const renderGenerationChanged = Number(diagnosticsAfter?.latestRender?.renderGeneration || 0)
+        !== Number(diagnosticsBefore?.latestRender?.renderGeneration || 0);
+      const gridEvents = (diagnosticsAfter?.events || []).filter(
+        event => Number(event.sequence || 0) > diagnosticSequenceBefore,
+      );
+      const coordinateRestore = gridEvents
+        .filter(event => event.type === 'scroll-restore-settled')
+        .at(-1) || null;
+      const restoredWheelDelta = coordinateRestore
+        ? Number(diagnosticsAfter?.latestScroll?.scrollTop || 0)
+          - Number(coordinateRestore.scrollTop || 0)
+        : null;
+      const visibleDrift = Math.abs(Number(continuity.delta) - 160);
+    if (
+      !continuity.connected
+        || visibleDrift !== 0
+    ) {
+      await testInfo.attach('reverse-scroll-displacement', {
+        body: JSON.stringify({
+          step,
+          wheelDeltaY: -160,
+          continuity,
+          renderGenerationChanged,
+            coordinateRestore,
+            restoredWheelDelta,
+            gridEvents,
+          latestScroll: diagnosticsAfter?.latestScroll || null,
+          latestRender: diagnosticsAfter?.latestRender || null,
+          latestMeasurement: diagnosticsAfter?.latestMeasurement || null,
+        }),
+        contentType: 'application/json',
+      });
       }
+    expect(continuity.connected).toBe(true);
+    expect(visibleDrift).toBe(0);
+    stableAnchorComparisons += 1;
       upwardArtists.add(await ui.galleryContextName.textContent());
     }
     // parity-check: allow-read-only-measurement-evaluate -- diagnose reverse-page ownership and boundary state

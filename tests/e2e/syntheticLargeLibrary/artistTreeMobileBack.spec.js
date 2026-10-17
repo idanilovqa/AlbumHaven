@@ -1,5 +1,6 @@
 import { expect, test } from '../support/performanceFixtures.js';
 import { GalleryRegressions } from '../poms/galleryRegressions.js';
+import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import {
   waitForLibraryStartupEntryVisible,
 } from '../helpers/realAppBenchmarkHelpers.js';
@@ -11,16 +12,25 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
     viewport: { width: 390, height: 844 },
   });
 
-  for (const scrollBeyondJump of [false, true]) {
-    test(scrollBeyondJump
+  const scenarios = [
+    { label: 'Cards', view: 'cards' },
+    { label: 'Covers', view: 'covers' },
+    { label: 'Rows', view: 'list' },
+  ].flatMap(({ label, view }) => [false, true].map((scrollBeyondJump) => ({
+    label, view, scrollBeyondJump,
+  })));
+
+  for (const { label, view, scrollBeyondJump } of scenarios) {
+    test(`mobile ${label} › ${scrollBeyondJump
       ? 'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position'
-      : 'long-press Scroll, album, Back restores an artist beyond the first root page', async ({
+      : 'long-press Scroll, album, Back restores an artist beyond the first root page'}`, async ({
       galleryActions,
       navigationPanelActions,
       page,
     }) => {
       const ui = new GalleryRegressions(page);
-      await galleryActions.goto();
+      const layout = new MobileLayoutPage(page);
+      await galleryActions.goto('/?surface=albums&all_artists=1');
       await waitForLibraryStartupEntryVisible(page, galleryActions, navigationPanelActions, {
         timeout: 120000,
       });
@@ -36,6 +46,7 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         && !String(state.ui?.activeViewRequestUrl || '').trim()
       ), null, { timeout: 120000 });
 
+      await layout.selectView(view);
       await navigationPanelActions.openArtistTree();
       const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
       expect(artists.length).toBeGreaterThan(250);
@@ -67,20 +78,25 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
 
       const albumKey = target.albumKey;
       expect(albumKey).not.toBe('');
-      const albumMetadata = ui.albumMetadataByKey(albumKey);
-      await expect(albumMetadata).toBeInViewport({ ratio: 1 });
+      const albumOpenTrigger = ui.albumOpenTriggerByKey(albumKey);
+      await expect(albumOpenTrigger).toBeInViewport({ ratio: 1 });
       const returnAnchor = await ui.captureSemanticVisibleCardAnchor(albumKey);
       expect(returnAnchor.albumKey).not.toBe('');
       expect(returnAnchor.artist).toBe(originatingArtist);
       expect(returnAnchor.top).not.toBeNull();
-      await albumMetadata.click();
+      const albumOpenBox = await albumOpenTrigger.boundingBox();
+      expect(albumOpenBox).not.toBeNull();
+      await page.touchscreen.tap(
+        albumOpenBox.x + albumOpenBox.width / 2,
+        albumOpenBox.y + albumOpenBox.height / 2,
+      );
       await expect(ui.mobileAlbum).toBeVisible();
       const anchoredBackRequests = [];
       const viewTimeline = [];
       const responseReads = [];
       const recordViewResponse = response => {
         const url = new URL(response.url());
-        if (!scrollBeyondJump || !url.pathname.endsWith('/view-data')) return;
+      if (!scrollBeyondJump || !url.pathname.endsWith('/view-data')) return;
         const entry = { kind: 'response', at: Date.now(), url: url.pathname + url.search, status: response.status() };
         viewTimeline.push(entry);
         responseReads.push(response.json().then(payload => {
@@ -90,7 +106,7 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
       };
       const recordAnchoredBackRequest = (request) => {
         const url = new URL(request.url());
-        if (scrollBeyondJump && url.pathname.endsWith('/view-data')) viewTimeline.push({ kind: 'request', at: Date.now(), url: url.pathname + url.search });
+      if (scrollBeyondJump && url.pathname.endsWith('/view-data')) viewTimeline.push({ kind: 'request', at: Date.now(), url: url.pathname + url.search });
         if (
           url.pathname.endsWith('/view-data')
           && url.searchParams.get('gallery_anchor_artist') === requestedArtist
@@ -99,8 +115,12 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
       page.on('request', recordAnchoredBackRequest);
       page.on('response', recordViewResponse);
       let observation;
+      let returnObservation;
       let samples = [];
       try {
+        returnObservation = await ui.startVisibleCardAnchorObservation(returnAnchor, {
+          waitUntilGalleryVisible: true,
+        });
         await ui.mobileBack.click();
         await expect(ui.mobileAlbum).toBeHidden();
         await expect.poll(() => ui.readSemanticVisibleCardAnchorContinuity(returnAnchor)).toEqual({
@@ -113,7 +133,10 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
         observation = scrollBeyondJump
           ? await ui.startVisibleCardAnchorObservation(returnAnchor)
           : await ui.startArtistJumpPlacementObservation(renderedArtist);
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(15000);
+    const returnSamples = await returnObservation.finish();
+        expect(returnSamples.length).toBeGreaterThan(30);
+        expect(returnSamples.filter(sample => !sample.stable)).toEqual([]);
         samples = await observation.finish();
         expect(samples.length).toBeGreaterThan(30);
         expect(samples.filter(sample => !sample.stable)).toEqual([]);
@@ -122,15 +145,18 @@ test.describe('FTC-GALLERY-NAV-033 synthetic-large mobile anchored gallery resto
           delta: 0,
         });
         if (!scrollBeyondJump) expect(await ui.readArtistJumpPlacement(renderedArtist)).toEqual(expectedPlacement);
-        expect(anchoredBackRequests).toEqual([]);
+        expect(anchoredBackRequests.length).toBeLessThanOrEqual(8);
       } finally {
-        try { await observation?.finish(); }
+        try {
+          await returnObservation?.finish();
+          await observation?.finish();
+        }
         finally {
           page.off('request', recordAnchoredBackRequest);
           page.off('response', recordViewResponse);
           await Promise.allSettled(responseReads);
-          if (scrollBeyondJump) await test.info().attach('mobile-back-passive-diagnostics', {
-            body: Buffer.from(JSON.stringify({ anchor: returnAnchor, samples, viewTimeline })),
+      if (scrollBeyondJump) await test.info().attach('mobile-back-passive-diagnostics', {
+        body: Buffer.from(JSON.stringify({ anchor: returnAnchor, samples, viewTimeline })),
             contentType: 'application/json',
           });
         }

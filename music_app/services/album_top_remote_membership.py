@@ -190,10 +190,9 @@ def resolve_sources(connection, live, top, selectors, destination, context_ref, 
         catalogs[identity] = catalog_ref
     # All mapping finishes in provider tuple order before any admission wait.
     for identity, catalog_ref in sorted(catalogs.items()):
-        row = connection.execute('''select catalog_ref from catalog.release_group_provider_identities
-            where provider=%s and entity_kind=%s and external_id=%s and catalog_ref=%s for share''',
+        row = connection.execute('''select app.lock_top_remote_catalog_identity(%s,%s,%s,%s) as locked''',
             (*identity, catalog_ref)).fetchone()
-        if row is None:
+        if row['locked'] is not True:
             raise AlbumTopError('identity_conflict', 409)
     candidates = []
     for selector in remote:

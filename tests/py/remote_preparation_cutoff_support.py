@@ -5,7 +5,7 @@ non-superuser/inherited roles. This fixture never creates roles/databases, drops
 schemas, widens grants, rewrites migration history or disables a trigger.
 It installs exact checked-in migrations through 0131, permits old-writer seeds,
 then installs exact 0132 and the separately approved 0133 on explicit requests.
-The exact known following 0134 is verified on disk but never applied here.
+The exact known following 0134, 0135 and 0136 are verified on disk but never applied here.
 Each transition case requires its own root-supplied empty database invocation.
 """
 from hashlib import sha256
@@ -34,6 +34,8 @@ POST_CUTOFF = {CONSUMPTION: "c433536b1600e706dd61fcda3fec9b8936cdccd9f1cb1b23acd
 # Exact reviewed repository tail, required on disk but never installed here.
 KNOWN_FOLLOWING_TAIL = {
     "0134_private_top_artwork_draft_capture.sql": "a2226a26b9732d70a17af35d0054fba05e0306156dbed94d2c02e2b4c8c6c87e",
+    "0135_public_metadata_file_invalidation.sql": "818a4734aa6717efd0ff1aae96e583b6b2f00a52424fcde94f8af38f0014adc5",
+    "0136_private_top_remote_identity_lock.sql": "19725aee6086a1ec6cf66571c59a9259fd2687bed3677de8ea20be91fdd102b1",
 }
 INPUTS = {
     "0127_private_top_remote_acquisition.sql": "b849fdb42550fe549561c9199eb87a3af3622003edb187ec08128e28ada99d65",

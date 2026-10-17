@@ -245,8 +245,20 @@ def _source_files(connection, source):
 
 
 def capture(connection, context, *, top, items, constraints=None):
+    # Existing v1 preview/Publish keeps its original collector semantics.
+    return _capture(connection, context, top=top, items=items,
+                    constraints=constraints, artwork_review=False)
+
+
+def capture_artwork_review(connection, context, *, top, items, constraints=None):
+    # Fixed private-review guard, not a caller-selected budget or new schema.
+    return _capture(connection, context, top=top, items=items,
+                    constraints=constraints, artwork_review=True)
+
+
+def _capture(connection, context, *, top, items, constraints, artwork_review):
     generation = source_barrier(connection, context.library_id)
-    captured, total_tracks, total_bytes = [], 0, 0
+    captured, total_tracks, total_bytes, total_files = [], 0, 0, 0
     try:
         for item in items:
             source, scope = selection_source(connection, context, item, constraints)
@@ -255,6 +267,13 @@ def capture(connection, context, *, top, items, constraints=None):
             # Row and byte budgets are enforced before immutable inserts. File
             # multiplicity is bounded independently of logical track identity.
             files = _source_files(connection, source)
+            # Charge physical duplicates before logical-track reduction. The
+            # existing per-source result remains bounded to10001 rows; no next
+            # source is queried after this fixed whole-review limit is crossed.
+            if artwork_review:
+                total_files += len(files)
+                if total_files > 2 * MAX_TOTAL_TRACKS:
+                    raise AlbumTopError("evidence_unavailable", 409)
             if not files or len(files) > MAX_SOURCE_FILES:
                 raise AlbumTopError("evidence_unavailable", 409)
             logical = {}

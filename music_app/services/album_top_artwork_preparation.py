@@ -22,6 +22,7 @@ from music_app.services import _top_artwork_saved as saved_artwork
 from music_app.services import _top_artwork_preparation_phases as preparation_phases
 from music_app.services import _top_artwork_draft_proof as draft_proof
 from music_app.services import artwork_proof_codec as proof_codec
+from music_app.services import album_top_artwork_review as review_owner
 from music_app.services.album_top_publication_authority import require_source_browse
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.library_roots import resolve_typed_artwork_observations
@@ -49,6 +50,22 @@ def _context(value):
     if type(value) is not str or _CONTEXT.fullmatch(value) is None:
         raise AlbumTopError('invalid_command')
     return value
+
+
+def _review_identity(context, *, kind, top_ref, top_revision_value, preparation_ref,
+                     preparation_revision, context_ref, draft_ref=None, draft_revision=None):
+    # Fixed private entrypoints, never a caller-selected source/proof adapter.
+    if kind not in ('saved', 'draft'):
+        raise AlbumTopError('invalid_command')
+    identity = {'context': context, 'top_ref': artwork_draft._identity(top_ref),
+                'top_revision': top_revision(top_revision_value),
+                'preparation_ref': artwork_draft._identity(preparation_ref),
+                'context_ref': _context(context_ref)}
+    revision = top_revision(preparation_revision)
+    if kind == 'draft':
+        identity.update(draft_ref=artwork_draft._identity(draft_ref),
+                        draft_revision=top_revision(draft_revision))
+    return identity, revision
 
 
 def _normalize_start(payload):
@@ -427,3 +444,58 @@ class TopArtworkPreparationService:
                     'draft_ref': draft_ref, 'draft_revision': draft_revision}
         return preparation_phases.advance(self, identity, kind='draft',
             preparation_revision=prep_revision, request_key=key, constraints=constraints)
+
+
+    def review_saved(self, context, *, top_ref, top_revision, preparation_ref,
+                     preparation_revision, context_ref, cursor_secret, constraints=None):
+        """Explicit full review only; no claim, image capture, publication or renewal."""
+        identity, revision = _review_identity(context, kind='saved', top_ref=top_ref,
+            top_revision_value=top_revision, preparation_ref=preparation_ref,
+            preparation_revision=preparation_revision, context_ref=context_ref)
+        review_owner.require_key(cursor_secret)
+        return preparation_phases.review(self, identity, kind='saved',
+            preparation_revision=revision, cursor_secret=cursor_secret, constraints=constraints)
+
+    def review_draft(self, context, *, top_ref, top_revision, preparation_ref,
+                     preparation_revision, draft_ref, draft_revision, context_ref,
+                     cursor_secret, constraints=None):
+        identity, revision = _review_identity(context, kind='draft', top_ref=top_ref,
+            top_revision_value=top_revision, preparation_ref=preparation_ref,
+            preparation_revision=preparation_revision, context_ref=context_ref,
+            draft_ref=draft_ref, draft_revision=draft_revision)
+        review_owner.require_key(cursor_secret)
+        return preparation_phases.review(self, identity, kind='draft',
+            preparation_revision=revision, cursor_secret=cursor_secret, constraints=constraints)
+
+    def read_saved_png(self, context, *, top_ref, top_revision, preparation_ref,
+                       preparation_revision, context_ref, cursor_secret, review_witness,
+                       row_ref, asset_ref, head_only=False, constraints=None):
+        """One immutable PNG after full fresh review binding and owner fences."""
+        identity, revision = _review_identity(context, kind='saved', top_ref=top_ref,
+            top_revision_value=top_revision, preparation_ref=preparation_ref,
+            preparation_revision=preparation_revision, context_ref=context_ref)
+        if type(head_only) is not bool:
+            raise AlbumTopError('invalid_command')
+        row_ref, asset_ref = artwork_draft._identity(row_ref), artwork_draft._identity(asset_ref)
+        review_owner.require_key(cursor_secret)
+        witness = review_owner.normalize_witness(review_witness)
+        return preparation_phases.png(self, identity, kind='saved', preparation_revision=revision,
+            cursor_secret=cursor_secret, review_witness=witness, row_ref=row_ref, asset_ref=asset_ref,
+            head_only=head_only, constraints=constraints)
+
+    def read_draft_png(self, context, *, top_ref, top_revision, preparation_ref,
+                       preparation_revision, draft_ref, draft_revision, context_ref,
+                       cursor_secret, review_witness, row_ref, asset_ref, head_only=False,
+                       constraints=None):
+        identity, revision = _review_identity(context, kind='draft', top_ref=top_ref,
+            top_revision_value=top_revision, preparation_ref=preparation_ref,
+            preparation_revision=preparation_revision, context_ref=context_ref,
+            draft_ref=draft_ref, draft_revision=draft_revision)
+        if type(head_only) is not bool:
+            raise AlbumTopError('invalid_command')
+        row_ref, asset_ref = artwork_draft._identity(row_ref), artwork_draft._identity(asset_ref)
+        review_owner.require_key(cursor_secret)
+        witness = review_owner.normalize_witness(review_witness)
+        return preparation_phases.png(self, identity, kind='draft', preparation_revision=revision,
+            cursor_secret=cursor_secret, review_witness=witness, row_ref=row_ref, asset_ref=asset_ref,
+            head_only=head_only, constraints=constraints)

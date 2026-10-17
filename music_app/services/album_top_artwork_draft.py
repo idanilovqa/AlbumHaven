@@ -342,7 +342,7 @@ def finish_snapshot(service, connection, live, header, rows, generation, constra
     digest = fingerprint(header, source_digest)
     return ({'kind': kind, 'mode': mode, 'observe_count': len(observed), 'header': header, 'rows': rows, 'scopes': scopes, 'roots': roots,
              'included_count': len(included), 'digest': digest,
-             'source_digest': source_digest,
+             'source_digest': source_digest, 'metadata_generation': generation,
              'inventory_digest': prepared.digest if prepared else None}, prepared)
 
 

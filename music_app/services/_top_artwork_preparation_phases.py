@@ -9,6 +9,7 @@ from music_app.services import album_top_artwork_draft as artwork_draft
 from music_app.services import _top_artwork_saved as saved
 from music_app.services import _top_artwork_draft_proof as draft_proof
 from music_app.services import artwork_proof_codec as proof_codec
+from music_app.services import album_top_artwork_review as review_owner
 from music_app.services.owned_album_tops import AlbumTopError
 from music_app.services.public_top_artwork_acquisition import ArtworkAcquisitionUnavailable, MAX_OUTPUT_BYTES
 
@@ -91,32 +92,113 @@ def _saved_root_ids(kind, observations):
 
 
 def read(service, identity, *, kind, after=0, limit=100, constraints=None):
+    return _read(service, identity, kind=kind, purpose='status', request=None,
+                 after=after, limit=limit, constraints=constraints)
+
+
+def review(service, identity, *, kind, preparation_revision, cursor_secret, constraints=None):
+    return _read(service, identity, kind=kind, purpose='review',
+        request={'preparation_revision': preparation_revision, 'cursor_secret': cursor_secret},
+        constraints=constraints)
+
+
+def png(service, identity, *, kind, preparation_revision, cursor_secret,
+        review_witness, row_ref, asset_ref, head_only, constraints=None):
+    return _read(service, identity, kind=kind, purpose='png', request={
+        'preparation_revision': preparation_revision, 'cursor_secret': cursor_secret,
+        'witness': review_witness, 'row_ref': row_ref, 'asset_ref': asset_ref,
+        'head_only': head_only}, constraints=constraints)
+
+
+def _read_response(service, connection, snapshot, kind, purpose, request, state, after, limit):
+    if purpose == 'status':
+        return _status(service, connection, snapshot, kind, after=after, limit=limit)
+    if purpose == 'review':
+        return review_owner.finish_review(snapshot, state, kind=kind,
+                                          cursor_secret=request['cursor_secret'])
+    if purpose == 'png':
+        return review_owner.read_png(connection, snapshot, kind=kind,
+            row_ref=request['row_ref'], asset_ref=request['asset_ref'], head_only=request['head_only'])
+    raise AlbumTopError('invalid_command')
+
+
+def _read(service, identity, *, kind, purpose, request, after=0, limit=100, constraints=None):
+    # One full-vector orchestration for status, explicit review and one PNG.
+    # Covered source metadata is read-only in both phases: its clock coalesces
+    # invalidation per transaction, so no post-observation metadata write may
+    # be hidden behind generation equality. Neither policy callbacks nor these
+    # fixed collaborators may mutate those dependencies.
+    if purpose not in ('status', 'review', 'png'):
+        raise AlbumTopError('invalid_command')
     context, ref, revision = identity['context'], identity['top_ref'], identity['top_revision']
-    prepared = None
+    prepared, state, response = None, None, None
+    snapshot, current, observations = None, None, None
     try:
         with service._authorized(context, constraints) as (connection, live, _):
             top = service._top(connection, live, ref, revision, constraints)
             snapshot, prepared = _load(service, connection, live, top, identity, kind, constraints, mode='read')
+            if purpose != 'status':
+                review_owner.require_ready(snapshot, request['preparation_revision'])
+            if purpose == 'review':
+                # Exactly one explicit metadata capture, before leaving A1.
+                # Later PNGs authenticate this observation instead of repeating
+                # the per-item metadata/file collector.
+                state = review_owner.capture_review(connection, live, top, snapshot,
+                                                    kind=kind, constraints=constraints)
+            elif purpose == 'png':
+                review_owner.verify_witness(snapshot, request['witness'], kind=kind,
+                                            cursor_secret=request['cursor_secret'])
             if not snapshot['observe_count']:
-                response = _status(service, connection, snapshot, kind, after=after, limit=limit)
+                response = _read_response(service, connection, snapshot, kind, purpose,
+                                          request, state, after, limit)
                 service._draft_finish(connection, live, top, snapshot, {}, constraints)
                 return response
             service._draft_finish(connection, live, top, snapshot, {}, constraints)
             prepared = None
         observations = service._draft_probe(snapshot)
         observed_root_ids = _saved_root_ids(kind, observations)
+        if purpose != 'status':
+            # S already compared every proof to current source/cover. After P1,
+            # retain only its exact binding/header, never a second authority or
+            # source vector alongside the next full snapshot.
+            snapshot = {'digest': snapshot['digest'], 'header': dict(snapshot['header']),
+                        'metadata_generation': snapshot['metadata_generation']}
         with service._authorized(context, constraints) as (connection, live, _):
             top = service._top(connection, live, ref, revision, constraints)
             if kind == 'saved':
                 saved.require_observed_roots(live, observed_root_ids, constraints)
             current, prepared = _load(service, connection, live, top, identity, kind, constraints, mode='read')
             artwork_draft.compare(snapshot, current)
-            response = _status(service, connection, current, kind, after=after, limit=limit)
+            if purpose != 'status':
+                review_owner.require_ready(current, request['preparation_revision'])
+                if snapshot['metadata_generation'] != current['metadata_generation']:
+                    raise AlbumTopError('artwork_source_changed', 409)
+            if purpose == 'png':
+                review_owner.verify_witness(current, request['witness'], kind=kind,
+                                            cursor_secret=request['cursor_secret'])
+            response = _read_response(service, connection, current, kind, purpose,
+                                      request, state, after, limit)
+            # Response SQL, PNG hash/length and bounded serialization all finish
+            # before callbacks, original-expiry DB clock and session exit.
             service._draft_finish(connection, live, top, current, observations, constraints)
             return response
+    except BaseException as error:
+        if purpose == 'status':
+            raise
+        # A failing collaborator/commit must not retain a PNG or complete safe
+        # summary in its traceback. Nothing has been streamed before exit.
+        response = None
+        if state is not None:
+            state.clear()
+        error.__traceback__ = None
+        error.__context__ = None
+        error.__cause__ = None
+        raise error.with_traceback(None)
     finally:
         prepared = None
-
+        if purpose != 'status':
+            response, state, snapshot, current, observations = None, None, None, None, None
+            request.clear()
 
 
 def advance(service, identity, *, kind, preparation_revision, request_key, constraints=None):

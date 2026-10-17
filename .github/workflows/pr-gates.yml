@@ -470,6 +470,13 @@ jobs:
           tests/py/test_album_top_artwork_preparation_postgres.py
           tests/py/test_top_artwork_draft_preparation_postgres.py
           tests/py/test_top_artwork_retention_postgres.py
+          tests/py/test_top_artwork_draft_proof.py
+          tests/py/test_top_artwork_draft_capture_postgres.py
+          tests/py/test_top_artwork_saved_phases_postgres.py
+          tests/py/test_top_artwork_review.py
+          tests/py/test_top_artwork_review_postgres.py
+          tests/py/test_public_metadata_file_invalidation_postgres.py
+          tests/py/test_album_top_remote_identity_lock_postgres.py
           TESTS
           mapfile -t selected < "$RUNNER_TEMP/tops-linux-evidence/tests.txt"
           for test_path in "${selected[@]}"; do test -f "$test_path"; done

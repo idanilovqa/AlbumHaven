@@ -459,9 +459,9 @@ def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_s
         (
             True,
             (
-                "Synthetic Scale Artist 0464",
-                "Synthetic Scale Album 00444",
-                2001,
+                isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
+                isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
+                isolatedLibraryApp.DDT_REMIXES_FIXTURE_YEAR,
             ),
         ),
     ],
@@ -537,15 +537,21 @@ def test_provider_storage_policy_seed_targets_only_the_calibration_album(monkeyp
 
     assert "Mastodon" not in recorded["sql"]
     assert recorded["params"][2:] == (
-        "Synthetic Scale Artist 0464",
-        "Synthetic Scale Album 00444",
-        2001,
+        isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
+        isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
+        isolatedLibraryApp.DDT_REMIXES_FIXTURE_YEAR,
     )
     candidates = json.loads(recorded["params"][0])
     assert {
         (candidate["artist"], candidate["album"], candidate["year"])
         for candidate in candidates
-    } == {("Synthetic Scale Artist 0464", "Synthetic Scale Album 00444", 2001)}
+    } == {
+        (
+            isolatedLibraryApp.DDT_STUDIO_RECORDS_FIXTURE_ARTIST,
+            isolatedLibraryApp.DDT_REMIXES_FIXTURE_ALBUM,
+            isolatedLibraryApp.DDT_REMIXES_FIXTURE_YEAR,
+        )
+    }
 
 
 def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_shaping():

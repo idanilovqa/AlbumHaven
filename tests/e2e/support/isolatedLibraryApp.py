@@ -3035,9 +3035,9 @@ def persist_provider_storage_policy_candidates(
         ]
 
     if include_performance_target:
-        target_artist = "Synthetic Scale Artist 0464"
-        target_album = "Synthetic Scale Album 00444"
-        target_year = 2001
+        target_artist = DDT_STUDIO_RECORDS_FIXTURE_ARTIST
+        target_album = DDT_REMIXES_FIXTURE_ALBUM
+        target_year = DDT_REMIXES_FIXTURE_YEAR
     else:
         target_artist = "Mastodon"
         target_album = "Crack The Skye"

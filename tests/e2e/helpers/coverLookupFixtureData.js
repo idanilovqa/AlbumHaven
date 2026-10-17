@@ -65,9 +65,9 @@ export const COVER_LOOKUP_TEST_TARGETS = Object.freeze({
     year: '2009',
   }),
   performanceInteractions: Object.freeze({
-    artist: 'Synthetic Scale Artist 0464',
-    album: 'Synthetic Scale Album 00444',
-    year: '2001',
+    artist: 'ДДТ',
+    album: 'Ремиксы',
+    year: '2000',
   }),
   notificationNoResult: Object.freeze({
     artist: 'Flaming Row',

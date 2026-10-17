@@ -2,7 +2,7 @@
 
 Only this test fixture's own synthetic actors/libraries are cleaned. Runtime uses
 its real role and real authority owner. Trusted setup can insert immutable test
-history, but production retention, identity mapping, and activation stay absent.
+retained history only. Fresh pending facts use the actual version-2 lifecycle.
 """
 from contextlib import contextmanager
 from uuid import uuid4
@@ -43,6 +43,12 @@ def payload(target=None, *, key=None, mbid=MBID):
             "release_group_id": mbid}
 
 
+def prepared_payload(preparation, target, *, key=None, mbid=MBID):
+    """Explicit v2 wire; payload() above remains the exact legacy-v1 builder."""
+    return {"version": 2, "preparation_ref": preparation["preparation_ref"],
+            "request_key": key or str(uuid4()), "destination": target, "release_group_id": mbid}
+
+
 @contextmanager
 def runtime(database):
     with psycopg.connect(database.app_url, row_factory=dict_row) as connection:
@@ -71,6 +77,9 @@ class RemoteCase:
         self.statements = []
         self.after_statement = None
         self.provider_hook = None
+        self.preparation_forms = {}
+        self.reservation_states = {}
+        self.reservation_commits = []
         self.facts = evidence()
         self.original_connect = database.service._connect
         connect = self.original_connect
@@ -80,11 +89,13 @@ class RemoteCase:
             """Transparent observation of real SQL; never supplies query results."""
             def __init__(self, real):
                 self.real = real
+                self.reserved = False
 
             def execute(self, sql, params=None):
                 result = self.real.execute(sql, params)
                 normalized = " ".join(sql.lower().split())
                 case.statements.append(normalized)
+                self.reserved = self.reserved or normalized.startswith("select app.reserve_top_remote_attempt(")
                 if case.after_statement is not None:
                     case.after_statement(normalized, self.real)
                 return result
@@ -103,9 +114,15 @@ class RemoteCase:
                 self.connection_history.setdefault(identity, {}).setdefault(pid, []).append(connection)
                 self.active_connections.append((identity, connection))
                 try:
-                    yield ObservedConnection(connection)
+                    observed_connection = ObservedConnection(connection)
+                    yield observed_connection
                 finally:
                     self.active_connections.remove((identity, connection))
+            # This line is reached only after the real owner connection context
+            # exits successfully and acknowledges commit. Observe persisted SQL
+            # state even if cancellation prevents entering the provider at all.
+            if observed_connection.reserved:
+                self.reservation_commits.append((identity, self.c2_state()))
         database.service._connect = observed
         self.service = TopRemoteAcquisitionService(database.service, provider=self.provider,
             searcher=self.searcher, user_agent="AlbumHaven-Synthetic-Contract/1.0")
@@ -147,6 +164,7 @@ class RemoteCase:
 
     def provider(self, mbid, **options):
         self.outside_authority()
+        self.reservation_states[get_ident()] = self.c2_state()
         self.calls.append(("acquire", mbid, options))
         if self.provider_hook is not None:
             self.provider_hook()
@@ -159,8 +177,9 @@ class RemoteCase:
             self.provider_hook()
         return (self.facts,)
 
-    def acquire(self, command=None, *, actor=None, **options):
-        return self.service.acquire(self.db.context(actor), payload=command or payload(),
+    def acquire(self, command, *, actor=None, **options):
+        """Dispatch exactly this body; never create a parent or convert a version."""
+        return self.service.acquire(self.db.context(actor), payload=command,
                                    context_ref=options.pop("context_ref", CONTEXT), **options)
 
     def rows(self):
@@ -198,39 +217,104 @@ class RemoteCase:
                 normalized.request_key, normalized.digest, facts.release_group_id, facts.digest,
                 facts.title, facts.artist_display, facts.first_release_date, facts.primary_type)
 
-    def seed(self, count, *, command=None, facts=None, state="expired", actor=None):
-        """One targeted SQL INSERT generates exact, bounded synthetic history.
+    def begin_v2(self, target=None, *, actor=None, form_ref=None, context_ref=CONTEXT):
+        """Real service maintenance sentinel and begin, under the intended scope."""
+        actor = actor or self.db.owner
+        target = target or destination()
+        context = self.db.context(actor)
+        progress = self.service.maintain_preparations(context, payload={"mode": "reclaim"}, context_ref=context_ref)
+        assert progress["capacity"]["legacy_initialized"] is True
+        scope = (actor.account_id, actor.session_id, actor.current_library_id, context_ref,
+                 target["kind"], target.get("top_ref", target.get("draft_ref")), target.get("revision"))
+        stable_form = form_ref or target.get("draft_ref") or self.preparation_forms.setdefault(scope, str(uuid4()))
+        parent = self.service.begin_preparation(context, payload={"destination": target, "form_ref": stable_form},
+            context_ref=context_ref)
+        assert parent["version"] == 2 and parent["state"] == "ready"
+        assert parent["destination"] == target and parent["form_ref"] == stable_form
+        return parent, target
 
-        Facts and command digest come from the real normalizers; generated request
-        keys only differ in the field deliberately excluded from that digest.
-        No production budget constant or storage accounting result is replaced.
-        """
-        assert 1 <= count <= 10000
-        assert state in {"expired", "retired", "live"}
-        command = command or payload()
-        args = self.store_args(command, actor=actor, facts=facts)
-        token = uuid4().hex
+    def prepare_v2(self, target=None, *, actor=None, form_ref=None, context_ref=CONTEXT, key=None, mbid=MBID):
+        """Visible fresh setup convenience; acquire() never invokes this helper."""
+        parent, target = self.begin_v2(target, actor=actor, form_ref=form_ref, context_ref=context_ref)
+        return prepared_payload(parent, target, key=key, mbid=mbid)
+
+    def binding_v2(self, command, *, actor=None, context_ref=CONTEXT):
+        actor = actor or self.db.owner
+        target = command["destination"]
+        owner = actor.account_id
+        if target["kind"] == "top":
+            with self.db.connect() as connection:
+                owner = connection.execute("select owner_account_id from app.album_lists where ref=%s",
+                    (target["top_ref"],)).fetchone()["owner_account_id"]
+        normalized = normalize_remote_acquisition(command)
+        return (command["preparation_ref"], actor.current_library_id, actor.account_id, actor.session_id,
+            context_ref, target["kind"], target.get("top_ref", target.get("draft_ref")), owner,
+            int(target["revision"]) if target["kind"] == "top" else None,
+            normalized.request_key, normalized.digest, normalized.release_group_id)
+
+    def reserve_v2(self, command, *, actor=None, context_ref=CONTEXT, connection=None):
+        if connection is not None:
+            # The caller must acknowledge this transaction before finish_v2.
+            assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+            assert_runtime_role(connection, self.db)
+            return connection.execute("select app.reserve_top_remote_attempt(" + ",".join(["%s"] * 12)
+                + ") as result", self.binding_v2(command, actor=actor, context_ref=context_ref)).fetchone()["result"]
+        with runtime(self.db) as connection:
+            assert_runtime_role(connection, self.db)
+            result = connection.execute("select app.reserve_top_remote_attempt(" + ",".join(["%s"] * 12)
+                + ") as result", self.binding_v2(command, actor=actor, context_ref=context_ref)).fetchone()["result"]
+        # Returning happens after the real connection context acknowledged commit.
+        return result
+
+    def finish_v2(self, command, reservation, *, actor=None, facts=None, context_ref=CONTEXT, connection=None):
+        facts = facts or self.facts
+        args = (*self.binding_v2(command, actor=actor, context_ref=context_ref), reservation["attempt_ref"],
+            reservation["acquisition_ref"], facts.digest, facts.title, facts.artist_display,
+            facts.first_release_date, facts.primary_type)
+        if connection is not None:
+            assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+            assert_runtime_role(connection, self.db)
+            return connection.execute("select app.finish_top_remote_attempt(" + ",".join(["%s"] * len(args))
+                + ") as result", args).fetchone()["result"]
+        with runtime(self.db) as connection:
+            assert_runtime_role(connection, self.db)
+            result = connection.execute("select app.finish_top_remote_attempt(" + ",".join(["%s"] * len(args))
+                + ") as result", args).fetchone()["result"]
+        return result
+
+    def c2_state(self):
+        with runtime(self.db) as connection:
+            assert_runtime_role(connection, self.db)
+            return {name: connection.execute("select * from app." + name
+                + " where actor_account_id=any(%s) order by 1", (self.db.account_ids,)).fetchall()
+                for name in ("album_top_remote_pending_budgets", "album_top_remote_preparations",
+                    "album_top_remote_attempts", "album_top_remote_acquisitions")}
+
+    def retire_pending(self, acquisition_ref):
         with self.db.connect() as connection:
-            connection.execute("""with seed as (
-                select %s::bigint as library_id,%s::bigint as actor_id,%s::bigint as session_id,
-                  %s::text as context_ref,%s::text as kind,%s::uuid as destination,
-                  %s::bigint as owner_id,%s::bigint as revision,%s::text as digest,
-                  %s::text as external_id,%s::text as version,%s::text as title,%s::text as artist,
-                  %s::text as released,%s::text as primary_type,
-                  statement_timestamp()-case when %s='expired' then interval '1 hour' else interval '0' end as created
-              ) insert into app.album_top_remote_acquisitions(ref,library_id,actor_account_id,original_session_id,
-                context_ref,destination_kind,destination_ref,destination_top_ref,destination_owner_account_id,
-                destination_revision,request_key,command_digest,provider,entity_kind,external_id,evidence_version,
-                title,artist_display,first_release_date,primary_type,facts_bytes,created_at,expires_at,retired_at)
-              select md5(%s||':ref:'||g)::uuid,library_id,actor_id,session_id,context_ref,kind,destination,
-                case when kind='top' then destination end,owner_id,revision,
-                case when %s=1 then %s::uuid else md5(%s||':key:'||g)::uuid end,
-                digest,'musicbrainz','release-group',external_id,version,title,artist,released,primary_type,
-                octet_length(jsonb_build_array(1,'musicbrainz','release-group',external_id,title,artist,released,primary_type,version)::text),
-                created,created+interval '30 minutes',case when %s='retired' then created end
-              from seed cross join generate_series(1,%s) as g""",
-              (*args[1:9], args[10], *args[11:], state, token, count, command["request_key"], token, state, count))
-        return command
+            connection.execute("update app.album_top_remote_acquisitions set retired_at=clock_timestamp() where ref=%s",
+                (acquisition_ref,))
+
+    def cleanup_pending(self):
+        """Guard-preserving, exact-actor cleanup; no immutable trigger bypass."""
+        self.db.service._connect = self.original_connect
+        with self.db.connect() as connection:
+            owner = connection.execute("select rolsuper,current_user=pg_get_userbyid(c.relowner) as owns "
+                "from pg_roles r cross join pg_class c where r.rolname=current_user "
+                "and c.oid='app.album_top_remote_preparations'::regclass").fetchone()
+            assert owner == {"rolsuper": False, "owns": True}
+            connection.execute("select id from app.accounts where id=any(%s) order by id for update",
+                (self.db.account_ids,)).fetchall()
+            connection.execute("select actor_account_id from app.album_top_remote_pending_budgets "
+                "where actor_account_id=any(%s) order by actor_account_id for update", (self.db.account_ids,)).fetchall()
+            parents = connection.execute("select ref from app.album_top_remote_preparations "
+                "where actor_account_id=any(%s) order by ref for update", (self.db.account_ids,)).fetchall()
+            for parent in parents:
+                connection.execute("select app.reclaim_top_remote_parent_locked(%s,true)", (parent["ref"],)).fetchone()
+            assert not connection.execute("select ref from app.album_top_remote_acquisitions "
+                "where actor_account_id=any(%s)", (self.db.account_ids,)).fetchall()
+            connection.execute("delete from app.album_top_remote_pending_budgets where actor_account_id=any(%s)",
+                (self.db.account_ids,))
 
     def counts(self, target=None):
         where = "actor_account_id=%s"
@@ -250,17 +334,13 @@ def remote(db):
     try:
         yield case
     finally:
-        db.service._connect = case.original_connect
+        case.cleanup_pending()
+        # Retained-history teardown remains separately scoped to fixture libraries.
         with db.connect() as connection:
             assert connection.execute("select rolsuper from pg_roles where rolname=current_user").fetchone()["rolsuper"] is False
-            for table, trigger in (("album_top_remote_acquisitions", "top_remote_acquisition_immutable"),
-                                   ("album_top_remote_admissions", "top_remote_admission_immutable")):
-                assert connection.execute("select current_user=pg_get_userbyid(relowner) as owns from pg_class where oid=%s::regclass",
-                                          ("app." + table,)).fetchone()["owns"] is True
-                connection.execute(f"alter table app.{table} disable trigger {trigger}")
+            assert connection.execute("select current_user=pg_get_userbyid(relowner) as owns from pg_class "
+                "where oid='app.album_top_remote_admissions'::regclass").fetchone()["owns"] is True
+            connection.execute("alter table app.album_top_remote_admissions disable trigger top_remote_admission_immutable")
             connection.execute("delete from app.album_list_item_remote_sources where library_id=any(%s)", (db.library_ids,))
             connection.execute("delete from app.album_top_remote_admissions where library_id=any(%s)", (db.library_ids,))
-            connection.execute("delete from app.album_top_remote_acquisitions where actor_account_id=any(%s)", (db.account_ids,))
-            for table, trigger in (("album_top_remote_acquisitions", "top_remote_acquisition_immutable"),
-                                   ("album_top_remote_admissions", "top_remote_admission_immutable")):
-                connection.execute(f"alter table app.{table} enable trigger {trigger}")
+            connection.execute("alter table app.album_top_remote_admissions enable trigger top_remote_admission_immutable")

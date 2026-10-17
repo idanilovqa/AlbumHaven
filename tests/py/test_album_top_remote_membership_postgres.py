@@ -68,20 +68,83 @@ class MembershipCase:
         self.storage, self.remote, self.db = storage, storage.remote, storage.db
         self.external_ids = []
         self.fact_titles = []
+        self.acquisitions = {}
 
     def acquire(self, top=None, *, actor=None, facts=None, target=None):
         self.remote.facts = facts or evidence(mbid=str(uuid4()), title='Remote album ' + uuid4().hex)
         self.external_ids.append(self.remote.facts.release_group_id)
         self.fact_titles.append(self.remote.facts.title)
-        command = payload(target or destination(top), mbid=self.remote.facts.release_group_id)
-        return self.remote.acquire(command, actor=actor)
+        command = self.remote.prepare_v2(target or destination(top), actor=actor,
+            mbid=self.remote.facts.release_group_id)
+        receipt = self.remote.acquire(command, actor=actor)
+        fact = next(row for row in self.remote.rows() if str(row['ref']) == receipt['acquisition_ref'])
+        self.acquisitions[receipt['acquisition_ref']] = {'command': command, 'receipt': receipt,
+            'fact': fact, 'actor': actor or self.db.owner}
+        return receipt
 
     def execute(self, command, *, actor=None, **options):
         before = len(self.remote.calls)
+        c2_before = self.remote.c2_state()
         try:
-            return self.db.service.execute(self.db.context(actor), command, context_ref=CONTEXT, **options)
+            result = self.db.service.execute(self.db.context(actor), command, context_ref=CONTEXT, **options)
+            selections = command.data.get('selections', ()) if command.action in {'create', 'add'} else (
+                [entry.get('source', {}) for entry in command.data.get('item_selections', ())]
+                if command.action == 'save' else ())
+            selected = {entry['acquisition_ref'] for entry in selections if entry.get('kind') == 'remote_acquisition'}
+            fresh = [row for row in c2_before['album_top_remote_acquisitions'] if str(row['ref']) in selected
+                and row['preparation_ref'] is not None]
+            if fresh:
+                self.assert_consumed(command, result, fresh, c2_before)
+            return result
         finally:
             assert len(self.remote.calls) == before, 'Membership/replay must never call provider transport'
+
+    def assert_consumed(self, command, result, facts, before):
+        """Exact assertions over the real committed operation/bridge/terminal."""
+        after = self.remote.c2_state()
+        remaining = {str(row['ref']) for row in after['album_top_remote_acquisitions']}
+        attempts = {str(row['acquisition_ref']): row for row in after['album_top_remote_attempts']}
+        with self.db.connect() as connection:
+            operation = connection.execute('select * from app.album_list_operations where actor_account_id=%s and request_key=%s',
+                (facts[0]['actor_account_id'], command.request_key)).fetchone()
+            assert operation is not None and operation['command_digest'] == command.digest
+            assert operation['original_session_id'] == facts[0]['original_session_id']
+            assert operation['action'] == command.action and operation['receipt'] == result
+            for fact in facts:
+                ref = str(fact['ref']); attempt = attempts[ref]
+                assert ref not in remaining and attempt['state'] == 'consumed'
+                assert attempt['evidence_version'] == fact['evidence_version']
+                assert str(attempt['operation_request_key']) == command.request_key
+                assert str(attempt['consumed_top_ref']) == result['top_ref']
+                assert attempt['consumed_revision'] == int(result['revision'])
+                bridge = connection.execute('select * from app.album_list_item_remote_sources where top_ref=%s and item_ref=%s',
+                    (result['top_ref'], attempt['consumed_item_ref'])).fetchone()
+                assert bridge is not None and bridge['admission_ref'] == attempt['consumed_admission_ref']
+                assert bridge['catalog_ref'] == attempt['consumed_catalog_ref']
+                admission = connection.execute('select * from app.album_top_remote_admissions where ref=%s',
+                    (bridge['admission_ref'],)).fetchone()
+                assert admission['evidence_version'] == fact['evidence_version'] and admission['retired_at'] is None
+                parent = next(row for row in after['album_top_remote_preparations'] if row['ref'] == fact['preparation_ref'])
+                assert parent['destination_ref'] == fact['destination_ref']
+                assert parent['destination_revision'] == fact['destination_revision']
+                assert parent['closed_at'] is None
+                if command.action in {'add', 'save'}:
+                    assert fact['destination_revision'] == int(command.data['revision'])
+                    assert int(result['revision']) == fact['destination_revision'] + 1
+                else:
+                    assert fact['destination_revision'] is None
+                    assert str(fact['destination_ref']) == command.data['draft_ref'] == result['draft_ref']
+        for table, identity in (('album_top_remote_preparations', 'ref'), ('album_top_remote_pending_budgets', 'actor_account_id')):
+            current = {row[identity]: row for row in after[table]}
+            for old in before[table]:
+                charged = [fact for fact in facts if (fact['preparation_ref'] if identity == 'ref'
+                    else fact['actor_account_id']) == old[identity]]
+                new = current[old[identity]]
+                assert new['pending_count'] == old['pending_count'] - len(charged)
+                assert new['pending_bytes'] == old['pending_bytes'] - sum(fact['facts_bytes'] for fact in charged)
+                assert new['reservation_count'] == old['reservation_count']
+                if identity == 'ref':
+                    assert new['attempt_count'] == old['attempt_count']
 
     def command(self, action, top=None, **data):
         body = {'request_key': str(uuid4()), **data}
@@ -138,7 +201,7 @@ class MembershipCase:
                 join catalog.album_presentation_versions p on p.ref=s.presentation_ref
                 where p.catalog_ref=any(%s::uuid[]) order by s.presentation_ref''', (self.db.album_refs,)).fetchall()
         return {**working, 'identities': identities, 'catalogs': catalogs, 'publication_seals': seals,
-                'pending_acquisitions': self.remote.rows(),
+                'pending_acquisitions': self.remote.rows(), 'c2_state': self.remote.c2_state(),
                 'presentations': presentations, 'presentation_tracks': presentation_tracks,
                 'presentation_evidence': presentation_evidence, 'presentation_seals': presentation_seals,
                 **{name: self.rows(name) for name in ('album_top_remote_admissions',
@@ -146,54 +209,8 @@ class MembershipCase:
                     'shared_links', 'album_list_publications', 'album_list_publication_items',
                     'album_list_item_publication_sources')}}
 
-    def seed_pending(self, top=None, *, seconds=-1):
-        """Insert exact synthetic pending history without rewriting an immutable row.
-
-        The real SQL clock controls both preload and definer expiry. A positive
-        deadline is used only for the two tests that cross the actual deadline;
-        no production clock, deadline constant, result or permission is mocked.
-        """
-        assert seconds in {-1, 10}
-        facts = evidence(mbid=str(uuid4()), title='Historical pending ' + uuid4().hex)
-        self.external_ids.append(facts.release_group_id)
-        self.fact_titles.append(facts.title)
-        target = destination(top)
-        command = payload(target, mbid=facts.release_group_id)
-        args = self.remote.store_args(command, facts=facts)
-        with self.db.connect() as connection:
-            row = connection.execute('''with input as (
-                select %s::uuid as ref,%s::bigint as library_id,%s::bigint as actor_id,
-                  %s::bigint as session_id,%s::text as context_ref,%s::text as kind,
-                  %s::uuid as destination,%s::bigint as owner_id,%s::bigint as revision,
-                  %s::uuid as request_key,%s::text as command_digest,%s::text as external_id,
-                  %s::text as version,%s::text as title,%s::text as artist,%s::text as released,
-                  %s::text as primary_type,statement_timestamp()+(%s*interval '1 second') as deadline
-              ) insert into app.album_top_remote_acquisitions(ref,library_id,actor_account_id,
-                original_session_id,context_ref,destination_kind,destination_ref,destination_top_ref,
-                destination_owner_account_id,destination_revision,request_key,command_digest,
-                provider,entity_kind,external_id,evidence_version,title,artist_display,first_release_date,
-                primary_type,facts_bytes,created_at,expires_at)
-              select ref,library_id,actor_id,session_id,context_ref,kind,destination,
-                case when kind='top' then destination end,owner_id,revision,request_key,command_digest,
-                'musicbrainz','release-group',external_id,version,title,artist,released,primary_type,
-                octet_length(jsonb_build_array(1,'musicbrainz','release-group',external_id,title,artist,
-                  released,primary_type,version)::text),deadline-interval '30 minutes',deadline
-              from input returning ref,expires_at''', (*args, seconds)).fetchone()
-        return {'acquisition_ref': str(row['ref']), 'evidence_version': facts.digest,
-                'destination': target, 'expires_at': row['expires_at']}
-
-    def wait_until_expired(self, acquired, connection=None):
-        def wait(real):
-            real.execute('select pg_sleep(greatest(0,extract(epoch from (%s-clock_timestamp())))+0.05)',
-                         (acquired['expires_at'],)).fetchone()
-            assert real.execute('select clock_timestamp()>%s as expired',
-                                (acquired['expires_at'],)).fetchone()['expired']
-        if connection is not None:
-            wait(connection)
-        else:
-            with runtime(self.db) as real:
-                assert_runtime_role(real, self.db)
-                wait(real)
+    # Real 30-minute pending expiry belongs to the separately selected acceptance
+    # owner. No synthetic expired/ten-second pending writer exists in this fixture.
 
     def retire(self, admission):
         with self.db.connect() as connection:
@@ -232,8 +249,8 @@ class MembershipCase:
         return top, admission
 
 
-@pytest.fixture
-def mixed(retained):
+@contextmanager
+def membership_case(retained):
     case = MembershipCase(retained)
     clock = case.db.service._clock
     try:
@@ -264,6 +281,12 @@ def mixed(retained):
                     case.db.album_refs.append(str(row['catalog_ref']))
             connection.execute('delete from catalog.release_group_provider_identities where external_id=any(%s)',
                                (case.external_ids,))
+
+
+@pytest.fixture
+def mixed(retained):
+    with membership_case(retained) as case:
+        yield case
 
 
 def test_mixed_create_commits_complete_order_typed_draft_and_truthful_summary(mixed):
@@ -342,7 +365,11 @@ def test_named_editor_add_charges_destination_owner_and_retains_after_editor_dep
     account_lock = next(i for i, sql in enumerate(statements) if 'from app.accounts' in sql and 'for update' in sql)
     top_lock = next(i for i, sql in enumerate(statements) if sql.startswith('select * from app.album_lists') and 'for update' in sql)
     retain = next(i for i, sql in enumerate(statements) if 'app.retain_top_remote_acquisition' in sql)
-    assert account_lock < top_lock < retain
+    budget = next(i for i, sql in enumerate(statements) if 'app.lock_top_remote_pending_actor' in sql)
+    sources = next(i for i, sql in enumerate(statements) if 'app.lock_top_remote_membership_sources' in sql)
+    receipt = next(i for i, sql in enumerate(statements) if sql.startswith('insert into app.album_list_operations '))
+    consume = next(i for i, sql in enumerate(statements) if 'app.consume_top_remote_acquisitions' in sql)
+    assert account_lock < budget < top_lock < sources < retain < receipt < consume
     detail = mixed.read(top)
     source = detail['edit_draft']['item_selections'][0]['source']
     top = mixed.execute(mixed.command('remove', top, item_refs=[detail['items'][0]['ref']]))
@@ -500,6 +527,10 @@ def test_copy_is_independent_after_source_removal_grant_loss_and_parent_retireme
     top, _ = write(mixed.db, 'revoke_editor', top, grant_ref=grant)
     top, _ = write(mixed.db, 'delete', top)
     mixed.retire(parent['ref'])
+    preparation = mixed.acquisitions[str(parent['original_acquisition_ref'])]['command']['preparation_ref']
+    mixed.remote.service.close_preparation(mixed.db.context(), preparation_ref=preparation,
+        payload={}, context_ref=CONTEXT)
+    mixed.remote.service.maintain_preparations(mixed.db.context(), payload={'mode': 'reclaim'}, context_ref=CONTEXT)
     before = mixed.snapshot()
     mixed.remote.statements.clear()
     assert mixed.execute(command, actor=new_session(mixed.db, viewer)) == copied
@@ -670,15 +701,21 @@ def test_pending_and_retained_facts_never_replace_current_database_authority(mix
 @pytest.mark.parametrize('action', ['create', 'add', 'save', 'copy'])
 def test_final_actual_session_expiry_after_receipt_insert_rolls_back_all_writes(mixed, action):
     command = prepare_mutation(mixed, action)
-    observed = []
+    observed, consumed = [], []
     def after(sql, connection):
         if sql.startswith('insert into app.album_list_operations '):
             observed.append(sql)
+            if action == 'copy':
+                mixed.db.service._clock = lambda: mixed.db.now + timedelta(days=2)
+        if 'app.consume_top_remote_acquisitions' in sql:
+            consumed.append(connection.execute("select count(*) as n from app.album_top_remote_attempts where actor_account_id=%s and state='consumed'",
+                (mixed.db.owner.account_id,)).fetchone()['n'])
             mixed.db.service._clock = lambda: mixed.db.now + timedelta(days=2)
     mixed.remote.after_statement = after
     before = mixed.snapshot()
     assert_error(lambda: mixed.execute(command), 'forbidden', 403)
     assert len(observed) == 1 and mixed.snapshot() == before
+    assert (bool(consumed) and consumed[0] > 0) if action != 'copy' else not consumed
 
 
 @pytest.mark.parametrize('action,denied', [
@@ -688,16 +725,20 @@ def test_final_actual_session_expiry_after_receipt_insert_rolls_back_all_writes(
 def test_policy_change_after_actual_receipt_insert_rolls_back_every_remote_mutation(mixed, action, denied):
     command = prepare_mutation(mixed, action)
     after_receipt = False
+    after_consume = False
     def after(sql, connection):
-        nonlocal after_receipt
+        nonlocal after_receipt, after_consume
         if sql.startswith('insert into app.album_list_operations '):
             after_receipt = True
+        if 'app.consume_top_remote_acquisitions' in sql:
+            after_consume = True
     def constraints(context):
-        return PolicyEvaluationConstraints(request_origin_allowed=not (after_receipt and context.action == denied))
+        return PolicyEvaluationConstraints(request_origin_allowed=not ((after_receipt if action == 'copy' else after_consume) and context.action == denied))
     mixed.remote.after_statement = after
     before = mixed.snapshot()
     assert_error(lambda: mixed.execute(command, constraints=constraints), 'forbidden', 403)
     assert after_receipt and mixed.snapshot() == before
+    assert after_consume is (action != 'copy')
 
 
 def test_remote_read_rechecks_browse_after_actual_progress_overlay_read(mixed):
@@ -715,66 +756,9 @@ def test_remote_read_rechecks_browse_after_actual_progress_overlay_read(mixed):
     assert after_overlay and mixed.snapshot() == before
 
 
-@pytest.mark.parametrize('action', ['create', 'add', 'save'])
-def test_expired_pending_is_rejected_by_owner_without_mapping_or_partial_membership(mixed, action):
-    top = None if action == 'create' else mixed.create()[0]
-    acquired = mixed.seed_pending(top)
-    if action == 'create':
-        command = mixed.command(action, title='Expired', draft_ref=acquired['destination']['draft_ref'],
-                                selections=[pending(acquired)])
-    elif action == 'add':
-        command = mixed.command(action, top, selections=[pending(acquired)])
-    else:
-        command = mixed.command(action, top, title='Must roll back', item_selections=[
-            {'kind': 'new_remote', 'source': pending(acquired)}])
-    before = mixed.snapshot()
-    assert_error(lambda: mixed.execute(command), 'remote_evidence_unavailable', 409)
-    assert mixed.snapshot() == before
-
-
-def test_pending_deadline_crossed_after_preload_is_rechecked_by_actual_definer(mixed):
-    acquired = mixed.seed_pending(seconds=10)
-    command = mixed.command('create', title='Late SQL expiry',
-        draft_ref=acquired['destination']['draft_ref'], selections=[pending(acquired)])
-    observed = []
-    def after(sql, connection):
-        if sql.startswith('select *,clock_timestamp() as checked_at from app.album_top_remote_acquisitions'):
-            # This transparent observer runs after the real SELECT acquired its
-            # result. It waits, without changing the returned row or timestamp.
-            assert connection.execute('select clock_timestamp()<%s as live',
-                (acquired['expires_at'],)).fetchone()['live'], 'Fixture deadline elapsed before preload'
-            mixed.wait_until_expired(acquired, connection)
-            observed.append(sql)
-    mixed.remote.after_statement = after
-    before = mixed.snapshot()
-    mixed.remote.statements.clear()
-    assert_error(lambda: mixed.execute(command), 'remote_evidence_unavailable', 409)
-    assert len(observed) == 1 and mixed.snapshot() == before
-    assert any(sql.startswith('insert into catalog.release_group_provider_identities') for sql in mixed.remote.statements)
-    assert not any('app.retain_top_remote_acquisition' in sql for sql in mixed.remote.statements)
-    # The observer records only successful execute calls. The real failed SQL
-    # raises before it can append the definer invocation to that log.
-
-
-def test_landed_create_replay_after_original_deadline_and_removal_never_reconsumes_pending(mixed):
-    acquired = mixed.seed_pending(seconds=10)
-    top, command = mixed.create(local=False, acquired=acquired)
-    source = mixed.read(top)['edit_draft']['item_selections'][0]['source']
-    top = mixed.execute(mixed.command('remove', top, item_refs=[mixed.read(top)['items'][0]['ref']]))
-    mixed.wait_until_expired(acquired)
-    with mixed.db.connect() as connection:
-        connection.execute('update app.album_top_remote_acquisitions set retired_at=clock_timestamp() where ref=%s',
-                           (acquired['acquisition_ref'],))
-    before = mixed.snapshot()
-    mixed.remote.statements.clear()
-    receipt = mixed.execute(command, actor=new_session(mixed.db, mixed.db.owner))
-    assert receipt['top_ref'] == top['top_ref'] and receipt['revision'] == '1'
-    assert mixed.snapshot() == before and mixed.read(top)['items'] == []
-    assert not any('from app.album_top_remote_acquisitions' in sql or
-                   'app.retain_top_remote_acquisition' in sql for sql in mixed.remote.statements)
-    readded = mixed.execute(mixed.command('add', top, selections=[source]))
-    assert len(mixed.read(readded)['items']) == 1
-    assert mixed.rows('album_top_remote_retained_budgets')[0]['admission_count'] == 1
+# Moved exact expired Create/Add/Save, post-preload deadline, and landed-replay
+# assertions to tests/py/remote_consumption_expiry_acceptance.py. They require
+# real SQL elapsed time and remain unexecuted acceptance gaps until selected.
 
 
 @pytest.mark.parametrize('action', ['create', 'add', 'save', 'copy'])
@@ -822,7 +806,10 @@ def test_late_invalid_member_rolls_back_prior_retention_in_complete_request(mixe
     before = mixed.snapshot()
     mixed.remote.statements.clear()
     assert_error(lambda: mixed.execute(mixed.command(action, top, **data)), 'remote_evidence_unavailable', 409)
-    assert any('app.retain_top_remote_acquisition' in sql for sql in mixed.remote.statements)
+    # Complete canonical prevalidation may reject the absent retained selector
+    # before retention. Actual prior-retention rollback is separately preserved
+    # by test_late_local_member_failure_rolls_back_actual_prior_retention.
+    assert not any('app.consume_top_remote_acquisitions' in sql for sql in mixed.remote.statements)
     assert mixed.snapshot() == before
 
 

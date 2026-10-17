@@ -118,10 +118,18 @@ class SQLTrace:
                 for entry in entries if entry["connection"] == parent["connection"]), (
                     "No new account lock may be requested after locking the Top")
         assert len({entry["connection"] for entry in accounts}) == phases
+        budgets = [entry for entry in entries if entry['sql'].startswith('select app.lock_top_remote_pending_actor(')]
+        if budgets:
+            assert len(budgets) == phases
+            for account, budget, top_lock in zip(accounts, budgets, tops):
+                assert account['connection'] == budget['connection'] == top_lock['connection']
+                assert account['order'] < budget['order'] < top_lock['order']
+                assert budget['params'] == (actor.account_id,)
         for entry in entries:
-            if entry["sql"].startswith("select app.store_top_remote_acquisition("):
-                # The structural helper re-locks the actor and its INSERT checks
-                # actor/owner FKs. Both identities must already be prelocked.
+            if entry["sql"].startswith(("select app.reserve_top_remote_attempt(", "select app.finish_top_remote_attempt(")):
+                assert budgets
+                # The structural owner locks parent/attempt/fact after these
+                # complete account, pending-budget and actual Top dependencies.
                 assert entry["params"][2] == actor.account_id
                 assert entry["params"][7] == owner.account_id
                 assert {entry["params"][2], entry["params"][7]} <= expected
@@ -175,7 +183,8 @@ def _invoke(case, operation, command, actor, **options):
 @pytest.mark.parametrize("operation", ["search", "acquire", "replay", "direct"])
 def test_one_discovery_and_sorted_accounts_precede_each_top_phase(remote, trace, editor_first, operation):
     owner, editor, top = _named_top(remote, editor_first=editor_first)
-    command = payload(destination(top))
+    command = (remote.prepare_v2(destination(top), actor=editor) if operation in {"acquire", "replay"}
+        else payload(destination(top)))
     prior = remote.acquire(command, actor=editor) if operation == "replay" else None
     before, calls = remote.unrelated(), len(remote.calls)
     result = trace.call("request", lambda: _invoke(remote, operation, command, editor))
@@ -190,7 +199,8 @@ def test_one_discovery_and_sorted_accounts_precede_each_top_phase(remote, trace,
 @pytest.mark.parametrize("operation", ["search", "acquire", "direct"])
 def test_create_locks_only_its_actor_and_never_discovers_or_locks_a_top(remote, trace, operation):
     actor = member(remote.db)
-    result = trace.call("create", lambda: _invoke(remote, operation, payload(), actor))
+    command = remote.prepare_v2(actor=actor) if operation == "acquire" else payload()
+    result = trace.call("create", lambda: _invoke(remote, operation, command, actor))
     entries = trace.selected("create")
     accounts = [entry for entry in entries if _account_lock(entry["sql"])]
     assert len(accounts) == (1 if operation == "direct" else 2)
@@ -198,6 +208,13 @@ def test_create_locks_only_its_actor_and_never_discovers_or_locks_a_top(remote, 
                and "order by id" in entry["sql"] for entry in accounts)
     assert not any(_top_lock(entry["sql"]) or entry["sql"] == _DISCOVERY for entry in entries)
     if operation == "acquire":
+        budgets = [entry for entry in entries if entry['sql'].startswith('select app.lock_top_remote_pending_actor(')]
+        assert len(budgets) == 2
+        for account, budget in zip(accounts, budgets):
+            assert account['connection'] == budget['connection'] and account['order'] < budget['order']
+            structural = [entry for entry in entries if entry['connection'] == budget['connection'] and
+                entry['sql'].startswith(('select app.reserve_top_remote_attempt(', 'select app.finish_top_remote_attempt('))]
+            assert len(structural) == 1 and budget['order'] < structural[0]['order']
         row = remote.rows()[0]
         assert str(row["ref"]) == result["acquisition_ref"]
         assert row["actor_account_id"] == row["destination_owner_account_id"] == actor.account_id
@@ -217,7 +234,7 @@ def _wait_for_blocker(connection, waiter_pid, blocker_pid):
 @pytest.mark.parametrize("editor_first", [False, True], ids=["owner-id-first", "editor-id-first"])
 def test_editor_store_and_actual_owner_save_complete_without_account_top_cycle(remote, trace, editor_first):
     owner, editor, top = _named_top(remote, editor_first=editor_first)
-    command = payload(destination(top))
+    command = remote.prepare_v2(destination(top), actor=editor)
     before = remote.unrelated()
     editor_holds_top, release_editor, owner_requests_account = Event(), Event(), Event()
     checkpoints = {}
@@ -225,13 +242,14 @@ def test_editor_store_and_actual_owner_save_complete_without_account_top_cycle(r
     def provider(mbid, **options):
         # Other actors may hold locks; this request must hold no DB transaction.
         remote.outside_authority(check_locks=False)
+        checkpoints["committed_reservation"] = remote.c2_state()
         remote.calls.append(("acquire", mbid, options))
         return remote.facts
 
     remote.service.provider = provider
 
     def after(entry, connection):
-        if entry["label"] == "editor" and _top_lock(entry["sql"]) and "for update" in entry["sql"]:
+        if entry["label"] == "editor" and _top_lock(entry["sql"]) and "for update" in entry["sql"] and remote.calls:
             checkpoints["editor_top"] = entry
             editor_holds_top.set()
             assert release_editor.wait(10), "Bounded editor Top barrier was not released"
@@ -288,6 +306,11 @@ def test_editor_store_and_actual_owner_save_complete_without_account_top_cycle(r
     assert {key: value for key, value in after_state.items() if key not in {"tops", "operations"}} == {
         key: value for key, value in before.items() if key not in {"tops", "operations"}}
     assert len(remote.calls) == 1
+    reserved = checkpoints['committed_reservation']
+    assert len(reserved['album_top_remote_attempts']) == 1
+    assert reserved['album_top_remote_attempts'][0]['state'] == 'reserved'
+    assert reserved['album_top_remote_pending_budgets'][0]['pending_count'] == 1
+    assert reserved['album_top_remote_pending_budgets'][0]['pending_bytes'] == 16384
 
 
 def _replace_fixture_owner(case, top, replacement, *, remove_grant=False):
@@ -308,7 +331,8 @@ def _replace_fixture_owner(case, top, replacement, *, remove_grant=False):
 def test_owner_pin_refuses_stale_binding_without_new_owner_authority(remote, trace, operation, when, replacement_kind):
     owner, editor, top = _named_top(remote)
     replacement = editor if replacement_kind == "actor_becomes_owner" else member(remote.db)
-    command = payload(destination(top))
+    command = remote.prepare_v2(destination(top), actor=editor) if operation == "acquire" else payload(destination(top))
+    c2_before = remote.c2_state()
     changes = []
 
     def change():
@@ -330,8 +354,12 @@ def test_owner_pin_refuses_stale_binding_without_new_owner_authority(remote, tra
                        phases=1 if when == "after_discovery" else 2)
     assert changes == [True] and remote.rows() == []
     assert len(remote.calls) == (when == "during_provider")
-    assert not any(entry["sql"].startswith("select app.store_top_remote_acquisition(")
+    assert not any(entry["sql"].startswith("select app.finish_top_remote_attempt(")
                    for entry in trace.selected("request"))
+    if operation == 'acquire' and when == 'during_provider':
+        assert remote.c2_state() == next(iter(remote.reservation_states.values()))
+    else:
+        assert remote.c2_state() == c2_before
     # The changed Top really is currently writable by this actor. Its fresh
     # permission must not retroactively authorize the stale acquisition request.
     current = remote.db.service.read(remote.db.context(editor), top_ref=top["top_ref"])
@@ -358,6 +386,7 @@ def test_compatible_direct_authorized_helper_discovers_then_refuses_stale_owner(
 @pytest.mark.parametrize("changed", ["deleted", "revision", "editor"])
 def test_provider_gap_retains_locked_destination_and_acl_fences(remote, trace, operation, changed):
     owner, editor, top = _named_top(remote)
+    command = remote.prepare_v2(destination(top), actor=editor) if operation == "acquire" else payload(destination(top))
     def change():
         action, fields = {"deleted": ("delete", {}),
             "revision": ("save", {"title": "Changed while provider was reading"}),
@@ -365,15 +394,19 @@ def test_provider_gap_retains_locked_destination_and_acl_fences(remote, trace, o
         trace.call("owner_change", lambda: write(remote.db, action, top, actor=owner, **fields))
     remote.provider_hook = change
     expected = ("revision_conflict", 409) if changed == "revision" else ("top_unavailable", 404)
-    assert_error(lambda: trace.call("request", lambda: _invoke(remote, operation, payload(destination(top)), editor)),
+    assert_error(lambda: trace.call("request", lambda: _invoke(remote, operation, command, editor)),
                  *expected)
     trace.assert_order("request", editor, owner, top, phases=2)
     assert len(remote.calls) == 1 and remote.rows() == []
+
+    if operation == 'acquire':
+        assert remote.c2_state() == next(iter(remote.reservation_states.values()))
 
 
 @pytest.mark.parametrize("boundary", ["session_expiry", "policy", "cancel", "late_false_observer"])
 def test_final_fence_rolls_back_actual_editor_store_after_ordered_locks(remote, trace, boundary):
     owner, editor, top = _named_top(remote)
+    command = remote.prepare_v2(destination(top), actor=editor)
     now, inserted, read_pending, denied = [remote.db.now], [], [], []
     remote.db.service._clock = lambda: now[0]
     before = remote.unrelated()
@@ -381,12 +414,12 @@ def test_final_fence_rolls_back_actual_editor_store_after_ordered_locks(remote, 
     def after(entry, connection):
         if entry["label"] != "request":
             return
-        if entry["sql"].startswith("select app.store_top_remote_acquisition("):
+        if entry["sql"].startswith("select app.finish_top_remote_attempt("):
             inserted.append(connection.execute("""select count(*) as n from app.album_top_remote_acquisitions
                 where actor_account_id=%s""", (editor.account_id,)).fetchone()["n"])
             if boundary == "session_expiry":
                 now[0] += timedelta(days=2)
-        if "from app.album_top_remote_acquisitions where ref=" in entry["sql"]:
+        if entry["sql"].startswith("select app.finish_top_remote_attempt("):
             read_pending.append(True)
 
     def constraints(context):
@@ -399,7 +432,7 @@ def test_final_fence_rolls_back_actual_editor_store_after_ordered_locks(remote, 
         return bool(inserted and boundary == "cancel")
 
     trace.after = after
-    assert_error(lambda: trace.call("request", lambda: remote.acquire(payload(destination(top)), actor=editor,
+    assert_error(lambda: trace.call("request", lambda: remote.acquire(command, actor=editor,
         constraints=constraints, should_cancel=cancellation)),
         "provider_cancelled" if boundary == "cancel" else "forbidden", 503 if boundary == "cancel" else 403)
     trace.assert_order("request", editor, owner, top, phases=2)
@@ -407,26 +440,36 @@ def test_final_fence_rolls_back_actual_editor_store_after_ordered_locks(remote, 
     if boundary == "late_false_observer":
         assert read_pending == [True] and denied
 
+    assert remote.c2_state() == next(iter(remote.reservation_states.values()))
+
 
 @pytest.mark.parametrize("operation", ["search", "acquire", "direct"])
 def test_initial_browse_denial_precedes_owner_discovery_or_any_lock(remote, trace, operation):
     _, editor, top = _named_top(remote)
+    command = remote.prepare_v2(destination(top), actor=editor) if operation == "acquire" else payload(destination(top))
+    c2_before = remote.c2_state()
     constraints = lambda context: PolicyEvaluationConstraints(request_origin_allowed=context.action != BROWSE)
-    assert_error(lambda: trace.call("denied", lambda: _invoke(remote, operation, payload(destination(top)),
+    assert_error(lambda: trace.call("denied", lambda: _invoke(remote, operation, command,
         editor, constraints=constraints)), "forbidden", 403)
     assert trace.selected("denied") == []
     assert remote.calls == [] and remote.rows() == []
+
+    assert remote.c2_state() == c2_before
 
 
 @pytest.mark.parametrize("operation", ["search", "acquire"])
 def test_discovery_is_exactly_current_library_and_missing_top_takes_no_account_lock(remote, trace, operation):
     _, editor, top = _named_top(remote)
+    command = remote.prepare_v2(destination(top), actor=editor) if operation == "acquire" else payload(destination(top))
+    c2_before = remote.c2_state()
     with remote.db.connect() as connection:
         other_library = remote.db.library_for(connection, editor)
         actor = remote.db.member(connection, editor, other_library)
-    assert_error(lambda: trace.call("foreign", lambda: _invoke(remote, operation, payload(destination(top)), actor)),
+    assert_error(lambda: trace.call("foreign", lambda: _invoke(remote, operation, command, actor)),
                  "top_unavailable", 404)
     entries = trace.selected("foreign")
     assert [entry["sql"] for entry in entries] == [_DISCOVERY]
     assert entries[0]["params"] == (top["top_ref"], other_library)
     assert remote.calls == [] and remote.rows() == []
+
+    assert remote.c2_state() == c2_before

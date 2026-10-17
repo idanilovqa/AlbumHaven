@@ -30,6 +30,53 @@ def typed_command(command):
     return 'selections' in command.data or 'item_selections' in command.data
 
 
+def pending_selectors(command):
+    selections = command.data.get('selections', ())
+    if 'item_selections' in command.data:
+        selections = [item['source'] for item in command.data['item_selections']]
+    return [item for item in selections if item['kind'] == 'remote_acquisition']
+
+
+def discover_pending_sources(connection, selectors, actor_account_id):
+    """Exact unlocked hints only; missing facts cannot defeat receipt recovery."""
+    if not selectors:
+        return []
+    if len(selectors) > MAX_TOP_ITEMS or len({item['acquisition_ref'] for item in selectors}) != len(selectors):
+        raise AlbumTopError('invalid_command')
+    rows = connection.execute('''select ref,preparation_ref,attempt_ref
+        from app.album_top_remote_acquisitions where actor_account_id=%s and ref=any(%s::uuid[])''',
+        (actor_account_id, [item['acquisition_ref'] for item in selectors])).fetchall()
+    found = {str(row['ref']): row for row in rows}
+    result = []
+    for selector in selectors:
+        row = found.get(selector['acquisition_ref'])
+        result.append({'acquisition_ref': selector['acquisition_ref'], 'evidence_version': selector['evidence_version'],
+            'preparation_ref': str(row['preparation_ref']) if row and row['preparation_ref'] is not None else None,
+            'attempt_ref': str(row['attempt_ref']) if row and row['attempt_ref'] is not None else None})
+    return result
+
+
+def lock_pending_budget(connection, actor_account_id):
+    # Accounting serialization only. Existing charged facts need no spare quota
+    # or completed legacy initialization in order to become retained membership.
+    _sql(connection, 'select app.lock_top_remote_pending_actor(%s)', (actor_account_id,)).fetchone()
+
+
+def _destination(command, top):
+    return RemoteTopDestination('create', command.data['draft_ref'], None) if command.action == 'create' else (
+        RemoteTopDestination('top', str(top['ref']), command.data['revision']))
+
+
+def _scope(live, top, destination, context_ref, revision):
+    return (live.library_id, live.actor.account_id, live.actor.session_id, context_ref,
+        destination.kind, destination.ref, top['owner_account_id'],
+        int(destination.revision) if destination.revision is not None else None, top['ref'], revision)
+
+
+def _source_key(selector):
+    return selector['kind'], selector['acquisition_ref'] if selector['kind'] == 'remote_acquisition' else selector['admission_ref']
+
+
 def bindings(connection, top):
     """Read exact bridges beneath the already locked current Top, without grant."""
     rows = connection.execute('''select a.*,r.item_ref from app.album_list_item_remote_sources r
@@ -95,39 +142,116 @@ def _sql(connection, statement, params):
             if name == 'top_remote_retained_conflict':
                 raise AlbumTopError('remote_evidence_conflict', 409) from None
             if name in {'top_remote_expired', 'top_remote_identity', 'top_remote_retained_unavailable',
-                        'top_remote_scope', 'top_remote_local_unavailable'}:
+                        'top_remote_scope', 'top_remote_local_unavailable', 'top_remote_consumption',
+                        'top_remote_preparation_unavailable'}:
                 raise AlbumTopError('remote_evidence_unavailable', 409) from None
         raise
 
 
-def resolve_source(connection, live, top, selector, destination, context_ref):
-    """Return catalog/admission only after the definer holds its retirement fence."""
-    if selector['kind'] == 'remote_acquisition':
-        row, _ = load_pending_remote_source(connection, selector=selector, live=live,
-            destination=destination, owner_account_id=top['owner_account_id'], context_ref=context_ref)
+def resolve_sources(connection, live, top, selectors, destination, context_ref, discovered):
+    """Batch prelocks and canonical work order, separate from curator order."""
+    from psycopg.types.json import Jsonb
+    remote = [item for item in selectors if item['kind'] in {'remote_acquisition', 'remote_retained'}]
+    pending = [item for item in remote if item['kind'] == 'remote_acquisition']
+    descriptors = {}
+    if pending:
+        expected = {item['acquisition_ref']: item['evidence_version'] for item in pending}
+        if (len(expected) != len(pending) or len(discovered) != len(pending)
+                or {item['acquisition_ref']: item['evidence_version'] for item in discovered} != expected):
+            raise AlbumTopError('remote_evidence_unavailable', 409)
+        locked = _sql(connection, '''select app.lock_top_remote_membership_sources(
+            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as sources''',
+            (*_scope(live, top, destination, context_ref, top['revision']), Jsonb(discovered))).fetchone()['sources']
+        if type(locked) is not list or len(locked) != len(pending):
+            raise AlbumTopError('remote_evidence_unavailable', 409)
+        for descriptor in locked:
+            if (type(descriptor) is not dict or set(descriptor) != {
+                    'acquisition_ref', 'evidence_version', 'preparation_ref', 'attempt_ref', 'request_key'}
+                    or descriptor['acquisition_ref'] not in expected
+                    or descriptor['evidence_version'] != expected[descriptor['acquisition_ref']]
+                    or descriptor['acquisition_ref'] in descriptors):
+                raise AlbumTopError('remote_evidence_unavailable', 409)
+            descriptors[descriptor['acquisition_ref']] = descriptor
+    facts = {}
+    for selector in sorted(pending, key=lambda item: item['acquisition_ref']):
+        row, _ = load_pending_remote_source(connection, selector=selector, live=live, destination=destination,
+            owner_account_id=top['owner_account_id'], context_ref=context_ref,
+            prelocked_source=descriptors[selector['acquisition_ref']])
+        facts[selector['acquisition_ref']] = row
+    identities = {}
+    for ref, row in sorted(facts.items()):
+        identities.setdefault((row['provider'], row['entity_kind'], row['external_id']), row)
+    catalogs = {}
+    for identity, row in sorted(identities.items()):
         try:
             catalog_ref = map_release_group_catalog(connection, row)
         except RemoteCatalogIdentityConflict:
             raise AlbumTopError('identity_conflict', 409) from None
-        admitted = _sql(connection, '''select app.retain_top_remote_acquisition(
-            %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as admission_ref''',
-            (str(uuid4()), selector['acquisition_ref'], selector['evidence_version'], top['ref'],
-             live.library_id, top['owner_account_id'], live.actor.account_id, live.actor.session_id,
-             context_ref, destination.kind, destination.ref, top['revision'], catalog_ref)).fetchone()
-        return catalog_ref, {'admission_ref': str(admitted['admission_ref']),
-                             'evidence_version': selector['evidence_version']}
-    row = connection.execute('''select * from app.album_top_remote_admissions
-        where ref=%s and top_ref=%s and library_id=%s and owner_account_id=%s''',
-        (selector['admission_ref'], top['ref'], live.library_id, top['owner_account_id'])).fetchone()
-    if row is None:
+        catalogs[identity] = catalog_ref
+    # All mapping finishes in provider tuple order before any admission wait.
+    for identity, catalog_ref in sorted(catalogs.items()):
+        row = connection.execute('''select catalog_ref from catalog.release_group_provider_identities
+            where provider=%s and entity_kind=%s and external_id=%s and catalog_ref=%s for share''',
+            (*identity, catalog_ref)).fetchone()
+        if row is None:
+            raise AlbumTopError('identity_conflict', 409)
+    candidates = []
+    for selector in remote:
+        if selector['kind'] == 'remote_acquisition':
+            row = facts[selector['acquisition_ref']]
+            catalog_ref = catalogs[(row['provider'], row['entity_kind'], row['external_id'])]
+        else:
+            row = connection.execute('''select * from app.album_top_remote_admissions
+                where ref=%s and top_ref=%s and library_id=%s and owner_account_id=%s''',
+                (selector['admission_ref'], top['ref'], live.library_id, top['owner_account_id'])).fetchone()
+            if row is None:
+                raise AlbumTopError('remote_evidence_unavailable', 409)
+            evidence_from_row(row)
+            catalog_ref = str(row['catalog_ref'])
+        candidates.append((catalog_ref, selector.get('admission_ref', ''), selector))
+    if len({row[0] for row in candidates}) != len(candidates):
+        raise AlbumTopError('duplicate_album', 409)
+    resolved = {}
+    for catalog_ref, _, selector in sorted(candidates, key=lambda row: row[:2]):
+        source = {'evidence_version': selector['evidence_version']}
+        if selector['kind'] == 'remote_acquisition':
+            admitted = _sql(connection, '''select app.retain_top_remote_acquisition(
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as admission_ref''',
+                (str(uuid4()), selector['acquisition_ref'], selector['evidence_version'], top['ref'],
+                 live.library_id, top['owner_account_id'], live.actor.account_id, live.actor.session_id,
+                 context_ref, destination.kind, destination.ref, top['revision'], catalog_ref)).fetchone()
+            source['admission_ref'] = str(admitted['admission_ref'])
+            descriptor = descriptors[selector['acquisition_ref']]
+            if descriptor['preparation_ref'] is not None:
+                source['pending'] = descriptor
+        else:
+            _sql(connection, 'select app.lock_top_remote_admission(%s,%s,%s,%s,%s,%s,%s)',
+                 (selector['admission_ref'], selector['evidence_version'], top['ref'], live.library_id,
+                  top['owner_account_id'], top['revision'], catalog_ref))
+            source['admission_ref'] = selector['admission_ref']
+        resolved[_source_key(selector)] = (catalog_ref, source)
+    return resolved
+
+
+def _consumption_map(items, sources):
+    return [{**source['pending'], 'item_ref': item['item_ref'], 'catalog_ref': item['album_ref'],
+             'admission_ref': source['admission_ref']} for item, source in zip(items, sources)
+            if source is not None and 'pending' in source]
+
+
+def consume(connection, live, command, top, receipt, context_ref, sources):
+    if not sources:
+        return
+    from psycopg.types.json import Jsonb
+    ordered = sorted(sources, key=lambda row: (row['preparation_ref'], row['request_key']))
+    result = _sql(connection, '''select app.consume_top_remote_acquisitions(
+        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) as result''',
+        (*_scope(live, top, _destination(command, top), require_context(context_ref), int(receipt['revision'])),
+         command.action, command.request_key, command.digest, Jsonb(ordered))).fetchone()['result']
+    if (type(result) is not dict or set(result) != {'consumed_count', 'released_bytes'}
+            or type(result['consumed_count']) is not int or result['consumed_count'] != len(sources)
+            or type(result['released_bytes']) is not int or not 0 < result['released_bytes'] <= len(sources) * 16384):
         raise AlbumTopError('remote_evidence_unavailable', 409)
-    evidence_from_row(row)
-    catalog_ref = str(row['catalog_ref'])
-    _sql(connection, 'select app.lock_top_remote_admission(%s,%s,%s,%s,%s,%s,%s)',
-         (selector['admission_ref'], selector['evidence_version'], top['ref'], live.library_id,
-          top['owner_account_id'], top['revision'], catalog_ref))
-    return catalog_ref, {'admission_ref': selector['admission_ref'],
-                         'evidence_version': selector['evidence_version']}
 
 
 def _attach(connection, top, item, source):
@@ -142,23 +266,23 @@ def _clear_for_local(connection, top, item, source):
          item['album_ref'], source['ref'], item['selected_local_album_id'], item['selected_source_ref']))
 
 
-def add(service, connection, live, command, top, now, constraints, context_ref):
+def add(service, connection, live, command, top, now, constraints, context_ref, discovered):
     context_ref = require_context(context_ref)
     creating = command.action == 'create'
     actions = (BROWSE, CREATE) if creating else (BROWSE, ITEMS)
     service._require(live, actions, constraints, None if creating else top)
-    destination = RemoteTopDestination('create', command.data['draft_ref'], None) if creating else (
-        RemoteTopDestination('top', str(top['ref']), str(top['revision'])))
+    destination = _destination(command, top)
     current = publication.working_items(connection, top)
     if len(current) + len(command.data['selections']) > MAX_TOP_ITEMS:
         raise AlbumTopError('top_too_large', 413)
+    resolved = resolve_sources(connection, live, top, command.data['selections'], destination, context_ref, discovered)
     items, sources, local_refs = [], [], []
     for selection in command.data['selections']:
         if selection['kind'] == 'local_catalog':
             catalog_ref, source = selection['album_ref'], None
             local_refs.append(catalog_ref)
         else:
-            catalog_ref, source = resolve_source(connection, live, top, selection, destination, context_ref)
+            catalog_ref, source = resolved[_source_key(selection)]
         items.append({'album_ref': catalog_ref, 'item_ref': str(uuid4())})
         sources.append(source)
     refs = [item['album_ref'] for item in items]
@@ -180,11 +304,12 @@ def add(service, connection, live, command, top, now, constraints, context_ref):
         raise AlbumTopError('revision_exhausted', 409)
     connection.execute('''update app.album_lists set next_original_position=%s,revision=%s,updated_at=%s
         where ref=%s''', (first + len(items), revision, now, top['ref']))
-    return {'top_ref': str(top['ref']), 'revision': str(revision), 'action': command.action,
-            'request_key': command.request_key, **({'draft_ref': command.data['draft_ref']} if creating else {})}
+    return ({'top_ref': str(top['ref']), 'revision': str(revision), 'action': command.action,
+             'request_key': command.request_key, **({'draft_ref': command.data['draft_ref']} if creating else {})},
+            _consumption_map(items, sources))
 
 
-def _resolve_draft(service, connection, live, command, top, current, remote, constraints, context_ref):
+def _resolve_draft(service, connection, live, command, top, current, remote, constraints, context_ref, discovered):
     typed = command.data.get('item_selections')
     if typed is None:
         if 'items' not in command.data:
@@ -199,12 +324,14 @@ def _resolve_draft(service, connection, live, command, top, current, remote, con
     by_ref = {str(row['ref']): row for row in current}
     by_album = {str(row['catalog_ref']): row for row in current}
     items, sources, local_new = [], [], []
-    destination = RemoteTopDestination('top', str(top['ref']), str(top['revision']))
+    destination = _destination(command, top)
+    resolved = resolve_sources(connection, live, top, [item['source'] for item in typed],
+                               destination, context_ref, discovered)
     for selection in typed:
         item_ref = selection.get('item_ref') if selection['kind'] == 'existing' else None
         source = selection['source']
         if source['kind'] in {'remote_acquisition', 'remote_retained'}:
-            album_ref, retained = resolve_source(connection, live, top, source, destination, context_ref)
+            album_ref, retained = resolved[_source_key(source)]
             if 'album_ref' in selection and selection['album_ref'] != album_ref:
                 raise AlbumTopError('items_changed', 409)
         else:
@@ -231,7 +358,7 @@ def _resolve_draft(service, connection, live, command, top, current, remote, con
     return items, sources
 
 
-def save(service, connection, live, command, top, now, constraints, context_ref, remote):
+def save(service, connection, live, command, top, now, constraints, context_ref, remote, discovered):
     context_ref = require_context(context_ref)
     current = publication.working_items(connection, top)
     typed = command.data.get('item_selections')
@@ -253,7 +380,8 @@ def save(service, connection, live, command, top, now, constraints, context_ref,
                 row['item_ref'] in remote and 'selected_source_ref' not in row for row in command.data['items']))
         if has_remote:
             raise AlbumTopError('remote_publication_unavailable', 409)
-    items, sources = _resolve_draft(service, connection, live, command, top, current, remote, constraints, context_ref)
+    items, sources = _resolve_draft(service, connection, live, command, top, current, remote,
+                                    constraints, context_ref, discovered)
     if any('selected_source_ref' in item for item in items):
         evidence.source_barrier(connection, live.library_id)
         for item in items:
@@ -270,7 +398,8 @@ def save(service, connection, live, command, top, now, constraints, context_ref,
         data = {key: value for key, value in command.data.items() if key != 'item_selections'}
         data['items'] = items
         local = AlbumTopCommand(command.action, command.top_ref, command.request_key, data)
-        return publication.save(service, connection, live, local, top, now, constraints)
+        receipt, required_actions = publication.save(service, connection, live, local, top, now, constraints)
+        return receipt, required_actions, []
     if publishing:
         raise AlbumTopError('remote_publication_unavailable', 409)
     if top['revision'] == _MAX_REVISION:
@@ -285,7 +414,7 @@ def save(service, connection, live, command, top, now, constraints, context_ref,
     connection.execute('''update app.album_lists set title=%s,description=%s,revision=%s,updated_at=%s where ref=%s''',
         (command.data.get('title', top['title']), command.data.get('description', top['description']), revision, now, top['ref']))
     return {'top_ref': str(top['ref']), 'revision': str(revision), 'action': command.action,
-            'request_key': command.request_key, 'remote_membership': True}, actions
+            'request_key': command.request_key, 'remote_membership': True}, actions, _consumption_map(final, sources)
 
 
 def copy_top(service, connection, live, command, top, constraints, context_ref, remote):

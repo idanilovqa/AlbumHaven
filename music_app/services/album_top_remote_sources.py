@@ -72,8 +72,38 @@ class RemoteTopAcquisitionCommand:
             separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedRemoteTopAcquisitionCommand:
+    preparation_ref: str
+    request_key: str
+    destination: RemoteTopDestination
+    release_group_id: str
+
+    def payload(self):
+        return {'version': 2, 'preparation_ref': self.preparation_ref,
+                'request_key': self.request_key, 'destination': self.destination.payload(),
+                'release_group_id': self.release_group_id}
+
+    @property
+    def digest(self):
+        value = ['top-remote-acquisition-v2', self.payload()]
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+            separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
+
+
 def normalize_remote_acquisition(value):
-    if type(value) is not dict or set(value) != {'request_key', 'destination', 'release_group_id'}:
+    if type(value) is not dict:
+        raise AlbumTopError('invalid_command')
+    if set(value) == {'version', 'preparation_ref', 'request_key', 'destination', 'release_group_id'}:
+        if type(value['version']) is not int or value['version'] != 2:
+            raise AlbumTopError('invalid_command')
+        try:
+            identity = canonical_release_group_id(value['release_group_id'])
+        except RemoteAlbumEvidenceError as error:
+            raise AlbumTopError(error.code) from None
+        return PreparedRemoteTopAcquisitionCommand(_ref(value['preparation_ref']),
+            _ref(value['request_key']), normalize_remote_destination(value['destination']), identity)
+    if set(value) != {'request_key', 'destination', 'release_group_id'}:
         raise AlbumTopError('invalid_command')
     try:
         identity = canonical_release_group_id(value['release_group_id'])
@@ -115,3 +145,24 @@ def project_remote_summary(facts):
         'first_release_date': facts.first_release_date, 'primary_type': facts.primary_type,
         'metadata_coverage': 'album_summary_only', 'track_metadata_status': 'unavailable',
         'track_count': None}
+
+
+def normalize_remote_preparation(value):
+    if type(value) is not dict or set(value) != {'destination', 'form_ref'}:
+        raise AlbumTopError('invalid_command')
+    destination = normalize_remote_destination(value['destination'])
+    form_ref = _ref(value['form_ref'])
+    if destination.kind == 'create' and form_ref != destination.ref:
+        raise AlbumTopError('invalid_command')
+    return destination, form_ref
+
+
+def remote_preparation_ref(value):
+    return _ref(value)
+
+
+def normalize_remote_maintenance(value):
+    if (type(value) is not dict or set(value) != {'mode'}
+            or type(value['mode']) is not str or value['mode'] not in {'reclaim', 'discard_legacy'}):
+        raise AlbumTopError('invalid_command')
+    return value['mode']

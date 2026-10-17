@@ -5,12 +5,14 @@ check and every SQL response is real; no provider HTTP or app composition runs.
 """
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Barrier, Event, get_ident
+from threading import Event, get_ident
 from uuid import uuid4
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from music_app.services.album_top_remote_acquisition import load_pending_remote_source
+from music_app.services import album_top_remote_membership as membership
 from music_app.services.album_top_remote_sources import normalize_remote_destination
 from music_app.services.owned_album_tops import BROWSE, CREATE, ITEMS
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
@@ -30,16 +32,42 @@ def selector(receipt):
             "evidence_version": receipt["evidence_version"]}
 
 
-def pending(case, receipt, command, *, actor=None, context_ref=CONTEXT, selected=None, target=None, owner=None):
+def pending(case, receipt, command, *, actor=None, context_ref=CONTEXT, selected=None, target=None, owner=None,
+            provide_prelock=True, discovered_override=None):
     target = normalize_remote_destination(target or command["destination"])
-    with case.service._authorized(case.db.context(actor), target, None, None) as (connection, live, top):
-        return load_pending_remote_source(connection, selector=selected or selector(receipt), live=live,
-            destination=target, owner_account_id=owner if owner is not None else case.service._owner(live, top),
-            context_ref=context_ref)
+    selected = selected or selector(receipt)
+    with case.db.connect() as lookup:
+        discovered = lookup.execute("select preparation_ref,attempt_ref from app.album_top_remote_acquisitions where ref=%s",
+            (selected['acquisition_ref'],)).fetchone()
+    descriptor = {**selected, 'preparation_ref': str(discovered['preparation_ref']) if discovered else None,
+        'attempt_ref': str(discovered['attempt_ref']) if discovered else None}
+    descriptor.pop('kind')
+    if discovered_override is not None:
+        descriptor.update(discovered_override)
+    with case.service._authorized(case.db.context(actor), target, None, None,
+            write=True, budget_lock=True) as (connection, live, top):
+        # The v2 loader is membership-internal. A Create-only read proves its
+        # contract under a real temporary owned Top, with every write rolled back.
+        with connection.transaction(force_rollback=True):
+            actual_owner = owner if owner is not None else case.service._owner(live, top)
+            if top is None:
+                top = connection.execute("""insert into app.album_lists(ref,owner_account_id,library_id,title,description)
+                    values(%s,%s,%s,'Loader-only transaction','') returning *""",
+                    (str(uuid4()), live.actor.account_id, live.library_id)).fetchone()
+            locked = None
+            if provide_prelock:
+                args = (live.library_id, live.actor.account_id, live.actor.session_id, context_ref, target.kind,
+                    target.ref, actual_owner, int(target.revision) if target.revision else None,
+                    str(top['ref']), int(top['revision']), Jsonb([descriptor]))
+                locked = membership._sql(connection, "select app.lock_top_remote_membership_sources(" + ','.join(['%s'] * 11)
+                    + ") as sources", args).fetchone()['sources'][0]
+            return load_pending_remote_source(connection, selector=selected, live=live,
+                destination=target, owner_account_id=actual_owner, context_ref=context_ref,
+                prelocked_source=locked)
 
 
 def test_create_is_per_draft_needs_no_goals_and_never_maps_or_mutates_membership(remote):
-    first, second = payload(), payload()
+    first, second = remote.prepare_v2(), remote.prepare_v2()
     before = remote.unrelated()
     assert not before["listening_goals"] and not before["listening_goal_evidence"]
     searched = search(remote, first)
@@ -49,6 +77,16 @@ def test_create_is_per_draft_needs_no_goals_and_never_maps_or_mutates_membership
     one, two = remote.acquire(first), remote.acquire(second)
     assert one["destination"] != two["destination"]
     assert one["acquisition_ref"] != two["acquisition_ref"]
+    assert one['version'] == two['version'] == 2 and one['state'] == two['state'] == 'pending'
+    assert one['preparation_ref'] == first['preparation_ref']
+    assert two['preparation_ref'] == second['preparation_ref']
+    assert one['preparation_ref'] != two['preparation_ref']
+    state = remote.c2_state()
+    assert len(state['album_top_remote_preparations']) == len(state['album_top_remote_attempts']) == 2
+    assert all(row['state'] == 'pending' for row in state['album_top_remote_attempts'])
+    assert all(row['attempt_count'] == row['pending_count'] == 1 for row in state['album_top_remote_preparations'])
+    assert state['album_top_remote_pending_budgets'][0]['pending_count'] == 2
+    assert state['album_top_remote_pending_budgets'][0]['pending_bytes'] == sum(row['facts_bytes'] for row in remote.rows())
     assert one["album"] == two["album"] == searched["candidates"][0]
     assert one["album"]["track_metadata_status"] == "unavailable"
     assert one["album"]["metadata_coverage"] == "album_summary_only"
@@ -76,9 +114,11 @@ def test_current_named_owner_editor_items_authority_is_required(remote, role):
         actor, expected = other, ("forbidden", 403)
     elif role == "private_stranger":
         actor, expected = other, ("top_unavailable", 404)
-    command = payload(destination(top))
+    command = (remote.prepare_v2(destination(top), actor=actor) if expected is None else
+        {"version": 2, "preparation_ref": str(uuid4()), **payload(destination(top))})
     before = remote.unrelated()
     if expected:
+        assert_error(lambda: remote.begin_v2(destination(top), actor=actor), *expected)
         assert_error(lambda: search(remote, command, actor=actor), *expected)
         assert_error(lambda: remote.acquire(command, actor=actor), *expected)
         assert remote.calls == [] and remote.rows() == []
@@ -96,10 +136,11 @@ def test_current_named_owner_editor_items_authority_is_required(remote, role):
 @pytest.mark.parametrize("action", [BROWSE, CREATE, ITEMS])
 def test_current_action_constraints_precede_io_and_recovery(remote, operation, action):
     top, _ = remote.db.create(refs=[])
-    command = payload(destination(top) if action == ITEMS else destination())
+    target = destination(top) if action == ITEMS else destination()
+    command = payload(target) if operation == "search" else remote.prepare_v2(target)
     if operation == "replay":
         remote.acquire(command)
-    before, calls = remote.rows(), len(remote.calls)
+    before, calls, c2 = remote.rows(), len(remote.calls), remote.c2_state()
     observed = []
     def constraints(context):
         observed.append(context.action)
@@ -108,6 +149,7 @@ def test_current_action_constraints_precede_io_and_recovery(remote, operation, a
         lambda: remote.acquire(command, constraints=constraints))
     assert_error(callback, "forbidden", 403)
     assert action in observed and len(remote.calls) == calls and remote.rows() == before
+    assert remote.c2_state() == c2
 
 
 @pytest.mark.parametrize("operation", ["search", "acquire"])
@@ -118,7 +160,7 @@ def test_provider_gap_rechecks_current_authority_session_library_and_top(remote,
     top, _ = database.create(refs=[])
     top, _ = write(database, "grant_editor", top, account_id=editor.account_id, role="editor")
     grant_ref = top["grant_ref"]
-    command = payload(destination(top))
+    command = payload(destination(top)) if operation == "search" else remote.prepare_v2(destination(top), actor=editor)
     def change():
         with database.connect() as connection:
             if changed == "account":
@@ -142,6 +184,8 @@ def test_provider_gap_rechecks_current_authority_session_library_and_top(remote,
         lambda: remote.acquire(command, actor=editor))
     assert_error(callback, *expected)
     assert len(remote.calls) == 1 and remote.rows() == []
+    if operation == "acquire":
+        assert remote.c2_state() == remote.reservation_states[get_ident()]
 
 
 @pytest.mark.parametrize("boundary", ["session_expiry", "policy", "cancel"])
@@ -150,7 +194,7 @@ def test_late_denial_after_real_insert_rolls_back_acquisition_and_response(remot
     remote.db.service._clock = lambda: observed_now[0]
     inserted = []
     def after(sql, connection):
-        if sql.startswith("select app.store_top_remote_acquisition("):
+        if sql.startswith("select app.finish_top_remote_attempt("):
             inserted.append(connection.execute("select count(*) as n from app.album_top_remote_acquisitions where actor_account_id=%s",
                                                (remote.db.owner.account_id,)).fetchone()["n"])
             if boundary == "session_expiry":
@@ -158,28 +202,33 @@ def test_late_denial_after_real_insert_rolls_back_acquisition_and_response(remot
     remote.after_statement = after
     constraints = lambda context: PolicyEvaluationConstraints(request_origin_allowed=not (inserted and boundary == "policy"))
     cancelled = lambda: bool(inserted and boundary == "cancel")
+    command = remote.prepare_v2()
     before = remote.unrelated()
-    assert_error(lambda: remote.acquire(payload(), constraints=constraints, should_cancel=cancelled),
+    assert_error(lambda: remote.acquire(command, constraints=constraints, should_cancel=cancelled),
                  "provider_cancelled" if boundary == "cancel" else "forbidden", 503 if boundary == "cancel" else 403)
     assert inserted == [1]
     assert remote.rows() == [] and remote.unrelated() == before
+    assert remote.c2_state() == remote.reservation_states[get_ident()]
 
 
 def test_lost_response_exact_recovery_keeps_first_facts_without_new_provider_io(remote):
-    command = payload()
+    command = remote.prepare_v2()
     first = remote.acquire(command)
     before = remote.rows()
+    c2_before = remote.c2_state()
     remote.facts = evidence(title="Later provider correction")
     assert remote.acquire(command) == first
     assert len(remote.calls) == 1 and remote.rows() == before
+    assert remote.c2_state() == c2_before
 
 
 @pytest.mark.parametrize("change", ["release_group", "draft", "context", "session", "library", "top"])
 def test_exact_request_key_is_bound_to_original_command_context_session_and_destination(remote, change):
     database = remote.db
-    command = payload()
+    command = remote.prepare_v2()
     remote.acquire(command)
     before = remote.rows()
+    c2_before = remote.c2_state()
     options = {}
     changed = dict(command)
     if change == "release_group":
@@ -198,22 +247,26 @@ def test_exact_request_key_is_bound_to_original_command_context_session_and_dest
         top, _ = database.create(refs=[])
         changed["destination"] = destination(top)
     assert_error(lambda: remote.acquire(changed, **options),
-                 "remote_evidence_unavailable" if change == "session" else "request_key_conflict", 409)
+                 "request_key_conflict" if change == "release_group" else "remote_evidence_unavailable", 409)
     assert len(remote.calls) == 1 and remote.rows() == before
+    assert remote.c2_state() == c2_before
 
 
-@pytest.mark.parametrize("state", ["expired", "retired"])
+# The exact expired expansion is mapped to remote_consumption_expiry_acceptance.py; unexecuted.
+@pytest.mark.parametrize("state", ["retired"])
 def test_expired_or_retired_exact_recovery_cannot_refresh_or_contact_provider(remote, state):
-    command = remote.seed(1, state=state)
-    before = remote.rows()
-    assert_error(lambda: remote.acquire(command), "remote_evidence_unavailable", 409)
-    assert remote.calls == [] and remote.rows() == before
+    command = remote.prepare_v2()
+    receipt = remote.acquire(command)
+    remote.retire_pending(receipt['acquisition_ref'])
+    before = remote.rows(), remote.c2_state()
+    assert_error(lambda: remote.acquire(command), "remote_preparation_unavailable", 409)
+    assert len(remote.calls) == 1 and (remote.rows(), remote.c2_state()) == before
 
 
 @pytest.mark.parametrize("change", ["actor", "session", "library", "context", "draft", "top", "revision", "owner", "version"])
 def test_pending_source_selector_preserves_every_original_binding(remote, change):
     database = remote.db
-    command = payload()
+    command = remote.prepare_v2()
     receipt = remote.acquire(command)
     row, facts = pending(remote, receipt, command)
     assert str(row["ref"]) == receipt["acquisition_ref"] and facts.digest == receipt["evidence_version"]
@@ -246,7 +299,7 @@ def test_pending_source_selector_preserves_every_original_binding(remote, change
 
 def test_pending_top_acquisition_requires_its_exact_saved_revision(remote):
     top, _ = remote.db.create(refs=[])
-    command = payload(destination(top))
+    command = remote.prepare_v2(destination(top))
     receipt = remote.acquire(command)
     saved, _ = write(remote.db, "save", top, title="New saved revision")
     assert_error(lambda: pending(remote, receipt, command), "revision_conflict", 409)
@@ -254,35 +307,34 @@ def test_pending_top_acquisition_requires_its_exact_saved_revision(remote):
 
 
 def test_concurrent_same_key_has_one_first_committed_immutable_result(remote):
-    command = payload()
-    both_reading = Barrier(2)
-    first_committed = Event()
+    command = remote.prepare_v2()
+    entered, release = Event(), Event()
     calls = []
     def provider(mbid, **options):
-        assert not any(owner == get_ident() for owner, _ in remote.active_connections)
-        name = options["should_cancel"].__name__
-        calls.append(name)
-        both_reading.wait(timeout=10)
-        if name == "second":
-            assert first_committed.wait(10)
-        return evidence(title="First committed" if name == "first" else "Later result")
+        remote.outside_authority()
+        calls.append(mbid)
+        entered.set()
+        assert release.wait(10)
+        return evidence(title="First committed")
     remote.service.provider = provider
-    def first():
-        return False
-    def second():
-        return False
-    def run_first():
-        try:
-            return remote.acquire(command, should_cancel=first)
-        finally:
-            first_committed.set()
     with ThreadPoolExecutor(max_workers=2) as pool:
-        one = pool.submit(run_first)
-        two = pool.submit(remote.acquire, command, should_cancel=second)
-        winner, recovered = one.result(timeout=15), two.result(timeout=15)
-    assert sorted(calls) == ["first", "second"]
-    assert winner == recovered and winner["album"]["title"] == "First committed"
-    assert len(remote.rows()) == 1 and remote.rows()[0]["title"] == "First committed"
+        first = pool.submit(remote.acquire, command)
+        try:
+            assert entered.wait(10)
+            reserved = remote.c2_state()
+            retry = pool.submit(remote.acquire, command).result(timeout=5)
+            assert retry['version'] == 2 and retry['state'] == 'in_flight'
+            assert remote.c2_state() == reserved and calls == [command['release_group_id']]
+        finally:
+            release.set()
+        winner = first.result(timeout=10)
+    after = remote.c2_state()
+    assert remote.acquire(command) == winner
+    assert remote.c2_state() == after and calls == [command['release_group_id']]
+    assert winner['album']['title'] == 'First committed'
+    assert len(remote.rows()) == 1 and remote.rows()[0]['title'] == 'First committed'
+    assert len(after['album_top_remote_attempts']) == 1
+    assert after['album_top_remote_preparations'][0]['attempt_count'] == 1
 
 
 @pytest.mark.parametrize("operation", ["search", "acquire"])
@@ -294,17 +346,20 @@ def test_provider_error_is_checked_after_current_authority_and_leaves_no_evidenc
                                (remote.db.owner.session_id,))
         raise RemoteAlbumEvidenceError("provider_unavailable")
     remote.service.provider = remote.service.searcher = failed
-    command = payload()
+    command = payload() if operation == "search" else remote.prepare_v2()
     assert_error((lambda: search(remote, command)) if operation == "search" else (lambda: remote.acquire(command)),
                  "forbidden", 403)
     assert remote.rows() == []
+    if operation == 'acquire':
+        attempts = remote.c2_state()['album_top_remote_attempts']
+        assert len(attempts) == 1 and attempts[0]['state'] == 'reserved'
 
 
 def test_false_late_cancellation_observer_cannot_change_policy_after_the_final_fence(remote):
     read_pending = []
     denied = []
     def after(sql, connection):
-        if "from app.album_top_remote_acquisitions where ref=" in sql:
+        if sql.startswith("select app.finish_top_remote_attempt("):
             read_pending.append(True)
     def cancellation_observer():
         if read_pending:
@@ -313,20 +368,24 @@ def test_false_late_cancellation_observer_cannot_change_policy_after_the_final_f
     def constraints(context):
         return PolicyEvaluationConstraints(request_origin_allowed=not denied)
     remote.after_statement = after
+    command = remote.prepare_v2()
     before = remote.unrelated()
-    assert_error(lambda: remote.acquire(payload(), should_cancel=cancellation_observer, constraints=constraints),
+    assert_error(lambda: remote.acquire(command, should_cancel=cancellation_observer, constraints=constraints),
                  "forbidden", 403)
     assert read_pending == [True] and denied
     assert remote.rows() == [] and remote.unrelated() == before
+    assert remote.c2_state() == next(iter(remote.reservation_states.values()))
 
 
-@pytest.mark.parametrize("state", ["expired", "retired"])
+# The exact expired expansion is mapped to remote_consumption_expiry_acceptance.py; unexecuted.
+@pytest.mark.parametrize("state", ["retired"])
 def test_pending_source_loader_rejects_expired_and_retired_rows_under_current_authority(remote, state):
-    command = remote.seed(1, state=state)
-    row = remote.rows()[0]
-    receipt = {"acquisition_ref": str(row["ref"]), "evidence_version": row["evidence_version"]}
+    command = remote.prepare_v2()
+    receipt = remote.acquire(command)
+    remote.retire_pending(receipt['acquisition_ref'])
+    before = remote.c2_state()
     assert_error(lambda: pending(remote, receipt, command), "remote_evidence_unavailable", 409)
-    assert remote.calls == [] and len(remote.rows()) == 1
+    assert len(remote.calls) == 1 and len(remote.rows()) == 1 and remote.c2_state() == before
 
 
 @pytest.mark.parametrize("changed", ["editor", "session", "revision"])
@@ -335,7 +394,7 @@ def test_committed_recovery_still_needs_current_editor_session_and_top_revision(
     editor = member(database)
     top, _ = database.create(refs=[])
     top, _ = write(database, "grant_editor", top, account_id=editor.account_id, role="editor")
-    command = payload(destination(top))
+    command = remote.prepare_v2(destination(top), actor=editor)
     remote.acquire(command, actor=editor)
     if changed == "editor":
         write(database, "revoke_editor", top, grant_ref=top["grant_ref"])
@@ -345,7 +404,9 @@ def test_committed_recovery_still_needs_current_editor_session_and_top_revision(
         with database.connect() as connection:
             connection.execute("update app.account_sessions set revoked_at=clock_timestamp() where id=%s", (editor.session_id,))
     before = remote.rows()
+    c2_before = remote.c2_state()
     code, status = {"editor": ("top_unavailable", 404), "session": ("forbidden", 403),
                     "revision": ("revision_conflict", 409)}[changed]
     assert_error(lambda: remote.acquire(command, actor=editor), code, status)
     assert len(remote.calls) == 1 and remote.rows() == before
+    assert remote.c2_state() == c2_before

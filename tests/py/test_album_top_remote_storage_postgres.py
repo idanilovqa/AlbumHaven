@@ -1,8 +1,8 @@
 """Exact SQL privilege, immutable-fact, and finite-storage admission contracts.
 
-Quota data is bounded SQL-generated synthetic history with exact JSONB byte
-accounting. The real 10,000/2,000 retained, 1,000/100 live, 32/8 MiB and 16 KiB
-limits are never monkeypatched or approximated by low test-only limits.
+Fresh pending setup uses acknowledged v2 reserve/finish transactions. Historical
+retained fixtures remain immutable history; old-writer replay uses a dedicated
+pre-cutoff database. No production limits or accounting results are replaced.
 """
 from datetime import timedelta
 from uuid import UUID, uuid4
@@ -12,9 +12,10 @@ import pytest
 from tests.py.postgres_runtime_role_contract import assert_runtime_role
 
 from tests.py.test_owned_album_tops_postgres import assert_error
+from tests.py.remote_preparation_cutoff_support import cutoff_transition
 from tests.py.remote_top_postgres_support import (
     CONTEXT, MBID, RELATIONS, STORE_SIGNATURE, STORE_SQL,
-    db, urls, remote, payload, destination, evidence, runtime, sql_error,
+    db, urls, remote, payload, prepared_payload, destination, evidence, runtime, sql_error,
 )
 
 
@@ -40,144 +41,292 @@ def sized_facts(remote, size):
     return result
 
 
-def seed_exact_bytes(remote, total, *, target=None, state="expired"):
-    """At most 5,000 rows; distribute actor history over separate draft buckets."""
-    small = fact_bytes(remote, evidence(title="x", artist="x"))
-    large_facts = evidence(title="x" + "\U0001f600" * 999, artist="x" + "\U0001f600" * 999)
-    large = fact_bytes(remote, large_facts)
-    complete, remainder = divmod(total, large)
-    groups = [(complete, large_facts)]
-    if remainder:
-        if remainder < small:
-            groups = [(complete - 1, large_facts), (1, sized_facts(remote, large - small)),
-                      (1, sized_facts(remote, small + remainder))]
-        else:
-            groups.append((1, sized_facts(remote, remainder)))
-    assert 0 < sum(count for count, _ in groups) <= 5000
-    for count, facts in groups:
-        while count:
-            chunk = min(count, 500)
-            remote.seed(chunk, command=payload(target or destination()), facts=facts, state=state)
-            count -= chunk
-    assert remote.counts(target)["bytes"] == total
-
-
-@pytest.mark.parametrize("scope,kind,limit", [
-    ("destination", "retained", 2000), ("actor", "retained", 10000),
-    ("destination", "live", 100), ("actor", "live", 1000),
-])
-def test_exact_count_and_live_caps_allow_last_slot_then_replay_but_refuse_growth(remote, scope, kind, limit):
-    target = destination()
-    state = "expired" if kind == "retained" else "live"
-    remaining = limit - 1
-    chunk_limit = 1900 if kind == "retained" else 99
-    while remaining:
-        count = min(remaining, chunk_limit)
-        remote.seed(count, command=payload(target if scope == "destination" else destination()), state=state)
-        remaining -= count
-    before = remote.counts(target if scope == "destination" else None)
-    assert before[kind] == limit - 1
-    command = payload(target)
-    receipt = remote.acquire(command)
-    after = remote.counts(target if scope == "destination" else None)
-    assert after[kind] == limit
-    assert remote.acquire(command) == receipt
-    assert remote.counts(target if scope == "destination" else None) == after
-    assert len(remote.calls) == 1
-    # A new actor-level request uses another draft to prove aggregate accounting.
-    next_target = target if scope == "destination" else destination()
-    assert_error(lambda: remote.acquire(payload(next_target)), "remote_acquisition_limit", 429)
-    assert len(remote.calls) == 1 and remote.counts(target if scope == "destination" else None) == after
-
-
-@pytest.mark.parametrize("scope,maximum", [("destination", 8 * 1024 * 1024), ("actor", 32 * 1024 * 1024)])
-@pytest.mark.parametrize("over", [0, 1])
-def test_exact_retained_jsonb_byte_cap_includes_expired_and_retired_history(remote, scope, maximum, over):
-    target = destination()
-    candidate_size = fact_bytes(remote, remote.facts)
-    total = maximum - candidate_size + over
-    seed_exact_bytes(remote, total, target=target if scope == "destination" else None,
-                     state="expired" if over == 0 else "retired")
-    before = remote.counts(target if scope == "destination" else None)
-    assert before["bytes"] == total and before["live"] == 0
-    command = payload(target)
-    if over:
-        # Preflight sees space (< cap), but the actual exact SQL addition fails.
-        assert total < maximum
-        assert_error(lambda: remote.acquire(command), "remote_acquisition_limit", 429)
-        assert remote.counts(target if scope == "destination" else None) == before
-    else:
-        receipt = remote.acquire(command)
-        after = remote.counts(target if scope == "destination" else None)
-        assert after["bytes"] == maximum and after["retained"] == before["retained"] + 1
-        assert remote.acquire(command) == receipt
-        assert_error(lambda: remote.acquire(payload(target if scope == "destination" else destination())),
-                     "remote_acquisition_limit", 429)
-        assert remote.counts(target if scope == "destination" else None) == after
-    assert len(remote.calls) == 1
+# The obsolete lifetime-history 2,000/10,000 and live 100/1,000 expansions
+# are explicitly mapped in CONTRACT-MAP.md to real consumed-batch growth and
+# A's 512/2,048 physical-capacity owners. No fabricated fresh-v1 seed survives.
 
 
 def test_final_sql_admission_rechecks_capacity_that_filled_during_provider_io(remote):
-    target = destination()
-    remote.provider_hook = lambda: remote.seed(100, command=payload(target), state="live")
-    assert_error(lambda: remote.acquire(payload(target)), "remote_acquisition_limit", 429)
-    assert len(remote.calls) == 1
-    assert remote.counts(target)["retained"] == remote.counts(target)["live"] == 100
-    assert all(row["title"] == remote.facts.title for row in remote.rows())
+    command = remote.prepare_v2()
+    parent = {'preparation_ref': command['preparation_ref']}
+    target = command['destination']
+    for _ in range(510):
+        prepared = prepared_payload(parent, target)
+        assert remote.finish_v2(prepared, remote.reserve_v2(prepared))['state'] == 'pending'
+    seen = []
+    def fill_remaining_capacity():
+        # The first dispatch owns its committed reservation before the final
+        # free slot fills. No long bulk setup runs inside its bounded lease.
+        for _ in range(1):
+            another = prepared_payload(parent, target)
+            reservation = remote.reserve_v2(another)
+            assert reservation['dispatch'] is True
+            assert remote.finish_v2(another, reservation)['state'] == 'pending'
+        before = remote.c2_state()
+        refused = remote.reserve_v2(prepared_payload(parent, target))
+        assert refused['state'] == 'limit' and refused['resource'] == 'attempts'
+        assert remote.c2_state() == before
+        seen.append(before)
+    remote.provider_hook = fill_remaining_capacity
+    receipt = remote.acquire(command)
+    assert len(remote.calls) == 1 and len(seen) == 1
+    after = remote.c2_state()
+    assert len(after['album_top_remote_acquisitions']) == 512
+    assert after['album_top_remote_preparations'][0]['pending_count'] == 512
+    assert after['album_top_remote_preparations'][0]['reservation_count'] == 0
+    assert after['album_top_remote_preparations'][0]['attempt_count'] == 512
+    assert remote.acquire(command) == receipt and remote.c2_state() == after
 
 
 def test_actor_live_capacity_spans_current_libraries_and_draft_buckets(remote):
     database = remote.db
     with database.connect() as connection:
-        other_library = database.library_for(connection, database.owner)
-        other_context_actor = database.member(connection, database.owner, other_library)
-    for _ in range(10):
-        remote.seed(100, command=payload(), state="live", actor=other_context_actor)
-    assert remote.counts()["live"] == 1000
-    assert_error(lambda: remote.acquire(payload()), "remote_acquisition_limit", 429)
-    assert remote.calls == [] and remote.counts()["retained"] == 1000
+        library = database.library_for(connection, database.owner)
+        other_actor = database.member(connection, database.owner, library)
+    first = None
+    for actor in (database.owner, other_actor, database.owner, other_actor):
+        parent, target = remote.begin_v2(actor=actor)
+        for _ in range(512):
+            command = prepared_payload(parent, target)
+            reservation = remote.reserve_v2(command, actor=actor)
+            assert reservation['dispatch'] is True
+            finished = remote.finish_v2(command, reservation, actor=actor)
+            assert finished['state'] == 'pending'
+            first = first or (command, finished['facts'])
+    state = remote.c2_state()
+    assert len(state['album_top_remote_acquisitions']) == 2048
+    assert {row['library_id'] for row in state['album_top_remote_acquisitions']} == {database.library, library}
+    budget = state['album_top_remote_pending_budgets'][0]
+    assert budget['pending_count'] == 2048 and budget['reservation_count'] == 0
+    assert budget['pending_bytes'] == sum(row['facts_bytes'] for row in state['album_top_remote_acquisitions'])
+    assert remote.reserve_v2(first[0])['facts'] == first[1]
+    parent, target = remote.begin_v2()
+    before = remote.c2_state()
+    refused = remote.reserve_v2(prepared_payload(parent, target))
+    assert refused['state'] == 'limit' and refused['resource'] == 'pending'
+    assert remote.c2_state() == before and remote.calls == []
 
 
 def test_sql_bytes_are_derived_not_caller_supplied_and_oversize_is_atomic(remote):
-    command = payload()
-    before = remote.rows()
-    args = list(remote.store_args(command))
-    # Deliberately oversized server-only invocation reaches the real 16 KiB
-    # aggregate guard before any INSERT. No fabricated facts_bytes are passed.
-    args[13] = "\U0001f600" * 5000
+    legacy = payload()
     with runtime(remote.db) as connection:
-        sql_error(connection, "55000", lambda: connection.execute(STORE_SQL, args), constraint="top_remote_budget")
-    assert remote.rows() == before
-    receipt = remote.acquire(command)
+        sql_error(connection, '55000', lambda: connection.execute(STORE_SQL, remote.store_args(legacy)),
+            constraint='top_remote_version_required')
+    command = remote.prepare_v2()
+    reservation = remote.reserve_v2(command)
+    before = remote.c2_state()
+    facts = remote.facts
+    args = [*remote.binding_v2(command), reservation['attempt_ref'], reservation['acquisition_ref'],
+        facts.digest, '\U0001f600' * 5000, facts.artist_display, facts.first_release_date, facts.primary_type]
+    with runtime(remote.db) as connection:
+        sql_error(connection, '55000', lambda: connection.execute('select app.finish_top_remote_attempt('
+            + ','.join(['%s'] * len(args)) + ')', args), constraint='top_remote_expired')
+    assert remote.c2_state() == before and remote.rows() == []
+    finished = remote.finish_v2(command, reservation)
     row = remote.rows()[0]
-    assert row["facts_bytes"] == fact_bytes(remote, remote.facts)
-    assert row["expires_at"] - row["created_at"] == timedelta(minutes=30)
-    assert row["evidence_version"] == receipt["evidence_version"]
+    assert row['facts_bytes'] == fact_bytes(remote, facts)
+    assert row['expires_at'] - row['created_at'] == timedelta(minutes=30)
+    assert row['evidence_version'] == finished['facts']['evidence_version']
+    state = remote.c2_state()
+    assert state['album_top_remote_pending_budgets'][0]['pending_bytes'] == row['facts_bytes']
+    assert state['album_top_remote_preparations'][0]['pending_bytes'] == row['facts_bytes']
 
 
-def test_sql_helper_exact_key_keeps_first_version_and_conflicting_scope_never_rewrites(remote):
-    command = payload()
-    first_args = remote.store_args(command)
+def test_sql_helper_exact_key_keeps_first_version_and_conflicting_scope_never_rewrites(cutoff_transition):
+    """One explicit seed→A→B run also preserves mixed and legacy HTTP contracts.
+
+    Each fixture invocation needs an independently supplied empty admitted DB;
+    this test deliberately does not request the ordinary post-cutoff db fixture.
+    """
+    from music_app.services.owned_album_tops import BROWSE
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+    from tests.py.test_album_top_collaboration_postgres import member, new_session, write
+    from tests.py.test_album_top_remote_acquisition_routes import application, call, ready, ACQUIRE, mutation_headers
+    from tests.py.remote_top_retention_postgres_support import retention_case, invoke, RETAIN
+    from tests.py.test_album_top_remote_membership_postgres import membership_case, pending
+    remote = cutoff_transition
+    command, first = remote.seed_old_writer(1)[0]
+    first_args = remote.store_args(command, ref=first)
+    pure_facts = evidence(mbid=str(uuid4()), title='Pre-cutoff pure legacy')
+    pure_command = payload(mbid=pure_facts.release_group_id)
+    pure_ref = remote.seed_old_command(pure_command, facts=pure_facts)
+    mixed_facts = evidence(mbid=str(uuid4()), title='Pre-cutoff mixed legacy')
+    mixed_command = payload(mbid=mixed_facts.release_group_id)
+    mixed_ref = remote.seed_old_command(mixed_command, facts=mixed_facts)
+    app = application(remote)
+    auth = mutation_headers(app, remote.db.owner)
+    http_facts = evidence(mbid=str(uuid4()), title='Pre-cutoff HTTP')
+    http_command = payload(mbid=http_facts.release_group_id)
+    http_ref = remote.seed_old_command(http_command, facts=http_facts, context_ref=auth['x-albumhaven-context'])
+    top, _ = remote.db.create(refs=[])
+    editor = member(remote.db)
+    top, _ = write(remote.db, 'grant_editor', top, account_id=editor.account_id, role='editor')
+    top_facts = evidence(mbid=str(uuid4()), title='Pre-cutoff editor Top')
+    top_command = payload(destination(top), mbid=top_facts.release_group_id)
+    remote.seed_old_command(top_command, actor=editor, facts=top_facts)
+    original = remote.rows()
+    remote.apply_cutoff()
+    remote.apply_consumption()
+    revised = evidence(title='Later provider result')
     with runtime(remote.db) as connection:
-        first = str(connection.execute(STORE_SQL, first_args).fetchone()["ref"])
-    revised = evidence(title="Later provider result")
-    with runtime(remote.db) as connection:
-        second = str(connection.execute(STORE_SQL, remote.store_args(command, facts=revised)).fetchone()["ref"])
+        second = str(connection.execute(STORE_SQL, remote.store_args(command, facts=revised)).fetchone()['ref'])
     assert first == second == first_args[0]
     before = remote.rows()
-    assert before[0]["title"] == remote.facts.title
-    for index, value in ((4, "b" * 64), (6, str(uuid4())), (10, "f" * 64), (11, str(uuid4()))):
-        conflicting = list(first_args)
-        conflicting[0] = str(uuid4())
-        conflicting[index] = value
+    assert [{key: value for key, value in row.items() if key not in {'preparation_ref', 'attempt_ref'}}
+        for row in before] == original
+    for index, value in ((4, 'b' * 64), (6, str(uuid4())), (10, 'f' * 64), (11, str(uuid4()))):
+        conflicting = list(first_args); conflicting[0] = str(uuid4()); conflicting[index] = value
         with runtime(remote.db) as connection:
-            sql_error(connection, "55000", lambda: connection.execute(STORE_SQL, conflicting), constraint="top_remote_request_conflict")
+            sql_error(connection, '55000', lambda: connection.execute(STORE_SQL, conflicting),
+                constraint='top_remote_request_conflict')
     assert remote.rows() == before
+    first_receipt = remote.acquire(command)
+    assert first_receipt['acquisition_ref'] == first and 'version' not in first_receipt
+    assert remote.acquire(command) == first_receipt
+    assert_error(lambda: remote.acquire(command, actor=new_session(remote.db, remote.db.owner)),
+        'remote_evidence_unavailable', 409)
+    assert_error(lambda: remote.acquire(command, context_ref='b' * 64), 'request_key_conflict', 409)
+    for changed in ({**command, 'release_group_id': str(uuid4())}, {**command, 'destination': destination()},
+                    {**command, 'destination': destination(top)}):
+        assert_error(lambda changed=changed: remote.acquire(changed), 'request_key_conflict', 409)
+    with remote.db.connect() as connection:
+        other_library = remote.db.library_for(connection, remote.db.owner)
+        other_actor = remote.db.member(connection, remote.db.owner, other_library)
+    assert_error(lambda: remote.acquire(command, actor=other_actor), 'request_key_conflict', 409)
+    denied = lambda context: PolicyEvaluationConstraints(request_origin_allowed=context.action != BROWSE)
+    assert_error(lambda: remote.acquire(command, constraints=denied), 'forbidden', 403)
+    editor_receipt = remote.acquire(top_command, actor=editor)
+    assert_error(lambda: remote.acquire(top_command, actor=new_session(remote.db, editor)), 'remote_evidence_unavailable', 409)
+    saved, _ = write(remote.db, 'save', top, title='Later exact Top revision')
+    assert_error(lambda: remote.acquire(top_command, actor=editor), 'revision_conflict', 409)
+    assert_error(lambda: remote.acquire({**top_command, 'destination': destination(saved)}, actor=editor), 'request_key_conflict', 409)
+    saved, _ = write(remote.db, 'revoke_editor', saved, grant_ref=top['grant_ref'])
+    assert_error(lambda: remote.acquire(top_command, actor=editor), 'top_unavailable', 404)
+    http_receipt = ready(call(app, ACQUIRE, headers=auth, payload=http_command))
+    assert http_receipt['acquisition_ref'] == http_ref and 'version' not in http_receipt
+    assert ready(call(app, ACQUIRE, headers=auth, payload=http_command)) == http_receipt
+    status, body, headers = call(app, ACQUIRE, headers=auth, payload={**http_command, 'destination': destination()})
+    assert status == 409 and body == {'ok': False, 'error': 'request_key_conflict'}
+    assert headers[b'cache-control'] == b'private, no-store'
+    assert remote.rows() == before and remote.calls == []
+
+    with retention_case(remote) as storage, membership_case(storage) as mixed:
+        mixed.external_ids.extend([pure_facts.release_group_id, mixed_facts.release_group_id])
+        pure_receipt = remote.acquire(pure_command)
+        assert pure_receipt['acquisition_ref'] == pure_ref
+        pure_top, _ = mixed.create(local=False, acquired=pure_receipt)
+        # No preparation initialization is required to retain genuine legacy.
+        budgets = remote.c2_state()['album_top_remote_pending_budgets']
+        assert not budgets or all(row['legacy_initialized'] is False for row in budgets)
+        legacy_rows = [row for row in remote.rows() if row['preparation_ref'] is None]
+        assert legacy_rows == before
+        # Real bounded scan plus a real empty sentinel, never initialized by DML.
+        while not remote.maintain()['capacity']['legacy_initialized']:
+            pass
+        initial_budget = next(row for row in remote.c2_state()['album_top_remote_pending_budgets']
+            if row['actor_account_id'] == remote.db.owner.account_id)
+        legacy = remote.acquire(mixed_command)
+        fresh = mixed.acquire(target=mixed_command['destination'])
+        membership = mixed.command('create', title='Genuine mixed versions',
+            draft_ref=mixed_command['destination']['draft_ref'], selections=[pending(legacy), pending(fresh)])
+        created = mixed.execute(membership)
+        assert len(mixed.read(created)['items']) == 2
+        assert [row for row in remote.rows() if row['preparation_ref'] is None] == legacy_rows
+        after_budget = next(row for row in remote.c2_state()['album_top_remote_pending_budgets']
+            if row['actor_account_id'] == remote.db.owner.account_id)
+        assert after_budget['pending_count'] == initial_budget['pending_count']
+        assert after_budget['pending_bytes'] == initial_budget['pending_bytes']
+        terminals = remote.c2_state()['album_top_remote_attempts']
+        assert len(terminals) == 1 and terminals[0]['state'] == 'consumed'
+        assert str(terminals[0]['acquisition_ref']) == fresh['acquisition_ref']
+        first_admission = next(row for row in mixed.rows('album_top_remote_admissions')
+            if str(row['original_acquisition_ref']) == mixed_ref)
+        original_fact = next(row for row in legacy_rows if str(row['ref']) == mixed_ref)
+        assert first_admission['original_session_id'] == original_fact['original_session_id']
+        assert first_admission['original_context_ref'] == original_fact['context_ref']
+        assert first_admission['acquired_at'] == original_fact['created_at']
+        assert first_admission['admission_deadline'] == original_fact['expires_at']
+        item = next(row for row in mixed.read(created)['items'] if row['catalog_ref'] == str(first_admission['catalog_ref']))
+        created = mixed.execute(mixed.command('remove', created, item_refs=[item['ref']]))
+        same = mixed.acquire(created, facts=mixed_facts)
+        created = mixed.execute(mixed.command('add', created, selections=[pending(same)]))
+        assert next(row for row in mixed.rows('album_top_remote_admissions') if row['ref'] == first_admission['ref']) == first_admission
+        assert len([row for row in mixed.rows('album_top_remote_admissions') if str(row['top_ref']) == created['top_ref']]) == 2
+        assert len(remote.calls) == 2
+
+        # Legal one-way retirement retains exact legacy error shape and cannot
+        # contact the provider or convert the old key into a fresh acquisition.
+        remote.retire_pending(first)
+        remote.retire_pending(http_ref)
+        retired_before, calls = remote.rows(), len(remote.calls)
+        assert_error(lambda: remote.acquire(command), 'remote_evidence_unavailable', 409)
+        status, body, headers = call(app, ACQUIRE, headers=auth, payload=http_command)
+        assert status == 409 and body == {'ok': False, 'error': 'remote_evidence_unavailable'}
+        assert headers[b'cache-control'] == b'private, no-store'
+        assert remote.rows() == retired_before and len(remote.calls) == calls
+
+        # True legacy retention holds the same complete runtime prefix as bounded
+        # cleanup. A competing real discard must wait, then may reclaim only
+        # temporary legacy facts after the outer retention transaction commits.
+        pure_admission = next(row for row in mixed.rows('album_top_remote_admissions')
+            if str(row['original_acquisition_ref']) == pure_ref)
+        pending_before = remote.c2_state()
+        durable_before = {key: value for key, value in mixed.snapshot().items()
+            if key not in {'pending_acquisitions', 'c2_state'}}
+        with runtime(remote.db) as holder:
+            assert_runtime_role(holder, remote.db)
+            storage.locks(holder, pure_top, pending=pure_receipt)
+            assert str(invoke(holder, RETAIN, storage.retain_args(pure_top, pure_receipt,
+                str(pure_admission['catalog_ref'])))) == str(pure_admission['ref'])
+            with runtime(remote.db) as waiting:
+                assert_runtime_role(waiting, remote.db)
+                waiting.execute("set local lock_timeout='150ms'")
+                sql_error(waiting, '55P03', lambda: waiting.execute(
+                    'select app.maintain_top_remote_preparations(%s,%s,%s)',
+                    (remote.db.owner.account_id, remote.db.library, 'discard_legacy')))
+            assert remote.c2_state() == pending_before
+            assert {key: value for key, value in mixed.snapshot().items()
+                if key not in {'pending_acquisitions', 'c2_state'}} == durable_before
+        charged = [row for row in pending_before['album_top_remote_acquisitions']
+            if row['actor_account_id'] == remote.db.owner.account_id and row['preparation_ref'] is None]
+        old_budget = next(row for row in pending_before['album_top_remote_pending_budgets']
+            if row['actor_account_id'] == remote.db.owner.account_id)
+        while True:
+            step = remote.maintain(mode='discard_legacy')
+            assert step['inspected'] <= 256
+            if not step['more_work']:
+                break
+        after_cleanup = remote.c2_state()
+        new_budget = next(row for row in after_cleanup['album_top_remote_pending_budgets']
+            if row['actor_account_id'] == remote.db.owner.account_id)
+        assert new_budget['pending_count'] == old_budget['pending_count'] - len(charged)
+        assert new_budget['pending_bytes'] == old_budget['pending_bytes'] - sum(row['facts_bytes'] for row in charged)
+        assert new_budget['reservation_count'] == old_budget['reservation_count']
+        removed = {row['ref'] for row in charged}
+        assert after_cleanup['album_top_remote_acquisitions'] == [row for row in pending_before['album_top_remote_acquisitions']
+            if row['ref'] not in removed]
+        assert {key: value for key, value in mixed.snapshot().items()
+            if key not in {'pending_acquisitions', 'c2_state'}} == durable_before
+        assert next(row for row in mixed.rows('album_top_remote_admissions') if row['ref'] == pure_admission['ref']) == pure_admission
+        assert len(remote.calls) == calls
+
+    with runtime(remote.db) as connection:
+        sql_error(connection, '55000', lambda: connection.execute(STORE_SQL, remote.store_args(payload())),
+            constraint='top_remote_version_required')
+    while remote.maintain(mode='discard_legacy')['more_work']:
+        pass
+    with runtime(remote.db) as connection:
+        sql_error(connection, '55000', lambda: connection.execute(STORE_SQL, first_args),
+            constraint='top_remote_version_required')
+    assert_error(lambda: remote.acquire(command), 'remote_acquisition_version_required', 409)
+    assert len(remote.calls) == calls
 
 
 def test_runtime_role_select_definer_execution_and_absence_of_direct_dml_are_real(remote):
     with runtime(remote.db) as connection:
         runtime_role = assert_runtime_role(connection, remote.db)
+        sql_error(connection, "55000", lambda: connection.execute(STORE_SQL, remote.store_args(payload())),
+            constraint="top_remote_version_required")
         for relation in RELATIONS:
             assert connection.execute(f"select * from app.{relation} where false").fetchall() == []
             for sql in (f"insert into app.{relation} default values", f"delete from app.{relation} where false",
@@ -238,7 +387,7 @@ def retained(remote):
 @pytest.mark.parametrize("relation", ["album_top_remote_acquisitions", "album_top_remote_admissions"])
 def test_facts_are_immutable_even_to_trusted_owner_and_retirement_is_monotonic(remote, relation):
     if relation == "album_top_remote_acquisitions":
-        ref = remote.acquire(payload())["acquisition_ref"]
+        ref = remote.acquire(remote.prepare_v2())["acquisition_ref"]
     else:
         _, _, ref, _ = retained(remote)
     with remote.db.connect() as connection:

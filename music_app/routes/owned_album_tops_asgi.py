@@ -378,9 +378,13 @@ async def _remote_lookup(request, *, search):
         context, constraints = _context(request, BROWSE)
         context_ref = _require_context(request)
         payload = await read_bounded_json_object(request, max_bytes=4096)
-        required = {'destination', 'title'} if search else {'request_key', 'destination', 'release_group_id'}
-        allowed = required | {'artist'} if search else required
-        if type(payload) is not dict or not required <= set(payload) <= allowed:
+        if search:
+            valid = type(payload) is dict and {'destination', 'title'} <= set(payload) <= {'destination', 'title', 'artist'}
+        else:
+            valid = type(payload) is dict and (set(payload) == {'request_key', 'destination', 'release_group_id'}
+                or (set(payload) == {'version', 'preparation_ref', 'request_key', 'destination', 'release_group_id'}
+                    and type(payload['version']) is int and payload['version'] == 2))
+        if not valid:
             raise AlbumTopError('invalid_command')
         service = _remote_service(request)
         watcher = asyncio.create_task(_watch_remote_disconnect(request, cancelled))
@@ -394,7 +398,7 @@ async def _remote_lookup(request, *, search):
             raise AlbumTopError('provider_cancelled', 503)
         if _require_context(request) != context_ref:
             raise AlbumTopError('stale_context', 409)
-        return _response(request, value)
+        return _remote_response(request, value, context_ref)
     except JSONBodyTooLarge:
         return _error(AlbumTopError('command_too_large', 413))
     except AlbumTopError as error:
@@ -407,6 +411,82 @@ async def _remote_lookup(request, *, search):
             watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await watcher
+
+
+def _remote_response(request, value, context_ref):
+    # Only this private remote family has preparation/attempt statuses. Generic
+    # Top mutations keep their existing response and continuity contracts.
+    if _require_context(request) != context_ref:
+        raise AlbumTopError('stale_context', 409)
+    status = {'in_flight': 202, 'failed': 503, 'maintenance_required': 409, 'limit': 429}.get(value.get('state'), 200)
+    return JSONResponse({'status': 'ready', 'data': value, 'context_ref': context_ref},
+                        status_code=status, headers=_NO_STORE)
+
+
+async def _remote_preparation(request, *, operation, preparation_ref=None):
+    cancelled = Event()
+    watcher = None
+    try:
+        if request.query_params or request.scope.get('query_string', b''):
+            raise AlbumTopError('invalid_command')
+        context, constraints = _context(request, BROWSE)
+        context_ref = _require_context(request)
+        service = _remote_service(request)
+        options = {'context_ref': context_ref, 'constraints': constraints, 'should_cancel': cancelled.is_set}
+        if operation == 'status':
+            method = service.preparation_status
+        else:
+            payload = await read_bounded_json_object(request, max_bytes=4096)
+            required = {'destination', 'form_ref'} if operation == 'begin' else {'mode'} if operation == 'maintain' else set()
+            if type(payload) is not dict or set(payload) != required:
+                raise AlbumTopError('invalid_command')
+            options['payload'] = payload
+            if operation == 'begin':
+                method = service.begin_preparation
+            elif operation == 'maintain':
+                method = service.maintain_preparations
+            else:
+                options['preparation_ref'] = top_uuid(preparation_ref)
+                method = service.close_preparation
+        # One bounded observer, retired on every exit. Status can also wait on
+        # current authority; disconnect must retire that response without DML.
+        watcher = asyncio.create_task(_watch_remote_disconnect(request, cancelled))
+        value = await run_in_threadpool(method, context, **options)
+        if cancelled.is_set():
+            raise AlbumTopError('provider_cancelled', 503)
+        return _remote_response(request, value, context_ref)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('remote_acquisition_unavailable', 503))
+    finally:
+        cancelled.set()
+        if watcher is not None:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
+
+
+@router.post('/album-top-catalog/remote-preparations')
+async def begin_album_top_remote_preparation(request: Request):
+    return await _remote_preparation(request, operation='begin')
+
+
+@router.get('/album-top-catalog/remote-preparations')
+async def read_album_top_remote_preparations(request: Request):
+    return await _remote_preparation(request, operation='status')
+
+
+@router.post('/album-top-catalog/remote-preparations/maintain')
+async def maintain_album_top_remote_preparations(request: Request):
+    return await _remote_preparation(request, operation='maintain')
+
+
+@router.post('/album-top-catalog/remote-preparations/{preparation_ref}/close')
+async def close_album_top_remote_preparation(request: Request, preparation_ref: str):
+    return await _remote_preparation(request, operation='close', preparation_ref=preparation_ref)
 
 
 @router.post('/album-top-catalog/remote-search')

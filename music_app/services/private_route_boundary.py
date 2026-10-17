@@ -216,6 +216,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/album-top-catalog/search"): "library.browse.read",
     ("POST", "/album-top-catalog/remote-search"): "library.browse.read",
     ("POST", "/album-top-catalog/remote-acquisitions"): "library.browse.read",
+    ("GET", "/album-top-catalog/remote-preparations"): "library.browse.read",
+    ("POST", "/album-top-catalog/remote-preparations"): "library.browse.read",
+    ("POST", "/album-top-catalog/remote-preparations/maintain"): "library.browse.read",
+    ("POST", "/album-top-catalog/remote-preparations/{preparation_ref}/close"): "library.browse.read",
     ("POST", "/album-tops/{top_ref}/publication-preview"): "library.album_tops.access.manage",
     ("POST", "/album-tops/{top_ref}/catalog/inventory"): "library.browse.read",
     ("GET", "/playlists/edit-requests"): "library.browse.read",
@@ -282,8 +286,13 @@ def install_private_route_boundary(app: FastAPI) -> None:
         try:
             return await _require_private_authentication(request, call_next)
         except Exception:
-            if request.method == "POST" and _matched_route_path(app, request) in {
-                    "/album-top-catalog/remote-search", "/album-top-catalog/remote-acquisitions"}:
+            if (request.method, _matched_route_path(app, request)) in {
+                    ("POST", "/album-top-catalog/remote-search"),
+                    ("POST", "/album-top-catalog/remote-acquisitions"),
+                    ("GET", "/album-top-catalog/remote-preparations"),
+                    ("POST", "/album-top-catalog/remote-preparations"),
+                    ("POST", "/album-top-catalog/remote-preparations/maintain"),
+                    ("POST", "/album-top-catalog/remote-preparations/{preparation_ref}/close")}:
                 return JSONResponse({"ok": False, "error": "remote_acquisition_unavailable"}, status_code=503,
                                     headers={"Cache-Control": "private, no-store"})
             if request.method == "POST" and _matched_route_path(app, request) in {"/search/native-target", "/search/native-targets"}:

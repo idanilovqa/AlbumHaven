@@ -6,12 +6,13 @@ Goals, publish, or grant authority through an acquisition UUID. The private Top
 transport supplies the existing public MusicBrainz user agent.
 """
 from contextlib import contextmanager
-from datetime import timezone
-from uuid import uuid4
+from datetime import timedelta, timezone
+from time import monotonic
 
 from music_app.services.album_top_remote_sources import (
     evidence_from_row, normalize_remote_acquisition, normalize_remote_destination,
     normalize_pending_remote_selector, project_remote_summary, remote_context_ref,
+    PreparedRemoteTopAcquisitionCommand,
 )
 from music_app.services.owned_album_tops import AlbumTopError, BROWSE, CREATE, ITEMS
 from music_app.services.remote_album_evidence import RemoteAlbumEvidenceError, validate_release_group_evidence
@@ -36,6 +37,23 @@ def _cancel(should_cancel):
             raise AlbumTopError('provider_cancelled', 503)
 
 
+def remote_storage_error(error):
+    if getattr(error, 'sqlstate', None) != '55000':
+        return None
+    constraint = getattr(getattr(error, 'diag', None), 'constraint_name', '') or ''
+    codes = {
+        'top_remote_revision': ('revision_conflict', 409),
+        'top_remote_version_required': ('remote_acquisition_version_required', 409),
+        'top_remote_preparation_unavailable': ('remote_preparation_unavailable', 409),
+        'top_remote_v2_membership_unavailable': ('remote_membership_unavailable', 409),
+        'top_remote_budget': ('remote_acquisition_limit', 429),
+        'top_remote_request_conflict': ('request_key_conflict', 409),
+        'top_remote_expired': ('remote_evidence_unavailable', 409),
+        'top_remote_scope': ('remote_evidence_unavailable', 409),
+    }
+    return AlbumTopError(*codes[constraint]) if constraint in codes else None
+
+
 def _binding(row, live, destination, owner_account_id, context_ref):
     expected = (live.library_id, live.actor.account_id, live.actor.session_id, context_ref,
         destination.kind, destination.ref, owner_account_id,
@@ -46,11 +64,16 @@ def _binding(row, live, destination, owner_account_id, context_ref):
     return actual == expected
 
 
-def load_pending_remote_source(connection, *, selector, live, destination, owner_account_id, context_ref):
+def load_pending_remote_source(connection, *, selector, live, destination, owner_account_id, context_ref,
+                               prelocked_source=None):
     """Database-only source check for a later existing membership transaction.
 
     The caller must already hold current account/session/library and destination
-    Top locks and have checked Browse/Items or Browse/Create. This returns facts,
+    Top locks and have checked Browse/Items or Browse/Create. For v2 it must also
+    hold the complete batch's budget/parent/attempt/fact UPDATE locks through the
+    structural batch owner, and pass that owner's exact descriptor. No lock is
+    acquired here: a per-item late parent lookup must not invert the batch order.
+    This returns facts,
     never consumes evidence, maps catalog identity or grants membership itself.
     Create callers must retain destination.ref as draft_ref in their normalized command.
     """
@@ -60,6 +83,30 @@ def load_pending_remote_source(connection, *, selector, live, destination, owner
     row = connection.execute('''select *,clock_timestamp() as checked_at
         from app.album_top_remote_acquisitions where ref=%s and actor_account_id=%s''',
         (selector['acquisition_ref'], live.actor.account_id)).fetchone()
+    if row is not None and row.get('preparation_ref') is not None:
+        expected = {'acquisition_ref': str(row['ref']), 'evidence_version': row['evidence_version'],
+                    'preparation_ref': str(row['preparation_ref']), 'attempt_ref': str(row['attempt_ref']),
+                    'request_key': str(row['request_key'])}
+        if type(prelocked_source) is not dict or prelocked_source != expected:
+            raise AlbumTopError('remote_membership_unavailable', 409)
+        parent = connection.execute('''select * from app.album_top_remote_preparations
+            where ref=%s and actor_account_id=%s''',
+            (row['preparation_ref'], live.actor.account_id)).fetchone()
+        attempt = connection.execute('''select * from app.album_top_remote_attempts
+            where ref=%s and preparation_ref=%s and actor_account_id=%s''',
+            (row['attempt_ref'], row['preparation_ref'], live.actor.account_id)).fetchone()
+        checked = connection.execute('select clock_timestamp() as checked_at').fetchone()['checked_at']
+        if (parent is None or attempt is None or not _binding(parent, live, destination, owner_account_id, context_ref)
+                or parent['closed_at'] is not None or parent['fully_expires_at'] <= checked
+                or attempt['state'] != 'pending' or attempt['acquisition_ref'] != row['ref']
+                or attempt['request_key'] != row['request_key'] or attempt['command_digest'] != row['command_digest']
+                or attempt['external_id'] != row['external_id'] or attempt['evidence_version'] != row['evidence_version']
+                or not parent['created_at'] <= attempt['created_at'] <= row['created_at'] < parent['accepts_until']
+                or row['created_at'] >= attempt['lease_until']
+                or row['expires_at'] - row['created_at'] != timedelta(minutes=30)
+                or row['expires_at'] > parent['fully_expires_at']):
+            raise AlbumTopError('remote_evidence_unavailable', 409)
+        row = dict(row, checked_at=checked)
     if (row is None or not _binding(row, live, destination, owner_account_id, context_ref)
             or row['retired_at'] is not None or row['expires_at'] <= row['checked_at']
             or row['evidence_version'] != selector['evidence_version']):
@@ -69,16 +116,17 @@ def load_pending_remote_source(connection, *, selector, live, destination, owner
 
 class TopRemoteAcquisitionService:
     """Private preparation only; the membership owner never fetches provider facts."""
-    def __init__(self, owner, *, provider=None, searcher=None, user_agent=None):
+    def __init__(self, owner, *, provider=None, searcher=None, user_agent=None, monotonic_clock=None):
         self.owner = owner
         self.provider = provider or fetch_release_group_evidence
         self.searcher = searcher or search_release_group_candidates
         self.user_agent = user_agent
+        self.monotonic_clock = monotonic if monotonic_clock is None else monotonic_clock
 
-    def _destination(self, connection, live, destination, constraints, *, write=False):
+    def _destination(self, connection, live, destination, constraints, *, write=False, check_revision=True):
         top = self.owner._top(connection, live, destination.ref, write=write) if destination.kind == 'top' else None
         self.owner._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
-        if top is not None and str(top['revision']) != destination.revision:
+        if check_revision and top is not None and str(top['revision']) != destination.revision:
             raise AlbumTopError('revision_conflict', 409)
         return top
 
@@ -99,7 +147,7 @@ class TopRemoteAcquisitionService:
 
     @contextmanager
     def _authorized(self, context, destination, constraints, should_cancel, *, write=False,
-                    discovered_owner=None):
+                    discovered_owner=None, budget_lock=False, check_revision=True):
         _cancel(should_cancel)
         if destination.kind == 'top' and discovered_owner is None:
             # Preserve the direct database-only helper seam. Public search and
@@ -108,7 +156,11 @@ class TopRemoteAcquisitionService:
         try:
             with self.owner._authorized(context, constraints,
                     target_account_id=discovered_owner) as (connection, live, now):
-                top = self._destination(connection, live, destination, constraints, write=write)
+                if budget_lock:
+                    connection.execute('select app.lock_top_remote_pending_actor(%s)',
+                                       (live.actor.account_id,)).fetchone()
+                top = self._destination(connection, live, destination, constraints,
+                                        write=write, check_revision=check_revision)
                 if top is not None and top['owner_account_id'] != discovered_owner:
                     raise AlbumTopError('concurrent_change', 409)
                 _cancel(should_cancel)
@@ -122,23 +174,72 @@ class TopRemoteAcquisitionService:
         except AlbumTopError:
             raise
         except Exception as error:
-            constraint = getattr(getattr(error, 'diag', None), 'constraint_name', '') or ''
-            if getattr(error, 'sqlstate', None) == '55000':
-                if constraint == 'top_remote_budget':
-                    raise AlbumTopError('remote_acquisition_limit', 429) from None
-                if constraint == 'top_remote_request_conflict':
-                    raise AlbumTopError('request_key_conflict', 409) from None
-                if constraint in {'top_remote_expired', 'top_remote_scope'}:
-                    raise AlbumTopError('remote_evidence_unavailable', 409) from None
+            translated = remote_storage_error(error)
+            if translated is not None:
+                raise translated from None
             raise
 
     @staticmethod
     def _owner(live, top):
         return top['owner_account_id'] if top else live.actor.account_id
 
+    @contextmanager
+    def _authorized_prepared_attempt(self, context, command, context_ref, constraints, should_cancel, *,
+                                     discovered_owner):
+        """Fixed reserve/replay owner; no caller deadline or finalizer seam.
+
+        Normal search/v1/direct _authorized semantics stay unchanged. This
+        owner obtains the actual reserve snapshot under the same lock prefix,
+        then fences consumed replies after its final cancellation/policy calls.
+        """
+        from music_app.services.album_top_remote_preparations import _sql, _timestamp, _require_snapshot
+        if not isinstance(command, PreparedRemoteTopAcquisitionCommand):
+            raise AlbumTopError('invalid_command')
+        context_ref = remote_context_ref(context_ref)
+        destination = command.destination
+        _require_snapshot(destination.kind != 'top' or type(discovered_owner) is int and discovered_owner > 0)
+        _cancel(should_cancel)
+        try:
+            with self.owner._authorized(context, constraints,
+                    target_account_id=discovered_owner) as (connection, live, _):
+                connection.execute('select app.lock_top_remote_pending_actor(%s)',
+                                   (live.actor.account_id,)).fetchone()
+                top = self._destination(connection, live, destination, constraints,
+                                        write=True, check_revision=False)
+                if top is not None and top['owner_account_id'] != discovered_owner:
+                    raise AlbumTopError('concurrent_change', 409)
+                _cancel(should_cancel)
+                args = (command.preparation_ref, live.library_id, live.actor.account_id, live.actor.session_id,
+                    context_ref, destination.kind, destination.ref, self._owner(live, top),
+                    int(destination.revision) if destination.revision is not None else None,
+                    command.request_key, command.digest, command.release_group_id)
+                snapshot = _sql(connection, 'reserve_top_remote_attempt', args)
+                consumed = snapshot.get('state') == 'consumed'
+                original_deadline = _timestamp(snapshot.get('fully_expires_at')) if consumed else None
+                observed_at = _timestamp(snapshot.get('sql_now')) if consumed else None
+                yield connection, live, top, args, snapshot
+                _cancel(should_cancel)
+                self.owner._require(live, (BROWSE, ITEMS) if top else (BROWSE, CREATE), constraints, top)
+                if consumed:
+                    final = connection.execute('select clock_timestamp()::text as checked_at').fetchone()
+                    _require_snapshot(final is not None)
+                    checked = _timestamp(final.get('checked_at'))
+                    _require_snapshot(checked >= observed_at)
+                    if checked >= original_deadline:
+                        raise AlbumTopError('remote_preparation_unavailable', 409)
+                # Only the already-held same-session exit/commit remains. A
+                # reserved dispatch is usable only after that commit succeeds.
+        except AlbumTopError:
+            raise
+        except Exception as error:
+            translated = remote_storage_error(error)
+            if translated is not None:
+                raise translated from None
+            raise
+
     def _prior(self, connection, live, top, command, context_ref):
         row = connection.execute('''select *,clock_timestamp() as checked_at
-            from app.album_top_remote_acquisitions where actor_account_id=%s and request_key=%s''',
+            from app.album_top_remote_acquisitions where actor_account_id=%s and request_key=%s and preparation_ref is null''',
             (live.actor.account_id, command.request_key)).fetchone()
         if row is None:
             return None
@@ -217,38 +318,32 @@ class TopRemoteAcquisitionService:
     def acquire(self, context, *, payload, context_ref, constraints=None, should_cancel=None):
         command = normalize_remote_acquisition(payload)
         context_ref = remote_context_ref(context_ref)
+        if isinstance(command, PreparedRemoteTopAcquisitionCommand):
+            from music_app.services.album_top_remote_preparations import RemoteTopPreparationService
+            return RemoteTopPreparationService(self).acquire(context, command=command,
+                context_ref=context_ref, constraints=constraints, should_cancel=should_cancel)
         discovered_owner = self._discover_owner(context, command.destination, constraints, should_cancel)
         with self._authorized(context, command.destination, constraints, should_cancel,
                 discovered_owner=discovered_owner) as (connection, live, top):
             prior = self._prior(connection, live, top, command, context_ref)
             if prior is not None:
                 return self._receipt(connection, live, top, command, context_ref, prior, constraints, should_cancel)
-            self._capacity(connection, live, command.destination)
-        # No DB context remains open across the sole exact provider lookup.
-        failure = None
-        try:
-            facts = validate_release_group_evidence(self.provider(command.release_group_id,
-                user_agent=self.user_agent, should_cancel=should_cancel))
-            if facts.release_group_id != command.release_group_id:
-                raise RemoteAlbumEvidenceError('provider_identity_changed')
-        except RemoteAlbumEvidenceError as error:
-            failure = error
-        with self._authorized(context, command.destination, constraints, should_cancel, write=True,
-                discovered_owner=discovered_owner) as (connection, live, top):
-            if failure is not None:
-                # A cancellation or denial is terminal, even if a concurrent
-                # identical request happened to commit while this lookup failed.
-                raise AlbumTopError(failure.code, 503) from None
-            prior = self._prior(connection, live, top, command, context_ref)
-            if prior is None:
-                connection.execute('''select app.store_top_remote_acquisition(
-                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
-                    (str(uuid4()), live.library_id, live.actor.account_id, live.actor.session_id, context_ref,
-                     command.destination.kind, command.destination.ref, self._owner(live, top),
-                     int(command.destination.revision) if command.destination.revision is not None else None,
-                     command.request_key, command.digest, facts.release_group_id, facts.digest,
-                     facts.title, facts.artist_display, facts.first_release_date, facts.primary_type)).fetchone()
-                prior = self._prior(connection, live, top, command, context_ref)
-                if prior is None:
-                    raise AlbumTopError('remote_evidence_unavailable', 409)
-            return self._receipt(connection, live, top, command, context_ref, prior, constraints, should_cancel)
+            # The SQL writer independently enforces the same permanent cutoff.
+            # A reclaimed legacy key must never become a fresh provider lookup.
+            raise AlbumTopError('remote_acquisition_version_required', 409)
+
+    def begin_preparation(self, context, **options):
+        from music_app.services.album_top_remote_preparations import RemoteTopPreparationService
+        return RemoteTopPreparationService(self).begin(context, **options)
+
+    def preparation_status(self, context, **options):
+        from music_app.services.album_top_remote_preparations import RemoteTopPreparationService
+        return RemoteTopPreparationService(self).status(context, **options)
+
+    def close_preparation(self, context, **options):
+        from music_app.services.album_top_remote_preparations import RemoteTopPreparationService
+        return RemoteTopPreparationService(self).close(context, **options)
+
+    def maintain_preparations(self, context, **options):
+        from music_app.services.album_top_remote_preparations import RemoteTopPreparationService
+        return RemoteTopPreparationService(self).maintain(context, **options)

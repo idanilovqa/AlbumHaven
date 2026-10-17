@@ -336,6 +336,21 @@ class PostgresOwnedAlbumTopsService:
         typed = remote_membership.typed_command(command)
         if typed:
             context_ref = remote_membership.require_context(context_ref)
+        pending = remote_membership.pending_selectors(command) if typed else []
+        discovered_sources = []
+        pending_receipt_seen = False
+        if pending:
+            self._require(context, (BROWSE,), constraints)
+            with self._connect(self._url) as lookup:
+                # A landed operation needs no remaining preparation or fact.
+                # This exact hint skips discovery only; current locked replay
+                # below is authoritative, and disappearance cannot fall through.
+                pending_receipt_seen = lookup.execute('''select request_key from app.album_list_operations
+                    where actor_account_id=%s and library_id=%s and request_key=%s''',
+                    (context.actor.account_id, context.library_id, command.request_key)).fetchone() is not None
+                if not pending_receipt_seen:
+                    discovered_sources = remote_membership.discover_pending_sources(
+                        lookup, pending, context.actor.account_id)
         manual_progress = command.action == "set_manual_completion"
         private_state = manual_progress or command.action == "set_activity"
         lock_target = command.data.get("account_id")
@@ -420,11 +435,13 @@ class PostgresOwnedAlbumTopsService:
                         retained if command.action not in {'create', 'copy'} else None,
                         owner_only=prior['publication_ref'] is not None)
                 return dict(prior["receipt"])
-            if copy_receipt_seen:
+            if copy_receipt_seen or pending_receipt_seen:
                 # A discovered receipt is never authority or permission to
                 # omit required locks for a new command. A disappeared receipt
-                # requires a fresh attempt; landed replay never reads source ACL.
+                # requires a fresh attempt; landed replay never needs source evidence.
                 raise AlbumTopError('concurrent_change', 409)
+            if pending:
+                remote_membership.lock_pending_budget(connection, live.actor.account_id)
             if command.action == "create":
                 self._require(live, command_actions(command), constraints)
                 ref = str(uuid4())
@@ -449,6 +466,7 @@ class PostgresOwnedAlbumTopsService:
                 if not private_state and str(top["revision"]) != command.data["revision"]:
                     raise AlbumTopError("revision_conflict", 409)
             required_actions = command_actions(command)
+            consumption = []
             remote = remote_membership.bindings(connection, top) if command.action in {
                 'add', 'save', 'copy', 'remove', 'reorder', 'enable_external'} else {}
             if remote and command.action in {'add', 'save', 'copy', 'remove', 'reorder', 'enable_external'}:
@@ -460,10 +478,11 @@ class PostgresOwnedAlbumTopsService:
                 # discovered account lock after the source Top lock.
                 raise AlbumTopError('concurrent_change', 409)
             if command.action in {'create', 'add'} and typed:
-                receipt = remote_membership.add(self, connection, live, command, top, now, constraints, context_ref)
+                receipt, consumption = remote_membership.add(self, connection, live, command, top, now,
+                    constraints, context_ref, discovered_sources)
             elif command.action in {'save', 'enable_external'} and (typed or remote):
-                receipt, required_actions = remote_membership.save(
-                    self, connection, live, command, top, now, constraints, context_ref, remote)
+                receipt, required_actions, consumption = remote_membership.save(
+                    self, connection, live, command, top, now, constraints, context_ref, remote, discovered_sources)
             elif command.action in {"save", "enable_external", "revoke_external"}:
                 receipt, required_actions = publication.save(self, connection, live, command, top, now, constraints)
             elif command.action == "set_activity":
@@ -481,6 +500,7 @@ class PostgresOwnedAlbumTopsService:
                 values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (live.actor.account_id, live.library_id,
                 command.request_key, live.actor.session_id, command.action, receipt["top_ref"], command.digest,
                 Jsonb(receipt), list(required_actions), receipt.get("publication", {}).get("publication_ref")))
+            remote_membership.consume(connection, live, command, top, receipt, context_ref, consumption)
             if typed or remote:
                 # The operation receipt INSERT can itself wait. Re-evaluate
                 # resolver policy after all writes; _authorized then rechecks

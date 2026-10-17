@@ -4,8 +4,10 @@ Only fixture-owned synthetic rows are seeded/cleaned with the migration role.
 Runtime transitions use album_haven_app and the real SQL functions/counters.
 """
 from uuid import uuid4
+from contextlib import contextmanager
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from tests.py.remote_top_postgres_support import (
     CONTEXT, evidence, destination, payload, remote, runtime, sql_error, db, urls,
@@ -17,6 +19,9 @@ READ = 'app.lock_top_remote_admission_for_read'
 COPY = 'app.copy_top_remote_admission'
 ATTACH = 'app.attach_top_remote_source'
 CLEAR = 'app.clear_top_remote_source_for_local'
+SOURCE_LOCK = 'app.lock_top_remote_membership_sources'
+CONSUME = 'app.consume_top_remote_acquisitions'
+CONSUMED_CREATE = 'app.read_top_remote_consumed_create'
 SIGNATURES = {
     RETAIN: 'uuid,uuid,text,uuid,bigint,bigint,bigint,bigint,text,text,uuid,bigint,uuid',
     LOCK: 'uuid,text,uuid,bigint,bigint,bigint,uuid',
@@ -24,6 +29,14 @@ SIGNATURES = {
     COPY: 'uuid,uuid,bigint,uuid,uuid,text,uuid,bigint,bigint,bigint,bigint,bigint,uuid',
     ATTACH: 'uuid,bigint,bigint,bigint,uuid,uuid,uuid,text',
     CLEAR: 'uuid,bigint,bigint,bigint,uuid,uuid,uuid,bigint,uuid',
+}
+
+
+# Existing six entrypoints remain exact; B adds only these fixed structural APIs.
+B_SIGNATURES = {
+    SOURCE_LOCK: 'bigint,bigint,bigint,text,text,uuid,bigint,bigint,uuid,bigint,jsonb',
+    CONSUME: 'bigint,bigint,bigint,text,text,uuid,bigint,bigint,uuid,bigint,text,uuid,text,jsonb',
+    CONSUMED_CREATE: 'uuid,bigint,bigint,bigint,text,text,uuid,bigint,bigint,uuid,text,text,uuid',
 }
 
 
@@ -42,19 +55,38 @@ class RetentionCase:
     def top(self, actor=None):
         return self.db.service.execute(self.db.context(actor), self.db.create_command(refs=[]))
 
-    def locks(self, connection, top, actor=None):
+    def locks(self, connection, top, actor=None, *, pending=None, pending_budget=False):
         actor = actor or self.db.owner
         owner = connection.execute('select owner_account_id from app.album_lists where ref=%s', (top['top_ref'],)).fetchone()['owner_account_id']
         connection.execute('select id from app.accounts where id=any(%s) order by id for update',
                            (sorted({actor.account_id, owner}),)).fetchall()
         connection.execute('select id from app.account_sessions where id=%s for share', (actor.session_id,)).fetchone()
+        connection.execute('select id from library.libraries where id=%s for share',
+            (actor.current_library_id,)).fetchone()
+        if pending is not None or pending_budget:
+            connection.execute('select app.lock_top_remote_pending_actor(%s)', (actor.account_id,)).fetchone()
         connection.execute('select ref from app.album_lists where ref=%s for update', (top['top_ref'],)).fetchone()
+        if pending is not None:
+            target = pending['destination']
+            source = connection.execute('select preparation_ref,attempt_ref from app.album_top_remote_acquisitions where ref=%s',
+                (pending['acquisition_ref'],)).fetchone()
+            # Binding discovery is not authority; the structural owner rechecks it.
+            descriptor = {'acquisition_ref': pending['acquisition_ref'], 'evidence_version': pending['evidence_version'],
+                'preparation_ref': str(source['preparation_ref']) if source['preparation_ref'] else None,
+                'attempt_ref': str(source['attempt_ref']) if source['attempt_ref'] else None}
+            args = [actor.current_library_id, actor.account_id, actor.session_id, CONTEXT, target['kind'],
+                target.get('top_ref', target.get('draft_ref')), owner,
+                int(target['revision']) if target['kind'] == 'top' else None,
+                top['top_ref'], int(top['revision']), Jsonb([descriptor])]
+            locked = invoke(connection, SOURCE_LOCK, args)
+            assert len(locked) == 1 and locked[0]['acquisition_ref'] == pending['acquisition_ref']
         return owner
 
     def pending(self, top, *, kind='top', facts=None):
         self.remote.facts = facts or self.remote.facts
         target = destination(top) if kind == 'top' else destination()
-        result = self.remote.acquire(payload(target, mbid=self.remote.facts.release_group_id))
+        command = self.remote.prepare_v2(target, mbid=self.remote.facts.release_group_id)
+        result = self.remote.acquire(command)
         return result
 
     def mapping(self, pending, catalog=None):
@@ -70,13 +102,17 @@ class RetentionCase:
     def retain_args(self, top, pending, catalog, *, actor=None):
         actor = actor or self.db.owner
         target = pending['destination']
+        with self.db.connect() as connection:
+            owner = connection.execute('select owner_account_id from app.album_lists where ref=%s',
+                (top['top_ref'],)).fetchone()['owner_account_id']
         return [str(uuid4()), pending['acquisition_ref'], pending['evidence_version'], top['top_ref'],
-                self.db.library, self.db.owner.account_id, actor.account_id, actor.session_id, CONTEXT,
-                target['kind'], target.get('top_ref', target.get('draft_ref')), int(top['revision']), catalog]
+                actor.current_library_id, owner, actor.account_id, actor.session_id, CONTEXT,
+                target['kind'], target.get('top_ref', target.get('draft_ref')),
+                int(target['revision']) if target['kind'] == 'top' else int(top['revision']), catalog]
 
     def retain(self, top, pending, catalog):
         with runtime(self.db) as connection:
-            self.locks(connection, top)
+            self.locks(connection, top, pending=pending)
             return str(invoke(connection, RETAIN, self.retain_args(top, pending, catalog)))
 
     def member(self, top, catalog, admission, version):
@@ -173,8 +209,8 @@ class RetentionCase:
         return album, ref
 
 
-@pytest.fixture
-def retained(remote):
+@contextmanager
+def retention_case(remote):
     case = RetentionCase(remote)
     try:
         yield case
@@ -190,3 +226,9 @@ def retained(remote):
             connection.execute('delete from app.album_top_remote_retained_budgets where library_id=any(%s)', (case.db.library_ids,))
             connection.execute('delete from catalog.release_group_provider_identities where external_id=any(%s)', (case.mapped,))
             connection.execute('delete from catalog.release_groups where title=%s', ('retention-' + case.token,))
+
+
+@pytest.fixture
+def retained(remote):
+    with retention_case(remote) as case:
+        yield case

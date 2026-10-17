@@ -11,7 +11,7 @@ import pytest
 from tests.py.postgres_runtime_role_contract import assert_runtime_role
 
 from tests.py.remote_top_retention_postgres_support import (
-    ATTACH, CLEAR, COPY, LOCK, READ, RETAIN, SIGNATURES, CONTEXT, destination, evidence,
+    ATTACH, CLEAR, COPY, LOCK, READ, RETAIN, SIGNATURES, B_SIGNATURES, CONTEXT, destination, evidence,
     invoke, payload, retained, remote, db, urls, runtime, sql_error,
 )
 
@@ -50,7 +50,8 @@ def test_runtime_is_select_and_six_narrow_non_superuser_definer_apis(retained):
                     has_table_privilege('album_haven_readonly',%s,%s) as readonly''',
                     ('app.' + table, privilege, runtime_role, 'app.' + table, privilege, 'app.' + table, privilege)).fetchone()
                 assert actual == {'runtime': privilege == 'SELECT', 'connected': privilege == 'SELECT', 'readonly': False}
-        for name, arguments in SIGNATURES.items():
+        assert len(SIGNATURES) == 6 and len(B_SIGNATURES) == 3
+        for name, arguments in {**SIGNATURES, **B_SIGNATURES}.items():
             signature = name + '(' + arguments + ')'
             row = connection.execute('''select p.prosecdef,p.proconfig,r.rolsuper,
                 has_function_privilege('album_haven_app',p.oid,'EXECUTE') as runtime,
@@ -86,28 +87,33 @@ def test_retention_copies_exact_stored_facts_lineage_and_zero_cost_active_reuse(
     assert row['acquired_at'] == source['created_at']
     assert row['admission_deadline'] == source['expires_at']
     assert row['original_context_ref'] == CONTEXT
+    pending_before = retained.remote.c2_state()
     before = retained.counts(top)
     assert before == {'admission_count': 1, 'facts_bytes': source['facts_bytes']}
     assert retained.retain(top, pending, catalog) == admission
     assert retained.counts(top) == before
+    assert retained.remote.c2_state() == pending_before
+    assert pending_before['album_top_remote_attempts'][0]['state'] == 'pending'
 
 
 @pytest.mark.parametrize('index,value,constraint', [
     (1, lambda: str(uuid4()), 'top_remote_expired'), (2, lambda: 'b' * 64, 'top_remote_expired'),
     (4, lambda: -1, 'top_remote_scope'), (5, lambda: -1, 'top_remote_scope'),
-    (6, lambda: -1, 'top_remote_expired'), (7, lambda: -1, 'top_remote_expired'),
+    (6, lambda: -1, 'top_remote_scope'), (7, lambda: -1, 'top_remote_scope'),
     (8, lambda: 'b' * 64, 'top_remote_expired'), (9, lambda: 'create', 'top_remote_expired'),
-    (10, lambda: str(uuid4()), 'top_remote_expired'), (11, lambda: 2, 'top_remote_scope'),
+    (10, lambda: str(uuid4()), 'top_remote_scope'), (11, lambda: 2, 'top_remote_scope'),
     (12, lambda: str(uuid4()), 'top_remote_identity'),
 ])
 def test_pending_binding_rejection_has_no_retention_or_counter_side_effect(retained, index, value, constraint):
     case = retained
     top = case.top(); pending = case.pending(top); catalog = case.mapping(pending)
     args = case.retain_args(top, pending, catalog); args[index] = value()
+    c2_before = case.remote.c2_state()
     with runtime(case.db) as connection:
-        case.locks(connection, top)
+        case.locks(connection, top, pending=pending)
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, args), constraint=constraint)
     assert case.counts() == {'admission_count': 0, 'facts_bytes': 0}
+    assert case.remote.c2_state() == c2_before
 
 
 def test_create_pending_binds_original_draft_and_actual_destination_top(retained):
@@ -115,7 +121,7 @@ def test_create_pending_binds_original_draft_and_actual_destination_top(retained
     top = case.top(); pending = case.pending(top, kind='create'); catalog = case.mapping(pending)
     args = case.retain_args(top, pending, catalog)
     with runtime(case.db) as connection:
-        case.locks(connection, top)
+        case.locks(connection, top, pending=pending)
         bad = list(args); bad[10] = str(uuid4())
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, bad), constraint='top_remote_expired')
         admission = str(invoke(connection, RETAIN, args))
@@ -125,31 +131,32 @@ def test_create_pending_binds_original_draft_and_actual_destination_top(retained
     assert row['original_destination_kind'] == 'create'
 
 
-@pytest.mark.parametrize('state', ['expired', 'retired'])
+# The exact expired expansion is in remote_consumption_expiry_acceptance.py (unexecuted).
+@pytest.mark.parametrize('state', ['retired'])
 def test_expired_or_retired_pending_never_enters_retained_history(retained, state):
     case = retained; top = case.top()
-    command = payload(destination(top), mbid=case.remote.facts.release_group_id)
-    case.remote.seed(1, command=command, state=state)
-    source = case.remote.rows()[0]
-    pending = {'acquisition_ref': str(source['ref']), 'evidence_version': source['evidence_version'], 'destination': command['destination']}
+    pending = case.pending(top)
+    case.remote.retire_pending(pending['acquisition_ref'])
+    before = case.remote.c2_state()
     catalog = case.mapping(pending)
     with runtime(case.db) as connection:
-        case.locks(connection, top)
+        case.locks(connection, top, pending_budget=True)
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, case.retain_args(top, pending, catalog)), constraint='top_remote_expired')
     assert case.counts()['admission_count'] == 0
+    assert case.remote.c2_state() == before
 
 
 def test_new_facts_cannot_replace_first_same_top_catalog_and_retirement_cannot_be_revived(retained):
     case = retained; top, pending, catalog, admission = setup_retained(case)
     newer = case.pending(top, facts=evidence(mbid=case.remote.facts.release_group_id, title='Changed remote title'))
     with runtime(case.db) as connection:
-        case.locks(connection, top)
+        case.locks(connection, top, pending=newer)
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, case.retain_args(top, newer, catalog)), constraint='top_remote_retained_conflict')
     with case.db.connect() as connection:
         connection.execute('update app.album_top_remote_admissions set retired_at=clock_timestamp() where ref=%s', (admission,))
         sql_error(connection, '55000', lambda: connection.execute('update app.album_top_remote_admissions set retired_at=null where ref=%s', (admission,)), constraint='top_remote_facts_immutable')
     with runtime(case.db) as connection:
-        case.locks(connection, top)
+        case.locks(connection, top, pending=pending)
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, case.retain_args(top, pending, catalog)), constraint='top_remote_retained_conflict')
         sql_error(connection, '55000', lambda: invoke(connection, LOCK, lock_args(case, top, catalog, admission, pending['evidence_version'])), constraint='top_remote_retained_unavailable')
     assert case.counts(top)['admission_count'] == 1
@@ -188,7 +195,7 @@ def test_top_history_exact_20000_boundary_retirement_and_removal_do_not_refund(r
     other = case.pending(top, facts=evidence(mbid=str(uuid4())))
     other_catalog = case.mapping(other, case.db.album_refs[1])
     with runtime(case.db) as connection:
-        case.locks(connection, top)
+        case.locks(connection, top, pending=other)
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, case.retain_args(top, other, other_catalog)), constraint='top_remote_retained_budget')
     assert case.counts(top)['admission_count'] == 20000
 
@@ -201,7 +208,7 @@ def test_owner_history_exact_100000_boundary_across_tops(retained):
     assert case.counts()['admission_count'] == 100000
     another = case.top(); acquisition = case.pending(another)
     with runtime(case.db) as connection:
-        case.locks(connection, another)
+        case.locks(connection, another, pending=acquisition)
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, case.retain_args(another, acquisition, catalog)), constraint='top_remote_retained_budget')
     assert case.counts(another)['admission_count'] == 0
 
@@ -223,7 +230,7 @@ def test_exact_retained_byte_budget_accepts_last_facts_and_rejects_growth(retain
     other = case.pending(target, facts=evidence(mbid=str(uuid4())))
     other_catalog = case.mapping(other, case.db.album_refs[1])
     with runtime(case.db) as connection:
-        case.locks(connection, target)
+        case.locks(connection, target, pending=other)
         sql_error(connection, '55000', lambda: invoke(connection, RETAIN, case.retain_args(target, other, other_catalog)), constraint='top_remote_retained_budget')
     assert case.counts(target if scope == 'top' else None) == counts
 
@@ -295,7 +302,7 @@ def test_copy_requires_exact_current_source_member_bridge_admission(retained, ch
 def test_pending_and_retained_share_fences_hold_until_outer_commit(retained):
     case = retained; top = case.top(); pending = case.pending(top); catalog = case.mapping(pending)
     with runtime(case.db) as first:
-        case.locks(first, top)
+        case.locks(first, top, pending=pending)
         admission = str(invoke(first, RETAIN, case.retain_args(top, pending, catalog)))
         with case.db.connect() as other:
             other.execute("set local lock_timeout='150ms'")
@@ -355,16 +362,17 @@ def test_remote_bridge_rejects_cross_composite_keys(retained, index):
 def test_failed_outer_transaction_rolls_back_admission_member_bridge_and_counters(retained):
     case = retained; top = case.top(); pending = case.pending(top); catalog = case.mapping(pending)
     before = case.db.snapshot()
+    c2_before = case.remote.c2_state()
     with pytest.raises(RuntimeError, match='synthetic rollback'):
         with runtime(case.db) as connection:
-            case.locks(connection, top)
+            case.locks(connection, top, pending=pending)
             admission = invoke(connection, RETAIN, case.retain_args(top, pending, catalog))
             item = str(uuid4())
             connection.execute('''insert into app.album_list_items(ref,top_ref,library_id,catalog_ref,original_position,curator_position)
                 values(%s,%s,%s,%s,1,1)''', (item, top['top_ref'], case.db.library, catalog))
             invoke(connection, ATTACH, [top['top_ref'], case.db.library, case.db.owner.account_id, 1, item, catalog, admission, pending['evidence_version']])
             raise RuntimeError('synthetic rollback')
-    assert case.db.snapshot() == before
+    assert case.db.snapshot() == before and case.remote.c2_state() == c2_before
     assert case.counts() == {'admission_count': 0, 'facts_bytes': 0}
     with case.db.connect() as connection:
         assert connection.execute('select * from app.album_top_remote_admissions where top_ref=%s', (top['top_ref'],)).fetchall() == []
@@ -412,7 +420,7 @@ def test_same_owner_different_tops_share_budget_serialization(retained):
     first_pending = case.pending(first_top); second_pending = case.pending(second_top)
     catalog = case.mapping(first_pending)
     with runtime(case.db) as first:
-        case.locks(first, first_top)
+        case.locks(first, first_top, pending=first_pending)
         invoke(first, RETAIN, case.retain_args(first_top, first_pending, catalog))
         with runtime(case.db) as second:
             second.execute("set local lock_timeout='150ms'")

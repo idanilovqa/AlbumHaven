@@ -314,6 +314,51 @@ test('startup silence is not an underrun until the current stream has rendered a
   assert.equal(fixture.events('underrun').length, 1);
 });
 
+test('holds tiny post-start refills until the startup cushion is restored', () => {
+ const fixture = createProcessor({
+ currentCapacityFrames: 512,
+ startupBufferFrames: 256,
+ });
+ enqueue(fixture, {
+ streamId: 41,
+ role: 'current',
+ sequence: 0,
+ left: sequence(1, 256),
+ });
+ play(fixture);
+
+ assertRenderedStereo(fixture, sequence(1, 128));
+ assertRenderedStereo(fixture, sequence(129, 128));
+ assertRenderedSilence(fixture);
+ const positionCountAtStarvation = fixture.events('position').length;
+
+ enqueue(fixture, {
+ streamId: 41,
+ role: 'current',
+ sequence: 1,
+ left: sequence(257, 64),
+ });
+ assertRenderedSilence(fixture);
+ assertRenderedSilence(fixture);
+
+ assert.equal(fixture.processor.current.bufferedFrames, 64);
+ assert.equal(fixture.processor.timelineFrame, 256);
+ assert.equal(fixture.events('underrun').length, 1);
+ assert.equal(fixture.events('buffering-start').length, 1);
+ assert.equal(fixture.events('position').length, positionCountAtStarvation);
+
+ enqueue(fixture, {
+ streamId: 41,
+ role: 'current',
+ sequence: 2,
+ left: sequence(321, 192),
+ });
+ assertRenderedStereo(fixture, sequence(257, 128));
+
+ assert.equal(fixture.events('buffering-end').length, 1);
+ assert.equal(fixture.processor.timelineFrame, 384);
+});
+
 test('pause writes silence without consuming buffered PCM', () => {
   const fixture = createProcessor();
   const frames = sequence(1, QUANTUM_FRAMES);

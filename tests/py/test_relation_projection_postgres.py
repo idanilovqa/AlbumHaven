@@ -141,6 +141,9 @@ class _ProjectionConnection:
 
     def execute(self, sql, params=None):
         self.database.executed.append((sql, params))
+        if sql == projection.inventory_publication_advisory_lock_sql():
+            self.database.events.append("inventory_advisory_lock")
+            return _Cursor([])
         if "pg_advisory_xact_lock" in sql:
             self.database.advisory_lock_count += 1
             if self.database.before_advisory_lock is not None:
@@ -296,6 +299,7 @@ def _compilation_rows(*, is_compilation=True):
             "featured_kind": "featured_member",
             "track_file_id": track_file_id,
             "library_root_id": 11,
+            "root_kind": "main_library",
             "root_path": "C:/Music",
             "relative_path": relative_path,
             "private_path": f"C:/Music/{relative_path}",
@@ -328,6 +332,13 @@ def test_relation_source_fingerprint_is_order_independent_and_source_sensitive()
 
     changed = deepcopy(rows)
     changed[1]["album_artist"] = "Morse Portnoy and George"
+    assert projection.relation_source_fingerprint(rows) != projection.relation_source_fingerprint(changed)
+
+
+def test_relation_source_fingerprint_changes_with_root_category():
+    rows = _compilation_rows()
+    changed = deepcopy(rows)
+    changed[0]["root_kind"] = "hoarding_library"
     assert projection.relation_source_fingerprint(rows) != projection.relation_source_fingerprint(changed)
 
 
@@ -910,13 +921,14 @@ def test_v4_ready_metadata_forces_corrected_alias_builder_rebuild(monkeypatch):
     assert result["builder_version"] == projection.RELATION_PROJECTION_BUILDER_VERSION
 
 
-def test_v7_ready_metadata_forces_ost_classifier_rebuild():
+@pytest.mark.parametrize("old_version", ["local-relation-builder-v7", "local-relation-builder-v9", "local-relation-builder-v10"])
+def test_old_ready_metadata_forces_corrected_folder_evidence_rebuild(old_version):
     fingerprint = projection.relation_source_fingerprint(_morse_rows())
     scan_cache = {
         "relation_views": _complete_relation_views(),
         projection.RELATION_PROJECTION_METADATA_KEY: {
             "status": "ready",
-            "builder_version": "local-relation-builder-v7",
+            "builder_version": old_version,
             "source_fingerprint": fingerprint,
             "built_from_fingerprint": fingerprint,
         },
@@ -1328,18 +1340,72 @@ def test_relation_projection_shapes_sources_before_short_locked_publication(monk
             "source_load",
             "fingerprint",
             "pure_build",
+            "inventory_advisory_lock",
             "advisory_lock",
             "family_replace",
             "scan_cache_save",
             "commit",
         }
     ]
-    assert rebuild_events[-7:] == [
+    assert rebuild_events[-8:] == [
         "source_load",
         "fingerprint",
         "pure_build",
+        "inventory_advisory_lock",
         "advisory_lock",
         "family_replace",
         "scan_cache_save",
         "commit",
     ]
+
+    locks = [sql for sql, _params in database.executed if "pg_advisory_xact_lock" in sql]
+    assert locks == [
+        projection.inventory_publication_advisory_lock_sql(),
+        projection.relation_projection_advisory_lock_sql(),
+    ]
+
+
+@pytest.mark.parametrize("cancel_follower", [False, True])
+def test_concurrent_relation_readiness_callers_share_one_source_build(monkeypatch, cancel_follower):
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from threading import Event
+    from music_app.services import relation_projection_postgres as relations
+
+    entered, joined, release, cancelled = Event(), Event(), Event(), Event()
+    builds = []
+
+    class ObservedFuture(Future):
+        def result(self, timeout=None):
+            joined.set()
+            return super().result(timeout=timeout)
+
+    def build(config, **kwargs):
+        builds.append(True)
+        entered.set()
+        assert release.wait(5)
+        return {"status": "ready"}
+
+    monkeypatch.setattr(relations, "Future", ObservedFuture)
+    monkeypatch.setattr(relations, "_ensure_relation_projection_ready", build)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://single-flight-fixture"}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        owner = executor.submit(relations.ensure_relation_projection_ready, config)
+        try:
+            assert entered.wait(5)
+            follower = executor.submit(
+                relations.ensure_relation_projection_ready, dict(config), connect=lambda url: None,
+                cancel_requested=cancelled,
+            )
+            assert joined.wait(5)
+            assert builds == [True]
+            if cancel_follower:
+                cancelled.set()
+                with pytest.raises(InterruptedError, match="cancelled"):
+                    follower.result(timeout=1)
+                assert not owner.done()
+        finally:
+            release.set()
+        assert owner.result(timeout=5) == {"status": "ready"}
+        if not cancel_follower:
+            assert follower.result(timeout=5) == {"status": "ready"}
+    assert config["ALBUM_HAVEN_APP_DATABASE_URL"] not in relations._RELATION_REPAIRS

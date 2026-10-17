@@ -273,37 +273,42 @@ test('scan performance Playwright config defaults to headless', () => {
   assert.equal(scanPerformanceConfig.use.headless, true);
 });
 
-test('scan performance config appends JSON output only for a runner-owned output path', () => {
-  const repoRoot = path.join(__dirname, '..', '..');
-  const loadReporters = (jsonOutputFile) => {
-    const env = { ...process.env };
-    if (jsonOutputFile) env.PLAYWRIGHT_JSON_OUTPUT_FILE = jsonOutputFile;
-    else delete env.PLAYWRIGHT_JSON_OUTPUT_FILE;
-    const result = spawnSync(process.execPath, ['-e', [
-      "const config = require('./playwright.scan-performance.config.cjs');",
-      'process.stdout.write(JSON.stringify(config.reporter));',
-    ].join(' ')], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env,
-      windowsHide: true,
-    });
-    assert.equal(result.status, 0, result.stderr);
-    return JSON.parse(result.stdout);
-  };
-  const outputFile = path.join(repoRoot, 'test-results', 'playwright-performance-targets', 'scan-page', 'attempt-1', 'report.json');
-  const withoutJson = loadReporters('');
-  const withJson = loadReporters(outputFile);
+for (const configName of ['scan-performance', 'synthetic-large-library']) {
+  test(`${configName} config appends JSON output only for the runner-owned output path`, () => {
+    const repoRoot = path.join(__dirname, '..', '..');
+    const loadReporters = (jsonOutputFile) => {
+      const env = { ...process.env };
+      if (jsonOutputFile) env.PLAYWRIGHT_JSON_OUTPUT_FILE = jsonOutputFile;
+      else delete env.PLAYWRIGHT_JSON_OUTPUT_FILE;
+      const result = spawnSync(process.execPath, ['-e', [
+        "process.env.ALBUM_HAVEN_PLAYWRIGHT_INVENTORY_DISCOVERY = '1'; process.argv.push('--list');",
+        `const config = require('./playwright.${configName}.config.cjs');`,
+        'process.stdout.write(JSON.stringify(config.reporter));',
+      ].join(' ')], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env,
+        windowsHide: true,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return JSON.parse(result.stdout);
+    };
+    const outputFile = path.join(repoRoot, 'test-results', 'playwright-performance-targets', 'scan-page', 'attempt-1', 'report.json');
+    const withoutJson = loadReporters('');
+    const withJson = loadReporters(outputFile);
 
-  assert.equal(withoutJson.length, 3);
-  assert.deepEqual(withoutJson.map((reporter) => reporter[0] === 'list' ? 'list' : path.basename(reporter[0])), [
-    'list',
-    'playwright-performance-reporter.cjs',
-    'playwright-final-result-reporter.cjs',
-  ]);
-  assert.deepEqual(withJson.at(-1), ['json', { outputFile }]);
-  assert.equal(withJson.length, 4);
-});
+    const expectedReporterCount = configName === 'synthetic-large-library' ? 4 : 3;
+    assert.equal(withoutJson.length, expectedReporterCount);
+    assert.deepEqual(withoutJson.map((reporter) => reporter[0] === 'list' ? 'list' : path.basename(reporter[0])), [
+      'list',
+      'playwright-performance-reporter.cjs',
+      'playwright-final-result-reporter.cjs',
+      ...(configName === 'synthetic-large-library' ? ['paired-search-calibration-reporter.cjs'] : []),
+    ]);
+    assert.deepEqual(withJson.at(-1), ['json', { outputFile }]);
+    assert.equal(withJson.length, expectedReporterCount + 1);
+  });
+}
 
 test('all isolated app launch paths share the same default and override Python resolver', () => {
   assert.equal(resolvePlaywrightPython({}), DEFAULT_PLAYWRIGHT_PYTHON);
@@ -461,6 +466,29 @@ test('isolated performance Playwright outputDir does not overlap retained perfor
 test('synthetic-large Playwright config forces a single worker so benchmark specs never run in parallel', () => {
   assert.equal(syntheticLargeLibraryConfig.workers, 1);
   assert.equal(syntheticLargeLibraryConfig.fullyParallel, false);
+});
+
+test('synthetic-large config exposes the isolated provider endpoint to fixture cleanup', () => {
+  for (const providerPort of ['', '4499']) {
+    const result = spawnSync(process.execPath, ['-e', [
+      "process.argv.push('--list');",
+      "const config = require('./playwright.synthetic-large-library.config.cjs');",
+      'process.stdout.write(JSON.stringify(config.metadata || {}));',
+    ].join(' ')], {
+      cwd: path.join(__dirname, '..', '..'),
+      encoding: 'utf8',
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ALBUM_HAVEN_PLAYWRIGHT_INVENTORY_DISCOVERY: '1',
+        PLAYWRIGHT_SERVE_REAL_APP: '0',
+        PLAYWRIGHT_REAL_APP_PORT: '44100',
+        PLAYWRIGHT_PROVIDER_PORT: providerPort,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).providerBaseURL, `http://127.0.0.1:${providerPort || '44102'}`);
+  }
 });
 
 test('default Playwright config stays pointed at the functional specs directory', () => {

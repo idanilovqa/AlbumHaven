@@ -15,10 +15,12 @@ from music_app.services.postgres_connections import pooled_connection
 
 _DISPLAY_COVER_SIZE = 480
 _COVER_PATHS_SQL = """
-    SELECT DISTINCT cover_path
+    SELECT DISTINCT
+           cover_path,
+           NULLIF(BTRIM(metadata ->> 'cover_revision'), '') AS cover_revision
     FROM library.local_albums
     WHERE NULLIF(BTRIM(cover_path), '') IS NOT NULL
-    ORDER BY cover_path
+    ORDER BY cover_path, cover_revision
 """
 
 
@@ -39,6 +41,7 @@ class CoverPreviewBackfill:
         self._database_url = str(
             config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
         ).strip()
+        self._data_dir = config.get("DATA_DIR")
         self._connect = connect
         self._generate = generate
         self._quiet_seconds = max(0.0, float(quiet_seconds))
@@ -72,27 +75,34 @@ class CoverPreviewBackfill:
             self._activity_changed.wait(timeout=remaining)
         return False
 
-    def _load_cover_paths(self) -> list[Path]:
+    def _load_cover_paths(self) -> list[tuple[Path, str | None]]:
         if not self._database_url:
             return []
         with self._connect(self._database_url, workload="browse") as connection:
             rows = connection.execute(_COVER_PATHS_SQL).fetchall()
         return [
-            Path(str(row.get("cover_path") or "").strip())
+            (
+                Path(str(row.get("cover_path") or "").strip()),
+                str(row.get("cover_revision") or "").strip() or None,
+            )
             for row in rows
             if str(row.get("cover_path") or "").strip()
         ]
 
     def run_once(self) -> int:
         generated = 0
-        for source_path in self._load_cover_paths():
+        for source_path, cover_revision in self._load_cover_paths():
             if not self._wait_until_idle():
                 break
             self._generate(
                 source_path,
-                cache_root=display_cover_variant_cache_root(source_path),
+                cache_root=display_cover_variant_cache_root(
+                    source_path,
+                    data_dir=self._data_dir if cover_revision else None,
+                ),
                 max_size=_DISPLAY_COVER_SIZE,
                 priority="background",
+                revision=cover_revision,
             )
             generated += 1
             if self._stop_requested.wait(self._throttle_seconds):

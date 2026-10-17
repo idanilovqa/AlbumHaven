@@ -10,6 +10,7 @@ const { PERFORMANCE_FAILURE_TRACE } = require('./scripts/playwright-trace-option
 const runtimeFlags = resolveRuntimeFlags(process.argv.slice(2), process.env);
 const isHeadless = runtimeFlags.headlessOverride ?? true;
 const realAppPort = Number(process.env.PLAYWRIGHT_REAL_APP_PORT || runtimeFlags.realAppPort || 5001);
+const providerPort = Number(process.env.PLAYWRIGHT_PROVIDER_PORT || realAppPort + 2);
 const managedAppUrl = `http://127.0.0.1:${realAppPort}`;
 const isInventoryDiscovery = process.env.ALBUM_HAVEN_PLAYWRIGHT_INVENTORY_DISCOVERY === '1'
   && process.argv.includes('--list');
@@ -33,8 +34,12 @@ const finalResultReporterOptions = { nonce: String(process.env[FINAL_RESULT_NONC
 delete process.env[FINAL_RESULT_NONCE_ENV];
 const selectedBrowser = runtimeFlags.browser;
 const browserProjectUse = resolveBrowserProjectUse(selectedBrowser);
+const jsonOutputFile = String(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE || '').trim();
 
 module.exports = defineConfig({
+  metadata: {
+    providerBaseURL: `http://127.0.0.1:${providerPort}`,
+  },
   testDir: path.join(__dirname, 'tests', 'e2e', 'syntheticLargeLibrary'),
   outputDir: path.join(__dirname, 'test-results', 'playwright-artifacts', 'synthetic-large-library'),
   snapshotPathTemplate: `{testDir}/{testFileDir}/{testFileName}-snapshots/${selectedBrowser}/{arg}-{platform}{ext}`,
@@ -49,6 +54,7 @@ module.exports = defineConfig({
     [performanceReporterPath],
     [finalResultReporterPath, finalResultReporterOptions],
     [pairedSearchReporterPath],
+    ...(jsonOutputFile ? [['json', { outputFile: jsonOutputFile }]] : []),
   ],
   use: {
     baseURL: managedAppUrl,

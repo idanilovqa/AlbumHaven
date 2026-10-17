@@ -1190,6 +1190,7 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
     const detail = await utilityProblematicFilesActions.readSelectedDetailSummary();
     expect(detail.title).toBe(SPLIT_ORIGINAL_ALBUM);
     expect([...new Set(detail.problemReasons)]).toEqual([
+      'Mixed album metadata in one folder',
       'Incomplete track order: Disc 1 missing 1, 2',
     ]);
     await settingsModalAppBarActions.closeSettings();

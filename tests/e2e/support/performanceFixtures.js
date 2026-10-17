@@ -349,12 +349,46 @@ function buildSelectedArtistFocusedLocalSummaryCards(_checkpoints, metricsPayloa
   ];
 }
 
+function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    {
+      label: 'Modal Visible',
+      value: `${Math.round(Number(metricsPayload?.modalVisibleMs || 0))} ms`,
+      note: 'Album Details action to interactive Cover Lookup modal',
+    },
+    {
+      label: 'Candidate Ready',
+      value: `${Math.round(Number(metricsPayload?.candidateReadyMs || 0))} ms`,
+      note: 'Cover Lookup action to decoded provider candidate',
+    },
+    {
+      label: 'Selection Feedback',
+      value: `${Math.round(Number(metricsPayload?.candidateSelectionMs || 0))} ms`,
+      note: String(metricsPayload?.selectedCandidateSource || 'unknown source'),
+    },
+    {
+      label: 'Save Accepted',
+      value: `${Math.round(Number(metricsPayload?.saveAcceptedMs || 0))} ms`,
+      note: 'Save action to accepted response and closed modal',
+    },
+  ];
+}
+
 function buildSearchBrowseFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
   return [
     {
+      label: 'Populated Search Ready',
+      value: Number.isFinite(metricsPayload?.searchPopulatedReadyMs)
+        ? `${Math.round(metricsPayload.searchPopulatedReadyMs)} ms`
+        : 'Not recorded',
+      note: 'Matching album and decoded visible covers',
+    },
+    {
       label: 'Search UI Ready',
-      value: `${Math.round(Number(metricsPayload?.searchBrowseApiMs || 0))} ms`,
-      note: 'Visible search into filtered gallery',
+      value: Number.isFinite(metricsPayload?.searchReadyMs)
+        ? `${Math.round(metricsPayload.searchReadyMs)} ms`
+        : 'Not recorded',
+      note: 'Query commitment; populated readiness measured separately',
     },
     {
       label: 'Query',
@@ -425,13 +459,20 @@ function buildAppOpenAllArtistsFocusedLocalSummaryCards(_checkpoints, metricsPay
 }
 
 function buildProblematicFilesFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
+  const measuredMs = metricsPayload?.problematicFilesApiMs;
+  const recorded = typeof measuredMs === 'number' && Number.isFinite(measuredMs) && measuredMs >= 0;
+  const readinessNotes = {
+    'target-met': 'TARGET MET — at or below 1000 ms; 1200 ms hard ceiling',
+    'grace-used': 'GRACE USED — above 1000 ms target; within 1200 ms hard ceiling',
+    'hard-fail': 'HARD FAIL — exceeds 1200 ms hard ceiling or has invalid timing evidence',
+  };
   return [
     {
       label: 'Problematic Files UI Ready',
-      value: `${Math.round(Number(metricsPayload?.problematicFilesApiMs || 0))} ms`,
-      note: metricsPayload?.readinessGraceUsed
-        ? 'GRACE USED — above 1000 ms target; within 1200 ms hard ceiling'
-        : 'TARGET MET — at or below 1000 ms; 1200 ms hard ceiling',
+      value: recorded ? `${Math.round(measuredMs)} ms` : 'Not recorded',
+      note: recorded
+        ? readinessNotes[metricsPayload?.readinessPerformanceStatus] || 'Timing classification not recorded'
+        : 'Timing evidence not recorded',
     },
     {
       label: 'Problematic Items',
@@ -1028,6 +1069,29 @@ export const test = base.extend({
       expectedTimingMetricIds: [
         'selected-artist.selectedArtistApiMs',
         'selected-artist.albumDetailsOpenMs',
+        'selected-artist.tagEditorFocusMs',
+        'selected-artist.tagEditorTypingMs',
+        'selected-artist.tagEditorCancelMs',
+        'selected-artist.notificationDrawerOpenMs',
+        'selected-artist.notificationDrawerCloseMs',
+        'selected-artist.galleryReturnMs',
+      ],
+    });
+  },
+
+  coverLookupLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'cover-lookup-local',
+      reportId: 'coverLookupLocal',
+      caseId: 'FTC-COVERS-019P',
+      title: 'Cover Lookup Interaction Benchmark',
+      intro: 'This synthetic performance report measures modal visibility, decoded candidate readiness, selection feedback, and Save acceptance through the production Cover Lookup path.',
+      buildSummaryCards: buildCoverLookupLocalSummaryCards,
+      expectedTimingMetricIds: [
+        'cover-lookup.modalVisibleMs',
+        'cover-lookup.candidateReadyMs',
+        'cover-lookup.candidateSelectionMs',
+        'cover-lookup.saveAcceptedMs',
       ],
     });
   },
@@ -1040,7 +1104,7 @@ export const test = base.extend({
       title: 'Visible Search Browse Benchmark',
       intro: 'This synthetic performance report captures the visible search UI flow through the selected library_browse repository after choosing a query from the root sidebar. It is a focused seam checkpoint inside the broader synthetic performance suite.',
       buildSummaryCards: buildSearchBrowseFocusedLocalSummaryCards,
-      expectedTimingMetricIds: ['search-browse.searchBrowseReadyMs'],
+      expectedTimingMetricIds: ['search-browse.searchBrowseReadyMs', 'search-browse.searchPopulatedReadyMs'],
     });
   },
 

@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 import json
 from pathlib import PurePosixPath, PureWindowsPath
 import re
@@ -84,6 +85,7 @@ def _postgres_bool(value: object) -> bool:
     }
 
 
+@lru_cache(maxsize=128)
 def _path_flavor(root_path: str):
     if root_path.startswith("/"):
         root = PurePosixPath(root_path)
@@ -162,6 +164,7 @@ def _normalize_spaces(text: str) -> str:
     return " ".join((text or "").strip().split())
 
 
+@lru_cache(maxsize=32768)
 def _normalize_key(text: str) -> str:
     return _normalize_spaces(text).translate(_ARTIST_PUNCT_TRANSLATION).casefold()
 
@@ -170,6 +173,7 @@ def _is_va_name(name: str) -> bool:
     return _normalize_key(name) in _VA_NAMES
 
 
+@lru_cache(maxsize=32768)
 def _looks_like_collaboration(name: str) -> bool:
     normalized = _normalize_key(name)
     if _is_va_name(normalized):
@@ -243,6 +247,7 @@ def _compact_key(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", _normalize_key(text))
 
 
+@lru_cache(maxsize=32768)
 def _low_value_artist_key(text: str) -> str:
     normalized = _normalize_key(text)
     if not normalized:
@@ -255,6 +260,7 @@ def _low_value_artist_key(text: str) -> str:
     return " ".join(normalized.split())
 
 
+@lru_cache(maxsize=32768)
 def _are_probable_artist_typos(left: str, right: str) -> bool:
     if not left or not right or left == right:
         return False
@@ -266,7 +272,12 @@ def _are_probable_artist_typos(left: str, right: str) -> bool:
         return False
     if abs(len(left_compact) - len(right_compact)) > 2:
         return False
-    return SequenceMatcher(None, left_compact, right_compact).ratio() >= 0.9
+    # Shared album locations do not make different numbered artists aliases.
+    if re.findall(r"\d+", left_compact) != re.findall(r"\d+", right_compact):
+        return False
+    matcher = SequenceMatcher(None, left_compact, right_compact)
+    # quick_ratio is an upper bound: rejected pairs cannot meet the threshold.
+    return matcher.quick_ratio() >= 0.9 and matcher.ratio() >= 0.9
 
 
 def _merge_artist_alias(
@@ -291,7 +302,9 @@ def _merge_artist_alias(
             canonical_aliases.add(alias)
 
 
-def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
+def _album_facts(
+    rows: list[object], *, include_family_data: bool = True
+) -> tuple[PostgresRelationAlbumFact, ...]:
     buckets: dict[int, dict[str, object]] = {}
     for raw_row in rows:
         row = _row_mapping(raw_row)
@@ -303,24 +316,25 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
             continue
         owner_artist = _text(row, "owner_artist_name")
         album_artist = _text(row, "album_artist") or owner_artist
-        bucket = buckets.setdefault(
-            album_id,
-            {
+        if album_id not in buckets:
+            buckets[album_id] = {
                 "album_artist": album_artist,
-                "is_compilation": _postgres_bool(row.get("album_is_compilation")),
+                "is_compilation": include_family_data
+                and _postgres_bool(row.get("album_is_compilation")),
                 "artists": set(),
-                "family_artists": set(),
+                "family_artists": set() if include_family_data else None,
                 "locations": set(),
+                "location_sources": set(),
                 "family_excluded": False,
-            },
-        )
+            }
+        bucket = buckets[album_id]
         member_artist = _text(row, "member_artist_name")
         for artist in (owner_artist, member_artist):
             if artist:
                 bucket["artists"].add(artist)
-        if owner_artist:
+        if include_family_data and owner_artist:
             bucket["family_artists"].add(owner_artist)
-        if member_artist:
+        if include_family_data and member_artist:
             if (
                 _text(row, "featured_kind").casefold() != "featured_track_artist"
                 or _postgres_bool(
@@ -328,15 +342,34 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
                 )
             ):
                 bucket["family_artists"].add(member_artist)
-        if _text(row, "relation_evidence_kind").casefold() == "soundtrack_root":
+        if (
+            include_family_data
+            and _text(row, "root_kind") == "main_library"
+            and _text(row, "relation_evidence_kind").casefold() == "soundtrack_root"
+        ):
             bucket["family_excluded"] = True
-        location_parts = root_relative_parts(row)
+        # Intake folder neighbors are not evidence of artist relationships.
+        # Keep their artists above, but exclude their locations from both
+        # folder-assisted aliases and family edges.
+        location_parts = None
+        if _text(row, "root_kind") == "main_library":
+            # Album-member joins repeat each file. Validate each distinct source
+            # once, retaining every input used by relative/fallback containment.
+            source = tuple(_text(row, key) for key in (
+                "library_root_id", "root_path", "relative_path", "private_path",
+            ))
+            if source not in bucket["location_sources"]:
+                bucket["location_sources"].add(source)
+                location_parts = root_relative_parts(row)
         if location_parts is not None:
             root_id, relative_parts = location_parts
+            # Aliases use only the validated artist/album container.
+            if not include_family_data:
+                relative_parts = relative_parts[:2]
             bucket["locations"].add(
                 PostgresTrackLocationFact(
                     library_root_id=root_id,
-                    root_path=_text(row, "root_path"),
+                    root_path=_text(row, "root_path") if include_family_data else "",
                     relative_parts=relative_parts,
                 )
             )
@@ -347,8 +380,8 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
         artists = tuple(sorted(bucket["artists"], key=str.casefold))
         if not artists and album_artist:
             artists = (album_artist,)
-        family_artists = set(bucket["family_artists"])
-        if not family_artists and album_artist:
+        family_artists = bucket["family_artists"]
+        if include_family_data and not family_artists and album_artist:
             family_artists.add(album_artist)
         facts.append(
             PostgresRelationAlbumFact(
@@ -356,7 +389,10 @@ def _album_facts(rows: list[object]) -> tuple[PostgresRelationAlbumFact, ...]:
                 album_artist=album_artist,
                 is_compilation=bool(bucket["is_compilation"]),
                 artists=artists,
-                family_artists=tuple(sorted(family_artists, key=str.casefold)),
+                family_artists=(
+                    tuple(sorted(family_artists, key=str.casefold))
+                    if include_family_data else ()
+                ),
                 locations=tuple(
                     sorted(
                         bucket["locations"],
@@ -595,6 +631,11 @@ def _build_family_views(
         },
         "sidebar_families": sidebar_families,
     }
+
+
+def build_postgres_relation_alias_views(rows: list[object]) -> dict[str, object]:
+    """Build current search aliases without unrelated family projections."""
+    return _build_alias_views(_album_facts(rows, include_family_data=False))
 
 
 def build_postgres_relation_views(rows: list[object]) -> dict[str, object]:

@@ -2002,7 +2002,7 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const consumesProvidedTerminalPayload = attempt === 0 && providedTerminalPayload;
     try {
       let data = providedTerminalPayload;
@@ -2127,7 +2127,7 @@ async function watchSaveTask(taskId, context = {}) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
               viewRefreshed = await fetchAndRender(
-                buildApiUrl(refreshView),
+                buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
@@ -2273,7 +2273,19 @@ async function watchSaveTask(taskId, context = {}) {
         }
         restoreOwnedAbsoluteScroll();
         if (!consumesProvidedTerminalPayload) {
-          showRepairAlert('Library view updated from saved files.', 'success', 1000);
+          const completionMessage = String(
+            context.tagEditAlert?.completionMessage || '',
+          ).trim();
+          if (completionMessage) {
+            showRepairAlert(
+              completionMessage,
+              'success',
+              2000,
+              { title: 'Tags updated', dismissible: false },
+            );
+          } else {
+            showRepairAlert('Library view updated from saved files.', 'success', 1000);
+          }
         }
         settleTagEditViewMutation(tagEditMutationClaim);
         return;
@@ -2335,6 +2347,14 @@ async function watchSaveTask(taskId, context = {}) {
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
     await waitForBrowserTimeout(500);
+  }
+  if (!mutationWasSuperseded()) {
+    showRepairAlert(
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
   }
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
@@ -2708,6 +2728,7 @@ async function openUtilityModalForTrack(trackPath) {
   const navigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationToken = navigationToken;
   state.utility.problematicNavigationActiveToken = navigationToken;
+  let openedCanonicalTarget = false;
   const ownsNavigation = () => (
     Number(state.utility.problematicNavigationToken || 0) === navigationToken
   );
@@ -2782,13 +2803,33 @@ async function openUtilityModalForTrack(trackPath) {
       && Number(state.utility.problematicSummaryRequestToken || 0)
         > summaryRequestTokenBeforePendingTasks
     );
+    const loadTrackSummary = async () => {
+      const complete = loadProblematicFiles(true, { render: false });
+      const initial = state.utility.initialLoadPromise || complete;
+      if (initial !== complete) {
+        complete.then((result) => {
+          if (result !== null && openedCanonicalTarget && ownsNavigation()
+              && state.utility.activeTab === 'problematic-files'
+              && state.utility.focusedTrackPath === String(trackPath || '')) {
+            renderUtilityModalContent();
+          }
+        });
+      }
+      const result = await initial;
+      if (result === null || !ownsNavigation()
+          || (initial.problematicSummaryRequestToken !== undefined
+            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      if (getProblematicAlbumForTrackPath(trackPath)) return result;
+      // Only returned canonical track membership may identify the target.
+      return complete;
+    };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
-      const loadResult = await loadProblematicFiles(true, { render: false });
+      const loadResult = await loadTrackSummary();
       if (loadResult === null || !ownsNavigation()) return;
     }
     let album = getProblematicAlbumForTrackPath(trackPath);
     if (!album && summaryWasLoaded) {
-      const refreshResult = await loadProblematicFiles(true, { render: false });
+      const refreshResult = await loadTrackSummary();
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
@@ -2805,9 +2846,33 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
     if (!album.detail_loaded) {
-      await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()) return;
+      while (album && !album.detail_loaded) {
+        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+        state.utility.selectedProblematicKey = album.key || '';
+        await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
+        if (!ownsNavigation()) return;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+          const current = getProblematicAlbumForTrackPath(trackPath);
+          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+            await state.utility.detailLoadPromises[current.key];
+            if (!ownsNavigation()) return;
+          }
+          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+            album = getProblematicAlbumForTrackPath(trackPath);
+            break;
+          }
+        }
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
+        if (!currentSummary || typeof currentSummary.then !== 'function') return;
+        await currentSummary;
+        if (!ownsNavigation()) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
+      }
     }
+    if (!album) return;
+    state.utility.selectedProblematicKey = album.key || '';
+    openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {
     if (Number(state.utility.problematicNavigationActiveToken || 0) === navigationToken) {

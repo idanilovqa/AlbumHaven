@@ -7,6 +7,9 @@ to the same functional-shard runner used by CI, and removes its state afterward.
 ## Prerequisites
 
 - Node dependencies are installed in this repository.
+- Bootstrap and teardown prefer installed PowerShell 7 (`pwsh.exe`), falling
+  back to Windows PowerShell when unavailable. Both use the same arguments and
+  credential filtering; no service restart or test-contract change is implied.
 - PostgreSQL 18 is installed at `C:\PostgreSQL\18` and the
   `postgresql-x64-18` service is available.
 - Python resolves from `PLAYWRIGHT_PYTHON` or `PATH` and has the application test

@@ -17,6 +17,7 @@ from music_app.services.cover_state import (
     apply_cover_selection_for_tracks as apply_cover_selection_service,
     find_albums_by_track_paths as find_albums_by_track_paths_in_albums,
 )
+from music_app.services.covers import image_dimensions
 from music_app.services.problematic_albums import (
     find_problematic_album_by_track_paths as find_problematic_album_by_track_paths_in_payload,
 )
@@ -66,6 +67,7 @@ def apply_cover_path_for_tracks(
         remote_cover_width=remote_cover_width,
         remote_cover_height=remote_cover_height,
         schedule_cache_update=schedule_cache_update,
+        manual_selection=True,
     )
 
 
@@ -84,12 +86,15 @@ def persist_cover_selection_for_tracks(
     remote_cover_width: int | None = None,
     remote_cover_height: int | None = None,
     cover_selection_origin: str | None = "user",
+    explicit_selection: bool = False,
     reject_if_user_controlled: bool = False,
     clear_selection: bool = False,
     commit_guard=None,
 ) -> dict[str, int]:
     if config is None:
         raise ValueError("persist_cover_selection_for_tracks requires explicit config")
+    width, height = image_dimensions(cover_path) if cover_path else (None, None)
+    dimensions = {"local_cover_width": width, "local_cover_height": height} if width and height else {}
     return persist_cover_selection_for_tracks_for_config(
         dict(config),
         track_paths,
@@ -103,6 +108,8 @@ def persist_cover_selection_for_tracks(
         remote_cover_width=remote_cover_width,
         remote_cover_height=remote_cover_height,
         cover_selection_origin=cover_selection_origin,
+        explicit_selection=explicit_selection,
+        **dimensions,
         reject_if_user_controlled=reject_if_user_controlled,
         clear_selection=clear_selection,
         commit_guard=commit_guard,
@@ -126,6 +133,7 @@ def apply_cover_selection_for_tracks(
     library_state: dict[str, object] | None = None,
     cover_revision: str | None = None,
     schedule_cache_update: bool = True,
+    manual_selection: bool = False,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     if config is None or logger is None or library_state is None:
         raise ValueError("apply_cover_selection_for_tracks requires explicit config, logger, and library_state")
@@ -175,4 +183,5 @@ def apply_cover_selection_for_tracks(
         remote_cover_height=remote_cover_height,
         cover_revision=cover_revision,
         persist_cache_update=schedule_cache_update,
+        manual_selection=manual_selection,
     )

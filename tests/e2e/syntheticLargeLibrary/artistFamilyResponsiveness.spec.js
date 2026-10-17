@@ -624,10 +624,11 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       });
     });
 
+    await navigationPanelActions.openArtistTree();
     const treeNealSelectionMs = await stepLogger.step('Return to Neal Morse from the filtered tree', async () => (
       measureActionTime(
         async () => {
-          await navigationPanelActions.selectSidebarArtistByName(EXPECTED_FAMILY.primary);
+          await navigationPanelActions.clickVisibleSidebarArtistByName(EXPECTED_FAMILY.primary);
         },
         async () => {
           await navigationPanelActions.waitForSidebarSelection(EXPECTED_FAMILY.primary);
@@ -662,10 +663,11 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
     expect(nealAlbumNames.length).toBeGreaterThan(6);
     expect(nealAlbumNames[0]).not.toEqual(nealAlbumNames[6]);
 
+    await galleryActions.prepareAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, 0);
     const firstAlbumOpenMs = await stepLogger.step('Open the first visible Neal Morse album details', async () => (
       measureActionTime(
         async () => {
-          await galleryActions.clickAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, 0);
+          await galleryActions.clickVisibleAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, 0);
         },
         async () => {
           await trackModalActions.waitForInteractiveSummary({ timeout: 60000 });
@@ -695,10 +697,11 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       timingMs: firstAlbumCloseMs,
     });
 
+    await galleryActions.prepareAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, 6);
     const secondAlbumOpenMs = await stepLogger.step('Open the seventh Neal Morse album details view', async () => (
       measureActionTime(
         async () => {
-          await galleryActions.clickAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, 6);
+          await galleryActions.clickVisibleAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, 6);
         },
         async () => {
           await trackModalActions.waitForInteractiveSummary({ timeout: 60000 });

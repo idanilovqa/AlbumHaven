@@ -10,6 +10,11 @@ from threading import Event
 
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_provider_candidates import CoverCandidate, dedupe_cover_candidates
+from music_app.services.cover_provider_deadline import (
+    AutomaticCoverDeadlineExceeded,
+    AutomaticCoverSearchFailed,
+    automatic_cover_budget_active,
+)
 from music_app.services import music_identity_matching
 from music_app.services.runtime_shutdown import create_daemon_executor
 
@@ -307,6 +312,8 @@ def _build_bandcamp_label_catalog_matches(
     logger=None,
 ) -> list[tuple[str, list[tuple[float, str, dict]]]]:
     local_stop_event = Event()
+    automatic = automatic_cover_budget_active()
+    probed_catalog_accounts: set[str] = set()
 
     def stopped() -> bool:
         return local_stop_event.is_set() or (callable(should_cancel) and should_cancel())
@@ -491,6 +498,9 @@ def _build_bandcamp_label_catalog_matches(
             if stopped():
                 break
             base_url, _direct_album_urls = account_details(account_url)
+            if base_url in probed_catalog_accounts:
+                continue
+            probed_catalog_accounts.add(base_url)
             homepage_html = http_get_text(f"{base_url}/", user_agent, service="bandcamp", context=f"account-home:{base_url}")
             homepage_available = bool(homepage_html and not bandcamp_client_challenge_detected(homepage_html))
             artist_page_html = (
@@ -534,6 +544,13 @@ def _build_bandcamp_label_catalog_matches(
                 break
         return probed_matches
 
+    def probe_known_accounts():
+        matches = probe_direct_account_urls(direct_artist_accounts, variant="direct-account")
+        if matches or not automatic or stopped():
+            return matches
+        # Catalog links do not depend on MusicBrainz and may use different slugs.
+        return probe_account_catalogs(direct_artist_accounts)
+
     musicbrainz_future = _BANDCAMP_DISCOVERY_EXECUTOR.submit(
         lambda: fetch_musicbrainz_bandcamp_context(
             artist,
@@ -545,7 +562,7 @@ def _build_bandcamp_label_catalog_matches(
         )
     )
     direct_future = _BANDCAMP_DISCOVERY_EXECUTOR.submit(
-        lambda: probe_direct_account_urls(direct_artist_accounts, variant="direct-account")
+        probe_known_accounts
     )
     context: dict[str, list[str]] = {
         "artists": [],
@@ -554,6 +571,7 @@ def _build_bandcamp_label_catalog_matches(
         "label_account_urls": [],
     }
     linked_future = None
+    discovery_failure: Exception | None = None
     pending = {musicbrainz_future, direct_future}
     while pending and not stopped():
         completed, pending = wait(
@@ -576,6 +594,7 @@ def _build_bandcamp_label_catalog_matches(
                 try:
                     context_result = future.result()
                 except Exception as exc:
+                    discovery_failure = exc
                     _emit(
                         log_event,
                         logger,
@@ -607,6 +626,7 @@ def _build_bandcamp_label_catalog_matches(
                 try:
                     discovery_matches = future.result()
                 except Exception as exc:
+                    discovery_failure = exc
                     _emit(
                         log_event,
                         logger,
@@ -669,6 +689,10 @@ def _build_bandcamp_label_catalog_matches(
         guessed_accounts=guessed_account_urls[:12],
         used_bing_search=False,
     )
+    if discovery_failure is not None and automatic_cover_budget_active():
+        if isinstance(discovery_failure, TimeoutError):
+            raise AutomaticCoverDeadlineExceeded() from discovery_failure
+        raise AutomaticCoverSearchFailed() from discovery_failure
     return []
 
 

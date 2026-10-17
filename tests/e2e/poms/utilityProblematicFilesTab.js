@@ -88,6 +88,12 @@ export class UtilityProblematicFilesTab extends BasePage {
     return '[data-problematic-album-key]';
   }
 
+  get modalSelector() { return '#utility-modal'; }
+
+  get activeTabSelector() { return '[data-utility-tab][aria-selected="true"]'; }
+
+  get detailEmptyStateSelector() { return '#utility-problematic-detail .utility-empty-state'; }
+
   async waitForSearchProjection(term, options = {}) {
     // Read-only: query state can change before the debounced DOM projection commits.
     await this.waitForPageCondition((expected) => {

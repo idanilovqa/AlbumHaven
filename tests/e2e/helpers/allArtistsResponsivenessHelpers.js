@@ -195,7 +195,7 @@ export async function measureStartupSidebarHydration(galleryActions, navigationP
     fullSidebarMsPromise,
     fullCountSynchronizedMsPromise,
   ]);
-  const fullSidebarCount = await navigationPanelActions.readSidebarArtistCount();
+  const fullSidebarCount = (await navigationPanelActions.readHydratedSidebarArtistNames()).length;
   const fullVisibleAllArtistsCount = await navigationPanelActions.readAllArtistsVisibleCount();
   const firstAlbumsReadinessBefore = await galleryActions.readInitialAllArtistsReadinessSnapshot();
   const firstAlbumsMs = await measureActionTime(

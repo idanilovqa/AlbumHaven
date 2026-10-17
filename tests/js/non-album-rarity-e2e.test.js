@@ -53,7 +53,7 @@ test('rarity-edit scenario keeps selectors and interactions in POMs and actions'
   );
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|\.route\s*\(/);
   assert.match(pom, /class TagEditor extends BasePage/);
-  assert.match(pom, /select\[data-tag-field="exception_type"\]/);
+  assert.match(pom, /input\[data-tag-field="exception_type"\]/);
   assert.match(actions, /class TagEditorActions/);
   assert.match(actions, /\/utilities\/edit-tags/);
   assert.match(actions, /utilities\\\/save-task\\\//);
@@ -63,7 +63,7 @@ test('rarity-edit scenario keeps selectors and interactions in POMs and actions'
   );
   assert.match(
     actions,
-    /const responseTaskCompleted = String\(payload\.save_task_status \|\| ''\) === 'completed';[\s\S]*if \(!responseTaskCompleted\)[\s\S]*\.toBe\('completed'\);[\s\S]*responseTaskCompleted[\s\S]*\? 'Tag changes saved\.'[\s\S]*: 'Library view updated from saved files\.'[\s\S]*expect\(this\.tagEditor\.repairAlert\)\.toBeVisible\(/,
+    /const responseTaskCompleted = String\(payload\.save_task_status \|\| ''\) === 'completed';[\s\S]*if \(!responseTaskCompleted\)[\s\S]*\.toBe\('completed'\);[\s\S]*responseTaskCompleted[\s\S]*\? TAG_EDIT_SAVED_MESSAGE[\s\S]*: 'Library view updated from saved files\.'[\s\S]*expect\(this\.tagEditor\.repairAlert\)\.toBeVisible\(/,
   );
   assert.match(pomExports, /export \{ TagEditor \} from '\.\/tagEditor\.js'/);
   assert.match(actionExports, /export \{ TagEditorActions \} from '\.\/tagEditorActions\.js'/);

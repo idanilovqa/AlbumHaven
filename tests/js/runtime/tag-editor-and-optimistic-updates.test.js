@@ -27,7 +27,40 @@ const helperPath = path.join(
 );
 const helperSource = fs.readFileSync(path.join(path.dirname(helperPath), 'in-page-tabs.js'), 'utf8')
   + '\n' + fs.readFileSync(helperPath, 'utf8');
+
+test('summary tag editor hydrates only the latest requested album and preserves permission', async () => {
+  const pending = new Map();
+  const opened = [];
+  const context = vm.createContext({
+    getTagEditorElements: () => ({ overlay: {} }),
+    bindOverlayPointerOrigin() {},
+    getTagEditorTracks: () => [],
+    orderAlbumTracks: tracks => tracks,
+    albumRequiresHydration: album => album.preview_only === true,
+    getAlbumRequestKey: album => album.key,
+    loadTrackModalAlbumDetails: key => new Promise(resolve => pending.set(key, resolve)),
+    showRepairAlert() {},
+  });
+  vm.runInContext(helperSource, context);
+  const open = context.openTagEditor;
+  const first = open({ key: 'first', preview_only: true }, { tracksMode: 'all' });
+  const second = open({ key: 'second', preview_only: true }, { tracksMode: 'all' });
+  context.openTagEditor = (album, options) => opened.push({ album, options });
+  const allowed = { key: 'second', allowed_actions: { 'library.files.edit_tags': true } };
+  pending.get('second')(allowed);
+  await second;
+  pending.get('first')({ ...allowed, key: 'first' });
+  await first;
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].album, allowed);
+  assert.equal(opened[0].options.tracksMode, 'all');
+  const denied = open({ key: 'denied', preview_only: true });
+  pending.get('denied')({ key: 'denied', allowed_actions: {} });
+  await denied;
+  assert.equal(opened.length, 1);
+});
 const albumUiComponentSources = [
+  'gallery-main-components.js',
   'alert-components.js',
   'album-artbox.js',
   'album-details-components.js',
@@ -119,6 +152,46 @@ function loadHelper(albums, overrides = {}) {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
+
+test('marking an album version completes without waiting for the canonical gallery refresh', async () => {
+  let resolveRefresh;
+  let refreshStarted = 0;
+  const context = loadHelper([], {
+    state: {
+      modalReleases: [],
+      modalReleaseIndex: 0,
+      view: { manual_version_links: {} },
+    },
+    document: { getElementById: () => null },
+    fetch: async () => ({
+      ok: true,
+      async json() {
+        return { ok: true, manual_version_links: { child: 'parent' } };
+      },
+    }),
+    mergeViewPayload(patch) {
+      context.state.view = { ...context.state.view, ...patch };
+    },
+    buildApiUrl: () => '/api/library',
+    fetchAndRender() {
+      refreshStarted += 1;
+      return new Promise((resolve) => { resolveRefresh = resolve; });
+    },
+    scheduleBrowserAnimationFrame(callback) { callback(); },
+    scheduleBrowserTimeout(callback) { callback(); },
+    showToast() {},
+  });
+
+  let saved = false;
+  const marking = context.markAlbumVersion('child', 'parent').then(() => { saved = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(saved, true);
+  assert.equal(refreshStarted, 1);
+  assert.equal(context.state.view.manual_version_links.child, 'parent');
+  resolveRefresh(true);
+  await marking;
+});
 
 test('album editions render the same keyboard tab component as Home', () => {
   const context = loadHelper([], { escapeHtml: value => String(value) });
@@ -564,6 +637,66 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
     '',
     'an Album Details edit must record that Problematic Files did not originate the task',
   );
+});
+
+test('closing the tag editor hides before deferred reorder cleanup', () => {
+  const scheduledFrames = [];
+  const scheduledIdle = [];
+  const overlay = { hidden: false };
+  const closedOverlay = { hidden: true };
+  let rowCleanupCount = 0;
+  let listReleaseCount = 0;
+  const list = { replaceChildren() { listReleaseCount += 1; } };
+  const context = loadHelper([], {
+    document: {
+      body: { classList: { remove() {} } },
+      getElementById() { return closedOverlay; },
+    },
+    getTagEditorElements() { return { overlay, list }; },
+    clearTagEditorReorderCue() { rowCleanupCount += 1; },
+    requestAnimationFrame(callback) { scheduledFrames.push(callback); },
+    requestIdleCallback(callback) { scheduledIdle.push(callback); },
+  });
+
+  context.closeTagEditor();
+
+  assert.equal(overlay.hidden, true);
+  assert.equal(rowCleanupCount, 0);
+  assert.equal(listReleaseCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
+  assert.equal(rowCleanupCount, 0);
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
+  assert.equal(rowCleanupCount, 0);
+  assert.equal(scheduledIdle.length, 1);
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 1);
+  assert.equal(listReleaseCount, 1);
+
+  overlay.hidden = false;
+  context.closeTagEditor();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  overlay.hidden = false;
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 1, 'reopening must cancel stale cleanup');
+  assert.equal(listReleaseCount, 1, 'reopening must retain the new editor rows');
+
+  overlay.hidden = false;
+  context.closeTagEditor();
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  overlay.hidden = false;
+  context.closeTagEditor();
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 1, 'an older close must not clean a newer closed session');
+  assert.equal(listReleaseCount, 1, 'an older close must not release newer session rows');
+  scheduledFrames.shift()();
+  scheduledFrames.shift()();
+  scheduledIdle.shift()();
+  assert.equal(rowCleanupCount, 2);
+  assert.equal(listReleaseCount, 2);
 });
 
 test('Problematic Files tag edits own the detail overlay before the edit request settles', async () => {
@@ -1754,7 +1887,20 @@ test('completed save-task response reconciles immediately without starting a wat
   assert.deepEqual(problematicCalls, [[album, null]]);
   assert.deepEqual(watchedTasks, []);
   assert.deepEqual(settledClaims, [mutationClaim]);
-  assert.deepEqual(alerts.at(-1), ['Tag changes saved.', 'success', 2000]);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
+    [
+      'Updating 1 track in “Album”.',
+      'info',
+      2000,
+      { title: 'Saving tags', dismissible: false },
+    ],
+    [
+      'Saved changes to 1 track in “Album”.',
+      'success',
+      2000,
+      { title: 'Tags updated', dismissible: false },
+    ],
+  ]);
 });
 
 test('completed refresh-required response gives its terminal payload to canonical reconciliation before Saved', async () => {
@@ -1824,7 +1970,7 @@ test('completed refresh-required response gives its terminal payload to canonica
         { [trackPath]: { title: 'Committed' } },
         terminalPayload,
       ],
-      ['alert', 'Tag changes saved.'],
+      ['alert', 'Saved changes to 1 track in “Album”.'],
     ],
   );
   assert.deepEqual(settledClaims, [mutationClaim]);
@@ -1906,7 +2052,7 @@ test('completed loose-track membership edit refreshes canonically even when fina
   );
   assert.deepEqual(events.slice(-2), [
     ['watch', 'completed-loose-membership-task'],
-    ['alert', 'Tag changes saved.'],
+    ['alert', 'Saved changes to 1 track in “Non-album tracks”.'],
   ]);
 
   closedModal.hidden = false;
@@ -2343,10 +2489,11 @@ test('manual tag edit does not apply successful origin albums after navigation d
   assert.strictEqual(context.state.view, navigatedView);
   assert.equal(watchedTasks.length, 1);
   assert.equal(watchedTasks[0][1].originatingViewStateRevision, 21);
-  assert.deepEqual(alerts.at(-1), [
-    'Tag changes queued. Finalizing library view...',
-    'success',
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1))), [
+    'Updating 1 track in “Album”.',
+    'info',
     2000,
+    { title: 'Saving tags', dismissible: false },
   ]);
 });
 
@@ -3870,6 +4017,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     buildAlbumDisplayCoverUrl() {
       return '/cover.png';
     },
+    buildAlbumCoverSourceMarkersHtml() {
+      return '';
+    },
     formatAlbumDuration() {
       return '';
     },
@@ -3959,6 +4109,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     },
     albumHasDisplayCover() {
       return false;
+    },
+    buildAlbumCoverSourceMarkersHtml() {
+      return '';
     },
     formatAlbumDuration() {
       return '';
@@ -4141,6 +4294,9 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     },
     albumHasDisplayCover() {
       return false;
+    },
+    buildAlbumCoverSourceMarkersHtml() {
+      return '';
     },
     formatAlbumDuration() {
       return '';

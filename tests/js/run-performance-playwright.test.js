@@ -9,6 +9,10 @@ const { _private } = performanceRunner;
 const REAL_APP_ENV = {
   ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
 };
+const CALIBRATED_REAL_APP_ENV = {
+  ...REAL_APP_ENV,
+  ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+};
 const BROAD_UTILITY_PROBLEMATIC_FILES_REAL_APP_ENV = {
   ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
   ALBUM_HAVEN_E2E_FIXTURE_PROFILE: 'utility-problematic-files',
@@ -29,6 +33,7 @@ const REAL_APP_TARGETS = [
   'selected-artist',
   'search-browse',
   'root-album-browse',
+  'artist-tree-scroll-navigation',
   'app-open-all-artists',
   'problematic-files-focused',
   'rules-focused',
@@ -58,6 +63,19 @@ function usePreloadedFixtureEnv(t, targetName) {
     }
   });
   return target;
+}
+
+function useArtworkDiversityProvenanceEnv(t) {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-runner-artwork-provenance-'));
+  const sourcePath = path.join(sourceRoot, 'artwork-diversity-provenance.json');
+  const original = process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE;
+  fs.writeFileSync(sourcePath, '{}\n', 'utf8');
+  process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = sourcePath;
+  t.after(() => {
+    if (original === undefined) delete process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE;
+    else process.env.ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = original;
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+  });
 }
 
 function selectNextPreloadedProfileAfter(targetName) {
@@ -268,6 +286,86 @@ test('configured suite rejects mixed preloaded fixture profiles before setup or 
   assert.deepEqual(calls, []);
 });
 
+test('configured suite default entry selects a fixture-compatible released library group', () => {
+  const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'default-performance-fixture');
+  let receivedOptions = null;
+
+  const exitCode = _private.runConfiguredPerformanceSuite(
+    _private.parseCliArgs([]),
+    {
+      ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library',
+      ALBUM_HAVEN_FIXTURE_ROOT: fixtureRoot,
+      ALBUM_HAVEN_MEDIA_ROOT: path.join(fixtureRoot, 'media'),
+    },
+    {
+      loadEnv: (baseEnv) => baseEnv,
+      runDatabasePreflight: () => {},
+      runSuite: (options) => {
+        receivedOptions = options;
+        return 0;
+      },
+    },
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(receivedOptions.group, 'library-browse');
+  const targets = _private.resolveRequestedTargets(receivedOptions);
+  assert.ok(targets.length > 1, 'the default must remain a meaningful performance suite');
+  assert.ok(targets.every((target) => (
+    target.fixtureProfile === 'synthetic-large-library'
+      && target.fixtureMode === 'preloaded-release'
+  )));
+  assert.equal(
+    targets.some((target) => target.aliasNames[0] === 'gallery-artwork-diversity'),
+    false,
+    'the separately provisioned derived target must not inherit the released fixture',
+  );
+  assert.equal(
+    targets.some((target) => target.aliasNames[0] === 'cover-lookup'),
+    false,
+    'the production-calibration target must not join the smaller released fixture group',
+  );
+});
+
+test('configured suite rejects the non-runnable all registry before setup', () => {
+  const calls = [];
+
+  assert.throws(
+    () => _private.runConfiguredPerformanceSuite(
+      {
+        browser: 'chromium',
+        grep: '',
+        group: 'all',
+        headless: true,
+        repeatCount: 1,
+        targetInput: '',
+      },
+      {},
+      {
+        loadEnv: () => calls.push('load-env'),
+        runDatabasePreflight: () => calls.push('preflight'),
+        runSuite: () => calls.push('suite'),
+      },
+    ),
+    /group all.*not runnable.*compatible group.*cloud performance matrix/i,
+  );
+  assert.deepEqual(calls, []);
+});
+
+test('grouped suite rejects mixing immutable and derived copies of one fixture profile', () => {
+  const immutableTarget = performanceRunner.PERFORMANCE_TARGETS['artist-tree-scroll-navigation'];
+  const derivedTarget = {
+    ...immutableTarget,
+    fixtureMode: 'preloaded-derived',
+    aliasNames: ['gallery-artwork-diversity'],
+  };
+
+  assert.throws(
+    () => _private.assertSinglePreloadedFixtureProfile([immutableTarget, derivedTarget]),
+    /cannot combine fixture modes.*preloaded-release.*preloaded-derived/i,
+  );
+});
+
 test('scan database configuration preflight honors dotenv values with process env precedence', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-scan-preflight-'));
   const dotenvPath = path.join(tempRoot, '.env');
@@ -333,7 +431,7 @@ test('parseCliArgs leaves targetInput empty when no performance target was provi
   assert.deepEqual(parsed, {
     browser: 'chromium',
     grep: '',
-    group: 'all',
+    group: 'library-browse',
     headless: true,
     repeatCount: 2,
     targetInput: '',
@@ -346,7 +444,7 @@ test('parseCliArgs defaults the performance runner to headless mode', () => {
   assert.deepEqual(parsed, {
     browser: 'chromium',
     grep: '',
-    group: 'all',
+    group: 'library-browse',
     headless: true,
     repeatCount: 1,
     targetInput: '',
@@ -402,6 +500,8 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
       'selected-artist',
       'search-browse',
       'root-album-browse',
+      'artist-tree-scroll-navigation',
+      'gallery-artwork-diversity',
       'app-open-all-artists',
       'problematic-files-focused',
       'rules-focused',
@@ -415,7 +515,7 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
     'scan-error',
     ]
   );
-  assert.equal(targets.length, 22);
+  assert.equal(targets.length, 24);
 });
 test('resolveRequestedTargets rejects an unknown performance group', () => {
   assert.throws(() => _private.resolveRequestedTargets({
@@ -484,12 +584,13 @@ test('resolveRequestedTargets can limit the run to the real-app group', () => {
       'selected-artist',
       'search-browse',
       'root-album-browse',
+      'artist-tree-scroll-navigation',
       'app-open-all-artists',
       'problematic-files-focused',
       'rules-focused',
     ]
   );
-  assert.equal(targets.length, 11);
+  assert.equal(targets.length, 12);
 });
 
 test('resolveRequestedTargets can limit the run to the idle-memory group', () => {
@@ -544,9 +645,11 @@ test('printUsage advertises the playback-start target, group, and coverage class
     console.log = originalLog;
   }
   const output = lines.join('\n');
-  assert.match(output, /--group all\|idle-memory\|playback-start\|gapless-playback\|real-app\|scan/);
+  assert.match(output, /--group library-browse\|idle-memory\|playback-start\|gapless-playback\|real-app\|scan/);
+  assert.doesNotMatch(output, /Known groups: all,/);
   assert.match(output, /Known names: idle-memory, playback-start, gapless-playback,/);
-  assert.match(output, /Known groups: all, idle-memory, playback-start, gapless-playback, real-app, scan/);
+  assert.match(output, /artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists/);
+  assert.match(output, /Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan/);
   assert.match(output, /real-app-isolated-postgres-playback/);
 });
 
@@ -567,8 +670,10 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['utility-problematic-files'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['utility-rules'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['selected-artist'], 'real-app-library-browse-load');
+  assert.equal(classesByTarget['cover-lookup'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['search-browse'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['root-album-browse'], 'real-app-library-browse-load');
+  assert.equal(classesByTarget['artist-tree-scroll-navigation'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['app-open-all-artists'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['problematic-files-focused'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['rules-focused'], 'real-app-library-browse-load');
@@ -577,7 +682,7 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['scan-add-album'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-metadata'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-page'], 'scanner-index-cache');
-  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 12);
+  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 14);
   assert.equal(classesByTarget['paired-search-calibration'], 'real-app-library-browse-load');
 });
 
@@ -1031,6 +1136,16 @@ test('buildRunnerArgs preserves app-open All Artists target metadata when select
 
   assert.equal(target.aliasNames[0], 'app-open-all-artists');
   assert.deepEqual(target.env, REAL_APP_ENV);
+});
+
+test('Cover Lookup target requires the production-calibration fixture', () => {
+  const target = _private.resolvePerformanceTarget(
+    'tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js',
+  );
+
+  assert.equal(target.aliasNames[0], 'cover-lookup');
+  assert.equal(target.casePattern, 'FTC-COVERS-019P');
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
 test('buildRunnerArgs preserves focused utility problematic-files target metadata when selected by spec path', () => {
@@ -2256,6 +2371,54 @@ test('scan-health selects only the natural unavailable-root contract without mea
   assert.equal(target.grep, 'FTC-OPS-003F');
 });
 
+test('artist scroll completion requires all navigation, restoration, presentation, and native-scroll cases once', () => {
+  const target = performanceRunner.PERFORMANCE_TARGETS['artist-tree-scroll-navigation'];
+  const titles = [
+    'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
+    'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+    ...['Cards', 'Covers', 'Rows'].flatMap((view) => [
+      `mobile ${view} > long-press Scroll, album, Back restores an artist beyond the first root page`,
+      `mobile ${view} > long-press Scroll, ordinary scroll to another artist, album, Back retains the new position`,
+    ]),
+    ...['Cards', 'Covers'].flatMap((view) => [
+      `desktop ${view} > desktop Scroll, album, Close retains the jumped-to position`,
+      `desktop ${view} > desktop Scroll, ordinary scroll, album, Close retains the departure position`,
+    ]),
+    'Mobile Cards, covers and rows retain the jumped-to release',
+    'Desktop Cards and covers retain the jumped-to release',
+    'mobile Cards > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'mobile Covers > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'mobile Rows > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'desktop Cards > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+    'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+    'real continuation response during held touch keeps gallery coordinates stable',
+    'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
+    'real continuation response during wheel sequence keeps gallery coordinates stable',
+  ];
+  const parsedTestResults = titles.map(testName => ({
+    status: 'passed', testName, fullName: `FTC-GALLERY-NAV-03 > ${testName}`,
+  }));
+  const record = {
+    status: 0, processStatus: 0, structuredStatus: 'passed', reporterFinalized: true,
+    measurementExpected: false,
+    expectedCasePatterns: target.casePatterns || [target.casePattern],
+    parsedTestResults,
+  };
+  assert.equal(target.casePatterns.length, 22);
+  assert.equal(new Set(target.casePatterns).size, 22);
+  assert.equal(target.casePatterns.some((pattern) => pattern.includes('›')), true);
+  assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');
+  for (const incomplete of [
+    parsedTestResults.slice(0, 2),
+    parsedTestResults.slice(1),
+    [...parsedTestResults, parsedTestResults[0]],
+    [{ ...parsedTestResults[0], status: 'failed' }, ...parsedTestResults.slice(1)],
+  ]) {
+    assert.equal(_private.classifyPerformanceAttempt({ ...record, parsedTestResults: incomplete }, 'local').outcome, 'failed');
+  }
+  assert.equal(_private.classifyPerformanceAttempt({ ...record, reporterFinalized: false }, 'local').outcome, 'failed');
+});
+
 test('coverage-only targets accept a completed Playwright JSON report as reporter finalization', () => {
   assert.equal(_private.isFinalizedPlaywrightJsonReport({
     suites: [{}],
@@ -2519,6 +2682,70 @@ test('resolveManagedRealAppPortForSequence assigns a dedicated base port block p
   assert.equal(_private.resolveManagedRealAppPortForSequence(1, 4333), 4343);
 });
 
+test('derived artwork target retains exact validated provenance in its target artifact', (t) => {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-artwork-provenance-'));
+  const sourcePath = path.join(sourceRoot, 'artwork-diversity-provenance.json');
+  const provenance = {
+    schemaVersion: 1,
+    profile: 'synthetic-large-library',
+    base: { release: 'fixtures-v1.0.25', manifestSha256: 'a'.repeat(64) },
+    generator: { commit: 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11' },
+    derivative: { release: 'fixtures-v1.0.25-distinct-artwork-diagnostic' },
+    diversity: { variantCount: 512, sourceMaxEdge: 960 },
+  };
+  const exactBytes = `${JSON.stringify(provenance, null, 2)}\n`;
+  fs.writeFileSync(sourcePath, exactBytes, 'utf8');
+  const target = {
+    ...performanceRunner.PERFORMANCE_TARGETS['gallery-artwork-diversity'],
+    aliasNames: ['gallery-artwork-diversity-provenance-unit'],
+  };
+  const targetRoot = _private.resolvePerformanceTargetArtifactRoot(target);
+  t.after(() => {
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+  });
+
+  _private.preparePerformanceTargetArtifactRoot(targetRoot);
+  const retainedPath = _private.retainArtworkDiversityProvenance(target, {
+    ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE: sourcePath,
+  });
+
+  assert.equal(retainedPath, path.join(targetRoot, 'artwork-diversity-provenance.json'));
+  assert.equal(fs.readFileSync(retainedPath, 'utf8'), exactBytes);
+  assert.equal(JSON.parse(fs.readFileSync(retainedPath, 'utf8')).base.release, 'fixtures-v1.0.25');
+  const runnerSource = _private.runTargetWithPolicy.toString();
+  const resetIndex = runnerSource.indexOf('preparePerformanceTargetArtifactRoot(');
+  const retainIndex = runnerSource.indexOf('retainArtworkDiversityProvenance(');
+  const attemptsIndex = runnerSource.indexOf('for (let attemptNumber');
+  assert.ok(
+    resetIndex >= 0 && retainIndex > resetIndex && attemptsIndex > retainIndex,
+    'provenance must be retained after target-root reset and before attempts',
+  );
+});
+
+test('derived artwork target refuses to run without retained provenance', () => {
+  const target = performanceRunner.PERFORMANCE_TARGETS['gallery-artwork-diversity'];
+  assert.throws(
+    () => _private.retainArtworkDiversityProvenance(target, {}),
+    /ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE/,
+  );
+});
+
+test('derived artwork target rejects malformed retained provenance', (t) => {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-invalid-artwork-provenance-'));
+  const sourcePath = path.join(sourceRoot, 'artwork-diversity-provenance.json');
+  fs.writeFileSync(sourcePath, '{', 'utf8');
+  t.after(() => fs.rmSync(sourceRoot, { recursive: true, force: true }));
+
+  assert.throws(
+    () => _private.retainArtworkDiversityProvenance(
+      performanceRunner.PERFORMANCE_TARGETS['gallery-artwork-diversity'],
+      { ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE: sourcePath },
+    ),
+    /valid JSON/,
+  );
+});
+
 test('runTargetWithPolicy does not treat stale metrics from an earlier attempt as later rerun passes', (t) => {
   usePreloadedFixtureEnv(t, 'artist-family');
   const originalSpawnSync = childProcess.spawnSync;
@@ -2620,6 +2847,7 @@ test('runTargetWithPolicy does not treat stale metrics from an earlier attempt a
 
 test('runSequentialPerformanceSuite executes the default approved performance targets when no target is provided', (t) => {
   usePreloadedFixtureEnv(t, 'idle-memory');
+  useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
   const originalDateNow = Date.now;
   const calls = [];
@@ -2658,7 +2886,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 22);
+  assert.equal(calls.length, 24);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
   assert.equal(
     calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
@@ -2670,7 +2898,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   );
   assert.deepEqual(
     calls.map((call) => call.args[1]),
-    new Array(22).fill('test'),
+    new Array(24).fill('test'),
   );
   assert.equal(calls[3].args.includes('--real-app-port=5001'), true);
   assert.equal(calls[4].args.includes('--real-app-port=5011'), true);
@@ -2683,27 +2911,29 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[11].args.includes('--real-app-port=5101'), true);
   assert.equal(calls[12].args.includes('--real-app-port=5111'), true);
   assert.equal(calls[13].args.includes('--real-app-port=5121'), true);
-  for (const call of calls.slice(3, 14)) {
+  for (const call of calls.slice(3, 15)) {
     assert.deepEqual(call.options.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE, 'postgres');
   }
   assert.equal(calls[6].options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
   assert.equal(calls[7].options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
-  assert.equal(calls[12].options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
-  assert.equal(calls[12].options.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP, '1');
+  const focusedProblematicCall = calls.find((call) => call.args.includes('--grep=FTC-UTIL-PROBLEMS-010'));
+  assert.ok(focusedProblematicCall);
+  assert.equal(focusedProblematicCall.options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
+  assert.equal(focusedProblematicCall.options.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP, '1');
   assert.equal(calls[3].options.env.ALBUM_HAVEN_E2E_SEED_ARTIST_FAMILY, undefined);
   assert.equal(calls[4].options.env.ALBUM_HAVEN_E2E_SEED_ARTIST_FAMILY, undefined);
   assert.equal(calls[5].options.env.ALBUM_HAVEN_E2E_SEED_ARTIST_FAMILY, undefined);
-  assert.equal(calls[14].options.env.PLAYWRIGHT_PORT, '4174');
-  assert.equal(calls[15].options.env.PLAYWRIGHT_PORT, '4175');
-  assert.equal(calls[16].options.env.PLAYWRIGHT_PORT, '4176');
-  assert.equal(calls[17].options.env.PLAYWRIGHT_PORT, '4177');
-  assert.equal(calls[18].options.env.PLAYWRIGHT_PORT, '4178');
-  assert.equal(calls[14].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cold');
-  assert.equal(calls[15].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
-  assert.equal(calls[16].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
-  assert.equal(calls[17].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'metadata');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-014')).options.env.PLAYWRIGHT_PORT, '4174');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-015')).options.env.PLAYWRIGHT_PORT, '4175');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-016')).options.env.PLAYWRIGHT_PORT, '4176');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-017')).options.env.PLAYWRIGHT_PORT, '4177');
+  assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-003(C|E)')).options.env.PLAYWRIGHT_PORT, '4178');
+  assert.equal(calls[16].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cold');
+  assert.equal(calls[17].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
   assert.equal(calls[18].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
-  const scanSamplePaths = calls.slice(14, 21).map(
+  assert.equal(calls[19].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'metadata');
+  assert.equal(calls[20].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
+  const scanSamplePaths = calls.slice(16, 23).map(
     (call) => call.options.env.ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH,
   );
   assert.equal(new Set(scanSamplePaths).size, 7);
@@ -2713,8 +2943,8 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.match(scanSamplePaths[3], /scan-metadata-port-4177-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[4], /scan-page-port-4178-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[6], /scan-error-port-4180-attempt-1-[0-9a-f-]{36}\.jsonl$/);
-  assert.equal(calls[20].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
-  assert.equal(calls[20].args.includes('--grep=FTC-OPS-003G'), true);
+  assert.equal(calls[22].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
+  assert.equal(calls[22].args.includes('--grep=FTC-OPS-003G'), true);
   for (const samplesPath of scanSamplePaths) assert.equal(fs.existsSync(samplesPath), false);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
@@ -2738,6 +2968,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[16].args.includes('--timeout=240000'), true);
   assert.equal(calls[17].args.includes('--timeout=240000'), true);
   assert.equal(calls[18].args.includes('--timeout=240000'), true);
+  assert.equal(calls[20].args.includes('--timeout=240000'), true);
   assert.equal(calls[3].args.includes('--grep=FTC-GALLERY-STARTUP-005A'), true);
   assert.equal(calls[4].args.includes('--grep=FTC-SEARCH-NAV-005A'), false);
   assert.equal(calls[5].args.includes('--grep=FTC-SEARCH-NAV-003A'), true);
@@ -2746,14 +2977,16 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[8].args.includes('--grep=FTC-GALLERY-STARTUP-005Q'), true);
   assert.equal(calls[9].args.includes('--grep=FTC-GALLERY-STARTUP-005R'), true);
   assert.equal(calls[10].args.includes('--grep=FTC-GALLERY-STARTUP-005S'), true);
-  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
-  assert.equal(calls[12].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);
-  assert.equal(calls[13].args.includes('--grep=FTC-UTIL-RULES-002P'), true);
-  assert.equal(calls[14].args.includes('--grep=FTC-OPS-014'), true);
-  assert.equal(calls[15].args.includes('--grep=FTC-OPS-015'), true);
-  assert.equal(calls[16].args.includes('--grep=FTC-OPS-016'), true);
-  assert.equal(calls[17].args.includes('--grep=FTC-OPS-017'), true);
-  assert.equal(calls[18].args.includes('--grep=FTC-OPS-003(C|E)'), true);
+  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3|4|5)'), true);
+  assert.equal(calls[12].args.includes('--grep=FTC-GALLERY-NAV-036'), true);
+  assert.equal(calls[13].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
+  assert.equal(calls[14].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);
+  assert.equal(calls[15].args.includes('--grep=FTC-UTIL-RULES-002P'), true);
+  assert.equal(calls[16].args.includes('--grep=FTC-OPS-014'), true);
+  assert.equal(calls[17].args.includes('--grep=FTC-OPS-015'), true);
+  assert.equal(calls[18].args.includes('--grep=FTC-OPS-016'), true);
+  assert.equal(calls[19].args.includes('--grep=FTC-OPS-017'), true);
+  assert.equal(calls[20].args.includes('--grep=FTC-OPS-003(C|E)'), true);
 });
 
 test('resolvePerformanceAttemptStatus rejects a false-zero child status when Playwright reported a failed test', () => {
@@ -2875,6 +3108,7 @@ test('buildAttemptEnv prevents report auto-open while preserving headed mode', (
 
 test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even after earlier batches consume wall clock time', (t) => {
   usePreloadedFixtureEnv(t, 'idle-memory');
+  useArtworkDiversityProvenanceEnv(t);
   const originalSpawnSync = childProcess.spawnSync;
   const originalDateNow = Date.now;
   const calls = [];
@@ -2915,10 +3149,10 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 22);
+  assert.equal(calls.length, 24);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
   }
-  assert.equal(calls[18].options.env.PLAYWRIGHT_PORT, '4178');
-  assert.equal(calls[18].args.includes('--timeout=240000'), true);
+  assert.equal(calls[20].options.env.PLAYWRIGHT_PORT, '4178');
+  assert.equal(calls[20].args.includes('--timeout=240000'), true);
 });

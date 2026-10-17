@@ -109,6 +109,7 @@ function loadHelper(options = {}) {
   const trackModalTitle = new FakeElement('track-modal-title');
   const trackModalSubtitle = new FakeElement('track-modal-subtitle');
   const trackModalCover = new FakeElement('track-modal-cover');
+  const mobileAlbumIdentity = new FakeElement('mobile-album-identity');
   const trackModalMissingWarning = new FakeElement('track-modal-missing-warning');
   const trackModalDuplicateWarning = new FakeElement('track-modal-duplicate-warning');
   const trackModalDuplicateTabs = new FakeElement('track-modal-duplicate-tabs');
@@ -291,6 +292,22 @@ function loadHelper(options = {}) {
       context.renderTrackModalReleaseCalls.push(album?.key || null);
       context.renderTrackModalReleaseAlbums.push(album);
     },
+    syncMobileAlbumCompositionCalls: [],
+    syncMobileAlbumComposition(album) {
+      context.syncMobileAlbumCompositionCalls.push(album);
+      mobileAlbumIdentity.textContent = [album?.album_artist, album?.name, album?.year]
+        .filter(Boolean)
+        .join(' - ');
+    },
+    mobileAlbumPagePresentations: [],
+    presentMobileAlbumPage(album) {
+      context.mobileAlbumPagePresentations.push({
+        key: album?.key || null,
+        title: trackModalTitle.textContent,
+        list: trackModalList.innerHTML,
+        mobileIdentity: mobileAlbumIdentity.textContent,
+      });
+    },
     attachSharedPlayerCalls: 0,
     attachSharedPlayer() {
       context.attachSharedPlayerCalls += 1;
@@ -426,6 +443,7 @@ function loadHelper(options = {}) {
     context,
     trackModal,
     trackModalCover,
+    mobileAlbumIdentity,
     galleryImages,
     utilityModal,
     lightboxOverlay,
@@ -463,6 +481,53 @@ test('opening Album Details preloads full artwork once without waiting and retri
   assert.equal(images.length, 3);
   context.openTrackModal({ ...album, fullCover: '' });
   assert.equal(images.length, 3);
+});
+
+test('preview hydration completes before full-size artwork preload', async () => {
+  let resolveDetails;
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => new Promise((resolve) => {
+      resolveDetails = resolve;
+    }),
+  });
+  context.Image = class {
+    set src(value) {
+      this._src = value;
+      context.modalSchedulingEvents.push('preload-full-artwork');
+    }
+
+    get src() {
+      return this._src;
+    }
+  };
+  context.buildAlbumLightboxCoverUrl = () => '/cover/full?revision=1';
+
+  context.openTrackModal({
+    key: 'alpha',
+    name: 'Album Alpha',
+    preview_only: true,
+  });
+
+  assert.deepEqual(context.modalSchedulingEvents, ['fetch-album-details']);
+
+  resolveDetails({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      album: {
+        key: 'alpha',
+        name: 'Album Alpha',
+        tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
+      },
+    }),
+  });
+  await flushMicrotasks();
+
+  assert.deepEqual(
+    context.modalSchedulingEvents,
+    ['fetch-album-details', 'preload-full-artwork'],
+  );
 });
 
 test('player Album Details takes foreground without closing Settings or its draft', () => {
@@ -791,6 +856,34 @@ test('opening a preview album renders all known edition tabs before details reso
   context.openTrackModal(album);
   assert.deepEqual(rendered, ['alpha', 'beta']);
   assert.deepEqual(context.renderTrackModalReleaseCalls, []);
+});
+
+test('opening another preview album replaces its mobile identity before presentation', () => {
+  const { context, mobileAlbumIdentity } = loadHelper({
+    onFetchAlbumDetails: () => new Promise(() => {}),
+  });
+  const elements = context.getTrackModalElements();
+  elements.title.textContent = 'Previous Artist - Previous Album - 1999';
+  elements.list.innerHTML = '<li>Previous Track</li>';
+  mobileAlbumIdentity.textContent = 'Previous Artist - Previous Album - 1999';
+
+  context.openTrackModal({
+    key: 'next-album',
+    album_artist: 'Next Artist',
+    name: 'Next Album',
+    year: 2026,
+    preview_only: true,
+  });
+
+  const presentations = context.mobileAlbumPagePresentations.filter(
+    (presentation) => presentation.key === 'next-album',
+  );
+  assert.equal(presentations.length, 1);
+  assert.equal(presentations[0].title, 'Next Artist - Next Album - 2026');
+  assert.equal(presentations[0].mobileIdentity, 'Next Artist - Next Album - 2026');
+  assert.match(presentations[0].list, /Loading album details/);
+  assert.match(presentations[0].list, /library-loader-spinner/);
+  assert.doesNotMatch(presentations[0].list, /Previous Track/);
 });
 
 async function run() {

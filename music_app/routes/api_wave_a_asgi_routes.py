@@ -8,6 +8,7 @@ from music_app.services.log_history import history_scope_for_request
 import inspect
 import logging
 from collections.abc import Mapping
+from pathlib import Path
 from threading import Event
 from time import perf_counter
 from typing import Any
@@ -53,7 +54,7 @@ from music_app.services.missing_album_removal_postgres import (
     MissingAlbumRootUnavailable,
     PostgresMissingAlbumRemovalService,
 )
-from music_app.services.policy_asgi import require_action
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 from music_app.services.library_roots import (
     library_root_cache_identity,
     load_library_root_settings,
@@ -65,6 +66,7 @@ from music_app.services.library_settings import (
 from music_app.services.log_history import append_log_history
 from music_app.services.manual_versions import load_manual_version_links, save_manual_version_links
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
+from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
 from music_app.services.problematic_albums import (
     find_problematic_album_by_track_paths as _find_problematic_album_by_track_paths_in_payload,
@@ -183,7 +185,14 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2
-_STRUCTURAL_EDIT_FIELDS = {"album", "album_artist", "year", "edition", "exception_type"}
+_STRUCTURAL_EDIT_FIELDS = {
+    "album",
+    "album_artist",
+    "year",
+    "edition",
+    "exception_type",
+    "custom_collection_name",
+}
 _RELATION_PROJECTION_EDIT_FIELDS = {"album_artist", "artist"}
 _MEDIA_TAG_EDIT_FIELDS = {
     "artist",
@@ -286,6 +295,58 @@ def _require_album_track_paths(
     if not track_paths:
         return None, _invalid_payload_response(error_message)
     return track_paths, None
+
+
+def _normalized_track_path_key(value: object) -> str:
+    text = str(value or "").strip()
+    return str(Path(text).resolve(strict=False)).casefold() if text else ""
+
+
+def _authoritative_tag_editor_track_paths(
+    request: Request,
+    album: Mapping[str, object],
+    source_path: str,
+) -> set[str]:
+    album_key = str(album.get("key") or album.get("album_key") or "").strip()
+    if _is_selected_postgres_library_browse_request(request):
+        if not album_key:
+            raise ValueError("The selected album has no authoritative identity.")
+        authoritative_album = PostgresLibraryBrowseRepository(
+            _app_config(request)
+        ).build_album_detail_payload(album_key)
+    else:
+        source_key = _normalized_track_path_key(source_path)
+        authoritative_albums = [
+            dict(candidate)
+            if isinstance(candidate, Mapping)
+            else album_to_dict(candidate, config=_app_config(request))
+            for candidate in list(_library_state(request).get("albums", []) or [])
+        ]
+        candidates = []
+        for candidate in authoritative_albums:
+            candidate_key = str(
+                candidate.get("key") or candidate.get("album_key") or ""
+            ).strip()
+            candidate_paths = {
+                _normalized_track_path_key(path)
+                for path in _album_track_paths(candidate)
+            }
+            if (album_key and candidate_key == album_key) or (
+                not album_key and source_key in candidate_paths
+            ):
+                candidates.append(candidate)
+        authoritative_album = candidates[0] if len(candidates) == 1 else None
+    if not isinstance(authoritative_album, Mapping):
+        raise ValueError("The selected album is not in the authoritative inventory.")
+
+    authoritative_paths = _album_track_paths(authoritative_album)
+    source_key = _normalized_track_path_key(source_path)
+    authoritative_keys = {
+        _normalized_track_path_key(path) for path in authoritative_paths
+    }
+    if not source_key or source_key not in authoritative_keys:
+        raise ValueError("The selected source file is not in the authoritative album.")
+    return authoritative_paths
 
 
 def _json_response(value: ResponseValue) -> JSONResponse:
@@ -1166,7 +1227,11 @@ def _is_postgres_edit_tags_exception_only_response_request(
     for raw_edits in updates.values():
         if not isinstance(raw_edits, Mapping):
             return False
-        if len(raw_edits) != 1 or next(iter(raw_edits.keys())) != "exception_type":
+        field_names = {str(field or "") for field in raw_edits}
+        if not field_names or not field_names <= {
+            "exception_type",
+            "custom_collection_name",
+        }:
             return False
 
     config = _app_config(request)
@@ -1653,6 +1718,44 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
     if _is_selected_postgres_library_browse_request(request) and _has_repair_album_media_write_rows(payload):
         result = _selected_postgres_media_write_response(result)
     return _json_response(result)
+
+
+@router.post("/utilities/tag-editor/folder-files")
+async def tag_editor_folder_files(request: Request) -> JSONResponse:
+    actions = allowed_actions_for_request(
+        request,
+        ("library.files.edit_tags", "library.paths.read"),
+    ).as_payload()
+    if not all(actions.get(action) for action in ("library.files.edit_tags", "library.paths.read")):
+        return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
+
+    payload = await _json_payload(request)
+    album, album_error = _require_album_payload(payload)
+    if album_error:
+        return _json_response(album_error)
+    track_paths, track_error = _require_album_track_paths(album)
+    if track_error:
+        return _json_response(track_error)
+    source_path = str(payload.get("source_path") or "").strip() if payload else ""
+    if not source_path or source_path not in track_paths:
+        return JSONResponse({"ok": False, "error": "Invalid source file"}, status_code=400)
+
+    try:
+        authoritative_track_paths = await run_in_threadpool(
+            _authoritative_tag_editor_track_paths,
+            request,
+            album,
+            source_path,
+        )
+        result = await run_in_threadpool(
+            load_tag_editor_folder_files,
+            _app_config(request),
+            source_path,
+            indexed_paths=authoritative_track_paths,
+        )
+    except (FileNotFoundError, OSError, ValueError):
+        return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)
+    return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/utilities/edit-tags")

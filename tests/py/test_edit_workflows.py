@@ -102,6 +102,7 @@ def test_handle_repair_album_request_queues_explicit_config_logger_without_app(c
     assert queued_payloads[0]["config"] is config
     assert queued_payloads[0]["logger"] is logger
     assert "app" not in queued_payloads[0]
+    assert "app" not in queued_payloads[0]
 
 
 def test_handle_repair_album_request_rejects_ignored_only_problem_exclusion(config):
@@ -360,7 +361,47 @@ def test_handle_edit_tags_request_exception_only_uses_override_and_queues_save(c
     assert queued_payloads and queued_payloads[0]["changed_paths"] == {track_path}
     assert queued_payloads[0]["config"] is config
     assert queued_payloads[0]["logger"] is logger
-    assert "app" not in queued_payloads[0]
+
+
+def test_custom_collection_requires_a_name_before_any_write(config):
+    track_path = str((config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve())
+    state_payload = {
+        "file_cache": {
+            track_path: {
+                "path": track_path,
+                "title": "Song",
+                "exception_type": "",
+                "custom_collection_name": "",
+            },
+        },
+        "separate_release_keys": set(),
+    }
+
+    result = handle_edit_tags_request(
+        album={"name": "Album", "album_artist": "Artist", "tracks": [{"path": track_path}]},
+        updates={track_path: {
+            "exception_type": "Custom Collection",
+            "custom_collection_name": "   ",
+        }},
+        requested_track_paths={track_path},
+        config=config,
+        logger=_logger_stub(),
+        get_state=lambda: state_payload,
+        create_save_task=lambda *_args: pytest.fail("invalid collection created save task"),
+        queue_finalize_save_task=lambda **_kwargs: pytest.fail("invalid collection queued save"),
+        apply_repairs_worker=lambda *_args: pytest.fail("invalid collection wrote media"),
+        update_cache_entry_after_repairs=lambda *_args: pytest.fail("invalid collection updated cache"),
+        build_affected_album_dicts=lambda *_args, **_kwargs: [],
+        load_separate_release_keys=lambda _config: set(),
+        normalize_exception_value=lambda value: str(value or "").strip(),
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        structural_edit_fields={"exception_type", "custom_collection_name"},
+        edit_write_workers=1,
+        save_track_exception_override=lambda *_args: pytest.fail("invalid collection saved override"),
+    )
+
+    assert result == ({"ok": False, "error": "Custom Collection name is required."}, 400)
 
 
 def test_handle_edit_tags_request_does_not_require_flask_context(config):

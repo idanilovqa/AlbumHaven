@@ -782,14 +782,19 @@ export class SearchToolbar extends BasePage {
     let lastObservedState = null;
     while (Date.now() <= deadline) {
       const initialObservation = this.productionViewObserver.read();
-      if (initialObservation.latestFullPayloadError) {
-        throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError}`);
+      if (initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError) {
+        throw new Error(`Production view observation failed: ${initialObservation.latestFullPayloadError || initialObservation.latestGalleryPageError}`);
       }
       const initiallyBusy = initialObservation.activeRequestCount > 0
         || initialObservation.pendingPayloadReadCount > 0;
-      const bootstrapPayload = !initialObservation.latestFullPayload && !initiallyBusy
+      let bootstrapPayload = initialObservation.allowBootstrapFallback !== false
+        && !initialObservation.latestFullPayload && !initiallyBusy
         ? await this.readProductionBootstrapPayload()
         : null;
+      if (bootstrapPayload && !this.productionViewObserver.acceptBootstrapPresence(
+        bootstrapPayload.startup_payload?.first_paint_view || bootstrapPayload.initial_view,
+        initialObservation.stateRevision,
+      )) bootstrapPayload = null;
       const payload = initialObservation.latestFullPayload
         || bootstrapPayload?.startup_payload?.first_paint_view
         || bootstrapPayload?.initial_view
@@ -843,7 +848,9 @@ export class SearchToolbar extends BasePage {
         .allTextContents())
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
-      const startupHydrating = payload === null || Boolean(
+      const payloadObserved = payload !== null || initialObservation.galleryPayloadObserved === true
+        || Boolean(initialObservation.latestCompletedSaveTaskPayload);
+      const startupHydrating = !payloadObserved || Boolean(
         bootstrapPayload?.bootstrap?.startupHydration?.required,
       );
       const finalAttachedArtists = (await this.page
@@ -857,8 +864,8 @@ export class SearchToolbar extends BasePage {
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
       const finalObservation = this.productionViewObserver.read();
-      if (finalObservation.latestFullPayloadError) {
-        throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError}`);
+      if (finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError) {
+        throw new Error(`Production view observation failed: ${finalObservation.latestFullPayloadError || finalObservation.latestGalleryPageError}`);
       }
       const observationChanged = finalObservation.stateRevision !== initialObservation.stateRevision;
       const domChanged = !hasStableDomEvidence(
@@ -877,12 +884,12 @@ export class SearchToolbar extends BasePage {
         ? hasAppliedCanonicalSidebar(
           canonicalSidebarArtists,
           finalAttachedSidebarArtists,
-          { loaderVisible, payloadPresent: payload !== null, settledEmpty },
+          { loaderVisible, payloadPresent: payloadObserved, settledEmpty },
         )
         : hasAppliedCanonicalArtistSurface(
           canonicalArtists,
           finalAttachedArtists,
-          { loaderVisible, payloadPresent: payload !== null, settledEmpty },
+          { loaderVisible, payloadPresent: payloadObserved, settledEmpty },
         );
       lastObservedState = {
         activeLoader,

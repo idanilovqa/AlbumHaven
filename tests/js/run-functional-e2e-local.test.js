@@ -151,6 +151,42 @@ ${source.slice(loopStart)}
   assert.doesNotMatch(result.stdout, /BOOTSTRAP:Teardown|FIXTURE_DELETED/);
 });
 
+test('bootstrap shell prefers installed PowerShell 7 and preserves the legacy fallback', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const helperStart = source.indexOf('function Resolve-Executable(');
+  const helperEnd = source.indexOf('\nfunction ', helperStart + 1);
+  const selection = source.match(/^\$bootstrapPowerShell = Resolve-Executable[^\r\n]+/m);
+  assert.ok(selection, 'bootstrap must reuse the executable resolver');
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-Command', `
+$ErrorActionPreference = 'Stop'
+${source.slice(helperStart, helperEnd)}
+function Get-Command {
+  param($Name, $ErrorAction)
+  if ($script:available -contains $Name) { [pscustomobject]@{ Source = $Name } }
+}
+function Test-Path { param($LiteralPath, $PathType) return $false }
+$results = foreach ($scenario in @('modern', 'legacy', 'missing')) {
+  $script:available = switch ($scenario) {
+    'modern' { @('pwsh.exe', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe') }
+    'legacy' { @('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe') }
+    'missing' { @() }
+  }
+  try {
+    ${selection[0]}
+    [pscustomobject]@{ selected = $bootstrapPowerShell }
+  } catch { [pscustomobject]@{ error = $_.Exception.Message } }
+}
+ConvertTo-Json -InputObject @($results) -Compress
+`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), [
+    { selected: 'pwsh.exe' },
+    { selected: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' },
+    { error: 'PowerShell executable was not found.' },
+  ]);
+  assert.match(source, /& \$bootstrapPowerShell @bootstrapArguments \| Where-Object/);
+});
+
 test('npm aliases and local guide expose only the supported runner', () => {
   const packageJson = readJson(packagePath);
   assert.equal(

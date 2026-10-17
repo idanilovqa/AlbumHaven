@@ -15,6 +15,31 @@ from music_app.services.relation_projection_postgres import (
 )
 
 
+@pytest.mark.parametrize("owner,guest", [
+    ("Synthetic Scale Artist 0647", "Synthetic Scale Artist 0594"),
+    ("Chamber Ensemble 1001", "Chamber Ensemble 1002"),
+])
+def test_shared_album_does_not_merge_artists_with_different_numeric_identities(owner, guest):
+    rows = [_row(
+        album_id=1, artist=owner, member=guest,
+        relative_path=r"Shared\Release\01.flac",
+        private_path=r"C:\Music\Shared\Release\01.flac",
+    )]
+    result = _build(rows)
+    assert result["alias_to_canonical"][owner] == owner
+    assert result["alias_to_canonical"][guest] == guest
+
+
+def test_shared_album_still_reconciles_spelling_variant_with_the_same_number():
+    owner, guest = "Chamber Ensemble 1001", "Chamber Ensembel 1001"
+    result = _build([_row(
+        album_id=1, artist=owner, member=guest,
+        relative_path=r"Shared\Release\01.flac",
+        private_path=r"C:\Music\Shared\Release\01.flac",
+    )])
+    assert result["alias_to_canonical"][owner] == result["alias_to_canonical"][guest]
+
+
 def _row(
     *,
     album_id: int,
@@ -45,6 +70,7 @@ def _row(
         ),
         "track_file_id": album_id * 100,
         "library_root_id": root_id,
+        "root_kind": "main_library",
         "root_path": root_path,
         "relative_path": relative_path,
         "private_path": private_path,
@@ -539,6 +565,78 @@ def test_missing_root_facts_keep_artists_but_never_create_families(root_id, root
     assert relation_views["folder_related"] == {}
 
 
+@pytest.mark.parametrize("root_kind", ["hoarding_library", "new_arrivals", "", None])
+def test_only_main_library_locations_contribute_folder_families(root_kind):
+    rows = _family_rows()
+    for row in rows:
+        row["root_kind"] = root_kind
+
+    relation_views = _build(rows)
+
+    assert set(relation_views["artists"]) == {"Artist One", "Artist Two"}
+    assert relation_views["family_to_artists"] == {}
+    assert relation_views["folder_related"] == {}
+    assert relation_views["sidebar_families"] == []
+
+
+@pytest.mark.parametrize("root_kind", ["hoarding_library", "new_arrivals"])
+def test_intake_siblings_do_not_merge_artist_aliases(root_kind):
+    rows = _family_rows()
+    for row, artist in zip(rows, ["Neal Morse", "Neal Morse Band"]):
+        row.update(
+            owner_artist_name=artist,
+            album_artist=artist,
+            member_artist_name=artist,
+            root_kind=root_kind,
+        )
+    relation_views = _build(rows)
+    assert relation_views["alias_to_canonical"]["Neal Morse"] == "Neal Morse"
+    assert relation_views["alias_to_canonical"]["Neal Morse Band"] == "Neal Morse Band"
+
+
+@pytest.mark.parametrize("root_kind", ["hoarding_library", "new_arrivals"])
+def test_intake_soundtrack_location_does_not_exclude_main_family(root_kind):
+    main_rows = _family_rows()
+    intake_copy = {
+        **main_rows[0],
+        "root_kind": root_kind,
+        "library_root_id": 22,
+        "root_path": r"D:\Intake",
+        "relative_path": r"OST\Artist One\Album One\01.flac",
+        "relation_evidence_kind": "soundtrack_root",
+    }
+
+    relation_views = _build(main_rows + [intake_copy])
+
+    assert relation_views["folder_related"] == {
+        "Artist One": {"Artist Two"},
+        "Artist Two": {"Artist One"},
+    }
+
+
+def test_main_family_survives_with_unrelated_artists_in_intake_locations():
+    rows = _family_rows()
+    intake_rows = _family_rows(root_id=22, root_path=r"D:\Intake")
+    intake_rows[1].update(
+        album_id=3,
+        owner_artist_name="Unrelated Artist",
+        album_artist="Unrelated Artist",
+        member_artist_name="Unrelated Artist",
+    )
+    for row in intake_rows:
+        row["root_kind"] = "hoarding_library"
+
+    relation_views = _build(rows + intake_rows)
+
+    assert relation_views["folder_related"] == {
+        "Artist One": {"Artist Two"},
+        "Artist Two": {"Artist One"},
+    }
+    assert set(relation_views["artists"]) == {
+        "Artist One", "Artist Two", "Unrelated Artist",
+    }
+
+
 @pytest.mark.parametrize(
     ("relative_path", "private_path"),
     [
@@ -702,3 +800,281 @@ def test_sidebar_family_label_survives_relation_view_serialization_roundtrip():
     roundtrip = deserialize_relation_views(serialize_relation_views(relation_views))
 
     assert roundtrip["sidebar_families"] == relation_views["sidebar_families"]
+
+
+def test_relation_builder_bounds_path_parsing_by_distinct_locations(monkeypatch, request):
+    from music_app.services import relation_projection_builder as builder
+
+    request.addfinalizer(builder._path_flavor.cache_clear)
+    original_path = builder.PureWindowsPath
+    parsed = []
+
+    class CountingWindowsPath(original_path):
+        def __new__(cls, *args):
+            parsed.append(args)
+            return super().__new__(cls, *args)
+
+    monkeypatch.setattr(builder, 'PureWindowsPath', CountingWindowsPath)
+    rows = [
+        _row(album_id=1, artist='Primary', member=f'Guest {index}',
+             root_path=r'C:\FixturePerfRoot',
+             relative_path=r'Primary\Album\01.flac')
+        for index in range(100)
+    ]
+    rows.append(_row(album_id=2, artist='Other', root_path=r'C:\FixturePerfRoot',
+                     relative_path=r'Other\Album\02.flac'))
+    result = _build(rows)
+    assert 'Primary' in result['artists']
+    assert 'Other' in result['artists']
+    assert len(parsed) <= 3, 'joined artist rows must not repeatedly parse identical root/file paths'
+
+
+def test_relation_builder_path_reuse_keeps_fallback_validation_inputs_distinct():
+    from music_app.services import relation_projection_builder as builder
+
+    rows = [
+        _row(album_id=1, artist='Artist', relative_path='../invalid.flac',
+             private_path=r'C:\Music\Artist\Album\01.flac'),
+        _row(album_id=1, artist='Artist', relative_path='../invalid.flac',
+             private_path=r'C:\Elsewhere\Artist\Album\02.flac'),
+        _row(album_id=1, artist='Artist', relative_path='../invalid.flac',
+             private_path=r'C:\Music\Artist\Album\03.flac'),
+    ]
+    facts = builder._album_facts(rows)
+    assert [location.relative_parts for location in facts[0].locations] == [
+        ('Artist', 'Album', '01.flac'), ('Artist', 'Album', '03.flac'),
+    ]
+
+
+@pytest.mark.parametrize('root_path,prefix', [
+    (r'C:\Music', r'Collective\Shared Era'),
+    (r'\\server\music', r'Collective\Shared Era'),
+    ('/srv/music', 'Collective/Shared Era'),
+])
+def test_alias_only_builder_matches_full_projection_without_family_work(monkeypatch, root_path, prefix):
+    from music_app.services import relation_projection_builder as builder
+
+    rows = _family_rows(root_path=root_path, prefix=prefix)
+    rows += [
+        _row(album_id=3, artist='Artist One', member='Artist One feat. Guest',
+             root_path=root_path, relative_path='Other/Album/01.flac'),
+        _row(album_id=4, artist='ARTIST ONE', root_path=root_path,
+             relative_path='../outside.flac', private_path='/outside/invalid.flac'),
+    ]
+    expected = _build(rows)
+    def reject_family_work(*args, **kwargs):
+        pytest.fail('alias-only search must not rebuild artist-family projections')
+    monkeypatch.setattr(builder, '_build_family_views', reject_family_work)
+    actual = builder.build_postgres_relation_alias_views(rows)
+    assert actual['alias_to_canonical'] == expected['alias_to_canonical']
+    assert actual['canonical_to_aliases'] == expected['canonical_to_aliases']
+    assert actual['artists_sidebar'] == expected['artists_sidebar']
+
+
+@pytest.fixture
+def isolated_artist_string_caches():
+    from music_app.services import relation_projection_builder as builder
+
+    names = (
+        '_normalize_key', '_looks_like_collaboration',
+        '_low_value_artist_key', '_are_probable_artist_typos',
+    )
+    for name in names:
+        clear = getattr(getattr(builder, name), 'cache_clear', None)
+        if clear:
+            clear()
+    yield builder, names
+    for name in names:
+        clear = getattr(getattr(builder, name), 'cache_clear', None)
+        if clear:
+            clear()
+
+
+def test_artist_key_normalization_reuses_identical_strings(monkeypatch, isolated_artist_string_caches):
+    builder, _ = isolated_artist_string_caches
+    calls = []
+    original = builder._normalize_spaces
+
+    def counted(text):
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(builder, '_normalize_spaces', counted)
+    for _ in range(25):
+        assert builder._normalize_key('  Solar   Artist  ') == 'solar artist'
+        assert builder._normalize_key('SOLAR ARTIST') == 'solar artist'
+    assert calls == ['  Solar   Artist  ', 'SOLAR ARTIST']
+
+
+@pytest.mark.parametrize('helper,regex_method,value,expected', [
+    ('_looks_like_collaboration', 'search', 'Solar Artist feat. Guest', True),
+    ('_low_value_artist_key', 'sub', 'Solar & Artist', 'solar artist'),
+])
+def test_artist_alias_classifiers_reuse_regex_work(
+    monkeypatch, isolated_artist_string_caches, helper, regex_method, value, expected,
+):
+    builder, _ = isolated_artist_string_caches
+    calls = []
+    original = getattr(builder.re, regex_method)
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(builder.re, regex_method, counted)
+    assert getattr(builder, helper)(value) == expected
+    first_call_work = len(calls)
+    assert first_call_work > 0
+    for _ in range(25):
+        assert getattr(builder, helper)(value) == expected
+    assert len(calls) == first_call_work
+
+
+def test_artist_typo_comparison_reuses_ordered_pairs(monkeypatch, isolated_artist_string_caches):
+    builder, _ = isolated_artist_string_caches
+    calls = []
+    original = builder.SequenceMatcher
+
+    def counted(*args, **kwargs):
+        calls.append(args[1:3])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(builder, 'SequenceMatcher', counted)
+    for _ in range(25):
+        assert builder._are_probable_artist_typos('Solar Artist', 'Solar Artis')
+        assert builder._are_probable_artist_typos('Solar Artis', 'Solar Artist')
+    assert calls == [('solarartist', 'solarartis'), ('solarartis', 'solarartist')]
+
+
+def test_artist_string_reuse_preserves_alias_maps_and_live_counts(
+    monkeypatch, isolated_artist_string_caches,
+):
+    builder, names = isolated_artist_string_caches
+    # The second build reverses display-name popularity without clearing caches.
+    for upper_count, lower_count in [(1, 1), (4, 1), (1, 4)]:
+        artists = (
+            ['SOLAR ARTIST'] * upper_count + ['Solar Artist'] * lower_count
+            + ['Solar Artist feat. Guest', 'Solar Artis', 'Solar Artiss'] * 4
+            + ['Other & Collective', 'Other and Collective'] * 3
+        )
+        rows = [
+            _row(album_id=index, artist=artist,
+                 relative_path=f'Collective/Shared Era/{index}/01.flac')
+            for index, artist in enumerate(artists, 1)
+        ]
+        with monkeypatch.context() as uncached:
+            for name in names:
+                function = getattr(builder, name)
+                uncached.setattr(builder, name, getattr(function, '__wrapped__', function))
+            expected = builder.build_postgres_relation_alias_views(rows)
+        actual = builder.build_postgres_relation_alias_views(rows)
+        assert actual == expected
+        assert sum(row['count'] for row in actual['artists_sidebar']) == len(artists)
+
+@pytest.mark.parametrize('root_path', [r'C:\Music', r'\\server\music', '/srv/music'])
+def test_alias_facts_do_not_read_family_only_source_fields(root_path):
+    from music_app.services import relation_projection_builder as builder
+
+    class AliasSource(dict):
+        def get(self, key, default=None):
+            assert key not in {
+                'album_is_compilation', 'featured_kind',
+                'member_artist_is_album_wide_track_artist', 'relation_evidence_kind',
+            }, f'Alias construction accessed family-only field: {key}'
+            return super().get(key, default)
+
+    rows = _family_rows(root_path=root_path, prefix='Collective/Shared Era')
+    expected = builder.build_postgres_relation_alias_views(rows)
+    assert builder.build_postgres_relation_alias_views([AliasSource(row) for row in rows]) == expected
+
+
+@pytest.mark.parametrize('root_path', [r'C:\Music', r'\\server\music', '/srv/music'])
+def test_alias_facts_compact_validated_containers_without_losing_fallback(monkeypatch, root_path):
+    from music_app.services import relation_projection_builder as builder
+
+    private = root_path.rstrip('/\\') + '/Fallback/Shared Era/03.flac'
+    rows = [
+        _row(album_id=1, artist='Artist One', root_path=root_path,
+             relative_path='Collective/Shared Era/01.flac'),
+        _row(album_id=1, artist='Artist One', member='Guest', root_path=root_path,
+             relative_path='Collective/Shared Era/02.flac'),
+        _row(album_id=1, artist='Artist One', root_path=root_path,
+             relative_path='Collective/Shared Era/../../../../outside.flac', private_path=private),
+        _row(album_id=1, artist='Artist One', root_path=root_path,
+             relative_path='../outside.flac', private_path=root_path + '-outside/Bad/01.flac'),
+        _row(album_id=2, artist='Artist One feat. Guest', root_path=root_path,
+             relative_path='Fallback/Shared Era/04.flac'),
+    ]
+    intake = _row(album_id=3, artist='Intake Artist', root_path=root_path,
+                  relative_path='Collective/Shared Era/05.flac')
+    intake['root_kind'] = 'intake'
+    rows.append(intake)
+    expected = _build(rows)
+    original = builder._build_alias_views
+    captured = []
+
+    def capture(albums):
+        captured.extend(albums)
+        return original(albums)
+
+    monkeypatch.setattr(builder, '_build_alias_views', capture)
+    actual = builder.build_postgres_relation_alias_views(rows)
+    assert actual == {key: expected[key] for key in actual}
+    assert [(location.library_root_id, location.relative_parts)
+            for location in captured[0].locations] == [
+                ('11', ('Collective', 'Shared Era')),
+                ('11', ('Fallback', 'Shared Era')),
+            ]
+    assert captured[2].locations == ()
+    assert captured[0].artists == ('Artist One', 'Guest')
+
+
+def test_full_album_facts_preserve_family_evidence_and_track_locations():
+    from music_app.services import relation_projection_builder as builder
+
+    row = _row(album_id=1, artist='Owner', member='Collaborator',
+               relative_path='Owner/Album/01.flac', compilation=True,
+               featured_kind='featured_track_artist',
+               member_artist_is_album_wide_track_artist=True,
+               relation_evidence_kind='soundtrack_root')
+    fact, = builder._album_facts([row])
+    assert fact.is_compilation is True
+    assert fact.family_excluded is True
+    assert fact.family_artists == ('Collaborator', 'Owner')
+    assert fact.locations[0].relative_parts == ('Owner', 'Album', '01.flac')
+    assert fact.locations[0].root_path == r'C:\Music'
+
+
+def test_artist_typo_rejects_impossible_match_without_full_ratio(
+    monkeypatch, isolated_artist_string_caches,
+):
+    builder, _ = isolated_artist_string_caches
+    original = builder.SequenceMatcher
+
+    class GuardedMatcher(original):
+        def ratio(self):
+            pytest.fail("An upper bound below 0.9 must skip full matching")
+
+    monkeypatch.setattr(builder, "SequenceMatcher", GuardedMatcher)
+    assert not builder._are_probable_artist_typos("Solar Abcdef", "Solar Uvwxyz")
+
+
+def test_artist_typo_upper_bound_preserves_original_decisions(isolated_artist_string_caches):
+    from difflib import SequenceMatcher
+    from itertools import product
+
+    builder, _ = isolated_artist_string_caches
+    names = [
+        "Solar Artist", "Solar Artis", "Solar Artists", "Solar Artixt",
+        "Solar Abcdef", "Solar Uvwxyz", "Solar Artist feat Guest",
+        "Solar Artist & Guest", "Aarni", "Aarn", "Annot Rhul", "Annöt Rhul",
+        "Ария", "Арда", "", "A", "A B", "A-B", "B A",
+    ]
+    for left, right in product(names, repeat=2):
+        a, b = builder._compact_key(left), builder._compact_key(right)
+        expected = bool(
+            left and right and left != right and a and b
+            and a[0] == b[0] and abs(len(a) - len(b)) <= 2
+            and SequenceMatcher(None, a, b).ratio() >= 0.9
+        )
+        assert builder._are_probable_artist_typos(left, right) == expected, (left, right)

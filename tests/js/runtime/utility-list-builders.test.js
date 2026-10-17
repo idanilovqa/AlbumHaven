@@ -190,6 +190,7 @@ function loadHelpers() {
   };
   vm.createContext(context);
   context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'view-state-helpers.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(
     orderAlbumTracksHelperSource,
@@ -3844,6 +3845,9 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
   await context.watchSaveTask('queued-rename-terminal', {
     originalAlbum: staleAlbum,
     originatingViewStateRevision: 12,
+    tagEditAlert: {
+      completionMessage: 'Saved changes to 1 track in “New Album”.',
+    },
     tagEdits: {
       [trackPath]: { album: 'New Album', year: '2026' },
     },
@@ -3865,9 +3869,14 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
     ['Hydrated Track'],
     'canonical identity adoption must retain hydrated modal membership',
   );
-  assert.deepEqual(alerts, [
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
-    ['Library view updated from saved files.', 'success', 1000],
+    [
+      'Saved changes to 1 track in “New Album”.',
+      'success',
+      2000,
+      { title: 'Tags updated', dismissible: false },
+    ],
   ]);
 });
 
@@ -4131,9 +4140,15 @@ test('watchSaveTask keeps optimistic state without an error when polling exhaust
 
   await context.watchSaveTask('never-terminal');
 
-  assert.equal(fetchCount, 40);
-  assert.deepEqual(alerts, [
+  assert.equal(fetchCount, 120);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
+    [
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    ],
   ]);
   assert.equal(settledClaims.length, 1, 'poll exhaustion must retain the optimistic result');
   assert.deepEqual(releasedClaims, [], 'running status must not use failed-task cleanup');
@@ -4142,6 +4157,25 @@ test('watchSaveTask keeps optimistic state without an error when polling exhaust
     false,
     'running status without a server error must not emit an error alert',
   );
+});
+
+test('watchSaveTask does not let an exhausted older edit overwrite a newer notification', async () => {
+  const context = loadHelpers();
+  const alerts = [];
+  let fetchCount = 0;
+  context.fetch = async () => {
+    fetchCount += 1;
+    return { ok: true, async json() { return { ok: true, status: 'running' }; } };
+  };
+  context.waitForBrowserTimeout = async () => {};
+  context.showRepairAlert = (...args) => alerts.push(args);
+  context.tagEditViewMutationStillOwnsResources = () => false;
+  context.settleTagEditViewMutation = () => {};
+
+  await context.watchSaveTask('superseded-task', { tagEditMutationClaim: {} });
+
+  assert.equal(fetchCount, 120);
+  assert.deepEqual(alerts, []);
 });
 
 test('watchSaveTask preserves finalized raw credits for album-only splits', async () => {
@@ -5122,8 +5156,14 @@ test('watchSaveTask rejects an older completion when disjoint sources target the
 
 test('watchSaveTask preserves absolute scroll intent through a required view refresh', async () => {
   const context = loadHelpers();
+  context.state.view.surface = { active: 'albums' };
+  context.state.view.selected_artist = '';
   const refreshCalls = [];
-  context.buildApiUrl = () => '/api/library';
+  const buildApiOptions = [];
+  context.buildApiUrl = (_view, options) => {
+    buildApiOptions.push(options);
+    return '/api/library';
+  };
   context.fetch = async () => ({
     ok: true,
     async json() {
@@ -5145,6 +5185,7 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
     preserveAbsoluteScroll: true,
   });
 
+  assert.deepEqual(JSON.parse(JSON.stringify(buildApiOptions)), [{ rootFullPayload: true }]);
   assert.equal(refreshCalls.length, 1);
   assert.equal(refreshCalls[0][0], '/api/library');
   assert.equal(refreshCalls[0][1], false);
@@ -5159,6 +5200,33 @@ test('watchSaveTask preserves absolute scroll intent through a required view ref
       restartIfSameUrl: true,
     },
   );
+});
+
+test('watchSaveTask preserves the committed search request without a root payload tier', async () => {
+  const context = loadHelpers();
+  context.state.view.surface = { active: 'albums' };
+  context.state.view.selected_artist = '';
+  context.state.view.query = 'Sparse';
+  const refreshCalls = [];
+  context.buildApiUrl = (_view, options = {}) => (
+    `/view-data?surface=albums&q=Sparse${options.payloadTier ? `&payload_tier=${options.payloadTier}` : ''}`
+  );
+  context.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { ok: true, status: 'completed', requires_view_refresh: true, updated_albums: [] };
+    },
+  });
+  context.fetchAndRender = async (...args) => {
+    refreshCalls.push(args);
+    return true;
+  };
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('committed-search-refresh-task');
+
+  assert.equal(refreshCalls.length, 1);
+  assert.equal(refreshCalls[0][0], '/view-data?surface=albums&q=Sparse');
 });
 
 test('watchSaveTask preserves absolute scroll intent while rendering finalized albums', async () => {

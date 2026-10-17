@@ -1,6 +1,9 @@
 import { expect } from '@playwright/test';
 import { acknowledgeSavedNotification, deliverSavedNotificationThroughStatus } from '../helpers/savedNotificationDelivery.js';
 
+const TAG_EDIT_RUNNING_MESSAGE = /^Updating \d+ tracks? in “.+”\.$/u;
+const TAG_EDIT_SAVED_MESSAGE = /^Saved changes to \d+ tracks? in “.+”\.$/u;
+
 export class TagEditorActions {
   constructor(tagEditor) {
     this.tagEditor = tagEditor;
@@ -40,6 +43,9 @@ export class TagEditorActions {
         .filter(Boolean),
       activeTrackCount: await this.tagEditor.activeTrackButtons.count(),
       exceptionType: String(await this.tagEditor.exceptionSelect.inputValue() || ''),
+      customCollectionName: String(
+        await this.tagEditor.customCollectionNameInput.inputValue() || '',
+      ),
       alertText: String(alertMessages[0] || '').trim(),
     };
   }
@@ -55,10 +61,9 @@ export class TagEditorActions {
         .filter((sample) => sample.visible && sample.text)
         .map((sample) => sample.text)
         .filter((text, index, allText) => index === 0 || text !== allText[index - 1]);
-      const runningIndex = visibleText.indexOf('Writing tag changes...');
-      const successText = 'Tag changes saved.';
-      const successIndexes = visibleText
-        .map((text, index) => (text === successText ? index : -1))
+    const runningIndex = visibleText.findIndex((text) => TAG_EDIT_RUNNING_MESSAGE.test(text));
+    const successIndexes = visibleText
+      .map((text, index) => (TAG_EDIT_SAVED_MESSAGE.test(text) ? index : -1))
         .filter((index) => index >= 0);
       expect(
         runningIndex,
@@ -191,6 +196,25 @@ export class TagEditorActions {
     return (await this.tagEditor.activeTrackTitles.allTextContents())
       .map((filename) => String(filename || '').trim())
       .filter(Boolean);
+  }
+
+  async readFolderPath() {
+    await expect(this.tagEditor.folderPath).toBeVisible();
+    return String(await this.tagEditor.folderPath.textContent() || '').trim();
+  }
+
+  async loadAllFilesFromFolder({ expectedTrackCount, timeout = 30000 } = {}) {
+    await expect(this.tagEditor.folderLoadButton).toBeVisible();
+    await expect(this.tagEditor.folderLoadButton).toHaveAttribute(
+      'aria-label',
+      'Load all files from this folder',
+    );
+    await expect(this.tagEditor.folderLoadButton.locator('svg')).toHaveCount(1);
+    await this.tagEditor.folderLoadButton.click();
+    if (expectedTrackCount !== undefined) {
+      await expect(this.tagEditor.trackButtons).toHaveCount(Number(expectedTrackCount), { timeout });
+    }
+    await expect(this.tagEditor.folderLoadButton).not.toHaveAttribute('aria-busy', 'true');
   }
 
   async selectTrackWithModifier(filename, modifier) {
@@ -506,13 +530,28 @@ export class TagEditorActions {
   }
 
   async setException(exceptionType) {
-    await this.tagEditor.exceptionSelect.selectOption({ label: exceptionType });
+    await this.tagEditor.exceptionSelect.fill(exceptionType);
+    await this.tagEditor.exceptionSelect.blur();
     await expect(this.tagEditor.exceptionSelect).toHaveValue(exceptionType);
   }
 
   async clearException() {
-    await this.tagEditor.exceptionSelect.selectOption({ label: 'None' });
+    await this.tagEditor.exceptionSelect.fill('');
+    await this.tagEditor.exceptionSelect.blur();
     await expect(this.tagEditor.exceptionSelect).toHaveValue('');
+  }
+
+  async setCustomCollectionName(collectionName) {
+    await expect(this.tagEditor.customCollectionNameInput).toBeVisible();
+    await this.tagEditor.customCollectionNameInput.fill(collectionName);
+    await this.tagEditor.customCollectionNameInput.blur();
+    await expect(this.tagEditor.customCollectionNameInput).toHaveValue(collectionName);
+  }
+
+  async expectApplyDisabledForMissingCollectionName() {
+    await expect(this.tagEditor.customCollectionNameInput).toBeVisible();
+    await expect(this.tagEditor.customCollectionNameInput).toHaveValue('');
+    await expect(this.tagEditor.applyButton).toBeDisabled();
   }
 
   async expectNonAlbumRarityConfirmationThenCancel() {
@@ -836,19 +875,20 @@ export class TagEditorActions {
             task: responseTaskCompleted ? payload : saveTaskStatuses.get(saveTaskId),
           });
         }
-        await expect(this.tagEditor.repairAlertMessage).toHaveText(
-          responseTaskCompleted
-            ? 'Tag changes saved.'
-            : 'Library view updated from saved files.',
-          { timeout },
-        );
-        if (options.savedNotificationDelivery === 'status-page') {
-          await deliverSavedNotificationThroughStatus(this.tagEditor,
-            responseTaskCompleted ? 'Tag changes saved.' : 'Library view updated from saved files.',
-            { timeout, beforeNavigation: options.beforeSavedNotification });
-        } else if (options.savedNotificationDelivery === 'current-view') {
-          await acknowledgeSavedNotification(this.tagEditor,
-            responseTaskCompleted ? 'Tag changes saved.' : 'Library view updated from saved files.', { timeout });
+      const expectedCompletionMessage = responseTaskCompleted
+        ? TAG_EDIT_SAVED_MESSAGE
+        : 'Library view updated from saved files.';
+      await expect(this.tagEditor.repairAlertMessage).toHaveText(expectedCompletionMessage, { timeout });
+      const deliveredCompletionMessage = responseTaskCompleted
+        ? String(await this.tagEditor.repairAlertMessage.textContent() || '').trim()
+        : expectedCompletionMessage;
+      if (options.savedNotificationDelivery === 'status-page') {
+        await deliverSavedNotificationThroughStatus(this.tagEditor,
+          deliveredCompletionMessage,
+          { timeout, beforeNavigation: options.beforeSavedNotification });
+      } else if (options.savedNotificationDelivery === 'current-view') {
+        await acknowledgeSavedNotification(this.tagEditor,
+          deliveredCompletionMessage, { timeout });
         } else {
           await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
         }
@@ -903,10 +943,10 @@ export class TagEditorActions {
       saveTaskId,
       waitForCompletion: async (waitOptions = {}) => {
         const completionTimeout = waitOptions.timeout || timeout;
-        await expect(terminalSavedAlert).toHaveText(
-          'Tag changes saved.',
-          { timeout: completionTimeout },
-        );
+          await expect(terminalSavedAlert).toHaveText(
+            TAG_EDIT_SAVED_MESSAGE,
+            { timeout: completionTimeout },
+          );
         await expect(this.tagEditor.overlay).toBeHidden({ timeout: completionTimeout });
         await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout: completionTimeout });
         return payload;
@@ -942,7 +982,7 @@ export class TagEditorActions {
       await expect(this.tagEditor.confirmDialog).toBeVisible({ timeout });
       await this.tagEditor.confirmButton.click();
       await expect(this.tagEditor.repairAlertMessage).toHaveText(
-        'Writing tag changes...',
+        TAG_EDIT_RUNNING_MESSAGE,
         { timeout },
       );
       await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
@@ -963,22 +1003,20 @@ export class TagEditorActions {
 
       await expect(this.tagEditor.overlay).toBeHidden({ timeout });
       await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
-      await expect(this.tagEditor.repairAlertMessage).toHaveText('Tag changes saved.', { timeout });
+      await expect(this.tagEditor.repairAlertMessage).toHaveText(TAG_EDIT_SAVED_MESSAGE, { timeout });
       await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
       const notificationSamples = await notificationObservation.finish();
       notificationObservation = null;
       const visibleSamples = notificationSamples.filter((sample) => sample.visible);
       expect(visibleSamples.some((sample) => (
-        sample.text === 'Writing tag changes...'
+      TAG_EDIT_RUNNING_MESSAGE.test(sample.text)
       ))).toBe(true);
       expect(visibleSamples.filter((sample) => sample.error)).toEqual([]);
       expect(visibleSamples.some((sample) => (
         sample.text === 'Tag changes queued. Finalizing library view...'
         || sample.text === 'Library view updated from saved files.'
       ))).toBe(false);
-      expect(visibleSamples.some((sample) => (
-        sample.text === 'Tag changes saved.'
-      ))).toBe(true);
+      expect(visibleSamples.some((sample) => TAG_EDIT_SAVED_MESSAGE.test(sample.text))).toBe(true);
       expect(saveTaskPollCount).toBe(0);
       return { notificationSamples, payload, saveTaskId };
     } finally {
@@ -1086,7 +1124,7 @@ export class TagEditorActions {
       }
       const { payload, retainedOptimisticState } = terminalResponseOutcome.value;
       await expect(this.tagEditor.repairAlertMessage).toHaveText(
-        'Tag changes saved.',
+        TAG_EDIT_SAVED_MESSAGE,
         { timeout },
       );
       await expect(this.tagEditor.overlay).toBeHidden({ timeout });
@@ -1099,8 +1137,8 @@ export class TagEditorActions {
         'from saved files.',
       ].join(' ');
       if (observesNotificationLifecycle) {
-        expect(visibleSamples.some((sample) => sample.text === 'Writing tag changes...')).toBe(true);
-        expect(visibleSamples.some((sample) => sample.text === 'Tag changes saved.')).toBe(true);
+    expect(visibleSamples.some((sample) => TAG_EDIT_RUNNING_MESSAGE.test(sample.text))).toBe(true);
+        expect(visibleSamples.some((sample) => TAG_EDIT_SAVED_MESSAGE.test(sample.text))).toBe(true);
         expect(visibleSamples.filter((sample) => sample.error)).toEqual([]);
         expect(visibleSamples.some((sample) => (
           sample.text === 'Tag changes queued. Finalizing library view...'

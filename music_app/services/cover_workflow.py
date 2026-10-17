@@ -14,6 +14,7 @@ from typing import Callable
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
 from music_app.services.covers import Image, reserve_existing_cover_variant
 from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
+from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 
 _ALBUM_DISC_MARKER_RE = re.compile(
@@ -206,17 +207,18 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
     except Exception as exc:
         raise ValueError("Clipboard image data could not be decoded.") from exc
     target = album_root / "cover.jpg"
-    if Image is None:
-        if mime_type != "image/jpeg":
-            raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
-        target.write_bytes(raw_bytes)
-        return target
-    try:
-        with Image.open(io.BytesIO(raw_bytes)) as img:
-            converted = img.convert("RGB")
-            converted.save(target, format="JPEG", quality=95)
-    except Exception as exc:
-        raise ValueError("Clipboard image could not be processed.") from exc
+    with suppress_library_watch_events((target,)):
+        if Image is None:
+            if mime_type != "image/jpeg":
+                raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
+            target.write_bytes(raw_bytes)
+            return target
+        try:
+            with Image.open(io.BytesIO(raw_bytes)) as img:
+                converted = img.convert("RGB")
+                converted.save(target, format="JPEG", quality=95)
+        except Exception as exc:
+            raise ValueError("Clipboard image could not be processed.") from exc
     return target
 
 
@@ -325,27 +327,28 @@ def _atomic_replace_file_bytes(
     atime_ns: int | None = None,
     mtime_ns: int | None = None,
 ) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
-            temp_file.write(raw_bytes)
-            temp_file.flush()
-            os.fsync(temp_file.fileno())
-        if atime_ns is not None and mtime_ns is not None:
-            os.utime(temp_path, ns=(atime_ns, mtime_ns))
-        os.replace(temp_path, target)
-        temp_path = None
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+    with suppress_library_watch_events((target,)):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                temp_file.write(raw_bytes)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            if atime_ns is not None and mtime_ns is not None:
+                os.utime(temp_path, ns=(atime_ns, mtime_ns))
+            os.replace(temp_path, target)
+            temp_path = None
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
 
 def begin_local_image_promotion(
@@ -687,7 +690,8 @@ def delete_local_cover_and_choose_next(
     is_squareish_cover,
     score_image,
 ) -> Path | None:
-    source_path.unlink()
+    with suppress_library_watch_events((source_path,)):
+        source_path.unlink()
     if not active_cover_path or source_path != active_cover_path:
         return active_cover_path
     next_source = choose_best_remaining_local_cover(

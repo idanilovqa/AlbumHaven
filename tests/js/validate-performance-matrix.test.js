@@ -18,11 +18,13 @@ const { EXPECTED } = require('../../scripts/ci/write-foundation-version-manifest
 
 const FIXTURE_RELEASE = 'fixtures-v1.0.25';
 const FIXTURE_MANIFEST_SHA256 = 'e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60';
+const ARTWORK_GENERATOR_COMMIT = 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11';
 const EXPECTED_SHARDS = [
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
+  { shard: 'gallery-artwork-diversity', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-derived', harness: 'managed-app', basePort: '4333', targets: 'gallery-artwork-diversity' },
 ];
 
 function performanceJobSource(source = workflow) {
@@ -40,12 +42,32 @@ function stepContaining(job, marker) {
   return step;
 }
 
-test('approved registry keeps 22 independently schedulable targets and 30 cases', () => {
-  assert.equal(contract.targets.length, 22);
-  assert.equal(contract.targets.flatMap((target) => target.cases).length, 30);
+test('approved registry keeps 24 independently schedulable targets and 53 cases', () => {
+  assert.equal(contract.targets.length, 24);
+  assert.equal(contract.targets.flatMap((target) => target.cases).length, 53);
   assert.deepEqual(
     contract.targets.filter((target) => target.defaultMember).map((target) => target.name),
     contract.targets.map((target) => target.name),
+  );
+  const nav036Owners = contract.targets.filter((target) =>
+    target.cases.some((entry) => entry.case.startsWith('FTC-GALLERY-NAV-036 '))
+  );
+  assert.deepEqual(nav036Owners.map((target) => target.name), ['gallery-artwork-diversity']);
+  const scrollNavigation = contract.targets.find((target) => (
+    target.name === 'artist-tree-scroll-navigation'
+  ));
+  assert.equal(scrollNavigation.cases.length, 22);
+  assert.deepEqual(
+    scrollNavigation.cases
+      .filter((entry) => entry.test.endsWith('galleryNativeScrollStability.spec.js'))
+      .map((entry) => entry.case),
+    [
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Cards › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Covers › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › mobile Rows › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop Cards › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'FTC-GALLERY-NAV-035 synthetic-large native gallery scroll stability › desktop Covers › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+    ],
   );
   for (const target of contract.targets) {
     assert.equal(target.workers, 1, target.name);
@@ -58,13 +80,13 @@ test('performance validator and shard runner exist', () => {
   assert.equal(fs.existsSync(shardRunnerPath), true, 'Missing scripts/ci/run-performance-shard.ps1');
 });
 
-test('workflow has four selectable fixture-profile runners owning all 22 targets once', () => {
+test('workflow has five selectable fixture-profile runners owning all 24 targets once', () => {
   const job = performanceJobSource();
   const rows = validator.parseStaticPerformanceMatrix(workflow);
   assert.deepEqual(rows, EXPECTED_SHARDS);
   const owned = rows.flatMap((row) => row.targets.split(','));
-  assert.equal(owned.length, 22);
-  assert.equal(new Set(owned).size, 22);
+  assert.equal(owned.length, 24);
+  assert.equal(new Set(owned).size, 24);
   assert.deepEqual(new Set(owned), new Set(contract.targets.map((target) => target.name)));
   assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.performance_shards_json\)\s*\}\}/);
   assert.match(job, /resolve-ci-shard\.cjs performance \$\{\{\s*matrix\.shard\s*\}\}/);
@@ -74,9 +96,9 @@ test('workflow has four selectable fixture-profile runners owning all 22 targets
   assert.match(job, /max-parallel:\s*4/);
   assert.deepEqual(
     rows.map((row) => row.fixtureProfile),
-    ['synthetic-large-library', 'utility-problematic-files', 'playback-media', 'scan-library'],
+    ['synthetic-large-library', 'utility-problematic-files', 'playback-media', 'scan-library', 'synthetic-large-library'],
   );
-  assert.equal(rows[0].targets.split(',').length, 11, 'synthetic-large-library must own all ten compatible targets');
+  assert.equal(rows[0].targets.split(',').length, 12, 'synthetic-large-library must own all twelve compatible targets');
   assert.doesNotMatch(job, /timeout-minutes:/, 'a multi-target shard must not squeeze later targets into a shared wall-clock budget');
 });
 
@@ -97,7 +119,7 @@ test('validator accepts selectable shards and rejects routing and case drift', (
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
-  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /30 cases/);
+  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /53 cases/);
 
   const paidCampaign = structuredClone(contract);
   paidCampaign.calibrationPolicy.separateCampaignRequired = true;
@@ -124,10 +146,10 @@ test('profile runners remain same-repository PR-context Windows Chrome jobs capp
   assert.match(job, /github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/);
   assert.match(job, /runs-on:\s*windows-2025/);
   assert.doesNotMatch(job, /continue-on-error:/);
-  assert.match(job, /-Browser\s+chrome/);
+  assert.match(job, /Browser\s*=\s*["']chrome["']/);
   assert.match(job, /run-performance-shard\.ps1/);
-  assert.match(job, /-Targets\s+["']?\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}/);
-  assert.match(job, /-BasePort\s+["']?\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}/);
+  assert.match(job, /Targets\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}["']/);
+  assert.match(job, /BasePort\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}["']/);
 });
 
 test('performance foundations are written only after shared shard PostgreSQL provisioning', () => {
@@ -189,9 +211,49 @@ test('each shard fetches an immutable profile or cover seed before pull-request 
   assert.match(job, /ALBUM_HAVEN_MEDIA_ROOT= /);
 });
 
+test('artwork-diversity CI pins a sibling generator checkout and passes it only to the derived shard', () => {
+  const job = performanceJobSource();
+  const pullRequestCheckout = stepContaining(job, 'ref: ${{ github.sha }}');
+  const trustedCheckout = stepContaining(job, 'github.event.pull_request.base.sha');
+  const generatorCheckout = stepContaining(job, 'idanilovqa/album-haven-test-data');
+  const runner = stepContaining(job, 'run-performance-shard.ps1');
+
+  assert.match(job, /defaults:\s*\r?\n\s+run:\s*\r?\n\s+working-directory:\s*\$\{\{\s*github\.workspace\s*\}\}\\album-haven-app/);
+  assert.match(pullRequestCheckout, /path:\s*album-haven-app/);
+  assert.match(pullRequestCheckout, /fetch-depth:\s*0/);
+  assert.match(pullRequestCheckout, /persist-credentials:\s*false/);
+  assert.match(trustedCheckout, /path:\s*album-haven-trusted-ci/);
+  assert.match(generatorCheckout, /if:\s*(?:\$\{\{\s*)?matrix\.shard\s*==\s*['"]gallery-artwork-diversity['"](?:\s*\}\})?/);
+  assert.match(generatorCheckout, new RegExp(`ref:\\s*${ARTWORK_GENERATOR_COMMIT}`));
+  assert.match(generatorCheckout, /path:\s*album-haven-test-data/);
+  assert.match(generatorCheckout, /token:\s*\$\{\{\s*secrets\.ALBUM_HAVEN_FIXTURES_TOKEN\s*\}\}/);
+  assert.match(generatorCheckout, /persist-credentials:\s*false/);
+  assert.match(job, /cache-dependency-path:\s*album-haven-app\/package-lock\.json/);
+  assert.match(job, /cache-dependency-path:\s*album-haven-app\/requirements\.txt/);
+  assert.match(job, /album-haven-trusted-ci\\scripts\\ci\\fetch-test-fixtures\.ps1/);
+
+  assert.match(runner, /fixture_mode\s*\}\}"\s+-eq\s+['"]preloaded-derived['"]/);
+  assert.match(runner, /Join-Path\s+['"]\$\{\{\s*github\.workspace\s*\}\}['"]\s+['"]album-haven-test-data['"]/);
+  assert.match(runner, /git\s+-C\s+\$generatorCheckout\s+rev-parse\s+HEAD/);
+  assert.match(runner, new RegExp(`\\$generatorHead\\s+-ne\\s+['"]${ARTWORK_GENERATOR_COMMIT}['"]`));
+  for (const [parameter, value] of [
+    ['GeneratorCheckout', '\\$generatorCheckout'],
+    ['ExpectedFixtureRelease', `["']${FIXTURE_RELEASE.replaceAll('.', '\\.')}["']`],
+    ['BaseManifestSha256', `["']${FIXTURE_MANIFEST_SHA256}["']`],
+    ['GeneratorCommit', `["']${ARTWORK_GENERATOR_COMMIT}["']`],
+    ['VariantCount', '512'],
+    ['SourceMaxEdge', '960'],
+  ]) {
+    assert.match(runner, new RegExp(`${parameter}\\s*=\\s*${value}`));
+  }
+  assert.match(runner, /run-performance-shard\.ps1\s+@runnerArguments/);
+  assert.match(job, /path:\s*album-haven-app\/test-results\/playwright-performance-targets/);
+  assert.match(job, /album-haven-app\/test-results\/playwright-artifacts/);
+});
+
 test('each target retains individual result, diagnostics, and foundation artifacts', () => {
   const job = performanceJobSource();
-  for (let slot = 1; slot <= 10; slot += 1) {
+  for (let slot = 1; slot <= 12; slot += 1) {
     const expression = `\${{ steps.shard.outputs.target${slot} }}`;
     const result = stepContaining(job, `performance-result-${expression}`);
     const foundation = stepContaining(job, `foundation-versions-performance-${expression}`);
@@ -206,9 +268,9 @@ test('each target retains individual result, diagnostics, and foundation artifac
   }
 });
 
-test('functional shards and all-22 authenticated target artifacts remain present without report jobs', () => {
+test('functional shards and all-24 authenticated target artifacts remain present without report jobs', () => {
   assert.match(workflow, /^\s{2}e2e_functional:/m);
   assert.match(workflow, /validate-functional-shards\.cjs @arguments/);
-  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target10\s*\}\}/);
+  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target12\s*\}\}/);
   assert.doesNotMatch(workflow, /^  (?:merge_cloud_reports|deploy_cloud_reports):/m);
 });

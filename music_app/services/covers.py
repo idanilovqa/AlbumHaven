@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from threading import Lock, RLock
 
+from music_app.services.library_watch_suppression import suppress_library_watch_events
+
 try:
     from PIL import Image, ImageFilter
 except ImportError:
@@ -23,16 +25,16 @@ _IMAGE_DIMENSIONS_CACHE: dict[str, tuple[tuple[int, int] | None, tuple[int, int]
 _COVER_VARIANT_PREWARM_LOCK = RLock()
 _COVER_VARIANT_PREWARM_INFLIGHT: dict[str, dict[str, object]] = {}
 _COVER_VARIANT_ADMISSION_LOCK = Lock()
-_COVER_VARIANT_ADMISSION_INFLIGHT: set[tuple[str, str, int]] = set()
+_COVER_VARIANT_ADMISSION_INFLIGHT: set[tuple[str, str, int, str]] = set()
 _COVER_VARIANT_ADMISSION_WORKERS = 2
 _COVER_VARIANT_BACKGROUND_WORKERS = 2
 _COVER_VARIANT_BACKGROUND_CAPACITY = (
     _COVER_VARIANT_ADMISSION_WORKERS + _COVER_VARIANT_BACKGROUND_WORKERS
 )
 _COVER_VARIANT_BACKGROUND_PENDING: OrderedDict[
-    tuple[str, str, int], tuple[Path, dict[str, object]]
+    tuple[str, str, int, str], tuple[Path, dict[str, object]]
 ] = OrderedDict()
-_COVER_VARIANT_BACKGROUND_RUNNING: set[tuple[str, str, int]] = set()
+_COVER_VARIANT_BACKGROUND_RUNNING: set[tuple[str, str, int, str]] = set()
 _COVER_VARIANT_BACKGROUND_DRAINERS = 0
 _COVER_VARIANT_FOREGROUND_WORKERS = 5
 _COVER_VARIANT_INTERACTIVE_WORKERS = 1
@@ -244,10 +246,11 @@ def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | Non
     while True:
         candidate = folder / f"cover-existing-{index}.jpg"
         try:
-            with candidate.open("xb") as reserve_file:
-                reserve_file.write(current_bytes)
-                reserve_file.flush()
-                os.fsync(reserve_file.fileno())
+            with suppress_library_watch_events((candidate,)):
+                with candidate.open("xb") as reserve_file:
+                    reserve_file.write(current_bytes)
+                    reserve_file.flush()
+                    os.fsync(reserve_file.fileno())
         except FileExistsError:
             index += 1
             continue
@@ -273,6 +276,17 @@ def normalize_cover_variant_size(value: object, *, maximum: int = 2048) -> int:
     if normalized <= 0:
         return 0
     return min(normalized, maximum)
+
+
+def normalize_cover_variant_revision(value: object) -> str:
+    normalized = str(value or "").strip().casefold()
+    if len(normalized) != 64:
+        return ""
+    try:
+        int(normalized, 16)
+    except ValueError:
+        return ""
+    return normalized
 
 
 def normalize_cover_variant_priority(value: object) -> str:
@@ -320,16 +334,36 @@ def build_cover_variant_path(source_path: Path, *, cache_root: Path, max_size: i
     ).with_suffix(extension)
 
 
-def display_cover_variant_cache_root(source_path: Path) -> Path:
-    """Return app-owner shared preview storage beside the album media."""
+def display_cover_variant_cache_root(
+    source_path: Path,
+    *,
+    data_dir: object | None = None,
+) -> Path:
+    """Return display-preview storage, preferring fast app-local data."""
+    if data_dir:
+        return Path(str(data_dir)) / "display-cover-cache"
     return Path(source_path).parent / ".album-haven"
 
 
-def build_cover_variant_base_path(source_path: Path, *, cache_root: Path, max_size: int) -> Path:
-    signature = _image_dimensions_signature(source_path) or (0, 0)
-    cache_key_material = f"{source_path.resolve()}|{signature[0]}|{signature[1]}|{max_size}"
-    if source_path.suffix.casefold() == ".png":
-        cache_key_material = f"{cache_key_material}|{_COVER_VARIANT_CACHE_POLICY_VERSION}"
+def build_cover_variant_base_path(
+    source_path: Path,
+    *,
+    cache_root: Path,
+    max_size: int,
+    revision: str | None = None,
+) -> Path:
+    normalized_revision = normalize_cover_variant_revision(revision)
+    if normalized_revision:
+        normalized_path = os.path.normcase(os.path.abspath(os.fspath(source_path)))
+        cache_key_material = (
+            f"{normalized_path}|revision:{normalized_revision}|{max_size}"
+            f"|{_COVER_VARIANT_CACHE_POLICY_VERSION}"
+        )
+    else:
+        signature = _image_dimensions_signature(source_path) or (0, 0)
+        cache_key_material = f"{source_path.resolve()}|{signature[0]}|{signature[1]}|{max_size}"
+        if source_path.suffix.casefold() == ".png":
+            cache_key_material = f"{cache_key_material}|{_COVER_VARIANT_CACHE_POLICY_VERSION}"
     cache_key = hashlib.sha1(
         cache_key_material.encode("utf-8", "ignore")
     ).hexdigest()
@@ -515,19 +549,21 @@ def find_existing_cover_display_variant(
     *,
     cache_root: Path,
     max_size: int,
+    revision: str | None = None,
 ) -> Path | None:
     normalized_size = normalize_cover_variant_size(max_size)
-    if (
-        Image is None
-        or normalized_size <= 0
-        or not source_path.exists()
-        or not source_path.is_file()
+    normalized_revision = normalize_cover_variant_revision(revision)
+    if Image is None or normalized_size <= 0:
+        return None
+    if not normalized_revision and (
+        not source_path.exists() or not source_path.is_file()
     ):
         return None
     variant_base_path = build_cover_variant_base_path(
         source_path,
         cache_root=cache_root,
         max_size=normalized_size,
+        revision=normalized_revision,
     )
     return _find_existing_cover_variant(variant_base_path)
 
@@ -538,6 +574,7 @@ def resolve_cover_display_variant(
     cache_root: Path,
     max_size: int,
     priority: str = _COVER_VARIANT_PRIORITY_FOREGROUND,
+    revision: str | None = None,
 ) -> Path:
     normalized_size = normalize_cover_variant_size(max_size)
     if (
@@ -552,6 +589,7 @@ def resolve_cover_display_variant(
         source_path,
         cache_root=cache_root,
         max_size=normalized_size,
+        revision=revision,
     )
     if existing_variant is not None:
         return existing_variant
@@ -560,6 +598,7 @@ def resolve_cover_display_variant(
         source_path,
         cache_root=cache_root,
         max_size=normalized_size,
+        revision=revision,
     )
 
     inflight = _queue_cover_variant_generation(
@@ -584,11 +623,13 @@ def _admit_cover_display_variant_generation(
     cache_root: Path,
     normalized_size: int,
     normalized_priority: str,
+    revision: str = "",
 ) -> Future[Path | None] | None:
     variant_base_path = build_cover_variant_base_path(
         source_path,
         cache_root=cache_root,
         max_size=normalized_size,
+        revision=revision,
     )
     if _find_existing_cover_variant(variant_base_path) is not None:
         return
@@ -699,9 +740,11 @@ def queue_cover_display_variant_generation(
     cache_root: Path,
     max_size: int,
     priority: str = _COVER_VARIANT_PRIORITY_BACKGROUND,
+    revision: str | None = None,
 ) -> None:
     normalized_size = normalize_cover_variant_size(max_size)
     normalized_priority = normalize_cover_variant_priority(priority)
+    normalized_revision = normalize_cover_variant_revision(revision)
     if (
         Image is None
         or normalized_size <= 0
@@ -712,12 +755,14 @@ def queue_cover_display_variant_generation(
         "cache_root": cache_root,
         "normalized_size": normalized_size,
         "normalized_priority": normalized_priority,
+        "revision": normalized_revision,
     }
     if normalized_priority == _COVER_VARIANT_PRIORITY_BACKGROUND:
         admission_key = (
             os.path.normcase(os.path.abspath(os.fspath(source_path))),
             os.path.normcase(os.path.abspath(os.fspath(cache_root))),
             normalized_size,
+            normalized_revision,
         )
         with _COVER_VARIANT_ADMISSION_LOCK:
             if admission_key not in _COVER_VARIANT_ADMISSION_INFLIGHT:

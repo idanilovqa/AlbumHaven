@@ -450,6 +450,59 @@ def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_s
     )
 
 
+@pytest.mark.parametrize(
+    ("include_performance_target", "rowcount"),
+    [(False, 1), (True, 2)],
+)
+def test_provider_storage_policy_seed_gates_the_owned_performance_album(
+    monkeypatch,
+    include_performance_target,
+    rowcount,
+):
+    recorded = {}
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def execute(self, sql, params):
+            recorded["sql"] = " ".join(str(sql).split())
+            recorded["params"] = params
+            return SimpleNamespace(rowcount=rowcount)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _database_url: FakeConnection()),
+    )
+
+    isolatedLibraryApp.persist_provider_storage_policy_candidates(
+        "postgresql://fixture",
+        4175,
+        {"cover_id": "provider-storage-policy-cover"},
+        include_performance_target=include_performance_target,
+    )
+
+    assert "Synthetic Scale Artist 0464" in recorded["sql"]
+    assert "Synthetic Scale Album 00444" in recorded["sql"]
+    storage_candidates = json.loads(recorded["params"][0])
+    performance_candidates = json.loads(recorded["params"][1])
+    assert {
+        (candidate["artist"], candidate["album"], candidate["year"])
+        for candidate in storage_candidates
+    } == {("Mastodon", "Crack The Skye", 2009)}
+    assert {
+        (candidate["artist"], candidate["album"], candidate["year"])
+        for candidate in performance_candidates
+    } == {("Synthetic Scale Artist 0464", "Synthetic Scale Album 00444", 2001)}
+    assert recorded["params"][2] == storage_candidates[0]["id"]
+    assert recorded["params"][3] == performance_candidates[0]["id"]
+    assert recorded["params"][4] is include_performance_target
+
+
 def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_shaping():
     source = LAUNCHER_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -467,6 +520,8 @@ def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_
     assert "fixture_media_root = library_root if is_preloaded_fixture else None" in main_source
     assert 'if fixture_profile == "functional-core":' in main_source
     assert "seed_functional_cover_search_cache(" in main_source
+    assert 'os.environ.get("ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET")' in main_source
+    assert '== "production-calibration"' in main_source
     assert "if not is_preloaded_fixture and not reuse_state:" in main_source
     assert "if database_preparation_started and not preserve_on_shutdown:" in main_source
 
@@ -1531,7 +1586,7 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     monkeypatch.setattr(
         isolatedLibraryApp,
         "persist_provider_storage_policy_candidates",
-        lambda *_args: events.append("provider-candidates.persist"),
+        lambda *_args, **_kwargs: events.append("provider-candidates.persist"),
     )
     monkeypatch.setattr(
         isolatedLibraryApp,
@@ -1749,7 +1804,7 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     monkeypatch.setattr(
         isolatedLibraryApp,
         "persist_provider_storage_policy_candidates",
-        lambda *_args: events.append("provider-candidates.persist"),
+        lambda *_args, **_kwargs: events.append("provider-candidates.persist"),
     )
     monkeypatch.setattr(
         isolatedLibraryApp,
@@ -2322,6 +2377,7 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
                 "featured_kind": "featured_member",
                 "track_file_id": index,
                 "library_root_id": "isolated-main-root",
+                "root_kind": "main_library",
                 "root_path": str(relation_root),
                 "relative_path": str(
                     Path(str(entry["path"])).relative_to(relation_root)
@@ -3154,6 +3210,7 @@ def test_isolated_fixture_seeds_alias_parity_rows_and_nested_family_paths(tmp_pa
             "owner_artist_name": artist,
             "member_artist_name": artist,
             "library_root_id": "isolated-main-root",
+            "root_kind": "main_library",
             "root_path": str(relation_root),
             "relative_path": str(track_path.relative_to(relation_root)),
             "private_path": str(track_path),

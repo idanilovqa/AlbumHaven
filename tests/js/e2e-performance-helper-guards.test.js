@@ -398,6 +398,40 @@ test('artist-family benchmark explicitly submits the empty query before awaiting
   assert.match(clearStep, /waitForUrlWithoutQueryParameter\('q', \{ timeout: 10000 \}\)/);
 });
 
+test('artist-family click-to-response timings exclude tree and gallery preparation work', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
+
+  const treeTimingStart = spec.indexOf('const treeNealSelectionMs =');
+  const treeTimingEnd = spec.indexOf("key: 'tree-neal-selection'", treeTimingStart);
+  const treePreparation = spec.lastIndexOf('await navigationPanelActions.openArtistTree();', treeTimingStart);
+  assert.ok(treePreparation >= 0 && treePreparation < treeTimingStart);
+  assert.match(
+    spec.slice(treePreparation + 'await navigationPanelActions.openArtistTree();'.length, treeTimingStart),
+    /^\s*$/,
+  );
+  const treeTiming = spec.slice(treeTimingStart, treeTimingEnd);
+  assert.match(treeTiming, /clickVisibleSidebarArtistByName\(EXPECTED_FAMILY\.primary\)/);
+  assert.doesNotMatch(treeTiming, /selectSidebarArtistByName|openArtistTree/);
+
+  for (const [index, timingName] of [[0, 'firstAlbumOpenMs'], [6, 'secondAlbumOpenMs']]) {
+    const timingStart = spec.indexOf(`const ${timingName} =`);
+    const timingEnd = spec.indexOf('recordTimingCheckpoint', timingStart);
+    const preparation = spec.lastIndexOf(
+      `await galleryActions.prepareAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, ${index});`,
+      timingStart,
+    );
+    assert.ok(preparation >= 0 && preparation < timingStart);
+    const preparationStatement = `await galleryActions.prepareAlbumDetailsByHeadingAndIndex(EXPECTED_FAMILY.primary, ${index});`;
+    assert.match(spec.slice(preparation + preparationStatement.length, timingStart), /^\s*$/);
+    const timing = spec.slice(timingStart, timingEnd);
+    assert.match(
+      timing,
+      new RegExp(`clickVisibleAlbumDetailsByHeadingAndIndex\\(EXPECTED_FAMILY\\.primary, ${index}\\)`),
+    );
+    assert.doesNotMatch(timing, /prepareAlbumDetailsByHeadingAndIndex|scrollIntoViewIfNeeded/);
+  }
+});
+
 test('artist-family benchmark keeps browser mechanics outside the scenario spec', () => {
   const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
   const artistFamilyActions = readRepoFile('tests/e2e/actions/artistFamilyActions.js');
@@ -596,11 +630,19 @@ test('focused selected-artist and root browse reports own complete terminal timi
   for (const metricId of [
     'selected-artist.selectedArtistApiMs',
     'selected-artist.albumDetailsOpenMs',
+    'selected-artist.tagEditorFocusMs',
+    'selected-artist.tagEditorTypingMs',
+    'selected-artist.tagEditorCancelMs',
+    'selected-artist.notificationDrawerOpenMs',
+    'selected-artist.notificationDrawerCloseMs',
+    'selected-artist.galleryReturnMs',
     'root-album-browse.rootAlbumBrowseApiMs',
   ]) {
     assert.match(`${selectedArtist}\n${rootBrowse}\n${fixtures}`, new RegExp(metricId.replaceAll('.', '\\.')));
   }
-  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 2);
+  assert.equal((selectedArtist.match(/recordTerminalTimingOutcome\(/g) || []).length, 3);
+  assert.match(selectedArtist, /measureInteractionToPaint/);
+  assert.match(selectedArtist, /maxLongTaskMs/);
   assert.match(selectedArtist, /recordContractCompletion\(\)/);
   assert.equal((rootBrowse.match(/recordTerminalTimingOutcome\(/g) || []).length, 1);
   assert.match(rootBrowse, /recordContractCompletion\(\)/);
@@ -965,6 +1007,55 @@ test('playback-start approved budget separates target, grace, hard failure, and 
   assert.equal(missingDegradation.passed, false);
 });
 
+test('sustained playback timing rejects wall-clock stalls even when audible time eventually catches up', async () => {
+  const moduleUrl = pathToFileURL(path.join(
+    repoRoot,
+    'tests/e2e/helpers/gaplessPlaybackHelpers.js',
+  )).href;
+  const {
+    MAX_SUSTAINED_PLAYBACK_WALL_OVERHEAD_MS,
+    evaluateSustainedPlaybackTiming,
+  } = await import(moduleUrl);
+
+  assert.equal(MAX_SUSTAINED_PLAYBACK_WALL_OVERHEAD_MS, 1_000);
+  assert.deepEqual(evaluateSustainedPlaybackTiming({
+    elapsedMs: 60_500,
+    currentTimeDelta: 60,
+    requiredSeconds: 60,
+  }), {
+    audibleDurationPassed: true,
+    wallClockOverheadMs: 500,
+    wallClockPassed: true,
+    passed: true,
+  });
+  assert.deepEqual(evaluateSustainedPlaybackTiming({
+    elapsedMs: 63_001,
+    currentTimeDelta: 60,
+    requiredSeconds: 60,
+  }), {
+    audibleDurationPassed: true,
+    wallClockOverheadMs: 3_001,
+    wallClockPassed: false,
+    passed: false,
+  });
+  assert.equal(evaluateSustainedPlaybackTiming({
+    elapsedMs: 60_000,
+    currentTimeDelta: 59.5,
+    requiredSeconds: 60,
+  }).passed, false);
+});
+
+test('reload continuity E2E measures explicit Play startup and a long uninterrupted window', () => {
+  const spec = readRepoFile('tests/e2e/specs/playerReloadAutoplayAllowed.spec.js');
+
+  assert.match(spec, /LONG_SUSTAINED_PLAYBACK_SECONDS = 60/);
+  assert.match(spec, /expectTimingBudget\([\s\S]*PLAYBACK_START_TIMING_BUDGET/);
+  assert.match(spec, /const explicitPlayMark = await playbackEvidence\.playbackMark\(\)/);
+  assert.match(spec, /const explicitPlayStartedAtMs = await page\.evaluate/);
+  assert.match(spec, /evidence\.observedAtMs - explicitPlayStartedAtMs/);
+  assert.match(spec, /seconds: LONG_SUSTAINED_PLAYBACK_SECONDS/);
+});
+
 test('playback-start spec and report retain the owner-approved budget without the intentional gate', () => {
   const spec = readRepoFile('tests/e2e/performance/playbackStart.spec.js');
   const fixtures = readRepoFile('tests/e2e/support/performanceFixtures.js');
@@ -1324,7 +1415,7 @@ test('Problematic Files records timing classification before strict runtime-erro
   const helper = readRepoFile('tests/e2e/helpers/utilityPerformanceHelpers.js');
   const fixture = readRepoFile('tests/e2e/support/baseFixtures.js');
   const timingCheckpoint = spec.indexOf('recordTimingCheckpoint({');
-  const readinessClassification = spec.indexOf('recordTextCheckpoint({');
+  const readinessClassification = spec.indexOf("key: 'problematic-files-focused-readiness-contract'");
   const retainedMetrics = spec.indexOf('setMetricsPayload({');
   const hardAssertion = spec.indexOf('expectTimingBudgetOutcome(');
   const runtimePartition = spec.indexOf('partitionProblematicFilesRuntimeLogs(');
@@ -1411,7 +1502,8 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.match(coldBlock, /await coldResponse\.text\(\)/);
   assert.match(coldBlock, /new TextEncoder\(\)\.encode\(coldResponseBody\)\.byteLength/);
   assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('bounded'\)/);
-  assert.match(coldBlock, /completeSummaryResponse\.json\(\)/);
+  assert.match(coldBlock, /completeSummaryResponse\.text\(\)/);
+  assert.match(coldBlock, /JSON\.parse\(completeResponseBody\)/);
   assert.match(coldBlock, /evaluateProblematicFilesDatasetContract\(/);
   assert.match(coldBlock, /coldInitialDetail\.key\)\.toBe\(coldFirstSummaryItem\.key\)/);
   assert.doesNotMatch(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);
@@ -1454,4 +1546,33 @@ test('new gallery and cold saved-loop playback cases own their exact sample evid
   }
   assert.match(cases[0], /const row=ui\.rows\.filter\(\{hasText:'Clean Signal'\}\)\.first\(\);[\s\S]*?const trackPath=await ui\.readTrackPath\(row\);/);
   assert.match(cases[1], /path: track\.path/);
+});
+
+
+test('populated search timer includes selected album identity and visible cover readiness', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
+  const start = spec.indexOf('const searchPopulatedReadyMs = await stepLogger.step(');
+  const end = spec.indexOf('const searchPayload = await readRuntimeView(page);', start);
+  assert.ok(start >= 0 && end > start);
+  const timedReadiness = spec.slice(start, end);
+  const terminal = timedReadiness.indexOf('return Date.now() - searchSubmittedAt;');
+  assert.doesNotMatch(timedReadiness, /waitForAlbumVisibleUnderHeading|scrollTo/);
+  for (const requiredWait of [
+    'await navigationPanelActions.waitForSidebarSelection(',
+    'await galleryActions.waitForSelectedArtistGallery(',
+    'await expect(expectedCover).toBeInViewport(',
+    '.readCoverImageReadinessByArtistAndAlbum(searchQuery, expectedAlbums[0])',
+    'await galleryActions.waitForVisibleGalleryCoversLoaded(',
+  ]) {
+    const wait = timedReadiness.indexOf(requiredWait);
+    assert.ok(wait >= 0 && wait < terminal, `${requiredWait} must complete inside the populated timer`);
+  }
+  const expectedIdentity = spec.indexOf('const expectedAlbums =');
+  const materializeArtist = spec.indexOf('await galleryActions.waitForDisplayedArtistSections([searchQuery])');
+  const materializeAlbum = spec.indexOf('await galleryActions.waitForFirstAlbumVisibleUnderHeading(searchQuery)');
+  assert.ok(materializeArtist >= 0 && materializeArtist < materializeAlbum);
+  assert.ok(materializeAlbum < expectedIdentity);
+  assert.ok(expectedIdentity < spec.indexOf('const searchReadyMs ='));
+  assert.match(spec, /performanceTimingBudget\('search-browse\.searchPopulatedReadyMs'\)/);
+  assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_POPULATED_BUDGET\.metricId/);
 });

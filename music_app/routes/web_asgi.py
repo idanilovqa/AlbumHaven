@@ -26,6 +26,7 @@ from music_app.services.covers import (
     display_cover_variant_cache_root,
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
+    normalize_cover_variant_revision,
     normalize_cover_variant_size,
     resolve_cover_display_variant,
 )
@@ -36,7 +37,7 @@ from music_app.services.gallery_display import (
     normalize_gallery_scale_percent,
 )
 from music_app.services.gallery_scope import normalize_gallery_scope, normalize_visible_categories
-from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.library_browse_postgres import GalleryProjectionPending, PostgresLibraryBrowseRepository
 from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
     get_primary_music_root,
@@ -47,6 +48,7 @@ from music_app.services.loops import resolve_loop_media_path, resolve_loop_previ
 from music_app.services.playlist_read_seams import build_view_surface_payload, resolve_active_view_surface
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.runtime_shutdown import create_daemon_executor
+from music_app.services.runtime_asset_versions import runtime_asset_version_cache
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -183,13 +185,13 @@ def _template_url_for(request: Request, name: str, **path_params: object) -> str
 def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
     if asset_paths is None:
         static_root = Path(__file__).resolve().parent.parent / "static"
-        runtime_stylesheets = tuple(sorted((static_root / "css").rglob("*.css")))
-        runtime_javascript = tuple(sorted((static_root / "js").rglob("*.js")))
-        asset_paths = (
-            static_root / "app.js",
-            *runtime_javascript,
-            *runtime_stylesheets,
-        )
+        def build_version():
+            return _runtime_asset_version((
+                static_root / "app.js",
+                *sorted((static_root / "js").rglob("*.js")),
+                *sorted((static_root / "css").rglob("*.css")),
+            ))
+        return runtime_asset_version_cache.get(static_root, build_version)
     digest = hashlib.sha256()
     try:
         for asset_path in asset_paths:
@@ -203,28 +205,42 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
+    started_at = time.perf_counter()
+    cpu_started_at = time.thread_time()
+    submitted_at = getattr(request.state, "index_template_submitted_at", started_at)
     actor = getattr(request.state, "current_actor", None)
-    request.app.state.runtime_asset_version = _runtime_asset_version()
-    return request.app.state.templates.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "request": request,
-            "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
-            "runtime_asset_version": request.app.state.runtime_asset_version,
-            "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
-            "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
-            "account_menu_csrf_token": issue_session_csrf(
-                request.cookies.get("__Host-album_haven_session"),
-                request.app.state.auth_policy_config,
-            ),
-            **context,
-            "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
-            "utility_allowed_actions": allowed_actions_for_request(request, (
-                "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
-            )),
-        },
-    )
+    runtime_asset_version = _runtime_asset_version()
+    request.app.state.runtime_asset_version = runtime_asset_version
+    hash_finished_at = time.perf_counter()
+    template_context = {
+        "request": request,
+        "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
+        "runtime_asset_version": runtime_asset_version,
+        "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+        "current_account_name": (actor.username_display or actor.display_name or "") if actor and actor.is_authenticated else "",
+        "account_menu_csrf_token": issue_session_csrf(
+            request.cookies.get("__Host-album_haven_session"),
+            request.app.state.auth_policy_config,
+        ),
+        **context,
+        "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
+        "utility_allowed_actions": allowed_actions_for_request(request, (
+            "library.rules.read", "library.loops.read", "library.logs.read", "library.problems.read", "integration.settings.read", "library.settings.read",
+        )),
+    }
+    context_finished_at = time.perf_counter()
+    response = request.app.state.templates.TemplateResponse(request, "index.html", template_context)
+    finished_at = time.perf_counter()
+    request.state.index_template_timing = {
+        "template_worker_wait_ms": round(max(0.0, started_at - submitted_at) * 1000, 2),
+        "template_work_elapsed_ms": round((finished_at - started_at) * 1000, 2),
+        "template_thread_cpu_ms": round((time.thread_time() - cpu_started_at) * 1000, 2),
+        "template_asset_hash_ms": round((hash_finished_at - started_at) * 1000, 2),
+        "template_context_ms": round((context_finished_at - hash_finished_at) * 1000, 2),
+        "template_render_ms": round((finished_at - context_finished_at) * 1000, 2),
+        "template_response_bytes": len(getattr(response, "body", b"")),
+    }
+    return response
 
 
 def _request_targets_home_root_surface(query_args: Any, query_raw: str, selected_artist: str) -> bool:
@@ -334,6 +350,15 @@ def _build_startup_hydration_endpoint(
         params.append(("payload_tier", normalized_payload_tier))
     if omit_sidebar:
         params.append(("omit_sidebar", "1"))
+    if (
+        normalized_surface == "albums"
+        and normalized_payload_tier != "sidebar"
+        and not query_raw
+        and not selected_artist
+        and not related_filter_artists
+        and not primary_filter_active
+    ):
+        params.append(("gallery_page_size", "50"))
     if query_raw:
         params.append(("q", query_raw))
     if selected_artist:
@@ -474,6 +499,50 @@ def _build_startup_hydration_contract(
                 else "embedded_sidebar_is_startup_complete"
             ),
         }
+    if (
+        normalized_surface == "albums"
+        and preview_mode == "empty_shell"
+        and not query_raw
+        and not selected_artist
+        and not related_filter_artists
+        and not primary_filter_active
+    ):
+        return {
+            "required": hydration_required,
+            "trigger": "after_runtime_boot" if hydration_required else "none",
+            "endpoint": _build_startup_hydration_endpoint(
+                query_raw,
+                selected_artist,
+                related_filter_artists,
+                primary_filter_active,
+                selected_artist_family_display_mode,
+                gallery_scope,
+                gallery_display_mode,
+                gallery_scale_percent,
+                visible_library_categories,
+                active_surface=normalized_surface,
+                omit_sidebar=True,
+                all_artists_active=all_artists_active,
+            ),
+            "followupEndpoint": _build_startup_hydration_endpoint(
+                query_raw,
+                selected_artist,
+                related_filter_artists,
+                primary_filter_active,
+                selected_artist_family_display_mode,
+                gallery_scope,
+                gallery_display_mode,
+                gallery_scale_percent,
+                visible_library_categories,
+                active_surface=normalized_surface,
+                payload_tier="sidebar",
+                all_artists_active=all_artists_active,
+            ),
+            "embeddedViewPatch": None,
+            "tier": "full",
+            "reason": "empty_shell_prioritizes_gallery_before_sidebar",
+        }
+
     if preview_mode == "empty_shell":
         reason = "empty_shell_requires_view_fetch"
     elif initial_view_partial:
@@ -533,14 +602,21 @@ def _build_postgres_root_startup_view(
     library_state: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object] | None, float]:
     payload_started_at = time.perf_counter()
-    payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
-        query_params=QueryParams([
-            (key, value) for key, value in QueryParams(query_args).multi_items()
-            if key not in {"gallery_cursor", "gallery_page_size"}
-        ] + ([] if str(query_args.get("surface") or "").strip().casefold() == "home"
-             else [("gallery_page_size", "8")])),
-        library_state=library_state,
-    )
+    try:
+        payload = PostgresLibraryBrowseRepository(config).build_root_startup_preview_payload(
+            query_params=QueryParams([
+                (key, value) for key, value in QueryParams(query_args).multi_items()
+                if key not in {"gallery_cursor", "gallery_page_size"}
+            ] + ([] if str(query_args.get("surface") or "").strip().casefold() == "home"
+                 else [("gallery_page_size", "8")])),
+            library_state=library_state,
+        )
+    except GalleryProjectionPending:
+        initial_view = _build_empty_initial_view(
+            config=config, query_raw="", selected_artist="", active_surface="albums",
+        )
+        initial_view["gallery_projection_pending"] = True
+        return initial_view, None, round((time.perf_counter() - payload_started_at) * 1000, 2)
     initial_view = build_initial_view_preview(payload)
     preview_sidebar = [
         dict(item)
@@ -570,14 +646,21 @@ def _build_postgres_selected_artist_startup_view(
         return None, 0.0
     payload_started_at = time.perf_counter()
     repository = PostgresLibraryBrowseRepository(config)
+    selected_query_args = QueryParams(query_args)
+    if not selected_query_args.get("q") and not selected_query_args.get("payload_tier"):
+        selected_query_args = QueryParams([
+            *selected_query_args.multi_items(), ("payload_tier", "gallery_summary"),
+        ])
     payload = repository.build_selected_artist_payload(
-        query_params=query_args,
+        query_params=selected_query_args,
         library_state=library_state,
     )
     root_sidebar: list[object] | None = None
     if not str(query_args.get("q") or "").strip():
-        root_sidebar_payload = repository.build_root_sidebar_payload(
+        root_sidebar_payload = repository.build_root_startup_preview_payload(
             query_params=query_args,
+            library_state=library_state,
+            sidebar_only=True,
         )
         root_sidebar = list(
             root_sidebar_payload.get("artists_sidebar") or []
@@ -630,7 +713,8 @@ def _build_bootstrap_payload(
                 query_args=query_args,
                 library_state=library_state,
             )
-            if library_state.get("cold_scan_pending") and int(initial_view.get("album_count") or 0) == 0:
+            if (initial_view.get("gallery_projection_pending")
+                    or (library_state.get("cold_scan_pending") and int(initial_view.get("album_count") or 0) == 0)):
                 preview_mode = "empty_shell"
             else:
                 preview_mode = "fresh_preview" if bool(initial_view.get("initial_view_partial")) else "full_view"
@@ -891,6 +975,7 @@ async def index(request: Request) -> Response:
     if (
         _request_targets_root_albums_surface(query_args, query_raw, selected_artist)
         and int(initial_view.get("album_count") or 0) == 0
+        and not initial_view.get("gallery_projection_pending")
         and not library_state.get("last_error")
         and not library_state.get("scan_in_progress")
     ):
@@ -915,7 +1000,9 @@ async def index(request: Request) -> Response:
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
     template_started_at = time.perf_counter()
-    response = _template_response(
+    request.state.index_template_submitted_at = template_started_at
+    response = await run_in_threadpool(
+        _template_response,
         request,
         {
             **appearance_context,
@@ -953,10 +1040,11 @@ async def index(request: Request) -> Response:
         bootstrap_elapsed_ms=bootstrap_elapsed_ms,
         appearance_elapsed_ms=appearance_elapsed_ms,
         template_elapsed_ms=template_elapsed_ms,
+        **getattr(request.state, "index_template_timing", {}),
         query=query_raw,
         selected_artist=selected_artist,
-        album_count=0,
-        artist_count=0,
+        album_count=int(initial_view.get("album_count") or 0),
+        artist_count=int(initial_view.get("artist_count") or 0),
         scan_in_progress=bool(library_state.get("scan_in_progress")) or started_background_refresh,
         hydrate_in_progress=bool(library_state.get("hydrate_in_progress")),
         covers_in_progress=bool(library_state.get("covers_in_progress")),
@@ -1018,7 +1106,8 @@ async def news_center(request: Request) -> Response:
         "has_related": False,
         "initial_view_partial": False,
     }
-    response = _template_response(
+    response = await run_in_threadpool(
+        _template_response,
         request,
         {
             **await load_appearance_context(request),
@@ -1167,26 +1256,63 @@ async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileRes
     return _conditional_file_response(request, resolved, no_cache=True)
 
 
-def _cover_response(request: Request, path: str, size: str | None) -> Response:
+def _cover_response(
+    request: Request,
+    path: str,
+    size: str | None,
+    revision: str = "",
+) -> Response:
     config = _app_config(request)
+    configured_roots = configured_library_root_paths_snapshot(config)
+    requested_size = normalize_cover_variant_size(size)
+    normalized_revision = normalize_cover_variant_revision(revision)
+
+    cache_root: Path | None = None
+    if requested_size > 0 and normalized_revision:
+        candidate = resolve_configured_media_path(
+            config,
+            path,
+            require_file=False,
+            require_exists=False,
+            configured_root_paths=configured_roots,
+        )
+        if candidate is None:
+            return _not_found()
+        cache_root = display_cover_variant_cache_root(
+            candidate,
+            data_dir=config.get("DATA_DIR"),
+        )
+        cached_variant = find_existing_cover_display_variant(
+            candidate,
+            cache_root=cache_root,
+            max_size=requested_size,
+            revision=normalized_revision,
+        )
+        if cached_variant is not None:
+            return _conditional_file_response(request, cached_variant, max_age=31536000)
+
     resolved = resolve_configured_media_path(
         config,
         path,
-        configured_root_paths=configured_library_root_paths_snapshot(config),
+        configured_root_paths=configured_roots,
     )
     if resolved is None:
         return _not_found()
-    requested_size = normalize_cover_variant_size(size)
     if requested_size > 0:
-        cache_root = display_cover_variant_cache_root(resolved)
+        if cache_root is None:
+            cache_root = display_cover_variant_cache_root(resolved)
         request_priority = normalize_cover_variant_priority(
             request.headers.get("x-album-haven-cover-priority")
+        )
+        revision_options = (
+            {"revision": normalized_revision} if normalized_revision else {}
         )
         try:
             cached_variant = find_existing_cover_display_variant(
                 resolved,
                 cache_root=cache_root,
                 max_size=requested_size,
+                **revision_options,
             )
             if cached_variant is not None:
                 resolved = cached_variant
@@ -1196,25 +1322,43 @@ def _cover_response(request: Request, path: str, size: str | None) -> Response:
                     cache_root=cache_root,
                     max_size=requested_size,
                     priority=request_priority,
+                    **revision_options,
                 )
         except Exception:
-            _app_logger(request).exception("cover: failed to prepare display variant for %s", resolved)
-    return _conditional_file_response(request, resolved, max_age=300)
+            _app_logger(request).exception(
+                "cover: failed to prepare display variant for %s", resolved
+            )
+    return _conditional_file_response(
+        request,
+        resolved,
+        max_age=31536000 if normalized_revision else 300,
+    )
 
 
 @router.get("/cover")
-async def cover(request: Request, path: str = "", size: str | None = None, loop_id: str = "") -> Response:
+async def cover(
+    request: Request,
+    path: str = "",
+    size: str | None = None,
+    loop_id: str = "",
+    v: str = "",
+) -> Response:
     if loop_id:
-        item = get_loop(_app_config(request),loop_id,**(await saved_loop_scope(request)))
-        if item is None or not item.get('cover_path'):
+        item = get_loop(
+            _app_config(request),
+            loop_id,
+            **(await saved_loop_scope(request)),
+        )
+        if item is None or not item.get("cover_path"):
             return _not_found()
-        path = str(item['cover_path'])
+        path = str(item["cover_path"])
     return await asyncio.get_running_loop().run_in_executor(
         _COVER_RESPONSE_EXECUTOR,
         _cover_response,
         request,
         path,
         size,
+        v,
     )
 
 

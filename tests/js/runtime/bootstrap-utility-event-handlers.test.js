@@ -159,6 +159,7 @@ function createContext(stateOverrides = {}) {
     },
     clearBrowserTimeout() {},
     closeRepairConfirmModal() {},
+    closeTagEditorExceptionMenu() {},
     closeUtilityModal() {},
     closeUtilityLoopSettingMenu() {},
     openMobileUtilityDetail() {},
@@ -209,6 +210,7 @@ function createContext(stateOverrides = {}) {
     },
     openRepairConfirmModal() {},
     openTagEditor() {},
+    openTagEditorExceptionMenu() {},
     openUtilityLogHistoryTab() {},
     openUtilityModal() {},
     persistPlayerAppearance() {},
@@ -228,6 +230,7 @@ function createContext(stateOverrides = {}) {
       if (typeof callback === 'function') callback();
       return 1;
     },
+    selectTagEditorExceptionOption() {},
     selectTagEditorTrack() {},
     setTagEditorSelectedPaths() {},
     showToast() {},
@@ -265,6 +268,28 @@ test('clicking the filter search input dismisses only the dropdown without consu
   assert.equal(wasPrevented(), false);
   assert.equal(context.document.activeElement, event.target);
   assert.equal(context.state.utility.selectedProblemFilters, selected);
+});
+
+test('Fast Cover Search passes its clicked control to immediate busy feedback', async () => {
+  const { context } = createContext();
+  const album = { key: 'sola-scriptura' };
+  const button = createElement({ 'data-track-modal-fast-cover-fetch': '1' });
+  const click = createEvent({ '[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]': button });
+  let startCall = null;
+  context.resolveTrackModalActionAlbum = (candidate) => {
+    assert.equal(candidate, button);
+    return album;
+  };
+  context.startCoverLookupForAlbum = (candidate, options) => {
+    startCall = { candidate, options };
+  };
+
+  await context.handleUtilityBootstrapClick(click.event);
+
+  assert.equal(click.wasPrevented(), true);
+  assert.equal(startCall.candidate, album);
+  assert.equal(startCall.options.backgroundOnly, true);
+  assert.equal(startCall.options.triggerButton, button);
 });
 
 for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-chips', '.utility-problem-filter-button']) {

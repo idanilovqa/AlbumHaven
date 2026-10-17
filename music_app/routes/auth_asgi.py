@@ -173,13 +173,13 @@ def _render_invitation(
 
 
 def _cookie_secure(request: Request, config: Mapping[str, object]) -> bool | None:
+    if _is_direct_loopback_http(request):
+        return True
     peer = _ip_address(request.client.host if request.client else None)
     if _peer_is_trusted_proxy(peer, config):
         forwarded_scheme = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().casefold()
         return True if forwarded_scheme == "https" else None
     if request.url.scheme == "https":
-        return True
-    if request.url.scheme == "http" and peer is not None and peer.is_loopback and _host_is_loopback(request.url.hostname):
         return True
     return None
 
@@ -1098,7 +1098,7 @@ def _same_origin(request: Request, config: Mapping[str, object]) -> bool:
     if origin is not None:
         if origin in origins:
             return True
-        return _direct_loopback_same_origin(request, config, origin)
+        return _direct_loopback_same_origin(request, origin)
     referer = request.headers.get("referer")
     if not referer:
         return False
@@ -1106,30 +1106,40 @@ def _same_origin(request: Request, config: Mapping[str, object]) -> bool:
         parsed = urlsplit(referer)
         referer_origin = f"{parsed.scheme}://{parsed.netloc}"
         return referer_origin in origins or _direct_loopback_same_origin(
-            request, config, referer_origin
+            request, referer_origin
         )
     except Exception:
         return False
 
 
-def _direct_loopback_same_origin(
-    request: Request,
-    config: Mapping[str, object],
-    candidate_origin: str,
-) -> bool:
+def _is_direct_loopback_http(request: Request) -> bool:
     peer = _ip_address(request.client.host if request.client else None)
     return bool(
         request.url.scheme == "http"
         and peer is not None
         and peer.is_loopback
-        and not _peer_is_trusted_proxy(peer, config)
         and _host_is_loopback(request.url.hostname)
+        and not any(
+            name.casefold() == "forwarded" or name.casefold().startswith("x-forwarded-")
+            for name in request.headers
+        )
+    )
+
+
+def _direct_loopback_same_origin(
+    request: Request,
+    candidate_origin: str,
+) -> bool:
+    return bool(
+        _is_direct_loopback_http(request)
         and candidate_origin == f"http://{request.url.netloc}"
     )
 
 
 def _request_source(request: Request, config: Mapping[str, object]) -> tuple[str, str]:
     peer_text = request.client.host if request.client else "unknown"
+    if _is_direct_loopback_http(request):
+        return peer_text, "loopback"
     peer = _ip_address(peer_text)
     if _peer_is_trusted_proxy(peer, config):
         forwarded_ip = _forwarded_client_address(

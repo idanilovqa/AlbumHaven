@@ -91,7 +91,10 @@ for (const outcome of ['success', 'success without gallery', 'error']) {
     assert.equal(h.context.state.coverLookup.modal.album.name, 'B');
     assert.equal(h.galleries.length, reads, 'A completion must not request B gallery');
     assert.equal(h.painted.get('A'), outcome === 'error' ? 'A-old' : 'A-settled');
-    assert.equal(h.notifications.at(-1)[1], outcome === 'error' ? 'error' : 'success');
+    assert.deepEqual(
+      h.notifications,
+      outcome === 'error' ? [['Owned local mutation failed', 'error', 2800]] : [],
+    );
   });
 }
 

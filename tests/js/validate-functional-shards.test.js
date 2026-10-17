@@ -17,10 +17,10 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 49],
-  ['cover-providers', 20],
+  ['gallery-search-visual', 53],
+  ['cover-providers', 24],
   ['metadata-mutations', 14],
-  ['playback-utilities', 40],
+  ['playback-utilities', 41],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 123-case assignment', () => {
+test('functional shard contract pins the approved four-way 132-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 123-case assignment',
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 123);
+  assert.equal(total, 132);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -709,19 +709,23 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     'FTC-COVERS-019 later automatic improvement restores the unseen indicator',
     'FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save',
     'FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection',
+    "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+    "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+    "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+    "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
   ]);
   const isolatedInvocations = waves.flatMap((wave) => wave.invocations).filter(
     (invocation) => invocation.baselineMode === 'isolated-app-process',
   );
 
-  assert.equal(isolatedInvocations.length, 4);
+  assert.equal(isolatedInvocations.length, 8);
   assert.deepEqual(
     new Set(isolatedInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name))),
     expectedCases,
   );
   assert.deepEqual(
     isolatedInvocations.map((invocation) => invocation.cases.length),
-    [1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
   );
   const sharedIndexes = firstWave.invocations
     .map((invocation, index) => invocation.baselineMode === 'owned-mutation' ? index : -1)
@@ -742,6 +746,10 @@ validatorTest('cover baseline-sensitive cases use separate app processes after o
     [
       'FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save',
       'FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection',
+      "FTC-COVERS-025 a persisted inherited cover from a rejected mixed folder is repaired by a production rescan",
+      "FTC-ALBUM-DETAILS-023 mixed and orphan copies stay outside album details while CD siblings and complete album sources survive reload and rescan",
+      "FTC-COVERS-026 an explicit adequate local cover remains user-owned and makes no automatic provider queries after reload and rescan",
+      "FTC-COVERS-027 poor legacy in-folder user cover upgrades to different adequate artwork on automatic search",
     ],
   );
   assert.equal(secondWave.invocations.at(-1).baselineMode, 'global-mutation');
@@ -763,7 +771,7 @@ validatorTest('gallery startup projections share one early app process before is
   assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
   assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
   const sharedReaderNames = waves[0].invocations[1].cases.map((ownedCase) => ownedCase.case);
-  assert.equal(sharedReaderNames.length, 27);
+  assert.equal(sharedReaderNames.length, 31);
   const artistTreeCase = 'FTC-ARTIST-TREE-002 preserves collapsed and expanded preferences after reload';
   assert.equal(sharedReaderNames.includes(artistTreeCase), false);
   const artistTreeInvocations = waves[1].invocations.filter(invocation => invocation.cases.some(ownedCase => ownedCase.case === artistTreeCase));
@@ -880,11 +888,12 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     ],
   );
   const lateNonAlbumInvocations = groupInvocations('late-non-album-mutations');
-  assert.deepEqual(lateNonAlbumInvocations.map((invocation) => invocation.cases.length), [1, 1, 1, 1, 1]);
+  assert.deepEqual(lateNonAlbumInvocations.map((invocation) => invocation.cases.length), [1, 1, 1, 1, 1, 1]);
   assert.deepEqual(
     lateNonAlbumInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
     [
       'FTC-NON-ALBUM-012 renders exception groups as the approved compact track table',
+      'FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks',
       'FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files',
       'FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files',
       'FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions',
@@ -914,10 +923,10 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 49, waves: [1, 2] }],
-    ['cover-providers', { cases: 20, waves: [1, 2] }],
+    ['gallery-search-visual', { cases: 53, waves: [1, 2] }],
+    ['cover-providers', { cases: 24, waves: [1, 2] }],
     ['metadata-mutations', { cases: 14, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 40, waves: [1, 2, 3, 4] }],
+    ['playback-utilities', { cases: 41, waves: [1, 2, 3, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

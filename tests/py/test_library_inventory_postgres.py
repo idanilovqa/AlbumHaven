@@ -151,6 +151,27 @@ def test_candidate_rows_retain_raw_inventory_credits_paths_root_category_and_fil
     assert result[0]["library_root_category"] == "Loose Singles"
 
 
+def test_candidate_query_pushes_artist_and_text_scope_into_postgres():
+    connection = FakeConnection([FakeCursor(rows=[])])
+
+    repository_for(connection).load_non_album_candidates(
+        artist_names=[" Radiohead ", "radiohead", "Thom Yorke"],
+        query_terms=[" Kid ", "A", "kid"],
+    )
+
+    sql, params = connection.calls[0]
+    normalized_sql = " ".join(sql.lower().split())
+    assert "%(artist_names)s::text[]" in normalized_sql
+    assert "lower(btrim(coalesce(library.local_artists.name, '')))" in normalized_sql
+    assert "library.local_tracks.metadata -> 'artists'" in normalized_sql
+    assert "{scan_cache,file_entry,artists}" in normalized_sql
+    assert "lower(active_track_files.private_path) like any(%(artist_path_patterns)s::text[])" in normalized_sql
+    assert "unnest(%(query_patterns)s::text[])" in normalized_sql
+    assert params["artist_names"] == ["radiohead", "thom yorke"]
+    assert params["artist_path_patterns"] == ["%radiohead%", "%thom yorke%"]
+    assert params["query_patterns"] == ["%a%", "%kid%"]
+
+
 @pytest.mark.parametrize(
     ("requested_limit", "expected_limit"),
     [
@@ -192,19 +213,19 @@ def test_candidate_filters_are_batched_deduplicated_bounded_and_parameterized(
 def test_candidate_query_includes_only_loose_tracks_or_meaningfully_overridden_album_tracks():
     sql = inventory_module._non_album_candidates_sql().lower()
     normalized_sql = " ".join(sql.split())
-    loose_track_path = normalized_sql.split(
+    eligible_track_file_scope = normalized_sql.split(
         "eligible_track_file_ids as (",
         1,
-    )[1].split(" union ", 1)[0]
+    )[1].split("), active_track_files as (", 1)[0]
 
-    assert "library.local_track_files.scan_cache_stale is false" in loose_track_path
-    assert "coalesce(library.local_track_files.scan_file_album, '')" in loose_track_path
+    assert "library.local_track_files.scan_cache_stale is false" in eligible_track_file_scope
+    assert "coalesce(library.local_track_files.scan_file_album, '')" in eligible_track_file_scope
     assert re.search(
         r"in\s*\(\s*'',\s*'unknown',\s*'unknown artist',\s*"
         r"'unknown album',\s*'none',\s*'null'\s*\)",
-        loose_track_path,
+        eligible_track_file_scope,
     )
-    assert " ~ " in loose_track_path
+    assert " ~ " in eligible_track_file_scope
     assert (
         "coalesce( library.local_track_files.scan_file_album, "
         "library.local_tracks.metadata ->> 'album', library.local_albums.title, '' )"
@@ -227,7 +248,7 @@ def test_candidate_query_does_not_treat_a_detached_track_with_a_real_album_as_no
     # scan projection must drive the indexed prefilter, while the effective
     # album predicate keeps the Python shaper's blank/unknown/marker semantics.
     assert "library.local_tracks.album_id is null" not in normalized_sql
-    assert "library.local_track_files.scan_file_album" in loose_track_path
+    assert "library.local_track_files.scan_file_album" in normalized_sql
     assert "library.local_tracks.metadata ->> 'album'" in normalized_sql
     assert "library.local_albums.title" in normalized_sql
     assert re.search(
@@ -274,8 +295,10 @@ def test_candidate_query_keeps_reused_active_file_cte_key_only_and_rejoins_requi
     assert "library.local_track_files.file_size_bytes" in sql
     assert "library.local_track_files.modified_at" in sql
     assert "library.local_track_files.content_signature" in sql
-    assert "library.local_track_files.metadata as track_file_metadata" not in sql
-    assert "library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry" in sql
+    assert "library.local_track_files.metadata as track_file_metadata" in sql
+    assert "library.local_track_files.metadata #> '{scan_cache,file_entry}'" in sql
+    assert "jsonb_build_object" in sql
+    assert "'local_album_membership_problem'" in sql
     assert "active_track_files.relative_path" not in sql
     assert "active_track_files.metadata as track_file_metadata" not in sql
     assert "active_track_files.file_entry" not in sql
@@ -307,8 +330,9 @@ def test_candidate_query_projects_only_json_fields_consumed_by_non_album_shaper(
         "library.local_albums.metadata -> 'cover_revision' as album_cover_revision"
         in sql
     )
-    assert "library.local_track_files.metadata as track_file_metadata" not in sql
-    assert "library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry" in sql
+    assert "library.local_track_files.metadata as track_file_metadata" in sql
+    assert "library.local_track_files.metadata #> '{scan_cache,file_entry}'" in sql
+    assert "'local_album_membership_problem'" in sql
     assert "library.library_roots.metadata as root_metadata" not in sql
 def test_candidate_query_prefilters_active_files_through_four_indexed_eligibility_paths():
     sql = inventory_module._non_album_candidates_sql().lower()
@@ -327,7 +351,7 @@ def test_candidate_query_prefilters_active_files_through_four_indexed_eligibilit
     assert "scan_cache_stale is false" in scanned_exception_path
     assert "bootstrap_context.library_id = library.local_tracks.library_id" in scanned_exception_path
     assert "{scan_cache,file_entry,exception_type}" in scanned_exception_path
-    assert "in ('interview', 'non album rarity', 'non-album rarity')" in scanned_exception_path
+    assert "not in ('', 'none', 'null')" in scanned_exception_path
     assert "select library.local_track_files.id as track_file_id" in loose_track_path
     assert "from library.local_tracks" in loose_track_path
     assert "bootstrap_context.library_id = library.local_tracks.library_id" in loose_track_path
@@ -397,6 +421,15 @@ def test_inventory_sql_has_no_musicbrainz_or_lastfm_authority_selectors():
 
     for forbidden in ("mbid", "musicbrainz", "lastfm", "last.fm", "integration."):
         assert forbidden not in sql
+
+
+def test_non_album_candidate_query_projects_custom_collection_name():
+    sql = " ".join(inventory_module._non_album_candidates_sql().lower().split())
+
+    assert (
+        "exception_override.override_payload ->> 'custom_collection_name' "
+        "as custom_collection_name"
+    ) in sql
 
 
 def test_inventory_runtime_selection_requires_url_and_driver_and_builds_repository(monkeypatch):

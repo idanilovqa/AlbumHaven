@@ -233,10 +233,7 @@ if ([string]::IsNullOrWhiteSpace($postgresAdminPassword)) {
 $bootstrap = Join-Path $repositoryRoot 'scripts\ci\bootstrap-windows-postgres.ps1'
 $loader = Join-Path $repositoryRoot 'scripts\ci\load-fixture-profile.py'
 $validator = Join-Path $repositoryRoot 'scripts\ci\validate-functional-shards.cjs'
-$windowsPowerShell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
-if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
-    throw "Windows PowerShell was not found: $windowsPowerShell"
-}
+$bootstrapPowerShell = Resolve-Executable '' @('pwsh.exe', 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe') 'PowerShell'
 
 function Invoke-PostgresBootstrap(
     [ValidateSet('Provision', 'Teardown')][string]$Mode,
@@ -263,7 +260,7 @@ function Invoke-PostgresBootstrap(
         '-Port', '5432',
         '-SkipFixtureLoad'
     )
-    & $windowsPowerShell @bootstrapArguments | Where-Object { $_ -notmatch '^::add-mask::' }
+    & $bootstrapPowerShell @bootstrapArguments | Where-Object { $_ -notmatch '^::add-mask::' }
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL $($Mode.ToLowerInvariant()) failed." }
 }
 

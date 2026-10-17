@@ -2,9 +2,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { PERFORMANCE_SHARDS } = require('./resolve-ci-shard.cjs');
+const { validatePerformanceChangeImpact } = require('./performance-change-impact.cjs');
 
-const EXPECTED_TARGET_COUNT = 22;
-const EXPECTED_CASE_COUNT = 30;
+const EXPECTED_TARGET_COUNT = 24;
+const EXPECTED_CASE_COUNT = 53;
 const MATRIX_FIELDS = ['shard', 'fixtureProfile', 'fixtureMode', 'harness', 'basePort', 'targets'];
 const CALIBRATION_POLICY = Object.freeze({
   evidenceMode: 'retained-cohorts',
@@ -22,16 +23,18 @@ const CALIBRATION_POLICY = Object.freeze({
   exceptionsRequireOwnerApproval: true,
 });
 const SHARD_DEFINITIONS = Object.freeze([
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
+  { shard: 'gallery-artwork-diversity', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-derived', harness: 'managed-app', basePort: '4333', targets: 'gallery-artwork-diversity' },
 ]);
 const FIXTURE_DOWNLOAD_PROFILES = Object.freeze({
   'synthetic-large-library': 'synthetic-large-library',
   'utility-problematic-files': 'utility-problematic-files',
   'playback-media': 'synthetic-large-library',
   'scan-library': 'synthetic-large-library',
+  'gallery-artwork-diversity': 'synthetic-large-library',
 });
 
 function normalizeTestPath(value) {
@@ -68,7 +71,7 @@ function parseStaticPerformanceMatrixRaw(workflow) {
       basePort: String(config.basePort),
       targets: config.targets.join(','),
     };
-    for (let slot = 1; slot <= 11; slot += 1) row[`target${slot}`] = config.targets[slot - 1] || 'none';
+    for (let slot = 1; slot <= 12; slot += 1) row[`target${slot}`] = config.targets[slot - 1] || 'none';
     return row;
   });
 }
@@ -117,7 +120,7 @@ function validateRegistry(errors, contract, runnerModule, testDataMatrix) {
 
 function validateShardRows(errors, rawRows, contract) {
   const rows = rawRows.map((row) => Object.fromEntries(MATRIX_FIELDS.map((field) => [field, row[field]])));
-  if (rows.length !== SHARD_DEFINITIONS.length) errors.push('performance matrix must contain exactly four profile runners');
+  if (rows.length !== SHARD_DEFINITIONS.length) errors.push('performance matrix must contain exactly five profile runners');
   if (JSON.stringify(rows) !== JSON.stringify(expectedRows())) errors.push('performance shard rows disagree with the reviewed compatible allocation');
   const targetsByName = new Map((contract.targets || []).map((target) => [target.name, target]));
   const owned = [];
@@ -138,14 +141,14 @@ function validateShardRows(errors, rawRows, contract) {
         errors.push(`performance shard ${row.shard} contains incompatible fixture or harness target ${name}`);
       }
     }
-    for (let slot = names.length + 1; slot <= 11; slot += 1) {
+    for (let slot = names.length + 1; slot <= 12; slot += 1) {
       if (row[`target${slot}`] !== 'none') errors.push(`performance shard ${row.shard} must fill unused artifact slots with none`);
     }
   }
   const registered = (contract.targets || []).map((target) => target.name);
   if (owned.length !== registered.length || new Set(owned).size !== registered.length
     || registered.some((name) => !owned.includes(name))) {
-    errors.push('all 22 performance targets must be owned exactly once across four profile runners');
+    errors.push('all 24 performance targets must be owned exactly once across five profile runners');
   }
 }
 
@@ -169,9 +172,9 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
     [/max-parallel:\s*4/, 'maximum parallel four'],
     [/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/, 'same-repository guard'],
     [/run-performance-shard\.ps1/, 'sequential shard runner'],
-    [/-Targets\s+["']?\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}/, 'resolved shard targets'],
-    [/-BasePort\s+["']?\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}/, 'target-owned port base'],
-    [/-Browser\s+chrome/, 'Chrome selection'],
+    [/Targets\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}["']/, 'resolved shard targets'],
+    [/BasePort\s*=\s*["']\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}["']/, 'target-owned port base'],
+    [/Browser\s*=\s*["']chrome["']/, 'Chrome selection'],
     [/node scripts\/ci\/validate-performance-matrix\.cjs --list/, 'matrix validation step'],
   ];
   for (const [pattern, label] of patterns) if (!pattern.test(job)) errors.push(`performance workflow is missing ${label}`);
@@ -179,7 +182,7 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
   const trustedCheckout = namedWorkflowStep(job, 'Checkout trusted fixture downloader');
   const fixtureFetch = namedWorkflowStep(job, 'Fetch immutable performance fixture');
   if (/\n\s+if:/.test(trustedCheckout) || /\n\s+if:/.test(fixtureFetch)) errors.push('trusted fixture seed must be fetched for every performance shard');
-  if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*\.trusted-ci/.test(job)) errors.push('performance shards must use a trusted base checkout');
+  if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*album-haven-trusted-ci/.test(job)) errors.push('performance shards must use a trusted base checkout');
   if (!/-Profile\s+\$\{\{\s*matrix\.shard\s*==\s*'utility-problematic-files'\s*&&\s*'utility-problematic-files'\s*\|\|\s*'synthetic-large-library'\s*\}\}/.test(fixtureFetch)) errors.push('performance fixture fetch must use the static reviewed download-profile mapping');
   if (!/generated-isolated[\s\S]*ALBUM_HAVEN_APPROVED_COVER_ROOT[\s\S]*ALBUM_HAVEN_FIXTURE_ROOT[\s\S]*ALBUM_HAVEN_MEDIA_ROOT/.test(job)) errors.push('generated shards must isolate a verified released cover seed from runtime fixture roots');
   if (job.indexOf('Fetch immutable performance fixture') > job.indexOf('Install Node dependencies')
@@ -187,7 +190,7 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
     || job.indexOf('Fetch immutable performance fixture') > job.indexOf('Validate performance matrix ownership')) {
     errors.push('secret-bearing fixture fetch must precede pull-request executable code');
   }
-  for (let slot = 1; slot <= 11; slot += 1) {
+  for (let slot = 1; slot <= 12; slot += 1) {
     const expression = `\\$\\{\\{\\s*steps\\.shard\\.outputs\\.target${slot}\\s*\\}\\}`;
     const resultPattern = new RegExp(`name:\\s*performance-result-${expression}-\\$\\{\\{\\s*github\\.run_attempt\\s*\\}\\}`);
     const diagnosticsPattern = new RegExp(`name:\\s*performance-diagnostics-${expression}-\\$\\{\\{\\s*github\\.run_attempt\\s*\\}\\}`);
@@ -251,6 +254,7 @@ function loadInputs(repoRoot) {
     contract: JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'ci', 'performance-targets.json'), 'utf8')),
     testDataMatrix: JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'), 'utf8')),
     runnerModule: require(path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs')),
+    changeImpact: JSON.parse(fs.readFileSync(path.join(repoRoot, 'tests', 'ci', 'performance-change-impact.json'), 'utf8')),
   };
 }
 
@@ -272,12 +276,16 @@ if (require.main === module) {
     const repoRoot = path.resolve(__dirname, '..', '..');
     const inputs = loadInputs(repoRoot);
     const errors = validateWorkflowContract(inputs.workflow, inputs.contract, inputs.runnerModule, inputs.testDataMatrix);
+    errors.push(...validatePerformanceChangeImpact(
+      inputs.changeImpact,
+      inputs.contract.targets.map(({ name }) => name),
+    ));
     if (process.argv.includes('--list')) errors.push(...validateDiscoveredCases(inputs.contract, discoverPerformanceCases(inputs.contract, { repoRoot })));
     if (errors.length > 0) {
       for (const error of errors) process.stderr.write(`${error}\n`);
       process.exitCode = 1;
     } else {
-      process.stdout.write(`performance matrix: 4 profile runners, ${EXPECTED_TARGET_COUNT} targets, ${EXPECTED_CASE_COUNT} cases\n`);
+      process.stdout.write(`performance matrix: 5 profile runners, ${EXPECTED_TARGET_COUNT} targets, ${EXPECTED_CASE_COUNT} cases\n`);
     }
   } catch (error) {
     process.stderr.write(`${error?.message || error}\n`);

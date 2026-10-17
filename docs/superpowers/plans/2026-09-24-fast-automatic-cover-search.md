@@ -1,0 +1,246 @@
+# Fast Automatic Cover Search Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace slow automatic cover discovery, preserve completed covers, and resume the cover-only pass with measured throughput.
+
+**Architecture:** Keep manual Find Better Art unchanged. Add a bounded automatic resolver that checks Apple API, Deezer, YouTube Music, and Spotify in order; only use Bandcamp when none returns a valid candidate. Reconcile interrupted writes and checkpoint scan/lookup metadata during the bulk pass.
+
+**Tech Stack:** Python, Pillow, pytest, Postgres-backed scan state.
+
+## Global Constraints
+
+- Never overwrite a selected or user-owned cover.
+- Never follow cover paths outside authorized album folders.
+- Stop on a confident image with both dimensions at least 1,200 pixels.
+- Retain the best matched smaller candidate when no provider clears that threshold.
+- Keep manual page search unchanged; automatic Apple search is API-only.
+- Do not repeat the full music scan or stop unrelated processes.
+
+---
+
+### Task 1: Automatic provider selection
+
+**Files:** `music_app/services/cover_refresh_provider.py`, `music_app/services/cover_provider_apple.py`, `music_app/services/cover_provider_matching.py`, `tests/py/test_cover_refresh_provider.py`, `tests/py/test_cover_provider_apple.py`.
+
+**Interfaces:** Preserve `search_primary_remote_cover(...) -> tuple[CoverCandidate | None, list[dict[str, object]]]`; add a separate bounded Apple API path and use existing provider candidate contracts.
+
+- [ ] Add exact tests for provider order, first 1,200×1,200 stop, smaller fallback, disabled providers, wrong identity/year, and Apple API-only automatic search. Run each exact pytest selection and confirm an expected failure.
+- [ ] Implement the minimum automatic resolver and bounded provider calls without altering manual search.
+- [ ] Run the focused provider tests and confirm they pass.
+
+### Task 2: Bandcamp fallback and interruption budget
+
+**Files:** `music_app/services/cover_refresh_provider.py`, `tests/py/test_cover_refresh_provider.py`.
+
+**Interfaces:** Retain the current resolver return contract and trace statuses; Bandcamp is reachable only after all four primary providers miss.
+
+- [ ] Add failing tests for Bandcamp-only-after-total-miss and a mocked slow provider that cannot monopolize the job.
+- [ ] Add bounded waits and fallback at the existing automatic resolver seam.
+- [ ] Run focused tests and confirm provider failures, skips, and no-matches remain distinct.
+
+October 3 provider-failure correction: regressions first reproduced lost
+Deezer HTTP-200 errors, malformed/empty response payloads, Apple/Deezer/Spotify
+missing result lists, Spotify missing tokens, MusicBrainz dependency failures,
+and swallowed Bandcamp discovery-future failures. Automatic failures now remain
+retryable rather than becoming negative-cache entries. Bandcamp preserves valid
+matches despite another discovery path failing. Both image-probe paths preserve
+all earlier valid candidates when a later probe expires, including a higher-ranked
+candidate other than the last one. Manual behavior and valid empty-result lists
+remain unchanged. The final focused deadline, Bandcamp, automatic resolver,
+HTTP, Deezer, planning, Apple, Spotify and MusicBrainz gate passed 185 tests in
+9.59 seconds (two existing Pillow deprecation warnings). This evidence does not
+establish live throughput or satisfy manual acceptance, E2E, review, CI or
+publication gates. No task checkbox or progress counter changed; remaining
+task-level acceptance stays open.
+
+### Task 3: Recover interrupted cover writes and checkpoint progress
+
+**Files:** `music_app/services/cover_refresh_planning.py`, `music_app/services/cover_refresh_execution.py`, `music_app/services/cover_provider_cache.py`, `tests/py/test_cover_refresh_planning.py`, `tests/py/test_state.py`.
+
+**Interfaces:** Reuse the existing scan-cache and lookup-cache persistence owners; no new storage authority.
+
+- [ ] Add failing tests showing a written local cover survives replanning and an interrupted batch retains checkpointed metadata.
+- [ ] Reconcile existing authorized cover files before planning and checkpoint updates in bounded batches.
+- [ ] Run focused recovery and execution tests; confirm selected-cover and containment cases still pass.
+
+### Task 4: Safe replacement and measured smoke
+
+**Files:** `docs/superpowers/specs/2026-09-24-fast-automatic-cover-search-design.md`, owning multi-root plan.
+
+- [ ] Confirm the old worker exited and inspect current cover files/cache without disclosing paths or media.
+- [ ] Run sequential focused Python tests and a small live smoke with elapsed provider timings.
+- [ ] Resume only the cover pass on the published inventory; record jobs per minute and provider error rates against the earlier 265-job/156-download checkpoint.
+- [ ] Record remaining manual acceptance, E2E, review, CI, and publication gates.
+
+## Recovery verification progress
+
+### October 4 recovery hardening delivery
+
+Owner requested completion of interrupted-cover recovery while the existing
+cover pass finishes unchanged. The first narrow Task 3 delivery protects the
+previous lookup checkpoint if a subsequent save is interrupted or fails.
+
+- Outcome: save through a same-directory temporary file and atomic replacement
+  at the existing `CoverSearchCache.save` owner; retain dirty state on failure.
+- Prerequisites: existing approved recovery/checkpoint design and unchanged
+  cache format. This hardens the legacy owner; it adds no persistence fallback
+  and does not migrate lookup data or authorize a new JSON store.
+- Acceptance: successful save/reload, failed replacement preserves the previous
+  checkpoint, a later save retries pending updates, and ordinary failure paths
+  clean up their owned temporary file. Existing permission-error behavior stays.
+- Compatibility/rollback: unchanged reader and JSON shape; revert source only.
+  Atomic replacement does not promise cross-process merging or power-loss
+  durability. A process killed before replacement may leave its temporary file.
+- Checkpoint: isolated focused tests and independent relevant-diff review before
+  a scoped commit. No deployment, live data access, scan, restart, or publication.
+
+- [x] Separate test author proves failed-replacement regression with generated
+  temporary data and verifies the existing successful reload contract.
+- [x] Implementation owner reuses an adequate existing atomic-write helper or
+  uses a same-directory standard-library temporary file and replacement.
+- [x] Separate verification and review confirm preservation, retry, cleanup,
+  compatibility, and unchanged permission handling.
+
+Verification: the initial atomic-replacement tests failed twice as expected;
+first review then reproduced denied temporary-file cleanup as a separate failing
+regression. After both fixes, independent focused verification passed 10 tests
+in 1.76 seconds: `tests/py/test_cover_provider_cache.py` and
+`tests/py/test_state.py::test_run_cover_jobs_checkpoints_lookup_cache_before_interrupted_batch`.
+No pytest warnings were reported. The complete second relevant-diff review found
+no actionable findings; scoped diff checks passed. Permission-denied cleanup is
+best-effort and logs a warning while retaining checkpoint and retry state.
+Only these three delivery checkboxes changed; there is no numeric progress
+counter in this plan. Task 3 and all live/acceptance/release gates remain open.
+
+The next Task 3 unit addresses recovered nondownloaded image metadata that
+previously waited for final snapshot publication; its scoped result follows.
+Full preplanning reconciliation is not established by these recovery tests.
+Do not mark Task 3 complete based on lookup hardening or queued-result recovery
+alone. Preparation performance has its own October 4 written design; new move
+workflows remain outside this cover delivery.
+
+### October 4 recovered-selection durability delivery
+
+The owner explicitly approved implementing the remaining recovered-cover metadata
+durability gap. Reuse the existing guarded per-album Postgres selection owner;
+do not save the full library snapshot for each recovered album or add a storage
+authority. This unit concerns recovered results from queued cover jobs, not an
+unbounded scan of satisfactory covers omitted from the queue.
+
+- Outcome: a changed, nondownloaded local selection is committed before its
+  runtime entries are published, so later interruption cannot lose that commit.
+- Preconditions: existing file within the authorized job folder; owned track
+  membership; current generation and user/concurrent selection guards. Reject
+  unsafe, user-controlled, or stale selections rather than overriding them.
+- Acceptance: a recovered result persists before final snapshot publication;
+  persistence failure does not publish the recovered runtime state; interruption
+  after that album preserves the committed selection; containment and manual
+  selection protections remain intact. Do not count reconciliation as a download.
+- Compatibility/rollback: reuse the existing selection repository and schema;
+  revert source only. No live repair, new cover pass, deployment, or restart.
+- Checkpoint: separate failing tests, minimal implementation, focused checks,
+  two complete relevant-diff review passes, and a scoped commit. Manual/live,
+  E2E, review-first CI, and publication gates remain open.
+
+- [x] Prove interrupted recovered-selection durability and guard regressions
+  with generated files and fake persistence boundaries.
+- [x] Persist recovered selection at the existing serialized per-album boundary.
+- [x] Verify error/containment/ownership cases and complete independent review
+  of this scoped implementation; real-Postgres and broader acceptance remain open.
+
+October 4 scoped verification: the final recovery selection passed 46 tests
+(45 deselected) in 5.93 seconds; the nullable expected-state/cache selection
+passed 45 tests (66 deselected) in 2.15 seconds. Both commands exited 0.
+Separate RED runs established lock-order, runtime-replacement, containment,
+nullable-guard, redundant-snapshot, and stale-progress defects before their
+repairs. The real adapter with a fake connection also verifies that a raised
+commit guard propagates the exception without calling commit; this is not a
+live PostgreSQL transaction or reload test.
+
+Changed local recovery commits before runtime publication and does not count as
+a download. Expected-state guards cover partial or entirely absent origin and
+revision. Unsafe or mixed-baseline recovery reports a conflict and warning.
+Already durable recovered/downloaded selections no longer republish the whole
+inventory. The remaining legacy no-cover clearing path reads both mutation
+revisions, waits for persistence outside the cache lock, and rechecks runtime
+identity, generations, and baseline before its guarded commit. It does not
+reconcile pre-existing database/runtime divergence.
+
+Complete relevant-diff review covered the adapter, forwarding wrapper, execution
+owner, and their tests. Repeated review repaired both post-result and pre-result
+progress writes: sequential and parallel old jobs now preserve a newer request's
+progress, and returned download counts belong to the completed batch. The final
+independent pass found no remaining actionable finding. No live files, database,
+provider pass, deployment, or worker restart participated in this verification.
+Only the three scoped delivery checkboxes above changed; Task 3, full preplanning
+reconciliation, real-Postgres durability proof, manual acceptance, E2E, hosted
+review, CI, and publication remain open.
+
+Focused red/green tests cover recovery of a newly discovered local cover and a
+changed image at the same path, preserving its content revision without counting
+a download. Nondownloaded user-owned selections retain their paths and linked
+remote-art metadata. Lookup results checkpoint every 25 completed jobs. The
+existing guarded image writer already commits new image selections per album.
+The combined family-projection/cover-job verification passed 124 tests after
+review fixes. Live reconciliation and resumption remain open.
+
+Storage clarification: scan/image-selection metadata is Postgres-backed, but
+the pre-existing `CoverSearchCache` still uses its legacy JSON implementation.
+This change reuses that owner; it does not add a JSON fallback or claim the
+lookup cache has been migrated. A lookup-cache persistence migration is not
+part of this approved resolver correction.
+
+### October 4 final recovery commit checkpoint
+
+Final root verification passed 91 recovery/nullable/cache tests with 111
+unrelated cases deselected in 4.09 seconds, exit 0. Iterative complete relevant
+diff review by the root and independent reviewers found no remaining actionable
+findings. This closes only this recovery unit's focused verification and review;
+manual acceptance, real-Postgres proof, E2E, hosted CI, live measurement and release
+remain open. No new cover pass or deployment was performed for this checkpoint.
+
+Changed files (6):
+
+- `music_app/services/cache.py`
+- `music_app/services/scan_cache_persistence.py`
+- `music_app/services/cover_refresh_execution.py`
+- `tests/py/test_state.py`
+- `tests/py/test_scan_cache_persistence.py`
+- `docs/superpowers/plans/2026-09-24-fast-automatic-cover-search.md`
+
+Direct task time, skill/process overhead and total slice elapsed time were not
+fully captured and remain unknown; test duration above is not total task time.
+This evidence adds no checkbox transition or numeric progress change.
+
+### October 3 integrated verification and sandbox deployment
+
+Independent focused integration verification passed 244 tests with 30 unrelated
+cases deselected and two existing Pillow deprecation warnings in 11.64 seconds.
+The JavaScript verification passed 370 tests. This evidence supplements the
+earlier provider gate; it does not replace required acceptance or release gates.
+
+Sandbox3 was deployed at code commit `2ecf7de2` using the official deployment
+runbook and this feature worktree. The public endpoint
+`https://sandbox3.albumhaven.org/login` returned HTTP 200 with the Album Haven
+sign-in page; `/bootstrap-data` returned HTTP 401. The deployment task was running,
+with port 5003 owned by reloader PID 22256 and application worker PID 2496.
+These are observations at verification time, not persistent process identities.
+
+An initial Windows `pythonw` spawned-stream startup failure was corrected locally
+in the deployment repository's `serve.py` and `test_deploy.py`, with five passing
+tests and two review passes. The production deployment path remained unchanged.
+
+No production cover pass was started. The supported endpoint uses the installed
+application code; an independent worker was unsafe because of full-snapshot
+writes and process-local coordination. Manual acceptance, E2E, CI, release, and
+live production cover throughput remain open. No checklist or counter changed.
+
+### October 3 search-only smoke evidence
+
+Read-only provider searches using isolated sandbox3 configuration measured Rush
+in 4.194 seconds (Apple candidate, 1498 x 1498) and Spock's Beard in 12.571
+seconds (no candidate, including a 7.06164-second Bandcamp timeout). These were
+search-only samples, with no album or database writes. Production cover-pass
+throughput in jobs per minute remains unverified; these measurements do not
+complete manual acceptance, E2E, CI, review, or publication gates.

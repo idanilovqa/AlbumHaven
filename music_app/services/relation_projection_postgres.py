@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from threading import Lock
+
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -28,7 +31,7 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
     Jsonb = None
 
 
-RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v10"
+RELATION_PROJECTION_BUILDER_VERSION = "local-relation-builder-v11"
 RELATION_PROJECTION_METADATA_KEY = "relation_projection"
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _PROJECTION_READY_MAX_ATTEMPTS = 3
@@ -183,6 +186,7 @@ def relation_source_fingerprint(rows: list[object]) -> str:
                 _text_value(row, "relation_evidence_kind"),
                 _int_value(row, "track_file_id"),
                 _text_value(row, "library_root_id"),
+                _text_value(row, "root_kind"),
                 _text_value(row, "root_path"),
                 _text_value(row, "relative_path"),
                 _text_value(row, "private_path"),
@@ -230,7 +234,50 @@ def build_ready_relation_projection_metadata(
     return metadata
 
 
+_RELATION_REPAIRS_LOCK = Lock()
+_RELATION_REPAIRS: dict[str, Future] = {}
+
+
 def ensure_relation_projection_ready(
+    config: Mapping[str, object],
+    *,
+    logger: object | None = None,
+    connect: Callable[[str], Any] | None = None,
+    cancel_requested: object | None = None,
+) -> dict[str, object]:
+    database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+    if not database_url:
+        raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for relation projection readiness.")
+    _raise_if_projection_cancelled(cancel_requested)
+    with _RELATION_REPAIRS_LOCK:
+        future = _RELATION_REPAIRS.get(database_url)
+        owns_repair = future is None
+        if owns_repair:
+            future = Future()
+            _RELATION_REPAIRS[database_url] = future
+    if not owns_repair:
+        while True:
+            _raise_if_projection_cancelled(cancel_requested)
+            try:
+                return future.result(timeout=0.1)
+            except FutureTimeoutError:
+                if future.done():
+                    raise
+    try:
+        result = _ensure_relation_projection_ready(
+            config, logger=logger, connect=connect, cancel_requested=cancel_requested,
+        )
+        future.set_result(result)
+        return result
+    except BaseException as error:
+        future.set_exception(error)
+        raise
+    finally:
+        with _RELATION_REPAIRS_LOCK:
+            _RELATION_REPAIRS.pop(database_url, None)
+
+
+def _ensure_relation_projection_ready(
     config: Mapping[str, object],
     *,
     logger: object | None = None,
@@ -316,6 +363,9 @@ def ensure_relation_projection_ready(
             retry_with_current_sources = False
             with connector(database_url) as connection:
                 with _cancel_active_connection_on_request(connection, cancel_requested):
+                    # Inventory writers lock library metadata before replacing family
+                    # rows. Join that publication order only after source building.
+                    connection.execute(inventory_publication_advisory_lock_sql())
                     connection.execute(relation_projection_advisory_lock_sql())
                     locked_snapshot_row = _first_row(connection.execute(_load_scan_cache_sql()))
                     locked_scan_cache = _scan_cache_from_row(locked_snapshot_row)
@@ -792,6 +842,62 @@ def _merge_failed_projection_status_sql() -> str:
     """
 
 
+def load_relation_alias_source_rows_sql() -> str:
+    """Keep album membership and locations separate instead of multiplying them."""
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ), live_files as materialized (
+          select tracks.album_id, files.library_root_id::text as library_root_id,
+                 roots.root_kind::text as root_kind, roots.root_path,
+                 files.relative_path, files.private_path
+          from bootstrap_context
+          join library.local_tracks as tracks
+            on tracks.library_id = bootstrap_context.library_id
+          join library.local_track_files as files
+            on files.track_id = tracks.id
+           and files.scan_cache_stale is false
+          join library.library_roots as roots
+            on roots.id = files.library_root_id
+           and roots.library_id = bootstrap_context.library_id
+          where tracks.album_id is not null
+        ), album_facts as materialized (
+          select albums.id as album_id, albums.library_id,
+                 owner.name as owner_artist_name,
+                 coalesce(nullif(albums.metadata ->> 'album_artist', ''), owner.name) as album_artist
+          from bootstrap_context
+          join library.local_albums as albums
+            on albums.library_id = bootstrap_context.library_id
+          join (select distinct album_id from live_files) as live_albums
+            on live_albums.album_id = albums.id
+          left join library.local_artists as owner on owner.id = albums.artist_id
+        )
+        select album_facts.album_id, album_facts.owner_artist_name, album_facts.album_artist,
+               member.name as member_artist_name,
+               null::text as library_root_id, null::text as root_kind,
+               null::text as root_path, null::text as relative_path, null::text as private_path
+        from album_facts
+        left join library.local_album_featured_artists as membership
+          on membership.library_id = album_facts.library_id
+         and membership.album_id = album_facts.album_id
+        left join library.local_artists as member on member.id = membership.artist_id
+        union all
+        select album_facts.album_id, album_facts.owner_artist_name, album_facts.album_artist,
+               null::text as member_artist_name,
+               live_files.library_root_id, live_files.root_kind, live_files.root_path,
+               live_files.relative_path, live_files.private_path
+        from album_facts
+        join live_files on live_files.album_id = album_facts.album_id;
+    """
+
+
 def load_relation_source_rows_sql() -> str:
     return """
         with bootstrap_context as (
@@ -898,6 +1004,7 @@ def load_relation_source_rows_sql() -> str:
           ) as relation_evidence_kind,
           library.local_track_files.id as track_file_id,
           library.local_track_files.library_root_id,
+          library.library_roots.root_kind,
           library.library_roots.root_path,
           library.local_track_files.relative_path,
           library.local_track_files.private_path as private_path
@@ -927,6 +1034,10 @@ def load_relation_source_rows_sql() -> str:
           member_artist.id nulls first,
           library.local_track_files.id nulls first;
     """
+
+
+def inventory_publication_advisory_lock_sql() -> str:
+    return "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));"
 
 
 def relation_projection_advisory_lock_sql() -> str:

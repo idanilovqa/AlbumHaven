@@ -246,3 +246,46 @@ test('gallery cover readiness timeout reports titles, states, geometry, and sche
     },
   );
 });
+
+test('native empty artwork is opt-in and never masks a pending visible image', async () => {
+  const { readVisibleGalleryCoverReadiness } = await galleryActionsModule;
+  const bounds = { left: 0, top: 0, right: 200, bottom: 200, width: 200, height: 200 };
+  const empty = new FakeElement(bounds, { attributes: { 'data-album-artbox-state': 'empty' } });
+  const image = new FakeImageElement(bounds, { complete: false });
+  const selectors = {
+    albumCardSelector: '.album-card', coverImageSelector: '.cover img',
+    coverPlaceholderSelector: '.cover-placeholder', titleSelector: '.title',
+    galleryScrollSelector: '#scroll', minimumCount: 1, requireVisible: true,
+    allowPlaceholder: false, allowEmptyArtwork: true, requireLocalImage: false,
+  };
+  const emptyCard = new FakeElement(bounds);
+  emptyCard.querySelector = selector => selector === '[data-album-artbox-state="empty"]'
+    ? empty : selector === '.title' ? { textContent: 'No artwork' } : null;
+  const cards = [emptyCard];
+  const keys = ['document', 'HTMLElement', 'HTMLImageElement', 'getComputedStyle'];
+  const original = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, {
+    HTMLElement: FakeElement, HTMLImageElement: FakeImageElement,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+    document: {
+      querySelector: () => new FakeElement(bounds),
+      querySelectorAll: () => cards,
+    },
+  });
+  try {
+    assert.equal(readVisibleGalleryCoverReadiness(selectors), true);
+    assert.equal(readVisibleGalleryCoverReadiness({ ...selectors, allowEmptyArtwork: false }), false);
+    cards.push(card('Pending image', bounds, image, selectors));
+    assert.equal(readVisibleGalleryCoverReadiness(selectors), false);
+    image.complete = true;
+    image.naturalWidth = 480;
+    assert.equal(readVisibleGalleryCoverReadiness(selectors), true);
+    empty.attributes.set('data-album-artbox-state', 'loading');
+    assert.equal(readVisibleGalleryCoverReadiness(selectors), false);
+  } finally {
+    for (const key of keys) {
+      if (original[key]) Object.defineProperty(globalThis, key, original[key]);
+      else delete globalThis[key];
+    }
+  }
+});

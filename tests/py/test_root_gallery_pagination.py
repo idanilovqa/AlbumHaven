@@ -81,24 +81,47 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
     monkeypatch.setattr(repository, "_load_non_album_entries", load_non_album)
     monkeypatch.setattr(browse, "build_non_album_track_list", lambda entries, **_options: list(entries))
     monkeypatch.setattr(browse, "configured_library_root_paths_snapshot", lambda _config, **_options: ())
-    payload = repository.build_root_startup_preview_payload(query_params={"gallery_page_size": "2", "omit_sidebar": "1"})
-    assert payload["non_album_tracks"] == [loose_track]
-    assert len(non_album_calls) == 1
-    assert non_album_calls[0]["connection"] is connection
+    payload = repository.build_root_startup_preview_payload(query_params={"gallery_page_size": "2"})
+    assert "non_album_tracks" not in payload
+    assert payload["non_album_tracks_deferred"] is True
+    assert non_album_calls == []
     assert payload["album_count"] == 7
     assert payload["artists_sidebar"][0]["count"] == 7
     assert len(payload["artist_groups"][0]["albums"]) == 2
+
     assert payload["gallery_page"]["has_more"] is True
     assert payload["initial_view_partial"] is False
     bounded = [params["gallery_album_ids"] for _, params in calls if params and "gallery_album_ids" in params]
     assert len(bounded) == 1 and len(bounded[0]) == 2
     assert calls[0][0] == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
     assert calls[-2:] == [("rollback", None), ("close", None)]
+
+    hydrated = repository.build_root_startup_preview_payload(query_params={
+        "gallery_page_size": "2",
+        "include_non_album": "1",
+    })
+    assert hydrated["non_album_tracks"] == [loose_track]
+    assert hydrated["non_album_tracks_deferred"] is False
+    assert len(non_album_calls) == 1
+    assert non_album_calls[0]["connection"] is connection
+
+    non_album_calls.clear()
+    first_page_without_sidebar = repository.build_root_startup_preview_payload(
+        query_params={
+            "gallery_page_size": "2",
+            "omit_sidebar": "1",
+        }
+    )
+    assert "artists_sidebar" not in first_page_without_sidebar
+    assert "non_album_tracks" not in first_page_without_sidebar
+    assert first_page_without_sidebar["non_album_tracks_deferred"] is True
+    assert non_album_calls == []
     next_page = repository.build_root_startup_preview_payload(query_params={
         "gallery_page_size": "2", "omit_sidebar": "1", "gallery_cursor": payload["gallery_page"]["next_cursor"]})
     assert "artists_sidebar" not in next_page
     assert "non_album_tracks" not in next_page
-    assert len(non_album_calls) == 1
+    assert next_page["non_album_tracks_deferred"] is True
+    assert non_album_calls == []
     assert next_page["album_count"] == 7
 
 
@@ -107,6 +130,11 @@ def test_root_page_hydrates_only_selected_album_ids_in_one_snapshot(monkeypatch)
 def test_root_page_rejects_malformed_cursor(cursor):
     with pytest.raises(ValueError, match='cursor'):
         _root_gallery_page_selection([], [], {}, {}, {'gallery_cursor': cursor})
+
+
+def test_root_page_rejects_unknown_page_direction():
+    with pytest.raises(ValueError, match='page direction'):
+        _root_gallery_page_selection([], [], {}, {}, {'gallery_page_direction': 'sideways'})
 
 
 def test_root_page_alias_order_and_revision_do_not_depend_on_database_row_order():
@@ -124,6 +152,93 @@ def test_root_page_revision_ignores_presentation_changes():
     first = _root_gallery_page_selection(rows, [], {}, {"gallery_display_mode": "cards", "gallery_scale_percent": 100}, {})
     changed = _root_gallery_page_selection(rows, [], {}, {"gallery_display_mode": "rows", "gallery_scale_percent": 75}, {})
     assert first[3]["revision"] == changed[3]["revision"]
+
+
+def test_root_page_revision_changes_when_artist_relationship_changes():
+    owned = [dict(row("Artist", "album"), featured_kind="owner")]
+    featured = [dict(row("Artist", "album"), featured_kind="featured_track_artist")]
+
+    owned_page = _root_gallery_page_selection(owned, [], {}, {}, {})
+    featured_page = _root_gallery_page_selection(featured, [], {}, {}, {})
+
+    assert owned_page[3]["revision"] != featured_page[3]["revision"]
+
+
+def test_anchored_root_page_keeps_leading_and_target_artist_discographies_complete():
+    rows = [
+        *[row("Above", f"above-{index}", artist_id=1) for index in range(18)],
+        *[row("Avantasia", f"avantasia-{index}", artist_id=2) for index in range(7)],
+        *[row("Avenged Sevenfold", f"avenged-{index}", artist_id=3) for index in range(8)],
+        *[row("Beyond", f"beyond-{index}", artist_id=4) for index in range(18)],
+    ]
+
+    selected, _, _, page = _root_gallery_page_selection(
+        rows,
+        [],
+        {},
+        {},
+        {"gallery_page_size": "12", "gallery_anchor_artist": "Avenged Sevenfold"},
+    )
+
+    assert [item["album_key"] for item in selected if item["artist_name"] == "Avantasia"] == [
+        f"avantasia-{index}" for index in range(7)
+    ]
+    assert [item["album_key"] for item in selected if item["artist_name"] == "Avenged Sevenfold"] == [
+        f"avenged-{index}" for index in range(8)
+    ]
+    assert page["has_previous"] is True
+    assert page["previous_cursor"]
+
+
+def test_anchored_root_page_previous_cursor_reaches_complete_earlier_artists():
+    rows = [
+        *[row("Aardvark", f"aardvark-{index}", artist_id=1) for index in range(5)],
+        *[row("Albatross", f"albatross-{index}", artist_id=2) for index in range(13)],
+        *[row("Avantasia", f"avantasia-{index}", artist_id=3) for index in range(7)],
+        *[row("Avenged Sevenfold", f"avenged-{index}", artist_id=4) for index in range(8)],
+    ]
+    anchored = _root_gallery_page_selection(
+        rows,
+        [],
+        {},
+        {},
+        {"gallery_page_size": "12", "gallery_anchor_artist": "Avenged Sevenfold"},
+    )
+
+    previous = _root_gallery_page_selection(
+        rows,
+        [],
+        {},
+        {},
+        {
+            "gallery_page_size": "12",
+            "gallery_cursor": anchored[3]["previous_cursor"],
+            "gallery_page_direction": "previous",
+        },
+    )
+
+    assert previous[0][0]["artist_name"] == "Albatross"
+    assert {item["album_key"] for item in previous[0] if item["artist_name"] == "Albatross"} == {
+        f"albatross-{index}" for index in range(13)
+    }
+    assert previous[3]["has_previous"] is True
+
+    first = _root_gallery_page_selection(
+        rows,
+        [],
+        {},
+        {},
+        {
+            "gallery_page_size": "12",
+            "gallery_cursor": previous[3]["previous_cursor"],
+            "gallery_page_direction": "previous",
+        },
+    )
+    assert [item["album_key"] for item in first[0] if item["artist_name"] == "Aardvark"] == [
+        f"aardvark-{index}" for index in range(5)
+    ]
+    assert first[3]["has_previous"] is False
+    assert first[3]["previous_cursor"] is None
 
 def test_root_membership_checks_eligible_files_without_full_library_track_rollups():
     from music_app.services.library_browse_postgres import _root_gallery_membership_sql

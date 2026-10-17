@@ -5382,6 +5382,8 @@ const state = {
   coverLookup: {
     drawerOpen: false,
     tasks: [],
+    notificationCounts: null,
+    tasksNextCursor: null,
     pollingTimer: 0,
     selectionTimer: 0,
     taskOpenSelectionGesture: null,
@@ -28979,6 +28981,22 @@ function handleCoverLookupTaskOpenCopy(event) {
   return true;
 }
 
+const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
+const COVER_LOOKUP_TASK_OVERSCAN = 10;
+const COVER_LOOKUP_TASK_ESTIMATED_HEIGHT = 74;
+
+function getCoverLookupTaskRenderWindow(tasks, body) {
+  const rowHeight = Math.max(
+    1,
+    Number(state.coverLookup.taskEstimatedHeight || COVER_LOOKUP_TASK_ESTIMATED_HEIGHT),
+  );
+  const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
+  const visibleStart = Math.floor(Math.max(0, Number(body.scrollTop || 0)) / rowHeight);
+  const start = Math.min(maximumStart, Math.max(0, visibleStart - COVER_LOOKUP_TASK_OVERSCAN));
+  const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
+  return { start, end, rowHeight };
+}
+
 function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   const drawer = document.getElementById('cover-lookup-drawer');
   const body = document.getElementById('cover-lookup-drawer-body');
@@ -29003,10 +29021,13 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
   }
   drawer.hidden = !state.coverLookup.drawerOpen;
   drawer.classList.toggle('is-open', state.coverLookup.drawerOpen);
-  const activeCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const pendingNotificationCount = tasks.filter((task) => isCompletedCoverLookupTask(task) && !Boolean(task?.notification_action_taken)).length;
-  const terminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
-  const badgeCount = activeCount + pendingNotificationCount;
+  const loadedActiveCount = tasks.filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
+  const loadedTerminalCount = tasks.filter((task) => isCompletedCoverLookupTask(task)).length;
+  const counts = state.coverLookup.notificationCounts;
+  const hasAuthoritativeCounts = Number.isFinite(Number(counts?.total_count));
+  const activeCount = hasAuthoritativeCounts ? Number(counts.active_count || 0) : loadedActiveCount;
+  const terminalCount = hasAuthoritativeCounts ? Number(counts.finished_count || 0) : loadedTerminalCount;
+  const badgeCount = hasAuthoritativeCounts ? Number(counts.total_count || 0) : tasks.length;
   if (summary) {
     summary.textContent = [
       activeCount ? `${activeCount} active` : '',
@@ -29021,6 +29042,11 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     clearButton.disabled = terminalCount <= 0;
     clearButton.setAttribute?.('aria-disabled', String(terminalCount <= 0));
   }
+  if (!state.coverLookup.drawerOpen) {
+    body.innerHTML = '';
+    syncCoverLookupElapsedTimer();
+    return;
+  }
   const preserveSelectedNotificationText = preserveInteraction
     && (hasActiveCoverLookupDrawerTextSelection(body) || hasActiveCoverLookupDrawerAction(body));
   if (!tasks.length) {
@@ -29030,7 +29056,10 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     syncCoverLookupElapsedTimer();
     return;
   }
-  const taskMarkup = tasks.map((task) => {
+  const renderWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  state.coverLookup.taskRenderWindowStart = renderWindow.start;
+  const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
+  const taskMarkup = visibleTasks.map((task) => {
     const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
@@ -29113,7 +29142,17 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     `;
   }).join('');
   if (!preserveSelectedNotificationText) {
-    body.innerHTML = taskMarkup;
+    const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
+    const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+    body.innerHTML = `
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
+      ${taskMarkup}
+      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
+    `;
+    const measuredCard = body.querySelector?.('.cover-lookup-task-card');
+    const measuredHeight = Number(measuredCard?.getBoundingClientRect?.().height || 0);
+    const measuredGap = Number.parseFloat(window.getComputedStyle?.(body)?.rowGap || '') || 8;
+    if (measuredHeight > 0) state.coverLookup.taskEstimatedHeight = measuredHeight + measuredGap;
   }
   syncCoverLookupElapsedTimer();
 }
@@ -29147,6 +29186,7 @@ async function clearCompletedCoverLookupTasks() {
       throw new Error(data.error || 'Failed to clear completed cover lookups');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
   } catch (error) {
@@ -29184,6 +29224,7 @@ async function clearCoverLookupTaskNotification(taskId) {
       throw new Error(data.error || 'Failed to clear notification');
     }
     state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    await loadCoverLookupNotificationCounts({ toast: false });
     renderCoverLookupDrawer();
     stopCoverLookupPollingIfIdle();
     showToast('Notification cleared.', 'success', 2200);
@@ -29526,18 +29567,89 @@ function renderCoverLookupModal() {
   }
 }
 
-let coverLookupTasksRequestSequence = 0;
+const coverLookupTasksRequestSequences = { replace: 0, refresh: 0, append: 0, active: 0 };
+
+function updateCoverLookupNotificationCounts(data) {
+  if (!Number.isFinite(Number(data?.total_count))) return;
+  state.coverLookup.notificationCounts = {
+    total_count: Math.max(0, Number(data.total_count || 0)),
+    active_count: Math.max(0, Number(data.active_count || 0)),
+    finished_count: Math.max(0, Number(data.finished_count || 0)),
+  };
+}
+
+async function loadCoverLookupNotificationCounts(options = {}) {
+  try {
+    const response = await fetch('/utilities/cover-lookup/tasks/counts', {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || 'Failed to load cover lookup notification counts');
+    }
+    updateCoverLookupNotificationCounts(data);
+    renderCoverLookupDrawer();
+  } catch (error) {
+    console.warn('[AlbumHaven][CoverLookup] Failed to load notification counts.', error);
+    if (options.toast !== false) {
+      showToast(error.message || 'Failed to load cover lookup notification counts.', 'error', 2800);
+    }
+  }
+}
+
+function mergeCoverLookupTaskSummaries(incomingTasks, mode) {
+  const incoming = mergeCoverLookupTasksWithNotifications(incomingTasks);
+  if (mode === 'replace') return incoming;
+  const current = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const incomingIds = new Set(incoming.map((task) => String(task?.id || '')).filter(Boolean));
+  const remaining = current.filter((task) => !incomingIds.has(String(task?.id || '')));
+  return mode === 'append' ? [...remaining, ...incoming] : [...incoming, ...remaining];
+}
 
 async function loadCoverLookupTasks(options = {}) {
-  const requestSequence = ++coverLookupTasksRequestSequence;
+  const activeOnly = options.activeOnly === true;
+  const append = options.append === true;
+  const requestMode = activeOnly
+    ? 'active'
+    : append
+      ? 'append'
+      : options.mergeFirstPage === true
+        ? 'refresh'
+        : 'replace';
+  const requestSequence = ++coverLookupTasksRequestSequences[requestMode];
+  const previousActiveTaskIds = activeOnly
+    ? new Set(
+      (state.coverLookup.tasks || [])
+        .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
+        .map((task) => String(task?.id || ''))
+        .filter(Boolean),
+    )
+    : new Set();
   try {
-    const response = await fetch('/utilities/cover-lookup/tasks', { headers: { Accept: 'application/json' } });
+    const params = new URLSearchParams({ limit: '50' });
+    if (activeOnly) params.set('active_only', 'true');
+    if (append && state.coverLookup.tasksNextCursor) {
+      params.set('cursor', state.coverLookup.tasksNextCursor);
+    }
+    const response = await fetch(`/utilities/cover-lookup/tasks?${params.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
     const data = await response.json().catch(() => ({}));
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
-    const nextTasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    updateCoverLookupNotificationCounts(data);
+    const incomingTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const incomingTaskIds = new Set(
+      incomingTasks.map((task) => String(task?.id || '')).filter(Boolean),
+    );
+    const missingActiveTask = activeOnly
+      && Array.from(previousActiveTaskIds).some((taskId) => !incomingTaskIds.has(taskId));
+    const nextTasks = mergeCoverLookupTaskSummaries(incomingTasks, requestMode);
+    if (requestMode === 'replace' || requestMode === 'append') {
+      state.coverLookup.tasksNextCursor = String(data.next_cursor || '') || null;
+    }
     const snapshot = JSON.stringify(nextTasks.map((task) => ({
       id: task.id,
       status: task.status,
@@ -29592,8 +29704,15 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
+    if (missingActiveTask) {
+      await loadCoverLookupTasks({
+        toast: false,
+        mergeFirstPage: true,
+        refreshModalGallery: options.refreshModalGallery,
+      });
+    }
   } catch (error) {
-    if (requestSequence !== coverLookupTasksRequestSequence) return;
+    if (requestSequence !== coverLookupTasksRequestSequences[requestMode]) return;
     console.warn('[AlbumHaven][CoverLookup] Failed to load lookup tasks.', error);
     if (options.toast !== false) {
       showToast(error.message || 'Failed to load cover lookups.', 'error', 2800);
@@ -29602,10 +29721,38 @@ async function loadCoverLookupTasks(options = {}) {
 }
 
 let coverLookupPollingRequest = null;
+let coverLookupHistoryRequest = null;
+
+async function loadNextCoverLookupTaskPage(options = {}) {
+  if (!state.coverLookup.tasksNextCursor) return;
+  if (coverLookupHistoryRequest) return coverLookupHistoryRequest;
+  const request = loadCoverLookupTasks({ ...options, append: true });
+  coverLookupHistoryRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupHistoryRequest === request) coverLookupHistoryRequest = null;
+  }
+}
+
+function handleCoverLookupDrawerScroll(event) {
+  const body = event?.currentTarget || document.getElementById('cover-lookup-drawer-body');
+  if (!body || !state.coverLookup.drawerOpen) return Promise.resolve();
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  const nextWindow = getCoverLookupTaskRenderWindow(tasks, body);
+  if (nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0)) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+  }
+  const remaining = Number(body.scrollHeight || 0)
+    - Number(body.scrollTop || 0)
+    - Number(body.clientHeight || 0);
+  if (remaining > 600 || !state.coverLookup.tasksNextCursor) return Promise.resolve();
+  return loadNextCoverLookupTaskPage({ toast: false });
+}
 
 async function loadCoverLookupTasksForPolling(options = {}) {
   if (coverLookupPollingRequest) return coverLookupPollingRequest;
-  const request = loadCoverLookupTasks(options);
+  const request = loadCoverLookupTasks({ ...options, activeOnly: true });
   coverLookupPollingRequest = request;
   try {
     return await request;
@@ -44812,6 +44959,14 @@ attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof loadCoverLookupNotificationCounts === 'function') {
+  void loadCoverLookupNotificationCounts({ toast: false });
+}
+document.getElementById('cover-lookup-drawer-body')?.addEventListener(
+  'scroll',
+  handleCoverLookupDrawerScroll,
+  { passive: true },
+);
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();

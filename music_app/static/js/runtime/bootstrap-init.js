@@ -5,6 +5,14 @@ attachModalEvents();
 document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
+if (typeof loadCoverLookupNotificationCounts === 'function') {
+  void loadCoverLookupNotificationCounts({ toast: false });
+}
+document.getElementById('cover-lookup-drawer-body')?.addEventListener(
+  'scroll',
+  handleCoverLookupDrawerScroll,
+  { passive: true },
+);
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();

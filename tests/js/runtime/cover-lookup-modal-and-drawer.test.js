@@ -296,6 +296,187 @@ function createDrawerHarness(overrides = {}) {
   process.exitCode = 1;
 });
 
+require('node:test')('notification startup loads authoritative counts without loading history', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          total_count: 528,
+          active_count: 2,
+          finished_count: 526,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.drawerOpen = false;
+
+  await context.loadCoverLookupNotificationCounts({ toast: false });
+
+  assert.deepEqual(requestedUrls, ['/utilities/cover-lookup/tasks/counts']);
+  assert.equal(context.state.coverLookup.notificationCounts.total_count, 528);
+  assert.deepEqual(context.state.coverLookup.tasks || [], []);
+});
+
+require('node:test')('drawer page loads 50 summaries and retains its next cursor', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ id: 'newest', status: 'completed' }],
+          next_cursor: 'page-two',
+          total_count: 528,
+          active_count: 0,
+          finished_count: 528,
+        }),
+      };
+    },
+  });
+
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(requestedUrls[0], '/utilities/cover-lookup/tasks?limit=50');
+  assert.equal(context.state.coverLookup.tasks[0].id, 'newest');
+  assert.equal(context.state.coverLookup.tasksNextCursor, 'page-two');
+});
+
+require('node:test')('active-only polling merges updates without replacing loaded history', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ id: 'active', status: 'running', progress: 25 }],
+          next_cursor: null,
+          total_count: 2,
+          active_count: 1,
+          finished_count: 1,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [{ id: 'history', status: 'completed' }];
+
+  await context.loadCoverLookupTasks({ toast: false, activeOnly: true });
+
+  assert.equal(requestedUrls[0], '/utilities/cover-lookup/tasks?limit=50&active_only=true');
+  assert.deepEqual(
+    Array.from(context.state.coverLookup.tasks, task => task.id),
+    ['active', 'history'],
+  );
+});
+
+require('node:test')('active-only polling refreshes the first page when a running task disappears', async () => {
+  const requestedUrls = [];
+  const { context } = createDrawerHarness({
+    fetch: async (url) => {
+      requestedUrls.push(String(url));
+      if (String(url).includes('active_only=true')) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            tasks: [],
+            next_cursor: null,
+            total_count: 1,
+            active_count: 0,
+            finished_count: 1,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          tasks: [{ id: 'finished', status: 'completed' }],
+          next_cursor: null,
+          total_count: 1,
+          active_count: 0,
+          finished_count: 1,
+        }),
+      };
+    },
+  });
+  context.state.coverLookup.tasks = [
+    { id: 'finished', status: 'running' },
+    { id: 'history', status: 'completed' },
+  ];
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+
+  assert.deepEqual(requestedUrls, [
+    '/utilities/cover-lookup/tasks?limit=50&active_only=true',
+    '/utilities/cover-lookup/tasks?limit=50',
+  ]);
+  assert.equal(context.state.coverLookup.tasks[0].status, 'completed');
+  assert.deepEqual(Array.from(context.state.coverLookup.tasks, task => task.id), ['finished', 'history']);
+});
+
+require('node:test')('notification history mounts no more than 60 cards with two spacers', () => {
+  const { context, bodyElement } = createDrawerHarness();
+  bodyElement.scrollTop = 0;
+  bodyElement.clientHeight = 600;
+  context.state.coverLookup.tasks = Array.from({ length: 528 }, (_, index) => ({
+    id: `task-${index}`,
+    status: 'completed',
+    artist: `Artist ${index}`,
+    album: `Album ${index}`,
+  }));
+
+  for (const scrollTop of [0, 12_000, 38_000]) {
+    bodyElement.scrollTop = scrollTop;
+    context.renderCoverLookupDrawer({ preserveInteraction: false });
+    assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-card /g) || []).length, 60);
+    assert.equal((bodyElement.innerHTML.match(/class="cover-lookup-task-spacer"/g) || []).length, 2);
+  }
+});
+
+require('node:test')('approaching drawer end serializes the next page request', async () => {
+  let resolveRequest;
+  let fetchCount = 0;
+  const response = {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      tasks: [{ id: 'older', status: 'completed' }],
+      next_cursor: null,
+      total_count: 51,
+      active_count: 0,
+      finished_count: 51,
+    }),
+  };
+  const { context, bodyElement } = createDrawerHarness({
+    fetch: () => {
+      fetchCount += 1;
+      return new Promise((resolve) => {
+        resolveRequest = () => resolve(response);
+      });
+    },
+  });
+  Object.assign(bodyElement, { scrollTop: 500, clientHeight: 500, scrollHeight: 1_100 });
+  Object.assign(context.state.coverLookup, {
+    tasks: [{ id: 'newest', status: 'completed' }],
+    tasksNextCursor: 'page-two',
+  });
+
+  const first = context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+  const overlapping = context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+  assert.equal(fetchCount, 1);
+  resolveRequest();
+  await Promise.all([first, overlapping]);
+  assert.deepEqual(Array.from(context.state.coverLookup.tasks, task => task.id), ['newest', 'older']);
+});
+
 ;(async () => {
   let resolveFirstRequest;
   let fetchCount = 0;
@@ -1514,7 +1695,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     },
     fetch: async (url) => {
       requestUrls.push(url);
-      if (url === '/utilities/cover-lookup/tasks') {
+      if (url === '/utilities/cover-lookup/tasks?limit=50') {
         return { ok: true, json: async () => ({ ok: true, tasks: [] }) };
       }
       if (url === '/utilities/cover-lookup/gallery/mark-seen') {
@@ -2684,7 +2865,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   };
   const context = loadHelper({
     fetch: async (url) => {
-      if (url === '/utilities/cover-lookup/tasks') {
+      if (url === '/utilities/cover-lookup/tasks?limit=50') {
         return {
           ok: true,
           json: async () => ({ ok: true, tasks: [completedTask] }),

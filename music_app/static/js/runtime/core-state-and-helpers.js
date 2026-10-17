@@ -344,6 +344,8 @@ const state = {
   coverLookup: {
     drawerOpen: false,
     tasks: [],
+    notificationCounts: null,
+    tasksNextCursor: null,
     pollingTimer: 0,
     selectionTimer: 0,
     taskOpenSelectionGesture: null,

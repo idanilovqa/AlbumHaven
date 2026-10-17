@@ -236,6 +236,72 @@ function createDrawerHarness(overrides = {}) {
   };
 }
 
+;(async () => {
+  const task = {
+    id: 'stable-task',
+    status: 'running',
+    artist: 'Artist',
+    album: 'Album',
+    progress: 25,
+    possible_matches: [{ id: 'candidate-1', art_kind: 'cover' }],
+  };
+  const { context } = createDrawerHarness({
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, tasks: [task] }) }),
+  });
+  let drawerRenderCount = 0;
+  context.renderCoverLookupDrawer = () => {
+    drawerRenderCount += 1;
+  };
+
+  await context.loadCoverLookupTasks({ toast: false });
+  await context.loadCoverLookupTasks({ toast: false });
+
+  assert.equal(drawerRenderCount, 1, 'an unchanged poll must not rebuild the notification drawer');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+require('node:test')('closing cover lookup releases hidden candidate images and polling state', () => {
+  class TestButton {}
+  const overlay = { hidden: false };
+  const modalBody = { innerHTML: '<img src="https://images.example/large-cover.jpg">' };
+  const saveButton = new TestButton();
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    document: {
+      body: { classList: { remove() {} } },
+      getElementById: (id) => ({
+        'cover-lookup-modal': overlay,
+        'cover-lookup-modal-body': modalBody,
+        'cover-lookup-save-remote-button': saveButton,
+        'track-modal': { hidden: true },
+        'utility-modal': { hidden: true },
+      }[id] || null),
+    },
+  });
+  Object.assign(context.state.coverLookup.modal, {
+    album: { name: 'Large album' },
+    taskId: 'completed-task',
+    localCovers: [{ path: 'C:/Music/cover.jpg' }],
+    otherArt: [{ path: 'C:/Music/booklet.jpg' }],
+    possibleMatches: [{ id: 'remote-cover', url: 'https://images.example/large-cover.jpg' }],
+    candidateSnapshot: { search_generation: 'completed-task', candidates: [{ id: 'remote-cover' }] },
+  });
+  context.state.coverLookup.tasks = [];
+
+  context.closeCoverLookupModal();
+
+  assert.equal(overlay.hidden, true);
+  assert.equal(modalBody.innerHTML, '');
+  assert.equal(context.state.coverLookup.modal.album, null);
+  assert.equal(context.state.coverLookup.modal.taskId, '');
+  assert.equal(context.state.coverLookup.modal.localCovers.length, 0);
+  assert.equal(context.state.coverLookup.modal.otherArt.length, 0);
+  assert.equal(context.state.coverLookup.modal.possibleMatches.length, 0);
+  assert.equal(context.state.coverLookup.modal.candidateSnapshot, null);
+});
+
 (async () => {
   for (const clearAll of [false, true]) {
     let resolveFetch;

@@ -32,6 +32,50 @@ ACTIVE_COVER_LOOKUP_MATCH_FIELDS = frozenset(CURRENT_USE_LOOKUP_MATCH_FIELDS - {
 MAX_ACTIVE_COVER_LOOKUP_STRING_CHARS = 2_048
 MAX_ACTIVE_COVER_LOOKUP_MATCHES_JSON_BYTES = 256 * 1_024
 
+_COVER_LOOKUP_LIST_ALBUM_FIELDS = (
+    "key",
+    "name",
+    "album",
+    "album_artist",
+    "artist",
+    "year",
+    "cover_path",
+    "cover_preview_url",
+    "cover_revision",
+    "remote_cover_url",
+    "remote_cover_thumbnail_url",
+    "remote_cover_source",
+    "remote_cover_source_label",
+    "remote_cover_album_url",
+    "remote_cover_width",
+    "remote_cover_height",
+)
+_COVER_LOOKUP_LIST_TASK_FIELDS = (
+    "id",
+    "status",
+    "type",
+    "artist",
+    "album",
+    "year",
+    "progress",
+    "progress_label",
+    "message",
+    "result_kind",
+    "notification_action_taken",
+    "notification_completed_at",
+    "notification_expires_at",
+    "created_at",
+    "started_at",
+    "updated_at",
+    "finished_at",
+    "cancel_requested",
+    "caa_empty_notice",
+    "selected_candidate_id",
+    "best_candidate_id",
+    "candidate_revision",
+    "candidate_updated_at",
+)
+
 
 def cover_lookup_result(task_id: str) -> dict[str, object]:
     with _COVER_LOOKUP_TASKS_LOCK:
@@ -119,6 +163,43 @@ def serialize_cover_lookup_task_payload(task_payload: dict[str, object] | None) 
 def is_terminal_cover_lookup_task(task_payload: dict[str, object] | None) -> bool:
     status = str((task_payload or {}).get("status") or "").strip().casefold()
     return status in _TERMINAL_COVER_LOOKUP_STATUSES
+
+
+def summarize_cover_lookup_task_for_list(
+    task_payload: dict[str, object] | None,
+) -> dict[str, object]:
+    serialized = serialize_cover_lookup_task_payload(task_payload) or {}
+    if not serialized:
+        return {}
+    summary = {
+        field: serialized[field]
+        for field in _COVER_LOOKUP_LIST_TASK_FIELDS
+        if field in serialized
+    }
+    matches = serialized.get("possible_matches")
+    if is_terminal_cover_lookup_task(serialized):
+        summary["possible_match_count"] = sum(
+            1
+            for match in (matches or [])
+            if isinstance(match, Mapping)
+            and str(match.get("art_kind") or "cover") == "cover"
+        )
+    elif isinstance(matches, list):
+        summary["possible_matches"] = matches
+    album_payload = serialized.get("album_payload")
+    if isinstance(album_payload, Mapping):
+        compact_album = {
+            field: album_payload[field]
+            for field in _COVER_LOOKUP_LIST_ALBUM_FIELDS
+            if field in album_payload
+        }
+        compact_album["tracks"] = [
+            {"path": str(track.get("path") or "")}
+            for track in (album_payload.get("tracks") or [])
+            if isinstance(track, Mapping) and str(track.get("path") or "").strip()
+        ]
+        summary["album_payload"] = compact_album
+    return summary
 
 
 def normalize_cover_lookup_notification_task(task_payload: dict[str, object] | None) -> dict[str, object] | None:
@@ -312,6 +393,15 @@ def list_cover_lookup_tasks(*, config: Mapping[str, object] | None = None) -> li
             merged_items.append(merged)
     merged_items.sort(key=_sort_cover_lookup_task_key, reverse=True)
     return merged_items
+
+
+def list_cover_lookup_task_summaries(
+    *, config: Mapping[str, object] | None = None
+) -> list[dict[str, object]]:
+    return [
+        summarize_cover_lookup_task_for_list(task)
+        for task in list_cover_lookup_tasks(config=config)
+    ]
 
 
 def update_cover_lookup_task(

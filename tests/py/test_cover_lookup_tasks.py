@@ -79,6 +79,65 @@ def test_cover_lookup_tasks_tests_do_not_use_flask_fixture_or_app_context():
     assert "app." + "app_context(" not in source
 
 
+def test_terminal_task_list_summary_preserves_actions_without_heavy_detail():
+    from music_app.services import cover_lookup_tasks as task_service
+
+    task = {
+        "id": "completed-task",
+        "status": "completed",
+        "artist": "Artist",
+        "album": "Album",
+        "year": 2001,
+        "progress": 100,
+        "progress_label": "Completed",
+        "message": "Found covers",
+        "result_kind": "candidates-found",
+        "notification_action_taken": False,
+        "notification_completed_at": "2026-10-17T18:00:00+00:00",
+        "track_paths": ["C:/Music/Artist/Album/01.flac"],
+        "job_contract": {"provider_state": "q" * 200_000},
+        "phase_timings_ms": {"lookup": 123},
+        "possible_matches": [
+            {"id": "front", "art_kind": "cover", "debug": "x" * 200_000},
+            {"id": "booklet", "art_kind": "other", "debug": "y" * 200_000},
+        ],
+        "album_payload": {
+            "key": "artist::album",
+            "name": "Album",
+            "album_artist": "Artist",
+            "year": 2001,
+            "cover_path": "C:/Music/Artist/Album/cover.jpg",
+            "tracks": [
+                {
+                    "path": "C:/Music/Artist/Album/01.flac",
+                    "title": "Track",
+                    "embedded_art": "z" * 200_000,
+                },
+            ],
+            "gallery_groups": ["unused-heavy-detail" * 10_000],
+        },
+    }
+
+    summary = task_service.summarize_cover_lookup_task_for_list(task)
+
+    assert summary["id"] == "completed-task"
+    assert summary["status"] == "completed"
+    assert summary["possible_match_count"] == 1
+    assert "possible_matches" not in summary
+    assert "track_paths" not in summary
+    assert "job_contract" not in summary
+    assert "phase_timings_ms" not in summary
+    assert summary["album_payload"] == {
+        "key": "artist::album",
+        "name": "Album",
+        "album_artist": "Artist",
+        "year": 2001,
+        "cover_path": "C:/Music/Artist/Album/cover.jpg",
+        "tracks": [{"path": "C:/Music/Artist/Album/01.flac"}],
+    }
+    assert len(json.dumps(summary).encode("utf-8")) < 4_096
+
+
 def test_live_terminal_completion_beats_stale_persisted_running_timestamp():
     created_at = "2026-07-21T14:18:16.697629+00:00"
     finished_at = "2026-07-21T14:18:34.401339+00:00"

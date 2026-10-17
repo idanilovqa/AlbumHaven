@@ -1281,9 +1281,11 @@ function renderCoverLookupDrawer({ preserveInteraction = true } = {}) {
     const status = String(task?.status || '');
     const isCompleted = isCompletedCoverLookupTask(task);
     const isNoResult = status === 'completed' && String(task?.result_kind || '') === 'no-results';
-    const foundCount = Array.isArray(task?.possible_matches)
-      ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
-      : 0;
+    const foundCount = Number.isFinite(Number(task?.possible_match_count))
+      ? Math.max(0, Number(task.possible_match_count))
+      : Array.isArray(task?.possible_matches)
+        ? task.possible_matches.filter(item => String(item?.art_kind || 'cover') === 'cover').length
+        : 0;
     const statusLabel = status === 'failed'
       ? 'Lookup failed'
       : status === 'canceled'
@@ -1781,22 +1783,32 @@ async function loadCoverLookupTasks(options = {}) {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
-    state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
-    renderCoverLookupDrawer();
-    (state.coverLookup.tasks || []).forEach((task) => {
-      applyCoverLookupTaskUpdates(task);
-    });
-    const snapshot = JSON.stringify(state.coverLookup.tasks.map((task) => ({
+    const nextTasks = mergeCoverLookupTasksWithNotifications(Array.isArray(data.tasks) ? data.tasks : []);
+    const snapshot = JSON.stringify(nextTasks.map((task) => ({
       id: task.id,
       status: task.status,
       progress: task.progress,
+      progress_label: task.progress_label,
+      message: task.message,
+      result_kind: task.result_kind,
+      artist: task.artist,
+      album: task.album,
+      year: task.year,
+      notification_action_taken: Boolean(task.notification_action_taken),
+      possible_match_count: Number(task.possible_match_count || 0),
       selected_candidate_id: task.selected_candidate_id,
       possible_match_ids: buildCoverLookupCandidateSnapshot(task),
       updated_albums_count: Array.isArray(task.updated_albums) ? task.updated_albums.length : 0,
     })));
+    const tasksChanged = snapshot !== state.coverLookup.tasksSnapshot;
+    state.coverLookup.tasks = nextTasks;
+    if (tasksChanged) renderCoverLookupDrawer();
+    nextTasks.forEach((task) => {
+      applyCoverLookupTaskUpdates(task);
+    });
     const modalTaskId = String(state.coverLookup.modal.taskId || '');
-    if (modalTaskId && snapshot !== state.coverLookup.tasksSnapshot) {
-      const task = state.coverLookup.tasks.find((item) => String(item?.id || '') === modalTaskId);
+    if (modalTaskId && tasksChanged) {
+      const task = nextTasks.find((item) => String(item?.id || '') === modalTaskId);
       if (task) {
         logCoverLookupTaskDebug('Task poll update.', task);
         state.coverLookup.modal.statusText = String(task.message || task.progress_label || '');
@@ -2008,6 +2020,17 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
+  state.coverLookup.modal.album = null;
+  state.coverLookup.modal.taskId = '';
+  state.coverLookup.modal.localCovers = [];
+  state.coverLookup.modal.otherArt = [];
+  state.coverLookup.modal.possibleMatches = [];
+  state.coverLookup.modal.candidateSnapshot = null;
+  state.coverLookup.modal.candidateGeneration = '';
+  state.coverLookup.modal.statusText = '';
+  state.coverLookup.modal.statusTone = 'neutral';
+  state.coverLookup.modal.manualUrlText = '';
+  if (els.body) els.body.innerHTML = '';
   if (els.saveRemote instanceof HTMLButtonElement) {
     els.saveRemote.hidden = false;
     els.saveRemote.disabled = true;

@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.routes.api_cover_helpers import (
     apply_cover_path_for_tracks,
     clear_completed_cover_lookup_tasks,
-    list_cover_lookup_tasks,
+    list_cover_lookup_task_summaries,
     mark_cover_lookup_task_notification_action_taken,
     persist_cover_selection_for_tracks,
 )
@@ -314,7 +314,7 @@ def _task_matches_album_context(
 @router.get("/utilities/cover-lookup/tasks")
 async def utilities_cover_lookup_tasks(request: Request) -> JSONResponse:
     config = _app_config(request)
-    return JSONResponse({"ok": True, "tasks": list_cover_lookup_tasks(config=config)})
+    return JSONResponse({"ok": True, "tasks": list_cover_lookup_task_summaries(config=config)})
 
 
 @router.post("/utilities/cover-lookup/tasks/clear-completed")
@@ -330,7 +330,7 @@ async def utilities_cover_lookup_tasks_clear_completed(request: Request) -> JSON
         {
             "ok": True,
             "removed_count": removed_count,
-            "tasks": list_cover_lookup_tasks(config=config),
+            "tasks": list_cover_lookup_task_summaries(config=config),
         }
     )
 
@@ -348,7 +348,7 @@ async def utilities_cover_lookup_task_clear(request: Request, task_id: str) -> J
         {
             "ok": True,
             "removed_count": removed_count,
-            "tasks": list_cover_lookup_tasks(config=config),
+            "tasks": list_cover_lookup_task_summaries(config=config),
         }
     )
 
@@ -362,7 +362,7 @@ async def utilities_cover_lookup_task_mark_action_taken(request: Request, task_i
     task = mark_cover_lookup_task_notification_action_taken(normalized_id, config=config)
     if task is None:
         return _json_response(_task_not_found_response("Lookup task"))
-    return JSONResponse({"ok": True, "task": task, "tasks": list_cover_lookup_tasks(config=config)})
+    return JSONResponse({"ok": True, "task": task, "tasks": list_cover_lookup_task_summaries(config=config)})
 
 
 @router.post("/utilities/cover-lookup/gallery")

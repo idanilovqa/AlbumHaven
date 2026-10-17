@@ -10,7 +10,7 @@ from music_app.services.cache import (
 )
 from music_app.services.cover_lookup_tasks import (
     clear_completed_cover_lookup_tasks,
-    list_cover_lookup_tasks,
+    list_cover_lookup_task_summaries,
     mark_cover_lookup_task_notification_action_taken,
 )
 from music_app.services.cover_state import (

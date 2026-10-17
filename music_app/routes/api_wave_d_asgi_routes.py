@@ -39,8 +39,10 @@ from music_app.services.cover_lookup_runtime import (
 )
 from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
+    count_cover_lookup_task_notifications,
     cover_lookup_result,
     create_cover_lookup_task,
+    load_cover_lookup_task_summary_page,
     serialize_cover_lookup_task_payload,
     update_cover_lookup_task,
 )
@@ -311,10 +313,44 @@ def _task_matches_album_context(
         return False
 
 
+@router.get("/utilities/cover-lookup/tasks/counts")
+async def utilities_cover_lookup_task_counts(request: Request) -> JSONResponse:
+    counts = count_cover_lookup_task_notifications(config=_app_config(request))
+    return JSONResponse({"ok": True, **counts})
+
+
 @router.get("/utilities/cover-lookup/tasks")
-async def utilities_cover_lookup_tasks(request: Request) -> JSONResponse:
+async def utilities_cover_lookup_tasks(
+    request: Request,
+    limit: int | None = None,
+    cursor: str | None = None,
+    active_only: bool | None = None,
+) -> JSONResponse:
     config = _app_config(request)
-    return JSONResponse({"ok": True, "tasks": list_cover_lookup_task_summaries(config=config)})
+    if limit is None and cursor is None and active_only is None:
+        return JSONResponse({"ok": True, "tasks": list_cover_lookup_task_summaries(config=config)})
+    try:
+        page = load_cover_lookup_task_summary_page(
+            config=config,
+            limit=max(1, min(limit or 50, 50)),
+            cursor=cursor,
+            active_only=active_only is True,
+        )
+    except ValueError:
+        return JSONResponse(
+            {"ok": False, "error": "Invalid cover lookup notification cursor"},
+            status_code=400,
+        )
+    return JSONResponse(
+        {
+            "ok": True,
+            "tasks": page["items"],
+            "next_cursor": page["next_cursor"],
+            "total_count": page["total_count"],
+            "active_count": page["active_count"],
+            "finished_count": page["finished_count"],
+        }
+    )
 
 
 @router.post("/utilities/cover-lookup/tasks/clear-completed")

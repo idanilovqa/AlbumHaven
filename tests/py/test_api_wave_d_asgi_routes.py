@@ -55,6 +55,30 @@ def postgres_runtime_fakes(app, monkeypatch):
         def load_notifications(self):
             return list(persisted_notifications)
 
+        def count_notifications(self):
+            active_count = sum(
+                1 for task in persisted_notifications if task.get("status") in {"pending", "running"}
+            )
+            return {
+                "total_count": len(persisted_notifications),
+                "active_count": active_count,
+                "finished_count": len(persisted_notifications) - active_count,
+            }
+
+        def load_notification_summary_page(self, *, limit, cursor, active_only):
+            if cursor is not None:
+                raise ValueError("invalid cover lookup notification cursor")
+            from music_app.services.cover_lookup_tasks import list_cover_lookup_tasks
+
+            items = list_cover_lookup_tasks(config=app.config)
+            if active_only:
+                items = [task for task in items if task.get("status") in {"pending", "running"}]
+            return {
+                "items": items[:limit],
+                "next_cursor": None,
+                **self.count_notifications(),
+            }
+
         def save_notifications(self, tasks):
             persisted_notifications[:] = list(tasks)
 
@@ -276,6 +300,73 @@ def test_asgi_wave_d_router_exports_cover_endpoint_urls_and_methods(app):
     assert route_methods["/utilities/fetch-cover"] == {"POST"}
     assert route_methods["/utilities/fetch-covers-unsuccessful"] == {"POST"}
     assert route_methods["/utilities/cancel-cover-scan"] == {"POST"}
+
+
+def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    page_calls = []
+    monkeypatch.setattr(
+        asgi_routes,
+        "count_cover_lookup_task_notifications",
+        lambda *, config: {"total_count": 528, "active_count": 2, "finished_count": 526},
+    )
+
+    def fake_page(*, limit, cursor, active_only, config):
+        page_calls.append((limit, cursor, active_only, config))
+        if cursor == "bad-cursor":
+            raise ValueError("invalid cover lookup notification cursor")
+        return {
+            "items": [{"id": "task-528"}],
+            "next_cursor": "next-page",
+            "total_count": 528,
+            "active_count": 2,
+            "finished_count": 526,
+        }
+
+    monkeypatch.setattr(asgi_routes, "load_cover_lookup_task_summary_page", fake_page)
+    asgi_app = _make_wave_d_app(app)
+
+    count_status, _count_headers, count_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks/counts",
+    )
+    page_status, _page_headers, page_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks",
+        query={"limit": 75, "cursor": "page-1", "active_only": "true"},
+    )
+    invalid_status, _invalid_headers, invalid_body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/cover-lookup/tasks",
+        query={"cursor": "bad-cursor"},
+    )
+
+    assert count_status == 200
+    assert _decode_json(count_body) == {
+        "ok": True,
+        "total_count": 528,
+        "active_count": 2,
+        "finished_count": 526,
+    }
+    assert page_status == 200
+    assert _decode_json(page_body) == {
+        "ok": True,
+        "tasks": [{"id": "task-528"}],
+        "next_cursor": "next-page",
+        "total_count": 528,
+        "active_count": 2,
+        "finished_count": 526,
+    }
+    assert page_calls[0][:3] == (50, "page-1", True)
+    assert invalid_status == 400
+    assert _decode_json(invalid_body) == {
+        "ok": False,
+        "error": "Invalid cover lookup notification cursor",
+    }
 
 
 @pytest.mark.parametrize("operation", ["clear", "mark-action-taken", "cancel"])

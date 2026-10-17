@@ -460,13 +460,10 @@ export class CoverLookupActions {
   }
 
   async waitForRemoteCandidateCountAtLeast(minimumCount, options = {}) {
-    await expect.poll(
-      () => this.coverLookup.remoteCoverCards.count(),
-      {
-        message: `Expected at least ${minimumCount} remote cover candidates.`,
-        timeout: options.timeout || 30000,
-      },
-    ).toBeGreaterThanOrEqual(Number(minimumCount));
+    await expect(
+      this.coverLookup.remoteCoverCards.nth(Number(minimumCount) - 1),
+      `Expected at least ${minimumCount} remote cover candidates.`,
+    ).toBeVisible({ timeout: options.timeout || 30000 });
   }
 
   async waitForRemoteCandidateId(candidateId, options = {}) {

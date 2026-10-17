@@ -1576,3 +1576,15 @@ test('populated search timer includes selected album identity and visible cover 
   assert.match(spec, /performanceTimingBudget\('search-browse\.searchPopulatedReadyMs'\)/);
   assert.match(spec, /recordTerminalTimingOutcome\(\s*SEARCH_POPULATED_BUDGET\.metricId/);
 });
+test('cover candidate readiness uses locator auto-wait without polling backoff', () => {
+  const source = readRepoFile('tests/e2e/actions/coverLookupActions.js');
+  const helper = readExportedFunction(
+    source,
+    '  async waitForRemoteCandidateCountAtLeast(',
+    '  async waitForRemoteCandidateId(',
+  );
+
+  assert.match(helper, /remoteCoverCards\.nth\(Number\(minimumCount\) - 1\)/);
+  assert.match(helper, /toBeVisible\(/);
+  assert.doesNotMatch(helper, /expect\.poll/);
+});

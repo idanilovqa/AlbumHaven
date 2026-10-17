@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CUTOFF = "0132_private_top_remote_preparations.sql"
 PREVIOUS = "0131_top_artwork_completion_alias.sql"
 CONSUMPTION = "0133_private_top_remote_consumption.sql"
-CUTOFF_SHA256 = "a08fea2f10534a7606a5cb31f6495531a2e3fbd5d8bc9e0c75893f2fa81927ef"
+CUTOFF_SHA256 = "437d7cf3722e313b112106c0919d6a28403e2fa769daab9f735b6c59435ffdfb"
 # Exact parent-reviewed B migration; no unreviewed post-A tail is admitted.
 POST_CUTOFF = {CONSUMPTION: "c433536b1600e706dd61fcda3fec9b8936cdccd9f1cb1b23acddac410c8d76bc"}
 INPUTS = {

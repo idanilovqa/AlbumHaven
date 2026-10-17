@@ -246,7 +246,7 @@ begin
   -- complete set before session/library authority and calls budget before Top.
   perform id from app.accounts where id in (p_actor,p_owner) and is_active and disabled_at is null order by id for update;
   get diagnostics locked=row_count;
-  if locked<>case when p_actor=p_owner then 1 else 2 end or p_session is null or p_session<=0
+  if locked<>(case when p_actor=p_owner then 1 else 2 end) or p_session is null or p_session<=0
       or p_context is null or p_context !~ '^[0-9a-f]{64}$'
       or p_destination is null or p_destination='00000000-0000-0000-0000-000000000000' then
     raise exception using errcode='55000',constraint='top_remote_scope',message='Remote scope is unavailable';

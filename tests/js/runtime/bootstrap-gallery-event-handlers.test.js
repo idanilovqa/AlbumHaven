@@ -2637,6 +2637,34 @@ test('exact artist search immediately highlights the unique rendered sidebar art
   assert.equal(calls.fetchAndRender.length, 1);
 });
 
+test('exact artist search immediately renders a unique offscreen virtualized sidebar artist', () => {
+  const unresolvedRequest = new Promise(() => {});
+  const sidebarArtists = Array.from({ length: 250 }, (_, index) => ({
+    artist: index === 220 ? 'Ария' : `Artist ${String(index).padStart(3, '0')}`,
+    count: 1,
+  }));
+  const { context, calls } = createContext({
+    searchInputValue: 'ария',
+    fetchAndRenderResult: unresolvedRequest,
+  });
+  const selection = createImmediateSidebarArtistEvent(sidebarArtists, 'Ария');
+  const getElementById = context.document.getElementById.bind(context.document);
+  context.state.gallery.sidebarArtistsOverride = sidebarArtists;
+  context.document.getElementById = (id) => (
+    id === 'sidebar-list' ? selection.sidebarList : getElementById(id)
+  );
+  context.document.querySelectorAll = () => [];
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(context.state.ui.pendingSidebarSelectedArtist, 'Ария');
+  assert.equal(context.state.ui.pendingSidebarAllArtistsActive, false);
+  assert.equal(context.state.ui.pendingSidebarRevealArtist, 'Ария');
+  assert.equal(calls.renderSidebar, 1);
+  assert.equal(calls.buildApiUrl[0].query, 'ария');
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
 test('search submit abandons Scan Page before dispatching an unfiltered query request', () => {
   const unresolvedRequest = new Promise(() => {});
   const { context, calls } = createContext({

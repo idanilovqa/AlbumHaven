@@ -42101,16 +42101,32 @@ function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
 function applyImmediateExactSearchArtistSelection(query) {
   const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
   if (!normalizedQuery) return false;
-  const matches = Array.from(
+  const mountedMatches = Array.from(
     document.querySelectorAll('#sidebar-list [data-sidebar-artist]'),
   ).filter((link) => (
     String(link.getAttribute?.('data-sidebar-artist') || '')
       .trim()
       .toLocaleLowerCase() === normalizedQuery
   ));
-  if (matches.length !== 1) return false;
-  const artist = String(matches[0].getAttribute?.('data-sidebar-artist') || '').trim();
-  return Boolean(artist && applyImmediateSidebarArtistSelection(matches[0], artist));
+  const sidebarList = document.getElementById?.('sidebar-list')
+    || mountedMatches[0]?.closest?.('#sidebar-list');
+  const sidebarArtists = Array.isArray(sidebarList?.albumHavenSidebarArtistsSource)
+    ? sidebarList.albumHavenSidebarArtistsSource
+    : [];
+  const sourceMatches = sidebarArtists.filter((entry) => (
+    String(entry?.artist || '').trim().toLocaleLowerCase() === normalizedQuery
+  ));
+  if (sourceMatches.length !== 1) return false;
+  const artist = String(sourceMatches[0]?.artist || '').trim();
+  if (!artist) return false;
+  if (mountedMatches.length === 1) {
+    return applyImmediateSidebarArtistSelection(mountedMatches[0], artist);
+  }
+  state.ui.pendingSidebarSelectedArtist = artist;
+  state.ui.pendingSidebarAllArtistsActive = false;
+  state.ui.pendingSidebarRevealArtist = artist;
+  renderSidebar();
+  return true;
 }
 
 function handleGalleryBootstrapWheel(event) {

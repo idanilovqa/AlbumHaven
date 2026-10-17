@@ -374,6 +374,40 @@ function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
   ];
 }
 
+function buildEditTagsPostEditSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    ['Search Gallery', metricsPayload?.searchGalleryReadyMs, 'Post-edit exact-artist search'],
+    ['Tree Highlight', metricsPayload?.treeHighlightMs, 'Post-edit Artist Tree selection'],
+    ['Tree Gallery', metricsPayload?.treeGalleryReadyMs, 'Selected-artist visible gallery'],
+    ['Album Details', metricsPayload?.albumDetailsOpenMs, 'Selected album track table'],
+  ].map(([label, timingMs, note]) => ({
+    label,
+    value: Number.isFinite(timingMs) ? `${Math.round(timingMs)} ms` : 'Not recorded',
+    note,
+  }));
+}
+
+function buildAlbumTitleSearchSummaryCards(_checkpoints, metricsPayload) {
+  return [{
+    label: 'Album Visible',
+    value: Number.isFinite(metricsPayload?.albumVisibleMs)
+      ? `${Math.round(metricsPayload.albumVisibleMs)} ms`
+      : 'Not recorded',
+    note: String(metricsPayload?.album || 'Exact album-title search'),
+  }];
+}
+
+function buildTrackTitleSearchSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    ['Album Visible', metricsPayload?.albumVisibleMs, metricsPayload?.album],
+    ['Matching Track', metricsPayload?.matchingTrackVisibleMs, metricsPayload?.track],
+  ].map(([label, timingMs, note]) => ({
+    label,
+    value: Number.isFinite(timingMs) ? `${Math.round(timingMs)} ms` : 'Not recorded',
+    note: String(note || ''),
+  }));
+}
+
 function buildSearchBrowseFocusedLocalSummaryCards(_checkpoints, metricsPayload) {
   return [
     {
@@ -1092,6 +1126,50 @@ export const test = base.extend({
         'cover-lookup.candidateReadyMs',
         'cover-lookup.candidateSelectionMs',
         'cover-lookup.saveAcceptedMs',
+      ],
+    });
+  },
+
+  editTagsPostEditLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'edit-tags-post-edit-local',
+      reportId: 'editTagsPostEditLocal',
+      caseId: 'FTC-TAGS-026P',
+      title: 'Repeated Edit Tags And Post-Edit Navigation Benchmark',
+      intro: 'This synthetic performance report records three terminal tag saves, clean notification dismissal, and same-session navigation against the complete library fixture.',
+      buildSummaryCards: buildEditTagsPostEditSummaryCards,
+      expectedTimingMetricIds: [
+        'edit-tags-post-edit.searchGalleryReadyMs',
+        'edit-tags-post-edit.treeHighlightMs',
+        'edit-tags-post-edit.treeGalleryReadyMs',
+        'edit-tags-post-edit.albumDetailsOpenMs',
+      ],
+    });
+  },
+
+  albumTitleSearchLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'album-title-search-local',
+      reportId: 'albumTitleSearchLocal',
+      caseId: 'FTC-SEARCH-NAV-029P',
+      title: 'Album Title Search Benchmark',
+      intro: 'This synthetic performance report measures search submission to the correct visible album card against the complete library fixture.',
+      buildSummaryCards: buildAlbumTitleSearchSummaryCards,
+      expectedTimingMetricIds: ['album-title-search.albumVisibleMs'],
+    });
+  },
+
+  trackTitleSearchLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'track-title-search-local',
+      reportId: 'trackTitleSearchLocal',
+      caseId: 'FTC-SEARCH-NAV-030P',
+      title: 'Track Title Search And Highlight Benchmark',
+      intro: 'This synthetic performance report measures track search to the correct visible album, then Album Details activation to the visible highlighted matching track row.',
+      buildSummaryCards: buildTrackTitleSearchSummaryCards,
+      expectedTimingMetricIds: [
+        'track-title-search.albumVisibleMs',
+        'track-title-search.matchingTrackVisibleMs',
       ],
     });
   },

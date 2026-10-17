@@ -6,11 +6,13 @@ const test = require('node:test');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'pr-gates.yml');
 const contractPath = path.join(repoRoot, 'tests', 'ci', 'performance-targets.json');
+const performanceTimesPath = path.join(repoRoot, 'tests', 'ci', 'performance-times.json');
 const validatorPath = path.join(repoRoot, 'scripts', 'ci', 'validate-performance-matrix.cjs');
 const shardRunnerPath = path.join(repoRoot, 'scripts', 'ci', 'run-performance-shard.ps1');
 const testDataMatrixPath = path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+const performanceTimes = JSON.parse(fs.readFileSync(performanceTimesPath, 'utf8'));
 const testDataMatrix = JSON.parse(fs.readFileSync(testDataMatrixPath, 'utf8'));
 const runnerModule = require('../../scripts/run-performance-playwright.cjs');
 const validator = require('../../scripts/ci/validate-performance-matrix.cjs');
@@ -20,12 +22,83 @@ const FIXTURE_RELEASE = 'fixtures-v1.0.25';
 const FIXTURE_MANIFEST_SHA256 = 'e56a515ff4073fa1c0e7e2b9a91a5217259344415c71de0b068af3615eb09e60';
 const ARTWORK_GENERATOR_COMMIT = 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11';
 const EXPECTED_SHARDS = [
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,rules-focused,paired-search-calibration' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
   { shard: 'gallery-artwork-diversity', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-derived', harness: 'managed-app', basePort: '4333', targets: 'gallery-artwork-diversity' },
 ];
+
+test('Edit Tags post-edit target uses the production synthetic-large application path', () => {
+  const target = runnerModule.PERFORMANCE_TARGETS['edit-tags-post-edit'];
+  assert.ok(target, 'performance runner must register edit-tags-post-edit');
+  assert.equal(target.kind, 'synthetic');
+  assert.equal(target.fixtureProfile, 'synthetic-large-library');
+  assert.equal(target.fixtureMode, 'preloaded-release');
+  assert.equal(
+    target.specPath,
+    'tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js',
+  );
+  assert.equal(target.grep, 'FTC-TAGS-026P');
+  assert.equal(target.reportId, 'editTagsPostEditLocal');
+  assert.equal(target.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE, 'postgres');
+
+  const contractTarget = contract.targets.find(({ name }) => name === 'edit-tags-post-edit');
+  assert.ok(contractTarget, 'CI performance contract must own edit-tags-post-edit');
+  assert.equal(contractTarget.fixtureProfile, 'synthetic-large-library');
+  assert.equal(contractTarget.fixtureMode, 'preloaded-release');
+  assert.equal(contractTarget.runnerClass, 'synthetic');
+});
+
+test('Cover Lookup and exact title searches are isolated production synthetic-large targets', () => {
+  const expected = {
+    'cover-lookup': {
+      specPath: 'tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js',
+      grep: 'FTC-COVERS-019P',
+      reportId: 'coverLookupLocal',
+    },
+    'album-title-search': {
+      specPath: 'tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js',
+      grep: 'FTC-SEARCH-NAV-029P',
+      reportId: 'albumTitleSearchLocal',
+    },
+    'track-title-search': {
+      specPath: 'tests/e2e/syntheticLargeLibrary/trackTitleSearchPerformance.spec.js',
+      grep: 'FTC-SEARCH-NAV-030P',
+      reportId: 'trackTitleSearchLocal',
+    },
+  };
+
+  for (const [name, fields] of Object.entries(expected)) {
+    const target = runnerModule.PERFORMANCE_TARGETS[name];
+    assert.ok(target, `performance runner must register ${name}`);
+    assert.equal(target.kind, 'synthetic');
+    assert.equal(target.fixtureProfile, 'synthetic-large-library');
+    assert.equal(target.fixtureMode, 'preloaded-release');
+    assert.equal(target.specPath, fields.specPath);
+    assert.equal(target.grep, fields.grep);
+    assert.equal(target.reportId, fields.reportId);
+    assert.equal(target.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE, 'postgres');
+
+    const contractTarget = contract.targets.find((entry) => entry.name === name);
+    assert.ok(contractTarget, `CI performance contract must own ${name}`);
+    assert.equal(contractTarget.fixtureProfile, 'synthetic-large-library');
+    assert.equal(contractTarget.fixtureMode, 'preloaded-release');
+    assert.equal(contractTarget.runnerClass, 'synthetic');
+    assert.equal(contractTarget.workers, 1);
+  }
+
+  for (const metricId of [
+    'album-title-search.albumVisibleMs',
+    'track-title-search.albumVisibleMs',
+    'track-title-search.matchingTrackVisibleMs',
+  ]) {
+    assert.deepEqual(performanceTimes[metricId], {
+      local: { targetMs: 800, graceMs: 400, hardCeilingMs: 1200 },
+      ci: { targetMs: 800, graceMs: 400, hardCeilingMs: 1200 },
+    });
+  }
+});
 
 function performanceJobSource(source = workflow) {
   const start = source.indexOf('  e2e_performance_ci:');
@@ -42,9 +115,9 @@ function stepContaining(job, marker) {
   return step;
 }
 
-test('approved registry keeps 24 independently schedulable targets and 53 cases', () => {
-  assert.equal(contract.targets.length, 24);
-  assert.equal(contract.targets.flatMap((target) => target.cases).length, 53);
+test('approved registry keeps 28 independently schedulable targets and 57 cases', () => {
+  assert.equal(contract.targets.length, 28);
+  assert.equal(contract.targets.flatMap((target) => target.cases).length, 57);
   assert.deepEqual(
     contract.targets.filter((target) => target.defaultMember).map((target) => target.name),
     contract.targets.map((target) => target.name),
@@ -80,13 +153,13 @@ test('performance validator and shard runner exist', () => {
   assert.equal(fs.existsSync(shardRunnerPath), true, 'Missing scripts/ci/run-performance-shard.ps1');
 });
 
-test('workflow has five selectable fixture-profile runners owning all 24 targets once', () => {
+test('workflow has five selectable fixture-profile runners owning all 28 targets once', () => {
   const job = performanceJobSource();
   const rows = validator.parseStaticPerformanceMatrix(workflow);
   assert.deepEqual(rows, EXPECTED_SHARDS);
   const owned = rows.flatMap((row) => row.targets.split(','));
-  assert.equal(owned.length, 24);
-  assert.equal(new Set(owned).size, 24);
+  assert.equal(owned.length, 28);
+  assert.equal(new Set(owned).size, 28);
   assert.deepEqual(new Set(owned), new Set(contract.targets.map((target) => target.name)));
   assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.performance_shards_json\)\s*\}\}/);
   assert.match(job, /resolve-ci-shard\.cjs performance \$\{\{\s*matrix\.shard\s*\}\}/);
@@ -98,7 +171,7 @@ test('workflow has five selectable fixture-profile runners owning all 24 targets
     rows.map((row) => row.fixtureProfile),
     ['synthetic-large-library', 'utility-problematic-files', 'playback-media', 'scan-library', 'synthetic-large-library'],
   );
-  assert.equal(rows[0].targets.split(',').length, 12, 'synthetic-large-library must own all twelve compatible targets');
+  assert.equal(rows[0].targets.split(',').length, 16, 'synthetic-large-library must own all sixteen compatible targets');
   assert.doesNotMatch(job, /timeout-minutes:/, 'a multi-target shard must not squeeze later targets into a shared wall-clock budget');
 });
 
@@ -119,7 +192,7 @@ test('validator accepts selectable shards and rejects routing and case drift', (
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
-  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /53 cases/);
+  assert.match(validator.validateWorkflowContract(workflow, missingCaseContract, runnerModule, testDataMatrix).join('\n'), /57 cases/);
 
   const paidCampaign = structuredClone(contract);
   paidCampaign.calibrationPolicy.separateCampaignRequired = true;
@@ -253,7 +326,7 @@ test('artwork-diversity CI pins a sibling generator checkout and passes it only 
 
 test('each target retains individual result, diagnostics, and foundation artifacts', () => {
   const job = performanceJobSource();
-  for (let slot = 1; slot <= 12; slot += 1) {
+  for (let slot = 1; slot <= 16; slot += 1) {
     const expression = `\${{ steps.shard.outputs.target${slot} }}`;
     const result = stepContaining(job, `performance-result-${expression}`);
     const foundation = stepContaining(job, `foundation-versions-performance-${expression}`);
@@ -268,9 +341,9 @@ test('each target retains individual result, diagnostics, and foundation artifac
   }
 });
 
-test('functional shards and all-24 authenticated target artifacts remain present without report jobs', () => {
+test('functional shards and all performance target artifacts remain present without report jobs', () => {
   assert.match(workflow, /^\s{2}e2e_functional:/m);
   assert.match(workflow, /validate-functional-shards\.cjs @arguments/);
-  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target12\s*\}\}/);
+  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target16\s*\}\}/);
   assert.doesNotMatch(workflow, /^  (?:merge_cloud_reports|deploy_cloud_reports):/m);
 });

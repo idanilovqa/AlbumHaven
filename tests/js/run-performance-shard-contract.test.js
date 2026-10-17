@@ -165,6 +165,35 @@ test('performance profile runner prepares its fixture exactly once before the ta
   assert.ok(prepareIndex > provisionIndex && prepareIndex < targetLoopIndex, 'prepare after provisioning and before targets');
 });
 
+test('Edit Tags performance target receives only a private writable DDT media copy', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(
+    source,
+    /if\s*\(\$target\s+-eq\s+['"]edit-tags-post-edit['"]\)[\s\S]*Prepare-EditTagsWritableMedia/i,
+  );
+  assert.match(
+    source,
+    /\$ddtArtist\s*=\s*\[string\]::Concat\(\[char\]0x0414,\s*\[char\]0x0414,\s*\[char\]0x0422\)/i,
+  );
+  assert.match(
+    source,
+    /Join-Path\s+\(Join-Path\s+\$env:ALBUM_HAVEN_MEDIA_ROOT\s+['"]writable['"]\)\s+\$ddtArtist/i,
+  );
+  assert.doesNotMatch(source, /ДДТ/);
+  assert.match(source, /Copy-Item\s+-LiteralPath\s+\$sourceArtistRoot[\s\S]*ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT/i);
+  assert.match(
+    source,
+    /ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT[^\r\n]*\$null[\s\S]*foreach\s*\(\$target\s+in\s+\$targetNames\)/i,
+    'the writable override must be cleared before sequential targets',
+  );
+  assert.doesNotMatch(
+    source,
+    /Copy-Item[^\r\n]*\$verifiedBaseFixtureRoot[^\r\n]*-Recurse/i,
+    'the runner must not copy or mutate the complete retained release fixture',
+  );
+});
+
 test('performance shard prepares and owns the preloaded artwork derivative before fixture loading', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   for (const parameter of [

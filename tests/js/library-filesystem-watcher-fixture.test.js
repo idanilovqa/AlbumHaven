@@ -43,6 +43,39 @@ test('writable media-root resolver allows synthetic fixtures only when the calle
   );
 });
 
+test('writable media-root resolver accepts a contained target-owned override', async (t) => {
+  const { resolveWritableFixtureMediaRoot } = await import(pathToFileURL(mediaRootHelperPath).href);
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-owned-media-root-'));
+  const fixtureRoot = path.join(temp, 'fixture');
+  const fixtureMediaRoot = path.join(fixtureRoot, 'media');
+  const sessionRoot = path.join(temp, 'session');
+  const writableMediaRoot = path.join(sessionRoot, 'media', 'writable');
+  fs.mkdirSync(fixtureMediaRoot, { recursive: true });
+  fs.mkdirSync(writableMediaRoot, { recursive: true });
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+
+  const environment = {
+    ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library',
+    ALBUM_HAVEN_FIXTURE_ROOT: fixtureRoot,
+    ALBUM_HAVEN_MEDIA_ROOT: fixtureMediaRoot,
+    ALBUM_HAVEN_E2E_TEMP_ROOT: sessionRoot,
+    ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT: writableMediaRoot,
+  };
+
+  assert.equal(
+    resolveWritableFixtureMediaRoot(environment, {
+      allowedProfiles: ['synthetic-large-library'],
+    }),
+    fs.realpathSync(writableMediaRoot),
+  );
+  assert.throws(() => resolveWritableFixtureMediaRoot({
+    ...environment,
+    ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT: fixtureMediaRoot,
+  }, {
+    allowedProfiles: ['synthetic-large-library'],
+  }), /inside.*temporary/i);
+});
+
 test('watcher fixture generates a decoder-valid MP3 source instead of accepting metadata stubs', async (t) => {
   const { generatePlayableMp3Source } = await load();
   assert.equal(typeof generatePlayableMp3Source, 'function');

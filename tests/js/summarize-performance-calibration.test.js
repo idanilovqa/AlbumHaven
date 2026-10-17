@@ -98,7 +98,7 @@ test('uses every retained sample, groups local and CI fingerprints, and reports 
   assert.equal(summary.thresholdDecision.action, 'retain-unchanged');
   assert.equal(summary.thresholdDecision.exceptionsRequireOwnerApproval, true);
   assert.equal(summary.excludedEvidenceCount, 2);
-  assert.equal(summary.targets.length, 24);
+  assert.equal(summary.targets.length, 28);
 
   const observed = summary.targets.find((entry) => entry.name === target);
   assert.equal(observed.calibrationState, 'reset-by-fingerprint-or-source-revision');

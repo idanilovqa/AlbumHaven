@@ -107,6 +107,10 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
     'artist-tree-scroll-navigation',
@@ -129,6 +133,10 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'search-all-artists',
     'utility-rules',
     'selected-artist',
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
     'artist-tree-scroll-navigation',
@@ -152,6 +160,10 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'root-album-browse',
     'artist-tree-scroll-navigation',
@@ -317,6 +329,21 @@ const PERFORMANCE_TARGETS = {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
   },
+  'edit-tags-post-edit': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'Real local app repeated Edit Tags saves, success-notification cleanup, and same-session post-edit search, tree, gallery, cover, and Album Details responsiveness.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js',
+    grep: 'FTC-TAGS-026P',
+    aliasNames: ['edit-tags-post-edit', 'edit-tags-performance', 'post-edit-navigation'],
+    reportId: 'editTagsPostEditLocal',
+    casePattern: 'FTC-TAGS-026P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    },
+  },
   'cover-lookup': {
     kind: 'synthetic',
     fixtureProfile: 'synthetic-large-library',
@@ -331,6 +358,36 @@ const PERFORMANCE_TARGETS = {
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
       ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+    },
+  },
+  'album-title-search': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'True-cold full-fixture album-title search to the correct visible album card.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js',
+    grep: 'FTC-SEARCH-NAV-029P',
+    aliasNames: ['album-title-search', 'album-search-performance'],
+    reportId: 'albumTitleSearchLocal',
+    casePattern: 'FTC-SEARCH-NAV-029P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    },
+  },
+  'track-title-search': {
+    kind: 'synthetic',
+    fixtureProfile: 'synthetic-large-library',
+    fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+    coverageClass: 'real-app-library-browse-load',
+    coverageDescription: 'True-cold full-fixture track-title search to the correct album and rendered matching-track accent.',
+    specPath: 'tests/e2e/syntheticLargeLibrary/trackTitleSearchPerformance.spec.js',
+    grep: 'FTC-SEARCH-NAV-030P',
+    aliasNames: ['track-title-search', 'track-search-performance'],
+    reportId: 'trackTitleSearchLocal',
+    casePattern: 'FTC-SEARCH-NAV-030P',
+    env: {
+      ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     },
   },
   'search-browse': {
@@ -1426,8 +1483,17 @@ function resolveDisplaySuiteName(target) {
   if (targetName === 'selected-artist') {
     return 'Selected Artist Browse';
   }
+  if (targetName === 'edit-tags-post-edit') {
+    return 'Edit Tags Post-Edit Navigation';
+  }
   if (targetName === 'cover-lookup') {
     return 'Cover Lookup';
+  }
+  if (targetName === 'album-title-search') {
+    return 'Album Title Search';
+  }
+  if (targetName === 'track-title-search') {
+    return 'Track Title Search';
   }
   if (targetName === 'search-browse') {
     return 'Search Browse';
@@ -2609,7 +2675,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group library-browse|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, cover-lookup, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, edit-tags-post-edit, cover-lookup, album-title-search, track-title-search, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
   console.log('Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

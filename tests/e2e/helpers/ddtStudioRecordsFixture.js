@@ -90,7 +90,9 @@ function expectedFixtureRows() {
 }
 
 function resolveFixtureAlbumDirectory(environment) {
-  const mediaRoot = resolveWritableFixtureMediaRoot(environment);
+  const mediaRoot = resolveWritableFixtureMediaRoot(environment, {
+    allowedProfiles: ['functional-core', 'synthetic-large-library'],
+  });
   const albumDirectory = path.resolve(mediaRoot, ARTIST, ALBUM);
   const relativePath = path.relative(mediaRoot, albumDirectory);
   if (

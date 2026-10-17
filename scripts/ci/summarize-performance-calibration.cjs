@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 
-const EXPECTED_TARGET_COUNT = 24;
+const EXPECTED_TARGET_COUNT = 28;
 const DEFAULT_PERFORMANCE_CONTRACT = path.resolve(
   __dirname, '..', '..', 'tests', 'ci', 'performance-targets.json',
 );

@@ -55,9 +55,9 @@ for track_path in sorted(album_dir.glob("*.mp3")):
 print(json.dumps(records, sort_keys=True))
 `;
 
-async function runGeneratedMp3TagScript({ artist, album, script }) {
+async function runGeneratedMp3TagScript({ artist, album, script, allowedProfiles }) {
   const albumDirectory = path.join(
-    resolveWritableFixtureMediaRoot(process.env),
+    resolveWritableFixtureMediaRoot(process.env, { allowedProfiles }),
     artist,
     album,
   );
@@ -69,10 +69,11 @@ async function runGeneratedMp3TagScript({ artist, album, script }) {
   return JSON.parse(stdout);
 }
 
-export async function readGeneratedMp3AlbumTags({ artist, album }) {
+export async function readGeneratedMp3AlbumTags({ artist, album, allowedProfiles }) {
   return runGeneratedMp3TagScript({
     artist,
     album,
+    allowedProfiles,
     script: READ_ALBUM_TAGS_SCRIPT,
   });
 }

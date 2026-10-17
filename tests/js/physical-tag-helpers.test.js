@@ -92,6 +92,38 @@ test('returns each MP3 basename with every TALB text value', async () => {
   ]);
 });
 
+test('reads tags from an explicitly allowed synthetic writable fixture', async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), 'album-haven-physical-tags-owned-'));
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'album-haven-physical-tags-fixture-'));
+  tempRoots.push(tempRoot, fixtureRoot);
+  const fixtureMediaRoot = path.join(fixtureRoot, 'media');
+  const writableMediaRoot = path.join(tempRoot, 'owned-media');
+  const albumDirectory = path.join(writableMediaRoot, 'Fixture Artist', 'Fixture Album');
+  await mkdir(fixtureMediaRoot, { recursive: true });
+  await mkdir(albumDirectory, { recursive: true });
+  await execFileAsync(
+    resolvePlaywrightPython(process.env),
+    ['-c', WRITE_TAG_FIXTURES_SCRIPT, albumDirectory],
+    { encoding: 'utf8', windowsHide: true },
+  );
+  process.env.ALBUM_HAVEN_E2E_TEMP_ROOT = tempRoot;
+  process.env.ALBUM_HAVEN_FIXTURE_PROFILE = 'synthetic-large-library';
+  process.env.ALBUM_HAVEN_FIXTURE_ROOT = fixtureRoot;
+  process.env.ALBUM_HAVEN_MEDIA_ROOT = fixtureMediaRoot;
+  process.env.ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT = writableMediaRoot;
+
+  try {
+    const records = await readGeneratedMp3AlbumTags({
+      artist: 'Fixture Artist',
+      album: 'Fixture Album',
+      allowedProfiles: ['synthetic-large-library'],
+    });
+    assert.equal(records.length, 2);
+  } finally {
+    delete process.env.ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT;
+  }
+});
+
 test('normalizes complete ID3 snapshots and reports only frames whose values changed', async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), 'album-haven-physical-tags-'));
   tempRoots.push(tempRoot);

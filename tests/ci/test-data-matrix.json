@@ -2738,6 +2738,9 @@
       "cover-lookup-interaction-timing",
       "spotify-link-preserved"
     ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-covers-019p"
+    },
     "ownerApproval": "approved"
   },
   {
@@ -8944,6 +8947,58 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": ["virtual-featured-on-divider-geometry"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js",
+    "case": "FTC-TAGS-026P synthetic-large repeated Edit Tags recovery › repeated saves leave navigation responsive",
+    "profile": "synthetic-large-library",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": ["large-library:repeated-edit-tags-post-edit-navigation"],
+    "filesystemScenarios": [
+      "media:synthetic-large-library",
+      "media-copy:ddt-edit-tags-post-edit"
+    ],
+    "expectedContracts": [
+      "repeated-edit-tags-success-lifecycle",
+      "post-edit-search-tree-gallery-responsiveness"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-tags-026p",
+      "filesystemCopy": "media/writable/ДДТ"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js",
+    "case": "FTC-SEARCH-NAV-029P synthetic-large album-title search performance › correct album becomes visible within the approved budget",
+    "profile": "synthetic-large-library",
+    "setupScope": "isolated",
+    "stateMode": "read-only",
+    "databaseScenarios": ["large-library:album-title-search"],
+    "filesystemScenarios": ["media:synthetic-large-library"],
+    "expectedContracts": ["album-title-search-visible-content-timing"],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/trackTitleSearchPerformance.spec.js",
+    "case": "FTC-SEARCH-NAV-030P synthetic-large track-title search performance › correct album and highlighted track become visible within approved budgets",
+    "profile": "synthetic-large-library",
+    "setupScope": "isolated",
+    "stateMode": "read-only",
+    "databaseScenarios": ["large-library:track-title-search-highlight"],
+    "filesystemScenarios": ["media:synthetic-large-library"],
+    "expectedContracts": [
+      "track-title-search-visible-content-timing",
+      "album-details-matching-track-highlight-timing"
+    ],
     "ownerApproval": "approved"
   }
 ]

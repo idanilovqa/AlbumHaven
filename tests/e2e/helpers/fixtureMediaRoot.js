@@ -19,6 +19,22 @@ export function resolveWritableFixtureMediaRoot(environment = process.env, optio
     if (mediaRoot !== expectedMediaRoot) {
       throw new Error('Physical functional helpers require the exact functional fixture media directory.');
     }
+    const writableMediaRootValue = String(
+      environment.ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT || '',
+    ).trim();
+    if (writableMediaRootValue) {
+      const tempRootValue = String(environment.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
+      if (!tempRootValue) {
+        throw new Error('A target-owned writable media root requires ALBUM_HAVEN_E2E_TEMP_ROOT.');
+      }
+      const tempRoot = fs.realpathSync(tempRootValue);
+      const writableMediaRoot = fs.realpathSync(writableMediaRootValue);
+      const relativePath = path.relative(tempRoot, writableMediaRoot);
+      if (!relativePath || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+        throw new Error('The target-owned writable media root must stay inside the temporary E2E root.');
+      }
+      return writableMediaRoot;
+    }
     return mediaRoot;
   }
 

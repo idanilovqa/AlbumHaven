@@ -1285,6 +1285,114 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload performance foundation 13 foundation-versions-performance-${{ steps.shard.outputs.target13 }}
+        if: ${{ always() && steps.shard.outputs.target13 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-performance-${{ steps.shard.outputs.target13 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target13 }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance result 13 performance-result-${{ steps.shard.outputs.target13 }}
+        if: ${{ always() && steps.shard.outputs.target13 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-result-${{ steps.shard.outputs.target13 }}-${{ github.run_attempt }}
+          path: album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target13 }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance diagnostics 13 performance-diagnostics-${{ steps.shard.outputs.target13 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target13 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-diagnostics-${{ steps.shard.outputs.target13 }}-${{ github.run_attempt }}
+          path: |
+            album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target13 }}
+            album-haven-app/test-results/playwright-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload performance foundation 14 foundation-versions-performance-${{ steps.shard.outputs.target14 }}
+        if: ${{ always() && steps.shard.outputs.target14 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-performance-${{ steps.shard.outputs.target14 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target14 }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance result 14 performance-result-${{ steps.shard.outputs.target14 }}
+        if: ${{ always() && steps.shard.outputs.target14 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-result-${{ steps.shard.outputs.target14 }}-${{ github.run_attempt }}
+          path: album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target14 }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance diagnostics 14 performance-diagnostics-${{ steps.shard.outputs.target14 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target14 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-diagnostics-${{ steps.shard.outputs.target14 }}-${{ github.run_attempt }}
+          path: |
+            album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target14 }}
+            album-haven-app/test-results/playwright-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload performance foundation 15 foundation-versions-performance-${{ steps.shard.outputs.target15 }}
+        if: ${{ always() && steps.shard.outputs.target15 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-performance-${{ steps.shard.outputs.target15 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target15 }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance result 15 performance-result-${{ steps.shard.outputs.target15 }}
+        if: ${{ always() && steps.shard.outputs.target15 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-result-${{ steps.shard.outputs.target15 }}-${{ github.run_attempt }}
+          path: album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target15 }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance diagnostics 15 performance-diagnostics-${{ steps.shard.outputs.target15 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target15 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-diagnostics-${{ steps.shard.outputs.target15 }}-${{ github.run_attempt }}
+          path: |
+            album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target15 }}
+            album-haven-app/test-results/playwright-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload performance foundation 16 foundation-versions-performance-${{ steps.shard.outputs.target16 }}
+        if: ${{ always() && steps.shard.outputs.target16 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-versions-performance-${{ steps.shard.outputs.target16 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target16 }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance result 16 performance-result-${{ steps.shard.outputs.target16 }}
+        if: ${{ always() && steps.shard.outputs.target16 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-result-${{ steps.shard.outputs.target16 }}-${{ github.run_attempt }}
+          path: album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target16 }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload performance diagnostics 16 performance-diagnostics-${{ steps.shard.outputs.target16 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target16 != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-diagnostics-${{ steps.shard.outputs.target16 }}-${{ github.run_attempt }}
+          path: |
+            album-haven-app/test-results/playwright-performance-targets/${{ steps.shard.outputs.target16 }}
+            album-haven-app/test-results/playwright-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
   review_scope:
     name: PR Review Scope
     runs-on: ubuntu-latest

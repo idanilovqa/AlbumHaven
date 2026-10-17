@@ -112,10 +112,10 @@ function validateTestDataMatrix(matrix, options = {}) {
       }
       const databaseIdentity = entry.mutationOwnership?.databaseIdentity;
       const filesystemCopy = entry.mutationOwnership?.filesystemCopy;
-      if (!databaseIdentity || !filesystemCopy) {
-        errors.push(`${identity} must name its database identity and writable filesystem copy`);
+      if (!databaseIdentity && !filesystemCopy) {
+        errors.push(`${identity} must name its database identity or writable filesystem copy`);
       } else {
-        const owner = `${databaseIdentity}::${filesystemCopy}`;
+        const owner = `${databaseIdentity || '-'}::${filesystemCopy || '-'}`;
         if (mutationOwners.has(owner)) errors.push(`duplicate mutation ownership: ${owner}`);
         mutationOwners.add(owner);
       }
@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 24) errors.push('default performance group must expose all 24 targets');
+  if (defaults.length !== 28) errors.push('default performance group must expose all 28 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -506,6 +506,18 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
+test('matrix validation accepts isolated database-only mutation ownership', () => {
+  const errors = validateTestDataMatrix([
+    validEntry({
+      case: 'mutates only an owned database record',
+      setupScope: 'isolated',
+      stateMode: 'owned-mutation',
+      mutationOwnership: { databaseIdentity: 'case:database-only' },
+    }),
+  ]);
+  assert.deepEqual(errors, []);
+});
+
 test('functional shard contract owns all 132 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
@@ -529,7 +541,7 @@ test('functional shard contract owns all 132 browser-functional cases exactly on
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 53 performance cases across 24 targets', () => {
+test('performance target contract owns all 57 performance cases across 28 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -551,6 +563,10 @@ test('performance target contract owns all 53 performance cases across 24 target
     'utility-problematic-files',
     'utility-rules',
     'selected-artist',
+    'edit-tags-post-edit',
+    'cover-lookup',
+    'album-title-search',
+    'track-title-search',
     'search-browse',
     'paired-search-calibration',
     'root-album-browse',
@@ -569,10 +585,10 @@ test('performance target contract owns all 53 performance cases across 24 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 53);
+  assert.equal(expectedCases.size, 57);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 24);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 24);
+  assert.equal(contract.targets.length, 28);
+  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 28);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')
@@ -732,12 +748,12 @@ test('read-only inventory command reports complete discovery and ownership total
       browserFunctional: 132,
       component: 214,
       mobile: 76,
-    performance: 53,
-    total: 475,
+      performance: 57,
+      total: 479,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 475,
+    testDataMatrix: 479,
       functionalShards: 132,
-    performanceTargets: 53,
+    performanceTargets: 57,
   });
 });

@@ -341,14 +341,15 @@ async def utilities_cover_lookup_tasks(
             {"ok": False, "error": "Invalid cover lookup notification cursor"},
             status_code=400,
         )
+    counts = page["counts"]
     return JSONResponse(
         {
             "ok": True,
             "tasks": page["items"],
             "next_cursor": page["next_cursor"],
-            "total_count": page["total_count"],
-            "active_count": page["active_count"],
-            "finished_count": page["finished_count"],
+            "total_count": counts["total_count"],
+            "active_count": counts["active_count"],
+            "finished_count": counts["finished_count"],
         }
     )
 

@@ -76,7 +76,7 @@ def postgres_runtime_fakes(app, monkeypatch):
             return {
                 "items": items[:limit],
                 "next_cursor": None,
-                **self.count_notifications(),
+                "counts": self.count_notifications(),
             }
 
         def save_notifications(self, tasks):
@@ -319,9 +319,11 @@ def test_asgi_cover_lookup_notification_counts_and_page_contract(app, monkeypatc
         return {
             "items": [{"id": "task-528"}],
             "next_cursor": "next-page",
-            "total_count": 528,
-            "active_count": 2,
-            "finished_count": 526,
+            "counts": {
+                "total_count": 528,
+                "active_count": 2,
+                "finished_count": 526,
+            },
         }
 
     monkeypatch.setattr(asgi_routes, "load_cover_lookup_task_summary_page", fake_page)

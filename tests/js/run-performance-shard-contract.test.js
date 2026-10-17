@@ -8,6 +8,15 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(repoRoot, 'scripts', 'ci', 'run-performance-shard.ps1');
 const targetRunnerPath = path.join(repoRoot, 'scripts', 'run-performance-playwright.cjs');
 
+test('performance shard exports its runner temp root to managed child processes', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(
+    source,
+    /Set-Item\s+-LiteralPath\s+['"]Env:RUNNER_TEMP['"]\s+-Value\s+\$RunnerTemp/i,
+  );
+});
+
 test('performance shard stops on process cleanup failure even when target ports are clear', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   const tailStart = source.indexOf('$statePath = Join-Path $stateRoot');

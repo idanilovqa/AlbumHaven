@@ -571,10 +571,7 @@ def test_asgi_view_data_uses_generation_owned_preview_during_active_scan(
         assert kwargs["client_surface_class"] == "private_web"
         query_args = kwargs["query_args"]
         assert {key: query_args.get(key) for key in expected_query} == expected_query
-        return {
-            "view_data_source": "transient_scan_state",
-            "album_count": len(kwargs["library_state"]["albums"]),
-        }
+        return {"album_count": len(kwargs["library_state"]["albums"])}
 
     monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "refresh_relation_views_for_state", fail_hydrate)

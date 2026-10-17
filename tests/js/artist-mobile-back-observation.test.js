@@ -1,6 +1,61 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('return observation excludes hidden gallery frames but rejects a one-pixel visible displacement', async () => {
+  const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
+  const callbacks = new Map();
+  let sequence = 0;
+  let visible = false;
+  let cardTop = 21;
+  let rowTop = 21;
+  let disposed = 0;
+  const previous = Object.fromEntries(['window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'].map(key => [key, global[key]]));
+  const gallery = { scrollTop: 200, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 0, width: visible ? 390 : 0, height: visible ? 600 : 0 }) };
+  const row = { getBoundingClientRect: () => ({ top: rowTop, height: 90 }) };
+  const card = { isConnected: true, parentElement: row, getBoundingClientRect: () => ({ top: cardTop, height: 90 }),
+    closest: selector => selector === '.album-row' ? row : null,
+    querySelector: () => ({ getAttribute: () => 'album-b' }), querySelectorAll: () => [] };
+  const section = { getBoundingClientRect: () => ({ top: 0, height: 900 }),
+    querySelector: () => ({ getAttribute: () => 'Artist B' }), querySelectorAll: () => [card] };
+  global.window = {};
+  global.document = { querySelector: () => gallery, querySelectorAll: () => [section] };
+  global.requestAnimationFrame = callback => { callbacks.set(++sequence, callback); return sequence; };
+  global.cancelAnimationFrame = id => callbacks.delete(id);
+  const tick = () => {
+    const [id, callback] = callbacks.entries().next().value;
+    callbacks.delete(id);
+    callback();
+  };
+  try {
+    const ui = Object.create(GalleryRegressions.prototype);
+    ui.page = { async evaluateHandle(callback, args) {
+      const value = callback(args);
+      return { evaluate: fn => fn(value), dispose: async () => { disposed += 1; } };
+    } };
+    const observation = await ui.startVisibleCardAnchorObservation(
+      { artist: 'Artist B', albumKey: 'album-b', top: 20, layoutTop: 20 },
+      { waitUntilGalleryVisible: true },
+    );
+    tick();
+    visible = true;
+    tick();
+    rowTop = 20;
+    tick();
+    cardTop = 20;
+    tick();
+    const samples = await observation.finish();
+    assert.deepEqual(samples.map(sample => sample.delta), [1, 0, 0]);
+    assert.deepEqual(samples.map(sample => sample.cardDelta), [1, 1, 0]);
+    assert.deepEqual(samples.map(sample => sample.stable), [false, false, true]);
+    assert.equal(callbacks.size, 0);
+    assert.equal(disposed, 1);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete global[key]; else global[key] = value;
+    }
+  }
+});
+
 test('gallery wheel preparation moves an attached offscreen album into the scroller before capture', async () => {
   const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
   const ui = Object.create(GalleryRegressions.prototype);
@@ -45,11 +100,30 @@ test('ordinary scrolling discovers a different artist without assuming later mou
     assert.equal(artist, 'A');
     return wheels < 3 ? null : { artist: 'B', albumKey: 'b-album' };
   };
-  ui.albumMetadataByKey = key => { assert.equal(key, 'b-album'); return 'metadata'; };
-  ui.revealAlbumWithGalleryWheel = async metadata => { assert.equal(metadata, 'metadata'); settled += 1; };
+  ui.albumCardByKey = key => { assert.equal(key, 'b-album'); return 'card'; };
+  ui.revealAlbumWithGalleryWheel = async card => { assert.equal(card, 'card'); settled += 1; };
   assert.deepEqual(await ui.scrollToDifferentGalleryArtist('A'), { artist: 'B', albumKey: 'b-album' });
   assert.equal(wheels, 3);
   assert.equal(settled, 1);
+});
+
+test('mode-neutral album opener targets the first open trigger', async () => {
+  const { GalleryRegressions } = await import('../e2e/poms/galleryRegressions.js');
+  const ui = Object.create(GalleryRegressions.prototype);
+  const firstTrigger = {};
+  let selector = '';
+  ui.albumCardByKey = key => {
+    assert.equal(key, 'album');
+    return {
+      locator(value) {
+        selector = value;
+        return { first: () => firstTrigger };
+      },
+    };
+  };
+
+  assert.equal(ui.albumOpenTriggerByKey('album'), firstTrigger);
+  assert.equal(selector, '[data-open-tracklist="1"][data-album-key]');
 });
 
 test('native artist long press uses 600 ms touch and detaches after failure', async () => {
@@ -78,7 +152,7 @@ test('artist placement observation retains every frame and cancels its owned fra
   const rect = top => ({ getBoundingClientRect: () => ({ top }) });
   const section = { querySelector: selector => rect(selector === '.artist-rows' && !aligned ? 20 : 0) };
   global.document = {
-    getElementById: () => rect(0),
+    getElementById: () => ({ ...rect(0), clientTop: 0 }),
     querySelectorAll: () => [{ getAttribute: () => 'Target', closest: () => section }],
     querySelector: () => ({ textContent: 'Target' }),
   };

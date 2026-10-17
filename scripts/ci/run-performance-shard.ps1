@@ -249,6 +249,7 @@ try {
 
     $env:PGPASSWORD = $null
     $env:PLAYWRIGHT_PYTHON = $PythonPath
+    Set-Item -LiteralPath 'Env:RUNNER_TEMP' -Value $RunnerTemp
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
     $env:ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = $null
     Set-ClearedRuntimeSelectors

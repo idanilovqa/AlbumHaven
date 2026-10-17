@@ -354,14 +354,32 @@ const PERFORMANCE_TARGETS = {
     coverageClass: 'real-app-library-browse-load',
     coverageDescription: 'Real local large-library Artist Tree jump alignment, reverse paging stability, complete groups, and early root continuation coverage.',
     specPath: 'tests/e2e/syntheticLargeLibrary',
-    grep: 'FTC-GALLERY-NAV-03(?:2|3)',
+    grep: 'FTC-GALLERY-NAV-03(?:2|3|4|5)',
     aliasNames: ['artist-tree-scroll-navigation', 'artist-tree-scroll', 'gallery-scroll-navigation'],
-    casePattern: 'FTC-GALLERY-NAV-03(?:2|3)',
+    casePattern: 'FTC-GALLERY-NAV-03(?:2|3|4|5)',
     casePatterns: [
       'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
       'root continuation starts eight viewports early and never reaches a hard stop during its real request',
-      'long-press Scroll, album, Back restores an artist beyond the first root page',
-      'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'mobile Cards › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Cards › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'mobile Covers › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Covers › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'mobile Rows › long-press Scroll, album, Back restores an artist beyond the first root page',
+      'mobile Rows › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+      'desktop Cards › desktop Scroll, album, Close retains the jumped-to position',
+      'desktop Cards › desktop Scroll, ordinary scroll, album, Close retains the departure position',
+      'desktop Covers › desktop Scroll, album, Close retains the jumped-to position',
+      'desktop Covers › desktop Scroll, ordinary scroll, album, Close retains the departure position',
+      'Mobile Cards, covers and rows retain the jumped-to release',
+      'Desktop Cards and covers retain the jumped-to release',
+      'mobile Cards › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'mobile Covers › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'mobile Rows › native touch swipes track the commanded gesture without reverse movement or layout jitter',
+      'desktop Cards › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'desktop Covers › native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+      'real continuation response during held touch keeps gallery coordinates stable',
+      'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
+      'real continuation response during wheel sequence keeps gallery coordinates stable',
     ],
     measurementExpected: false,
     env: {
@@ -1346,15 +1364,23 @@ function listTargetCasePatterns(target) {
     .filter(Boolean);
 }
 
+function normalizeTestHierarchy(value) {
+  return String(value || '').replaceAll('›', '>');
+}
+
+function parsedTestSearchText(entry) {
+  return [entry?.fullName, entry?.testName, entry?.suiteName]
+    .map(normalizeTestHierarchy)
+    .join('\n');
+}
+
 function parsedTestMatchesTarget(target, entry) {
   const casePatterns = listTargetCasePatterns(target);
   if (casePatterns.length === 0) {
     return true;
   }
-  const searchableText = [entry?.fullName, entry?.testName, entry?.suiteName]
-    .map((value) => String(value || ''))
-    .join('\n');
-  return casePatterns.some((casePattern) => searchableText.includes(casePattern));
+  const searchableText = parsedTestSearchText(entry);
+  return casePatterns.some((casePattern) => searchableText.includes(normalizeTestHierarchy(casePattern)));
 }
 
 function filterParsedTestsForTarget(target, parsedTestResults = []) {
@@ -1490,27 +1516,19 @@ function classifyPerformanceAttempt(attemptRecord = {}, selectedContract = 'loca
     &&
     parsedCases.filter((entry) => entry?.status === 'failed').length === 1
     && parsedCases.filter((entry) => entry?.status === 'failed').every((entry) => (
-      [entry?.fullName, entry?.testName, entry?.suiteName]
-        .map((value) => String(value || ''))
-        .join('\n')
-        .includes(String(attemptRecord.metricCasePattern || attemptRecord.metricCaseId || ''))
+        parsedTestSearchText(entry)
+          .includes(normalizeTestHierarchy(attemptRecord.metricCasePattern || attemptRecord.metricCaseId))
     ))
-    && expectedCasePatterns.every((pattern) => parsedCases.some((entry) => (
-      [entry?.fullName, entry?.testName, entry?.suiteName]
-        .map((value) => String(value || ''))
-        .join('\n')
-        .includes(pattern)
-    )))
+      && expectedCasePatterns.every((pattern) => parsedCases.some((entry) => (
+        parsedTestSearchText(entry).includes(normalizeTestHierarchy(pattern))
+      )))
   );
   const processAndStructurePassed = attemptRecord.processStatus === 0
     && attemptRecord.structuredStatus === 'passed';
   if (attemptRecord.status === 0 || processAndStructurePassed) {
     if (attemptRecord.measurementExpected === false) {
       const caseMatches = expectedCasePatterns.map((pattern) => parsedCases.filter((entry) => (
-        [entry?.fullName, entry?.testName, entry?.suiteName]
-          .map((value) => String(value || ''))
-          .join('\n')
-          .includes(pattern)
+        parsedTestSearchText(entry).includes(normalizeTestHierarchy(pattern))
       )));
       const casesComplete = expectedCasePatterns.length > 0
         && parsedCases.every((entry) => entry?.status === 'passed')

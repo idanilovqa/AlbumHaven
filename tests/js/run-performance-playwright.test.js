@@ -2351,13 +2351,29 @@ test('scan-health selects only the natural unavailable-root contract without mea
   assert.equal(target.grep, 'FTC-OPS-003F');
 });
 
-test('artist scroll completion requires navigation, paging, and mobile Back cases once', () => {
+test('artist scroll completion requires all navigation, restoration, presentation, and native-scroll cases once', () => {
   const target = performanceRunner.PERFORMANCE_TARGETS['artist-tree-scroll-navigation'];
   const titles = [
     'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
     'root continuation starts eight viewports early and never reaches a hard stop during its real request',
-    'long-press Scroll, album, Back restores an artist beyond the first root page',
-      'long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
+    ...['Cards', 'Covers', 'Rows'].flatMap((view) => [
+      `mobile ${view} > long-press Scroll, album, Back restores an artist beyond the first root page`,
+      `mobile ${view} > long-press Scroll, ordinary scroll to another artist, album, Back retains the new position`,
+    ]),
+    ...['Cards', 'Covers'].flatMap((view) => [
+      `desktop ${view} > desktop Scroll, album, Close retains the jumped-to position`,
+      `desktop ${view} > desktop Scroll, ordinary scroll, album, Close retains the departure position`,
+    ]),
+    'Mobile Cards, covers and rows retain the jumped-to release',
+    'Desktop Cards and covers retain the jumped-to release',
+    'mobile Cards > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'mobile Covers > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'mobile Rows > native touch swipes track the commanded gesture without reverse movement or layout jitter',
+    'desktop Cards > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+    'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
+    'real continuation response during held touch keeps gallery coordinates stable',
+    'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
+    'real continuation response during wheel sequence keeps gallery coordinates stable',
   ];
   const parsedTestResults = titles.map(testName => ({
     status: 'passed', testName, fullName: `FTC-GALLERY-NAV-03 > ${testName}`,
@@ -2368,6 +2384,9 @@ test('artist scroll completion requires navigation, paging, and mobile Back case
     expectedCasePatterns: target.casePatterns || [target.casePattern],
     parsedTestResults,
   };
+  assert.equal(target.casePatterns.length, 22);
+  assert.equal(new Set(target.casePatterns).size, 22);
+  assert.equal(target.casePatterns.some((pattern) => pattern.includes('›')), true);
   assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');
   for (const incomplete of [
     parsedTestResults.slice(0, 2),
@@ -2938,7 +2957,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[8].args.includes('--grep=FTC-GALLERY-STARTUP-005Q'), true);
   assert.equal(calls[9].args.includes('--grep=FTC-GALLERY-STARTUP-005R'), true);
   assert.equal(calls[10].args.includes('--grep=FTC-GALLERY-STARTUP-005S'), true);
-  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3)'), true);
+  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3|4|5)'), true);
   assert.equal(calls[12].args.includes('--grep=FTC-GALLERY-NAV-036'), true);
   assert.equal(calls[13].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
   assert.equal(calls[14].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);

@@ -3034,58 +3034,48 @@ def persist_provider_storage_policy_candidates(
             for index, (source, source_label, album_url) in enumerate(provider_contracts)
         ]
 
-    storage_policy_candidates = build_candidates("Mastodon", "Crack The Skye", 2009)
-    performance_candidates = build_candidates(
-        "Synthetic Scale Artist 0464",
-        "Synthetic Scale Album 00444",
-        2001,
-    )
+    if include_performance_target:
+        target_artist = "Synthetic Scale Artist 0464"
+        target_album = "Synthetic Scale Album 00444"
+        target_year = 2001
+    else:
+        target_artist = "Mastodon"
+        target_album = "Crack Skye"
+        target_year = 2009
+    candidates = build_candidates(target_artist, target_album, target_year)
 
     with psycopg.connect(setup_database_url) as connection:
         result = connection.execute(
             """
             insert into library.local_album_cover_candidate_snapshots (
-              album_id,
-              search_generation,
-              search_kind,
-              status,
-              revision,
-              candidates,
-              best_candidate_id,
-              started_at,
-              updated_at,
-              finished_at
+                album_id,
+                search_generation,
+                search_kind,
+                status,
+                revision,
+                candidates,
+                best_candidate_id,
+                started_at,
+                updated_at,
+                finished_at
             )
             select
-              library.local_albums.id,
-              '00000000-0000-0000-0000-000000000010'::uuid,
-              'manual',
-              'completed',
-              1,
-                case
-                    when library.local_artists.name = 'Mastodon' then %s::jsonb
-                    else %s::jsonb
-                end,
-                case
-                    when library.local_artists.name = 'Mastodon' then %s
-                    else %s
-                end,
-              now(),
-              now(),
-              now()
+                library.local_albums.id,
+                '00000000-0000-0000-0000-000000000010'::uuid,
+                'manual',
+                'completed',
+                1,
+                %s::jsonb,
+                %s,
+                now(),
+                now(),
+                now()
             from library.local_albums
             join library.local_artists
               on library.local_artists.id = library.local_albums.artist_id
-            where (
-              library.local_artists.name = 'Mastodon'
-              and library.local_albums.title = 'Crack The Skye'
-              and library.local_albums.release_year = 2009
-            ) or (
-              %s
-              and library.local_artists.name = 'Synthetic Scale Artist 0464'
-              and library.local_albums.title = 'Synthetic Scale Album 00444'
-              and library.local_albums.release_year = 2001
-            )
+            where library.local_artists.name = %s
+              and library.local_albums.title = %s
+              and library.local_albums.release_year = %s
             on conflict (album_id) do update
             set candidates = excluded.candidates,
                 best_candidate_id = excluded.best_candidate_id,
@@ -3095,19 +3085,18 @@ def persist_provider_storage_policy_candidates(
                 finished_at = excluded.finished_at;
             """,
             (
-                json.dumps(storage_policy_candidates),
-                json.dumps(performance_candidates),
-                storage_policy_candidates[0]["id"],
-                performance_candidates[0]["id"],
-                include_performance_target,
+                json.dumps(candidates),
+                candidates[0]["id"],
+                target_artist,
+                target_album,
+                target_year,
             ),
         )
-        expected_row_count = 2 if include_performance_target else 1
-        if result.rowcount != expected_row_count:
-            raise RuntimeError(
-                "The provider storage-policy fixture must resolve "
-                f"{expected_row_count} owned local album(s); resolved {result.rowcount}."
-            )
+    if result.rowcount != 1:
+        raise RuntimeError(
+            "The provider storage-policy fixture must resolve "
+            f"1 owned local album; resolved {result.rowcount}."
+        )
 
 
 def persist_legacy_ignored_album_contract(setup_database_url: str) -> None:

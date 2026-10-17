@@ -435,6 +435,8 @@ def test_fixture_profile_mode_preserves_released_and_generated_boundaries(
     [
         ("", True),
         ("functional-core", True),
+        ("synthetic-large-library", True),
+        ("utility-problematic-files", True),
         ("playback-media", False),
         ("scan-library", False),
     ],
@@ -451,13 +453,23 @@ def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_s
 
 
 @pytest.mark.parametrize(
-    ("include_performance_target", "rowcount"),
-    [(False, 1), (True, 2)],
+    ("include_performance_target", "expected_target"),
+    [
+        (False, ("Mastodon", "Crack Skye", 2009)),
+        (
+            True,
+            (
+                "Synthetic Scale Artist 0464",
+                "Synthetic Scale Album 00444",
+                2001,
+            ),
+        ),
+    ],
 )
 def test_provider_storage_policy_seed_gates_the_owned_performance_album(
     monkeypatch,
     include_performance_target,
-    rowcount,
+    expected_target,
 ):
     recorded = {}
 
@@ -471,7 +483,7 @@ def test_provider_storage_policy_seed_gates_the_owned_performance_album(
         def execute(self, sql, params):
             recorded["sql"] = " ".join(str(sql).split())
             recorded["params"] = params
-            return SimpleNamespace(rowcount=rowcount)
+            return SimpleNamespace(rowcount=1)
 
     monkeypatch.setitem(
         sys.modules,
@@ -486,21 +498,54 @@ def test_provider_storage_policy_seed_gates_the_owned_performance_album(
         include_performance_target=include_performance_target,
     )
 
-    assert "Synthetic Scale Artist 0464" in recorded["sql"]
-    assert "Synthetic Scale Album 00444" in recorded["sql"]
-    storage_candidates = json.loads(recorded["params"][0])
-    performance_candidates = json.loads(recorded["params"][1])
+    candidates = json.loads(recorded["params"][0])
     assert {
         (candidate["artist"], candidate["album"], candidate["year"])
-        for candidate in storage_candidates
-    } == {("Mastodon", "Crack The Skye", 2009)}
+        for candidate in candidates
+    } == {expected_target}
+    assert recorded["params"][1] == candidates[0]["id"]
+    assert recorded["params"][2:] == expected_target
+
+
+def test_provider_storage_policy_seed_targets_only_the_calibration_album(monkeypatch):
+    recorded = {}
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def execute(self, sql, params):
+            recorded["sql"] = " ".join(str(sql).split())
+            recorded["params"] = params
+            return SimpleNamespace(rowcount=1)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _database_url: FakeConnection()),
+    )
+
+    isolatedLibraryApp.persist_provider_storage_policy_candidates(
+        "postgresql://fixture",
+        4175,
+        {"cover_id": "provider-storage-policy-cover"},
+        include_performance_target=True,
+    )
+
+    assert "Mastodon" not in recorded["sql"]
+    assert recorded["params"][2:] == (
+        "Synthetic Scale Artist 0464",
+        "Synthetic Scale Album 00444",
+        2001,
+    )
+    candidates = json.loads(recorded["params"][0])
     assert {
         (candidate["artist"], candidate["album"], candidate["year"])
-        for candidate in performance_candidates
+        for candidate in candidates
     } == {("Synthetic Scale Artist 0464", "Synthetic Scale Album 00444", 2001)}
-    assert recorded["params"][2] == storage_candidates[0]["id"]
-    assert recorded["params"][3] == performance_candidates[0]["id"]
-    assert recorded["params"][4] is include_performance_target
 
 
 def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_shaping():

@@ -262,6 +262,35 @@ function createDrawerHarness(overrides = {}) {
   process.exitCode = 1;
 });
 
+;(async () => {
+  let resolveFirstRequest;
+  let fetchCount = 0;
+  const response = { ok: true, json: async () => ({ ok: true, tasks: [] }) };
+  const { context } = createDrawerHarness({
+    fetch: () => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        return new Promise((resolve) => {
+          resolveFirstRequest = resolve;
+        });
+      }
+      return Promise.resolve(response);
+    },
+  });
+
+  const firstLoad = context.loadCoverLookupTasksForPolling({ toast: false });
+  const overlappingLoad = context.loadCoverLookupTasksForPolling({ toast: false });
+  assert.equal(fetchCount, 1, 'polling must not start a second task-list request while one is in flight');
+  resolveFirstRequest(response);
+  await Promise.all([firstLoad, overlappingLoad]);
+
+  await context.loadCoverLookupTasksForPolling({ toast: false });
+  assert.equal(fetchCount, 2, 'polling resumes after the prior request settles');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
 require('node:test')('closing cover lookup releases hidden candidate images and polling state', () => {
   class TestButton {}
   const overlay = { hidden: false };

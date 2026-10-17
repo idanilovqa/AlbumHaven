@@ -1847,10 +1847,25 @@ async function loadCoverLookupTasks(options = {}) {
   }
 }
 
+let coverLookupPollingRequest = null;
+
+async function loadCoverLookupTasksForPolling(options = {}) {
+  if (coverLookupPollingRequest) return coverLookupPollingRequest;
+  const request = loadCoverLookupTasks(options);
+  coverLookupPollingRequest = request;
+  try {
+    return await request;
+  } finally {
+    if (coverLookupPollingRequest === request) {
+      coverLookupPollingRequest = null;
+    }
+  }
+}
+
 function ensureCoverLookupPolling() {
   if (state.coverLookup.pollingTimer) return;
   state.coverLookup.pollingTimer = window.setInterval(async () => {
-    await loadCoverLookupTasks({ toast: false });
+    await loadCoverLookupTasksForPolling({ toast: false });
     const snapshot = state.coverLookup.modal.candidateSnapshot;
     const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
     const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (

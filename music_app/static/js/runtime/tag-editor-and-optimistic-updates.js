@@ -853,7 +853,7 @@ async function confirmManualTagEdit() {
   showRepairAlert(
     tagEditAlert.savingMessage,
     'info',
-    null,
+    2000,
     { title: 'Saving tags', dismissible: false },
   );
   let failedLogHistoryEntryId = '';

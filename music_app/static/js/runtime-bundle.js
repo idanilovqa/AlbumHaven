@@ -20283,7 +20283,7 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const consumesProvidedTerminalPayload = attempt === 0 && providedTerminalPayload;
     try {
       let data = providedTerminalPayload;
@@ -20628,6 +20628,14 @@ async function watchSaveTask(taskId, context = {}) {
       console.warn('[AlbumHaven][SaveTask] Could not check save task status.', error);
     }
     await waitForBrowserTimeout(500);
+  }
+  if (!mutationWasSuperseded()) {
+    showRepairAlert(
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    );
   }
   if (problematicMutation) settleProblematicSaveTaskMutation(normalizedId);
   settleTagEditViewMutation(tagEditMutationClaim);
@@ -21121,6 +21129,7 @@ async function openUtilityModalForTrack(trackPath) {
     if (!album.detail_loaded) {
       while (album && !album.detail_loaded) {
         const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+        state.utility.selectedProblematicKey = album.key || '';
         await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
         if (!ownsNavigation()) return;
         if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
@@ -21143,6 +21152,7 @@ async function openUtilityModalForTrack(trackPath) {
       }
     }
     if (!album) return;
+    state.utility.selectedProblematicKey = album.key || '';
     openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {
@@ -31058,7 +31068,7 @@ async function confirmManualTagEdit() {
   showRepairAlert(
     tagEditAlert.savingMessage,
     'info',
-    null,
+    2000,
     { title: 'Saving tags', dismissible: false },
   );
   let failedLogHistoryEntryId = '';

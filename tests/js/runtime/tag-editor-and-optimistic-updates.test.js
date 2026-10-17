@@ -1891,7 +1891,7 @@ test('completed save-task response reconciles immediately without starting a wat
     [
       'Updating 1 track in “Album”.',
       'info',
-      null,
+      2000,
       { title: 'Saving tags', dismissible: false },
     ],
     [
@@ -2492,7 +2492,7 @@ test('manual tag edit does not apply successful origin albums after navigation d
   assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1))), [
     'Updating 1 track in “Album”.',
     'info',
-    null,
+    2000,
     { title: 'Saving tags', dismissible: false },
   ]);
 });

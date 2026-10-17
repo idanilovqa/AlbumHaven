@@ -4140,9 +4140,15 @@ test('watchSaveTask keeps optimistic state without an error when polling exhaust
 
   await context.watchSaveTask('never-terminal');
 
-  assert.equal(fetchCount, 40);
-  assert.deepEqual(alerts, [
+  assert.equal(fetchCount, 120);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
+    [
+      'Tag changes are still being finalized. Your edits remain queued.',
+      'info',
+      8000,
+      { title: 'Tags still updating', dismissible: true },
+    ],
   ]);
   assert.equal(settledClaims.length, 1, 'poll exhaustion must retain the optimistic result');
   assert.deepEqual(releasedClaims, [], 'running status must not use failed-task cleanup');
@@ -4151,6 +4157,25 @@ test('watchSaveTask keeps optimistic state without an error when polling exhaust
     false,
     'running status without a server error must not emit an error alert',
   );
+});
+
+test('watchSaveTask does not let an exhausted older edit overwrite a newer notification', async () => {
+  const context = loadHelpers();
+  const alerts = [];
+  let fetchCount = 0;
+  context.fetch = async () => {
+    fetchCount += 1;
+    return { ok: true, async json() { return { ok: true, status: 'running' }; } };
+  };
+  context.waitForBrowserTimeout = async () => {};
+  context.showRepairAlert = (...args) => alerts.push(args);
+  context.tagEditViewMutationStillOwnsResources = () => false;
+  context.settleTagEditViewMutation = () => {};
+
+  await context.watchSaveTask('superseded-task', { tagEditMutationClaim: {} });
+
+  assert.equal(fetchCount, 120);
+  assert.deepEqual(alerts, []);
 });
 
 test('watchSaveTask preserves finalized raw credits for album-only splits', async () => {

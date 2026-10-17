@@ -2130,7 +2130,7 @@ def test_cancelled_queued_finalizer_releases_intent_session_and_structural_reser
 
 
 @pytest.mark.parametrize("structural", [False, True])
-def test_successful_tag_save_queues_settings_projection_prewarm_after_invalidations(
+def test_successful_tag_save_does_not_prewarm_settings_on_the_foreground_browse_pool(
     tmp_path,
     monkeypatch,
     structural,
@@ -2200,5 +2200,4 @@ def test_successful_tag_save_queues_settings_projection_prewarm_after_invalidati
     assert events == [
         "problematic-invalidated",
         "rules-invalidated",
-        "prewarm-queued",
     ]

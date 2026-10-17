@@ -3040,7 +3040,7 @@ def persist_provider_storage_policy_candidates(
         target_year = 2001
     else:
         target_artist = "Mastodon"
-        target_album = "Crack Skye"
+        target_album = "Crack The Skye"
         target_year = 2009
     candidates = build_candidates(target_artist, target_album, target_year)
 

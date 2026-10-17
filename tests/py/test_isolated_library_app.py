@@ -455,7 +455,7 @@ def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_s
 @pytest.mark.parametrize(
     ("include_performance_target", "expected_target"),
     [
-        (False, ("Mastodon", "Crack Skye", 2009)),
+        (False, ("Mastodon", "Crack The Skye", 2009)),
         (
             True,
             (

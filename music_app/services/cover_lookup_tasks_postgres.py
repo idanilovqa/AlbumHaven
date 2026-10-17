@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
@@ -17,6 +20,9 @@ except ImportError:  # pragma: no cover - allows import-time diagnostics without
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_cover_lookup_notifications_adapter"
 _SOURCE_FAMILIES = ("cover_lookup_notifications", _SOURCE)
+_ACTIVE_STATUSES = ("pending", "running")
+_FINISHED_STATUSES = ("completed", "failed", "canceled")
+_MAX_NOTIFICATION_PAGE_SIZE = 50
 _PROVIDER_PAYLOAD_KEYS = (
     "possible_matches",
     "manual_urls",
@@ -62,6 +68,53 @@ class CoverLookupTasksPostgresAdapter:
             for summary in summaries
             if str(summary.get("id") or "").strip()
         ]
+
+    def count_notifications(self) -> dict[str, int]:
+        with self._connect_to_database() as connection:
+            _ensure_bootstrap_context(connection)
+            return _count_notifications(connection)
+
+    def load_notification_summary_page(
+        self,
+        *,
+        limit: int,
+        cursor: str | None,
+        active_only: bool,
+    ) -> dict[str, object]:
+        page_size = max(1, min(int(limit), _MAX_NOTIFICATION_PAGE_SIZE))
+        cursor_values = _decode_notification_cursor(cursor) if cursor else None
+        with self._connect_to_database() as connection:
+            _ensure_bootstrap_context(connection)
+            counts = _count_notifications(connection)
+            params: list[object] = [_SOURCE_FAMILIES]
+            if active_only:
+                params.append(_ACTIVE_STATUSES)
+            if cursor_values is not None:
+                params.extend(cursor_values)
+            params.append(page_size + 1)
+            rows = list(
+                connection.execute(
+                    _load_notification_summary_page_sql(
+                        has_cursor=cursor_values is not None,
+                        active_only=active_only,
+                    ),
+                    tuple(params),
+                ).fetchall()
+            )
+
+        page_rows = rows[:page_size]
+        items = [
+            _compact_notification_summary(_notification_summary_from_row(row))
+            for row in page_rows
+        ]
+        next_cursor = None
+        if len(rows) > page_size and page_rows:
+            last_row = _row_mapping(page_rows[-1])
+            next_cursor = _encode_notification_cursor(
+                _timestamp_text(last_row.get("effective_timestamp")),
+                _text(last_row.get("task_key")),
+            )
+        return {"items": items, "next_cursor": next_cursor, "counts": counts}
 
     def save_notifications(self, tasks: list[dict[str, object]]) -> None:
         normalized_tasks = [
@@ -216,6 +269,80 @@ def _timestamp_text(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     return _text(value)
+
+
+def _count_notifications(connection: Any) -> dict[str, int]:
+    row = _row_mapping(
+        _first_row(
+            connection.execute(
+                _count_notifications_sql(),
+                (_ACTIVE_STATUSES, _FINISHED_STATUSES, _SOURCE_FAMILIES),
+            )
+        )
+        or {}
+    )
+    return {
+        "total_count": int(row.get("total_count") or 0),
+        "active_count": int(row.get("active_count") or 0),
+        "finished_count": int(row.get("finished_count") or 0),
+    }
+
+
+def _encode_notification_cursor(timestamp: str, task_key: str) -> str:
+    payload = json.dumps(
+        {"timestamp": timestamp, "task_key": task_key},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_notification_cursor(cursor: str) -> tuple[str, str]:
+    try:
+        encoded = cursor.encode("ascii")
+        padding = b"=" * (-len(encoded) % 4)
+        decoded = base64.b64decode(encoded + padding, altchars=b"-_", validate=True)
+        payload = json.loads(decoded.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError
+        timestamp = payload.get("timestamp")
+        task_key = payload.get("task_key")
+        if not isinstance(timestamp, str) or not timestamp.strip():
+            raise ValueError
+        if not isinstance(task_key, str) or not task_key.strip():
+            raise ValueError
+        parsed_timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed_timestamp.tzinfo is None:
+            raise ValueError
+    except (UnicodeError, ValueError, TypeError, binascii.Error, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid notification cursor.") from exc
+    return parsed_timestamp.isoformat(), task_key.strip()
+
+
+def _compact_notification_summary(summary: dict[str, object]) -> dict[str, object]:
+    compact = dict(summary)
+    for key in (
+        "track_paths",
+        "selected_cover_private_path",
+        "selected_cover_path",
+        "local_cover_path",
+        "cover_path",
+    ):
+        compact.pop(key, None)
+    album_payload = compact.get("album_payload")
+    if isinstance(album_payload, Mapping):
+        compact["album_payload"] = {
+            str(key): value
+            for key, value in album_payload.items()
+            if str(key)
+            not in {
+                "tracks",
+                "selected_cover_private_path",
+                "selected_cover_path",
+                "local_cover_path",
+                "cover_path",
+            }
+        }
+    return compact
 
 
 def _sanitize_json_payload(value: object) -> object:
@@ -546,6 +673,134 @@ def _load_notification_summaries_sql() -> str:
             ops.cover_lookup_tasks.task_key desc;
         """
     ).replace("%s::text[]", f"array[{', '.join(repr(item) for item in _SOURCE_FAMILIES)}]::text[]")
+
+
+def _count_notifications_sql() -> str:
+    return (
+        _bootstrap_context_sql()
+        + """
+        select
+          count(*)::int as total_count,
+          count(*) filter (
+            where ops.cover_lookup_tasks.status = any(%s::text[])
+          )::int as active_count,
+          count(*) filter (
+            where ops.cover_lookup_tasks.status = any(%s::text[])
+          )::int as finished_count
+        from ops.cover_lookup_tasks
+        join bootstrap_context
+          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[]);
+        """
+    )
+
+
+def _load_notification_summary_page_sql(*, has_cursor: bool, active_only: bool) -> str:
+    filters = [
+        "ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])"
+    ]
+    if active_only:
+        filters.append("ops.cover_lookup_tasks.status = any(%s::text[])")
+    if has_cursor:
+        filters.append(
+            "(coalesce(ops.cover_lookup_tasks.completed_at, "
+            "ops.cover_lookup_tasks.requested_at), ops.cover_lookup_tasks.task_key) "
+            "< (%s::timestamptz, %s)"
+        )
+    where_sql = "\n          and ".join(filters)
+    return (
+        _bootstrap_context_sql()
+        + f"""
+        select
+          jsonb_strip_nulls(
+            jsonb_build_object(
+              'type', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'type',
+              'artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'artist',
+              'album', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album',
+              'year', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'year',
+              'progress', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'progress',
+              'progress_label', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'progress_label',
+              'message', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'message',
+              'result_kind', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'result_kind',
+              'started_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'started_at',
+              'updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'updated_at',
+              'finished_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'finished_at',
+              'cancel_requested', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'cancel_requested',
+              'caa_empty_notice', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'caa_empty_notice',
+              'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
+              'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
+              'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
+              'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at'
+            )
+            || jsonb_build_object(
+              'id', ops.cover_lookup_tasks.task_key,
+              'status', ops.cover_lookup_tasks.status,
+              'created_at', ops.cover_lookup_tasks.requested_at,
+              'notification_completed_at', coalesce(
+                nullif(ops.cover_lookup_tasks.metadata ->> 'notification_completed_at', ''),
+                ops.cover_lookup_tasks.completed_at::text
+              ),
+              'notification_expires_at', coalesce(
+                ops.cover_lookup_tasks.metadata ->> 'notification_expires_at',
+                ''
+              ),
+              'notification_action_taken', coalesce(
+                (ops.cover_lookup_tasks.metadata ->> 'notification_action_taken')::boolean,
+                false
+              ),
+              'possible_match_count', (
+                select count(*)
+                from jsonb_array_elements(
+                  coalesce(
+                    ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'possible_matches',
+                    ops.cover_lookup_tasks.provider_payload -> 'possible_matches',
+                    '[]'::jsonb
+                  )
+                ) as candidate
+                where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
+              ),
+              'album_payload', case
+                when jsonb_typeof(
+                  ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload'
+                ) = 'object'
+                then jsonb_strip_nulls(jsonb_build_object(
+                  'key', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'key',
+                  'name', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'name',
+                  'album', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album',
+                  'album_artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_artist',
+                  'artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'artist',
+                  'year', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'year',
+                  'cover_preview_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_preview_url',
+                  'cover_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_revision',
+                  'remote_cover_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_url',
+                  'remote_cover_thumbnail_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_thumbnail_url',
+                  'remote_cover_source', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_source',
+                  'remote_cover_source_label', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_source_label',
+                  'remote_cover_album_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_album_url',
+                  'remote_cover_width', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_width'
+                ))
+                else null
+              end
+            )
+          ) as task_summary,
+          coalesce(
+            ops.cover_lookup_tasks.completed_at,
+            ops.cover_lookup_tasks.requested_at
+          ) as effective_timestamp,
+          ops.cover_lookup_tasks.task_key
+        from ops.cover_lookup_tasks
+        join bootstrap_context
+          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+        where {where_sql}
+        order by
+          coalesce(
+            ops.cover_lookup_tasks.completed_at,
+            ops.cover_lookup_tasks.requested_at
+          ) desc,
+          ops.cover_lookup_tasks.task_key desc
+        limit %s;
+        """
+    )
 
 
 def _delete_removed_notifications_sql() -> str:

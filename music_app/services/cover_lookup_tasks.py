@@ -12,8 +12,10 @@ from music_app.services.cover_provider_candidates import (
     normalize_remote_image_url,
 )
 from music_app.services.cover_lookup_notifications import (
+    count_cover_lookup_notifications,
     delete_cover_lookup_notifications,
     load_cover_lookup_notification_summaries,
+    load_cover_lookup_notification_summary_page,
     load_cover_lookup_notifications,
     save_cover_lookup_notifications,
     upsert_cover_lookup_notification,
@@ -493,6 +495,27 @@ def list_cover_lookup_task_summaries(
     )
     summaries.sort(key=_sort_cover_lookup_task_key, reverse=True)
     return summaries
+
+
+def count_cover_lookup_task_notifications(
+    *, config: Mapping[str, object]
+) -> dict[str, int]:
+    return count_cover_lookup_notifications(dict(config))
+
+
+def load_cover_lookup_task_summary_page(
+    *,
+    config: Mapping[str, object],
+    limit: int,
+    cursor: str | None,
+    active_only: bool,
+) -> dict[str, object]:
+    return load_cover_lookup_notification_summary_page(
+        dict(config),
+        limit=limit,
+        cursor=cursor,
+        active_only=active_only,
+    )
 
 
 def update_cover_lookup_task(

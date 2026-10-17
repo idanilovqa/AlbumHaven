@@ -30,6 +30,24 @@ def load_cover_lookup_notification_summaries(
     return _filter_notification_tasks(adapter.load_notifications())
 
 
+def count_cover_lookup_notifications(config: dict[str, object]) -> dict[str, int]:
+    return _cover_lookup_notifications_adapter(config).count_notifications()
+
+
+def load_cover_lookup_notification_summary_page(
+    config: dict[str, object],
+    *,
+    limit: int,
+    cursor: str | None,
+    active_only: bool,
+) -> dict[str, object]:
+    return _cover_lookup_notifications_adapter(config).load_notification_summary_page(
+        limit=limit,
+        cursor=cursor,
+        active_only=active_only,
+    )
+
+
 def save_cover_lookup_notifications(config: dict[str, object], tasks: list[dict[str, object]]) -> None:
     filtered_tasks = _filter_notification_tasks(tasks)
     _cover_lookup_notifications_adapter(config).save_notifications(filtered_tasks)

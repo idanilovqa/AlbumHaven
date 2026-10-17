@@ -1098,3 +1098,63 @@ def test_canceled_task_rejects_late_provider_completion(config):
     payload = cover_lookup_result(task_id)
     assert payload["status"] == "canceled"
     assert payload["possible_matches"] == []
+
+
+def test_bounded_notification_reads_delegate_to_postgres_adapter(monkeypatch):
+    from music_app.services import cover_lookup_notifications as notification_service
+
+    calls = []
+
+    class FakeAdapter:
+        def count_notifications(self):
+            calls.append(("count",))
+            return {"total_count": 8, "active_count": 2, "finished_count": 6}
+
+        def load_notification_summary_page(self, *, limit, cursor, active_only):
+            calls.append(("page", limit, cursor, active_only))
+            return {
+                "items": [{"id": "task-8"}],
+                "next_cursor": "next",
+                "counts": {"total_count": 8, "active_count": 2, "finished_count": 6},
+            }
+
+    monkeypatch.setattr(
+        notification_service,
+        "_cover_lookup_notifications_adapter",
+        lambda _config: FakeAdapter(),
+    )
+
+    assert notification_service.count_cover_lookup_notifications({})["total_count"] == 8
+    page = notification_service.load_cover_lookup_notification_summary_page(
+        {}, limit=20, cursor="cursor", active_only=True
+    )
+    assert page["items"] == [{"id": "task-8"}]
+    assert calls == [("count",), ("page", 20, "cursor", True)]
+
+
+def test_task_level_bounded_notification_reads_preserve_contract(monkeypatch):
+    from music_app.services import cover_lookup_tasks as task_service
+
+    counts = {"total_count": 4, "active_count": 1, "finished_count": 3}
+    page = {"items": [{"id": "task-4"}], "next_cursor": None, "counts": counts}
+    monkeypatch.setattr(
+        task_service,
+        "count_cover_lookup_notifications",
+        lambda config: counts if config == {"key": "value"} else None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        task_service,
+        "load_cover_lookup_notification_summary_page",
+        lambda config, *, limit, cursor, active_only: page
+        if (config, limit, cursor, active_only) == ({"key": "value"}, 50, None, False)
+        else None,
+        raising=False,
+    )
+
+    assert task_service.count_cover_lookup_task_notifications(
+        config={"key": "value"}
+    ) == counts
+    assert task_service.load_cover_lookup_task_summary_page(
+        config={"key": "value"}, limit=50, cursor=None, active_only=False
+    ) == page

@@ -5561,6 +5561,62 @@ test('watchSaveTask does not restore origin-bound album state after navigation b
   assert.equal(alerts[0][0], 'Structural persistence failed after media compensation.');
 });
 
+test('watchSaveTask leaves an unrelated foreground search untouched after save completion', async () => {
+  const context = loadHelpers();
+  const originalAlbum = {
+    key: 'pre-edit-source',
+    name: 'Source Album',
+    album_artist: 'Edit Artist',
+    tracks: [{ path: 'D:\\Music\\Edit Artist\\Source Album\\01 First.flac' }],
+  };
+  const finalizedAlbum = {
+    key: 'renamed-destination',
+    name: 'Renamed Destination',
+    album_artist: 'Edit Artist',
+    tracks: originalAlbum.tracks,
+  };
+  const unrelatedAlbum = {
+    key: 'unrelated-search-result',
+    name: 'Unrelated Search Result',
+    album_artist: 'Foreground Artist',
+    tracks: [{ path: 'D:\\Music\\Foreground Artist\\Result\\01 Other.flac' }],
+  };
+  const refreshes = [];
+  context.state.ui = { viewStateRevision: 11 };
+  context.state.view.query = 'Unrelated Search Result';
+  context.state.view.selected_artist = 'Foreground Artist';
+  context.state.view.selected_artist_source = 'auto_top_match';
+  context.state.view.artist_groups = [{
+    artist: 'Foreground Artist',
+    albums: [unrelatedAlbum],
+  }];
+  context.buildApiUrl = () => '/api/unrelated-search';
+  context.fetchAndRender = async (...args) => {
+    refreshes.push(args);
+    return true;
+  };
+  context.fetch = async () => ({
+    ok: true,
+    async json() {
+      context.state.ui.viewStateRevision = 12;
+      return {
+        ok: true,
+        status: 'completed',
+        requires_view_refresh: true,
+        updated_albums: [finalizedAlbum],
+      };
+    },
+  });
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('navigated-unrelated-search-task', {
+    originalAlbum,
+    originatingViewStateRevision: 11,
+  });
+
+  assert.deepEqual(refreshes, []);
+});
+
 test('watchSaveTask does not apply finalized origin albums after navigation before completion', async () => {
   const context = loadHelpers();
   const originalAlbum = {
@@ -5578,6 +5634,10 @@ test('watchSaveTask does not apply finalized origin albums after navigation befo
   const authoritativeRefreshes = [];
   const alerts = [];
   context.state.ui = { viewStateRevision: 11 };
+  context.state.view.artist_groups = [{
+    artist: 'Edit Artist',
+    albums: [finalizedAlbum],
+  }];
   context.buildApiUrl = (view) => {
     requestedViews.push(view);
     return '/api/current-library-view';

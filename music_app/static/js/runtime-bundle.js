@@ -20343,6 +20343,21 @@ async function watchSaveTask(taskId, context = {}) {
         let modalUpdatedAlbums = finalizedAlbums;
         let viewRefreshed = false;
         let viewReconciledLocally = false;
+        const currentViewContainsAffectedAlbum = () => {
+          const affectedAlbums = [originalAlbum, ...finalizedAlbums].filter(Boolean);
+          if (!affectedAlbums.length) return true;
+          return collectVisibleAlbumsUnique().some((visibleAlbum) => (
+            affectedAlbums.some((affectedAlbum) => {
+              const visibleAliases = getAlbumRuntimeIdentityAliases(visibleAlbum);
+              const sharesRuntimeIdentity = Array.from(
+                getAlbumRuntimeIdentityAliases(affectedAlbum),
+              ).some((alias) => visibleAliases.has(alias));
+              return sharesRuntimeIdentity
+                || albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(affectedAlbum))
+                || albumsShareLogicalReleaseIdentity(visibleAlbum, affectedAlbum);
+            })
+          ));
+        };
         if (data.requires_view_refresh) {
           if (
             canReconcileOriginView()
@@ -20381,6 +20396,7 @@ async function watchSaveTask(taskId, context = {}) {
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
             && !mutationWasSuperseded()
+            && (originStillOwnsView() || currentViewContainsAffectedAlbum())
           ) {
             try {
               let refreshView = state.view;
@@ -20495,7 +20511,7 @@ async function watchSaveTask(taskId, context = {}) {
           );
           if (reconciledAlbums.length) modalUpdatedAlbums = reconciledAlbums;
           renderView(renderOptions);
-        } else if (!originStillOwnsView()) {
+        } else if (!originStillOwnsView() && currentViewContainsAffectedAlbum()) {
           try {
             await fetchAndRender(buildApiUrl(state.view), false, currentViewRenderOptions());
           } catch (refreshError) {

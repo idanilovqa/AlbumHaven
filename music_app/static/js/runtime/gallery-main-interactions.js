@@ -664,7 +664,7 @@ function transitionGalleryMain(action) {
   }
   if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
-  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: previousView === nextState.view });
   if (typeof syncMobileHome === 'function') syncMobileHome();
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
   if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {

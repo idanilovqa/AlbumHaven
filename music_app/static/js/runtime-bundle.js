@@ -6942,7 +6942,7 @@ function transitionGalleryMain(action) {
   }
   if (action.type === 'toggle-source') window.AlbumHavenDevicePreferences?.write('gallerySources', nextState.sources);
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
-  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
+  renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: previousView === nextState.view });
   if (typeof syncMobileHome === 'function') syncMobileHome();
   if (typeof syncMobileGalleryControls === 'function') syncMobileGalleryControls();
   if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
@@ -20894,20 +20894,31 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
-    const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
     if (!album.detail_loaded) {
-      await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
-      if (!ownsNavigation()
-          || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
-      // A changed complete summary may have replaced the preview detail owner.
-      const current = getProblematicAlbumForTrackPath(trackPath);
-      if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
-        await state.utility.detailLoadPromises[current.key];
-        if (!ownsNavigation()
-            || Number(state.utility.problematicSummaryRequestToken || 0) !== summaryOwner) return;
+      while (album && !album.detail_loaded) {
+        const summaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
+        await loadProblematicAlbumDetail(album.key || '', undefined, { render: false });
+        if (!ownsNavigation()) return;
+        if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+          const current = getProblematicAlbumForTrackPath(trackPath);
+          if (current && !current.detail_loaded && state.utility.detailLoadPromises?.[current.key]) {
+            await state.utility.detailLoadPromises[current.key];
+            if (!ownsNavigation()) return;
+          }
+          if (Number(state.utility.problematicSummaryRequestToken || 0) === summaryOwner) {
+            album = getProblematicAlbumForTrackPath(trackPath);
+            break;
+          }
+        }
+        const currentSummary = state.utility.completeLoadPromise
+          || state.utility.initialLoadPromise;
+        if (!currentSummary || typeof currentSummary.then !== 'function') return;
+        await currentSummary;
+        if (!ownsNavigation()) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
       }
     }
-    if (!getProblematicAlbumForTrackPath(trackPath)) return;
+    if (!album) return;
     openedCanonicalTarget = true;
     openUtilityModal({ resetSearch: true, resetSelection: false, forceLoad: false });
   } finally {

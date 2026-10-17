@@ -44,9 +44,19 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       )
     ));
 
-    let selectedCandidate = null;
+    let readyCandidate = null;
     await stepLogger.step('Wait for one decoded provider candidate through the production cover proxy', async () => {
       await coverLookupActions.waitForRemoteCandidateCountAtLeast(1);
+      const candidates = await coverLookupActions.readRemoteCandidateSummaries();
+      readyCandidate = candidates[0];
+      expect(readyCandidate?.id).toBeTruthy();
+      const image = await coverLookupActions.readRemoteCandidateEvidence(readyCandidate.id);
+      expect(image.sha256).not.toBe('');
+    });
+    const candidateReadyMs = performance.now() - lookupStartedAt;
+
+    let selectedCandidate = null;
+    await stepLogger.step('Wait for the Spotify candidate used by the save contract', async () => {
       const candidates = await coverLookupActions.readRemoteCandidateSummaries();
       selectedCandidate = candidates.find(
         (candidate) => candidate.source.toLocaleLowerCase() === 'spotify',
@@ -55,7 +65,6 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       const image = await coverLookupActions.readRemoteCandidateEvidence(selectedCandidate.id);
       expect(image.sha256).not.toBe('');
     });
-    const candidateReadyMs = performance.now() - lookupStartedAt;
 
     const candidateSelection = await stepLogger.step('Measure candidate selection feedback', async () => (
       measureInteractionToPaint(

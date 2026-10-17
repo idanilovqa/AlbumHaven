@@ -1588,3 +1588,16 @@ test('cover candidate readiness uses locator auto-wait without polling backoff',
   assert.match(helper, /toBeVisible\(/);
   assert.doesNotMatch(helper, /expect\.poll/);
 });
+
+test('cover lookup times the first decoded candidate before Spotify save setup', () => {
+  const spec = readRepoFile('tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js');
+
+  assert.match(
+    spec,
+    /readyCandidate = candidates\[0\][\s\S]*?readRemoteCandidateEvidence\(readyCandidate\.id\)[\s\S]*?const candidateReadyMs/,
+  );
+  assert.match(
+    spec,
+    /const candidateReadyMs[\s\S]*?selectedCandidate = candidates\.find\([\s\S]*?spotify/,
+  );
+});

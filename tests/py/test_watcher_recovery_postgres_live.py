@@ -897,9 +897,7 @@ def test_watcher_hot_path_query_plans_use_existing_indexes(live_watcher_database
         assert forbidden_scan not in plan, plan
 
 
-def _publish_watcher_generation(scope, generation_id: int, *, now: datetime, worker_id: str):
-    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
-
+def _claim_watcher_generation(scope, generation_id: int, *, now: datetime, worker_id: str):
     recovery = _repository(scope.worker_url)
     assert generation_id in recovery.dispatch_ready(now=now, limit=32)
     jobs = PostgresJobRepository(
@@ -916,6 +914,12 @@ def _publish_watcher_generation(scope, generation_id: int, *, now: datetime, wor
     generation = recovery.claim_generation(claim=claim, now=now)
     assert generation is not None
     assert generation.generation_id == generation_id
+    return claim
+
+
+def _publish_claimed_watcher_generation(scope, claim, generation_id: int, *, now: datetime):
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+
     scans = PostgresScanJobRepository(
         database_url=scope.worker_url,
         connect_to_database=isolatedPostgres._connect,
@@ -935,6 +939,13 @@ def _publish_watcher_generation(scope, generation_id: int, *, now: datetime, wor
     )
     assert publication["publication_won"] is True, publication
     return publication
+
+
+def _publish_watcher_generation(scope, generation_id: int, *, now: datetime, worker_id: str):
+    claim = _claim_watcher_generation(
+        scope, generation_id, now=now, worker_id=worker_id
+    )
+    return _publish_claimed_watcher_generation(scope, claim, generation_id, now=now)
 
 
 def test_idempotent_targeted_publication_replay_revalidates_file_scope(
@@ -1185,7 +1196,7 @@ def _publish_linked_full_scan(
     return publication
 
 
-def test_repair_replays_generation_that_completed_before_full_publication(
+def test_repair_replays_deferred_generation_after_prior_completion_before_full_publication(
     live_watcher_database,
 ):
     scope = live_watcher_database
@@ -1198,26 +1209,51 @@ def test_repair_replays_generation_that_completed_before_full_publication(
         observed_at=now,
     )
     repair_id = _seed_scanning_repair(scope, now=now, logical_root_id="root-a")
-    _, accepted = _enqueue_linked_full_scan(
-        scope,
-        repair_id=repair_id,
-        now=now,
-        request_ref="watcher:repair-completed-before-full",
-    )
     assert app_recovery.accept_event(
         library_id=scope.library_id,
         event=_created(scope, "root-a", "completed-before-full.flac"),
         accepted_at=now + timedelta(seconds=1),
     ).generation_id == initial.generation_id
-    _publish_watcher_generation(
+    targeted_claim = _claim_watcher_generation(
         scope,
         initial.generation_id,
         now=now + timedelta(seconds=2),
         worker_id="repair-pre-full-targeted",
     )
+    _, accepted = _enqueue_linked_full_scan(
+        scope,
+        repair_id=repair_id,
+        now=now + timedelta(seconds=2),
+        request_ref="watcher:repair-completed-before-full",
+    )
+    deferred = app_recovery.accept_event(
+        library_id=scope.library_id,
+        event=_created(scope, "root-a", "accepted-after-full-snapshot.flac"),
+        accepted_at=now + timedelta(seconds=2, microseconds=1),
+    )
+    assert deferred.generation_id != initial.generation_id
+    with isolatedPostgres._connect(scope.setup_url) as connection:
+        watermark = connection.execute(
+            """
+            select repair_root.captured_accepted_sequence, lane.accepted_sequence
+            from library.watcher_repair_roots as repair_root
+            join library.watcher_lanes as lane
+              on lane.library_id = repair_root.library_id
+             and lane.root_id = repair_root.root_id
+            where repair_root.repair_id = %s
+            """,
+            (repair_id,),
+        ).fetchone()
+    assert watermark["captured_accepted_sequence"] < watermark["accepted_sequence"]
+    _publish_claimed_watcher_generation(
+        scope,
+        targeted_claim,
+        initial.generation_id,
+        now=now + timedelta(seconds=2, microseconds=2),
+    )
     worker_scans, claim, intent, scope_result = _claim_enqueued_full_scan(
         scope,
-        now=now + timedelta(seconds=2),
+        now=now + timedelta(seconds=2, microseconds=3),
         request_ref="watcher:repair-completed-before-full",
     )
     _publish_linked_full_scan(
@@ -1258,6 +1294,7 @@ def test_repair_replays_generation_that_completed_before_full_publication(
     assert waiting["completed_at"] is None
     assert waiting["resolved_at"] is None
     assert successor_id is not None and successor_id != initial.generation_id
+    assert successor_id == deferred.generation_id
     assert {row["generation_id"] for row in repair_links} == {successor_id}
 
     _publish_watcher_generation(

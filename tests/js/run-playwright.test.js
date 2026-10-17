@@ -3094,6 +3094,7 @@ test('startManagedIsolatedApp launches Python directly with safe managed env and
   ]);
   assert.equal(calls[0].options.shell, false);
   assert.equal(calls[0].options.windowsHide, true);
+  assert.deepEqual(calls[0].options.stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(calls[0].options.env[_private.MANAGED_ISOLATED_APP_ENV], '1');
   assert.equal(calls[0].options.env.LASTFM_API_KEY, '');
   assert.equal(
@@ -3491,7 +3492,11 @@ test('stopManagedIsolatedApp uses bind-only port checks after verified process-t
         });
       },
     }),
-    /port 4324 was not reusable after teardown/,
+    (error) => {
+      assert.equal(error.code, 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED');
+      assert.match(error.message, /port 4324 was not reusable after teardown/);
+      return true;
+    },
   );
 
   assert.deepEqual(stopped, [{
@@ -3506,6 +3511,321 @@ test('stopManagedIsolatedApp uses bind-only port checks after verified process-t
     { port: 4322, ownerProbeResult: [] },
     { port: 4324, ownerProbeResult: [] },
   ]);
+});
+
+test('stopManagedIsolatedApp requests graceful shutdown and checks ports only after clean exit', async () => {
+  const child = createFakeChildProcess(5658);
+  child.albumHavenCreationIdentity = 'original-python';
+  const events = [];
+  const input = new EventEmitter();
+  input.write = (value) => {
+    events.push(['write', value]);
+    assert.equal(value, 'shutdown\n');
+    child.exitCode = 0;
+    child.signalCode = null;
+    child.emit('exit', 0, null);
+    return true;
+  };
+  input.end = () => {
+    events.push(['end']);
+  };
+  child.stdin = input;
+
+  const stopping = _private.stopManagedIsolatedApp(child, [4322, 4324], {
+    readProcessCreationIdentityFn() {
+      return 'original-python';
+    },
+    readProcessTreeIdentitiesFn() {
+      return [{
+        pid: 5658,
+        creationIdentity: 'original-python',
+        depth: 0,
+      }];
+    },
+    stopProcessTreeFn(pid, options) {
+      events.push(['force-stop', pid, options.expectedCreationIdentity]);
+    },
+    async waitForReclaimedProcessesExitedFn(owners) {
+      events.push(['wait-for-exit', owners]);
+    },
+    async waitForPortReleasedFn(port) {
+      events.push(['port', port]);
+      return true;
+    },
+  });
+
+  await stopping;
+  assert.deepEqual(events, [
+    ['write', 'shutdown\n'],
+    ['end'],
+    ['wait-for-exit', [{
+      pid: 5658,
+      creationIdentity: 'original-python',
+      depth: 0,
+    }]],
+    ['port', 4322],
+    ['port', 4324],
+  ]);
+
+  assert.equal(input.listenerCount('error'), 1);
+  const latePipeError = new Error('late stdin pipe closure');
+  latePipeError.code = 'EPIPE';
+  assert.doesNotThrow(() => {
+    input.emit('error', latePipeError);
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  input.emit('close');
+  assert.equal(input.listenerCount('error'), 0);
+});
+
+test('stopManagedIsolatedApp fails closed after an exited child loses creation identity', async () => {
+  const child = createFakeChildProcess(5661);
+  child.albumHavenCreationIdentity = 'original-python';
+  child.exitCode = 0;
+  child.signalCode = null;
+  const identityReads = [];
+  const events = [];
+  child.stdin = {
+    write(value) {
+      events.push(['write', value]);
+      return true;
+    },
+    end() {
+      events.push(['end']);
+    },
+  };
+
+  await assert.rejects(
+    _private.stopManagedIsolatedApp(child, [4322, 4324], {
+      readProcessCreationIdentityFn(pid) {
+        identityReads.push(pid);
+        return '';
+      },
+      readProcessTreeIdentitiesFn() {
+        return [];
+      },
+      async waitForDirectChildExitFn() {
+        events.push(['wait-for-direct-exit']);
+      },
+      stopProcessTreeFn(pid, options) {
+        events.push(['force-stop', pid, options.expectedCreationIdentity]);
+      },
+      async waitForReclaimedProcessesExitedFn(owners) {
+        events.push(['verify-exact-owner-exited', owners]);
+      },
+      async waitForPortReleasedFn(port) {
+        events.push(['port', port]);
+        return true;
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED');
+      assert.match(error.message, /creation identity/i);
+      return true;
+    },
+  );
+
+  assert.deepEqual(identityReads, [5661, 5661]);
+  assert.deepEqual(events, [
+    ['verify-exact-owner-exited', [{
+      pid: 5661,
+      creationIdentity: 'original-python',
+    }]],
+    ['port', 4322],
+    ['port', 4324],
+  ]);
+});
+
+test('stopManagedIsolatedApp cleans up by identity then rejects when graceful shutdown fails', async () => {
+  const child = createFakeChildProcess(5659);
+  child.albumHavenCreationIdentity = 'original-python';
+  const events = [];
+  child.stdin = {
+    write(value) {
+      events.push(['write', value]);
+      return true;
+    },
+    end() {
+      events.push(['end']);
+    },
+  };
+
+  await assert.rejects(
+    _private.stopManagedIsolatedApp(child, [4322, 4324], {
+      readProcessCreationIdentityFn() {
+        return 'original-python';
+      },
+      readProcessTreeIdentitiesFn() {
+        return [{
+          pid: 5659,
+          creationIdentity: 'original-python',
+          depth: 0,
+        }];
+      },
+      async waitForDirectChildExitFn() {
+        throw new Error('graceful shutdown timed out');
+      },
+      stopProcessTreeFn(pid, options) {
+        events.push(['force-stop', pid, options.expectedCreationIdentity]);
+      },
+      async waitForReclaimedProcessesExitedFn(owners) {
+        events.push(['wait-for-forced-exit', owners]);
+      },
+      async waitForPortReleasedFn(port) {
+        events.push(['port', port]);
+        return true;
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED');
+      return true;
+    },
+  );
+
+  assert.deepEqual(events, [
+    ['write', 'shutdown\n'],
+    ['end'],
+    ['force-stop', 5659, 'original-python'],
+    ['wait-for-forced-exit', [
+      {
+        pid: 5659,
+        creationIdentity: 'original-python',
+        depth: 0,
+      },
+    ]],
+    ['port', 4322],
+    ['port', 4324],
+  ]);
+});
+
+test('stopManagedIsolatedApp observes pending exit rejection after synchronous stdin failure', async () => {
+  const child = createFakeChildProcess(5660);
+  child.albumHavenCreationIdentity = 'original-python';
+  const events = [];
+  const unhandledRejections = [];
+  let rejectExit;
+  const exitPromise = new Promise((_resolve, reject) => {
+    rejectExit = reject;
+  });
+  const onUnhandledRejection = (error) => {
+    unhandledRejections.push(error);
+  };
+  process.on('unhandledRejection', onUnhandledRejection);
+
+  child.stdin = {
+    write(value) {
+      events.push(['write', value]);
+      throw new Error('stdin write failed');
+    },
+    end() {
+      events.push(['end']);
+    },
+  };
+
+  try {
+    await assert.rejects(
+      _private.stopManagedIsolatedApp(child, [4322, 4324], {
+        readProcessCreationIdentityFn() {
+          return 'original-python';
+        },
+        readProcessTreeIdentitiesFn() {
+          return [{
+            pid: 5660,
+            creationIdentity: 'original-python',
+            depth: 0,
+          }];
+        },
+        waitForDirectChildExitFn() {
+          return exitPromise;
+        },
+        stopProcessTreeFn(pid, options) {
+          events.push(['force-stop', pid, options.expectedCreationIdentity]);
+        },
+        async waitForReclaimedProcessesExitedFn(owners) {
+          events.push(['wait-for-forced-exit', owners]);
+        },
+        async waitForPortReleasedFn(port) {
+          events.push(['port', port]);
+          return true;
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED');
+        return true;
+      },
+    );
+
+    assert.deepEqual(events, [
+      ['write', 'shutdown\n'],
+      ['force-stop', 5660, 'original-python'],
+      ['wait-for-forced-exit', [{
+        pid: 5660,
+        creationIdentity: 'original-python',
+        depth: 0,
+      }]],
+      ['port', 4322],
+      ['port', 4324],
+    ]);
+
+    rejectExit(new Error('late direct-child exit failure'));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandledRejections, []);
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandledRejection);
+  }
+});
+
+test('managed isolated restart controller fails closed when graceful stop fails', async (t) => {
+  for (const operation of ['stop', 'restart']) {
+    await t.test(operation, async () => {
+      const ownedRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), `album-haven-graceful-stop-${operation}-`),
+      );
+      const child = createFakeChildProcess(operation === 'stop' ? 5670 : 5671);
+      const gracefulFailure = new Error('managed app graceful stop failed');
+      gracefulFailure.code = 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED';
+      let controller;
+
+      try {
+        controller = _private.createManagedIsolatedAppRestartController({
+          childEnv: {},
+          ownedIsolatedTempRoot: ownedRoot,
+          initialChild: child,
+          ports: [4320, 4322],
+          async stopManagedIsolatedAppFn() {
+            throw gracefulFailure;
+          },
+          async startManagedIsolatedAppFn() {
+            assert.fail('failed graceful stop must not start a replacement');
+          },
+          autoStart: false,
+        });
+        fs.writeFileSync(
+          path.join(controller.controlDirectory, 'restart-request.json'),
+          JSON.stringify({ nonce: `graceful-stop-${operation}`, operation }),
+        );
+
+        await assert.rejects(
+          controller.processPendingRequest(),
+          (error) => error === gracefulFailure,
+        );
+
+        const acknowledgment = JSON.parse(fs.readFileSync(
+          path.join(controller.controlDirectory, 'restart-ack.json'),
+          'utf8',
+        ));
+        assert.equal(acknowledgment.status, 'failed');
+        assert.notEqual(acknowledgment.status, 'stopped');
+        assert.notEqual(acknowledgment.status, 'ready');
+        assert.equal(controller.getCurrentChild(), child);
+        assert.equal(controller.getFailure(), gracefulFailure);
+      } finally {
+        await controller?.close();
+        fs.rmSync(ownedRoot, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 test('managed isolated stop request waits for shutdown without starting a replacement', async () => {

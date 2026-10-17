@@ -93,6 +93,7 @@ def _build_worker(
     *,
     full_scan_log_event: Callable[[str], object] | None = None,
     mail_config: Mapping[str, Any] | None = None,
+    worker_id: str | None = None,
 ) -> Any:
     """Wire the durable worker with its closed handler set."""
 
@@ -343,6 +344,7 @@ def _build_worker(
         repository=repository,
         authorization_service=authorization,
         handlers=handlers,
+        worker_id=worker_id,
         lease_seconds=config.lease_seconds,
         heartbeat_seconds=config.heartbeat_seconds,
         poll_seconds=config.poll_seconds,

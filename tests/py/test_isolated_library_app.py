@@ -543,7 +543,10 @@ def test_isolated_library_launcher_is_setup_only_and_runs_the_production_asgi_ap
 
     assert "create_asgi_app" in imported_names
     assert "uvicorn" in imported_names
-    assert ("uvicorn", "run") in called_attributes
+    assert ("uvicorn", "Config") in called_attributes
+    assert ("uvicorn", "Server") in called_attributes
+    assert ("server", "run") in called_attributes
+    assert ("uvicorn", "run") not in called_attributes
     assert "FastAPI" not in imported_names
     assert not any(parts[-1:] == ("FastAPI",) for parts in called_attributes)
     assert route_decorators.isdisjoint({"get", "post", "put", "patch", "delete", "route", "websocket"})
@@ -1431,7 +1434,7 @@ def test_cleanup_only_reaps_stale_owner_resets_tables_and_releases_without_start
     monkeypatch.setattr(isolatedLibraryApp, "load_fixture_config", unexpected("load_fixture_config"))
     monkeypatch.setattr(isolatedLibraryApp, "ProviderFixtureService", unexpected("ProviderFixtureService"))
     monkeypatch.setattr(music_app, "create_asgi_app", unexpected("create_asgi_app"))
-    monkeypatch.setattr("uvicorn.run", unexpected("uvicorn.run"))
+    monkeypatch.setattr("uvicorn.Server.run", unexpected("uvicorn.Server.run"))
 
     if reset_fails:
         with pytest.raises(RuntimeError, match="cleanup reset failed"):
@@ -1468,6 +1471,29 @@ def test_managed_durable_jobs_worker_starts_waits_and_stops_cleanly():
     assert events == ["worker.run", "worker.stopped", "worker.close"]
 
 
+def test_exact_stdin_shutdown_command_requests_uvicorn_exit():
+    server = SimpleNamespace(should_exit=False)
+
+    isolatedLibraryApp._watch_stdin_for_shutdown(
+        server,
+        stdin=io.StringIO("shutdown\n"),
+    )
+
+    assert server.should_exit is True
+
+
+@pytest.mark.parametrize("stdin_value", ["", "stop\n"])
+def test_eof_or_unknown_stdin_command_does_not_request_uvicorn_exit(stdin_value):
+    server = SimpleNamespace(should_exit=False)
+
+    isolatedLibraryApp._watch_stdin_for_shutdown(
+        server,
+        stdin=io.StringIO(stdin_value),
+    )
+
+    assert server.should_exit is False
+
+
 def test_isolated_jobs_worker_is_built_only_with_dedicated_worker_database(monkeypatch):
     monkeypatch.delenv("ALBUM_HAVEN_WORKER_DATABASE_URL", raising=False)
     assert isolatedLibraryApp.build_isolated_jobs_worker("runtime-url") is None
@@ -1477,13 +1503,32 @@ def test_isolated_jobs_worker_uses_deterministic_e2e_timing_without_changing_def
     monkeypatch,
 ):
     import config
+    import psycopg
     import scripts.run_jobs_worker as run_jobs_worker
 
     production_defaults = config.build_worker_config({
         "ALBUM_HAVEN_WORKER_DATABASE_URL": "postgresql://worker",
     })
     captured_environment = {}
+    captured_worker_ids = []
+    ready_queries = []
     fake_worker = object()
+
+    class ReadyConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, statement, parameters):
+            ready_queries.append((statement, parameters))
+            return SimpleNamespace(fetchone=lambda: {"ready": 1})
+
+    def build_worker(worker_config, *, mail_config, worker_id):
+        assert (worker_config, mail_config) == ("worker-config", "mail-config")
+        captured_worker_ids.append(worker_id)
+        return fake_worker
     monkeypatch.setenv("ALBUM_HAVEN_WORKER_DATABASE_URL", "worker-url")
     monkeypatch.setattr(
         config,
@@ -1491,13 +1536,14 @@ def test_isolated_jobs_worker_uses_deterministic_e2e_timing_without_changing_def
         lambda environment: captured_environment.update(environment) or "worker-config",
     )
     monkeypatch.setattr(config, "build_mail_config", lambda _environment: "mail-config")
+    monkeypatch.setattr(run_jobs_worker, "_build_worker", build_worker)
     monkeypatch.setattr(
-        run_jobs_worker,
-        "_build_worker",
-        lambda worker_config, *, mail_config: (
-            fake_worker
-            if (worker_config, mail_config) == ("worker-config", "mail-config")
-            else None
+        psycopg,
+        "connect",
+        lambda database_url: (
+            ReadyConnection()
+            if database_url == "runtime-url"
+            else pytest.fail(f"unexpected readiness database URL: {database_url}")
         ),
     )
 
@@ -1505,6 +1551,16 @@ def test_isolated_jobs_worker_uses_deterministic_e2e_timing_without_changing_def
 
     assert managed is not None
     assert managed._worker is fake_worker
+    assert len(captured_worker_ids) == 1
+    assert captured_worker_ids[0]
+    assert managed._ready_probe() is True
+    assert managed._ready_probe() is True
+    assert len(ready_queries) == 2
+    for statement, parameters in ready_queries:
+        normalized_statement = " ".join(statement.split())
+        assert "instance_id = %(instance_id)s" in normalized_statement
+        assert "lifecycle_state = 'running'" in normalized_statement
+        assert parameters == {"instance_id": captured_worker_ids[0]}
     assert captured_environment["ALBUM_HAVEN_WORKER_POLL_SECONDS"] == "1"
     assert captured_environment["ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"] == "1"
     assert captured_environment["ALBUM_HAVEN_WORKER_LEASE_SECONDS"] == "15"
@@ -1698,7 +1754,19 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
         "create_asgi_app",
         lambda: app,
     )
-    monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: events.append("server.run"))
+    monkeypatch.setattr("uvicorn.Config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "uvicorn.Server",
+        lambda _config: SimpleNamespace(
+            should_exit=False,
+            run=lambda: events.append("server.run"),
+        ),
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "_watch_stdin_for_shutdown",
+        lambda _server: None,
+    )
     monkeypatch.setattr(
         isolatedLibraryApp,
         "build_isolated_jobs_worker",
@@ -2049,7 +2117,19 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         "create_asgi_app",
         lambda: app,
     )
-    monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: events.append("server.run"))
+    monkeypatch.setattr("uvicorn.Config", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "uvicorn.Server",
+        lambda _config: SimpleNamespace(
+            should_exit=False,
+            run=lambda: events.append("server.run"),
+        ),
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "_watch_stdin_for_shutdown",
+        lambda _server: None,
+    )
     monkeypatch.setattr(
         isolatedLibraryApp,
         "build_isolated_jobs_worker",
@@ -6070,5 +6150,15 @@ def test_main_installs_safe_lifespan_diagnostics_before_worker_and_server_start(
     diagnostic_install = main_source.index("_install_safe_lifespan_diagnostics(app)")
     worker_construction = main_source.index("build_isolated_jobs_worker(")
     worker_start = main_source.index("jobs_worker.start()")
-    server_start = main_source.index("uvicorn.run(")
-    assert app_creation < diagnostic_install < worker_construction < worker_start < server_start
+    server_config = main_source.index("uvicorn.Config(")
+    server_creation = main_source.index("uvicorn.Server(")
+    server_start = main_source.index("server.run()")
+    assert (
+        app_creation
+        < diagnostic_install
+        < worker_construction
+        < worker_start
+        < server_config
+        < server_creation
+        < server_start
+    )

@@ -188,3 +188,26 @@ def test_worker_bootstrap_composes_durable_watcher_due_reconciliation():
     assert "PostgresWatcherRecoveryRepository" in source
     assert "watcher_recovery.reconcile_due" in source
     assert "combine_due_reconcilers" in source
+
+
+def test_worker_bootstrap_forwards_optional_worker_id_to_worker():
+    import ast
+    import inspect
+    import textwrap
+
+    signature = inspect.signature(run_jobs_worker._build_worker)
+    assert signature.parameters["worker_id"].default is None
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(run_jobs_worker._build_worker)))
+    worker_call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Worker"
+    )
+    worker_id_keyword = next(
+        keyword for keyword in worker_call.keywords if keyword.arg == "worker_id"
+    )
+    assert isinstance(worker_id_keyword.value, ast.Name)
+    assert worker_id_keyword.value.id == "worker_id"

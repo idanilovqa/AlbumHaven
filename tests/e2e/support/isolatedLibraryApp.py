@@ -5354,6 +5354,11 @@ class ManagedDurableJobsWorker:
             raise RuntimeError("Isolated durable jobs worker failed") from self._failure
 
 
+def _watch_stdin_for_shutdown(server: Any, stdin=sys.stdin) -> None:
+    if stdin.readline() == "shutdown\n":
+        server.should_exit = True
+
+
 def build_isolated_jobs_worker(runtime_database_url: str) -> ManagedDurableJobsWorker | None:
     worker_database_url = str(
         os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or ""
@@ -5370,16 +5375,20 @@ def build_isolated_jobs_worker(runtime_database_url: str) -> ManagedDurableJobsW
     worker_environment["ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"] = "1"
     worker_environment["ALBUM_HAVEN_WORKER_LEASE_SECONDS"] = "15"
     worker_environment["ALBUM_HAVEN_WORKER_HEARTBEAT_SECONDS"] = "5"
+    worker_id = f"e2e-worker-{uuid.uuid4().hex}"
     worker = _build_worker(
         build_worker_config(worker_environment),
         mail_config=build_mail_config(worker_environment),
+        worker_id=worker_id,
     )
 
     def ready_probe() -> bool:
         with psycopg.connect(runtime_database_url) as connection:
             row = connection.execute(
                 "select 1 from ops.worker_instances "
-                "where lifecycle_state = 'running' limit 1"
+                "where instance_id = %(instance_id)s "
+                "and lifecycle_state = 'running' limit 1",
+                {"instance_id": worker_id},
             ).fetchone()
         return row is not None
 
@@ -5734,7 +5743,19 @@ def main() -> None:
         )
         import uvicorn
 
-        uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+        server_config = uvicorn.Config(
+            app,
+            host="127.0.0.1",
+            port=args.port,
+            log_level="warning",
+        )
+        server = uvicorn.Server(server_config)
+        threading.Thread(
+            target=_watch_stdin_for_shutdown,
+            args=(server,),
+            daemon=True,
+        ).start()
+        server.run()
     except BaseException as exc:
         original_failure = exc
         raise

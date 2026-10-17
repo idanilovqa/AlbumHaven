@@ -86,6 +86,7 @@ const MANAGED_ISOLATED_REUSE_STATE_ENV = 'ALBUM_HAVEN_E2E_REUSE_STATE';
 const MANAGED_ISOLATED_RESTART_REQUEST_FILE = 'restart-request.json';
 const MANAGED_ISOLATED_RESTART_ACK_FILE = 'restart-ack.json';
 const MANAGED_ISOLATED_RESTART_POLL_INTERVAL_MS = 100;
+const MANAGED_ISOLATED_APP_SHUTDOWN_COMMAND = 'shutdown\n';
 const SCAN_STATUS_SAMPLES_ENV = 'ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH';
 const MANAGED_SCAN_APP_STARTUP_TIMEOUT_MS = 120000;
 const MANAGED_ISOLATED_APP_STARTUP_TIMEOUT_MS = 120000;
@@ -1360,7 +1361,7 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
     {
       cwd: repoRoot,
       env: managedEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
     },
@@ -1431,40 +1432,144 @@ async function stopManagedIsolatedApp(child, ports, options = {}) {
   if (!child) return;
   const expectedCreationIdentity = String(child.albumHavenCreationIdentity || '');
   const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
+  const readProcessTreeIdentitiesFn = options.readProcessTreeIdentitiesFn
+    || readProcessTreeIdentities;
   const stopProcessTreeFn = options.stopProcessTreeFn || stopProcessTree;
+  const waitForDirectChildExitFn = options.waitForDirectChildExitFn || waitForDirectChildExit;
   const waitForReclaimedProcessesExitedFn = options.waitForReclaimedProcessesExitedFn
     || waitForReclaimedProcessesExited;
   const waitForPortReleasedFn = options.waitForPortReleasedFn || waitForPortReleased;
+  const processOwner = {
+    pid: child.pid,
+    creationIdentity: expectedCreationIdentity,
+  };
+  const waitForExactProcesses = (owners) => waitForReclaimedProcessesExitedFn(owners, {
+    timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+    pollIntervalMs: 250,
+  });
+  const waitForPorts = async () => {
+    for (const port of [...new Set(Array.isArray(ports) ? ports : [])]) {
+      const released = await waitForPortReleasedFn(port, {
+        timeoutMs: MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS,
+        pollIntervalMs: 250,
+        // The owned process tree has already exited with its creation identity
+        // verified. A stable exclusive bind proves that each loopback port is
+        // reusable, including when an unrelated process races to claim it,
+        // without repeatedly launching the expensive Windows TCP-owner probe.
+        readPortOwningProcessesFn: () => [],
+      });
+      if (!released) {
+        throw new Error(`Managed isolated app port ${port} was not reusable after teardown.`);
+      }
+    }
+  };
+
   if (!expectedCreationIdentity) {
     await (options.abortManagedIsolatedAppStartupFn || abortManagedIsolatedAppStartup)(child, options);
-  } else {
-    const currentIdentity = readProcessCreationIdentityFn(child.pid);
-    if (currentIdentity && currentIdentity !== expectedCreationIdentity) {
-      throw new Error(`Managed isolated app PID ${child.pid} changed creation identity before teardown.`);
+    await waitForPorts();
+    return;
+  }
+
+  const currentIdentity = readProcessCreationIdentityFn(child.pid);
+  if (currentIdentity && currentIdentity !== expectedCreationIdentity) {
+    throw new Error(`Managed isolated app PID ${child.pid} changed creation identity before teardown.`);
+  }
+
+  let processOwners = [processOwner];
+  let gracefulError = null;
+  try {
+    if (!currentIdentity) {
+      throw new Error(
+        `Managed isolated app PID ${child.pid} lost its creation identity before graceful teardown.`,
+      );
     }
-    if (currentIdentity === expectedCreationIdentity) {
-      stopProcessTreeFn(child.pid, { expectedCreationIdentity });
-      await waitForReclaimedProcessesExitedFn([
-        { pid: child.pid, creationIdentity: expectedCreationIdentity },
-      ], {
-        timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
-        pollIntervalMs: 250,
+    const processTree = readProcessTreeIdentitiesFn(child.pid);
+    const root = processTree.find((owner) => owner.pid === child.pid);
+    if (root?.creationIdentity !== expectedCreationIdentity) {
+      throw new Error(
+        `Managed isolated app PID ${child.pid} changed creation identity before graceful teardown.`,
+      );
+    }
+    processOwners = processTree;
+
+    const input = child.stdin;
+    if (
+      !input
+      || typeof input.write !== 'function'
+      || typeof input.end !== 'function'
+      || input.destroyed
+      || input.writable === false
+      || input.writableEnded
+    ) {
+      throw new Error(`Managed isolated app PID ${child.pid} had no writable stdin.`);
+    }
+
+    let rejectInputError = () => {};
+    const inputErrorPromise = new Promise((_resolve, reject) => {
+      rejectInputError = reject;
+    });
+    const onInputError = (error) => rejectInputError(error);
+    const removeInputErrorListener = () => input.removeListener?.('error', onInputError);
+    input.once?.('error', onInputError);
+    input.once?.('close', removeInputErrorListener);
+    const exitPromise = waitForDirectChildExitFn(child, {
+      timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+    });
+    const exitOrInputError = Promise.race([exitPromise, inputErrorPromise]);
+    try {
+      input.write(MANAGED_ISOLATED_APP_SHUTDOWN_COMMAND, (error) => {
+        if (error) rejectInputError(error);
       });
+      input.end();
+    } catch (error) {
+      rejectInputError(error);
+    }
+    await exitOrInputError;
+
+    if (child.exitCode !== 0 || child.signalCode != null) {
+      throw new Error(
+        `Managed isolated app PID ${child.pid} did not exit cleanly `
+        + `(code=${String(child.exitCode)}, signal=${String(child.signalCode)}).`,
+      );
+    }
+    await waitForExactProcesses(processOwners);
+  } catch (error) {
+    gracefulError = error;
+  }
+
+  const cleanupErrors = [];
+  if (gracefulError) {
+    try {
+      if (readProcessCreationIdentityFn(child.pid) === expectedCreationIdentity) {
+        stopProcessTreeFn(child.pid, { expectedCreationIdentity });
+      }
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
+      await waitForExactProcesses(processOwners);
+    } catch (error) {
+      cleanupErrors.push(error);
     }
   }
-  for (const port of [...new Set(Array.isArray(ports) ? ports : [])]) {
-    const released = await waitForPortReleasedFn(port, {
-      timeoutMs: MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS,
-      pollIntervalMs: 250,
-      // The owned process tree has already exited with its creation identity
-      // verified. A stable exclusive bind proves that each loopback port is
-      // reusable, including when an unrelated process races to claim it,
-      // without repeatedly launching the expensive Windows TCP-owner probe.
-      readPortOwningProcessesFn: () => [],
-    });
-    if (!released) {
-      throw new Error(`Managed isolated app port ${port} was not reusable after teardown.`);
-    }
+
+  try {
+    await waitForPorts();
+  } catch (error) {
+    if (!gracefulError) throw error;
+    cleanupErrors.push(error);
+  }
+
+  if (gracefulError) {
+    const causes = [gracefulError, ...cleanupErrors];
+    const failure = new AggregateError(
+      causes,
+      `Managed isolated app graceful stop failed: ${
+        causes.map((error) => String(error?.message || error)).join('; ')
+      }`,
+    );
+    failure.code = 'MANAGED_ISOLATED_APP_GRACEFUL_STOP_FAILED';
+    throw failure;
   }
 }
 

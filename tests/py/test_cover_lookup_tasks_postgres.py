@@ -76,9 +76,9 @@ def test_count_notifications_uses_one_filtered_aggregate_query():
     assert "count(*) filter ( where" in sql
     assert "source_family" in sql
     assert params == (
-        ("pending", "running"),
-        ("completed", "failed", "canceled"),
-        ("cover_lookup_notifications", "runtime_cover_lookup_notifications_adapter"),
+        ["pending", "running"],
+        ["completed", "failed", "canceled"],
+        ["cover_lookup_notifications", "runtime_cover_lookup_notifications_adapter"],
     )
 
 
@@ -155,7 +155,11 @@ def test_active_only_page_filters_pending_and_running_and_caps_limit_at_50():
     assert [item["id"] for item in page["items"]] == ["running"]
     page_sql, page_params = connection.operations[-1]
     assert "status = any(%s::text[])" in page_sql
-    assert page_params[-2] == ("pending", "running")
+    assert page_params[0] == [
+        "cover_lookup_notifications",
+        "runtime_cover_lookup_notifications_adapter",
+    ]
+    assert page_params[-2] == ["pending", "running"]
     assert page_params[-1] == 51
 
 

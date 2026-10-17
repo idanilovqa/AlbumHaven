@@ -86,9 +86,9 @@ class CoverLookupTasksPostgresAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             counts = _count_notifications(connection)
-            params: list[object] = [_SOURCE_FAMILIES]
+            params: list[object] = [list(_SOURCE_FAMILIES)]
             if active_only:
-                params.append(_ACTIVE_STATUSES)
+                params.append(list(_ACTIVE_STATUSES))
             if cursor_values is not None:
                 params.extend(cursor_values)
             params.append(page_size + 1)
@@ -276,7 +276,11 @@ def _count_notifications(connection: Any) -> dict[str, int]:
         _first_row(
             connection.execute(
                 _count_notifications_sql(),
-                (_ACTIVE_STATUSES, _FINISHED_STATUSES, _SOURCE_FAMILIES),
+                (
+                    list(_ACTIVE_STATUSES),
+                    list(_FINISHED_STATUSES),
+                    list(_SOURCE_FAMILIES),
+                ),
             )
         )
         or {}

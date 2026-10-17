@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
-from threading import Lock
+import select
+from threading import Event, Lock
 import time
 from typing import Any, Callable, Iterable, Literal, Mapping, Protocol
 from uuid import UUID
@@ -113,6 +114,30 @@ class WatcherDirtyWriteAttempt(Protocol):
     def outcome(self) -> WatcherDirtyWriteOutcome | None: ...
 
     def execute(self) -> WatcherDirtyWriteOutcome: ...
+
+    def cancel(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class WatcherSessionFinishOutcome:
+    state: Literal["committed", "rolled_back", "indeterminate"]
+    finished: bool = False
+
+    def __post_init__(self) -> None:
+        if self.state not in {"committed", "rolled_back", "indeterminate"}:
+            raise ValueError("watcher session finish outcome state is invalid")
+        if self.state != "committed" and self.finished:
+            raise ValueError("only a committed outcome may confirm session finish")
+
+
+class WatcherSessionFinishAttempt(Protocol):
+    @property
+    def is_terminal(self) -> bool: ...
+
+    @property
+    def outcome(self) -> WatcherSessionFinishOutcome | None: ...
+
+    def execute(self) -> WatcherSessionFinishOutcome: ...
 
     def cancel(self) -> None: ...
 
@@ -232,22 +257,18 @@ def _runtime_session_error(exc: BaseException, *, begin: bool = False) -> BaseEx
     return RuntimeError("watcher runtime session operation failed")
 
 
-class _PostgresWatcherDirtyWriteAttempt:
+class _PostgresDirtyWriteAttempt:
     def __init__(
         self,
         *,
         database_url: str,
         connect_to_database: Callable[..., Any],
-        library_id: int,
-        logical_root_ids: tuple[str, ...],
-        observed_at: datetime,
+        operation: Callable[[Any], WatcherDirtyWriteOutcome],
         operation_deadline: float,
     ) -> None:
         self._database_url = database_url
         self._connect_to_database = connect_to_database
-        self._library_id = library_id
-        self._logical_root_ids = logical_root_ids
-        self._observed_at = observed_at
+        self._operation = operation
         self._operation_deadline = operation_deadline
         self._lock = Lock()
         self._cancelled = False
@@ -292,7 +313,7 @@ class _PostgresWatcherDirtyWriteAttempt:
             if self._outcome is not None:
                 return self._outcome
             if self._executing:
-                raise RuntimeError("watcher dirty write attempt is already executing")
+                raise RuntimeError("watcher transaction attempt is already executing")
             self._executing = True
             if self._cancelled:
                 return self._publish_locked(WatcherDirtyWriteOutcome("rolled_back"))
@@ -330,18 +351,21 @@ class _PostgresWatcherDirtyWriteAttempt:
                 "select pg_catalog.set_config('lock_timeout', %s, true)",
                 (timeout,),
             )
-            connection.execute(
-                "select * from library.mark_watcher_roots_dirty(%s, %s, %s, %s)",
-                (
-                    self._library_id,
-                    list(self._logical_root_ids),
-                    "overflow",
-                    self._observed_at,
-                ),
-            ).fetchall()
             with self._lock:
                 cancelled = self._cancelled
             if cancelled:
+                rolled_back = self._rollback(connection)
+                self._close(connection)
+                return self._publish(
+                    WatcherDirtyWriteOutcome("rolled_back" if rolled_back else "indeterminate")
+                )
+            committed_outcome = self._operation(connection)
+            with self._lock:
+                # Cancellation and the commit handoff have one ordering. Once
+                # handed off, the acknowledgement can be lost even if cancel
+                # arrives before the driver actually submits COMMIT.
+                commit_started = not self._cancelled
+            if not commit_started:
                 rolled_back = self._rollback(connection)
                 self._close(connection)
                 return self._publish(
@@ -349,16 +373,12 @@ class _PostgresWatcherDirtyWriteAttempt:
                         "rolled_back" if rolled_back else "indeterminate"
                     )
                 )
-            commit_started = True
             connection.commit()
             with self._lock:
                 cancelled = self._cancelled
             self._close(connection)
             return self._publish(
-                WatcherDirtyWriteOutcome(
-                    "indeterminate" if cancelled else "committed",
-                    () if cancelled else self._logical_root_ids,
-                )
+                WatcherDirtyWriteOutcome("indeterminate") if cancelled else committed_outcome
             )
         except Exception:
             rolled_back = not commit_started and (
@@ -366,9 +386,10 @@ class _PostgresWatcherDirtyWriteAttempt:
             )
             if connection is not None:
                 self._close(connection)
-            return self._publish(
+            outcome = self._publish(
                 WatcherDirtyWriteOutcome("rolled_back" if rolled_back else "indeterminate")
             )
+            return outcome
         finally:
             with self._lock:
                 self._connection = None
@@ -381,6 +402,8 @@ class _PostgresWatcherDirtyWriteAttempt:
     def cancel(self) -> None:
         with self._lock:
             self._cancelled = True
+            if not self._executing:
+                self._publish_locked(WatcherDirtyWriteOutcome("rolled_back"))
             connection = self._connection
             if connection is None or self._cancel_sent:
                 return
@@ -396,6 +419,218 @@ class _PostgresWatcherDirtyWriteAttempt:
             pass
         finally:
             self._close(connection)
+
+
+class _PostgresSessionFinishAttempt:
+    """One worker owns the connection; cancellation only signals that worker."""
+
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        connect_to_database: Callable[..., Any],
+        library_id: int,
+        session_token: UUID,
+        operation_deadline: float,
+    ) -> None:
+        self._database_url = database_url
+        self._connect_to_database = connect_to_database
+        self._library_id = library_id
+        self._session_token = session_token
+        self._operation_deadline = operation_deadline
+        self._lock = Lock()
+        self._cancelled = Event()
+        self._executing = False
+        self._connection: Any | None = None
+        self._outcome: WatcherSessionFinishOutcome | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.outcome is not None
+
+    @property
+    def outcome(self) -> WatcherSessionFinishOutcome | None:
+        with self._lock:
+            return self._outcome
+
+    def cancel(self) -> None:
+        if not self._lock.acquire(timeout=max(0.0, self._remaining())):
+            return
+        try:
+            self._cancelled.set()
+            if not self._executing and self._outcome is None:
+                self._outcome = WatcherSessionFinishOutcome("rolled_back")
+        finally:
+            self._lock.release()
+
+    def _remaining(self) -> float:
+        return self._operation_deadline - time.monotonic()
+
+    def _check_budget(self, *, cleanup: bool = False) -> None:
+        if (not cleanup and self._cancelled.is_set()) or self._remaining() <= 0:
+            raise TimeoutError("watcher session finish cancelled or expired")
+
+    def _wait_socket(self, pgconn: Any, *, writing: bool, cleanup: bool = False) -> None:
+        self._check_budget(cleanup=cleanup)
+        socket = pgconn.socket
+        select.select(
+            [socket], [socket] if writing else [], [],
+            min(0.02, max(0.0, self._remaining())),
+        )
+
+    def _drain(self, pgconn: Any, *, cleanup: bool = False) -> list[Any]:
+        from psycopg.pq import DiagnosticField, ExecStatus
+
+        results = []
+        while True:
+            self._check_budget(cleanup=cleanup)
+            pending = pgconn.flush()
+            if pending == 0:
+                break
+            if pending != 1:
+                raise RuntimeError("watcher session finish flush failed")
+            self._wait_socket(pgconn, writing=True, cleanup=cleanup)
+            pgconn.consume_input()
+        while True:
+            self._check_budget(cleanup=cleanup)
+            pgconn.consume_input()
+            if pgconn.is_busy():
+                self._wait_socket(pgconn, writing=False, cleanup=cleanup)
+                continue
+            result = pgconn.get_result()
+            if result is None:
+                return results
+            if result.status not in (ExecStatus.COMMAND_OK, ExecStatus.TUPLES_OK):
+                if cleanup:
+                    continue
+                if result.error_field(DiagnosticField.SQLSTATE) == b"55000":
+                    raise WatcherSessionReplacedError("watcher runtime session was replaced")
+                raise RuntimeError("watcher session finish query failed")
+            results.append(result)
+
+    def execute(self) -> WatcherSessionFinishOutcome:
+        from psycopg import capabilities
+        from psycopg.pq import ExecStatus, PipelineStatus, TransactionStatus
+
+        with self._lock:
+            if self._outcome is not None:
+                return self._outcome
+            if self._executing:
+                raise RuntimeError("watcher session finish is already executing")
+            self._executing = True
+        connection = None
+        commit_started = False
+        query_active = False
+        transaction_started = False
+        outcome = WatcherSessionFinishOutcome("rolled_back")
+        stale = None
+        cleanup_proven = True
+        try:
+            self._check_budget()
+            remaining = self._remaining()
+            if remaining < 1:
+                raise TimeoutError("watcher session finish connection budget exhausted")
+            connection = self._connect_to_database(
+                self._database_url, connect_timeout=max(1, int(remaining)),
+            )
+            self._connection = connection
+            self._check_budget()
+            pgconn = connection.pgconn
+            if not capabilities.has_cancel_safe() or not callable(getattr(connection, "cancel_safe", None)):
+                raise RuntimeError("watcher session finish requires bounded cancellation")
+            if (pgconn.nonblocking != 1 or pgconn.pipeline_status != PipelineStatus.OFF
+                    or pgconn.transaction_status != TransactionStatus.IDLE):
+                raise RuntimeError("watcher session finish requires a fresh nonblocking connection")
+            for name in ("send_query", "send_query_params", "flush", "consume_input",
+                         "is_busy", "get_result"):
+                if not callable(getattr(pgconn, name, None)):
+                    raise RuntimeError("watcher session finish transport is unsupported")
+            query_active = True
+            transaction_started = True
+            pgconn.send_query(b"BEGIN")
+            self._drain(pgconn)
+            query_active = False
+            self._check_budget()
+            timeout_ms = max(1, int(self._remaining() * 1000))
+            query_active = True
+            pgconn.send_query(
+                f"SET LOCAL statement_timeout = '{timeout_ms}ms'; "
+                f"SET LOCAL lock_timeout = '{timeout_ms}ms'".encode())
+            self._drain(pgconn)
+            query_active = False
+            self._check_budget()
+            query_active = True
+            pgconn.send_query_params(
+                b"select library.finish_watcher_runtime_session($1::bigint, $2::uuid) as finished",
+                [str(self._library_id).encode(), str(self._session_token).encode()],
+            )
+            results = self._drain(pgconn)
+            query_active = False
+            if (len(results) != 1 or results[0].status != ExecStatus.TUPLES_OK
+                    or results[0].ntuples != 1 or results[0].nfields != 1
+                    or results[0].get_value(0, 0) != b"t"):
+                raise RuntimeError("watcher session could not be finished")
+            with self._lock:
+                self._check_budget()
+                # send_query itself may flush bytes. From entry onward, an
+                # exception or cancellation cannot prove COMMIT was not sent.
+                commit_started = True
+                query_active = True
+                pgconn.send_query(b"COMMIT")
+            results = self._drain(pgconn)
+            query_active = False
+            if (len(results) == 1 and results[0].status == ExecStatus.COMMAND_OK
+                    and results[0].command_status == b"COMMIT"):
+                outcome = WatcherSessionFinishOutcome("committed", True)
+            else:
+                outcome = WatcherSessionFinishOutcome("indeterminate")
+        except Exception as exc:
+            outcome = WatcherSessionFinishOutcome(
+                "indeterminate" if commit_started else "rolled_back")
+            if not commit_started and isinstance(exc, WatcherSessionReplacedError):
+                stale = exc
+        finally:
+            if connection is not None:
+                # Closing a socket alone does not interrupt a server-side lock
+                # wait. Only this worker owns the connection and sends cancel.
+                if transaction_started and outcome.state != "committed":
+                    cleanup_proven = False
+                    try:
+                        if query_active:
+                            self._check_budget(cleanup=True)
+                            cancel_budget = self._remaining() / 2
+                            if cancel_budget <= 0:
+                                raise TimeoutError
+                            connection.cancel_safe(timeout=cancel_budget)
+                            self._drain(connection.pgconn, cleanup=True)
+                        self._check_budget(cleanup=True)
+                        connection.pgconn.send_query(b"ROLLBACK")
+                        rollback_results = self._drain(connection.pgconn, cleanup=True)
+                        cleanup_proven = (
+                            len(rollback_results) == 1
+                            and rollback_results[0].status == ExecStatus.COMMAND_OK
+                            and rollback_results[0].command_status == b"ROLLBACK"
+                        )
+                    except Exception:
+                        pass
+                    if not cleanup_proven:
+                        outcome = WatcherSessionFinishOutcome("indeterminate")
+                try:
+                    # Only the worker closes its dedicated connection, after
+                    # any bounded server-side cleanup above.
+                    connection.close()
+                except Exception:
+                    outcome = WatcherSessionFinishOutcome("indeterminate")
+                else:
+                    self._connection = None
+            with self._lock:
+                # A failed close is not terminal proof. Keep the attempt and
+                # connection reachable through the controller's owned handle.
+                if self._connection is None and cleanup_proven:
+                    self._outcome = outcome
+        if stale is not None:
+            raise stale
+        return outcome
 
 
 class PostgresWatcherRecoveryRepository:
@@ -540,12 +775,40 @@ class PostgresWatcherRecoveryRepository:
             raise ValueError("operation_deadline must be finite") from None
         if not math.isfinite(operation_deadline):
             raise ValueError("operation_deadline must be finite")
-        return _PostgresWatcherDirtyWriteAttempt(
+        def mark_dirty(connection: Any) -> WatcherDirtyWriteOutcome:
+            connection.execute(
+                "select * from library.mark_watcher_roots_dirty(%s, %s, %s, %s)",
+                (library_id, list(logical_root_ids), "overflow", observed_at),
+            ).fetchall()
+            return WatcherDirtyWriteOutcome("committed", logical_root_ids)
+
+        return _PostgresDirtyWriteAttempt(
+            database_url=self._database_url,
+            connect_to_database=self._connect_to_database,
+            operation=mark_dirty,
+            operation_deadline=operation_deadline,
+        )
+
+    def prepare_runtime_session_finish(
+        self,
+        *,
+        library_id: int,
+        session_token: UUID,
+        operation_deadline: float,
+    ) -> WatcherSessionFinishAttempt:
+        library_id, session_token = _runtime_session_identity(library_id, session_token)
+        try:
+            operation_deadline = float(operation_deadline)
+        except (TypeError, ValueError):
+            raise ValueError("operation_deadline must be finite") from None
+        if not math.isfinite(operation_deadline):
+            raise ValueError("operation_deadline must be finite")
+
+        return _PostgresSessionFinishAttempt(
             database_url=self._database_url,
             connect_to_database=self._connect_to_database,
             library_id=library_id,
-            logical_root_ids=logical_root_ids,
-            observed_at=observed_at,
+            session_token=session_token,
             operation_deadline=operation_deadline,
         )
 
@@ -897,5 +1160,7 @@ __all__ = [
     "WatcherParticipantFence",
     "WatcherRollbackResult",
     "WatcherRootRecord",
+    "WatcherSessionFinishAttempt",
+    "WatcherSessionFinishOutcome",
     "WatcherSessionReplacedError",
 ]

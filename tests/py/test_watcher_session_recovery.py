@@ -122,6 +122,10 @@ def test_session_finish_requires_confirmed_success_without_automatic_retry(state
     assert repository.finish_calls == []
     assert timers.timers == []
 
+    with pytest.raises(RuntimeError):
+        controller.finish(deadline=12.0)
+    assert len(repository.finish_prepare_calls) == 1
+
 
 def test_session_finish_cancels_and_joins_blocked_attempt_within_deadline():
     attempt = FinishAttempt("indeterminate", False, blocked=True)
@@ -152,6 +156,116 @@ def test_session_finish_cancels_and_joins_blocked_attempt_within_deadline():
         attempt.released.set()
         for thread in threads:
             thread.join(2)
+
+
+def test_session_finish_lock_wait_uses_remaining_original_budget():
+    repository = _finish_repository(FinishAttempt())
+    controller, _ = _started_controller(repository)
+    controller.stop_retry_and_flush(deadline=11.0)
+    timeouts = []
+
+    class BusyLock:
+        def acquire(self, *, timeout):
+            timeouts.append(timeout)
+            return False
+
+    controller._stop_lock = BusyLock()
+    with pytest.raises(RuntimeError, match="deadline"):
+        controller.finish(deadline=10.25)
+    assert timeouts == [0.25]
+    assert repository.finish_prepare_calls == []
+
+
+def test_session_finish_retains_nonterminal_attempt_and_never_retries():
+    class NonterminalFinish(FinishAttempt):
+        def execute(self):
+            self.execute_count += 1
+            raise OSError("connection cleanup unresolved")
+
+    attempt = NonterminalFinish()
+    repository = _finish_repository(attempt)
+    controller, _ = _started_controller(repository)
+    controller.stop_retry_and_flush(deadline=11.0)
+    with pytest.raises(RuntimeError, match="did not terminate"):
+        controller.finish(deadline=11.0)
+    assert controller._attempt is attempt
+    assert controller._callback_thread is not None
+    with pytest.raises(RuntimeError):
+        controller.finish(deadline=12.0)
+    assert attempt.execute_count == 1
+    assert len(repository.finish_prepare_calls) == 1
+
+
+def test_concurrent_session_finish_executes_only_one_transaction():
+    attempt = FinishAttempt(blocked=True)
+    repository = _finish_repository(attempt)
+    controller, _ = _started_controller(
+        repository, monotonic_clock=monotonic,
+        thread_factory=lambda target, name: Thread(target=target, name=name, daemon=True),
+    )
+    deadline = monotonic() + 1
+    controller.stop_retry_and_flush(deadline=deadline)
+    results = []
+    errors = []
+
+    def finish():
+        try:
+            results.append(controller.finish(deadline=deadline))
+        except Exception as exc:
+            errors.append(exc)
+
+    callers = [Thread(target=finish, daemon=True) for _ in range(2)]
+    callers[0].start()
+    try:
+        assert attempt.entered.wait(1)
+        callers[1].start()
+    finally:
+        attempt.released.set()
+        for caller in callers:
+            if caller.ident is not None:
+                caller.join(2)
+    assert all(not caller.is_alive() for caller in callers)
+    assert errors == [] and results == [True, True]
+    assert len(repository.finish_prepare_calls) == 1
+    assert attempt.execute_count == 1
+
+
+def test_session_finish_start_failure_cancels_prepared_attempt_without_execute():
+    class UnstartedAttempt(FinishAttempt):
+        def cancel(self):
+            super().cancel()
+            self.outcome = SimpleNamespace(state="rolled_back", finished=False)
+            self.is_terminal = True
+
+    class CannotStart(InlineThread):
+        def start(self):
+            raise RuntimeError("thread unavailable")
+
+    attempt = UnstartedAttempt()
+    repository = _finish_repository(attempt)
+    controller, _ = _started_controller(repository, thread_factory=CannotStart)
+    controller.stop_retry_and_flush(deadline=11.0)
+    with pytest.raises(RuntimeError, match="thread unavailable"):
+        controller.finish(deadline=11.0)
+    assert attempt.cancel_count == 1 and attempt.execute_count == 0
+    assert controller._attempt is None and controller._callback_thread is None
+    assert controller._finished is False
+
+
+def test_session_finish_retains_thread_when_cancel_cannot_prove_exit():
+    class UnjoinedThread(InlineThread):
+        def start(self):
+            self._alive = True
+
+    attempt = FinishAttempt()
+    repository = _finish_repository(attempt)
+    controller, _ = _started_controller(repository, thread_factory=UnjoinedThread)
+    controller.stop_retry_and_flush(deadline=11.0)
+    with pytest.raises(RuntimeError, match="did not terminate"):
+        controller.finish(deadline=11.0)
+    assert controller._callback_thread.is_alive()
+    assert controller._attempt is attempt and attempt.cancel_count == 1
+    assert controller._finished is False
 
 
 def _controller_type():
@@ -933,7 +1047,7 @@ def test_stop_failure_leaves_session_open_and_rejects_finish():
     with pytest.raises(RuntimeError):
         controller.stop_retry_and_flush(deadline=monotonic() + 0.5)
     with pytest.raises(RuntimeError):
-        controller.finish()
+        controller.finish(deadline=11.0)
 
     assert repository.finish_calls == []
 

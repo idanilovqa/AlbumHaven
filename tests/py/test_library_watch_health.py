@@ -377,7 +377,7 @@ def test_app_wires_coordinator_health_and_durable_reconciliation_admission(monke
         def stop_retry_and_flush(self, *, deadline):
             pass
 
-        def finish(self):
+        def finish(self, *, deadline):
             return True
 
     monkeypatch.setattr(watcher_session_recovery, "WatcherSessionRecoveryController", SessionController)

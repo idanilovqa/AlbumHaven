@@ -161,7 +161,7 @@ def _stop_library_watch_runtime(
         if watch_service is not None:
             watch_service.stop(timeout=max(0.0, deadline - time.monotonic()))
         watcher_session_controller.stop_retry_and_flush(deadline=deadline)
-        if not watcher_session_controller.finish():
+        if not watcher_session_controller.finish(deadline=deadline):
             raise RuntimeError("watcher runtime session finish failed")
         if event_coordinator is not None:
             event_coordinator.stop()

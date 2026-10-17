@@ -587,7 +587,7 @@ def _watcher_session_lifecycle_harness(
             assert isinstance(deadline, float)
             events.append("retry.cancel_join_flush")
 
-        def finish(self):
+        def finish(self, *, deadline):
             events.append("session.finish")
             state["open"] = False
             state["participants"] = set()
@@ -1008,7 +1008,8 @@ def test_watcher_session_shutdown_failure_surfaces_and_leaves_session_open(
         if failed_stage in stop_failures:
             raise RuntimeError(failed_stage)
 
-    def finish():
+    def finish(*, deadline):
+        assert deadline == 123.0
         calls.append("session.finish")
         if failed_stage == "session-finish":
             raise RuntimeError(failed_stage)
@@ -1056,7 +1057,8 @@ def test_watcher_session_shutdown_observer_uses_remaining_deadline(monkeypatch, 
         assert deadline == 123.0
         calls.append("retry.cancel_join_flush")
 
-    def finish():
+    def finish(*, deadline):
+        assert deadline == 123.0
         calls.append("session.finish")
         return True
 
@@ -1249,7 +1251,7 @@ def stub_watcher_session(monkeypatch):
         def stop_retry_and_flush(self, *, deadline):
             pass
 
-        def finish(self):
+        def finish(self, *, deadline):
             return True
 
     class Backfill:

@@ -5,7 +5,8 @@ import importlib
 from inspect import signature
 from pathlib import Path
 import re
-from threading import Event, Thread
+import socket
+from threading import Event, Thread, get_ident
 import time
 from types import SimpleNamespace
 from uuid import UUID
@@ -644,6 +645,489 @@ class _DirtyConnectionFactory:
         self.connect_entered.set()
         assert self.connect_release.wait(2.0)
         return self.connection
+
+
+class _FinishConnection(_DirtyConnection):
+    def __init__(self, *, finished=True, query_error=None, **kwargs):
+        super().__init__(**kwargs)
+        self.finished = finished
+        self.query_error = query_error
+        self.cancel_timeouts = []
+        self.pgconn = _FinishPGconn(self, ack_error=self.fail_commit)
+
+    def close(self):
+        self.rolled_back = not self.pgconn.commits
+        self.committed = self.pgconn.transaction_status == 0 and bool(self.pgconn.commits)
+        self.pgconn.reader.close()
+        self.pgconn.writer.close()
+        super().close()
+
+    def execute(self, statement, parameters=()):
+        if "finish_watcher_runtime_session" not in statement:
+            return super().execute(statement, parameters)
+        self.executed.append((statement, parameters))
+        self.query_entered.set()
+        assert self.query_release.wait(2.0)
+        if self.query_error is not None:
+            raise self.query_error
+        return _Result([{"finished": self.finished}])
+
+    def cancel_safe(self, *, timeout):
+        self.cancel_timeouts.append(timeout)
+        super().cancel_safe(timeout=timeout)
+
+
+class _FinishPGconn:
+    nonblocking = 1
+    pipeline_status = 0
+    transaction_status = 0
+
+    def __init__(self, connection, *, send_error=None, ack_error=None):
+        self.connection = connection
+        self.send_error = send_error
+        self.ack_error = ack_error
+        self.sent = []
+        self.result_read = False
+        self.ack_entered = Event()
+        self.ack_release = Event()
+        self.ack_release.set()
+        self.current_query = b""
+        self.after_finish = lambda: None
+        self.after_query = lambda query: None
+        self.reader, self.writer = socket.socketpair()
+        self.writer.send(b"ready")
+
+    @property
+    def socket(self):
+        return self.reader.fileno()
+
+    def send_query(self, query):
+        self.sent.append(query)
+        self.current_query = query
+        self.result_read = False
+        if query == b"COMMIT" and self.send_error:
+            raise self.send_error
+        if query == b"BEGIN":
+            self.transaction_status = 2
+
+    def send_query_params(self, query, parameters, **kwargs):
+        self.send_query(query)
+        self.connection.executed.append((query, parameters))
+        if b"finish_watcher_runtime_session" in query:
+            self.connection.query_entered.set()
+
+    def flush(self):
+        return 0
+
+    def consume_input(self):
+        pass
+
+    def is_busy(self):
+        if b"finish_watcher_runtime_session" in self.current_query:
+            return int(not self.connection.query_release.is_set())
+        return 0
+
+    def get_result(self):
+        if self.current_query == b"COMMIT":
+            self.ack_entered.set()
+            assert self.ack_release.wait(2)
+            if self.ack_error:
+                raise self.ack_error
+        if self.result_read:
+            return None
+        self.result_read = True
+        self.after_query(self.current_query)
+        if b"finish_watcher_runtime_session" in self.current_query:
+            self.after_finish()
+            if self.connection.query_error:
+                return SimpleNamespace(
+                    status=7,
+                    error_field=lambda field: self.connection.query_error.sqlstate.encode(),
+                )
+            return SimpleNamespace(
+                status=2, command_status=b"SELECT 1", ntuples=1, nfields=1,
+                get_value=lambda row, column: b"t" if self.connection.finished else b"f",
+            )
+        if self.current_query == b"COMMIT":
+            self.transaction_status = 0
+        return SimpleNamespace(status=1, command_status=self.current_query.split()[0])
+
+    @property
+    def commits(self):
+        return [query for query in self.sent if query == b"COMMIT"]
+
+
+class _StrictFinishConnection(_FinishConnection):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.pgconn.reader.close()
+        self.pgconn.writer.close()
+        self.pgconn = _FinishPGconn(self, **kwargs)
+        self.close_threads = []
+
+    def close(self):
+        self.close_threads.append(get_ident())
+        self.pgconn.reader.close()
+        self.pgconn.writer.close()
+        super().close()
+
+
+def test_strict_finish_submits_commit_through_nonblocking_pgconn():
+    connection = _StrictFinishConnection()
+    attempt, factory, _ = _finish_attempt(connection)
+    outcome = attempt.execute()
+    assert connection.pgconn.commits == [b"COMMIT"]
+    assert not connection.commit_entered.is_set(), "high-level commit reopens the race"
+    assert outcome.state == "committed" and outcome.finished is True
+    assert connection.closed and len(factory.calls) == 1
+
+
+@pytest.mark.parametrize("failure_phase", ["send_error", "ack_error"])
+def test_strict_finish_submission_or_ack_failure_is_indeterminate_without_retry(failure_phase):
+    connection = _StrictFinishConnection(**{failure_phase: ConnectionError("lost")})
+    attempt, factory, _ = _finish_attempt(connection)
+    outcome = attempt.execute()
+    assert outcome.state == "indeterminate" and outcome.finished is False
+    assert connection.pgconn.commits == [b"COMMIT"]
+    assert not connection.rolled_back and connection.closed
+    if failure_phase == "ack_error":
+        assert not attempt.is_terminal
+        with pytest.raises(RuntimeError, match="already executing"):
+            attempt.execute()
+    else:
+        assert attempt.execute() is outcome
+    assert len(factory.calls) == 1
+
+
+@pytest.mark.parametrize(("attribute", "value"), [("nonblocking", 0), ("pipeline_status", 1)])
+def test_strict_finish_rejects_blocking_or_pipeline_connection_before_submission(attribute, value):
+    connection = _StrictFinishConnection()
+    setattr(connection.pgconn, attribute, value)
+    attempt, _, _ = _finish_attempt(connection)
+    outcome = attempt.execute()
+    assert outcome.state != "committed" and outcome.finished is False
+    assert connection.pgconn.commits == []
+    assert not connection.commit_entered.is_set() and connection.closed
+
+
+def test_strict_finish_rejects_unbounded_cancel_capability_before_sql(monkeypatch):
+    from psycopg import capabilities
+
+    monkeypatch.setattr(capabilities, "has_cancel_safe", lambda: False)
+    connection = _StrictFinishConnection()
+    attempt, _, _ = _finish_attempt(connection)
+    outcome = attempt.execute()
+    assert connection.pgconn.sent == []
+    assert connection.closed
+    assert outcome.state == "rolled_back"
+
+
+def test_strict_finish_rechecks_original_deadline_after_finish_query(monkeypatch):
+    clock = [10.0]
+    monkeypatch.setattr(_recovery_module().time, "monotonic", lambda: clock[0])
+
+    class DeadlineExpires(_StrictFinishConnection):
+        def execute(self, statement, parameters=()):
+            result = super().execute(statement, parameters)
+            if "finish_watcher_runtime_session" in statement:
+                clock[0] = 15.0
+            return result
+
+    connection = DeadlineExpires()
+    connection.pgconn.after_finish = lambda: clock.__setitem__(0, 15.0)
+    attempt, _, _ = _finish_attempt(connection, deadline=15.0)
+    outcome = attempt.execute()
+    assert outcome.state == "indeterminate" and outcome.finished is False
+    assert not attempt.is_terminal
+    assert connection.pgconn.commits == [] and not connection.commit_entered.is_set()
+    assert connection.closed
+
+
+def test_strict_finish_cancel_never_closes_worker_connection_from_calling_thread():
+    connection = _StrictFinishConnection()
+    connection.query_release.clear()
+    attempt, _, _ = _finish_attempt(connection)
+    results = []
+    worker = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+    worker.start()
+    try:
+        assert connection.query_entered.wait(1)
+        attempt.cancel()
+        assert get_ident() not in connection.close_threads
+    finally:
+        connection.query_release.set()
+        worker.join(2)
+    assert not worker.is_alive()
+    assert connection.close_threads == [worker.ident]
+    assert connection.pgconn.commits == []
+    assert results[0].state == "rolled_back"
+
+
+@pytest.mark.parametrize("cancel_error", [None, TimeoutError("cancel timed out")])
+def test_strict_finish_worker_cancels_active_backend_before_close(cancel_error):
+    connection = _StrictFinishConnection()
+    connection.query_release.clear()
+    cancel_threads = []
+    deadline = time.monotonic() + 4
+
+    def cancel_safe(*, timeout):
+        cancel_threads.append(get_ident())
+        assert 0 < timeout < deadline - time.monotonic()
+        assert not connection.closed
+        if cancel_error:
+            raise cancel_error
+        connection.query_release.set()
+
+    connection.cancel_safe = cancel_safe
+    attempt, _, _ = _finish_attempt(connection, deadline=deadline)
+    results = []
+    worker = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+    worker.start()
+    try:
+        assert connection.query_entered.wait(1)
+        attempt.cancel()
+        worker.join(1)
+        assert not worker.is_alive()
+        assert cancel_threads == [worker.ident]
+        assert connection.close_threads == [worker.ident]
+        assert connection.pgconn.commits == []
+        assert results[0].state == ("indeterminate" if cancel_error else "rolled_back")
+        assert attempt.is_terminal is (cancel_error is None)
+    finally:
+        connection.query_release.set()
+        worker.join(2)
+
+
+def test_strict_finish_releases_cancellation_lock_before_reading_commit_ack():
+    connection = _StrictFinishConnection()
+    connection.pgconn.ack_release.clear()
+    attempt, _, _ = _finish_attempt(connection)
+    results = []
+    cancelled = Event()
+    worker = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+    canceller = Thread(target=lambda: (attempt.cancel(), cancelled.set()), daemon=True)
+    worker.start()
+    try:
+        assert connection.pgconn.ack_entered.wait(1)
+        canceller.start()
+        assert cancelled.wait(1), "acknowledgement wait must not hold cancellation lock"
+        assert connection.close_threads == []
+    finally:
+        connection.pgconn.ack_release.set()
+        worker.join(2)
+        if canceller.ident is not None:
+            canceller.join(2)
+    assert not worker.is_alive() and not canceller.is_alive()
+    assert connection.pgconn.commits == [b"COMMIT"]
+    assert results[0].state == "indeterminate" and results[0].finished is False
+
+
+def _finish_attempt(connection=None, *, deadline=None):
+    connection = connection or _FinishConnection()
+    factory = _DirtyConnectionFactory(connection)
+    repository = _recovery_module().PostgresWatcherRecoveryRepository(
+        database_url="postgresql://watcher.invalid/album_haven",
+        connect_to_database=factory,
+    )
+    attempt = repository.prepare_runtime_session_finish(
+        library_id=7,
+        session_token=SESSION_TOKEN,
+        operation_deadline=time.monotonic() + 5 if deadline is None else deadline,
+    )
+    return attempt, factory, connection
+
+
+def test_strict_finish_commit_backpressure_cancels_without_retry():
+    connection = _StrictFinishConnection()
+    blocked = Event()
+
+    def flush():
+        if connection.pgconn.current_query == b"COMMIT" and not connection.cancel_count:
+            blocked.set()
+            return 1
+        return 0
+
+    connection.pgconn.flush = flush
+    attempt, factory, _ = _finish_attempt(connection)
+    results = []
+    worker = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+    worker.start()
+    try:
+        assert blocked.wait(1)
+        attempt.cancel()
+    finally:
+        worker.join(2)
+    assert not worker.is_alive()
+    assert results[0].state == "indeterminate" and not results[0].finished
+    assert connection.pgconn.commits == [b"COMMIT"]
+    assert connection.close_threads == [worker.ident]
+    assert attempt.execute() == results[0] and len(factory.calls) == 1
+
+
+def test_strict_finish_submission_holds_lock_until_driver_call_returns():
+    connection = _StrictFinishConnection()
+    entered, release, cancel_started, cancelled = Event(), Event(), Event(), Event()
+    original_send = connection.pgconn.send_query
+
+    def send(query):
+        if query == b"COMMIT":
+            entered.set()
+            assert release.wait(2)
+        original_send(query)
+
+    connection.pgconn.send_query = send
+    connection.pgconn.ack_release.clear()
+    attempt, _, _ = _finish_attempt(connection)
+    results = []
+    worker = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+
+    def cancel():
+        cancel_started.set()
+        attempt.cancel()
+        cancelled.set()
+
+    canceller = Thread(target=cancel, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        canceller.start()
+        assert cancel_started.wait(1)
+        assert not cancelled.wait(0.05), "driver submission must share cancellation lock"
+        release.set()
+        assert cancelled.wait(1)
+    finally:
+        release.set()
+        connection.pgconn.ack_release.set()
+        worker.join(2)
+        if canceller.ident is not None:
+            canceller.join(2)
+    assert not worker.is_alive() and not canceller.is_alive()
+    assert connection.pgconn.commits == [b"COMMIT"]
+    assert results[0].state == "indeterminate"
+
+
+def test_strict_finish_failed_close_retains_nonterminal_connection_ownership():
+    connection = _StrictFinishConnection()
+    attempt, _, _ = _finish_attempt(connection)
+    original_close = connection.close
+
+    def close():
+        raise OSError("close failed")
+
+    connection.close = close
+    try:
+        outcome = attempt.execute()
+        assert outcome.state == "indeterminate"
+        assert not attempt.is_terminal and attempt.outcome is None
+        assert attempt._connection is connection
+    finally:
+        original_close()
+
+
+@pytest.mark.parametrize("finished", [True, False])
+def test_prepared_session_finish_has_no_io_until_execute_and_preserves_sql_result(finished):
+    attempt, factory, connection = _finish_attempt(_FinishConnection(finished=finished))
+    assert factory.calls == []
+    assert attempt.outcome is None
+    assert not attempt.is_terminal
+    outcome = attempt.execute()
+    assert outcome.state == ("committed" if finished else "rolled_back")
+    assert outcome.finished is finished
+    assert connection.executed[-1] == (
+        b"select library.finish_watcher_runtime_session($1::bigint, $2::uuid) as finished",
+        [b"7", str(SESSION_TOKEN).encode()],
+    )
+    assert connection.committed is finished and connection.closed
+    assert connection.pgconn.commits == ([b"COMMIT"] if finished else [])
+    assert attempt.execute() is outcome
+    assert len(factory.calls) == 1
+
+
+def test_prepared_session_finish_expired_deadline_never_connects():
+    attempt, factory, connection = _finish_attempt(deadline=0)
+    outcome = attempt.execute()
+    assert outcome.state == "rolled_back" and outcome.finished is False
+    assert factory.calls == [] and connection.executed == []
+
+
+@pytest.mark.parametrize("sqlstate", ["55P03", "57014", "55000"])
+def test_prepared_session_finish_query_failure_rolls_back_and_preserves_stale_error(sqlstate):
+    connection = _FinishConnection(query_error=_SqlStateError(sqlstate, "private-token"))
+    attempt, _, _ = _finish_attempt(connection)
+    if sqlstate == "55000":
+        with pytest.raises(_recovery_module().WatcherSessionReplacedError):
+            attempt.execute()
+    else:
+        attempt.execute()
+    assert attempt.is_terminal
+    assert attempt.outcome.state == "rolled_back"
+    assert attempt.outcome.finished is False
+    assert connection.rolled_back and connection.closed
+    assert not connection.committed
+
+
+def test_prepared_session_finish_ambiguous_commit_is_never_confirmed():
+    attempt, _, connection = _finish_attempt(
+        _FinishConnection(fail_commit=ConnectionError("ack lost"))
+    )
+    outcome = attempt.execute()
+    assert outcome.state == "indeterminate" and outcome.finished is False
+    assert connection.closed and not connection.rolled_back
+
+
+def test_prepared_session_finish_uses_timeouts_and_safe_cancellation():
+    connection = _FinishConnection()
+    connection.query_release.clear()
+    attempt, factory, _ = _finish_attempt(connection, deadline=time.monotonic() + 4)
+    results = []
+    thread = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+    thread.start()
+    try:
+        assert connection.query_entered.wait(1)
+        attempt.cancel()
+    finally:
+        connection.query_release.set()
+        thread.join(2)
+    assert not thread.is_alive()
+    assert 0 < factory.calls[0][1]["connect_timeout"] <= 4
+    timeout_query = next(query for query in connection.pgconn.sent if b"statement_timeout" in query)
+    assert b"lock_timeout" in timeout_query
+    assert 0 < int(timeout_query.split(b"'")[1].removesuffix(b"ms")) <= 4000
+    assert len(connection.cancel_timeouts) <= 1
+    assert all(0 < timeout < 4 for timeout in connection.cancel_timeouts)
+    assert connection.closed and not connection.committed
+    assert results[0].state == "rolled_back" and results[0].finished is False
+
+
+@pytest.mark.parametrize("cancel_after", ["lock_timeout", "finish_watcher_runtime_session"])
+def test_prepared_session_finish_cancellation_before_commit_handoff_never_commits(cancel_after):
+    connection = _FinishConnection()
+    attempt, _, _ = _finish_attempt(connection)
+    connection.pgconn.after_query = lambda query: attempt.cancel() if cancel_after.encode() in query else None
+    outcome = attempt.execute()
+    assert outcome.state == "rolled_back" and outcome.finished is False
+    assert not connection.commit_entered.is_set()
+    assert connection.rolled_back and connection.closed
+    if cancel_after == "lock_timeout":
+        assert not connection.query_entered.is_set()
+
+
+def test_prepared_session_finish_cancellation_after_commit_handoff_is_indeterminate():
+    connection = _FinishConnection()
+    connection.pgconn.ack_release.clear()
+    attempt, _, _ = _finish_attempt(connection)
+    results = []
+    thread = Thread(target=lambda: results.append(attempt.execute()), daemon=True)
+    thread.start()
+    try:
+        assert connection.pgconn.ack_entered.wait(1)
+        attempt.cancel()
+    finally:
+        connection.pgconn.ack_release.set()
+        thread.join(2)
+    assert not thread.is_alive()
+    assert results[0].state == "indeterminate" and results[0].finished is False
+    assert attempt.is_terminal and connection.closed
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,8 @@ from uuid import UUID
 from music_app.services.watcher_recovery_postgres import (
     WatcherDirtyWriteAttempt,
     WatcherDirtyWriteOutcome,
+    WatcherSessionFinishAttempt,
+    WatcherSessionFinishOutcome,
     WatcherSessionReplacedError,
 )
 
@@ -45,12 +47,13 @@ class WatcherSessionRecoveryRepository(Protocol):
         logical_root_ids: tuple[str, ...],
     ) -> None: ...
 
-    def finish_runtime_session(
+    def prepare_runtime_session_finish(
         self,
         *,
         library_id: int,
         session_token: UUID,
-    ) -> bool: ...
+        operation_deadline: float,
+    ) -> WatcherSessionFinishAttempt: ...
 
     def prepare_overflow_dirty_write(
         self,
@@ -131,7 +134,7 @@ class WatcherSessionRecoveryController:
         self._thread_starting = False
         self._pending: set[str] = set()
         self._in_flight: set[str] = set()
-        self._attempt: WatcherDirtyWriteAttempt | None = None
+        self._attempt: WatcherDirtyWriteAttempt | WatcherSessionFinishAttempt | None = None
         self._timer: object | None = None
         self._callback_thread: object | None = None
         self._generation = 0
@@ -142,6 +145,7 @@ class WatcherSessionRecoveryController:
         self._flush_succeeded = False
         self._session_replaced = False
         self._finished = False
+        self._finish_attempted = False
 
     def start(
         self,
@@ -261,29 +265,45 @@ class WatcherSessionRecoveryController:
         finally:
             self._stop_lock.release()
 
-    def finish(self) -> bool:
-        with self._retry_lock:
-            self._require_started_locked()
-            if not self._flush_succeeded or self._session_replaced:
-                raise RuntimeError("watcher recovery session is not clean")
-            if self._finished:
-                return True
-            library_id = self._library_id
-            session_token = self._session_token
-        assert library_id is not None and session_token is not None
+    def finish(self, *, deadline: float) -> bool:
+        deadline = float(deadline)
+        if not math.isfinite(deadline):
+            raise ValueError("deadline must be finite")
+        if not self._acquire_until(self._stop_lock, deadline):
+            raise RuntimeError("watcher recovery finish deadline is exhausted")
         try:
-            finished = self._repository.finish_runtime_session(
+            with self._retry_lock:
+                self._require_started_locked()
+                if self._finished:
+                    return True
+                if not self._flush_succeeded or self._session_replaced:
+                    raise RuntimeError("watcher recovery session is not clean")
+                if self._finish_attempted:
+                    raise RuntimeError("watcher recovery finish already attempted")
+                if deadline <= self._monotonic_clock():
+                    raise RuntimeError("watcher recovery finish deadline is exhausted")
+                self._finish_attempted = True
+                library_id = self._library_id
+                session_token = self._session_token
+            assert library_id is not None and session_token is not None
+            attempt = self._repository.prepare_runtime_session_finish(
                 library_id=library_id,
                 session_token=session_token,
+                operation_deadline=deadline,
             )
-        except WatcherSessionReplacedError as exc:
-            self._replace_and_cleanup(exc)
-            raise
-        if not finished:
-            raise RuntimeError("watcher recovery session could not be finished")
-        with self._retry_lock:
-            self._finished = True
-        return True
+            try:
+                outcome = self._run_final_attempt(attempt, deadline, "finish")
+            except WatcherSessionReplacedError:
+                with self._retry_lock:
+                    self._session_replaced = True
+                raise
+            if outcome.state != "committed" or outcome.finished is not True:
+                raise RuntimeError("watcher recovery session could not be finished")
+            with self._retry_lock:
+                self._finished = True
+            return True
+        finally:
+            self._stop_lock.release()
 
     def _session_identity(self) -> tuple[int, UUID]:
         with self._retry_lock:
@@ -588,20 +608,62 @@ class WatcherSessionRecoveryController:
             observed_at=_aware_utc(self._clock()),
             operation_deadline=deadline,
         )
-        with self._thread_start_lock:
+        with self._retry_lock:
+            self._pending.difference_update(root_ids)
+            self._in_flight.update(root_ids)
+        outcome = None
+        try:
+            outcome = self._run_final_attempt(attempt, deadline, "final_flush", len(root_ids))
+        finally:
             with self._retry_lock:
-                self._pending.difference_update(root_ids)
-                self._in_flight.update(root_ids)
+                terminated = self._attempt is None and self._callback_thread is None
+            if terminated:
+                self._complete_attempt(root_ids, attempt, outcome)
+
+    def _run_final_attempt(
+        self,
+        attempt: WatcherDirtyWriteAttempt | WatcherSessionFinishAttempt,
+        deadline: float,
+        operation: str,
+        root_count: int = 0,
+    ) -> WatcherDirtyWriteOutcome | WatcherSessionFinishOutcome:
+        errors: list[Exception] = []
+
+        def execute() -> None:
+            try:
+                attempt.execute()
+            except Exception as exc:
+                self._log_failure(operation, root_count, exc)
+                errors.append(exc)
+
+        if not self._acquire_until(self._thread_start_lock, deadline):
+            raise RuntimeError("watcher recovery final operation deadline is exhausted")
+        try:
+            with self._retry_lock:
                 self._attempt = attempt
                 thread = self._thread_factory(
-                    lambda: self._execute_final(root_ids, attempt),
-                    "watcher-recovery-final-flush",
+                    execute,
+                    f"watcher-recovery-{operation}",
                 )
                 self._callback_thread = thread
                 self._thread_starting = True
                 self._thread_started.clear()
+        finally:
+            self._thread_start_lock.release()
         try:
             thread.start()
+        except Exception:
+            # A start implementation can fail after launching its callback.
+            # Keep ownership unless both thread exit and transaction are proved.
+            if thread.is_alive():
+                self._cancel_and_join(attempt, thread, deadline)
+            else:
+                attempt.cancel()
+            if not thread.is_alive() and attempt.is_terminal and attempt.outcome is not None:
+                with self._retry_lock:
+                    self._attempt = None
+                    self._callback_thread = None
+            raise
         finally:
             with self._retry_lock:
                 self._thread_starting = False
@@ -617,21 +679,15 @@ class WatcherSessionRecoveryController:
                 cancel_error = exc.__class__
             thread.join(max(0.0, deadline - self._monotonic_clock()))
         if thread.is_alive() or not attempt.is_terminal or attempt.outcome is None:
-            raise RuntimeError("watcher recovery final flush did not terminate")
+            raise RuntimeError("watcher recovery final operation did not terminate")
+        with self._retry_lock:
+            self._attempt = None
+            self._callback_thread = None
         if cancel_error is not None:
-            raise RuntimeError("watcher recovery final flush cancellation failed")
-
-    def _execute_final(
-        self,
-        root_ids: tuple[str, ...],
-        attempt: WatcherDirtyWriteAttempt,
-    ) -> None:
-        try:
-            outcome = attempt.execute()
-        except Exception as exc:
-            self._log_failure("final_flush", len(root_ids), exc)
-            outcome = None
-        self._complete_attempt(root_ids, attempt, outcome)
+            raise RuntimeError("watcher recovery final operation cancellation failed")
+        if errors:
+            raise errors[0]
+        return attempt.outcome
 
     @staticmethod
     def _log_failure(operation: str, root_count: int, exc: BaseException) -> None:

@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
+import time
 from types import SimpleNamespace
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -146,6 +147,18 @@ def session_scope(watcher_session_database, tmp_path):
         )
     finally:
         with isolatedPostgres._connect(scope.setup_url) as connection:
+            connection.execute(
+                "delete from library.watcher_runtime_sessions where library_id = any(%s)",
+                ([library_id, other_library_id],),
+            )
+            connection.execute(
+                "delete from library.watcher_lanes where library_id = any(%s)",
+                ([library_id, other_library_id],),
+            )
+            connection.execute(
+                "delete from library.targeted_reconciliation_intents where library_id = any(%s)",
+                ([library_id, other_library_id],),
+            )
             connection.execute("delete from library.libraries where id = %s", (library_id,))
             connection.execute(
                 "delete from library.libraries where id = %s",
@@ -222,6 +235,147 @@ def _occurrences(connection, scope, logical_id: str) -> int:
     return int(row["occurrences"])
 
 
+def test_prepared_finish_commits_and_closes_dedicated_connection(session_scope):
+    import psycopg
+    from psycopg.rows import dict_row
+    from music_app.services.watcher_recovery_postgres import PostgresWatcherRecoveryRepository
+
+    token = uuid4()
+    with isolatedPostgres._connect(session_scope.app_url) as app:
+        assert _begin(app, session_scope, token, ("old-active",)) == ()
+
+    connections = []
+    backend_pids = []
+
+    def connect(database_url, **kwargs):
+        connection = psycopg.connect(database_url, row_factory=dict_row, **kwargs)
+        connections.append(connection)
+        backend_pids.append(connection.info.backend_pid)
+        return connection
+
+    repository = PostgresWatcherRecoveryRepository(
+        database_url=session_scope.app_url, connect_to_database=connect,
+    )
+    attempt = repository.prepare_runtime_session_finish(
+        library_id=session_scope.library_id, session_token=token,
+        operation_deadline=time.monotonic() + 8,
+    )
+    outcome = attempt.execute()
+    assert outcome.state == "committed" and outcome.finished is True
+    assert len(connections) == 1 and connections[0].closed
+    with isolatedPostgres._connect(session_scope.setup_url) as observer:
+        observer.autocommit = True
+        assert observer.execute(
+            "select session_token from library.watcher_runtime_sessions where library_id = %s",
+            (session_scope.library_id,),
+        ).fetchone() is None
+        assert _participants(observer, session_scope.library_id) == set()
+        disconnect_deadline = time.monotonic() + 1
+        while True:
+            backend_count = observer.execute(
+                "select count(*) as count from pg_catalog.pg_stat_activity where pid = %s",
+                (backend_pids[0],),
+            ).fetchone()["count"]
+            if backend_count == 0 or time.monotonic() >= disconnect_deadline:
+                break
+            time.sleep(0.02)
+        assert backend_count == 0, "finish left its database backend alive"
+
+
+def test_cancelled_finish_waiting_for_advisory_lock_preserves_startup_recovery(session_scope):
+    import psycopg
+    from psycopg.rows import dict_row
+    from music_app.services.watcher_recovery_postgres import PostgresWatcherRecoveryRepository
+
+    token = uuid4()
+    with isolatedPostgres._connect(session_scope.app_url) as app:
+        assert _begin(app, session_scope, token, ("old-active",)) == ()
+
+    connected = Event()
+    connections = []
+    backend_pids = []
+
+    def connect(database_url, **kwargs):
+        connection = psycopg.connect(database_url, row_factory=dict_row, **kwargs)
+        connections.append(connection)
+        backend_pids.append(connection.info.backend_pid)
+        connected.set()
+        return connection
+
+    repository = PostgresWatcherRecoveryRepository(
+        database_url=session_scope.app_url, connect_to_database=connect,
+    )
+    attempt = repository.prepare_runtime_session_finish(
+        library_id=session_scope.library_id, session_token=token,
+        operation_deadline=time.monotonic() + 8,
+    )
+    outcomes = []
+    errors = []
+
+    def finish():
+        try:
+            outcomes.append(attempt.execute())
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = Thread(target=finish, daemon=True)
+    with isolatedPostgres._connect(session_scope.setup_url) as blocker:
+        blocker.execute(
+            "select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended("
+            "'album-haven:watcher:' || %s::text, 0))",
+            (session_scope.library_id,),
+        )
+        worker.start()
+        try:
+            assert connected.wait(2), "finish did not acquire its dedicated connection"
+            with isolatedPostgres._connect(session_scope.setup_url) as observer:
+                observer.autocommit = True
+                observation_deadline = time.monotonic() + 3
+                while True:
+                    waiting = observer.execute(
+                        "select exists(select 1 from pg_catalog.pg_locks "
+                        "where pid = %s and locktype = 'advisory' and not granted) as waiting",
+                        (backend_pids[0],),
+                    ).fetchone()["waiting"]
+                    if waiting or time.monotonic() >= observation_deadline:
+                        break
+                    time.sleep(0.02)
+                assert waiting, "finish never reached the held advisory lock"
+                attempt.cancel()
+                worker.join(2)
+                assert not worker.is_alive(), "cancel must finish while blocker remains held"
+                assert errors == [] and len(outcomes) == 1
+                assert outcomes[0].state == "rolled_back" and not outcomes[0].finished
+                assert all(connection.closed for connection in connections)
+                assert observer.execute(
+                    "select session_token from library.watcher_runtime_sessions "
+                    "where library_id = %s", (session_scope.library_id,),
+                ).fetchone()["session_token"] == token
+                assert _participants(observer, session_scope.library_id) == {"old-active"}
+                disconnect_deadline = time.monotonic() + 1
+                while True:
+                    backend_count = observer.execute(
+                        "select count(*) as count from pg_catalog.pg_stat_activity where pid = %s",
+                        (backend_pids[0],),
+                    ).fetchone()["count"]
+                    if backend_count == 0 or time.monotonic() >= disconnect_deadline:
+                        break
+                    time.sleep(0.02)
+                assert backend_count == 0, "finish left its database backend alive"
+        finally:
+            blocker.rollback()
+            attempt.cancel()
+            worker.join(9)
+    assert not worker.is_alive()
+    with isolatedPostgres._connect(session_scope.app_url) as app:
+        assert _begin(
+            app, session_scope, uuid4(), ("new-active",), NOW + timedelta(seconds=1),
+        ) == ("old-active",)
+    with isolatedPostgres._connect(session_scope.setup_url) as setup:
+        assert _occurrences(setup, session_scope, "old-active") == 1
+        assert _participants(setup, session_scope.library_id) == {"new-active"}
+
+
 def test_clean_begin_empty_roots_and_clean_finish(session_scope):
     token = uuid4()
     with isolatedPostgres._connect(session_scope.app_url) as app:
@@ -267,6 +421,25 @@ def test_unclean_takeover_filters_inactive_prior_and_installs_exact_current_set(
         assert _occurrences(setup, session_scope, "old-active") == 1
         assert _occurrences(setup, session_scope, "shared-active") == 1
         assert _occurrences(setup, session_scope, "old-inactive") == 0
+        reasons = {
+            str(row["logical_id"]): str(row["reason_code"])
+            for row in setup.execute(
+                "select root.metadata ->> 'root_id' as logical_id, "
+                "incident.reason_code from library.watcher_incidents incident "
+                "join library.library_roots root on "
+                "root.library_id = incident.library_id and root.id = incident.root_id "
+                "where incident.library_id = %s and incident.resolved_at is null",
+                (session_scope.library_id,),
+            ).fetchall()
+        }
+        assert reasons == {
+            "old-active": "overflow",
+            "shared-active": "overflow",
+        }
+        assert _participants(setup, session_scope.library_id) == {
+            "shared-active",
+            "new-active",
+        }
 
 
 def test_unclean_takeover_chunks_a_512_root_prior_union_and_installs_new_set(
@@ -386,25 +559,6 @@ def test_begin_rejects_ambiguous_active_prior_metadata_and_preserves_evidence(
         assert session["session_token"] == old_token
         assert participant_ids == tuple(sorted(prior_root_ids))
         assert int(incident_count) == 0
-        reasons = {
-            str(row["logical_id"]): str(row["reason_code"])
-            for row in setup.execute(
-                "select root.metadata ->> 'root_id' as logical_id, "
-                "incident.reason_code from library.watcher_incidents incident "
-                "join library.library_roots root on "
-                "root.library_id = incident.library_id and root.id = incident.root_id "
-                "where incident.library_id = %s and incident.resolved_at is null",
-                (session_scope.library_id,),
-            ).fetchall()
-        }
-        assert reasons == {
-            "old-active": "overflow",
-            "shared-active": "overflow",
-        }
-        assert _participants(setup, session_scope.library_id) == {
-            "shared-active",
-            "new-active",
-        }
 
 
 @pytest.mark.parametrize("operation", ["begin", "expand", "set"])

@@ -273,8 +273,10 @@ class ActivityNativeTargets:
             return None
         if type(expected_subject_id) is not int or expected_subject_id<1:
             raise NativeTargetError('source_unavailable',403)
+        # Runtime cannot rewrite profiles; the caller's account lock prevents
+        # cascading deletion. Recheck the exact binding without UPDATE privilege.
         row=connection.execute("""select account_id from app.social_profiles
-            where account_ref=%s and account_id=%s for share""",
+            where account_ref=%s and account_id=%s""",
             (origin['subject_ref'],expected_subject_id)).fetchone()
         if row is None:raise NativeTargetError('source_unavailable',403)
         return expected_subject_id

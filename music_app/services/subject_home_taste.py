@@ -52,8 +52,10 @@ def subject_taste_context(connection, context, origin, *, expected_subject_id=No
     # Never resolve a replacement subject after authority acquisition.
     if type(expected_subject_id) is not int or expected_subject_id<1:
         raise ValueError('Verified subject identity is required.')
+    # Runtime cannot rewrite profiles; the caller's account lock prevents
+    # cascading deletion. Recheck the exact binding without UPDATE privilege.
     row=connection.execute("""select account_id from app.social_profiles
-        where account_ref=%s and account_id=%s for share""",
+        where account_ref=%s and account_id=%s""",
         (origin['subject_ref'],expected_subject_id)).fetchone()
     if row is None:
         raise ValueError('Subject binding changed.')

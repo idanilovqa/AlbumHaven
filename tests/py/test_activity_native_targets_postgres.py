@@ -59,6 +59,36 @@ def capture(value,kind='tracks',*,comparison=False):
     return origin,response['data']['rows']
 
 
+@pytest.mark.parametrize('reader', ['native', 'taste'])
+def test_subject_binding_reads_with_runtime_identity_privileges(native_activity, reader):
+    from uuid import uuid4
+    from music_app.services.private_library_authority import current_library_transaction
+    from music_app.services.subject_home_taste import subject_taste_context
+    state, context, service, _ = native_activity
+    origin = {'audience': 'friend', 'subject_ref': state['peer_ref']}
+    with current_library_transaction(state['db'].app_url, context,
+            target_account_id=state['peer'], read_only=True) as (connection, live, _):
+        privileges = connection.execute("""select
+            has_table_privilege(current_user,'app.social_profiles','SELECT') as readable,
+            has_any_column_privilege(current_user,'app.social_profiles','UPDATE') as writable,
+            has_table_privilege(current_user,'app.social_profiles','DELETE') as deletable""").fetchone()
+        assert privileges == {'readable': True, 'writable': False, 'deletable': False}
+        def bind(descriptor, subject):
+            if reader == 'native':
+                return service._subject_binding(connection, descriptor, subject)
+            scoped, identity = subject_taste_context(connection, live, descriptor,
+                expected_subject_id=subject)
+            assert scoped.target_account_id == identity
+            return identity
+        assert bind(origin, state['peer']) == state['peer']
+        error = NativeTargetError if reader == 'native' else ValueError
+        with pytest.raises(error):
+            bind({**origin, 'subject_ref': str(uuid4())}, state['peer'])
+        with pytest.raises(error):
+            bind(origin, context.actor.account_id)
+        assert bind(origin, state['peer']) == state['peer']
+
+
 def test_exact_friend_receipt_can_resolve_native_play_without_exposing_path_in_projection(native_activity):
     state,ctx,service,probes=native_activity
     origin,rows=capture(native_activity)

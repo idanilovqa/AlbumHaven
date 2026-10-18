@@ -247,8 +247,9 @@ def read_album_top(request: Request, top_ref: str):
             raise AlbumTopError("invalid_command")
         context, constraints = _context(request, BROWSE)
         # Fail before database work if the private UI identity cannot be established.
-        _context_ref(request)
-        return _response(request, _service(request).read(context, top_ref=top_ref, constraints=constraints))
+        context_ref = _context_ref(request)
+        return _response(request, _service(request).read(context, top_ref=top_ref,
+            constraints=constraints, context_ref=context_ref))
     except AlbumTopError as error:
         return _error(error)
 
@@ -258,10 +259,11 @@ async def _mutate(request, action, top_ref=None):
         if request.query_params:
             raise AlbumTopError("invalid_command")
         context, constraints = _context(request, CREATE if action == "create" else BROWSE)
-        _require_context(request)
+        context_ref = _require_context(request)
         payload = await read_bounded_json_object(request, max_bytes=MAX_TOP_COMMAND_BYTES)
         command = normalize_top_command(action, payload, top_ref=top_ref)
-        value = await run_in_threadpool(_service(request).execute, context, command, constraints=constraints)
+        value = await run_in_threadpool(_service(request).execute, context, command,
+            constraints=constraints, context_ref=context_ref)
         return _response(request, value)
     except JSONBodyTooLarge:
         return _error(AlbumTopError("command_too_large", 413))

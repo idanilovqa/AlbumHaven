@@ -32,10 +32,12 @@ CREATE = "library.album_tops.create"
 class Service:
     def __init__(self, error=None):
         self.calls = []
+        self.context_refs = []
         self.error = error
 
-    def execute(self, context, command, *, constraints=None):
+    def execute(self, context, command, *, constraints=None, context_ref=None):
         self.calls.append(("execute", context, command, constraints))
+        self.context_refs.append(context_ref)
         if self.error is not None:
             raise self.error
         return {"top_ref": TOP, "revision": "2", "request_key": command.request_key, "action": command.action}
@@ -125,6 +127,7 @@ def test_mutations_pass_normalized_commands_with_authenticated_context(action, c
     assert data["status"] == "ready" and data["context_ref"] == private_ui_context_ref(req)
     assert data["data"] == {"top_ref": TOP, "revision": "2", "request_key": REQUEST, "action": action}
     _, context, command, constraints = service.calls[0]
+    assert service.context_refs == [private_ui_context_ref(req)]
     assert context.actor is req.state.current_actor
     assert context.library_id == 73 and context.client_surface_class == "private_web"
     assert context.action == (CREATE if action == "create" else BROWSE)
@@ -280,6 +283,7 @@ def test_private_read_returns_context_without_requiring_a_mutation_header():
     assert decoded(response) == {"status": "ready", "data": {"top_ref": TOP, "items": [], "revision": "1"},
                                  "context_ref": private_ui_context_ref(req)}
     assert service.calls[0][2]["top_ref"] == TOP
+    assert service.calls[0][2]["context_ref"] == private_ui_context_ref(req)
 
 
 def test_index_passes_bounded_pagination_context_and_server_secret():
@@ -476,6 +480,8 @@ def test_real_middleware_accepts_same_origin_csrf_and_fresh_ui_context(path, pay
     assert status == 200 and body["status"] == "ready"
     assert headers[b"cache-control"] == b"private, no-store"
     assert len(service.calls) == 1 and service.calls[0][0] == operation
+    if operation == "execute":
+        assert service.context_refs == [body["context_ref"]]
     assert app.state.current_actor_resolver.tokens == ["s" * 43]
 
 

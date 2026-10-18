@@ -304,8 +304,14 @@ def main():
     evidence, cases = run / 'evidence', run / 'scenarios'
     evidence.mkdir()
     cases.mkdir()
+    plain_chain(evidence)
+    # Disabling cacheprovider makes the repository's cache_dir option unknown.
+    # Use only this fixed inert config, without weakening strict validation.
+    pytest_config = evidence / 'pytest-isolated.ini'
+    with pytest_config.open('x', encoding='ascii', newline='\n') as output:
+        output.write('[pytest]\n')
     os.environ['ALBUMHAVEN_W0_ROOT'] = str(run)
-    args = ['--noconftest', '--import-mode=importlib', '-p', 'no:cacheprovider',
+    args = ['-c', str(pytest_config), '--noconftest', '--import-mode=importlib', '-p', 'no:cacheprovider',
             '--strict-config', '--strict-markers', '--rootdir=' + str(checkout),
             '--tb=short', TEST_PATH]
     write_json(evidence / 'command.json', {

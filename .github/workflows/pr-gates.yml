@@ -2370,6 +2370,8 @@ jobs:
             timeout_minutes: 30
           - batch: retained_ownership
             timeout_minutes: 20
+          - batch: capture_backend
+            timeout_minutes: 20
           # Each exact-node diagnostic has a fresh runner/service and the same
           # owned initializer. Never reuse a quarantined full-batch database.
           - batch: popularity_bootstrap
@@ -2447,7 +2449,7 @@ jobs:
         run: python scripts/ci/bootstrap-linux-tops-postgres.py --suffix "tops_${{ github.run_id }}_${{ github.run_attempt }}"
 
       - name: Initialize fresh personal-album producer bootstrap baseline
-        if: ${{ matrix.batch == 'loved_backend' || matrix.batch == 'favorites_backend' }}
+        if: ${{ matrix.batch == 'loved_backend' || matrix.batch == 'favorites_backend' || matrix.batch == 'capture_backend' }}
         env:
           FEATURE_BATCH: ${{ matrix.batch }}
         run: python scripts/ci/initialize-loved-browse-postgres.py
@@ -2544,6 +2546,20 @@ jobs:
                 'tests/py/test_playback_evidence_leases.py' \
                 'tests/py/test_rooted_playback_adapter.py' > "$evidence/tests.txt"
               ;;
+            capture_backend)
+              printf '%s\n' \
+                'tests/py/test_playback_capture.py' \
+                'tests/py/test_playback_capture_routes.py' \
+                'tests/py/test_playback_capture_postgres.py' \
+                'tests/py/test_playback_capture_migration_postgres.py' \
+                'tests/py/test_private_library_authority_capture_lock_order.py' \
+                'tests/py/test_current_library_selector_contract.py' \
+                'tests/py/test_private_route_boundary.py' \
+                'tests/py/test_app_factory.py::test_app_reported_capture_routes_are_mounted' \
+                'tests/py/test_isolated_postgres_migration_ledger.py' \
+                'tests/py/test_phase7_auth_app.py' \
+                'tests/py/test_initialize_loved_browse_postgres.py' > "$evidence/tests.txt"
+              ;;
             *) echo "Unknown feature batch" >&2; exit 1 ;;
           esac
           # Closed diagnostic allowlist, paired with its original admission lane.
@@ -2605,6 +2621,29 @@ jobs:
           date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/runtime-completed-at.txt" || exit 1
           if [ "${runtime_status[0]}" -ne 0 ]; then exit "${runtime_status[0]}"; fi
           exit "${runtime_status[1]}"
+
+      - name: Reject missing or skipped capture verification
+        if: ${{ !cancelled() && matrix.batch == 'capture_backend' && steps.feature_runtime.outcome != 'skipped' }}
+        run: |
+          python - <<'PY_CAPTURE_EVIDENCE'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          evidence = Path(os.environ["RUNNER_TEMP"]) / "feature-batch-evidence"
+          selected = evidence.joinpath("tests.txt").read_text().splitlines()
+          expected = {path.split("::", 1)[0][:-3].replace("/", ".") for path in selected}
+          cases = ET.parse(evidence / "results.xml").getroot().findall(".//testcase")
+          observed = {case.get("classname", "") for case in cases}
+          missing = sorted(module for module in expected
+                           if not any(name == module or name.startswith(module + ".") for name in observed))
+          skipped = [case for case in cases if case.find("skipped") is not None]
+          failed = [case for case in cases if case.find("failure") is not None or case.find("error") is not None]
+          if not cases or missing or skipped or failed:
+              raise SystemExit(f"Capture evidence incomplete: cases={len(cases)}, missing={missing}, "
+                               f"skipped={len(skipped)}, failed={len(failed)}")
+          evidence.joinpath("capture-zero-skip.txt").write_text(
+              f"Verified {len(cases)} cases across {len(expected)} selected modules; zero skips.\n")
+          PY_CAPTURE_EVIDENCE
 
       - name: Diagnose one exact feature node on its fresh owned baseline
         if: ${{ matrix.diagnostic != '' }}

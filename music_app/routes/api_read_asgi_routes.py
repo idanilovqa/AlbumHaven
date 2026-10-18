@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from music_app.services.private_ui_context import private_ui_context_ref
+from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
 
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.log_history import history_scope_for_request, normalize_log_history_query, export_log_history, LogHistoryQueryError
@@ -41,6 +41,7 @@ from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_browse_postgres import (
     PostgresLibraryBrowseRepository, build_transient_root_gallery_page,
+    ArtistLovedBrowseRootReceipt, project_artist_loved_browse_launches,
 )
 from music_app.services.library_inventory_postgres import (
     MAX_NON_ALBUM_CANDIDATE_LIMIT,
@@ -526,16 +527,99 @@ def _loose_preference_source_readable(source: Mapping[str, object]) -> bool:
     )
 
 
+_ARTIST_LOVED_BROWSE_GROUP_FIELDS = (
+    "artist_groups", "primary_artist_groups", "family_artist_groups",
+    "related_filter_base_primary_groups", "related_filter_base_family_groups",
+)
+
+
+def _clear_artist_loved_browse_launches(payload: dict[str, object]) -> None:
+    """A copied cache/fallback response may never carry forward admission."""
+    def strip(value):
+        if isinstance(value, dict):
+            for key in ("artist_loved_launch", "artist_loved_launches", "artist_loved_context_ref"):
+                value.pop(key, None)
+            for nested in value.values():
+                strip(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                strip(nested)
+
+    strip(payload)
+    payload["artist_loved_context_ref"] = None
+    for key in _ARTIST_LOVED_BROWSE_GROUP_FIELDS:
+        groups = payload.get(key)
+        if isinstance(groups, list):
+            for group in groups:
+                if isinstance(group, dict):
+                    group["artist_loved_launch"] = None
+    page = payload.get("artist_page")
+    if isinstance(page, dict):
+        page["artist_loved_launches"] = {"artist": None, "family": None}
+
+
+def _project_artist_loved_launches_for_request(
+    request: Request, payload: dict[str, object], *, artist_loved_roots, copy_memo,
+) -> None:
+    """Admit server-only receipts at the final ordinary private response seam."""
+    if not artist_loved_roots:
+        return
+    from psycopg import OperationalError
+    from music_app.services.client_surfaces import client_surface_from_request
+    from music_app.services.policy import PolicyContext
+    from music_app.services.policy_asgi import _deployment_mode, _request_origin
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+    from music_app.services.private_library_authority import (
+        PrivateLibraryAuthorityError, current_library_transaction,
+    )
+
+    actor = getattr(request.state, "current_actor", None)
+    if actor is None:
+        return
+    context = PolicyContext.build(
+        actor=actor, action="library.browse.read", library_id=actor.current_library_id,
+        deployment_mode=_deployment_mode(request), request_origin=_request_origin(request),
+        client_surface_class=client_surface_from_request(request),
+    )
+    resolver = getattr(request.app.state, "policy_constraint_resolver", None)
+    constraints = resolver if callable(resolver) else PolicyEvaluationConstraints()
+    try:
+        reference = private_ui_context_ref(request)
+        if reference is None:
+            return
+        with current_library_transaction(
+            _app_config(request).get("ALBUM_HAVEN_APP_DATABASE_URL"), context,
+            constraints=constraints, read_only=True,
+        ) as (connection, live, _now):
+            projected = project_artist_loved_browse_launches(
+                connection, context=live, constraints=constraints, context_ref=reference,
+                receipts=artist_loved_roots, payload=payload, copy_memo=copy_memo,
+            )
+        # A request-local identity replacement cannot publish the prior actor's
+        # launch. No field is installed until the transaction has also exited.
+        if private_ui_context_ref(request) != reference:
+            return
+    except (PrivateLibraryAuthorityError, PrivateUIContextError, OperationalError):
+        return
+    if projected:
+        payload["artist_loved_context_ref"] = reference
+        for target, field_name, value in projected:
+            target[field_name] = value
+
+
 def _private_browse_response(
     request: Request, payload: dict[str, object], *, transient: bool = False,
+    artist_loved_roots: Iterable[ArtistLovedBrowseRootReceipt] = (),
 ) -> JSONResponse:
     """Finalize ordinary browse data without personalizing shared producers."""
     headers = {"Cache-Control": "private, no-store"}
+    copy_memo: dict[int, object] = {}
+    payload = deepcopy(payload, copy_memo)
+    _clear_artist_loved_browse_launches(payload)
     try:
         # The private middleware authenticates and caches this typed actor before
         # the synchronous handler runs. No owner or subject fallback is valid.
         account_id, library_id = track_preference_scope(getattr(request.state, "current_actor", None))
-        payload = deepcopy(payload)
         client_surface = _client_surface_class_from_asgi(request)
         rows = [row for row in (payload.get("non_album_tracks") or []) if isinstance(row, dict)]
         rows_by_path: dict[str, list[dict[str, object]]] = {}
@@ -620,6 +704,10 @@ def _private_browse_response(
     if transient:
         _apply_transient_scan_album_rating_overlays(request, _transient_view_album_payloads(payload))
     _project_missing_album_actions_for_request(request, payload)
+    if not transient:
+        _project_artist_loved_launches_for_request(
+            request, payload, artist_loved_roots=tuple(artist_loved_roots), copy_memo=copy_memo,
+        )
     return JSONResponse(payload, headers=headers)
 
 
@@ -702,30 +790,35 @@ def view_data(request: Request) -> JSONResponse:
             return JSONResponse({"ok": False, "error": "Invalid gallery paging parameters."}, status_code=400)
         from starlette.datastructures import QueryParams
         page_params = QueryParams([*request.query_params.multi_items(), *([] if "gallery_page_size" in request.query_params else [("gallery_page_size", "50")])])
+        artist_loved_roots = []
         try:
             if _should_use_transient_scan_browse_state(library_state, browse_state):
                 return _transient_scan_view_response(request, browse_state, page_params)
             payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_startup_preview_payload(
-                query_params=page_params, library_state=library_state)
+                query_params=page_params, library_state=library_state,
+                _artist_loved_roots=artist_loved_roots)
         except ValueError as error:
             restart = "restart required" in str(error)
             return JSONResponse({"ok": False, "error": str(error), "restart_required": restart},
                                 status_code=409 if restart else 400)
-        return _private_browse_response(request, payload)
+        return _private_browse_response(request, payload, artist_loved_roots=artist_loved_roots)
 
     if _should_use_transient_scan_browse_state(library_state, browse_state):
         return _transient_scan_view_response(request, browse_state)
 
     if _is_postgres_root_sidebar_request(request):
+        artist_loved_roots = []
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_sidebar_payload(
-            query_params=request.query_params,
+            query_params=request.query_params, _artist_loved_roots=artist_loved_roots,
         )
-        return _private_browse_response(request, payload)
+        return _private_browse_response(request, payload, artist_loved_roots=artist_loved_roots)
     if _is_postgres_selected_artist_request(request):
+        artist_loved_roots = []
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         payload = repository.build_selected_artist_payload(
             query_params=request.query_params,
             library_state=_postgres_browse_library_state(request),
+            _artist_loved_roots=artist_loved_roots,
         )
         if _request_flag_value(request.query_params.get("root_sidebar")):
             root_sidebar_payload = repository.build_root_sidebar_payload(
@@ -743,7 +836,7 @@ def view_data(request: Request) -> JSONResponse:
                     if field in root_sidebar_payload
                 },
             }
-        return _private_browse_response(request, payload)
+        return _private_browse_response(request, payload, artist_loved_roots=artist_loved_roots)
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
         query = str(request.query_params.get("q") or "").strip()
@@ -761,10 +854,11 @@ def view_data(request: Request) -> JSONResponse:
         _log_view_data_request_from_asgi(request, payload, request_started_at)
         return _private_browse_response(request, payload)
     if _is_postgres_root_album_browse_request(request):
+        artist_loved_roots = []
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
-            query_params=request.query_params,
+            query_params=request.query_params, _artist_loved_roots=artist_loved_roots,
         )
-        return _private_browse_response(request, payload)
+        return _private_browse_response(request, payload, artist_loved_roots=artist_loved_roots)
     unsupported_selected_artist_response = _unsupported_postgres_selected_artist_browse_response(request)
     if unsupported_selected_artist_response is not None:
         return unsupported_selected_artist_response

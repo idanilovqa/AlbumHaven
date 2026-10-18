@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 from copy import deepcopy
+from dataclasses import dataclass, field
 from collections.abc import Callable, Iterable, Mapping
 import fnmatch
 import hashlib
@@ -104,6 +105,245 @@ _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
     thread_name_prefix="albumhaven-postgres-utility-prewarm",
 )
+
+
+@dataclass(frozen=True)
+class ArtistLovedBrowseRootReceipt:
+    """Request-local producer provenance; never part of a browse payload/cache."""
+
+    target: dict[str, object] = field(repr=False, compare=False)
+    target_kind: str
+    inventory_library_id: int
+    root_artist_id: int
+    root_artist_key: str
+    artist_ref: str
+    original_alias: str | None = None
+
+
+_ARTIST_LOVED_GROUP_FIELDS = (
+    "artist_groups", "primary_artist_groups", "family_artist_groups",
+    "related_filter_base_primary_groups", "related_filter_base_family_groups",
+)
+
+
+def _artist_loved_alias_index(alias_state: Mapping[str, object]):
+    """Validate the published shape once; keep all normalized forward owners."""
+    if alias_state.get("projection_stale_reason"):
+        return None
+    aliases = alias_state.get("alias_to_canonical")
+    reverse = alias_state.get("canonical_to_aliases")
+    if not isinstance(aliases, Mapping) or not isinstance(reverse, Mapping):
+        return None
+    owners: dict[str, set[str]] = {}
+    for alias, canonical in aliases.items():
+        if (not isinstance(alias, str) or not alias.strip()
+                or not isinstance(canonical, str) or not canonical.strip()):
+            return None
+        owners.setdefault(local_inventory_identity_key(alias), set()).add(
+            local_inventory_identity_key(canonical)
+        )
+    return aliases, _root_browse_alias_to_canonical(aliases), reverse, owners
+
+
+def _artist_loved_anchor_valid(artist_ref: object, original_alias: object, index) -> bool:
+    from music_app.services.selected_artist_membership import collaboration_alias_of
+
+    if index is None or not isinstance(artist_ref, str) or not artist_ref.strip():
+        return False
+    aliases, primary_aliases, reverse, owners = index
+    key = local_inventory_identity_key(artist_ref)
+    if (len(owners.get(key, ())) > 1
+            or local_inventory_identity_key(_canonical_artist_name(artist_ref, primary_aliases)) != key):
+        return False
+    if original_alias is not None:
+        if (not isinstance(original_alias, str) or not original_alias.strip()
+                or len(owners.get(local_inventory_identity_key(original_alias), ())) > 1
+                or local_inventory_identity_key(_canonical_artist_name(original_alias, primary_aliases)) != key):
+            return False
+    canonical = _canonical_artist_name(artist_ref, aliases)
+    values = reverse.get(canonical, [])
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        return False
+    # A real collaboration principal remains itself, just as in the exact-ID
+    # family reader. It must not expand into its credited primary artist.
+    if collaboration_alias_of(artist_ref, canonical):
+        return True
+    for name in _expanded_primary_artist_names(artist_ref, aliases, reverse):
+        forward = owners.get(local_inventory_identity_key(name), set())
+        if len(forward) > 1 or forward and key not in forward:
+            return False
+    return True
+
+
+def _capture_artist_loved_browse_roots(
+    connection: Any,
+    *,
+    targets: Iterable[tuple[dict[str, object], str, str, str | None]],
+    collector: list[ArtistLovedBrowseRootReceipt],
+) -> None:
+    """Capture exact principals in the producer's existing read snapshot.
+
+    Targets contain server canonical anchors, never album/Popular identities.
+    Ambiguous bootstrap selection or a missing canonical-key principal gives no
+    receipt. In particular, there is no fallback to a persisted alias row.
+    """
+    if getattr(connection, "autocommit", True) is not False:
+        raise ValueError("Artist Loved provenance requires a caller-owned transaction")
+    targets = list(targets)
+    if not targets:
+        return
+    # The ordinary loaders select this same bootstrap inventory. Requiring a
+    # unique match also avoids depending on their LIMIT 1 in malformed data.
+    libraries = connection.execute("""select l.id as library_id
+        from app.bootstrap_owners b join library.libraries l
+          on l.owner_account_id=b.account_id and l.name='Local Library'
+         and l.library_kind='local'
+        where b.owner_key='local-bootstrap-owner'""").fetchall()
+    if len(libraries) != 1:
+        return
+    library_id = libraries[0]["library_id"]
+    if type(library_id) is not int or not 0 < library_id < 2**63:
+        return
+    index = _artist_loved_alias_index(load_current_library_relation_alias_maps(connection, library_id))
+    admitted = [target for target in targets
+                if isinstance(target[0], dict) and target[1] in ("group", "page")
+                and _artist_loved_anchor_valid(target[2], target[3], index)]
+    keys = sorted({local_inventory_identity_key(target[2]) for target in admitted})
+    if not keys:
+        return
+    rows = connection.execute("""select id, name, artist_key from library.local_artists
+        where library_id=%s and artist_key=any(%s::text[])""", (library_id, keys)).fetchall()
+    by_key: dict[str, list[object]] = {}
+    for row in rows:
+        by_key.setdefault(row["artist_key"], []).append(row)
+    seen = {id(receipt.target) for receipt in collector}
+    for target, kind, anchor, original_alias in admitted:
+        matches = by_key.get(local_inventory_identity_key(anchor), [])
+        if len(matches) != 1 or id(target) in seen:
+            continue
+        row = matches[0]
+        if (type(row["id"]) is not int or not 0 < row["id"] < 2**63
+                or not isinstance(row["name"], str)
+                or local_inventory_identity_key(row["name"]) != row["artist_key"]
+                or not _artist_loved_anchor_valid(row["name"], original_alias, index)):
+            continue
+        collector.append(ArtistLovedBrowseRootReceipt(
+            target, kind, library_id, row["id"], row["artist_key"], anchor, original_alias,
+        ))
+        seen.add(id(target))
+
+
+def project_artist_loved_browse_launches(
+    connection: Any,
+    *,
+    context: Any,
+    constraints: Any,
+    context_ref: str,
+    receipts: Iterable[ArtistLovedBrowseRootReceipt],
+    payload: dict[str, object],
+    copy_memo: Mapping[int, object],
+    clock: Callable | None = None,
+) -> list[tuple[dict[str, object], str, dict[str, object]]]:
+    """Prepare launch fields on a live current-library transaction, without mutation.
+
+    The caller publishes the returned fields only after its authority transaction
+    exits successfully. Root rows are re-read by captured ID and locked through
+    final policy/session checks; a deleted principal can never rebind by name.
+    Family membership and personal taste remain source-capture responsibilities.
+    """
+    from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
+    from music_app.services.policy import PolicyContext, ResourceScope
+    from music_app.services.private_library_authority import (
+        PrivateLibraryAuthorityError, require_private_action,
+    )
+    from datetime import datetime, timezone
+
+    if (getattr(connection, "autocommit", True) is not False
+            or not isinstance(context, PolicyContext)):
+        raise ValueError("Artist Loved admission requires a current-library transaction")
+    if (type(context.library_id) is not int or not 0 < context.library_id < 2**63
+            or context.library_id != context.actor.current_library_id):
+        raise PrivateLibraryAuthorityError("Private library access is unavailable.")
+    if not isinstance(context_ref, str) or re.fullmatch(r"[0-9a-f]{64}", context_ref) is None:
+        return []
+    require_private_action(context, "library.browse.read", constraints=constraints)
+    require_private_action(context, "library.playlists.create", constraints=constraints)
+    group_targets = {id(group) for key in _ARTIST_LOVED_GROUP_FIELDS
+                     if isinstance(payload.get(key), list)
+                     for group in payload[key] if isinstance(group, dict)}
+    page = payload.get("artist_page")
+    candidates = []
+    for receipt in receipts:
+        if not isinstance(receipt, ArtistLovedBrowseRootReceipt):
+            continue
+        if (type(receipt.inventory_library_id) is not int
+                or receipt.inventory_library_id != context.library_id
+                or type(receipt.root_artist_id) is not int or not 0 < receipt.root_artist_id < 2**63
+                or not isinstance(receipt.root_artist_key, str)
+                or receipt.root_artist_key != local_inventory_identity_key(receipt.artist_ref)):
+            continue
+        target = copy_memo.get(id(receipt.target))
+        if not isinstance(target, dict):
+            continue
+        if receipt.target_kind == "group":
+            if id(target) not in group_targets or target.get("artist") != receipt.artist_ref:
+                continue
+        elif receipt.target_kind == "page":
+            if target is not page or target.get("artist_ref") != receipt.artist_ref:
+                continue
+        else:
+            continue
+        candidates.append((receipt, target))
+    if not candidates:
+        return []
+    rows = connection.execute("""select id, name, artist_key from library.local_artists
+        where library_id=%s and id=any(%s::bigint[]) order by id for share""",
+        (context.library_id, sorted({receipt.root_artist_id for receipt, _ in candidates}))).fetchall()
+    roots = {row["id"]: row for row in rows}
+    # current_library_transaction holds the library row, including alias metadata,
+    # against changes. Load after root-lock waits and validate the original token.
+    index = _artist_loved_alias_index(load_current_library_relation_alias_maps(connection, context.library_id))
+    pending = []
+    for receipt, target in candidates:
+        row = roots.get(receipt.root_artist_id)
+        if (row is None or row["artist_key"] != receipt.root_artist_key
+                or not isinstance(row["name"], str)
+                or local_inventory_identity_key(row["name"]) != receipt.root_artist_key
+                or not _artist_loved_anchor_valid(receipt.artist_ref, receipt.original_alias, index)
+                or not _artist_loved_anchor_valid(row["name"], receipt.original_alias, index)):
+            continue
+        try:
+            require_private_action(context, "library.browse.read", constraints=constraints,
+                                   resource=ResourceScope("artist", str(receipt.root_artist_id)))
+        except PrivateLibraryAuthorityError:
+            continue
+        pending.append((receipt, target))
+    # Policy callbacks and database lock acquisition can wait. Publish nothing
+    # until global authority, each root and the original session remain current.
+    require_private_action(context, "library.browse.read", constraints=constraints)
+    require_private_action(context, "library.playlists.create", constraints=constraints)
+    allowed = []
+    for receipt, target in pending:
+        try:
+            require_private_action(context, "library.browse.read", constraints=constraints,
+                                   resource=ResourceScope("artist", str(receipt.root_artist_id)))
+        except PrivateLibraryAuthorityError:
+            continue
+        allowed.append((receipt, target))
+    lock_current_actor_session(connection, actor_account_id=context.actor.account_id,
+        actor_session_id=context.actor.session_id,
+        clock=clock or (lambda: datetime.now(timezone.utc)))
+    result = []
+    for receipt, target in allowed:
+        def launch(mode):
+            return {"context_ref": context_ref, "artist_ref": receipt.artist_ref,
+                    "descriptor": {"version": 1, "root_artist_id": str(receipt.root_artist_id),
+                                   "scope_mode": mode}}
+        if receipt.target_kind == "page":
+            result.append((target, "artist_loved_launches", {"artist": launch("artist"), "family": launch("family")}))
+        else:
+            result.append((target, "artist_loved_launch", launch("artist")))
+    return result
 
 
 class _SearchPreviewRows(list[object]):
@@ -346,6 +586,7 @@ class PostgresLibraryBrowseRepository:
         self,
         *,
         query_params: Mapping[str, object] | None = None,
+        _artist_loved_roots: list[ArtistLovedBrowseRootReceipt] | None = None,
     ) -> dict[str, object]:
         view_state = _root_sidebar_view_state(query_params)
         connection = self._connect_to_database()
@@ -404,6 +645,12 @@ class PostgresLibraryBrowseRepository:
                 source_rows=preview_rows,
                 connection=connection,
             )
+            if _artist_loved_roots is not None:
+                _capture_artist_loved_browse_roots(
+                    connection, collector=_artist_loved_roots,
+                    targets=[(group, "group", group.get("artist"), None)
+                             for group in preview_artist_groups],
+                )
         finally:
             try:
                 rollback = getattr(connection, "rollback", None)
@@ -503,6 +750,7 @@ class PostgresLibraryBrowseRepository:
         *,
         query_params: Mapping[str, object] | None = None,
         library_state: Mapping[str, object] | None = None,
+        _artist_loved_roots: list[ArtistLovedBrowseRootReceipt] | None = None,
     ) -> dict[str, object]:
         view_state = _root_sidebar_view_state(query_params)
         paged = (query_params or {}).get("gallery_page_size") is not None
@@ -629,6 +877,12 @@ class PostgresLibraryBrowseRepository:
                 source_rows=preview_rows,
                 connection=connection,
             )
+            if _artist_loved_roots is not None:
+                _capture_artist_loved_browse_roots(
+                    connection, collector=_artist_loved_roots,
+                    targets=[(group, "group", group.get("artist"), None)
+                             for group in preview_artist_groups],
+                )
         finally:
             try:
                 rollback = getattr(connection, "rollback", None)
@@ -724,6 +978,7 @@ class PostgresLibraryBrowseRepository:
         _search_missing_album_rows: list[object] | None = None,
         _exclude_primary_from_family_preview: bool = False,
         _connection: Any | None = None,
+        _artist_loved_roots: list[ArtistLovedBrowseRootReceipt] | None = None,
     ) -> dict[str, object]:
         if _connection is None:
             with self._connect_to_database() as connection:
@@ -741,6 +996,7 @@ class PostgresLibraryBrowseRepository:
                         _exclude_primary_from_family_preview
                     ),
                     _connection=connection,
+                    _artist_loved_roots=_artist_loved_roots,
                 )
         view_state = _root_sidebar_view_state(query_params)
         query = str((query_params or {}).get("q") or "").strip()
@@ -767,6 +1023,16 @@ class PostgresLibraryBrowseRepository:
             requested_artist,
             selected_artist_alias_to_canonical,
         )
+        # Keep the selected principal independent of query/category/subset
+        # results. This private target is populated with the later page seam;
+        # it is never serialized separately or placed in a shared cache.
+        artist_loved_page_target = None
+        if _artist_loved_roots is not None:
+            artist_loved_page_target = {}
+            _capture_artist_loved_browse_roots(
+                _connection, collector=_artist_loved_roots,
+                targets=[(artist_loved_page_target, "page", selected_artist, requested_artist)],
+            )
         selected_artist_scope = _expanded_primary_artist_names(
             selected_artist,
             selected_artist_alias_to_canonical,
@@ -1108,6 +1374,9 @@ class PostgresLibraryBrowseRepository:
             timeline_at=(query_params or {}).get("timeline_at"),
         )
         artist_page["gallery_payload"] = _build_artist_page_gallery_payload(artist_display)
+        if artist_loved_page_target is not None:
+            artist_loved_page_target.update(artist_page)
+            artist_page = artist_loved_page_target
         playback_context = None if use_preview_albums else _selected_artist_playback_context(albums)
         search_filters = _build_search_filter_state()
         payload = {
@@ -1227,6 +1496,14 @@ class PostgresLibraryBrowseRepository:
                 else artist_groups if artist_groups else [*primary_artist_groups, *family_artist_groups]
             ),
         )
+        if _artist_loved_roots is not None:
+            _capture_artist_loved_browse_roots(
+                _connection, collector=_artist_loved_roots,
+                targets=[(group, "group", group.get("artist"),
+                          requested_artist if group.get("artist") == selected_artist else None)
+                         for field_name in _ARTIST_LOVED_GROUP_FIELDS
+                         for group in payload[field_name]],
+            )
         self.queue_settings_projection_prewarm()
         return payload
 
@@ -1327,21 +1604,32 @@ class PostgresLibraryBrowseRepository:
         self,
         *,
         query_params: Mapping[str, object] | None = None,
+        _connection: Any | None = None,
+        _artist_loved_roots: list[ArtistLovedBrowseRootReceipt] | None = None,
     ) -> dict[str, object]:
+        if _artist_loved_roots is not None and _connection is None:
+            with self._connect_to_database() as connection:
+                connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                return self.build_root_album_browse_payload(
+                    query_params=query_params, _connection=connection,
+                    _artist_loved_roots=_artist_loved_roots,
+                )
+        # Omitted collector keeps the legacy independent-read call contract.
+        read_scope = {"connection": _connection} if _connection is not None else {}
         view_state = _root_sidebar_view_state(query_params)
         omit_sidebar = _request_flag((query_params or {}).get("omit_sidebar"))
-        relation_alias_maps = self._load_relation_alias_maps()
+        relation_alias_maps = self._load_relation_alias_maps(**read_scope)
         root_alias_to_canonical = _root_browse_alias_to_canonical(
             relation_alias_maps["alias_to_canonical"]
         )
-        support_state = self._inventory_repository.load_support_state()
+        support_state = self._inventory_repository.load_support_state(**read_scope)
         rows = _canonicalize_artist_rows(
-            self._load_root_album_browse_rows(view_state),
+            self._load_root_album_browse_rows(view_state, **read_scope),
             root_alias_to_canonical,
         )
         artist_groups = _root_album_browse_artist_groups(rows)
         missing_albums = _missing_album_projection_payloads(
-            self._load_missing_album_rows(),
+            self._load_missing_album_rows(**read_scope),
             view_state=view_state,
         )
         _merge_missing_albums_into_artist_groups(
@@ -1350,16 +1638,24 @@ class PostgresLibraryBrowseRepository:
         self._apply_private_album_rating_overlays(
             _album_payloads_from_groups(artist_groups),
             source_rows=rows,
+            **read_scope,
         )
         album_count = len(_album_identity_set(rows)) + len(missing_albums)
         non_album_entries = self._load_non_album_entries(
             view_state=view_state,
             alias_to_canonical=relation_alias_maps["alias_to_canonical"],
             canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
+            **read_scope,
+        )
+        root_paths = (
+            {"configured_root_paths": configured_library_root_paths_snapshot(
+                self._config, connection=_connection)}
+            if _connection is not None and non_album_entries else {}
         )
         non_album_tracks = build_non_album_track_list(
             non_album_entries,
             config=self._config,
+            **root_paths,
         )
         payload = {
             "surface": _build_view_surface_payload("albums"),
@@ -1410,6 +1706,11 @@ class PostgresLibraryBrowseRepository:
             self._config,
             artist_groups,
         )
+        if _artist_loved_roots is not None:
+            _capture_artist_loved_browse_roots(
+                _connection, collector=_artist_loved_roots,
+                targets=[(group, "group", group.get("artist"), None) for group in artist_groups],
+            )
         self.queue_settings_projection_prewarm()
         return payload
 
@@ -2427,9 +2728,13 @@ class PostgresLibraryBrowseRepository:
             cursor = connection.execute(_album_detail_sql(), {"album_key": album_key})
             return list(cursor.fetchall())
 
-    def _load_root_album_browse_rows(self, view_state: Mapping[str, object]) -> list[object]:
-        with self._connect_to_database() as connection:
-            cursor = connection.execute(_root_album_browse_sql(), _root_sidebar_params(view_state))
+    def _load_root_album_browse_rows(
+        self, view_state: Mapping[str, object], *, connection: Any | None = None,
+    ) -> list[object]:
+        if connection is not None:
+            return list(connection.execute(_root_album_browse_sql(), _root_sidebar_params(view_state)).fetchall())
+        with self._connect_to_database() as owned_connection:
+            cursor = owned_connection.execute(_root_album_browse_sql(), _root_sidebar_params(view_state))
             return list(cursor.fetchall())
 
     def _load_root_startup_rows(

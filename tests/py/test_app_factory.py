@@ -1552,3 +1552,11 @@ def test_lifespan_template_warmup_preserves_template_reload():
     after = environment.get_template("index.html")
     assert after is not before
     assert after.render() == "after"
+
+
+
+def test_app_reported_capture_routes_are_mounted(tmp_path, monkeypatch):
+    app = create_test_asgi_app(tmp_path, monkeypatch)
+    methods = _collect_route_methods(app)
+    assert "GET" in methods["/playback/capture/context"]
+    assert "POST" in methods["/playback/capture/checkpoint"]

@@ -803,3 +803,54 @@ def test_admin_denial_is_readable_for_navigation_but_json_for_api_clients(path, 
         assert dict(response_headers)[b'content-type'] == b'application/json'
     assert b'location' not in dict(response_headers)
     assert b'set-cookie' not in dict(response_headers)
+
+
+
+@pytest.mark.parametrize('method,path,csrf', [
+    ('GET','/playback/capture/context','none'),
+    ('POST','/playback/capture/checkpoint','session_header'),
+])
+def test_capture_boundary_exact_actions_and_existing_csrf(method,path,csrf):
+    assert private_action_for_route(method,path)=='library.media.read'
+    assert csrf_mode_for_route(method,path)==csrf
+
+
+@pytest.mark.parametrize('method,path', [('GET','/playback/capture/context'),('POST','/playback/capture/checkpoint')])
+def test_capture_auth_errors_are_private_no_store(method,path):
+    app,_=_app(CurrentActor.anonymous())
+    async def endpoint():return {'ok':True}
+    app.add_api_route(path,endpoint,methods=[method])
+    status,body,headers=_request(app,path,method=method,include_headers=True)
+    assert status==401
+    assert dict(headers)[b'cache-control']==b'private, no-store'
+
+
+def test_capture_post_requires_existing_session_header_csrf():
+    from music_app.services.current_actor import ActorState, LibraryRelationship
+    from music_app.services.auth_session_csrf import issue_session_csrf
+    actor=CurrentActor(state=ActorState.ACTIVE,account_id=7,session_id=11,is_bootstrap_owner=True,
+        current_library_id=3,library_relationships=(LibraryRelationship(3,'owner',True),))
+    app,_=_app(actor)
+    async def endpoint():return {'ok':True}
+    app.add_api_route('/playback/capture/checkpoint',endpoint,methods=['POST'])
+    session='s'*43
+    csrf=issue_session_csrf(session,app.state.auth_policy_config)
+    cookie=f'__Host-album_haven_session={session}; __Host-album_haven_csrf={csrf}'
+    denied,_,headers=_request(app,'/playback/capture/checkpoint',method='POST',cookie=cookie,include_headers=True)
+    assert denied==403 and dict(headers)[b'cache-control']==b'private, no-store'
+    accepted,_,headers=_request(app,'/playback/capture/checkpoint',method='POST',cookie=cookie,
+        headers={'origin':'https://music.test','x-album-haven-csrf':csrf},include_headers=True)
+    assert accepted==200 and dict(headers)[b'cache-control']==b'private, no-store'
+
+
+@pytest.mark.parametrize('method,path', [('GET','/playback/capture/context'),('POST','/playback/capture/checkpoint')])
+def test_capture_early_boundary_failure_is_sanitized_private(monkeypatch,method,path):
+    from music_app.services import private_route_boundary as boundary
+    app,_=_app(CurrentActor.anonymous())
+    async def endpoint():return {'ok':True}
+    app.add_api_route(path,endpoint,methods=[method])
+    async def fail(*args,**kwargs):raise RuntimeError('private-path-token')
+    monkeypatch.setattr(boundary,'current_actor_from_request',fail)
+    status,body,headers=_request(app,path,method=method,include_headers=True)
+    assert status==503 and b'private-path-token' not in body
+    assert dict(headers)[b'cache-control']==b'private, no-store'

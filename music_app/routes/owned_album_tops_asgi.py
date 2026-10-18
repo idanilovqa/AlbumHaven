@@ -1,13 +1,14 @@
 """Authenticated Album Top transport; playback authority stays independent."""
 import asyncio
 import hmac
+from collections.abc import Mapping
 from contextlib import suppress
 from html import escape
 from threading import Event
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
@@ -18,6 +19,9 @@ from music_app.services.owned_album_tops import (
 )
 from music_app.services.owned_album_tops_postgres import PostgresOwnedAlbumTopsService
 from music_app.services.album_top_remote_acquisition import TopRemoteAcquisitionService
+from music_app.services.album_top_artwork_owner import TopArtworkOwnerService
+from music_app.services.album_top_artwork_preparation import TopArtworkPreparationService
+from music_app.services.album_top_artwork_review import _json_size as artwork_json_size
 from music_app.services.album_top_publication_sources import validate_request as validate_publication_source_request
 from music_app.services.policy import PolicyContext
 from music_app.services.policy_asgi import _deployment_mode, _request_origin
@@ -526,3 +530,239 @@ async def admit_album_top_inventory(request: Request):
         return _error(AlbumTopError("command_too_large", 413))
     except AlbumTopError as error:
         return _error(error)
+
+# Fixed native artwork family. These routes are composed only with the accepted
+# preparation/publication service and native source, never a dynamic provider.
+_ARTWORK_COMMAND_BYTES = 2 * 1024 * 1024
+_ARTWORK_SMALL_BYTES = 16 * 1024
+_ARTWORK_RESPONSE_BYTES = 2 * 1024 * 1024 + 1024
+_ARTWORK_REVIEW_BYTES = 36 * 1024 * 1024 + 1024
+
+
+def _artwork_key(request):
+    # Optional collaborator forwarding preserves service receipt-first semantics.
+    # Actual HTTP admission above still requires a valid current context key.
+    settings = getattr(request.app.state, 'auth_policy_config', None)
+    hmac_settings = settings.get('hmac') if isinstance(settings, Mapping) else None
+    return hmac_settings.get('secret') if isinstance(hmac_settings, Mapping) else None
+
+
+def _artwork_identity(request, top_ref, kind=None, preparation_ref=None):
+    if request.scope.get('query_string', b'') != b'' or request.query_params:
+        raise AlbumTopError('invalid_query')
+    context, constraints = _context(request, BROWSE)
+    captured = _require_context(request)
+    ref = top_uuid(top_ref)
+    if ref == '00000000-0000-0000-0000-000000000000':
+        raise AlbumTopError('invalid_command')
+    if kind is not None and kind not in ('saved', 'draft'):
+        raise AlbumTopError('invalid_command')
+    if preparation_ref is not None:
+        prep = top_uuid(preparation_ref)
+        if prep == '00000000-0000-0000-0000-000000000000':
+            raise AlbumTopError('invalid_command')
+    return context, constraints, captured, ref
+
+
+def _artwork_response(request, value, captured, *, review=False):
+    payload = {'status': 'ready', 'data': value, 'context_ref': captured}
+    artwork_json_size(payload, _ARTWORK_REVIEW_BYTES if review else _ARTWORK_RESPONSE_BYTES)
+    response = JSONResponse(payload, headers=_NO_STORE)
+    if not hmac.compare_digest(_require_context(request), captured):
+        raise AlbumTopError('stale_context', 409)
+    return response
+
+
+async def _artwork_payload(request, kind, operation):
+    additions = {'status': {'after', 'limit'}, 'advance': {'preparation_revision', 'request_key'},
+        'review': {'preparation_revision', 'title', 'description', 'action'},
+        'preview': {'preparation_revision', 'review_witness', 'row_ref', 'asset_ref'}}
+    expected = {'top_revision'} | ({'draft_ref', 'draft_revision'} if kind == 'draft' else set()) | additions[operation]
+    payload = await read_bounded_json_object(request, max_bytes=_ARTWORK_SMALL_BYTES)
+    if type(payload) is not dict or set(payload) != expected:
+        raise AlbumTopError('invalid_command')
+    return payload
+
+
+@router.get('/album-tops/{top_ref}/artwork-publication')
+async def read_album_top_artwork_state(request: Request, top_ref: str):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref)
+        async for chunk in request.stream():
+            if chunk:
+                raise AlbumTopError('invalid_command')
+        value = await run_in_threadpool(TopArtworkOwnerService(_service(request)).read_state,
+            context, top_ref=ref, context_ref=captured, constraints=constraints)
+        return _artwork_response(request, value, captured)
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+@router.post('/album-tops/{top_ref}/artwork-publication/sources')
+async def read_album_top_artwork_sources(request: Request, top_ref: str):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref)
+        payload = await read_bounded_json_object(request, max_bytes=_ARTWORK_SMALL_BYTES)
+        value = await run_in_threadpool(TopArtworkOwnerService(_service(request)).read_sources,
+            context, top_ref=ref, payload=payload, context_ref=captured,
+            cursor_secret=_artwork_key(request), constraints=constraints)
+        return _artwork_response(request, value, captured)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+@router.post('/album-tops/{top_ref}/artwork-preparations/{kind}/start')
+async def start_album_top_artwork(request: Request, top_ref: str, kind: str):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref, kind)
+        payload = await read_bounded_json_object(request, max_bytes=_ARTWORK_COMMAND_BYTES)
+        service = TopArtworkPreparationService(_service(request))
+        if kind == 'saved':
+            value = await run_in_threadpool(service.start, context, top_ref=ref, payload=payload,
+                context_ref=captured, constraints=constraints)
+        else:
+            value = await run_in_threadpool(service.start_draft, context, top_ref=ref, payload=payload,
+                context_ref=captured, constraints=constraints)
+        return _artwork_response(request, value, captured)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+@router.post('/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/status')
+async def read_album_top_artwork_preparation(request: Request, top_ref: str, kind: str, preparation_ref: str):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref, kind, preparation_ref)
+        payload = await _artwork_payload(request, kind, 'status')
+        payload['top_revision_value'] = payload.pop('top_revision')
+        service = TopArtworkPreparationService(_service(request))
+        if kind == 'saved':
+            value = await run_in_threadpool(service.read, context, top_ref=ref, preparation_ref=preparation_ref,
+                context_ref=captured, constraints=constraints, **payload)
+        else:
+            value = await run_in_threadpool(service.read_draft, context, top_ref=ref, preparation_ref=preparation_ref,
+                context_ref=captured, constraints=constraints, **payload)
+        return _artwork_response(request, value, captured)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+@router.post('/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/advance')
+async def advance_album_top_artwork_preparation(request: Request, top_ref: str, kind: str, preparation_ref: str):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref, kind, preparation_ref)
+        payload = await _artwork_payload(request, kind, 'advance')
+        payload['top_revision_value'] = payload.pop('top_revision')
+        service = TopArtworkPreparationService(_service(request))
+        if kind == 'saved':
+            value = await run_in_threadpool(service.advance, context, top_ref=ref, preparation_ref=preparation_ref,
+                context_ref=captured, constraints=constraints, **payload)
+        else:
+            value = await run_in_threadpool(service.advance_draft, context, top_ref=ref, preparation_ref=preparation_ref,
+                context_ref=captured, constraints=constraints, **payload)
+        return _artwork_response(request, value, captured)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+@router.post('/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/review')
+async def review_album_top_artwork_publication(request: Request, top_ref: str, kind: str, preparation_ref: str):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref, kind, preparation_ref)
+        payload = await _artwork_payload(request, kind, 'review')
+        service = TopArtworkPreparationService(_service(request))
+        if kind == 'saved':
+            value = await run_in_threadpool(service.review_publication_saved, context, top_ref=ref,
+                preparation_ref=preparation_ref, context_ref=captured, cursor_secret=_artwork_key(request),
+                constraints=constraints, **payload)
+        else:
+            value = await run_in_threadpool(service.review_publication_draft, context, top_ref=ref,
+                preparation_ref=preparation_ref, context_ref=captured, cursor_secret=_artwork_key(request),
+                constraints=constraints, **payload)
+        return _artwork_response(request, value, captured, review=True)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+@router.post('/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/preview')
+async def read_album_top_artwork_preview(request: Request, top_ref: str, kind: str, preparation_ref: str):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref, kind, preparation_ref)
+        payload = await _artwork_payload(request, kind, 'preview')
+        service = TopArtworkPreparationService(_service(request))
+        if kind == 'saved':
+            value = await run_in_threadpool(service.read_saved_png, context, top_ref=ref, preparation_ref=preparation_ref,
+                context_ref=captured, cursor_secret=_artwork_key(request), head_only=False, constraints=constraints, **payload)
+        else:
+            value = await run_in_threadpool(service.read_draft_png, context, top_ref=ref, preparation_ref=preparation_ref,
+                context_ref=captured, cursor_secret=_artwork_key(request), head_only=False, constraints=constraints, **payload)
+        if (type(value) is not dict or set(value) != {'body', 'content_type', 'content_length', 'cache_control',
+                'x_content_type_options', 'referrer_policy'} or type(value['body']) is not bytes
+                or type(value['content_length']) is not int or not 0 < value['content_length'] <= 327680
+                or len(value['body']) != value['content_length'] or value['content_type'] != 'image/png'
+                or value['cache_control'] != 'private, no-store' or value['x_content_type_options'] != 'nosniff'
+                or value['referrer_policy'] != 'no-referrer'):
+            raise AlbumTopError('unavailable', 503)
+        response = Response(value['body'], media_type='image/png', headers={**_NO_STORE,
+            'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+            'Content-Encoding': 'identity', 'X-AlbumHaven-Context': captured})
+        if not hmac.compare_digest(_require_context(request), captured):
+            raise AlbumTopError('stale_context', 409)
+        return response
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+async def _publish_album_top_artwork(request, top_ref, action):
+    try:
+        context, constraints, captured, ref = _artwork_identity(request, top_ref)
+        payload = await read_bounded_json_object(request, max_bytes=_ARTWORK_COMMAND_BYTES)
+        if type(payload) is not dict or set(payload) != {'request_key', 'revision', 'title', 'description', 'items', 'evidence_revision', 'artwork_publication'}:
+            raise AlbumTopError('invalid_command')
+        command = normalize_top_command(action, payload, top_ref=ref)
+        # No state/prepare/review/token or original-context preflight can stand
+        # between current HTTP admission and the service's exact receipt replay.
+        value = await run_in_threadpool(_service(request).execute, context, command,
+            constraints=constraints, context_ref=captured, cursor_secret=_artwork_key(request))
+        return _artwork_response(request, value, captured)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+    except Exception:
+        return _error(AlbumTopError('unavailable', 503))
+
+
+@router.post('/album-tops/{top_ref}/artwork-publication/save')
+async def save_album_top_artwork_publication(request: Request, top_ref: str):
+    return await _publish_album_top_artwork(request, top_ref, 'save')
+
+
+@router.post('/album-tops/{top_ref}/artwork-publication/enable')
+async def enable_album_top_artwork_publication(request: Request, top_ref: str):
+    return await _publish_album_top_artwork(request, top_ref, 'enable_external')

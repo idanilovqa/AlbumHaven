@@ -13027,6 +13027,26 @@ function resolveTrackModalActionAlbum(button) {
   return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
 }
 
+async function resolveHydratedTrackModalActionAlbum(button) {
+  const album = resolveTrackModalActionAlbum(button);
+  if (!album || !albumRequiresHydration(album)) return album;
+  const albumKey = String(
+    getTrackModalButtonAlbumKey(button)
+    || getAlbumRequestKey(album)
+    || getAlbumIdentity(album)
+    || album.key
+    || '',
+  ).trim();
+  if (!albumKey) return null;
+  try {
+    return await loadTrackModalAlbumDetails(albumKey);
+  } catch (error) {
+    console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
+    showToast('Unable to load album details.', 'error', 3200);
+    return null;
+  }
+}
+
 function resolveTrackModalDuplicateSourceAlbum(button) {
   const album = resolveTrackModalActionAlbum(button);
   if (!album || !(button instanceof HTMLElement)) return album;
@@ -40568,17 +40588,21 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    openCoverLookupModal(resolveTrackModalActionAlbum(trackModalCoverLookupButton));
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    if (album) openCoverLookupModal(album);
     return;
   }
 
   const trackModalFetchCoverButton = event.target.closest('[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]');
   if (trackModalFetchCoverButton) {
     event.preventDefault();
-    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), {
-      backgroundOnly: true,
-      triggerButton: trackModalFetchCoverButton,
-    });
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalFetchCoverButton);
+    if (album) {
+      startCoverLookupForAlbum(album, {
+        backgroundOnly: true,
+        triggerButton: trackModalFetchCoverButton,
+      });
+    }
     return;
   }
 

@@ -270,13 +270,45 @@ test('clicking the filter search input dismisses only the dropdown without consu
   assert.equal(context.state.utility.selectedProblemFilters, selected);
 });
 
-test('Fast Cover Search passes its clicked control to immediate busy feedback', async () => {
+test('Cover Lookup hydrates the clicked album before opening its gallery', async () => {
   const { context } = createContext();
-  const album = { key: 'sola-scriptura' };
+  const hydratedAlbum = {
+    key: 'revelations-of-divine-love',
+    tracks: [{ path: 'C:\\Music\\Revelations of Divine Love\\01 Track.mp3' }],
+  };
+  const button = createElement({ 'data-open-track-modal-cover-lookup': '1' });
+  const click = createEvent({ '[data-open-track-modal-cover-lookup="1"]': button });
+  let openedAlbum = null;
+  context.resolveTrackModalActionAlbum = () => {
+    assert.fail('Cover Lookup must not use the compact synchronous resolver');
+  };
+  context.resolveHydratedTrackModalActionAlbum = async (candidate) => {
+    assert.equal(candidate, button);
+    return hydratedAlbum;
+  };
+  context.openCoverLookupModal = (album) => {
+    openedAlbum = album;
+  };
+
+  await context.handleUtilityBootstrapClick(click.event);
+
+  assert.equal(click.wasPrevented(), true);
+  assert.strictEqual(openedAlbum, hydratedAlbum);
+});
+
+test('Fast Cover Search hydrates its album and passes its clicked control to immediate busy feedback', async () => {
+  const { context } = createContext();
+  const album = {
+    key: 'sola-scriptura',
+    tracks: [{ path: 'C:\\Music\\Sola Scriptura\\01 Track.flac' }],
+  };
   const button = createElement({ 'data-track-modal-fast-cover-fetch': '1' });
   const click = createEvent({ '[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]': button });
   let startCall = null;
-  context.resolveTrackModalActionAlbum = (candidate) => {
+  context.resolveTrackModalActionAlbum = () => {
+    assert.fail('Fast Cover Search must not use the compact synchronous resolver');
+  };
+  context.resolveHydratedTrackModalActionAlbum = async (candidate) => {
     assert.equal(candidate, button);
     return album;
   };

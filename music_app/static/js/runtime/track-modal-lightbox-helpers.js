@@ -711,6 +711,26 @@ function resolveTrackModalActionAlbum(button) {
   return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
 }
 
+async function resolveHydratedTrackModalActionAlbum(button) {
+  const album = resolveTrackModalActionAlbum(button);
+  if (!album || !albumRequiresHydration(album)) return album;
+  const albumKey = String(
+    getTrackModalButtonAlbumKey(button)
+    || getAlbumRequestKey(album)
+    || getAlbumIdentity(album)
+    || album.key
+    || '',
+  ).trim();
+  if (!albumKey) return null;
+  try {
+    return await loadTrackModalAlbumDetails(albumKey);
+  } catch (error) {
+    console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
+    showToast('Unable to load album details.', 'error', 3200);
+    return null;
+  }
+}
+
 function resolveTrackModalDuplicateSourceAlbum(button) {
   const album = resolveTrackModalActionAlbum(button);
   if (!album || !(button instanceof HTMLElement)) return album;

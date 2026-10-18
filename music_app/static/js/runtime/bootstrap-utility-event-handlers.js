@@ -722,17 +722,21 @@ async function handleUtilityBootstrapClick(event) {
   const trackModalCoverLookupButton = event.target.closest('[data-open-track-modal-cover-lookup="1"]');
   if (trackModalCoverLookupButton) {
     event.preventDefault();
-    openCoverLookupModal(resolveTrackModalActionAlbum(trackModalCoverLookupButton));
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalCoverLookupButton);
+    if (album) openCoverLookupModal(album);
     return;
   }
 
   const trackModalFetchCoverButton = event.target.closest('[data-track-modal-fast-cover-fetch="1"], [data-open-track-modal-fetch-cover="1"]');
   if (trackModalFetchCoverButton) {
     event.preventDefault();
-    startCoverLookupForAlbum(resolveTrackModalActionAlbum(trackModalFetchCoverButton), {
-      backgroundOnly: true,
-      triggerButton: trackModalFetchCoverButton,
-    });
+    const album = await resolveHydratedTrackModalActionAlbum(trackModalFetchCoverButton);
+    if (album) {
+      startCoverLookupForAlbum(album, {
+        backgroundOnly: true,
+        triggerButton: trackModalFetchCoverButton,
+      });
+    }
     return;
   }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from music_app.services.cover_lookup_tasks_postgres import CoverLookupTasksPostgresAdapter
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
@@ -32,6 +34,18 @@ def load_cover_lookup_notification_summaries(
 
 def count_cover_lookup_notifications(config: dict[str, object]) -> dict[str, int]:
     return _cover_lookup_notifications_adapter(config).count_notifications()
+
+
+def interrupt_stale_cover_lookup_notifications(
+    config: dict[str, object],
+    *,
+    stale_before: datetime,
+    completed_at: datetime,
+) -> set[str]:
+    return _cover_lookup_notifications_adapter(config).interrupt_stale_notifications(
+        stale_before=stale_before,
+        completed_at=completed_at,
+    )
 
 
 def load_cover_lookup_notification_summary_page(

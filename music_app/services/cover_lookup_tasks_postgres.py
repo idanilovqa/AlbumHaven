@@ -74,6 +74,36 @@ class CoverLookupTasksPostgresAdapter:
             _ensure_bootstrap_context(connection)
             return _count_notifications(connection)
 
+    def interrupt_stale_notifications(
+        self,
+        *,
+        stale_before: datetime,
+        completed_at: datetime,
+    ) -> set[str]:
+        message = "Cover art lookup stopped before it could finish."
+        with self._connect_to_database() as connection:
+            with _transaction(connection):
+                _ensure_bootstrap_context(connection)
+                cursor = connection.execute(
+                    _interrupt_stale_notifications_sql(),
+                    (
+                        completed_at,
+                        message,
+                        completed_at,
+                        completed_at,
+                        message,
+                        list(_SOURCE_FAMILIES),
+                        list(_ACTIVE_STATUSES),
+                        stale_before,
+                    ),
+                )
+                rows = list(cursor.fetchall())
+        return {
+            _text(_row_mapping(row).get("task_key"))
+            for row in rows
+            if _text(_row_mapping(row).get("task_key"))
+        }
+
     def load_notification_summary_page(
         self,
         *,
@@ -821,6 +851,53 @@ def _delete_removed_notifications_sql() -> str:
           );
     """
     )
+
+
+def _interrupt_stale_notifications_sql() -> str:
+    return _bootstrap_context_sql() + """
+        update ops.cover_lookup_tasks
+        set status = 'failed',
+            completed_at = %s::timestamptz,
+            error_message = %s,
+            metadata = ops.cover_lookup_tasks.metadata || jsonb_build_object(
+                'notification_action_taken', false,
+                'notification_completed_at', %s::timestamptz::text,
+                'notification_expires_at', '',
+                'source_payload',
+                    coalesce(
+                        ops.cover_lookup_tasks.metadata -> 'source_payload',
+                        '{}'::jsonb
+                    ) || jsonb_build_object(
+                        'status', 'failed',
+                        'progress', 100,
+                        'progress_label', 'Interrupted',
+                        'result_kind', 'interrupted',
+                        'finished_at', %s::timestamptz::text,
+                        'message', %s
+                    )
+            )
+        from bootstrap_context
+        where ops.cover_lookup_tasks.library_id = bootstrap_context.library_id
+          and ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
+          and ops.cover_lookup_tasks.status = any(%s::text[])
+          and greatest(
+                nullif(
+                    ops.cover_lookup_tasks.metadata -> 'source_payload'
+                        ->> 'candidate_updated_at',
+                    ''
+                )::timestamptz,
+                nullif(
+                    ops.cover_lookup_tasks.metadata -> 'source_payload' ->> 'updated_at',
+                    ''
+                )::timestamptz,
+                nullif(
+                    ops.cover_lookup_tasks.metadata -> 'source_payload' ->> 'started_at',
+                    ''
+                )::timestamptz,
+                ops.cover_lookup_tasks.requested_at
+          ) <= %s::timestamptz
+        returning ops.cover_lookup_tasks.task_key;
+    """
 
 
 def _delete_notifications_sql() -> str:

@@ -381,7 +381,9 @@ def test_queue_cover_lookup_task_registers_background_future(config, logger, lib
     monkeypatch.setattr(
         cover_lookup_runtime,
         "register_cover_lookup_future",
-        lambda task_id, future: calls.setdefault("registered", (task_id, future)),
+        lambda task_id, future, **_kwargs: calls.setdefault(
+            "registered", (task_id, future)
+        ),
     )
 
     task_id = cover_lookup_runtime.queue_cover_lookup_task(
@@ -491,7 +493,11 @@ def test_queued_fifth_cover_lookup_gets_full_provider_budget_after_worker_satura
         "create_cover_lookup_task",
         lambda *_args, **_kwargs: ("task-fifth", Event()),
     )
-    monkeypatch.setattr(cover_lookup_runtime, "register_cover_lookup_future", lambda *_args: None)
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "register_cover_lookup_future",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         cover_lookup_runtime,
         "build_cover_lookup_provider_deadline_at",
@@ -553,7 +559,9 @@ def test_queue_cover_lookup_save_remote_task_submits_runtime_job(monkeypatch, tm
     monkeypatch.setattr(
         cover_lookup_runtime,
         "register_cover_lookup_future",
-        lambda task_id, future: calls.setdefault("registered", (task_id, future)),
+        lambda task_id, future, **_kwargs: calls.setdefault(
+            "registered", (task_id, future)
+        ),
     )
 
     cover_lookup_runtime.queue_cover_lookup_save_remote_task(

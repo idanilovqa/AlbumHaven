@@ -240,7 +240,7 @@ def queue_cover_lookup_task(
         build_cover_lookup_job_contract("candidate_lookup"),
     )
     future = _COVER_LOOKUP_EXECUTOR.submit(_run_cover_lookup_job, runtime_job)
-    register_cover_lookup_future(task_id, future)
+    register_cover_lookup_future(task_id, future, config=config)
     return task_id
 
 
@@ -275,7 +275,7 @@ def queue_cover_lookup_save_remote_task(
         apply_cover_selection_for_tracks=apply_cover_selection_for_tracks,
         persist_cover_selection_for_tracks=persist_cover_selection_for_tracks,
     )
-    register_cover_lookup_future(task_id, future)
+    register_cover_lookup_future(task_id, future, config=config)
 
 
 def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:

@@ -82,6 +82,31 @@ def test_count_notifications_uses_one_filtered_aggregate_query():
     )
 
 
+def test_interrupt_stale_notifications_atomically_terminalizes_active_rows():
+    connection = _Connection(
+        page_rows=[{"task_key": "orphaned-task"}],
+    )
+    stale_before = datetime.fromisoformat("2026-10-17T17:45:00+00:00")
+    completed_at = datetime.fromisoformat("2026-10-17T18:00:00+00:00")
+
+    interrupted = _adapter(connection).interrupt_stale_notifications(
+        stale_before=stale_before,
+        completed_at=completed_at,
+    )
+
+    assert interrupted == {"orphaned-task"}
+    sql, params = connection.operations[-1]
+    assert "update ops.cover_lookup_tasks" in sql
+    assert "status = 'failed'" in sql
+    assert "source_family" in sql
+    assert "candidate_updated_at" in sql
+    assert "greatest(" in sql
+    assert "returning ops.cover_lookup_tasks.task_key" in sql
+    assert ["pending", "running"] in params
+    assert stale_before in params
+    assert completed_at in params
+
+
 def test_load_notification_summary_page_returns_newest_first_page_and_counts():
     rows = [
         _row("newest", "2026-10-17T18:00:02+00:00"),

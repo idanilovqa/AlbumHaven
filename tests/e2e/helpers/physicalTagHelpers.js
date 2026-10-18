@@ -56,8 +56,13 @@ print(json.dumps(records, sort_keys=True))
 `;
 
 async function runGeneratedMp3TagScript({ artist, album, script, allowedProfiles }) {
+  const mediaRoot = resolveWritableFixtureMediaRoot(process.env, { allowedProfiles });
+  const preparedMediaRoot = process.env.ALBUM_HAVEN_FIXTURE_PROFILE === 'synthetic-large-library'
+    && !String(process.env.ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT || '').trim()
+    ? path.join(mediaRoot, 'writable')
+    : mediaRoot;
   const albumDirectory = path.join(
-    resolveWritableFixtureMediaRoot(process.env, { allowedProfiles }),
+    preparedMediaRoot,
     artist,
     album,
   );

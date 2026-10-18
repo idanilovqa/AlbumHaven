@@ -20,6 +20,7 @@ const ORIGINAL_ALBUM = 'Студийные записи';
 const TEMPORARY_ALBUM_A = 'Студийные записи — performance A';
 const TEMPORARY_ALBUM_B = 'Студийные записи — performance B';
 const TRACK_FILENAME = '01. Студийная запись 1.mp3';
+const TRACK_TITLE = 'Студийная запись 1';
 const FIXTURE_YEAR = '1999';
 const TREE_FILTER_QUERY = 'Ар';
 const TREE_ARTIST = 'Ария';
@@ -47,8 +48,10 @@ async function expectPhysicalAlbum(expectedAlbum) {
 
 test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
   test('repeated saves leave navigation responsive', async ({
+    appBarActions,
     editTagsPostEditLocalReport,
     galleryActions,
+    managedAppLifecycle,
     navigationPanelActions,
     page,
     searchToolbarActions,
@@ -56,7 +59,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
     tagEditorActions,
     trackModalActions,
   }) => {
-    test.setTimeout(240000);
+    test.setTimeout(480000);
     requirePostgresRuntimeEnv('the repeated Edit Tags post-edit benchmark');
 
     const saveTimingsMs = [];
@@ -66,7 +69,12 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
 
     try {
       await stepLogger.step('Restore the private DDT media copy and open the source album', async () => {
-        await restoreDdtStudioRecordsFixture();
+        await managedAppLifecycle.stop();
+        try {
+          await restoreDdtStudioRecordsFixture();
+        } finally {
+          await managedAppLifecycle.restart();
+        }
         await galleryActions.goto('/');
         await waitForPostgresBrowseWarmRoot(page, galleryActions, navigationPanelActions);
         await galleryActions.goto(ARTIST_VIEW_URL);
@@ -111,14 +119,80 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             timingMs: saveTimingMs,
             details: { destinationAlbum, saveTaskId: result.saveTaskId },
           });
-          if (destinationAlbum !== ORIGINAL_ALBUM) {
-            await trackModalActions.close();
-            await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, destinationAlbum, {
-              timeout: 60000,
-            });
-            await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
-            await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
-          }
+          await trackModalActions.close();
+        });
+
+        await stepLogger.step(`Verify navigation after Edit Tags transition ${index + 1}`, async () => {
+          await searchToolbarActions.search(ARTIST);
+          await searchToolbarActions.waitForQuery(ARTIST, { timeout: 60000 });
+          await galleryActions.waitForSelectedArtistGallery(ARTIST, {
+            queryValue: ARTIST,
+            timeout: 60000,
+          });
+          await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, destinationAlbum, {
+            timeout: 60000,
+          });
+
+          await searchToolbarActions.clearSearch({ submitWithEnter: true });
+          await searchToolbarActions.waitForQuery('', { timeout: 60000 });
+          await galleryActions.waitForSelectedArtistGallery(ARTIST, { timeout: 60000 });
+          await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, destinationAlbum, {
+            timeout: 60000,
+          });
+
+          await searchToolbarActions.search(destinationAlbum);
+          await searchToolbarActions.waitForQuery(destinationAlbum, { timeout: 60000 });
+          await galleryActions.waitForAlbumVisible(destinationAlbum, { timeout: 60000 });
+
+          await searchToolbarActions.search(TRACK_TITLE);
+          await searchToolbarActions.waitForQuery(TRACK_TITLE, { timeout: 60000 });
+          await galleryActions.waitForAlbumVisible(destinationAlbum, { timeout: 60000 });
+          await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
+          await trackModalActions.waitForReady();
+          const matchingRow = trackModalActions.trackModal.albumTrackTable.rows
+            .filter({ hasText: TRACK_TITLE })
+            .first();
+          await expect(matchingRow).toBeVisible({ timeout: 60000 });
+          await expect(matchingRow).toHaveAttribute('data-track-search-match', 'true', {
+            timeout: 60000,
+          });
+          await trackModalActions.close();
+
+          await appBarActions.openLibraryHome();
+          await searchToolbarActions.waitForQuery('', { timeout: 60000 });
+          await navigationPanelActions.waitForAllArtistsVisibility(true, { timeout: 60000 });
+          await galleryActions.waitForGalleryReady({ timeout: 60000 });
+          await expect.poll(
+            async () => (
+              await navigationPanelActions.readRuntimeSidebarArtistNames()
+            ).includes(TREE_ARTIST),
+            { timeout: 60000 },
+          ).toBe(true);
+
+          await searchToolbarActions.search(TREE_FILTER_QUERY);
+          await searchToolbarActions.waitForQuery(TREE_FILTER_QUERY, { timeout: 60000 });
+          await expect.poll(
+            () => navigationPanelActions.readSidebarArtistNameCount(TREE_ARTIST),
+            { timeout: 60000 },
+          ).toBe(1);
+          await navigationPanelActions.selectSidebarArtistByName(TREE_ARTIST);
+          await navigationPanelActions.waitForSidebarSelection(TREE_ARTIST, { timeout: 60000 });
+          await galleryActions.waitForSelectedArtistGallery(TREE_ARTIST, { timeout: 60000 });
+          const navigationView = await readRuntimeView(page);
+          const navigationAlbum = String(flattenAlbums(navigationView.artist_groups)[0]?.name || '').trim();
+          expect(navigationAlbum, 'Artist Tree navigation must expose an album.').not.toBe('');
+          await galleryActions.clickAlbumDetailsByAlbumName(navigationAlbum);
+          const navigationSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
+          expect(navigationSummary.trackRows).toBeGreaterThan(0);
+          await trackModalActions.close();
+
+          await galleryActions.goto(ARTIST_VIEW_URL);
+          await galleryActions.waitForSelectedArtistGallery(ARTIST, { timeout: 60000 });
+          await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, destinationAlbum, {
+            timeout: 60000,
+          });
+          await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
+          await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
         });
       }
 
@@ -133,11 +207,20 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       metrics.searchGalleryReadyMs = await stepLogger.step(
         'Measure post-edit search to the restored visible album',
         async () => {
+          const responsePromise = page.waitForResponse((response) => {
+            if (response.request().method() !== 'GET') return false;
+            const url = new URL(response.url());
+            return url.pathname === '/view-data'
+              && String(url.searchParams.get('q') || '').trim() === ARTIST;
+          });
           await searchToolbarActions.search(ARTIST, {
             recordSubmissionBoundary() {
               searchSubmittedAt = performance.now();
             },
           });
+          const response = await responsePromise;
+          metrics.searchResponseMs = performance.now() - searchSubmittedAt;
+          expect(response.ok(), 'Post-edit artist search response must succeed.').toBe(true);
           await searchToolbarActions.waitForQuery(ARTIST, { timeout: 60000 });
           await galleryActions.waitForSelectedArtistGallery(ARTIST, {
             queryValue: ARTIST,
@@ -199,7 +282,12 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       expect(trackSummary.trackRows).toBeGreaterThan(0);
       await trackModalActions.close();
     } finally {
-      await restoreDdtStudioRecordsFixture();
+      await managedAppLifecycle.stop();
+      try {
+        await restoreDdtStudioRecordsFixture();
+      } finally {
+        await managedAppLifecycle.restart();
+      }
     }
 
     for (const [key, label] of [
@@ -221,6 +309,12 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       );
     }
     await editTagsPostEditLocalReport.recordTimingCheckpoint({
+        key: 'post-edit-search-response',
+        label: 'Post-edit exact-artist search response',
+        timingMs: metrics.searchResponseMs,
+        details: { artist: ARTIST },
+      });
+      await editTagsPostEditLocalReport.recordTimingCheckpoint({
       key: 'post-edit-search-cover-ready',
       label: 'Post-edit search visible covers',
       timingMs: metrics.searchCoverReadyMs,

@@ -90,9 +90,13 @@ function expectedFixtureRows() {
 }
 
 function resolveFixtureAlbumDirectory(environment) {
-  const mediaRoot = resolveWritableFixtureMediaRoot(environment, {
+  const resolvedMediaRoot = resolveWritableFixtureMediaRoot(environment, {
     allowedProfiles: ['functional-core', 'synthetic-large-library'],
   });
+  const mediaRoot = environment.ALBUM_HAVEN_FIXTURE_PROFILE === 'synthetic-large-library'
+    && !String(environment.ALBUM_HAVEN_E2E_WRITABLE_MEDIA_ROOT || '').trim()
+    ? path.resolve(resolvedMediaRoot, 'writable')
+    : resolvedMediaRoot;
   const albumDirectory = path.resolve(mediaRoot, ARTIST, ALBUM);
   const relativePath = path.relative(mediaRoot, albumDirectory);
   if (

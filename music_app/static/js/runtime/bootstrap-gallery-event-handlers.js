@@ -380,9 +380,10 @@ function handleGalleryBootstrapClick(event) {
       scheduleBrowserAnimationFrame(() => {
         renderArtistGroups({ preserveScroll: true });
       });
-      Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
-        omitSidebar: true,
-      }), false, {
+      Promise.resolve(fetchAndRender(buildApiUrl(
+        nextView,
+        isLibraryHome ? {} : { omitSidebar: true },
+      ), false, {
         preserveScroll: true,
       })).then(resumeCoverLoads, () => resumeCoverLoads(true, true));
       return;
@@ -1538,6 +1539,18 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     return;
   }
   const previousView = state.view;
+  const mountedSelectedArtist = String(previousView?.selected_artist || '').trim();
+  const pendingExactSearchArtist = String(
+    state.ui?.pendingSidebarSelectedArtist || '',
+  ).trim();
+  const retainsMountedExactArtist = Boolean(
+    mountedSelectedArtist
+    && pendingExactSearchArtist
+    && pendingExactSearchArtist.toLocaleLowerCase() === mountedSelectedArtist.toLocaleLowerCase()
+    && String(normalizedQuery || '').trim().toLocaleLowerCase()
+      === pendingExactSearchArtist.toLocaleLowerCase()
+    && isMountedSelectedGalleryComplete(mountedSelectedArtist, null)
+  );
   const next = {
     ...withActiveGallerySources(state.view, state.gallery.mainState),
     query: normalizedQuery,
@@ -1546,6 +1559,13 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     related_filter_artists: [],
     primary_filter_active: false,
   };
+  if (retainsMountedExactArtist) {
+    applyViewPayload({
+      ...previousView,
+      query: normalizedQuery,
+      all_artists_active: false,
+    }, { trackSidebarReveal: false });
+  }
   state.gallery.sidebarArtistsOverride = null;
   state.gallery.sidebarShowAllArtistsOverride = null;
   state.ui.pendingSearchClearOnBlur = false;
@@ -1587,7 +1607,8 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     }
   };
   const request = fetchAndRender(hydrationUrl, true, {
-    preserveScroll: String(previousView.query || '') === normalizedQuery,
+    preserveScroll: retainsMountedExactArtist
+      || String(previousView.query || '') === normalizedQuery,
     restartIfSameUrl: true,
     skipPendingViewTransition: true,
     showSearchProgress: true,

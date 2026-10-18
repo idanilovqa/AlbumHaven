@@ -58,6 +58,50 @@ print(json.dumps([{
   });
 });
 
+test('uses the nested writable media tree for the synthetic large-library profile', async () => {
+  const profileRoot = path.join(TEMP_ROOT, 'synthetic-large-library');
+  const mediaRoot = path.join(profileRoot, 'media');
+  const writableRoot = path.join(mediaRoot, 'writable');
+  const albumDirectory = path.join(writableRoot, 'ДДТ', 'Студийные записи');
+  fs.mkdirSync(albumDirectory, { recursive: true });
+  const physicalRows = Array.from({ length: 16 }, (_, index) => ({
+    private_path: path.join(albumDirectory, `${index + 1}.mp3`),
+    track_number: index + 1,
+    year: 1999,
+    release_date: '1999-01-01',
+    file_size_bytes: 1000,
+    modified_at_epoch: 2000,
+  }));
+  const calls = [];
+
+  await restoreDdtStudioRecordsFixture({
+    env: {
+      ALBUM_HAVEN_FIXTURE_PROFILE: 'synthetic-large-library',
+      ALBUM_HAVEN_FIXTURE_ROOT: profileRoot,
+      ALBUM_HAVEN_MEDIA_ROOT: mediaRoot,
+      ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
+        'postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e',
+    },
+    execFileAsync: async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === '-c') return { stdout: JSON.stringify(physicalRows) };
+      return {
+        stdout: JSON.stringify({
+          album_rows: 1,
+          track_rows: 16,
+          track_file_rows: 16,
+          album_edition_rows: 0,
+          file_edition_rows: 0,
+        }),
+      };
+    },
+    platform: 'linux',
+    pythonCommand: 'fixture-python',
+  });
+
+  assert.equal(calls[0].args[2], albumDirectory);
+});
+
 test('restores the exact mixed-year Studio Records fixture through guarded helpers', async () => {
   const calls = [];
   const physicalRows = Array.from({ length: 16 }, (_, index) => {
@@ -148,7 +192,15 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
   assert.match(sql, /album_id = target_album\.id/);
   assert.match(
     sql,
-    /library\.local_tracks\.title =[\s\S]*fixture_rows\.track_number::text/,
+    /library\.local_tracks\.album_id\s*=\s*target_album\.id/,
+  );
+  assert.match(
+    sql,
+    /library\.local_tracks\.title\s*=\s*'Студийная запись '\s*\|\|\s*fixture_rows\.track_number::text/,
+  );
+  assert.doesNotMatch(
+    sql,
+    /library\.local_track_files\.private_path\s*=\s*fixture_rows\.private_path/,
   );
   assert.match(sql, /private_path = selected_rows\.private_path/);
   assert.match(sql, /- array\['year', 'release_date'\]::text\[\]/);
@@ -215,5 +267,26 @@ test('isolates the Studio Records scenario before and after its mutations', () =
         < body.indexOf('await managedAppLifecycle.restart();'),
       `${hook} must restore the authoritative fixture before restarting the app`,
     );
+  }
+});
+
+test('restarts the performance app around Studio Records setup and cleanup', () => {
+  const spec = fs.readFileSync(
+    path.resolve('tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js'),
+    'utf8',
+  );
+  const stopPositions = [...spec.matchAll(/await managedAppLifecycle\.stop\(\);/gu)]
+    .map((match) => match.index);
+  const restorePositions = [...spec.matchAll(/await restoreDdtStudioRecordsFixture\(\);/gu)]
+    .map((match) => match.index);
+  const restartPositions = [...spec.matchAll(/await managedAppLifecycle\.restart\(\);/gu)]
+    .map((match) => match.index);
+
+  assert.equal(stopPositions.length, 2);
+  assert.equal(restorePositions.length, 2);
+  assert.equal(restartPositions.length, 2);
+  for (let index = 0; index < 2; index += 1) {
+    assert.ok(stopPositions[index] < restorePositions[index]);
+    assert.ok(restorePositions[index] < restartPositions[index]);
   }
 });

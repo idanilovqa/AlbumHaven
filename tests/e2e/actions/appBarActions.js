@@ -15,6 +15,10 @@ export class AppBarActions {
     await this.appBar.waitForVisible(this.appBar.toolbar, { timeout: options.timeout || 30000 });
   }
 
+  async openLibraryHome() {
+    await this.appBar.brand.click({ noWaitAfter: true });
+  }
+
   async openStatusMenu(options = {}) {
     const timeout = options.timeout || 10000;
     await expect.poll(async () => {

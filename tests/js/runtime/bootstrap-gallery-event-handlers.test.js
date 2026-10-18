@@ -1404,6 +1404,30 @@ test('library-home navigation clears active search state before opening All arti
   assert.deepEqual(calls.buildApiUrlOptions.at(-1), {});
 });
 
+test('library-home cached root refresh requests an authoritative Artist Tree', () => {
+  const cachedRootView = {
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: [{ artist: 'Broadcast', albums: [] }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+  };
+  const { context, calls } = createContext({ cachedRootView, useProductionBuildApiUrl: true });
+  context.state.view.query = 'flower kings';
+  context.state.view.artists_sidebar = [{ artist: 'The Flower Kings', count: 1 }];
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.deepEqual(calls.buildApiUrlOptions.at(-1), {});
+  const refreshUrl = new URL(calls.fetchAndRender.at(-1).url, 'http://localhost');
+  assert.equal(refreshUrl.searchParams.get('q'), null);
+  assert.equal(refreshUrl.searchParams.has('omit_sidebar'), false);
+});
+
 test('library-home navigation already at the root responds by scrolling to the top without fetching', () => {
   const { context, calls } = createContext({
     currentUrl: 'http://localhost/?surface=albums&all_artists=1',
@@ -2637,6 +2661,52 @@ test('exact artist search immediately highlights the unique rendered sidebar art
   assert.equal(calls.buildApiUrl[0].query, 'neal morse');
   assert.equal(calls.buildApiUrl[0].selected_artist, '');
   assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('exact search for the mounted selected artist retains its complete gallery and scroll', () => {
+  const unresolvedRequest = new Promise(() => {});
+  const albums = Array.from({ length: 141 }, (_, index) => ({ key: `ddt-${index}` }));
+  const sidebarArtists = [{ artist: 'ДДТ', count: albums.length }];
+  const { context, calls } = createContext({
+    searchInputValue: 'ДДТ',
+    fetchAndRenderResult: unresolvedRequest,
+    useProductionBuildApiUrl: true,
+  });
+  const selection = createImmediateSidebarArtistEvent(sidebarArtists, 'ДДТ');
+  context.state.gallery.sidebarArtistsOverride = sidebarArtists;
+  context.state.view = {
+    ...context.state.view,
+    query: '',
+    selected_artist: 'ДДТ',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artists_sidebar: sidebarArtists,
+    primary_artist_groups: [{ artist: 'ДДТ', albums }],
+    family_artist_groups: [],
+    artist_groups: [{ artist: 'ДДТ', albums }],
+    listen_through_scope_candidates: {
+      artist: {
+        artist_ref: 'ДДТ',
+        local_completion_denominator: { album_count: albums.length },
+      },
+    },
+  };
+  context.document.querySelectorAll = (selector) => (
+    selector === '#sidebar-list [data-sidebar-artist]' ? [selection.selectedLink] : []
+  );
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(context.state.view.query, 'ДДТ');
+  assert.equal(context.state.view.selected_artist, 'ДДТ');
+  assert.equal(context.state.view.artist_groups[0].artist, 'ДДТ');
+  assert.equal(context.state.view.artist_groups[0].albums.length, albums.length);
+  assert.equal(calls.fetchAndRender.length, 1);
+  const requestUrl = new URL(calls.fetchAndRender[0].url, 'http://localhost');
+  assert.equal(requestUrl.searchParams.get('q'), 'ДДТ');
+  assert.equal(requestUrl.searchParams.has('artist'), false);
+  assert.equal(calls.fetchAndRender[0].runtimeOptions.preserveScroll, true);
 });
 
 test('exact artist search immediately renders a unique offscreen virtualized sidebar artist', () => {

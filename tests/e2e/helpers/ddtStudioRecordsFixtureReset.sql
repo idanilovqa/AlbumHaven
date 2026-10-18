@@ -45,8 +45,10 @@ selected_rows as materialized (
     library.local_track_files.id as track_file_id,
     library.local_tracks.id as track_id
   from fixture_rows
+  cross join target_album
   join library.local_tracks
-    on library.local_tracks.title =
+    on library.local_tracks.album_id = target_album.id
+    and library.local_tracks.title =
       'Студийная запись ' || fixture_rows.track_number::text
   join library.local_track_files
     on library.local_track_files.track_id = library.local_tracks.id

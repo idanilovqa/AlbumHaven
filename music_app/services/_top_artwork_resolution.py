@@ -1,4 +1,4 @@
-"""Dormant bounded POSIX observations. Values convey no database authority.
+"""Dormant bounded filesystem observations. Values convey no database authority.
 
 Only the fixed resolver entry may submit immutable inputs. No connection, policy,
 configuration, decoder, provider or image-gate owner belongs in this module.
@@ -47,7 +47,7 @@ class ExpectedSelection:
     root_path: str
     resolved_cover_path: str
     relative_parts: tuple
-    root_stamp: PosixRootStamp
+    root_stamp: object
 
 
 @dataclass(frozen=True)
@@ -97,8 +97,8 @@ class RowObservation:
 @dataclass(frozen=True)
 class RootObservation:
     root_ledger_key: tuple
-    initial: PosixRootStamp
-    final: PosixRootStamp
+    initial: object
+    final: object
 
 
 @dataclass(frozen=True)
@@ -575,15 +575,29 @@ class _ProbeOwner:
 
     def resolve(self, value):
         deadline = time.monotonic() + 10.0
+        windows = value.platform == 'win32'
+        if windows:
+            # Fixed adapter allocation precedes admission; no new worker owner.
+            try:
+                from music_app.services import _top_artwork_resolution_windows as win
+                job = _SingleReleaseJob(self._slots.release, deadline=deadline,
+                                        quarantine_cleanup=True)
+                context = win._Context(deadline, job.is_abandoned, job=job)
+            except BaseException as error:
+                if not isinstance(error, Exception):
+                    raise
+                return _failure(value, 'artwork_probe_unavailable')
         with self._lock:
             if self._closed:
                 return _failure(value, 'artwork_probe_unavailable')
             if not self._slots.acquire(blocking=False):
                 return _failure(value, 'artwork_probe_busy')
-            job = _SingleReleaseJob(self._slots.release, deadline=deadline,
-                                    quarantine_cleanup=True)
+            if not windows:
+                job = _SingleReleaseJob(self._slots.release, deadline=deadline,
+                                        quarantine_cleanup=True)
             self._jobs.add(job)
-        context = _Context(deadline, job.is_abandoned)
+        if not windows:
+            context = _Context(deadline, job.is_abandoned)
         try:
             self._executor.submit(self._work, job, value, context)
         except BaseException as error:
@@ -611,7 +625,11 @@ class _ProbeOwner:
             if not job.start_work():
                 return
             try:
-                result = _run(value, context)
+                if value.platform == 'win32':
+                    from music_app.services import _top_artwork_resolution_windows as win
+                    result = win._run(value, context)
+                else:
+                    result = _run(value, context)
             except _Stop as error:
                 result = _failure(value, str(error), context.counts())
             except RootedFileUnavailable as error:
@@ -620,14 +638,19 @@ class _ProbeOwner:
                 result = _failure(value, code, context.counts())
             except BaseException:
                 result = _failure(value, 'artwork_probe_unavailable', context.counts())
-            if context.cleanup_failures:
+            if value.platform == 'win32':
+                context.finish_work()
+            if context.cleanup_failures or getattr(context, 'cleanup_incomplete', False):
                 job.report_cleanup_failure()
-                result = _failure(value, 'artwork_probe_unavailable', context.counts())
+                result = _failure(value, 'artwork_probe_unavailable', context.counts(),
+                    counts_complete=not getattr(context, 'cleanup_incomplete', False))
             # _run and its ExitStacks have discharged all ownership before this
             # publication. The shared job arbitrates expiry vs synchronized claim.
             job.publish_and_wait(result)
         finally:
-            if context.cleanup_failures:
+            if value.platform == 'win32':
+                context.finish_work()
+            if context.cleanup_failures or getattr(context, 'cleanup_incomplete', False):
                 job.report_cleanup_failure()
             job.release_once()
             with self._lock:
@@ -653,13 +676,21 @@ _owner_failed = False
 
 def resolve(value):
     """Fixed dormant entry: immutable values only, no injected collaborators."""
-    value = _validate(value)
+    if type(value) is ResolutionInput and type(getattr(value, 'platform', None)) is str and value.platform == 'win32':
+        from music_app.services import _top_artwork_resolution_windows as win
+        value = win._validate(value)
+    else:
+        value = _validate(value)
     if not value.rows:
         return Success(value.operation_ref, value.snapshot_digest, value.platform,
                        value.resolver_contract, (), (), WorkCounts())
     if not value.roots:
         return _failure(value, 'artwork_unavailable')
-    required = sum(1 if row.stored_cover_path.startswith('/') else len(value.roots) for row in value.rows)
+    if value.platform == 'win32':
+        required = sum(1 if win._path(row.stored_cover_path)[0] is not None else len(value.roots)
+                       for row in value.rows)
+    else:
+        required = sum(1 if row.stored_cover_path.startswith('/') else len(value.roots) for row in value.rows)
     if required > 16384:
         return _failure(value, 'artwork_validation_limit')
     global _owner, _owner_failed

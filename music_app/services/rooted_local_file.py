@@ -25,8 +25,11 @@ _cleanup_domains_lock = threading.Lock()
 
 class _CleanupScope:
     """Fixed synchronous ownership handoff; no caller-selected collaborators."""
-    def __init__(self, *, job=None, owner=None, record=None, closing=None):
+    def __init__(self, *, job=None, owner=None, record=None, closing=None,
+                 operation_context=None, physical_cleanup=None):
         self.job, self.owner, self.record, self.closing = job, owner, record, closing
+        self.operation_context = operation_context
+        self.physical_cleanup = physical_cleanup
         self.parent = None
 
     def __enter__(self):
@@ -46,6 +49,37 @@ def _cleanup_current(name):
             return value
         scope = scope.parent
     return None
+
+
+def _physical_cleanup(call, *args):
+    """Count a sole physical close, including through nested fixed wrappers.
+
+    Reporting cannot stop legal cleanup after a deadline or reporting failure.
+    This is cleanup accounting, never ordinary work/deadline admission.
+    """
+    context = _cleanup_current('operation_context')
+    if context is None or _cleanup_current('physical_cleanup'):
+        return call(*args)
+    reporting_error = None
+    with _CleanupScope(physical_cleanup=True):
+        try:
+            context.record_cleanup_attempt()
+        except BaseException as error:
+            reporting_error = error
+        try:
+            result = call(*args)
+            if ((result is not None and result is not True)
+                    or args and getattr(args[0], 'cleanup_complete', True) is not True):
+                raise RootedFileUnavailable('source_cleanup_incomplete')
+        except BaseException:
+            try:
+                context.record_cleanup_failure()
+            except BaseException:
+                pass
+            raise
+    if reporting_error is not None:
+        raise reporting_error
+    return result
 
 
 class _CleanupDomain:
@@ -98,12 +132,27 @@ class _CleanupOwner:
         self.subject = None
         self.unrecorded = None  # Preallocated anchor for an admitted raw transfer.
         self._job = _cleanup_current('job')
+        self.operation_context = _cleanup_current('operation_context')
         domain._admit(self)
         try:
             if self._job is not None:
                 self._job._register_cleanup_owner(self)
+            if self.operation_context is not None:
+                self.operation_context.register_cleanup_owner(self)
         except BaseException:
-            domain._retire(self)  # No resource operation has started.
+            # No resource operation has started. Retire every clean registration
+            # even if an injected bookkeeping callback itself fails.
+            try:
+                if self.operation_context is not None:
+                    self.operation_context.forget_cleanup_owner(self)
+            except BaseException:
+                pass
+            try:
+                if self._job is not None:
+                    self._job._forget_cleanup_owner(self)
+            except BaseException:
+                pass
+            domain._retire(self)
             raise
 
     @property
@@ -128,6 +177,8 @@ class _CleanupOwner:
         with self._lock:
             self.failed = True
         self.domain._fail()
+        if self.operation_context is not None:
+            self.operation_context.owner_cleanup_failed(self, error)
         if self._job is not None:
             self._job._cleanup_failed(self, error)
 
@@ -145,6 +196,8 @@ class _CleanupOwner:
         if self.complete:
             self.domain._retire(self)
             self.subject = None
+            if self.operation_context is not None:
+                self.operation_context.forget_cleanup_owner(self)
             job, self._job = self._job, None
             if job is not None:
                 job._forget_cleanup_owner(self)
@@ -219,8 +272,12 @@ class _CleanupRecord:
             self.state = 'attempted'
         try:
             if value is not None:
-                with _CleanupScope(owner=self.owner, closing=self):
-                    result = closer(value)
+                with _CleanupScope(owner=self.owner, closing=self,
+                        operation_context=self.owner.operation_context):
+                    if self.kind in ('handle', 'descriptor', 'stream'):
+                        result = _physical_cleanup(closer, value)
+                    else:
+                        result = closer(value)
                 if result is not None and result is not True:
                     raise RootedFileUnavailable('source_cleanup_incomplete')
                 if getattr(value, 'cleanup_complete', True) is not True:
@@ -702,7 +759,16 @@ def _close_resource(resource):
     return resource.close()
 
 
-def acquire(selection, expected_root_stamp=None, *, backend=None):
+def acquire(selection, expected_root_stamp=None, *, backend=None, operation_context=None):
+    """Optional counted Windows acquisition; no caller/context authority added."""
+    if operation_context is not None and getattr(selection, 'platform', None) != 'win32':
+        raise RootedFileUnavailable('operation_context_unavailable')
+    with _CleanupScope(operation_context=operation_context):
+        return _acquire(selection, expected_root_stamp, backend=backend,
+                        operation_context=operation_context)
+
+
+def _acquire(selection, expected_root_stamp=None, *, backend=None, operation_context=None):
     """Dormant acquisition; caller owns off-loop admission and abandonment budget."""
     if type(selection) is not RootSelection:
         raise RootedFileUnavailable('source_invalid')
@@ -718,7 +784,11 @@ def acquire(selection, expected_root_stamp=None, *, backend=None):
         if backend is None:
             resource = PosixResource(selection, expected_root_stamp)
         else:
-            resource = backend.acquire(selection, expected_root_stamp)
+            if operation_context is None:
+                resource = backend.acquire(selection, expected_root_stamp)
+            else:
+                resource = backend.acquire(selection, expected_root_stamp,
+                                           operation_context=operation_context)
         record.value = resource
         record.bind(resource)
         return RootedRegularFile(resource, _cleanup_owner=owner,
@@ -731,15 +801,19 @@ def acquire(selection, expected_root_stamp=None, *, backend=None):
         raise
 
 
-def describe_root(selection, *, backend=None):
+def describe_root(selection, *, backend=None, operation_context=None):
     """Comparison only, never an authorization grant or persistent open lease."""
     if type(selection) is not RootSelection:
         raise RootedFileUnavailable('source_invalid')
     if backend is not None:
-        return backend.describe_root(selection)
+        if operation_context is None:
+            return backend.describe_root(selection)
+        return backend.describe_root(selection, operation_context=operation_context)
     if selection.platform == 'win32':
         from music_app.services._rooted_local_file_windows import WindowsBackend
-        return WindowsBackend().describe_root(selection)
+        return WindowsBackend().describe_root(selection, operation_context=operation_context)
+    if operation_context is not None:
+        raise RootedFileUnavailable('operation_context_unavailable')
     _require_posix()
     root = _posix_selection(selection)
     with ExitStack() as stack:
@@ -773,6 +847,9 @@ def _posix_root_observation_selection(selection):
 
 def observe_root(selection, *, operation_context):
     """Bounded root-only observation; no leaf identity or authority is implied."""
+    if type(selection) is RootObservationSelection and selection.platform == 'win32':
+        from music_app.services._rooted_local_file_windows import WindowsBackend
+        return WindowsBackend().describe_root(selection, operation_context=operation_context)
     root = _posix_root_observation_selection(selection)
     _require_posix()
     with ExitStack() as stack:
@@ -783,6 +860,17 @@ def observe_root(selection, *, operation_context):
             operation_context.before_syscall()
         device, inode = _directory_identity(os.fstat(chain.fd))
         return PosixRootStamp('posix', device, inode)
+
+
+def observe_selection(selection, expected_root_stamp=None, *, operation_context, backend=None):
+    """Metadata-only Windows selection; no reader, proof or policy authority."""
+    if type(selection) is not RootSelection or selection.platform != 'win32':
+        raise RootedFileUnavailable('source_invalid')
+    if backend is None:
+        from music_app.services._rooted_local_file_windows import WindowsBackend
+        backend = WindowsBackend()
+    return backend.observe_selection(selection, expected_root_stamp,
+                                     operation_context=operation_context)
 
 
 class _SingleReleaseJob:

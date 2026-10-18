@@ -40,6 +40,10 @@ class ArtworkAcquisitionUnavailable(ValueError):
     """A bounded, non-sensitive code; no filesystem path is exposed."""
 
 
+class ArtworkCaptureCleanupIncomplete(RuntimeError):
+    """Fatal bounded cleanup uncertainty; never a per-row unavailable result."""
+
+
 @dataclass(frozen=True)
 class ArtworkSourceDescriptor:
     library_id: int
@@ -182,6 +186,12 @@ def _validate_descriptor(source):
 
 def artwork_source_from_observation(*, library_id, observation, root_observation):
     """Pure POSIX adapter; no describe/probe/open or authority is performed."""
+    from music_app.services._top_artwork_resolution import RootObservation
+    from music_app.services._rooted_local_file_windows import WindowsRootStamp
+    from music_app.services._top_artwork_capture_windows import artwork_source_from_observation as windows_source
+    if type(root_observation) is RootObservation and type(root_observation.initial) is WindowsRootStamp:
+        return windows_source(library_id=library_id, observation=observation,
+                              root_observation=root_observation)
     from music_app.services._top_artwork_resolution import RowObservation, RootObservation
     from music_app.services.rooted_local_file import PosixRootStamp
     if (type(observation) is not RowObservation or type(root_observation) is not RootObservation
@@ -238,6 +248,11 @@ def capture_artwork(source):
     mutation guards, not a proof against privileged metadata restoration.
     The final bytes are an immutable capture, not a future disk-file promise.
     """
+    from music_app.services._top_artwork_capture_windows import (
+        WindowsArtworkSourceDescriptor, capture_artwork_windows,
+    )
+    if type(source) is WindowsArtworkSourceDescriptor:
+        return capture_artwork_windows(source)
     _require_platform()
     try:
         root, relative = _validate_descriptor(source)

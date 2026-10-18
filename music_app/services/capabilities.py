@@ -30,6 +30,7 @@ SOCIAL_ACTIONS = frozenset({
 # Friendship and personal taste remain actor/resource scoped in their services.
 PERSONAL_ACTIONS = PERSONAL_COLLECTION_ACTIONS | SOCIAL_ACTIONS | frozenset({
     "library.track_preferences.manage",
+    "library.album_preferences.manage",
 })
 
 CAPABILITY_ACTIONS = MappingProxyType({

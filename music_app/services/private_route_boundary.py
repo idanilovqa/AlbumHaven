@@ -288,6 +288,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/playlists/{playlist_ref}/default-sort"): "library.playlists.settings.manage",
     ("POST", "/playlists/{playlist_ref}/playback-settings"): "library.playlists.settings.manage",
     ("POST", "/track-preferences"): "library.track_preferences.manage",
+    ("POST", "/album-preferences"): "library.album_preferences.manage",
 }
 
 
@@ -306,6 +307,11 @@ def install_private_route_boundary(app: FastAPI) -> None:
         try:
             return await _require_private_authentication(request, call_next)
         except Exception:
+            # Exact mutation only. This also covers failures before route match,
+            # actor resolution or normal private headers; never expose details.
+            if request.method == "POST" and request.url.path == "/album-preferences":
+                return JSONResponse({"error": "album_preference_unavailable"}, status_code=503,
+                                    headers={"Cache-Control": "private, no-store"})
             if (request.method, _matched_route_path(app, request)) in {
                     ("GET", "/album-tops/{top_ref}/artwork-publication"),
                     ("POST", "/album-tops/{top_ref}/artwork-publication/sources"),
@@ -369,7 +375,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
         preference_headers = (
             dict(_TOP_WORKING_HEADERS) if route_path == _TOP_WORKING_ROUTE else
             {"Cache-Control": "private, no-store"}
-            if private_top_view or route_path in {"/view-data", "/search/native-target", "/search/native-targets", "/search/listener-native-bindings", "/search/listener-native-target", "/search/listener-native-targets", "/search/popularity-native-bindings", "/search/popularity-native-target", "/search/popularity-native-targets", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue", "/playlists/creation-source/artist-popular", "/playlists/creation-source/artist-popular/regenerate", "/playlists/creation-source/artist-popular/native-queue", "/playlists/creation-source/artist-loved", "/playlists/creation-source/artist-loved/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")) else
+            if private_top_view or route_path in {"/view-data", "/search/native-target", "/search/native-targets", "/search/listener-native-bindings", "/search/listener-native-target", "/search/listener-native-targets", "/search/popularity-native-bindings", "/search/popularity-native-target", "/search/popularity-native-targets", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/album-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue", "/playlists/creation-source/artist-popular", "/playlists/creation-source/artist-popular/regenerate", "/playlists/creation-source/artist-popular/native-queue", "/playlists/creation-source/artist-loved", "/playlists/creation-source/artist-loved/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")) else
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/account/layout-preferences", "/api/account/appearance/selection-accent"} else {}
         )
@@ -432,7 +438,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 headers=preference_headers,
             )
         response = await call_next(request)
-        if private_top_view or route_path in {"/view-data", "/search/native-target", "/search/native-targets", "/search/listener-native-bindings", "/search/listener-native-target", "/search/listener-native-targets", "/search/popularity-native-bindings", "/search/popularity-native-target", "/search/popularity-native-targets", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue", "/playlists/creation-source/artist-popular", "/playlists/creation-source/artist-popular/regenerate", "/playlists/creation-source/artist-popular/native-queue", "/playlists/creation-source/artist-loved", "/playlists/creation-source/artist-loved/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")):
+        if private_top_view or route_path in {"/view-data", "/search/native-target", "/search/native-targets", "/search/listener-native-bindings", "/search/listener-native-target", "/search/listener-native-targets", "/search/popularity-native-bindings", "/search/popularity-native-target", "/search/popularity-native-targets", "/home/activity/now-playing", "/playback/session/presence-source", "/playback/session/presence", "/album-details", "/track-preferences", "/album-preferences", "/home/activity", "/home/activity/native-target", "/library/album-artwork/{album_ref}", "/playlists/{playlist_ref}/native-queue", "/playlists/{playlist_ref}/items/{item_ref}/native-target", "/admin/friends-policy", "/playlists/creation-source/match-candidates", "/playlists/creation-source/accept-match", "/playlists/creation-source/library-mix", "/playlists/creation-source/library-mix/native-queue", "/playlists/creation-source/artist-popular", "/playlists/creation-source/artist-popular/regenerate", "/playlists/creation-source/artist-popular/native-queue", "/playlists/creation-source/artist-loved", "/playlists/creation-source/artist-loved/native-queue"} or route_path.startswith(("/friends", "/album-tops", "/album-top-catalog/", "/account/goals")):
             response.headers.update(preference_headers)
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)

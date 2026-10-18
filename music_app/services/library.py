@@ -560,6 +560,32 @@ def _freeze_payload_signature(value: object) -> object:
     return value
 
 
+_PRIVATE_ALBUM_TASTE_FIELDS = frozenset({
+    "album_preference", "album_preference_overlay", "album_rating", "rating",
+    "album_rating_source", "album_rating_provenance", "rating_provenance",
+    "provenance", "favorite", "is_favorite", "album_favorite",
+    "favorite_override", "favorite_source", "taste_state", "preference_revision",
+    "can_edit", "can_edit_preferences", "can_manage_album_preferences",
+    "inventory_album_ref", "canonical_album_ref", "preference_context_ref",
+    "context_ref", "to_listen", "is_relisten", "can_toggle_to_listen",
+    "_album_taste_stamp",
+})
+
+
+def _strip_public_album_taste_fields(value):
+    # Work only on a caller-owned clone. Tag evidence is independently labelled.
+    for field in _PRIVATE_ALBUM_TASTE_FIELDS:
+        value.pop(field, None)
+    if str(value.get("album_ref") or "").startswith("inventory-album:"):
+        value.pop("album_ref", None)
+    actions = value.get("allowed_actions")
+    if isinstance(actions, dict):
+        value["allowed_actions"] = {
+            key: item for key, item in actions.items()
+            if key not in {"can_manage_album_preferences", "can_toggle_to_listen"}
+        }
+
+
 def strip_private_album_preference_overlays(album_payload: dict[str, object]) -> dict[str, object]:
     if not isinstance(album_payload, dict):
         return {}
@@ -567,7 +593,7 @@ def strip_private_album_preference_overlays(album_payload: dict[str, object]) ->
     sanitized_payload = dict(album_payload)
     sanitized_payload.pop("album_note", None)
     sanitized_payload.pop("visible_album_notes", None)
-    sanitized_payload["album_preference"] = _album_preference_to_dict()
+    _strip_public_album_taste_fields(sanitized_payload)
     sanitized_payload["top_viewer_overlay"] = _top_viewer_overlay_to_dict()
     sanitized_payload["crowd_opinion"] = _hidden_crowd_opinion_payload()
     sanitized_payload["friends_opinion"] = _hidden_friends_opinion_payload()
@@ -582,7 +608,7 @@ def strip_private_album_preference_overlays(album_payload: dict[str, object]) ->
         summary = sanitized_gallery_list_block.get("summary")
         if isinstance(summary, dict):
             sanitized_summary = dict(summary)
-            sanitized_summary["album_preference"] = _album_preference_to_dict()
+            _strip_public_album_taste_fields(sanitized_summary)
             sanitized_summary["crowd_opinion"] = _hidden_crowd_opinion_payload()
             sanitized_summary["friends_opinion"] = _hidden_friends_opinion_payload()
             sanitized_summary["album_popularity"] = _hidden_album_popularity_payload()

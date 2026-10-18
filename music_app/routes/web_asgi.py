@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from music_app.services.private_ui_context import private_ui_context_ref, PrivateUIContextError
 from music_app.services.view_search import is_personal_search_expression, is_private_search_request
+from music_app.services.private_search_contract import is_popularity_search_request
 
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.loops import get_loop
@@ -645,13 +646,14 @@ def _build_bootstrap_payload(
     preview_mode = "empty_shell"
     embedded_view_patch = None
     personal_search = is_private_search_request(query_args)
+    popularity_search = personal_search and is_popularity_search_request(query_args)
     if personal_search:
         # Cold HTML never reads ordinary Artist/Family rows for personal syntax,
         # including unsupported expressions. The guarded endpoint owns errors.
         initial_view = _build_empty_initial_view(config=config, query_raw=query_raw,
             selected_artist=selected_artist, active_surface="albums")
         initial_view.pop("music_dir", None)
-        initial_view["search_presentation"] = str(query_args.get("search_presentation") or "albums")
+        initial_view["search_presentation"] = str(query_args.get("search_presentation") or ("tracks" if popularity_search else "albums"))
         active_surface = "albums"
     elif library_browse_uses_postgres:
         if active_surface == "album_tops":
@@ -767,7 +769,7 @@ def _build_bootstrap_payload(
         pairs = list(query_args.multi_items())
         if "surface" not in query_args:
             pairs.append(("surface", "albums"))
-        if "payload_tier" not in query_args:
+        if not popularity_search and "payload_tier" not in query_args:
             pairs.append(("payload_tier", "full"))
         startup_hydration = {**startup_hydration, "required": True, "trigger": "after_runtime_boot",
             "endpoint": "/view-data?" + urlencode(pairs), "followupEndpoint": "", "tier": "full",

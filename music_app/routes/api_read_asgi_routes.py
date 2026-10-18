@@ -754,6 +754,24 @@ async def api_listener_search_native_targets(request: Request):
     return await listener_search_native_targets_response(request)
 
 
+@router.post("/search/popularity-native-bindings")
+async def api_popularity_search_native_bindings(request: Request):
+    from music_app.routes.private_search_asgi import popularity_search_native_bindings_response
+    return await popularity_search_native_bindings_response(request)
+
+
+@router.post("/search/popularity-native-target")
+async def api_popularity_search_native_target(request: Request):
+    from music_app.routes.private_search_asgi import popularity_search_native_target_response
+    return await popularity_search_native_target_response(request)
+
+
+@router.post("/search/popularity-native-targets")
+async def api_popularity_search_native_targets(request: Request):
+    from music_app.routes.private_search_asgi import popularity_search_native_targets_response
+    return await popularity_search_native_targets_response(request)
+
+
 @router.post("/search/native-targets")
 async def search_native_targets(request: Request) -> JSONResponse:
     from music_app.routes.private_search_asgi import private_search_native_targets_response

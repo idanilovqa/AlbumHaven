@@ -529,7 +529,7 @@ def test_injected_connector_capture_lock_commit_repeatable_read_profile_ledger_a
         indices = lambda fragment: [index for index, operation in enumerate(operations)
                                    if operation[0] == "sql" and fragment in operation[1]]
         gates, isolation = indices("pg_advisory_lock("), indices("set transaction isolation level repeatable read")
-        profiles = indices("for share of a,m,p")
+        profiles = indices("for share of a,m")
         ledger = indices("from integration.listen_history h")
         sessions = [index for index in indices("from app.account_sessions") if "for share nowait" in operations[index][1]]
         assert gates and len(isolation) == 1 and len(profiles) == 2 and ledger and len(sessions) == 1
@@ -616,7 +616,7 @@ def test_locked_profile_and_final_actual_session_share_hold_until_reader_commit(
     paused = False
     def after(sql):
         nonlocal paused
-        match = "for share of a,m,p" in sql if gate == "profile" else "from app.account_sessions" in sql and "for share nowait" in sql
+        match = "for share of a,m" in sql if gate == "profile" else "from app.account_sessions" in sql and "for share nowait" in sql
         if match and not paused:
             paused = True
             locked.set()
@@ -858,7 +858,7 @@ def test_signed_cursor_still_requires_actual_locked_subject_and_relationship_bin
         expect_search_error(409, "search_cursor_restart_required", lambda: listener_read(
             state, subject=state["peer"], cursor=cursor, connect=leases))
         assert_sequential_injected_leases(leases)
-        assert any(operation[0] == "sql" and "for share of a,m,p" in operation[1]
+        assert any(operation[0] == "sql" and "for share of a,m" in operation[1]
                    for operation in leases.home.operations)
         assert not any(operation[0] == "sql" and (
             "from integration.listen_history h" in operation[1]

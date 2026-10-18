@@ -125,7 +125,7 @@ def test_only_absent_cursor_starts_query_wrong_key_and_duplicate_json_fail():
     assert decode(None,secret=SECRET,purpose='cursor') is None
     data = payload()
     with pytest.raises(ValueError):
-        decode(encrypt(data),secret='different-test-only-secret',purpose='cursor')
+        decode(encrypt(data),secret='different-listener-test-only-secret-20261018',purpose='cursor')
     raw = json.dumps(data)[:-1] + ',"version":"listener-search-v1"}'
     duplicate = _cipher(SECRET).encrypt(raw.encode()).decode()
     with pytest.raises(ValueError):

@@ -13,7 +13,42 @@ from tests.py.listener_search_live_support import (
     CONTEXT_REF, SECRET, NOW, database_urls, mutable_ledger, social_ledger,
     read, request, service, error, profile, context_for, add_history_rows,
     seed_preference, revision, deny, assert_wire, expire_session_with_database_clock,
+    runtime_connect,
 )
+
+
+@pytest.mark.parametrize('friend',[False,True])
+def test_runtime_listener_read_keeps_social_profile_mutation_denied(social_ledger,friend):
+    state = social_ledger
+    subject = state['peer'] if friend else state['actor'].account_id
+    identity = profile(state['db'],subject)
+    checked = []
+
+    @contextmanager
+    def guarded_runtime_connect(url):
+        assert url == state['db'].app_url
+        with runtime_connect(url) as connection:
+            permissions = connection.execute("""select
+                pg_has_role(current_user,'album_haven_app','MEMBER') as app_role,
+                pg_has_role(current_user,'album_haven_migrator','MEMBER') as migrator_role,
+                has_table_privilege(current_user,'app.social_profiles','SELECT') as can_select,
+                has_table_privilege(current_user,'app.social_profiles','UPDATE') as can_update,
+                has_any_column_privilege(current_user,'app.social_profiles','UPDATE') as can_update_column,
+                has_table_privilege(current_user,'app.social_profiles','DELETE') as can_delete
+                """).fetchone()
+            assert permissions == {'app_role':True,'migrator_role':False,'can_select':True,
+                'can_update':False,'can_update_column':False,'can_delete':False}
+            # Finish the privilege probe before the service chooses isolation.
+            connection.commit()
+            checked.append(connection.info.backend_pid)
+            yield connection
+
+    value = read(state,subject=subject,connect=guarded_runtime_connect)
+    assert checked
+    assert_wire(value)
+    assert value['listener'] == {'account_ref':identity['account_ref'],
+        'username':identity['username_display'],'display_name':identity['display_name']}
+    assert value['page']['total_matches'] == (2 if friend else 3)
 
 
 @pytest.mark.parametrize('friend',[False,True])

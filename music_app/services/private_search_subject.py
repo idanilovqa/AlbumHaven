@@ -78,7 +78,7 @@ def read_locked_listener_profile(connection, *, account_id, username, library_id
         join library.library_memberships m on m.account_id=a.id and m.library_id=%s
         join app.social_profiles p on p.account_id=a.id
         where a.id=%s and a.username_normalized=%s and a.is_active and a.disabled_at is null
-        for share of a,m,p''', (library_id, account_id, username)).fetchone()
+        for share of a,m''', (library_id, account_id, username)).fetchone()
     if row is None or row['account_id'] != account_id:
         raise _denied()
     return row

@@ -321,8 +321,8 @@ class PostgresOwnedAlbumTopsService:
                 if any(top[key] != published_top[key] for key in ("ref", "owner_account_id", "library_id")):
                     raise AlbumTopError("unavailable", 404)
                 self._require(live, (BROWSE,), constraints, top)
-                _, sources = reader._manifest(connection, published_top, retained)
-                reader._owner(connection, published_top, sources, constraints)
+                _, sources, artwork_sources = reader._retained_manifest(connection, published_top, retained)
+                reader._owner(connection, published_top, sources, constraints, artwork_sources)
                 return ref
 
     def _replay_operation(self, connection, live, command, constraints, context_ref=None):

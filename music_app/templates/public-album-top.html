@@ -1,5 +1,7 @@
 <!doctype html>
 {% from "partials/button.html" import ui_link %}
+{% set has_artwork = payload is not none and payload.data.publication_contract_version is defined and payload.data.publication_contract_version == 2 %}
+{% set loading_message = 'Loading published metadata and approved artwork…' if has_artwork else 'Loading published metadata…' %}
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -16,13 +18,13 @@
   {% endif %}
 </head>
 <body class="public-album-top-page">
-  {% if payload is not none %}<p id="public-album-top-loading" class="public-album-top" role="status">Loading published metadata…</p>{% endif %}
+  {% if payload is not none %}<p id="public-album-top-loading" class="public-album-top" role="status">{{ loading_message }}</p>{% endif %}
   <main id="public-album-top-page" class="public-album-top" aria-live="polite"{% if payload is not none %} hidden{% endif %}>
     <header class="public-album-top__heading">
       <p class="public-album-top__eyebrow">AlbumHaven · Shared Album Top</p>
       <h1>{{ payload.data.title if payload is not none and payload.kind == 'top' else page_title }}</h1>
       {% if payload is not none and payload.kind == 'top' and payload.data.description %}<p class="public-album-top__description">{{ payload.data.description }}</p>{% endif %}
-      {% if payload is not none %}<p class="public-album-top__notice">Published album and track metadata. Audio and listening progress aren't included.</p>{% endif %}
+      {% if payload is not none %}<p class="public-album-top__notice">{% if has_artwork %}Published album and track metadata with approved artwork. Audio and listening progress aren't included.{% else %}Published album and track metadata. Audio and listening progress aren't included.{% endif %}</p>{% endif %}
       {% if payload is not none %}
       {% if working_path %}
       <p>{{ ui_link('Open in AlbumHaven', working_path, size='small') }}</p>
@@ -33,7 +35,7 @@
       {% endif %}
     </header>
     {% if payload is not none %}
-    <div id="public-album-top-content" class="public-album-top__content"><p role="status">Loading published metadata…</p></div>
+    <div id="public-album-top-content" class="public-album-top__content"><p role="status">{{ loading_message }}</p></div>
     {% else %}
     <p role="status">{{ error_message }}</p>
     {% endif %}
@@ -46,6 +48,6 @@
     {% endif %}
     {% if payload is not none %}<script id="public-album-top-data" type="application/json">{{ payload | tojson }}</script>{% endif %}
   </main>
-  {% if payload is not none %}<noscript><p class="public-album-top">Enable JavaScript to view this published metadata gallery.</p></noscript>{% endif %}
+  {% if payload is not none %}<noscript><p class="public-album-top">{% if has_artwork %}Enable JavaScript to view this published metadata and approved artwork gallery.{% else %}Enable JavaScript to view this published metadata gallery.{% endif %}</p></noscript>{% endif %}
 </body>
 </html>

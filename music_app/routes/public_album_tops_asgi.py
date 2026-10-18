@@ -1,4 +1,4 @@
-"""Explicitly deployed metadata-only immutable Album Top representations.
+"""Explicitly deployed immutable public metadata and approved sanitized PNGs.
 
 The same URL returns the same public metadata for signed-in visitors. Working
 Top navigation and media/progress authorization are separate later owners.
@@ -8,19 +8,23 @@ import re
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.owned_album_tops import AlbumTopError
 from music_app.services.policy import RequestOrigin
 from music_app.services.private_route_boundary import public_share_request_origin, album_top_working_link_path
-from music_app.services.public_album_tops import normalize_public_top_query, public_ref
+from music_app.services.public_album_tops import (
+    MAX_PUBLIC_PNG_BYTES, MAX_PUBLIC_RESPONSE_BYTES, normalize_public_top_query,
+    public_ref, snapshot_integer, validate_snapshot_v2,
+)
 from music_app.services.public_album_tops_postgres import PostgresPublicAlbumTopsService
 
 router = APIRouter()
 _HEADERS = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer", "Vary": "Accept"}
+_PNG_HEADERS = {key: value for key, value in _HEADERS.items() if key != "Vary"}
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 _MEDIA = re.compile(r"(?:[a-z0-9!#$&^_.+-]+|\*)/(?:[a-z0-9!#$&^_.+-]+|\*)\Z", re.ASCII)
 _QUALITY = re.compile(r"(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)\Z", re.ASCII)
@@ -77,6 +81,9 @@ def _html_payload(value, *, share_ref, item_ref, page):
         raise ValueError("Invalid public metadata projection")
     data = {key: source[key] for key in ("share_ref", "publication_ref", "publication_revision", "next_cursor")}
     data["allowed_actions"] = {key: source["allowed_actions"][key] for key in ("can_read", "can_open_item")}
+    if "publication_contract_version" in source:
+        validate_snapshot_v2(source, share_ref=share_ref, item_ref=item_ref, limit=page["limit"])
+        data["publication_contract_version"] = 2
     cursor = data["next_cursor"]
     if cursor is not None and (type(cursor) is not str or not 1 <= len(cursor) <= 4096):
         raise ValueError("Invalid public metadata cursor")
@@ -124,9 +131,11 @@ def _html_response(request, value, status, *, share_ref=None, item_ref=None, pag
             status_code=503, headers=_HEADERS)
 
 
-def _response(request, value, status=200, **subject):
+def _response(request, value, status=200, *, bounded=False, **subject):
     response = (_html_response(request, value, status, **subject) if _wants_html(request)
                 else JSONResponse(value, status_code=status, headers=_HEADERS))
+    if bounded and len(response.body) > MAX_PUBLIC_RESPONSE_BYTES:
+        raise AlbumTopError("unavailable", 503)
     if request.method == "HEAD":
         # Retain representation headers while sending no body; authorization and
         # current publication validation are identical to GET.
@@ -156,7 +165,33 @@ async def _read(request, share_ref, item_ref=None):
             constraints=resolver if callable(resolver) else None, **page)
         if public_share_request_origin(request) != origin:
             raise AlbumTopError("unavailable", 404)
-        return _response(request, {"status": "ready", "data": value}, **subject)
+        is_v2 = "publication_contract_version" in value
+        if is_v2:
+            validate_snapshot_v2(value, share_ref=share_ref, item_ref=item_ref, limit=page["limit"])
+            publication_ref = public_ref(value["publication_ref"])
+        else:
+            # A missing version must never turn artwork into legacy data and
+            # bypass post-construction admission. Preserve valid v1 doubles and
+            # its existing HTML positive projection of unrelated extra fields.
+            rows = value.get("items", [])
+            if type(rows) is not list or len(rows) > 100:
+                raise AlbumTopError("unavailable", 503)
+            if "item" in value:
+                rows = [*rows, value["item"]]
+            if any(type(row) is not dict or row.get("artwork_ref") is not None for row in rows):
+                raise AlbumTopError("unavailable", 503)
+        response = _response(request, {"status": "ready", "data": value}, bounded=is_v2, **subject)
+        if is_v2 and response.status_code == 200:
+            # Response construction is complete, including HEAD's suppressed
+            # representation. Fresh current authority is not a cached read.
+            await run_in_threadpool(service.recheck_guest_response, share_ref=share_ref,
+                publication_ref=publication_ref, publication_contract_version=2, item_ref=item_ref,
+                request_origin=RequestOrigin("network", origin),
+                constraints=resolver if callable(resolver) else None)
+            if public_share_request_origin(request) != origin:
+                raise AlbumTopError("unavailable", 404)
+            # No render, response SQL, hashing or intervening await follows.
+        return response
     except AlbumTopError as error:
         return _response(request, {"ok": False, "error": error.code}, error.status_code, **subject)
     except Exception:
@@ -171,3 +206,58 @@ async def read_public_album_top(request: Request, share_ref: str):
 @router.api_route("/public/album-tops/{share_ref}/items/{item_ref}", methods=["GET", "HEAD"])
 async def read_public_album_top_item(request: Request, share_ref: str, item_ref: str):
     return await _read(request, share_ref, item_ref)
+
+
+def _png_error(request, *, status, code):
+    response = JSONResponse({"ok": False, "error": code}, status_code=status, headers=_PNG_HEADERS)
+    if request.method == "HEAD":
+        response.body = b""
+    return response
+
+
+@router.api_route("/public/album-tops/{share_ref}/publications/{publication_ref}/items/{item_ref}/artwork/{asset_ref}.png",
+                  methods=["GET", "HEAD"])
+async def read_public_album_top_artwork(request: Request, share_ref: str, publication_ref: str,
+                                        item_ref: str, asset_ref: str):
+    try:
+        origin = public_share_request_origin(request)
+        if origin is None:
+            raise AlbumTopError("unavailable", 404)
+        share_ref, publication_ref = public_ref(share_ref), public_ref(publication_ref)
+        item_ref, asset_ref = public_ref(item_ref), public_ref(asset_ref)
+        if request.scope.get("query_string", b""):
+            raise AlbumTopError("invalid_query", 400)
+        service = getattr(request.app.state, "public_album_tops_service", None)
+        if service is None:
+            service = PostgresPublicAlbumTopsService(request.app.state.config)
+        resolver = getattr(request.app.state, "policy_constraint_resolver", None)
+        constraints = resolver if callable(resolver) else None
+        head_only = request.method == "HEAD"
+        value = await run_in_threadpool(service.read_guest_artwork, share_ref=share_ref,
+            publication_ref=publication_ref, item_ref=item_ref, asset_ref=asset_ref,
+            head_only=head_only, request_origin=RequestOrigin("network", origin), constraints=constraints)
+        if (type(value) is not dict or set(value) != {"content_type", "content_length", "body"}
+                or value["content_type"] != "image/png" or type(value["body"]) is not bytes):
+            raise AlbumTopError("unavailable", 503)
+        length = snapshot_integer(value["content_length"], maximum=MAX_PUBLIC_PNG_BYTES)
+        if len(value["body"]) != (0 if head_only else length):
+            raise AlbumTopError("unavailable", 503)
+        response = Response(value["body"], media_type="image/png",
+            headers={**_PNG_HEADERS, "Content-Length": str(length)})
+        # Conditional/Range headers never select a cache or partial-body path.
+        # GET bytes/hash and HEAD metadata were validated by the fixed reader;
+        # even GET's final admission uses a header-only query.
+        await run_in_threadpool(service.recheck_guest_response, share_ref=share_ref,
+            publication_ref=publication_ref, publication_contract_version=2,
+            item_ref=item_ref, asset_ref=asset_ref,
+            request_origin=RequestOrigin("network", origin), constraints=constraints)
+        if public_share_request_origin(request) != origin:
+            raise AlbumTopError("unavailable", 404)
+        return response
+    except AlbumTopError as error:
+        # The new image perimeter discloses no private authorization distinction.
+        status = error.status_code if error.status_code in (400, 404, 503) else 404
+        code = "invalid_query" if status == 400 and error.code == "invalid_query" else "unavailable"
+        return _png_error(request, status=status, code=code)
+    except Exception:
+        return _png_error(request, status=503, code="unavailable")

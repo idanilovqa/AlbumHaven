@@ -27,7 +27,8 @@ _PUBLIC_AUTH_PATHS = frozenset(
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _PUBLIC_SHARE_REF = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _PUBLIC_SHARE_PATH = re.compile(
-    rf"/public/album-tops/{_PUBLIC_SHARE_REF}(?:/items/{_PUBLIC_SHARE_REF})?", re.ASCII
+    rf"/public/album-tops/{_PUBLIC_SHARE_REF}(?:(?:/items/{_PUBLIC_SHARE_REF})?"
+    rf"|/publications/{_PUBLIC_SHARE_REF}/items/{_PUBLIC_SHARE_REF}/artwork/{_PUBLIC_SHARE_REF}\.png)", re.ASCII
 )
 _TOP_WORKING_ROUTE = "/album-tops/public-link/{share_ref}"
 _TOP_WORKING_PATH = re.compile(rf"/album-tops/public-link/({_PUBLIC_SHARE_REF})", re.ASCII)
@@ -462,7 +463,7 @@ def _is_public(method: str, path: str) -> bool:
 
 
 def public_share_request_origin(request: Request) -> str | None:
-    """Return the admitted origin for only the existing exact metadata perimeter."""
+    """Return the admitted origin for only the exact metadata/PNG perimeter."""
 
     config = getattr(request.app.state, "config", None)
     if (not isinstance(config, Mapping)

@@ -1,7 +1,8 @@
-/* Metadata-only document. The server owns admission; no private app is started. */
+/* Published document. The server owns admission; no private app is started. */
 (() => {
   'use strict';
   let page = null, payloadNode = null, content = null, payload = null, retired = false;
+  let artworkContainer = null, loadingMessage = 'Loading published metadata…';
   const genericTitle = 'Shared Album Top · AlbumHaven';
   function currentNodes() {
     page = document.getElementById('public-album-top-page');
@@ -10,6 +11,8 @@
   }
   function clear(message) {
     retired = true;
+    if (artworkContainer) artworkContainer.removeEventListener('error', artworkError, true);
+    artworkContainer = null;
     document.title = genericTitle;
     currentNodes();
     if (payloadNode) { payloadNode.textContent = ''; payloadNode.remove(); }
@@ -23,13 +26,13 @@
     page.replaceChildren(status);
     page.hidden = false;
   }
-  function retire() { clear('Loading published metadata…'); }
+  function retire() { clear(loadingMessage); }
   window.addEventListener('pagehide', retire);
   window.addEventListener('pageshow', event => {
     if (!event.persisted) return;
     retire();
     // A restored document must obtain a fresh checked response, never its DTO.
-    try { window.location.reload(); } catch (_) { /* Keep retired metadata empty. */ }
+    try { window.location.reload(); } catch (_) { /* Keep the retired document empty. */ }
   });
 
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -58,13 +61,14 @@
     }));
     return value;
   }
-  function item(value, share) {
+  function item(value, share, version) {
     record(value, itemKeys);
     identity(value.item_ref); identity(value.album_ref); identity(value.presentation_ref);
     decimal(value.original_position); integer(value.curator_position);
     text(value.title); text(value.artist);
     if (value.year !== null) integer(value.year, 1, 9999);
-    requireValue(value.artwork_ref === null);
+    if (version === 2 && value.artwork_ref !== null) identity(value.artwork_ref);
+    else requireValue(value.artwork_ref === null);
     requireValue(value.details_path === `/public/album-tops/${share}/items/${value.item_ref}`);
     return value;
   }
@@ -97,7 +101,12 @@
     }
     requireValue(limit === payload.limit);
     const common = ['share_ref', 'publication_ref', 'publication_revision', 'next_cursor', 'allowed_actions'];
-    const data = record(payload.data, [...common, ...(isItem ? ['item', 'tracks', 'track_count'] : ['title', 'description', 'items'])]);
+    const hasVersion = payload.data !== null && typeof payload.data === 'object'
+      && Object.hasOwn(payload.data, 'publication_contract_version');
+    const data = record(payload.data, [...common, ...(hasVersion ? ['publication_contract_version'] : []),
+      ...(isItem ? ['item', 'tracks', 'track_count'] : ['title', 'description', 'items'])]);
+    if (hasVersion) requireValue(data.publication_contract_version === 2);
+    const version = hasVersion ? 2 : 1;
     requireValue(data.share_ref === payload.share_ref);
     identity(data.publication_ref); decimal(data.publication_revision);
     record(data.allowed_actions, ['can_read', 'can_open_item']);
@@ -105,7 +114,7 @@
     requireValue(data.next_cursor === null || typeof data.next_cursor === 'string'
       && data.next_cursor.length >= 1 && data.next_cursor.length <= 4096);
     if (isItem) {
-      item(data.item, payload.share_ref); requireValue(data.item.item_ref === payload.item_ref);
+      item(data.item, payload.share_ref, version); requireValue(data.item.item_ref === payload.item_ref);
       integer(data.track_count, 0);
       rows(data.tracks, payload.limit, 'position', 'track_ref', track => {
         record(track, ['track_ref', 'position', 'title', 'artist', 'duration_ms']);
@@ -117,13 +126,36 @@
       requireValue(data.next_cursor === null || data.tracks.length === payload.limit && data.tracks.at(-1).position < data.track_count);
     } else {
       text(data.title, 100); text(data.description, 1000, true);
-      rows(data.items, payload.limit, 'curator_position', 'item_ref', value => item(value, payload.share_ref));
+      rows(data.items, payload.limit, 'curator_position', 'item_ref', value => item(value, payload.share_ref, version));
       requireValue(hasCursor || !data.items.length || data.items[0].curator_position === 1);
       requireValue(data.next_cursor === null || data.items.length === payload.limit);
     }
     return payload;
   }
-  function artwork(title) { return buildAlbumArtboxHtml({state: 'empty', label: `Artwork unavailable: ${title}`}); }
+  function artwork(value, data) {
+    if (data.publication_contract_version !== 2 || value.artwork_ref === null) {
+      return buildAlbumArtboxHtml({state: 'empty', label: `Artwork unavailable: ${value.title}`});
+    }
+    // Only validated publication/item/asset identities reach this path. No URL
+    // is accepted from the payload and the utility/private artbox is not used.
+    const path = `/public/album-tops/${data.share_ref}/publications/${data.publication_ref}/items/${value.item_ref}/artwork/${value.artwork_ref}.png`;
+    const label = `Published artwork: ${value.title}`;
+    return buildAlbumArtboxHtml({state: 'ready', label,
+      coverHtml: `<img class="public-album-top__image" data-public-album-artwork="1" src="${escapeHtml(path)}" alt="${escapeHtml(label)}" referrerpolicy="no-referrer" loading="lazy" decoding="async">`});
+  }
+  function artworkError(event) {
+    const container = artworkContainer, image = event.target;
+    if (retired || !container || container !== content || !page?.isConnected || !page.contains(container)
+      || image?.tagName !== 'IMG' || !container.contains(image)
+      || image.getAttribute('data-public-album-artwork') !== '1') return;
+    const artbox = image.closest('.album-artbox');
+    if (!artbox || !container.contains(artbox)) return;
+    const html = buildAlbumArtboxHtml({state: 'missing',
+      label: `Artwork unavailable: ${image.getAttribute('alt') || 'Published album artwork'}`});
+    // A late event, including one during retirement, cannot revive an image.
+    if (!retired && container === content && page?.isConnected && page.contains(container)
+      && container.contains(image) && container.contains(artbox)) artbox.outerHTML = html;
+  }
   function duration(milliseconds) {
     if (milliseconds === null) return '—';
     const seconds = Math.floor(milliseconds / 1000), hours = Math.floor(seconds / 3600);
@@ -135,7 +167,7 @@
     return `<div class="public-album-top__gallery">${data.items.map(value => {
       const card = buildGalleryCardHtml({interaction: 'none', displayMode: 'cards',
         identity: value.item_ref, title: value.title, artist: value.artist, year: value.year,
-        artboxHtml: artwork(value.title), listeningSummaryHtml: ''});
+        artboxHtml: artwork(value, data), listeningSummaryHtml: ''});
       return `<a class="public-album-top__card-link" href="${escapeHtml(value.details_path)}" aria-label="${escapeHtml(`Open ${value.title}, album ${value.curator_position}`)}">${card}</a>`;
     }).join('')}</div>`;
   }
@@ -152,7 +184,7 @@
       groups: [{tracks: data.tracks.map(track => ({trackNumber: track.position, title: track.title,
         secondaryArtist: track.artist, duration: duration(track.duration_ms)}))}],
     }) : '<p class="public-album-top__empty" role="status">No tracks on this published page.</p>';
-    return `<section class="public-album-top__detail" aria-labelledby="public-album-title"><div class="public-album-top__album-heading"><div class="public-album-top__artwork">${artwork(value.title)}</div>${header}</div><p class="public-album-top__track-count">${data.track_count} published track${data.track_count === 1 ? '' : 's'} · ${data.tracks.length} on this page</p>${tracks}</section>`;
+    return `<section class="public-album-top__detail" aria-labelledby="public-album-title"><div class="public-album-top__album-heading"><div class="public-album-top__artwork">${artwork(value, data)}</div>${header}</div><p class="public-album-top__track-count">${data.track_count} published track${data.track_count === 1 ? '' : 's'} · ${data.tracks.length} on this page</p>${tracks}</section>`;
   }
   function render() {
     currentNodes();
@@ -162,8 +194,18 @@
       requireValue(payloadNode && content && page.contains(payloadNode) && page.contains(content));
       requireValue(payloadNode.textContent.length <= 8000000);
       payload = validate(JSON.parse(payloadNode.textContent));
+      const hasArtwork = payload.data.publication_contract_version === 2;
+      if (hasArtwork) loadingMessage = 'Loading published metadata and approved artwork…';
       const html = payload.kind === 'top' ? gallery(payload.data) : detail(payload.data);
-      if (!retired) content.innerHTML = html;
+      if (!retired) {
+        if (hasArtwork) {
+          // One capture listener covers this bounded page, including native
+          // image errors queued as soon as the markup is inserted.
+          artworkContainer = content;
+          artworkContainer.addEventListener('error', artworkError, true);
+        }
+        content.innerHTML = html;
+      }
       if (!retired) {
         document.getElementById('public-album-top-loading')?.remove();
         page.hidden = false;

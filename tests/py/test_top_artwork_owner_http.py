@@ -75,8 +75,10 @@ def witness():
 def descriptor(kind='saved', *, action='enable_external'):
     value = {'version': 2, 'kind': kind, 'preparation_ref': PREPARATION,
         'preparation_revision': '1', 'context_ref': CONTEXT, 'review_witness': witness(),
-        'publication_intent': {'version': 1, 'action': action, 'link_state': 'no_link',
-            'link_revision': None, 'intent_digest': '4' * 64, 'token': 'opaque-intent-unit-fixture'}}
+        'publication_intent': {'version': 1, 'action': action,
+            'link_state': 'enabled' if action == 'save' else 'no_link',
+            'link_revision': '1' if action == 'save' else None,
+            'intent_digest': '4' * 64, 'token': 'opaque-intent-unit-fixture'}}
     if kind == 'draft': value.update(draft_ref=DRAFT, draft_revision='1')
     return value
 
@@ -611,4 +613,19 @@ def test_mounted_artwork_early_errors_are_sanitized_private(adapters, monkeypatc
     assert status == 503
     assert json.loads(raw) == {'ok': False, 'error': 'unavailable'}
     assert dict(pairs)[b'cache-control'] == b'private, no-store'
+    assert all_calls(adapters) == []
+
+
+@pytest.mark.parametrize('kind', ['saved', 'draft'])
+@pytest.mark.parametrize('link_state,link_revision', [('no_link', None), ('revoked', '1'), ('enabled', None)])
+def test_save_requires_an_enabled_link_intent_with_revision_before_owner_dispatch(adapters, kind, link_state, link_revision):
+    # Save updates an existing published link; initial publication uses Enable.
+    # These route fixtures are shape witnesses, not authenticated review tokens.
+    app = middleware_app(adapters[0], actor())
+    payload = body_for('save', kind)
+    payload['artwork_publication']['publication_intent'].update(
+        link_state=link_state, link_revision=link_revision)
+    status, body, _ = json_exchange(app, 'save', kind=kind, payload=payload)
+    assert status == 409
+    assert body == {'ok': False, 'error': 'invalid_or_stale_review'}
     assert all_calls(adapters) == []

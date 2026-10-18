@@ -19,7 +19,7 @@ def require_source_browse(context, source, constraints):
         raise AlbumTopError("forbidden", 403) from None
 
 
-def publication_owner_eligibility(connection, *, top, config, sources, constraints):
+def publication_owner_eligibility(connection, *, top, config, sources, constraints, artwork_sources=()):
     """Caller locks owner accounts before membership/Top/link, never afterward.
 
     This context is policy-only. It must never enter current_library_transaction
@@ -55,6 +55,14 @@ def publication_owner_eligibility(connection, *, top, config, sources, constrain
             require_private_action(context, action, resource=context.resource, constraints=constraints)
         for source in sources:
             require_source_browse(context, source, constraints)
+        for source in artwork_sources:
+            album, root = source['selected_local_album_id'], source['artwork_root_id']
+            if type(album) is not int or album <= 0 or type(root) is not int or root <= 0:
+                raise ValueError('Artwork scope unavailable')
+            require_private_action(context, 'library.artwork.read',
+                resource=ResourceScope('album', str(album)), constraints=constraints)
+            require_private_action(context, BROWSE,
+                resource=ResourceScope('library_root', str(root)), constraints=constraints)
     except AlbumTopError:
         raise
     except (ValueError, PrivateLibraryAuthorityError):
@@ -67,3 +75,10 @@ def retained_sources(connection, publication_ref):
         e.selected_library_root_id from app.album_list_publication_items i
         join library.album_presentation_evidence e on e.presentation_ref=i.presentation_ref
         where i.publication_ref=%s""", (publication_ref,)).fetchall()
+
+
+def retained_artwork_sources(connection, publication_ref):
+    """Compact immutable scope only; never expose/interpret private proof bytes."""
+    return connection.execute('''select distinct local_album_id as selected_local_album_id,artwork_root_id
+        from app.album_top_artwork_publication_rows where publication_ref=%s and included
+        order by local_album_id,artwork_root_id''', (publication_ref,)).fetchall()

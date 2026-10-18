@@ -142,6 +142,8 @@ class TopArtworkPreparationService:
                     raise AlbumTopError('request_key_conflict', 409) from None
                 if constraint == 'top_artwork_request_expired':
                     raise AlbumTopError('artwork_request_expired', 409) from None
+                if constraint == 'top_artwork_preparation_consumed':
+                    raise AlbumTopError('artwork_preparation_consumed', 409) from None
                 if constraint == 'top_artwork_retention_limit':
                     raise AlbumTopError('artwork_retention_limit', 409) from None
                 if constraint == 'top_artwork_publication_budget' or constraint.startswith('album_top_artwork_budgets_'):
@@ -152,6 +154,19 @@ class TopArtworkPreparationService:
     def _top(self, connection, live, ref, revision, constraints, *, write=False):
         top = self.owner._top(connection, live, ref, write=write)
         self.owner._require(live, _ACTIONS, constraints, top, owner_only=True)
+        if str(top['revision']) != str(revision):
+            raise AlbumTopError('revision_conflict', 409)
+        return top
+
+    def _start_top(self, connection, live, ref, revision, key, constraints):
+        # Current scope/owner non-disclosure precedes consumed-key recovery;
+        # old revision and source/preparation discovery deliberately follow it.
+        top = self.owner._top(connection, live, ref, write=True)
+        self.owner._require(live, _ACTIONS, constraints, top, owner_only=True)
+        consumed = connection.execute('select app.top_artwork_start_consumed(%s,%s,%s,%s) as consumed',
+            (ref, live.library_id, live.actor.account_id, key)).fetchone()['consumed']
+        if consumed:
+            raise AlbumTopError('artwork_preparation_consumed', 409)
         if str(top['revision']) != str(revision):
             raise AlbumTopError('revision_conflict', 409)
         return top
@@ -219,7 +234,7 @@ class TopArtworkPreparationService:
         command = artwork_draft.normalize(payload)
         draft = command['draft']
         with self._authorized(context, constraints) as (connection, live, _):
-            top = self._top(connection, live, ref, draft['revision'], constraints, write=True)
+            top = self._start_top(connection, live, ref, draft['revision'], command['request_key'], constraints)
             current = publication.working_items(connection, top)
             publication.validate_draft_membership(draft['items'], current)
             # Every selected album, including excluded rows, is locked before
@@ -466,6 +481,35 @@ class TopArtworkPreparationService:
         review_owner.require_key(cursor_secret)
         return preparation_phases.review(self, identity, kind='draft',
             preparation_revision=revision, cursor_secret=cursor_secret, constraints=constraints)
+
+    def review_publication_saved(self, context, *, top_ref, top_revision, preparation_ref,
+                                 preparation_revision, context_ref, cursor_secret,
+                                 title, description, action, constraints=None):
+        identity, revision = _review_identity(context, kind='saved', top_ref=top_ref,
+            top_revision_value=top_revision, preparation_ref=preparation_ref,
+            preparation_revision=preparation_revision, context_ref=context_ref)
+        header = review_owner.publication_header(title, description)
+        if type(action) is not str or action not in ('save', 'enable_external'):
+            raise AlbumTopError('invalid_command')
+        review_owner.require_key(cursor_secret)
+        return preparation_phases.publication_review(self, identity, kind='saved',
+            preparation_revision=revision, cursor_secret=cursor_secret, header=header,
+            action=action, constraints=constraints)
+
+    def review_publication_draft(self, context, *, top_ref, top_revision, preparation_ref,
+                                 preparation_revision, draft_ref, draft_revision, context_ref,
+                                 cursor_secret, title, description, action, constraints=None):
+        identity, revision = _review_identity(context, kind='draft', top_ref=top_ref,
+            top_revision_value=top_revision, preparation_ref=preparation_ref,
+            preparation_revision=preparation_revision, context_ref=context_ref,
+            draft_ref=draft_ref, draft_revision=draft_revision)
+        header = review_owner.publication_header(title, description)
+        if type(action) is not str or action not in ('save', 'enable_external'):
+            raise AlbumTopError('invalid_command')
+        review_owner.require_key(cursor_secret)
+        return preparation_phases.publication_review(self, identity, kind='draft',
+            preparation_revision=revision, cursor_secret=cursor_secret, header=header,
+            action=action, constraints=constraints)
 
     def read_saved_png(self, context, *, top_ref, top_revision, preparation_ref,
                        preparation_revision, context_ref, cursor_secret, review_witness,

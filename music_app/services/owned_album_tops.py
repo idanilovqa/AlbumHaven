@@ -234,8 +234,8 @@ def normalize_top_publication_preview(payload):
 def normalize_top_command(action: str, payload: object, *, top_ref: object = None) -> AlbumTopCommand:
     fields = {
         "create": {"request_key", "title", "description", "album_refs", "draft_ref", "selections"},
-        "save": {"request_key", "revision", "title", "description", "items", "item_selections", "evidence_revision"},
-        "enable_external": {"request_key", "revision", "title", "description", "items", "evidence_revision"},
+        "save": {"request_key", "revision", "title", "description", "items", "item_selections", "evidence_revision", "artwork_publication"},
+        "enable_external": {"request_key", "revision", "title", "description", "items", "evidence_revision", "artwork_publication"},
         "revoke_external": {"request_key", "revision"},
         "add": {"request_key", "revision", "album_refs", "selections"},
         "remove": {"request_key", "revision", "item_refs"},
@@ -316,6 +316,16 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
         if "title" in payload:
             data["title"] = _text(payload["title"], 100, title=True)
     elif action in {"save", "enable_external"}:
+        if 'artwork_publication' in payload:
+            # Must land with execute's replay-first/key-fenced v2 dispatch.
+            # A descriptor can never be silently forwarded to the v1 saver.
+            from music_app.services import album_top_artwork_review as artwork_review
+            if (not {'title', 'description', 'items', 'evidence_revision'} <= payload.keys()
+                    or 'item_selections' in payload):
+                raise AlbumTopError('invalid_command')
+            data.update(artwork_review.publication_header(payload['title'], payload['description']))
+            data['items'] = _draft_items(payload['items'], require_sources=True)
+            data['artwork_publication'] = artwork_review.normalize_publication_descriptor(payload['artwork_publication'])
         if "title" in payload:
             data["title"] = _text(payload["title"], 100, title=True)
         if "description" in payload:

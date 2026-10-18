@@ -394,8 +394,8 @@ def normalize_witness(value):
     return dict(value)
 
 
-def finish_review(snapshot, state, *, kind, cursor_secret):
-    """Fresh second-phase comparison (or the explicit no-image first phase)."""
+def _review_response(snapshot, state, *, kind, cursor_secret):
+    """Fixed bounded B response builder; caller serializes its whole envelope."""
     secret = require_key(cursor_secret)
     asset_digest, review_digest, total = _compact(snapshot, kind=kind,
         metadata_evidence_revision=state['metadata_evidence_revision'])
@@ -423,6 +423,12 @@ def finish_review(snapshot, state, *, kind, cursor_secret):
     if pending_size - 4 + witness_size > _MAX_SUMMARY:
         _limit()
     response['review_witness'] = witness
+    return response
+
+
+def finish_review(snapshot, state, *, kind, cursor_secret):
+    """Fresh second-phase comparison (or the explicit no-image first phase)."""
+    response = _review_response(snapshot, state, kind=kind, cursor_secret=cursor_secret)
     # Fixed approved primitives only. Encoding is bounded before allocation.
     evidence.canonical(response)
     return response
@@ -447,6 +453,130 @@ def verify_witness(snapshot, witness, *, kind, cursor_secret):
     asset_digest, review_digest, _ = _compact(snapshot, kind=kind,
         metadata_evidence_revision=witness['metadata_evidence_revision'])
     if asset_digest != witness['asset_manifest_digest'] or review_digest != witness['review_digest']:
+        _invalid_review()
+
+
+_INTENT_DOMAIN = 'private-top-artwork-publication-intent-v1'
+_INTENT_KEYS = frozenset(('version', 'action', 'link_state', 'link_revision', 'intent_digest', 'token'))
+_MAX_INTENT = 6144
+_MAX_PUBLICATION_INPUT = 12288
+
+
+def publication_header(title, description):
+    from music_app.services.owned_album_tops import _text
+    title, description = _text(title, 100, title=True), _text(description, 1000)
+    if any(ord(char) < 32 or ord(char) == 127 for char in title + description):
+        raise AlbumTopError('invalid_command')
+    return {'title': title, 'description': description}
+
+
+def publication_link(link):
+    if link is None:
+        return {'link_state': 'no_link', 'link_revision': None}
+    if link['state'] not in ('enabled', 'revoked'):
+        _unavailable()
+    return {'link_state': link['state'], 'link_revision': str(_integer(link['link_revision']))}
+
+
+def normalize_publication_intent(value):
+    if type(value) is not dict or set(value) != _INTENT_KEYS:
+        _invalid_review()
+    if type(value['version']) is not int or value['version'] != 1:
+        _invalid_review()
+    if (type(value['action']) is not str or value['action'] not in ('save', 'enable_external')
+            or type(value['link_state']) is not str or value['link_state'] not in ('no_link', 'enabled', 'revoked')):
+        _invalid_review()
+    try:
+        if value['link_state'] == 'no_link':
+            if value['link_revision'] is not None:
+                _invalid_review()
+        else:
+            _decimal(value['link_revision'])
+        if value['action'] == 'save' and value['link_state'] != 'enabled':
+            _invalid_review()
+        if not _hex(value['intent_digest']):
+            _invalid_review()
+        token = value['token']
+        if type(token) is not str or not 1 <= len(token) <= _MAX_TOKEN or not token.isascii():
+            _invalid_review()
+        _json_size(value, _MAX_INTENT)
+    except AlbumTopError:
+        _invalid_review()
+    return dict(value)
+
+
+def normalize_publication_descriptor(value):
+    """Bound request shape only; crypto/key/preparation access follows replay."""
+    from music_app.services.owned_album_tops import top_revision
+    common = {'version', 'kind', 'preparation_ref', 'preparation_revision',
+              'context_ref', 'review_witness', 'publication_intent'}
+    if type(value) is not dict or type(value.get('kind')) is not str or value['kind'] not in ('saved', 'draft'):
+        raise AlbumTopError('invalid_command')
+    expected = common | ({'draft_ref', 'draft_revision'} if value['kind'] == 'draft' else set())
+    if (set(value) != expected or type(value['version']) is not int or value['version'] != 2
+            or not _hex(value['context_ref'])):
+        raise AlbumTopError('invalid_command')
+    # The complete envelope is charged before decoding either opaque token.
+    _json_size(value, _MAX_PUBLICATION_INPUT)
+    result = {'version': 2, 'kind': value['kind'], 'preparation_ref': _uuid(value['preparation_ref']),
+              'preparation_revision': top_revision(value['preparation_revision']),
+              'context_ref': value['context_ref'], 'review_witness': normalize_witness(value['review_witness']),
+              'publication_intent': normalize_publication_intent(value['publication_intent'])}
+    if value['kind'] == 'draft':
+        result.update(draft_ref=_uuid(value['draft_ref']), draft_revision=top_revision(value['draft_revision']))
+    return result
+
+
+def _publication_scope(snapshot, witness, *, kind, header, action, link):
+    if action not in ('save', 'enable_external') or action == 'save' and link['link_state'] != 'enabled':
+        _invalid_review()
+    return [_INTENT_DOMAIN, 1, kind, *_identity(snapshot, kind), snapshot['digest'],
+            witness['metadata_generation'], witness['metadata_evidence_revision'],
+            witness['asset_manifest_digest'], witness['review_digest'],
+            header['title'], header['description'], action, link['link_state'], link['link_revision']]
+
+
+def finish_publication_review(snapshot, state, *, kind, cursor_secret, header, action, link):
+    response = _review_response(snapshot, state, kind=kind, cursor_secret=cursor_secret)
+    scope = _publication_scope(snapshot, response['review_witness'], kind=kind,
+                               header=header, action=action, link=link)
+    _json_size(scope, _MAX_INTENT)
+    digest = evidence.digest(scope)
+    try:
+        # Commit to the complete bounded scope through its digest. Encoding a
+        # 1000-character Unicode description directly in the cursor's ASCII
+        # JSON could exceed the unchanged 4096-byte token contract.
+        token = encode_social_cursor(snapshot['metadata_generation'] + 1,
+            secret=require_key(cursor_secret), scope=[_INTENT_DOMAIN, 1, digest])
+    except RuntimeError:
+        raise AlbumTopError('review_key_unavailable', 503) from None
+    intent = normalize_publication_intent({'version': 1, 'action': action, **link,
+                                          'intent_digest': digest, 'token': token})
+    response.update(proposed_header=dict(header), publication_intent=intent)
+    _json_size(response, _MAX_SUMMARY)
+    evidence.canonical(response)
+    return response
+
+
+def verify_publication_intent(snapshot, descriptor, *, cursor_secret, header, action, link):
+    kind = descriptor['kind']
+    verify_witness(snapshot, descriptor['review_witness'], kind=kind, cursor_secret=cursor_secret)
+    intent = normalize_publication_intent(descriptor['publication_intent'])
+    scope = _publication_scope(snapshot, descriptor['review_witness'], kind=kind,
+                               header=header, action=action, link=link)
+    _json_size(scope, _MAX_INTENT)
+    digest = evidence.digest(scope)
+    if (intent['action'] != action or any(intent[key] != link[key] for key in link)
+            or intent['intent_digest'] != digest):
+        _invalid_review()
+    try:
+        position = decode_social_cursor(intent['token'], secret=require_key(cursor_secret),
+                                        scope=[_INTENT_DOMAIN, 1, digest])
+    except RuntimeError:
+        raise AlbumTopError('review_key_unavailable', 503) from None
+    except ValueError:
+        _invalid_review()
+    if position != snapshot['metadata_generation'] + 1:
         _invalid_review()
 
 

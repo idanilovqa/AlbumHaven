@@ -7,7 +7,7 @@ from music_app.services.auth_config import build_public_sharing_config
 from music_app.services.owned_album_tops import AlbumTopError, BROWSE, MANAGE, ITEMS, ACCESS
 from music_app.services import album_top_publication_evidence as evidence
 from music_app.services.album_top_publication_authority import (
-    publication_owner_eligibility, retained_sources,
+    publication_owner_eligibility, retained_sources, retained_artwork_sources,
 )
 
 _MAX_REVISION = 9223372036854775807
@@ -19,6 +19,39 @@ def lock_link(connection, top, *, write=False):
         + ("update" if write else "share"), (top["ref"], top["library_id"])).fetchone()
 
 
+def publication_version(connection, top, publication_ref):
+    """Exact matching seal/header scope, without consulting working members."""
+    row = connection.execute('''select p.contract_version from app.album_list_publications p
+        join app.album_list_publication_seals s on s.publication_ref=p.ref
+          and s.seal_contract_version=p.contract_version and s.sealed_at is not null
+          and s.content_digest ~ '^[0-9a-f]{64}$'
+        where p.ref=%s and p.top_ref=%s and p.library_id=%s
+          and p.approved_by_account_id=%s''',
+        (publication_ref, top['ref'], top['library_id'], top['owner_account_id'])).fetchone()
+    if row is None or row['contract_version'] not in (1, 2):
+        raise AlbumTopError('evidence_unavailable', 409)
+    if row['contract_version'] == 2:
+        # Separate query preserves v1-only historical schemas and behavior.
+        if connection.execute('''select l.publication_ref from app.album_top_artwork_publication_lineage l
+            join app.album_top_artwork_publication_consumptions c using(publication_ref)
+            join app.album_list_publication_seals s using(publication_ref)
+            where l.publication_ref=%s and l.top_ref=%s and l.library_id=%s and l.owner_account_id=%s
+              and c.build_xid=l.build_xid and s.build_xid=l.build_xid and c.seal_digest=s.content_digest
+              and c.preparation_ref=l.preparation_ref and c.removed_items=l.row_count
+              and c.released_proof_bytes=l.proof_reservation and c.consumed_at<l.expires_at
+              and l.row_count=(select count(*) from app.album_top_artwork_publication_rows r
+                where r.publication_ref=l.publication_ref)''',
+            (publication_ref, top['ref'], top['library_id'], top['owner_account_id'])).fetchone() is None:
+            raise AlbumTopError('evidence_unavailable', 409)
+    return row['contract_version']
+
+
+def require_metadata_save_allowed(connection, top, link):
+    if link is not None and link['state'] == 'enabled' and publication_version(
+            connection, top, link['active_publication_ref']) == 2:
+        raise AlbumTopError('artwork_review_required', 409)
+
+
 def saved_projection(service, connection, live, top, constraints):
     """Owner-only saved publication facts; deployment consent never changes state.
 
@@ -28,6 +61,7 @@ def saved_projection(service, connection, live, top, constraints):
     """
     service._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
     link = lock_link(connection, top)
+    version = None
     result = {"state": "unpublished", "share_ref": None, "link_revision": None,
               "publication_ref": None, "publication_revision": None}
     if link is not None:
@@ -35,16 +69,22 @@ def saved_projection(service, connection, live, top, constraints):
             raise AlbumTopError("publication_unavailable", 503)
         result = _publication_receipt(link)
         if link["state"] == "enabled":
-            row = connection.execute("""select p.ref,p.publication_revision
+            row = connection.execute("""select p.ref,p.publication_revision,p.contract_version
                 from app.album_list_publications p join app.album_list_publication_seals s
                   on s.publication_ref=p.ref and s.sealed_at is not null
-                    and s.seal_contract_version=1 and s.content_digest ~ '^[0-9a-f]{64}$'
+                    and s.seal_contract_version=p.contract_version and s.content_digest ~ '^[0-9a-f]{64}$'
                 where p.ref=%s and p.top_ref=%s and p.library_id=%s
-                  and p.approved_by_account_id=%s and p.contract_version=1""",
+                  and p.approved_by_account_id=%s and p.contract_version in (1,2)""",
                 (link["active_publication_ref"], top["ref"], top["library_id"],
                  top["owner_account_id"])).fetchone()
             if row is None:
                 raise AlbumTopError("publication_unavailable", 503)
+            version = row['contract_version']
+            if version == 2:
+                try:
+                    publication_version(connection, top, row['ref'])
+                except AlbumTopError:
+                    raise AlbumTopError('publication_unavailable', 503) from None
             result = _publication_receipt(link, str(row["ref"]), row["publication_revision"])
         elif link["active_publication_ref"] is not None:
             raise AlbumTopError("publication_unavailable", 503)
@@ -63,6 +103,11 @@ def saved_projection(service, connection, live, top, constraints):
     # A resolver can change while the link read waits. Recheck before emitting
     # owner-only identifiers, even though database grants/session are locked.
     service._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
+    if version == 2:
+        publication_owner_eligibility(connection, top=top, config=service._config,
+            sources=retained_sources(connection, link['active_publication_ref']), constraints=constraints,
+            artwork_sources=retained_artwork_sources(connection, link['active_publication_ref']))
+        service._require(live, (BROWSE, ACCESS), constraints, top, owner_only=True)
     path = "/public/album-tops/" + result["share_ref"] if result["state"] == "enabled" else None
     return {**result, "public_path": path,
             "public_url": origin + path if origin is not None and path is not None else None,
@@ -225,6 +270,8 @@ def _publish(connection, top, link, capture, final, *, title, description, revis
 
 def save(service, connection, live, command, top, now, constraints):
     """Return the private receipt and its server-owned replay classification."""
+    if 'artwork_publication' in command.data:
+        raise AlbumTopError('artwork_review_required', 409)
     link = lock_link(connection, top, write=True)
     if top["revision"] == _MAX_REVISION:
         raise AlbumTopError("revision_exhausted", 409)
@@ -245,6 +292,8 @@ def save(service, connection, live, command, top, now, constraints):
         if publishing:
             actions.append(ACCESS)
         service._require(live, tuple(actions), constraints, top, owner_only=publishing)
+        if publishing:
+            require_metadata_save_allowed(connection, top, link)
         validate_draft(service, connection, live, top, items, current, constraints)
         captured = None
         if publishing:
@@ -290,10 +339,9 @@ def replay(service, connection, live, command, top, prior, constraints):
         if top["deleted_at"] is not None:
             raise AlbumTopError("top_unavailable", 404)
         lock_link(connection, top)
-        if connection.execute("""select publication_ref from app.album_list_publication_seals
-            where publication_ref=%s and sealed_at is not null and seal_contract_version=1""",
-            (prior["publication_ref"],)).fetchone() is None:
-            raise AlbumTopError("evidence_unavailable", 409)
+        version = publication_version(connection, top, prior['publication_ref'])
+        artwork = retained_artwork_sources(connection, prior['publication_ref']) if version == 2 else ()
         publication_owner_eligibility(connection, top=top, config=service._config,
-            sources=retained_sources(connection, prior["publication_ref"]), constraints=constraints)
+            sources=retained_sources(connection, prior["publication_ref"]), constraints=constraints,
+            artwork_sources=artwork)
         service._require(live, actions, constraints, top, owner_only=True)

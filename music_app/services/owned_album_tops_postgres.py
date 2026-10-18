@@ -325,7 +325,60 @@ class PostgresOwnedAlbumTopsService:
                 reader._owner(connection, published_top, sources, constraints)
                 return ref
 
-    def execute(self, context, command: AlbumTopCommand, *, constraints=None, context_ref=None):
+    def _replay_operation(self, connection, live, command, constraints, context_ref=None):
+        """Fixed locked receipt owner; no new-request key or preparation access."""
+        typed = remote_membership.typed_command(command)
+        manual_progress = command.action == 'set_manual_completion'
+        private_state = manual_progress or command.action == 'set_activity'
+        # Actor lock held by current_library_transaction serializes operation keys.
+        prior = connection.execute("""select command_digest,receipt,top_ref,required_actions,publication_ref from app.album_list_operations
+            where actor_account_id=%s and library_id=%s and request_key=%s""",
+            (live.actor.account_id, live.library_id, command.request_key)).fetchone()
+        if prior:
+            if prior["command_digest"] != command.digest:
+                raise AlbumTopError("request_key_conflict", 409)
+            retained = self._top(connection, live, str(prior["top_ref"]),
+                                 allow_deleted=not private_state and prior["publication_ref"] is None)
+            if private_state:
+                # The parent lock can outlive session validity. Check before
+                # replay work as well as at the final commit boundary.
+                lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
+                    actor_session_id=live.actor.session_id, clock=self._clock)
+            self._require(live, (BROWSE,), constraints, retained)
+            self._require(live, command_actions(command), constraints,
+                retained if command.action not in {"create", "copy"} else None,
+                owner_only=command.action == "delete")
+            # Copy receipts bind the destination. Source edits or revocation
+            # cannot duplicate a landed copy, including from a new session.
+            if command.action in {"create", "copy"} and retained["owner_account_id"] != live.actor.account_id:
+                raise AlbumTopError("top_unavailable", 404)
+            retained_version = publication.publication_version(connection, retained, prior['publication_ref']) if prior['publication_ref'] is not None else None
+            remote_replay = retained_version != 2 and command.action in {'save', 'copy'} and (
+                prior['receipt'].get('remote_membership') is True
+                or remote_membership.bindings(connection, retained))
+            if remote_replay:
+                remote_membership.require_context(context_ref)
+            if manual_progress:
+                progress.require_member(connection, live, retained, command.data["album_ref"])
+            publication.replay(self, connection, live, command, retained, prior, constraints)
+            if typed or remote_replay:
+                self._require(live, (BROWSE,), constraints, retained)
+                self._require(live, tuple(prior['required_actions']) or command_actions(command), constraints,
+                    retained if command.action not in {'create', 'copy'} else None,
+                    owner_only=prior['publication_ref'] is not None)
+            return dict(prior["receipt"])
+        return None
+
+    @staticmethod
+    def _insert_operation(connection, live, command, receipt, required_actions):
+        from psycopg.types.json import Jsonb
+        connection.execute("""insert into app.album_list_operations
+            (actor_account_id,library_id,request_key,original_session_id,action,top_ref,command_digest,receipt,required_actions,publication_ref)
+            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (live.actor.account_id, live.library_id,
+            command.request_key, live.actor.session_id, command.action, receipt["top_ref"], command.digest,
+            Jsonb(receipt), list(required_actions), receipt.get("publication", {}).get("publication_ref")))
+
+    def execute(self, context, command: AlbumTopCommand, *, constraints=None, context_ref=None, cursor_secret=None):
         from psycopg.types.json import Jsonb
         if not isinstance(command, AlbumTopCommand):
             raise AlbumTopError("invalid_command")
@@ -333,6 +386,12 @@ class PostgresOwnedAlbumTopsService:
             raise AlbumTopError("invalid_command")
         command = normalize_top_command(command.action,
             {**command.data, "request_key": command.request_key}, top_ref=command.top_ref)
+        if 'artwork_publication' in command.data:
+            # Paired atomically with descriptor normalization. Current routes
+            # never supply this server-only key; landed replay needs no key.
+            from music_app.services import _top_artwork_preparation_phases as artwork_phases
+            return artwork_phases.publish(self, context, command,
+                cursor_secret=cursor_secret, constraints=constraints)
         typed = remote_membership.typed_command(command)
         if typed:
             context_ref = remote_membership.require_context(context_ref)
@@ -399,42 +458,9 @@ class PostgresOwnedAlbumTopsService:
                 lock_target = request["requester_account_id"] if request else None
         with self._authorized(context, constraints, target_account_id=lock_target,
                               target_account_ids=copied_actor_ids) as (connection, live, now):
-            # Actor lock held by current_library_transaction serializes operation keys.
-            prior = connection.execute("""select command_digest,receipt,top_ref,required_actions,publication_ref from app.album_list_operations
-                where actor_account_id=%s and library_id=%s and request_key=%s""",
-                (live.actor.account_id, live.library_id, command.request_key)).fetchone()
-            if prior:
-                if prior["command_digest"] != command.digest:
-                    raise AlbumTopError("request_key_conflict", 409)
-                retained = self._top(connection, live, str(prior["top_ref"]),
-                                     allow_deleted=not private_state and prior["publication_ref"] is None)
-                if private_state:
-                    # The parent lock can outlive session validity. Check before
-                    # replay work as well as at the final commit boundary.
-                    lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
-                        actor_session_id=live.actor.session_id, clock=self._clock)
-                self._require(live, (BROWSE,), constraints, retained)
-                self._require(live, command_actions(command), constraints,
-                    retained if command.action not in {"create", "copy"} else None,
-                    owner_only=command.action == "delete")
-                # Copy receipts bind the destination. Source edits or revocation
-                # cannot duplicate a landed copy, including from a new session.
-                if command.action in {"create", "copy"} and retained["owner_account_id"] != live.actor.account_id:
-                    raise AlbumTopError("top_unavailable", 404)
-                remote_replay = command.action in {'save', 'copy'} and (
-                    prior['receipt'].get('remote_membership') is True
-                    or remote_membership.bindings(connection, retained))
-                if remote_replay:
-                    remote_membership.require_context(context_ref)
-                if manual_progress:
-                    progress.require_member(connection, live, retained, command.data["album_ref"])
-                publication.replay(self, connection, live, command, retained, prior, constraints)
-                if typed or remote_replay:
-                    self._require(live, (BROWSE,), constraints, retained)
-                    self._require(live, tuple(prior['required_actions']) or command_actions(command), constraints,
-                        retained if command.action not in {'create', 'copy'} else None,
-                        owner_only=prior['publication_ref'] is not None)
-                return dict(prior["receipt"])
+            replayed = self._replay_operation(connection, live, command, constraints, context_ref)
+            if replayed is not None:
+                return replayed
             if copy_receipt_seen or pending_receipt_seen:
                 # A discovered receipt is never authority or permission to
                 # omit required locks for a new command. A disappeared receipt
@@ -495,11 +521,7 @@ class PostgresOwnedAlbumTopsService:
             else:
                 receipt = self._mutate(connection, live, command, top, now, constraints,
                                        locked_target=lock_target)
-            connection.execute("""insert into app.album_list_operations
-                (actor_account_id,library_id,request_key,original_session_id,action,top_ref,command_digest,receipt,required_actions,publication_ref)
-                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (live.actor.account_id, live.library_id,
-                command.request_key, live.actor.session_id, command.action, receipt["top_ref"], command.digest,
-                Jsonb(receipt), list(required_actions), receipt.get("publication", {}).get("publication_ref")))
+            self._insert_operation(connection, live, command, receipt, required_actions)
             remote_membership.consume(connection, live, command, top, receipt, context_ref, consumption)
             if typed or remote:
                 # The operation receipt INSERT can itself wait. Re-evaluate

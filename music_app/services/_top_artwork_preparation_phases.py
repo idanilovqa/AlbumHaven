@@ -10,6 +10,8 @@ from music_app.services import _top_artwork_saved as saved
 from music_app.services import _top_artwork_draft_proof as draft_proof
 from music_app.services import artwork_proof_codec as proof_codec
 from music_app.services import album_top_artwork_review as review_owner
+from music_app.services import album_top_artwork_publication as publication_owner
+from music_app.services import album_top_publication as publication
 from music_app.services.owned_album_tops import AlbumTopError
 from music_app.services.public_top_artwork_acquisition import ArtworkAcquisitionUnavailable, MAX_OUTPUT_BYTES
 
@@ -102,6 +104,13 @@ def review(service, identity, *, kind, preparation_revision, cursor_secret, cons
         constraints=constraints)
 
 
+def publication_review(service, identity, *, kind, preparation_revision, cursor_secret,
+                       header, action, constraints=None):
+    return _read(service, identity, kind=kind, purpose='publication_review', request={
+        'preparation_revision': preparation_revision, 'cursor_secret': cursor_secret,
+        'header': header, 'action': action}, constraints=constraints)
+
+
 def png(service, identity, *, kind, preparation_revision, cursor_secret,
         review_witness, row_ref, asset_ref, head_only, constraints=None):
     return _read(service, identity, kind=kind, purpose='png', request={
@@ -116,10 +125,20 @@ def _read_response(service, connection, snapshot, kind, purpose, request, state,
     if purpose == 'review':
         return review_owner.finish_review(snapshot, state, kind=kind,
                                           cursor_secret=request['cursor_secret'])
+    if purpose == 'publication_review':
+        return review_owner.finish_publication_review(snapshot, state, kind=kind,
+            cursor_secret=request['cursor_secret'], header=request['header'],
+            action=request['action'], link=request['link'])
     if purpose == 'png':
         return review_owner.read_png(connection, snapshot, kind=kind,
             row_ref=request['row_ref'], asset_ref=request['asset_ref'], head_only=request['head_only'])
     raise AlbumTopError('invalid_command')
+
+
+def _finish_read(service, connection, live, top, snapshot, observations, constraints, purpose):
+    if purpose == 'publication_review':
+        publication_owner.require_snapshot_eligibility(service, connection, top, snapshot, constraints)
+    service._draft_finish(connection, live, top, snapshot, observations, constraints)
 
 
 def _read(service, identity, *, kind, purpose, request, after=0, limit=100, constraints=None):
@@ -128,7 +147,7 @@ def _read(service, identity, *, kind, purpose, request, after=0, limit=100, cons
     # invalidation per transaction, so no post-observation metadata write may
     # be hidden behind generation equality. Neither policy callbacks nor these
     # fixed collaborators may mutate those dependencies.
-    if purpose not in ('status', 'review', 'png'):
+    if purpose not in ('status', 'review', 'png', 'publication_review'):
         raise AlbumTopError('invalid_command')
     context, ref, revision = identity['context'], identity['top_ref'], identity['top_revision']
     prepared, state, response = None, None, None
@@ -136,10 +155,14 @@ def _read(service, identity, *, kind, purpose, request, after=0, limit=100, cons
     try:
         with service._authorized(context, constraints) as (connection, live, _):
             top = service._top(connection, live, ref, revision, constraints)
+            if purpose == 'publication_review':
+                request['link'] = review_owner.publication_link(publication.lock_link(connection, top))
+                if request['action'] == 'save' and request['link']['link_state'] != 'enabled':
+                    raise AlbumTopError('invalid_or_stale_review', 409)
             snapshot, prepared = _load(service, connection, live, top, identity, kind, constraints, mode='read')
             if purpose != 'status':
                 review_owner.require_ready(snapshot, request['preparation_revision'])
-            if purpose == 'review':
+            if purpose in ('review', 'publication_review'):
                 # Exactly one explicit metadata capture, before leaving A1.
                 # Later PNGs authenticate this observation instead of repeating
                 # the per-item metadata/file collector.
@@ -151,9 +174,9 @@ def _read(service, identity, *, kind, purpose, request, after=0, limit=100, cons
             if not snapshot['observe_count']:
                 response = _read_response(service, connection, snapshot, kind, purpose,
                                           request, state, after, limit)
-                service._draft_finish(connection, live, top, snapshot, {}, constraints)
+                _finish_read(service, connection, live, top, snapshot, {}, constraints, purpose)
                 return response
-            service._draft_finish(connection, live, top, snapshot, {}, constraints)
+            _finish_read(service, connection, live, top, snapshot, {}, constraints, purpose)
             prepared = None
         observations = service._draft_probe(snapshot)
         observed_root_ids = _saved_root_ids(kind, observations)
@@ -165,6 +188,9 @@ def _read(service, identity, *, kind, purpose, request, after=0, limit=100, cons
                         'metadata_generation': snapshot['metadata_generation']}
         with service._authorized(context, constraints) as (connection, live, _):
             top = service._top(connection, live, ref, revision, constraints)
+            if purpose == 'publication_review' and request['link'] != review_owner.publication_link(
+                    publication.lock_link(connection, top)):
+                raise AlbumTopError('invalid_or_stale_review', 409)
             if kind == 'saved':
                 saved.require_observed_roots(live, observed_root_ids, constraints)
             current, prepared = _load(service, connection, live, top, identity, kind, constraints, mode='read')
@@ -180,7 +206,7 @@ def _read(service, identity, *, kind, purpose, request, after=0, limit=100, cons
                                       request, state, after, limit)
             # Response SQL, PNG hash/length and bounded serialization all finish
             # before callbacks, original-expiry DB clock and session exit.
-            service._draft_finish(connection, live, top, current, observations, constraints)
+            _finish_read(service, connection, live, top, current, observations, constraints, purpose)
             return response
     except BaseException as error:
         if purpose == 'status':
@@ -199,6 +225,93 @@ def _read(service, identity, *, kind, purpose, request, after=0, limit=100, cons
         if purpose != 'status':
             response, state, snapshot, current, observations = None, None, None, None, None
             request.clear()
+
+
+def _publication_commit(service, connection, live, command, top, link, snapshot, prepared,
+                        observations, now, constraints):
+    receipt, final_top = publication_owner.save(service, connection, live, command, top, link,
+        snapshot, prepared, now, constraints)
+    # The existing execute owner remains the sole operation receipt writer.
+    service.owner._insert_operation(connection, live, command, receipt, publication_owner.ACTIONS)
+    publication_owner.consume(connection, receipt)
+    publication_owner.finish(service, connection, live, final_top, snapshot, observations, receipt, constraints)
+    return receipt
+
+
+def publish(owner, context, command, *, cursor_secret, constraints=None):
+    """Fixed existing-execute branch: replay/A1, outside observation, replay/A2.
+
+    Trusted callbacks and fixed collaborators must keep metadata/source/cover
+    dependencies read-only; their invalidation clock coalesces per transaction.
+    No caller supplies a preflight record, adapter, callback or SQL mode.
+    """
+    service = snapshot = current = prepared = observations = receipt = None
+    try:
+        with owner._authorized(context, constraints) as (connection, live, now):
+            replayed = owner._replay_operation(connection, live, command, constraints)
+            if replayed is not None:
+                return replayed
+            # This is a server-supplied argument, never a payload/config override.
+            # Incomplete application composition cannot reach a v1 fallthrough.
+            review_owner.require_key(cursor_secret)
+            from music_app.services.album_top_artwork_preparation import TopArtworkPreparationService, _review_identity
+            service = TopArtworkPreparationService(owner)
+            descriptor = command.data['artwork_publication']
+            kind = descriptor['kind']
+            identity, _ = _review_identity(context, kind=kind, top_ref=command.top_ref,
+                top_revision_value=command.data['revision'], preparation_ref=descriptor['preparation_ref'],
+                preparation_revision=descriptor['preparation_revision'], context_ref=descriptor['context_ref'],
+                draft_ref=descriptor.get('draft_ref'), draft_revision=descriptor.get('draft_revision'))
+            top = service._top(connection, live, command.top_ref, command.data['revision'], constraints, write=True)
+            link = publication.lock_link(connection, top, write=True)
+            snapshot, prepared = _load(service, connection, live, top, identity, kind, constraints, mode='read')
+            publication_owner.validate_command(service, connection, live, command, top, link,
+                snapshot, cursor_secret, constraints)
+            if not snapshot['observe_count']:
+                # Excluded images still require metadata-source/root Browse.
+                receipt = _publication_commit(service, connection, live, command, top, link,
+                    snapshot, prepared, {}, now, constraints)
+                return receipt
+            service._draft_finish(connection, live, top, snapshot, {}, constraints)
+            prepared = None
+        observations = service._draft_probe(snapshot)
+        observed_roots = _saved_root_ids(kind, observations)
+        snapshot = {'digest': snapshot['digest'], 'header': dict(snapshot['header']),
+                    'metadata_generation': snapshot['metadata_generation']}
+        with service._authorized(context, constraints) as (connection, live, now):
+            replayed = owner._replay_operation(connection, live, command, constraints)
+            if replayed is not None:
+                return replayed
+            top = service._top(connection, live, command.top_ref, command.data['revision'], constraints, write=True)
+            link = publication.lock_link(connection, top, write=True)
+            if kind == 'saved':
+                saved.require_observed_roots(live, observed_roots, constraints)
+            current, prepared = _load(service, connection, live, top, identity, kind, constraints, mode='read')
+            artwork_draft.compare(snapshot, current)
+            if snapshot['metadata_generation'] != current['metadata_generation']:
+                raise AlbumTopError('artwork_source_changed', 409)
+            publication_owner.validate_command(service, connection, live, command, top, link,
+                current, cursor_secret, constraints)
+            receipt = _publication_commit(service, connection, live, command, top, link,
+                current, prepared, observations, now, constraints)
+            return receipt
+    except BaseException as error:
+        # No retained metadata/proof vector or response escapes in traceback on
+        # a collaborator, policy, finalizer, session or commit failure.
+        receipt = None
+        error.__traceback__ = error.__context__ = error.__cause__ = None
+        if isinstance(error, proof_codec.InvalidArtworkProof):
+            raise AlbumTopError('artwork_source_changed', 409) from None
+        code = getattr(error, 'sqlstate', None)
+        constraint = getattr(getattr(error, 'diag', None), 'constraint_name', '') or ''
+        if code in {'23514', '55000', '22003'}:
+            message = ('invalid_or_stale_review' if constraint == 'top_artwork_publication_link' else
+                       'artwork_limit' if constraint == 'top_artwork_publication_budget' else
+                       'artwork_preparation_unavailable')
+            raise AlbumTopError(message, 409) from None
+        raise error.with_traceback(None)
+    finally:
+        snapshot = current = prepared = observations = receipt = service = None
 
 
 def advance(service, identity, *, kind, preparation_revision, request_key, constraints=None):

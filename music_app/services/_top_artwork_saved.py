@@ -126,7 +126,7 @@ def start(service, context, ref, draft, choices, key, request_generation, contex
     prepared = None
     try:
         with service._authorized(context, constraints) as (connection, live, _):
-            top = service._top(connection, live, ref, draft['revision'], constraints, write=True)
+            top = service._start_top(connection, live, ref, draft['revision'], key, constraints)
             current = members(connection, live, top)
             if [(str(row['ref']), str(row['catalog_ref'])) for row in current] != [
                     (item['item_ref'], item['album_ref']) for item in draft['items']]:

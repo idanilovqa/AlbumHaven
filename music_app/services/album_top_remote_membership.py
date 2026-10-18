@@ -265,6 +265,16 @@ def _clear_for_local(connection, top, item, source):
          item['album_ref'], source['ref'], item['selected_local_album_id'], item['selected_source_ref']))
 
 
+def clear_artwork_local_replacements(connection, top, items):
+    """Fixed post-admission seam; caller already proved every final local source."""
+    remote = bindings(connection, top)
+    for item in items:
+        if item['item_ref'] in remote:
+            if 'selected_source_ref' not in item:
+                raise AlbumTopError('remote_publication_unavailable', 409)
+            _clear_for_local(connection, top, item, remote[item['item_ref']])
+
+
 def add(service, connection, live, command, top, now, constraints, context_ref, discovered):
     context_ref = require_context(context_ref)
     creating = command.action == 'create'
@@ -358,6 +368,10 @@ def _resolve_draft(service, connection, live, command, top, current, remote, con
 
 
 def save(service, connection, live, command, top, now, constraints, context_ref, remote, discovered):
+    if 'artwork_publication' in command.data:
+        # Only the fixed full-S phase may dispatch this contract, before any
+        # remote bridge is cleared or old-state baseline is changed.
+        raise AlbumTopError('artwork_review_required', 409)
     context_ref = require_context(context_ref)
     current = publication.working_items(connection, top)
     typed = command.data.get('item_selections')
@@ -374,6 +388,7 @@ def save(service, connection, live, command, top, now, constraints, context_ref,
     # prove this owner Save cannot use the exact v1 publication contract.
     if publishing:
         service._require(live, tuple(dict.fromkeys((*actions, ACCESS))), constraints, top, owner_only=True)
+        publication.require_metadata_save_allowed(connection, top, link)
         has_remote = any(row['source']['kind'].startswith('remote_') for row in typed) if typed is not None else (
             bool(remote) if 'items' not in command.data else any(
                 row['item_ref'] in remote and 'selected_source_ref' not in row for row in command.data['items']))

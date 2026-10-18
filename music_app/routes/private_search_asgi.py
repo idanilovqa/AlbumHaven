@@ -16,7 +16,10 @@ from music_app.services.private_search_postgres import (
     PostgresPrivateSearchService, normalize_native_search_command, normalize_native_search_batch_command,
 )
 from music_app.services.social_cursors import decode_search_cursor, SearchCursorScopeError
-from music_app.services.private_search_contract import ListenerSearchRequest
+from music_app.services.private_search_contract import ListenerSearchRequest, PrivateSearchRequest, PopularitySearchRequest
+from music_app.services.private_popularity_search_postgres import (
+    PostgresPopularitySearch, normalize_popularity_native_command,
+)
 from music_app.services.private_listener_search_postgres import PostgresListenerSearch, normalize_listener_native_command
 
 _NO_STORE = {'Cache-Control': 'private, no-store'}
@@ -102,7 +105,7 @@ async def private_search_native_target_response(request):
         if set(request.query_params) - _NATIVE_QUERY_KEYS:
             raise PrivateSearchError()
         query = normalize_private_search_request(request.query_params)
-        if type(query) is ListenerSearchRequest:
+        if type(query) is not PrivateSearchRequest:
             raise PrivateSearchError()
         if (query.artist is None) == (not query.all_artists):
             raise PrivateSearchError()
@@ -128,7 +131,7 @@ async def private_search_native_targets_response(request):
         if set(request.query_params) - _NATIVE_QUERY_KEYS:
             raise PrivateSearchError()
         query = normalize_private_search_request(request.query_params)
-        if type(query) is ListenerSearchRequest:
+        if type(query) is not PrivateSearchRequest:
             raise PrivateSearchError()
         if query.presentation != 'tracks' or (query.artist is None) == (not query.all_artists):
             raise PrivateSearchError()
@@ -153,6 +156,13 @@ def private_search_view_response(request):
     try:
         query = normalize_private_search_request(request.query_params)
         context, context_ref, constraints, secret = _private_search_context(request)
+        if type(query) is PopularitySearchRequest:
+            service = getattr(request.app.state, 'private_popularity_search_service', None)
+            if service is None:
+                service = PostgresPopularitySearch(request.app.state.config)
+            payload = service.read(context, request=query, context_ref=context_ref,
+                                   cursor_secret=secret, constraints=constraints)
+            return JSONResponse(payload, headers=_NO_STORE)
         if type(query) is ListenerSearchRequest:
             service = getattr(request.app.state, 'private_listener_search_service', None)
             if service is None:
@@ -233,3 +243,39 @@ async def listener_search_native_target_response(request):
 
 async def listener_search_native_targets_response(request):
     return await _listener_native_response(request, operation='batch')
+
+
+async def _popularity_native_response(request, *, operation):
+    try:
+        if request.query_params:
+            raise PrivateSearchError()
+        context, context_ref, constraints, secret = _private_search_context(request)
+        command = await _native_json(request, limit=_NATIVE_BATCH_BODY_LIMIT)
+        normalize_popularity_native_command(command, operation=operation)
+        service = getattr(request.app.state, 'private_popularity_search_service', None)
+        if service is None:
+            service = PostgresPopularitySearch(request.app.state.config)
+        method = {'bindings': service.project_bindings, 'single': service.resolve_target,
+                  'batch': service.resolve_targets}[operation]
+        payload = await run_in_threadpool(method, context, context_ref=context_ref,
+            cursor_secret=secret, constraints=constraints, **command)
+        return JSONResponse(payload, headers=_NO_STORE)
+    except PrivateLibraryAuthorityError:
+        error = PrivateSearchError('private_search_forbidden', 403)
+    except PrivateSearchError as caught:
+        error = caught
+    except Exception:
+        error = PrivateSearchError('private_search_unavailable', 503)
+    return _error_response(error)
+
+
+async def popularity_search_native_bindings_response(request):
+    return await _popularity_native_response(request, operation='bindings')
+
+
+async def popularity_search_native_target_response(request):
+    return await _popularity_native_response(request, operation='single')
+
+
+async def popularity_search_native_targets_response(request):
+    return await _popularity_native_response(request, operation='batch')

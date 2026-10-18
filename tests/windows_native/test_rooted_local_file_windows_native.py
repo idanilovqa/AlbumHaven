@@ -20,7 +20,8 @@ import pytest
 
 SCENARIOS = (
     'abi_selector', 'ordinary_reads', 'missing_and_kinds',
-    'rename_root', 'rename_intermediate', 'rename_leaf', 'content_mutations',
+    'retained_root_stability', 'retained_intermediate_stability',
+    'rename_leaf', 'content_mutations',
     'wrong_expected_root', 'sharing_denial', 'locked_read',
     'junction_root', 'junction_intermediate', 'junction_leaf',
     'reader_lifecycle', 'repeated_cleanup',
@@ -28,8 +29,8 @@ SCENARIOS = (
 CHECKS = {
     'abi_selector': 'abi_and_selector', 'ordinary_reads': 'ordinary_reads',
     'missing_and_kinds': 'missing_and_kind_failures',
-    'rename_root': 'rename_and_sticky_failure',
-    'rename_intermediate': 'rename_and_sticky_failure',
+    'retained_root_stability': 'directory_mutation_prevented',
+    'retained_intermediate_stability': 'directory_mutation_prevented',
     'rename_leaf': 'rename_and_sticky_failure',
     'content_mutations': 'observed_content_mutations',
     'wrong_expected_root': 'actual_wrong_root_rejected',
@@ -50,7 +51,9 @@ REPARSE = 0x400
 STAGES = frozenset(('admission', 'bootstrap', 'fixture_setup', 'scenario',
     'rename_acquire', 'rename_move_out', 'rename_replacement_create',
     'rename_check_changed', 'rename_replacement_remove', 'rename_restore',
-    'rename_check_sticky', 'cleanup', 'complete'))
+    'rename_check_sticky', 'directory_control_before', 'directory_acquire',
+    'directory_attempt', 'directory_integrity', 'directory_release',
+    'directory_control_after', 'cleanup', 'complete'))
 # Fail closed even if setup or evidence writing interrupts the ordinary stop path.
 _can_continue = True
 

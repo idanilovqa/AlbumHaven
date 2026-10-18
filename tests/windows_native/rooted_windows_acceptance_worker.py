@@ -18,7 +18,8 @@ import sys
 
 SCENARIOS = (
     'abi_selector', 'ordinary_reads', 'missing_and_kinds',
-    'rename_root', 'rename_intermediate', 'rename_leaf', 'content_mutations',
+    'retained_root_stability', 'retained_intermediate_stability',
+    'rename_leaf', 'content_mutations',
     'wrong_expected_root', 'sharing_denial', 'locked_read',
     'junction_root', 'junction_intermediate', 'junction_leaf',
     'reader_lifecycle', 'repeated_cleanup',
@@ -527,6 +528,115 @@ def missing_and_kinds(f):
     f.checks['missing_and_kind_failures'] = True
 
 
+def directory_stability(f, kind):
+    """Prove NTFS prevention with the same successful before/after controls.
+
+    This is not successful-directory-rename detection. Oracle handles are
+    closed before each mutation; only the actual rooted lease retains children.
+    """
+    require(kind in ('root', 'intermediate'), 'directory_kind_not_admitted')
+    directory = f.root if kind == 'root' else f.root / 'middle'
+    alternate = directory.with_name('root-old' if kind == 'root' else 'middle-old')
+
+    def oracle_clear():
+        require(not f.oracle.handles and f.oracle.opened == f.oracle.closed,
+                'directory_oracle_not_released')
+
+    def absent_alternate():
+        plain_chain(alternate.parent)
+        try:
+            alternate.lstat()
+        except FileNotFoundError:
+            return
+        raise CaseFailure('directory_alternate_exists')
+
+    def snapshot():
+        plain_chain(directory)
+        value = f.leaf.lstat()
+        require(stat.S_ISREG(value.st_mode) and
+                not value.st_file_attributes & REPARSE, 'directory_leaf_not_ordinary')
+        root = f.oracle.info(f.root, directory=True)
+        selected = f.oracle.info(directory, directory=True)
+        leaf = f.oracle.info(f.leaf)
+        for info, is_directory in ((root, 1), (selected, 1), (leaf, 0)):
+            require(info['type'] == 1 and info['directory'] == is_directory and
+                    info['delete_pending'] == 0 and info['tag'] == 0 and
+                    not info['attributes'] & REPARSE, 'directory_identity_not_ordinary')
+        require(leaf['size'] == len(PAYLOAD), 'directory_payload_size_changed')
+        oracle_clear()
+        return tuple((info['serial'], info['file_id']) for info in (root, selected, leaf))
+
+    def payload():
+        # Existing independent ReadFile binding, fixed owned leaf and strict cap.
+        # This handle is closed before any subsequent rename is attempted.
+        handle = f.oracle.open(f.leaf, access=0x80000000)
+        try:
+            buffer = ctypes.create_string_buffer(len(PAYLOAD) + 1)
+            count = ctypes.c_uint32()
+            require(bool(f.oracle.kernel.ReadFile(handle, buffer, len(buffer),
+                    ctypes.byref(count), None)) and count.value == len(PAYLOAD) and
+                    buffer.raw[:count.value] == PAYLOAD, 'directory_payload_changed')
+        finally:
+            f.oracle.close(handle)
+        oracle_clear()
+
+    def control_roundtrip(expected):
+        absent_alternate()
+        oracle_clear()
+        directory.rename(alternate)
+        # A successful return is required in both directions; no caught denial.
+        alternate.rename(directory)
+        absent_alternate()
+        require(snapshot() == expected, 'directory_control_identity_changed')
+        payload()
+
+    f.stage = 'directory_control_before'
+    absent_alternate()
+    original = snapshot()
+    payload()
+    control_roundtrip(original)
+    f.native.complete()  # No product resource exists before the actual lease.
+
+    f.stage = 'directory_acquire'
+    lease = f.acquire()
+    observation = lease.observation
+    f.compare(lease, f.leaf)
+    require(snapshot() == original, 'directory_admission_identity_changed')
+    oracle_clear()
+    f.stage = 'directory_attempt'
+    try:
+        directory.rename(alternate)
+    except PermissionError as error:
+        require(error.errno == 13 and getattr(error, 'winerror', None) == 5,
+                'directory_wrong_denial')
+    else:
+        raise CaseFailure('directory_mutation_not_prevented')
+
+    f.stage = 'directory_integrity'
+    absent_alternate()
+    require(snapshot() == original, 'directory_denial_identity_changed')
+    f.compare(lease, f.leaf)
+    require(lease.check() == observation and lease.check() == observation,
+            'directory_denial_poisoned_lease')
+    reader = f.reader(lease)
+    require(reader.read(len(PAYLOAD) + 1) == PAYLOAD, 'directory_retained_payload_changed')
+    reader.close()
+    require(lease.check() == observation, 'directory_reader_changed_lease')
+    oracle_clear()
+
+    f.stage = 'directory_release'
+    lease.close()
+    require(lease.drained.is_set(), 'directory_lease_not_drained')
+    f.native.complete()
+    oracle_clear()
+
+    f.stage = 'directory_control_after'
+    control_roundtrip(original)
+    f.native.complete()
+    oracle_clear()
+    f.checks['directory_mutation_prevented'] = True
+
+
 def rename_case(f, kind):
     f.stage = 'rename_acquire'
     lease = f.acquire()
@@ -687,8 +797,8 @@ def repeated_cleanup(f):
 DISPATCH = {
     'abi_selector': abi_selector, 'ordinary_reads': ordinary_reads,
     'missing_and_kinds': missing_and_kinds,
-    'rename_root': lambda f: rename_case(f, 'root'),
-    'rename_intermediate': lambda f: rename_case(f, 'intermediate'),
+    'retained_root_stability': lambda f: directory_stability(f, 'root'),
+    'retained_intermediate_stability': lambda f: directory_stability(f, 'intermediate'),
     'rename_leaf': lambda f: rename_case(f, 'leaf'),
     'content_mutations': content_mutations, 'wrong_expected_root': wrong_expected_root,
     'sharing_denial': sharing_denial, 'locked_read': locked_read,

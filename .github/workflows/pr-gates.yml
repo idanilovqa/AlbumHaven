@@ -461,6 +461,11 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/tops-linux-evidence/head.txt"
           python --version > "$RUNNER_TEMP/tops-linux-evidence/python.txt"
           cat > "$RUNNER_TEMP/tops-linux-evidence/tests.txt" <<'TESTS'
+          tests/py/test_top_artwork_publication_retention_postgres.py
+          tests/py/test_top_artwork_publication_seals_postgres.py
+          tests/py/test_top_artwork_publication_closure_postgres.py
+          tests/py/test_top_artwork_publication.py
+          tests/py/test_top_artwork_publication_postgres.py
           tests/py/test_artwork_proof_codec.py
           tests/py/test_top_artwork_resolution.py
           tests/py/test_rooted_local_file.py
@@ -477,9 +482,6 @@ jobs:
           tests/py/test_top_artwork_review_postgres.py
           tests/py/test_public_metadata_file_invalidation_postgres.py
           tests/py/test_album_top_remote_identity_lock_postgres.py
-          tests/py/test_top_artwork_publication_retention_postgres.py
-          tests/py/test_top_artwork_publication_seals_postgres.py
-          tests/py/test_top_artwork_publication_closure_postgres.py
           TESTS
           mapfile -t selected < "$RUNNER_TEMP/tops-linux-evidence/tests.txt"
           for test_path in "${selected[@]}"; do test -f "$test_path"; done

@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from music_app.services.allowed_actions import AllowedActions
 from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.home_activity import HomeActivityError, parse_activity_query, read_home_activity
 from music_app.services.private_ui_context import PrivateUIContextError, private_ui_context_ref
@@ -80,13 +81,26 @@ async def _friend_read(request, account_ref, *, comparison):
         actions = ("library.social.history.read", "library.social.taste.read") if comparison else ("library.social.history.read",)
 
         def resource_actions(kind, resource_id):
-            return allowed_actions_for_request(request, actions,
-                target_account_id=target, resource=ResourceScope(kind, str(resource_id)))
+            resource = ResourceScope(kind, str(resource_id))
+            social = allowed_actions_for_request(request, actions,
+                target_account_id=target, resource=resource)
+            if not comparison or query.kind != "albums":
+                return social
+            # Social authority is about the verified subject; Browse is the
+            # viewer's own authority and must use its own request evaluation.
+            browse = allowed_actions_for_request(request, ("library.browse.read",),
+                resource=resource)
+            return AllowedActions(tuple(sorted(set(social.keys) | set(browse.keys))))
 
         resource_actions.scope_wide = not callable(getattr(request.app.state, "policy_constraint_resolver", None))
         result = await run_in_threadpool(read_home_activity, config, actor=actor, query=query,
             subject_account_id=target, comparison=comparison, allowed_actions_for_resource=resource_actions)
         result = await _native_actions(request,result,query,audience="comparison" if comparison else "friend",subject_ref=account_ref)
+        current = request.state.current_actor
+        if (private_ui_context_ref(request) != context_ref
+                or (current.account_id, current.session_id, current.current_library_id)
+                != (actor.account_id, actor.session_id, actor.current_library_id)):
+            raise NativeTargetError("stale_context", 409)
         return JSONResponse({**result, "context_ref": context_ref}, headers=_HEADERS)
     except (HomeActivityError, PrivateUIContextError, NativeTargetError) as error:
         return JSONResponse({"error": error.code}, status_code=error.status_code, headers=_HEADERS)

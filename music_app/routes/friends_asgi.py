@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from music_app.services.friends_postgres import FriendConflictError, FriendScopeError, PostgresFriendsStore
 from music_app.services.policy import ResourceScope
+from music_app.services.private_library_authority import PrivateLibraryAuthorityError
 from music_app.services.social_cursors import encode_social_cursor, decode_social_cursor
 from music_app.services.policy_asgi import allowed_actions_for_request, require_action
 
@@ -36,7 +37,7 @@ async def _call(request,method,**kwargs):
         store=PostgresFriendsStore(request.app.state.config)
         result=await run_in_threadpool(getattr(store,method),**scope,**kwargs)
         return result
-    except FriendScopeError:
+    except (FriendScopeError,PrivateLibraryAuthorityError):
         raise HTTPException(403,'Social scope is unavailable.') from None
     except FriendConflictError as exc:
         raise HTTPException(409,str(exc)) from None
@@ -187,12 +188,26 @@ async def change_friend(request:Request,account_ref:str,action:str):
 @router.get('/friends/{account_ref}/taste')
 async def compare_friend_taste(request:Request,account_ref:str,kind:str='tracks',cursor:str|None=Query(None,max_length=4096),limit:int=Query(50,ge=1,le=100)):
     account_id=await _call(request,'resolve_account_ref',account_ref=account_ref)
-    await require_action('library.social.taste.read',resource=ResourceScope('account',str(account_id)))(request)
+    await require_action('library.social.taste.read',target_account_id=account_id,resource=ResourceScope('account',str(account_id)))(request)
     query='taste:'+account_ref+':'+kind
-    result=await _call(request,'compare_taste',target_account_id=account_id,kind=kind,after=_position(request,cursor,query),limit=limit)
-    result['rows']=[row for row in result['rows'] if allowed_actions_for_request(
-        request,('library.social.taste.read',),resource=ResourceScope('track' if kind=='tracks' else 'album',str(row['resource_id']))
-    ).allows('library.social.taste.read')]
+    from music_app.services.policy import PolicyContext
+    from music_app.services.client_surfaces import client_surface_from_request
+    from music_app.services.policy_asgi import _deployment_mode, _request_origin
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+    actor=request.state.current_actor
+    reference=_context_ref(request)
+    context=PolicyContext.build(actor=actor,action='library.browse.read',library_id=actor.current_library_id,
+        deployment_mode=_deployment_mode(request),request_origin=_request_origin(request),
+        client_surface_class=client_surface_from_request(request))
+    resolver=getattr(request.app.state,'policy_constraint_resolver',None)
+    constraints=resolver if callable(resolver) else PolicyEvaluationConstraints()
+    result=await _call(request,'compare_taste',target_account_id=account_id,kind=kind,
+        after=_position(request,cursor,query),limit=limit,context=context,constraints=constraints,
+        expected_subject_ref=account_ref)
+    current=request.state.current_actor
+    if (_context_ref(request)!=reference or (current.account_id,current.session_id,current.current_library_id)
+            !=(actor.account_id,actor.session_id,actor.current_library_id)):
+        raise HTTPException(409,'stale_context')
     return _finish_page(request,result,query)
 
 

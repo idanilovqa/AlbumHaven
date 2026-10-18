@@ -46,6 +46,12 @@ async def activity_native_target(request:Request):
             raise NativeTargetError('invalid_command',422)
         result=await run_in_threadpool(ActivityNativeTargets(request.app.state.config).resolve,context,
             origin=payload['origin'],row_ref=payload['row_ref'],intent=payload['intent'],target_kind=payload.get('target_kind'),constraints=constraints)
+        if result['origin']['audience'] in {'friend','comparison'}:
+            actor=request.state.current_actor
+            if (private_ui_context_ref(request)!=current
+                    or (actor.account_id,actor.session_id,actor.current_library_id)
+                    !=(context.actor.account_id,context.actor.session_id,context.library_id)):
+                raise NativeTargetError('stale_context',409)
         return JSONResponse(jsonable_encoder({'status':'ready','data':result,'context_ref':current}),headers=_HEADERS)
     except JSONBodyTooLarge:
         return JSONResponse({'error':'command_too_large'},status_code=413,headers=_HEADERS)

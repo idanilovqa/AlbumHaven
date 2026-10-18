@@ -53,7 +53,7 @@ class PlaylistNativeTargets:
             targets=self._targets.resolve_play_queue(connection,live,
                 [items[ref]['local_track_id'] for ref in refs],constraints=constraints)
             personal=None
-            if playlist.get('library_mix'):
+            if playlist.get('library_mix') or playlist.get('artist_loved'):
                 from music_app.services.listen_history_postgres import read_scoped_track_play_counts
                 personal=read_scoped_track_play_counts(connection,account_id=live.actor.account_id,
                     library_id=live.library_id,track_ids=list(targets))

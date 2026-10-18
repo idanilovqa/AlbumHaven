@@ -11,7 +11,8 @@ from music_app.services.private_album_artwork import album_artwork_url
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session, RecentAuthenticationRequired
 from music_app.services.private_library_authority import current_library_transaction, PrivateLibraryAuthorityError
 from music_app.services.owned_playlists import (
-    BROWSE, CREATE, MANAGE, ITEMS, ACCESS, SETTINGS, LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL, PlaylistError, PlaylistCommand,
+    BROWSE, CREATE, MANAGE, ITEMS, ACCESS, SETTINGS, LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL,
+    ARTIST_LOVED_PROTOCOL, PlaylistError, PlaylistCommand,
     command_actions, inventory_identity, normalize_playlist_command,
     require_playlist_authority, uuid_ref,
 )
@@ -21,6 +22,7 @@ from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import decode_social_cursor, encode_social_cursor
 from music_app.services import playlist_creation_sources_postgres as sources
 from music_app.services import library_mix_postgres as library_mixes
+from music_app.services import artist_loved_playlists_postgres as artist_loves
 
 
 class PostgresOwnedPlaylistsService:
@@ -54,7 +56,7 @@ class PostgresOwnedPlaylistsService:
             raise
 
     @staticmethod
-    def _playlist(connection, context, playlist_ref, *, allow_deleted=False, write=False):
+    def _playlist(connection, context, playlist_ref, *, allow_deleted=False, write=False, include_artist_loved=True):
         # Lock the parent BEFORE reading editor eligibility. An EXISTS evaluated
         # before a lock wait could retain an editor grant just revoked by owner.
         row = connection.execute(f"""select * from app.playlists
@@ -76,6 +78,11 @@ class PostgresOwnedPlaylistsService:
             raise PlaylistError("playlist_unavailable", 404)
         playlist["library_mix"] = library_mixes.load_recipes(connection, context.library_id,
             [str(playlist["ref"])]).get(str(playlist["ref"]))
+        if include_artist_loved:
+            playlist["artist_loved"] = artist_loves.load_recipes(connection, context.library_id,
+                [str(playlist["ref"])]).get(str(playlist["ref"]))
+            if playlist["library_mix"] and playlist["artist_loved"]:
+                raise PlaylistError("artist_loved_unavailable", 503)
         return playlist
 
     @staticmethod
@@ -176,36 +183,40 @@ class PostgresOwnedPlaylistsService:
                 else:
                     source = sources.load_source(connection,live,command.data["source"]["ref"],command.data["source"]["revision"],now,
                         protocol=command.data["source_protocol"], kind=command.data["source"]["kind"])
-                if source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
-                    selected = library_mixes.selected(self, connection, live, source,
-                        command.data["entry_refs"], constraints=constraints)
-                elif queue.is_queue(source):
-                    selected=queue.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
-                elif command.data["mode"]=="missing":
-                    selected=missing.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
-                elif source.get("source_kind")=="activity":
-                    from music_app.services import playlist_activity_sources as activity
-                    selected=activity.selected(connection,live,source,command.data["entry_refs"],
-                        config=self._config,constraints=constraints)
+                if source["protocol"] == ARTIST_LOVED_PROTOCOL:
+                    receipt = artist_loves.create_from_source(self, connection, live, command, source,
+                                                              constraints=constraints)
                 else:
-                    selected = sources.selected_entries(connection,live,source,command.data["entry_refs"],config=self._config)
-                if any(not self._resource_allowed(live,BROWSE,ResourceScope("track",str(row["original_local_track_id"])),constraints)
-                       for row in selected if row["original_local_track_id"] is not None):
-                    raise PlaylistError("item_unavailable", 409)
-                # Inventory/source waits must not retain an earlier session or
-                # draft-expiry decision beyond the eventual mutation point.
-                mutation_now = lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
-                    actor_session_id=live.actor.session_id, clock=self._clock)
-                if source["expires_at"] <= mutation_now:
-                    raise PlaylistError("source_expired", 410)
-                ref = str(uuid4())
-                connection.execute("""insert into app.playlists(ref,owner_account_id,library_id,title,description)
-                    values (%s,%s,%s,%s,%s)""",(ref,live.actor.account_id,live.library_id,command.data["title"],command.data["description"]))
-                self._insert_items(connection,live,ref,selected,offset=0,source=source)
-                if source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
-                    library_mixes.save_recipe(connection, live, ref, source,
-                        playback_order=command.data.get("mix_playback_order"))
-                receipt = self._receipt(live,command,ref,1,True,added_count=len(selected))
+                    if source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
+                        selected = library_mixes.selected(self, connection, live, source,
+                            command.data["entry_refs"], constraints=constraints)
+                    elif queue.is_queue(source):
+                        selected=queue.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
+                    elif command.data["mode"]=="missing":
+                        selected=missing.selected(self,connection,live,source,command.data["entry_refs"],constraints=constraints)
+                    elif source.get("source_kind")=="activity":
+                        from music_app.services import playlist_activity_sources as activity
+                        selected=activity.selected(connection,live,source,command.data["entry_refs"],
+                            config=self._config,constraints=constraints)
+                    else:
+                        selected = sources.selected_entries(connection,live,source,command.data["entry_refs"],config=self._config)
+                    if any(not self._resource_allowed(live,BROWSE,ResourceScope("track",str(row["original_local_track_id"])),constraints)
+                           for row in selected if row["original_local_track_id"] is not None):
+                        raise PlaylistError("item_unavailable", 409)
+                    # Inventory/source waits must not retain an earlier session or
+                    # draft-expiry decision beyond the eventual mutation point.
+                    mutation_now = lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
+                        actor_session_id=live.actor.session_id, clock=self._clock)
+                    if source["expires_at"] <= mutation_now:
+                        raise PlaylistError("source_expired", 410)
+                    ref = str(uuid4())
+                    connection.execute("""insert into app.playlists(ref,owner_account_id,library_id,title,description)
+                        values (%s,%s,%s,%s,%s)""",(ref,live.actor.account_id,live.library_id,command.data["title"],command.data["description"]))
+                    self._insert_items(connection,live,ref,selected,offset=0,source=source)
+                    if source["protocol"] in (LIBRARY_MIX_PROTOCOL, ARTIST_MIX_PROTOCOL):
+                        library_mixes.save_recipe(connection, live, ref, source,
+                            playback_order=command.data.get("mix_playback_order"))
+                    receipt = self._receipt(live,command,ref,1,True,added_count=len(selected))
             else:
                 guard_source=None
                 guard_selected=None
@@ -223,6 +234,7 @@ class PostgresOwnedPlaylistsService:
                 if str(playlist["revision"]) != command.data["revision"]:
                     raise PlaylistError("revision_conflict",409)
                 library_mixes.require_manual_membership(command, playlist)
+                artist_loves.require_manual_membership(command, playlist)
                 rows = (connection.execute("select * from app.playlist_items where playlist_ref=%s order by position",
                     (command.playlist_ref,)).fetchall() if command.action in {"save", "add", "remove", "reorder"} else [])
                 order = [str(row["ref"]) for row in rows]
@@ -259,7 +271,9 @@ class PostgresOwnedPlaylistsService:
             raise PlaylistError("operation_unavailable",404)
         if prior["command_digest"]!=command.digest or prior["action"]!=command.action:
             raise PlaylistError("idempotency_key_reused",409)
-        playlist = self._playlist(connection,context,str(prior["playlist_ref"]),allow_deleted=True)
+        # Exact receipts do not consult the live Loved recipe or source again.
+        playlist = self._playlist(connection,context,str(prior["playlist_ref"]),allow_deleted=True,
+                                  include_artist_loved=False)
         self._require(context,(BROWSE,),constraints,playlist)
         lock_current_actor_session(connection, actor_account_id=context.actor.account_id,
             actor_session_id=context.actor.session_id, clock=self._clock)
@@ -273,7 +287,8 @@ class PostgresOwnedPlaylistsService:
                 (live.actor.account_id,live.library_id,key,live.actor.session_id)).fetchone()
             if row is None:
                 return {"status":"unknown"}
-            playlist=self._playlist(connection,live,str(row["playlist_ref"]),allow_deleted=True)
+            playlist=self._playlist(connection,live,str(row["playlist_ref"]),allow_deleted=True,
+                                    include_artist_loved=False)
             self._require(live,(BROWSE,),constraints,playlist)
             lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
                 actor_session_id=live.actor.session_id, clock=self._clock)
@@ -338,6 +353,8 @@ class PostgresOwnedPlaylistsService:
             return viewers.decide(self,connection,context,command,playlist,constraints)
         if command.action == "delete":
             viewers.invalidate(connection,command.playlist_ref)
+            if playlist.get("artist_loved"):
+                artist_loves.retire(connection, context, command.playlist_ref)
             connection.execute("update app.playlists set deleted_at=now() where ref=%s", (command.playlist_ref,))
             return True, {"deleted": True}
         if command.action == "default_sort":
@@ -437,6 +454,8 @@ class PostgresOwnedPlaylistsService:
             raise PlaylistError("invalid_source_query")
         mix_refresh = (library_mixes.refresh_owned(self, context, playlist_ref, constraints=constraints)
             if playlist_ref is not None else {"refresh_status": "last_computed"})
+        loved_refresh = (artist_loves.refresh_owned(self, context, playlist_ref, constraints=constraints)
+            if playlist_ref is not None else {"refresh_status": "last_computed"})
         with self._authorized(context,constraints) as (connection,live,_now):
             playlists=connection.execute("""select p.* from app.playlists p
                 where p.library_id=%s and p.deleted_at is null and
@@ -456,8 +475,10 @@ class PostgresOwnedPlaylistsService:
                 select playlist_ref,count(*) as item_count from app.playlist_items
                 where playlist_ref=any(%s::uuid[]) group by playlist_ref""", (refs,)).fetchall()}
             mix_recipes = library_mixes.load_recipes(connection, live.library_id, refs)
+            loved_recipes = artist_loves.load_recipes(connection, live.library_id, refs)
             projected = [{**row,"editor_grant":str(row["ref"]) in editors,
                           "library_mix":mix_recipes.get(str(row["ref"])),
+                          "artist_loved":loved_recipes.get(str(row["ref"])),
                           "item_count":counts.get(str(row["ref"]),0)} for row in playlists]
             projected.sort(key=lambda row:(row["updated_at"],str(row["ref"])),reverse=True)
             cards=[self._card(live,row,constraints) for row in projected
@@ -480,7 +501,7 @@ class PostgresOwnedPlaylistsService:
                 if row["local_track_id"] is not None and self._resource_allowed(live,BROWSE,ResourceScope("track",str(row["local_track_id"])),constraints)],config=self._config)
             card=self._card(live,{**playlist,"item_count":len(rows)},constraints)
             tracks=[self._track_row(live,row,current.get(row["local_track_id"]),constraints=constraints) for row in rows]
-            if playlist.get("library_mix"):
+            if playlist.get("library_mix") or playlist.get("artist_loved"):
                 from music_app.services.listen_history_postgres import read_scoped_track_play_counts
                 personal = read_scoped_track_play_counts(connection, account_id=live.actor.account_id,
                     library_id=live.library_id, track_ids=list(current))
@@ -492,6 +513,9 @@ class PostgresOwnedPlaylistsService:
                 "allowed_actions":{**card["allowed_actions"],"can_play":any(row["allowed_actions"]["can_play"] for row in tracks),
                     "can_inspect_missing":self._allows(live,(BROWSE,CREATE),constraints) and any(row["availability"]=="missing" for row in tracks)},
                 "track_rows":tracks}
+            if playlist.get("artist_loved"):
+                payload["playlist_detail"]["artist_loved"] = artist_loves.project_recipe(
+                    playlist["artist_loved"], refresh_status=loved_refresh["refresh_status"])
             if playlist.get("library_mix"):
                 payload["playlist_detail"]["popularity_refresh_status"] = library_mixes.read_popularity_refresh_status(
                     connection, live.library_id)
@@ -623,11 +647,16 @@ class PostgresOwnedPlaylistsService:
         access=cls._allows(context,(BROWSE,ACCESS),constraints,row,owner_only=True)
         delete=cls._allows(context,(BROWSE,MANAGE),constraints,row,owner_only=True)
         mix = row.get("library_mix")
-        if mix and library_mixes.recipe_from_row(mix).auto_update:
+        loved = row.get("artist_loved")
+        if mix and loved:
+            raise PlaylistError("artist_loved_unavailable", 503)
+        if loved or mix and library_mixes.recipe_from_row(mix).auto_update:
             items = False
         return {"playlist_id":str(row["ref"]),"title":row["title"],"description":row["description"],
                 "revision":str(row["revision"]),"item_count":int(row["item_count"]),"visibility":row["visibility"],
-                "playlist_kind":"library_mix" if mix else "manual", "library_mix":library_mixes.project_recipe(mix),
+                "playlist_kind":"artist_loved" if loved else "library_mix" if mix else "manual",
+                "library_mix":library_mixes.project_recipe(mix),
+                **({"artist_loved":artist_loves.project_recipe(loved)} if loved else {}),
                 "allowed_actions":{"can_open":True,"can_read":True,"can_export":True,
                     "can_edit":manage,"can_rename":manage,"can_reorder":items,"can_add":items,"can_remove":items,
                     "can_delete":delete,"can_play":False,"can_share":access,

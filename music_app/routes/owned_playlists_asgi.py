@@ -134,6 +134,56 @@ def playlist_source_entries(request: Request):
         return _error(error)
 
 
+@router.post("/playlists/creation-source/artist-loved")
+async def create_artist_loved_source(request: Request):
+    from music_app.services import artist_loved_playlists_postgres as loves
+    try:
+        context, constraints = _context(request, CREATE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
+        result = await run_in_threadpool(loves.capture, _service(request), context,
+                                        payload, constraints=constraints)
+        return _response(request, result)
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.get("/playlists/creation-source/artist-loved")
+def read_artist_loved_source(request: Request):
+    from music_app.services import artist_loved_playlists_postgres as loves
+    try:
+        params = request.query_params
+        if set(params) != {"source_ref", "source_revision"} or len(params.multi_items()) != len(params):
+            raise PlaylistError("invalid_source_query")
+        context, constraints = _context(request, CREATE)
+        return _response(request, loves.read_capture(_service(request), context,
+            params["source_ref"], params["source_revision"], constraints=constraints))
+    except PlaylistError as error:
+        return _error(error)
+
+
+@router.post("/playlists/creation-source/artist-loved/native-queue")
+async def artist_loved_native_queue(request: Request):
+    from music_app.services import artist_loved_playlists_postgres as loves
+    try:
+        context, constraints = _context(request, BROWSE)
+        _require_context_header(request)
+        if request.query_params:
+            raise PlaylistError("invalid_command")
+        payload = await read_bounded_json_object(request, max_bytes=MAX_PLAYLIST_COMMAND_BYTES)
+        result = await run_in_threadpool(loves.native_queue, _service(request), context,
+                                        payload, constraints=constraints)
+        return _response(request, {"status": "ready", "data": result})
+    except JSONBodyTooLarge:
+        return _error(PlaylistError("command_too_large", 413))
+    except PlaylistError as error:
+        return _error(error)
+
+
 def _generated_mix_options(request):
     from music_app.services.owned_playlists import ARTIST_MIX_PROTOCOL
     return ({"protocol": ARTIST_MIX_PROTOCOL} if "/creation-source/artist-popular" in request.url.path else {})

@@ -262,6 +262,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.api_wave_b_asgi_routes import router as api_wave_b_asgi_router
     from music_app.routes.api_wave_c_asgi_routes import router as api_wave_c_asgi_router
     from music_app.routes.api_wave_d_asgi_routes import router as api_wave_d_asgi_router
+    from music_app.routes.playback_capture_asgi import router as playback_capture_asgi_router
     from music_app.routes.playback_stream_asgi import (
         PlaybackPcmRegistry,
         router as playback_stream_asgi_router,
@@ -390,6 +391,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(api_wave_c_asgi_router)
     app.include_router(api_wave_d_asgi_router)
     app.include_router(playback_stream_asgi_router)
+    app.include_router(playback_capture_asgi_router)
 
 
 def create_asgi_app():

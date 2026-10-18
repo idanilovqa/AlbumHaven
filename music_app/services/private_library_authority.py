@@ -25,7 +25,7 @@ def require_private_action(context, action, *, resource=None, constraints=None):
 
 
 @contextmanager
-def current_library_transaction(database_url,context,*,constraints=None,connect=None,clock=None,target_account_id=None,target_account_ids=(),read_only=False):
+def current_library_transaction(database_url,context,*,constraints=None,connect=None,clock=None,target_account_id=None,target_account_ids=(),read_only=False,inventory_publication_first=False):
     if not isinstance(context,PolicyContext):raise PrivateLibraryAuthorityError('Private library access is unavailable.')
     actor=context.actor
     if not isinstance(target_account_ids, (tuple, list)) or len(target_account_ids)>5000 or any(
@@ -42,6 +42,10 @@ def current_library_transaction(database_url,context,*,constraints=None,connect=
     try:
         with (connect or pooled_connection)(database_url) as connection:
             connection.execute('set transaction isolation level read committed')
+            if inventory_publication_first:
+                connection.execute("set local lock_timeout = '250ms'")
+                connection.execute("set local statement_timeout = '1000ms'")
+                connection.execute("select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))")
             account_ids=sorted({actor.account_id,target_account_id or actor.account_id,*target_account_ids})
             if read_only:
                 connection.execute('select id from app.accounts where id=any(%s) order by id for share',

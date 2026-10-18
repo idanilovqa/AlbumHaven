@@ -289,6 +289,12 @@ def mounted(monkeypatch):
     state = SimpleNamespace(payload=stale_payload(), receipts=(), transient=False)
     monkeypatch.setattr(routes, "_project_missing_album_actions_for_request", lambda *a: None)
     monkeypatch.setattr(routes, "_apply_transient_scan_album_rating_overlays", lambda *a: None)
+    def no_album_preference_receipts(request, payload):
+        # This mount isolates Loved finalization; Favorites tests own composition.
+        assert not any(isinstance(album, browse.AlbumPreferenceCandidate)
+                       for album in routes._own_album_containers(payload))
+        return payload
+    monkeypatch.setattr(routes, "_project_own_album_preferences", no_album_preference_receipts)
     @app.get("/view-data")
     def seam(request: Request):
         state.request = request

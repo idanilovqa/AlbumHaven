@@ -13,6 +13,7 @@ from music_app.services.music_identity_matching import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_PUBLIC_MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 _MUSICBRAINZ_RELEASE_CACHE_LOCK = threading.Lock()
 _MUSICBRAINZ_RELEASE_CACHE: dict[str, list[dict]] = {}
 _BANDCAMP_CONTEXT_CACHE_LOCK = threading.Lock()
@@ -65,6 +66,42 @@ def _emit(log_event: LogEvent | None, message: str, **kwargs) -> None:
     if log_event is None:
         return
     log_event({}, _LOGGER, message, level="info", **kwargs)
+
+
+def _musicbrainz_payload_with_fallback(
+    *,
+    path: str,
+    user_agent: str,
+    context: str,
+    http_get_json: JsonGetter,
+    log_event: LogEvent | None,
+    should_cancel: Callable[[], bool] | None,
+) -> dict | None:
+    configured_base_url = str(Config.MUSICBRAINZ_BASE_URL or "").strip().rstrip("/")
+    payload = http_get_json(
+        _provider_url(configured_base_url, path),
+        user_agent,
+        service="musicbrainz",
+        context=context,
+        should_cancel=should_cancel,
+    )
+    if isinstance(payload, dict) or (callable(should_cancel) and should_cancel()):
+        return payload
+    if configured_base_url.casefold() == _PUBLIC_MUSICBRAINZ_BASE_URL.casefold():
+        return None
+    _emit(
+        log_event,
+        "MusicBrainz release search using public fallback",
+        endpoint_role="public_fallback",
+        context=context,
+    )
+    return http_get_json(
+        _provider_url(_PUBLIC_MUSICBRAINZ_BASE_URL, path),
+        user_agent,
+        service="musicbrainz",
+        context=context,
+        should_cancel=should_cancel,
+    )
 
 
 def search_musicbrainz_release_candidates(
@@ -152,15 +189,16 @@ def search_musicbrainz_release_candidates(
             return []
         query = urllib.parse.quote(query_text)
         inc_param = "&inc=labels+artist-credits" if include_labels else "&inc=artist-credits"
-        search_url = _provider_url(
-            Config.MUSICBRAINZ_BASE_URL,
-            f"release/?query={query}&fmt=json&limit={max(1, int(result_limit or 20))}{inc_param}",
+        search_path = (
+            f"release/?query={query}&fmt=json&limit={max(1, int(result_limit or 20))}{inc_param}"
         )
-        payload = http_get_json(
-            search_url,
-            user_agent,
-            service="musicbrainz",
-            context=f"{context_prefix}:{mode}:{artist_query} - {album_query}",
+        request_context = f"{context_prefix}:{mode}:{artist_query} - {album_query}"
+        payload = _musicbrainz_payload_with_fallback(
+            path=search_path,
+            user_agent=user_agent,
+            context=request_context,
+            http_get_json=http_get_json,
+            log_event=log_event,
             should_cancel=should_cancel,
         )
         if callable(should_cancel) and should_cancel():

@@ -334,7 +334,9 @@ jobs:
             -SkipFixtureLoad
 
       - name: Initialize fresh persistent Loved producer bootstrap baseline
-        run: python scripts/ci/initialize-loved-browse-postgres.py
+        run: |
+          $env:PGPASSWORD = $null
+          python scripts/ci/initialize-loved-browse-postgres.py
 
       - name: Write Python foundation version manifest
         env:
@@ -2325,7 +2327,7 @@ jobs:
             }
 
   test_feature_batches_linux:
-    name: Feature ${{ matrix.batch }} (Linux, non-authoritative)
+    name: Feature ${{ matrix.batch }}${{ matrix.diagnostic && format(' diagnostic {0}', matrix.diagnostic) || '' }} (Linux, non-authoritative)
     needs:
       - review_scope
       - review_prerequisites
@@ -2368,6 +2370,23 @@ jobs:
             timeout_minutes: 30
           - batch: retained_ownership
             timeout_minutes: 20
+          # Each exact-node diagnostic has a fresh runner/service and the same
+          # owned initializer. Never reuse a quarantined full-batch database.
+          - batch: popularity_bootstrap
+            diagnostic: popularity_inventory_teardown
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_revoked_view_teardown
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_schema_contract
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_durable_view
+            timeout_minutes: 15
+          - batch: favorites_backend
+            diagnostic: favorites_importer_race
+            timeout_minutes: 15
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
@@ -2425,6 +2444,7 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           FEATURE_BATCH: ${{ matrix.batch }}
+          FEATURE_DIAGNOSTIC: ${{ matrix.diagnostic }}
         run: |
           evidence="$RUNNER_TEMP/feature-batch-evidence"
           mkdir -p "$evidence"
@@ -2499,14 +2519,34 @@ jobs:
             retained_ownership)
               printf '%s\n' \
                 'tests/py/test_retained_playback_shared_owner.py' \
-                'tests/py/test_playback_evidence_leases.py' > "$evidence/tests.txt"
+                'tests/py/test_playback_evidence_leases.py' \
+                'tests/py/test_rooted_playback_adapter.py' > "$evidence/tests.txt"
               ;;
             *) echo "Unknown feature batch" >&2; exit 1 ;;
           esac
+          # Closed diagnostic allowlist, paired with its original admission lane.
+          # Original full-batch selectors above remain unchanged.
+          if [ -n "$FEATURE_DIAGNOSTIC" ]; then
+            cp "$evidence/tests.txt" "$evidence/full-batch-tests.txt"
+            case "$FEATURE_BATCH:$FEATURE_DIAGNOSTIC" in
+              popularity_bootstrap:popularity_inventory_teardown)
+                printf '%s\n' 'tests/py/test_private_popularity_search_inventory.py::test_admission_precedes_every_metadata_facet_and_metric_query' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_revoked_view_teardown)
+                printf '%s\n' 'tests/py/test_album_preferences_asgi.py::test_revoked_durable_view_grant_is_not_replaced_by_cached_actor' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_schema_contract)
+                printf '%s\n' 'tests/py/test_album_preferences_postgres.py::test_migrated_schema_defaults_constraints_and_no_new_counter_privilege' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_durable_view)
+                printf '%s\n' 'tests/py/test_album_preferences_postgres.py::test_durable_denial_prevents_write[view]' > "$evidence/tests.txt" ;;
+              favorites_backend:favorites_importer_race)
+                printf '%s\n' 'tests/py/test_album_preferences_postgres.py::test_actual_importer_wins_absent_row_race_without_stale_patch_overwrite' > "$evidence/tests.txt" ;;
+              *) echo "Unknown diagnostic or mismatched feature lane" >&2; exit 1 ;;
+            esac
+            printf '%s\n' "$FEATURE_DIAGNOSTIC" > "$evidence/diagnostic.txt"
+          fi
           test -s "$evidence/tests.txt"
           test -z "$(sort "$evidence/tests.txt" | uniq -d)"
           mapfile -t selected < "$evidence/tests.txt"
-          for test_path in "${selected[@]}"; do test -f "$test_path"; done
+          for test_path in "${selected[@]}"; do test -f "${test_path%%::*}"; done
 
       - name: Collect exact feature batch
         id: feature_collection
@@ -2526,6 +2566,7 @@ jobs:
           exit "${collection_status[1]}"
 
       - name: Run complete feature batch sequentially
+        if: ${{ !matrix.diagnostic }}
         id: feature_runtime
         env:
           FEATURE_BATCH: ${{ matrix.batch }}
@@ -2543,6 +2584,33 @@ jobs:
           if [ "${runtime_status[0]}" -ne 0 ]; then exit "${runtime_status[0]}"; fi
           exit "${runtime_status[1]}"
 
+      - name: Diagnose one exact feature node on its fresh owned baseline
+        if: ${{ matrix.diagnostic != '' }}
+        id: feature_diagnostic_runtime
+        timeout-minutes: 5
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: ${{ matrix.batch == 'favorites_backend' && 'favorites_linux17' || '' }}
+        run: |
+          evidence="$RUNNER_TEMP/feature-batch-evidence"
+          mapfile -t selected < "$evidence/tests.txt"
+          test "${#selected[@]}" -eq 1
+          test -s "$evidence/diagnostic.txt"
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/diagnostic-runtime-started-at.txt"
+          set +e
+          timeout --signal=TERM --kill-after=30s 180s \
+            python -u -m pytest -q -vv --maxfail=1 --tb=long --show-capture=all -rA \
+            -o faulthandler_timeout=60 --junitxml="$evidence/diagnostic-results.xml" \
+            "${selected[@]}" 2>&1 | tee "$evidence/diagnostic-runtime.txt"
+          diagnostic_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${diagnostic_status[0]}" > "$evidence/diagnostic-runtime.exit-code.txt" || exit 1
+          printf '%s\n' "${diagnostic_status[1]}" > "$evidence/diagnostic-tee.exit-code.txt" || exit 1
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$evidence/diagnostic-runtime-completed-at.txt" || exit 1
+          # Timeout 124/137 is interrupted evidence, never a passing test result.
+          # No lock release/reset/retry follows a failed or interrupted fixture.
+          if [ "${diagnostic_status[0]}" -ne 0 ]; then exit "${diagnostic_status[0]}"; fi
+          exit "${diagnostic_status[1]}"
+
       - name: Explain independent feature evidence boundary
         if: ${{ always() }}
         env:
@@ -2551,12 +2619,18 @@ jobs:
           SELECTION_OUTCOME: ${{ steps.feature_selection.outcome }}
           COLLECTION_OUTCOME: ${{ steps.feature_collection.outcome }}
           RUNTIME_OUTCOME: ${{ steps.feature_runtime.outcome }}
+          DIAGNOSTIC: ${{ matrix.diagnostic }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.feature_diagnostic_runtime.outcome }}
         run: |
           evidence="$RUNNER_TEMP/feature-batch-evidence"
           mkdir -p "$evidence"
           {
             printf 'batch=%s\nhead=%s\nselection=%s\ncollection=%s\nruntime=%s\n' \
               "$FEATURE_BATCH" "$EXPECTED_HEAD" "$SELECTION_OUTCOME" "$COLLECTION_OUTCOME" "$RUNTIME_OUTCOME"
+            if [ -n "$DIAGNOSTIC" ]; then
+              printf 'diagnostic=%s\ndiagnostic_runtime=%s\n' "$DIAGNOSTIC" "$DIAGNOSTIC_OUTCOME"
+              echo "Exact-node diagnostic only; not full-batch acceptance or proof of order independence."
+            fi
             echo "Independent supplemental evidence; existing full-suite gates are unchanged."
             echo "Skipped, interrupted, uncollected and unselected cases remain unverified."
             echo "W1/W2 Linux seam evidence does not replace real-Windows W0 acceptance."
@@ -2566,7 +2640,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: feature-batch-${{ matrix.batch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: feature-batch-${{ matrix.batch }}${{ matrix.diagnostic && format('-diagnostic-{0}', matrix.diagnostic) || '' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/feature-batch-evidence/
           if-no-files-found: warn
           retention-days: 14

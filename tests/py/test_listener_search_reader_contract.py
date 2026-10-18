@@ -8,7 +8,9 @@ from music_app.services.current_actor import ActorState, CapabilityGrant, Curren
 from music_app.services.policy import PolicyContext, RequestOrigin
 from music_app.services.private_listener_search_cursor import encode_listener_cursor
 from music_app.services.private_listener_search_postgres import PostgresListenerSearch
-from music_app.services.private_search_contract import PrivateSearchError, normalize_private_search_request
+from music_app.services.private_search_contract import (
+    ListenerSearchCriteria, ListenerSearchRequest, PrivateSearchError, normalize_private_search_request,
+)
 from music_app.services.private_search_subject import ListenerHistoryExpectation
 
 SECRET = 'listener-search-pure-request-boundary-secret'
@@ -98,6 +100,8 @@ def test_home_listener_expectation_distinguishes_initial_and_continuation():
 
 
 @pytest.mark.parametrize('query', ['@maya', '@maya :tracks listened:all'])
-def test_reader_does_not_change_existing_http_search_admission(query):
-    with pytest.raises(PrivateSearchError):
-        normalize_private_search_request(QueryParams({'q': query}))
+def test_http_uses_a_distinct_live_request_without_widening_the_raw_reader(query):
+    request = normalize_private_search_request(QueryParams({'q': query}))
+    assert type(request) is ListenerSearchRequest
+    assert request.criteria == ListenerSearchCriteria('maya')
+    assert request.presentation == 'tracks'

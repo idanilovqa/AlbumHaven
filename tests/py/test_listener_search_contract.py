@@ -1,9 +1,10 @@
-"""Confirmed listener grammar remains independent of live Search admission."""
+"""Raw listener grammar and its distinct live Search admission contract."""
 import pytest
 from starlette.datastructures import QueryParams
 
 from music_app.services.private_search_contract import (
-    ListenerHistoryCriteria, PrivateSearchError, normalize_listener_history_query,
+    ListenerHistoryCriteria, ListenerSearchCriteria, ListenerSearchRequest,
+    PrivateSearchError, normalize_listener_history_query,
     normalize_own_love_query, normalize_private_search_request,
 )
 
@@ -60,10 +61,12 @@ def test_username_boundaries_reuse_existing_account_contract():
 
 
 @pytest.mark.parametrize('query', ['@maya', '@maya :tracks listened:all'])
-def test_foundation_does_not_admit_http_until_history_reader_exists(query):
-    with pytest.raises(PrivateSearchError) as caught:
-        normalize_private_search_request(QueryParams({'surface': 'albums', 'q': query}))
-    assert caught.value.code == 'unsupported_private_search_combination'
+def test_confirmed_history_forms_have_distinct_live_track_admission(query):
+    request = normalize_private_search_request(QueryParams({'surface': 'albums', 'q': query}))
+    assert type(request) is ListenerSearchRequest
+    assert request.criteria == ListenerSearchCriteria('maya')
+    assert request.presentation == 'tracks'
+    assert request.limit == 100
 
 
 def test_existing_own_love_contract_is_unchanged():

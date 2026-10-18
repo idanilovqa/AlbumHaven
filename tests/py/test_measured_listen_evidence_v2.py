@@ -213,7 +213,8 @@ class MeasuredEvidenceV2Tests(unittest.TestCase):
         self.rejected(lambda:E.compare_checkpoint_v2(state,body,V['binding'],[[0,8193]]))
 
     def test_v1_prefix_and_version_isolation(self):
-        prefix=OWNER.read_bytes()[:13471]
+        # Normalize only Git checkout CRLF before comparing the LF source prefix.
+        prefix=OWNER.read_bytes().replace(b'\r\n', b'\n')[:13471]
         self.assertEqual(hashlib.sha256(prefix).hexdigest(),'218f403d9980b649851c0d2eeff946ac7dac8dd5c5c06c7ae076d7db63116752')
         self.assertEqual(E.VERSION,'rendered-position-histogram-v1')
         self.rejected(lambda:E.normalize_checkpoint(CASES['one_second']['envelope'],E.MediaMetadata(48000,48000)))

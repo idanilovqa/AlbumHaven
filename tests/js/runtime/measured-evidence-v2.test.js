@@ -188,7 +188,10 @@ test('coverage cap retains exact prior union then can merge, but never recover c
 
 test('v1 prefix and version remain separate',async()=>{
   const m=await modulePromise;
-  assert.equal(createHash('sha256').update(fs.readFileSync(owner).subarray(0,9655)).digest('hex'),
+  // Git may check text out as CRLF; compare the committed LF text prefix.
+  // Do not normalize wire/canonical JSON or any other source whitespace.
+  const sourceLF = Buffer.from(fs.readFileSync(owner, 'utf8').replace(/\r\n/g, '\n'), 'utf8');
+  assert.equal(createHash('sha256').update(sourceLF.subarray(0,9655)).digest('hex'),
     'ead31489540f18e68ded792a8df6fcffac079a7a5ca86ff0afdd147e179d89b3');
   assert.equal(m.VERSION,'rendered-position-histogram-v1');
   assert.equal(m.V2_VERSION,'rendered-position-slices-v2');

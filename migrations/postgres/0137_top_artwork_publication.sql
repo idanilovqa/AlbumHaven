@@ -282,7 +282,7 @@ end $$;
 -- One private projection of exact staging. No external source/proof arrays are
 -- accepted. Every caller uses keyset pages of 100 (with a 101-row sentinel).
 create function app._artwork_publication_staging(p_ref uuid,p_after integer,p_limit integer)
-returns table(position integer,row_kind text,draft_ref uuid,draft_revision bigint,row_ref uuid,
+returns table("position" integer,row_kind text,draft_ref uuid,draft_revision bigint,row_ref uuid,
   saved_item_ref uuid,catalog_ref uuid,local_album_id bigint,metadata_source_ref uuid,metadata_root_id bigint,
   included boolean,status text,asset_ref uuid,source_stamp jsonb,acquisition_stamp jsonb)
 language sql stable security definer set search_path=pg_catalog as $$

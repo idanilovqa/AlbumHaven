@@ -36,7 +36,7 @@ KNOWN_FOLLOWING_TAIL = {
     "0134_private_top_artwork_draft_capture.sql": "a2226a26b9732d70a17af35d0054fba05e0306156dbed94d2c02e2b4c8c6c87e",
     "0135_public_metadata_file_invalidation.sql": "818a4734aa6717efd0ff1aae96e583b6b2f00a52424fcde94f8af38f0014adc5",
     "0136_private_top_remote_identity_lock.sql": "19725aee6086a1ec6cf66571c59a9259fd2687bed3677de8ea20be91fdd102b1",
-    "0137_top_artwork_publication.sql": "606a782a1a34138d493be9c91443d3162630d760b99b1528270a099363e318ff",
+    "0137_top_artwork_publication.sql": "36153e084f45e496c4e771413d4999a120f715e9a736074930fc98182694bdeb",
 }
 INPUTS = {
     "0127_private_top_remote_acquisition.sql": "b849fdb42550fe549561c9199eb87a3af3622003edb187ec08128e28ada99d65",

@@ -9,6 +9,7 @@ registry, async execution handoff, and finalization bookkeeping live here.
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import Future
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ from music_app.services.cache import (
     save_cache_to_disk_for_config,
 )
 from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.edit_tag_timings import EditTagTimingRecorder
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
 
@@ -316,7 +318,15 @@ def _normalize_empty_exception_rebase_entries(
 
 def save_task_result(task_id: str) -> JsonDict:
     with _SAVE_TASKS_LOCK:
-        return dict(_SAVE_TASKS.get(task_id, {}))
+        result = dict(_SAVE_TASKS.get(task_id, {}))
+    result.pop("_timing_recorder", None)
+    return result
+
+
+def save_task_timing_recorder(task_id: str) -> EditTagTimingRecorder | None:
+    with _SAVE_TASKS_LOCK:
+        recorder = _SAVE_TASKS.get(task_id, {}).get("_timing_recorder")
+    return recorder if isinstance(recorder, EditTagTimingRecorder) else None
 
 
 def update_save_task(task_id: str, **changes) -> None:
@@ -748,6 +758,7 @@ def finalize_structural_tag_edit_save_task(
     structural_tag_edit_reservation: object | None = None,
     before_persistence_commit: Callable[[object], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
+    timing_recorder: EditTagTimingRecorder | None = None,
 ) -> None:
     finalize_started = perf_counter()
     try:
@@ -758,13 +769,18 @@ def finalize_structural_tag_edit_save_task(
                 if before_persistence_commit is not None
                 else {}
             )
-            persistence_result = persist_structural_tag_edit(
-                changed_paths=set(changed_paths),
-                previous_file_entries=previous_file_cache,
-                updated_file_entries=updated_file_cache,
-                changed_field_names=set(changed_field_names),
-                **persistence_options,
-            )
+            with (
+                timing_recorder.measure("postgres_commit")
+                if timing_recorder is not None
+                else nullcontext()
+            ):
+                persistence_result = persist_structural_tag_edit(
+                    changed_paths=set(changed_paths),
+                    previous_file_entries=previous_file_cache,
+                    updated_file_entries=updated_file_cache,
+                    changed_field_names=set(changed_field_names),
+                    **persistence_options,
+                )
             persistence_ms = (perf_counter() - persistence_started) * 1000.0
         except Exception as exc:
             compensation_succeeded = True
@@ -882,14 +898,24 @@ def finalize_structural_tag_edit_save_task(
                     )
 
         state_guard = run_state_mutation or (lambda action: action())
-        _post_commit_value(
-            warnings,
-            "Runtime state refresh",
-            lambda: state_guard(refresh_runtime_state),
-            None,
-        )
+        with (
+            timing_recorder.measure("runtime_reconciliation")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            _post_commit_value(
+                warnings,
+                "Runtime state refresh",
+                lambda: state_guard(refresh_runtime_state),
+                None,
+            )
         try:
-            updated_albums = find_albums_by_track_paths(requested_track_paths)
+            with (
+                timing_recorder.measure("canonical_album_lookup")
+                if timing_recorder is not None
+                else nullcontext()
+            ):
+                updated_albums = find_albums_by_track_paths(requested_track_paths)
         except Exception as exc:
             _fail_save_task(
                 task_id,
@@ -902,34 +928,49 @@ def finalize_structural_tag_edit_save_task(
                 error=exc,
             )
             return
-        _post_commit_value(
-            warnings,
-            "History update",
-            lambda: append_log_history(config, log_entry),
-            None,
-        )
-        _post_commit_value(
-            warnings,
-            "Application event log",
-            lambda: log_app_event(
-                config,
-                logger,
-                str(log_entry.get("action") or "Library save completed"),
-                level="info",
-                **{
-                    key: value
-                    for key, value in log_entry.items()
-                    if key not in {"id", "timestamp", "action"}
-                },
-            ),
-            None,
-        )
-        updated_problematic_album = _post_commit_value(
-            warnings,
-            "Problematic album refresh",
-            lambda: find_problematic_album_by_track_paths(requested_track_paths),
-            None,
-        )
+        with (
+            timing_recorder.measure("history_publication")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            _post_commit_value(
+                warnings,
+                "History update",
+                lambda: append_log_history(config, log_entry),
+                None,
+            )
+        with (
+            timing_recorder.measure("event_publication")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            _post_commit_value(
+                warnings,
+                "Application event log",
+                lambda: log_app_event(
+                    config,
+                    logger,
+                    str(log_entry.get("action") or "Library save completed"),
+                    level="info",
+                    **{
+                        key: value
+                        for key, value in log_entry.items()
+                        if key not in {"id", "timestamp", "action"}
+                    },
+                ),
+                None,
+            )
+        with (
+            timing_recorder.measure("problematic_album_lookup")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            updated_problematic_album = _post_commit_value(
+                warnings,
+                "Problematic album refresh",
+                lambda: find_problematic_album_by_track_paths(requested_track_paths),
+                None,
+            )
         completion = {
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -956,6 +997,9 @@ def finalize_structural_tag_edit_save_task(
         }
         if warnings:
             completion["warnings"] = warnings
+        if timing_recorder is not None:
+            completion.update(timing_recorder.snapshot())
+            completion["_timing_recorder"] = timing_recorder
         update_save_task(task_id, **completion)
     finally:
         release = getattr(structural_tag_edit_reservation, "release", None)

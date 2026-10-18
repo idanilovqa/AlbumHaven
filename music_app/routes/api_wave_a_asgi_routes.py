@@ -81,7 +81,9 @@ from music_app.services.save_tasks import (
     queue_finalize_save_task,
     queue_finalize_structural_tag_edit_save_task,
     save_task_result,
+    save_task_timing_recorder,
     structural_tag_edit_resource_keys,
+    update_save_task,
 )
 from music_app.services.separate_releases import load_separate_release_keys, save_separate_release_keys
 from music_app.services.tag_edit_intents_postgres import (
@@ -1388,6 +1390,7 @@ def _authoritative_edit_tags_response(
     *,
     total_ms: float,
 ) -> ResponseValue:
+    response_started = perf_counter()
     if isinstance(result, tuple) or not result.get("ok"):
         return result
     task_id = str(result.get("save_task_id") or "").strip()
@@ -1423,6 +1426,10 @@ def _authoritative_edit_tags_response(
         "updated_problematic_album",
         "requires_view_refresh",
         "warnings",
+        "operation_id",
+        "phase_timings_ms",
+        "pool_lease_timings_ms",
+        "pool_lease_counts",
     ):
         if key in task:
             response[key] = task[key]
@@ -1433,6 +1440,15 @@ def _authoritative_edit_tags_response(
     response_timings["total_ms"] = round(total_ms, 3)
     response["timings"] = response_timings
     response["save_task_status"] = "completed"
+    timing_recorder = save_task_timing_recorder(task_id)
+    if timing_recorder is not None:
+        timing_recorder.record(
+            "response_construction",
+            (perf_counter() - response_started) * 1000.0,
+        )
+        timing_snapshot = timing_recorder.snapshot()
+        update_save_task(task_id, **timing_snapshot)
+        response.update(timing_snapshot)
     return response
 
 
@@ -1912,6 +1928,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             return verified
 
         handler_options["validate_proposals"] = validate_proposals
+    reservation_started = perf_counter()
     structural_tag_edit_reservation = (
         await acquire_structural_tag_edit_reservation_async(
             reservation_resource_keys
@@ -1919,6 +1936,9 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         if reservation_resource_keys
         else None
     )
+    handler_options["reservation_wait_ms"] = (
+        perf_counter() - reservation_started
+    ) * 1000.0
     result = await _run_edit_tags_handler_with_reservation(
         handler_options,
         _EditTagsReservation(intent_lease, structural_tag_edit_reservation),

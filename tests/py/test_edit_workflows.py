@@ -943,6 +943,12 @@ def test_edit_tags_prepares_durable_intent_before_media_and_marks_verified(confi
         ("verified", "intent-1"),
     ]
     assert queued[0]["tag_edit_intent_id"] == "intent-1"
+    timing_snapshot = queued[0]["timing_recorder"].snapshot()
+    assert timing_snapshot["operation_id"] == "save-1"
+    assert timing_snapshot["phase_timings_ms"]["reservation_wait"] == 0.0
+    assert timing_snapshot["phase_timings_ms"]["intent_prepare"] >= 0
+    assert timing_snapshot["phase_timings_ms"]["media_writes"] >= 0
+    assert timing_snapshot["phase_timings_ms"]["files_verified_checkpoint"] >= 0
     assert queued[0]["exception_updates"] == {track_path: ""}
 
 

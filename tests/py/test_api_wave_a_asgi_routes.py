@@ -4504,6 +4504,7 @@ def test_asgi_edit_tags_returns_committed_values_only_after_terminal_save_task(
     monkeypatch,
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.edit_tag_timings import EditTagTimingRecorder
     from music_app.services.save_tasks import create_save_task, update_save_task
 
     committed_values = {
@@ -4513,12 +4514,28 @@ def test_asgi_edit_tags_returns_committed_values_only_after_terminal_save_task(
     }
 
     def fake_handle_edit_tags_request(**kwargs):
+        assert kwargs["reservation_wait_ms"] >= 0
         task_id = create_save_task("edit-tags")
+        timing_recorder = EditTagTimingRecorder(task_id)
+        timing_recorder.record("postgres_commit", 4.25)
+        timing_recorder.observe_pool_lease(
+            "released",
+            {
+                "workload": "default",
+                "wait_ms": 1.0,
+                "held_ms": 4.25,
+                "pool_size": 4,
+                "pool_available": 3,
+                "requests_waiting": 0,
+            },
+        )
         update_save_task(
             task_id,
             status="completed",
             committed_values=committed_values,
             timings={"postgres_ms": 4.25},
+            **timing_recorder.snapshot(),
+            _timing_recorder=timing_recorder,
             updated_albums=[],
             updated_problematic_album=None,
             requires_view_refresh=False,
@@ -4566,6 +4583,11 @@ def test_asgi_edit_tags_returns_committed_values_only_after_terminal_save_task(
     assert payload["committed_values"] == committed_values
     assert payload["timings"]["postgres_ms"] == 4.25
     assert payload["timings"]["total_ms"] >= 0
+    assert payload["operation_id"] == payload["save_task_id"]
+    assert payload["phase_timings_ms"]["postgres_commit"] == 4.25
+    assert payload["phase_timings_ms"]["response_construction"] >= 0
+    assert payload["pool_lease_timings_ms"]["default"]["held_ms"] == 4.25
+    assert payload["pool_lease_counts"]["default"]["released"] == 1
 
 
 def test_selected_postgres_media_compensation_is_path_scoped_and_restores_exception(

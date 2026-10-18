@@ -211,7 +211,27 @@ def test_reader_first_prelock_blocks_selected_inventory_writer(native_activity,m
         assert reader.result(timeout=8)['status']=='ready'
         writer.result(timeout=8)
     monkeypatch.setattr(ActivityNativeTargets,'prelock_listener_on_connection',original)
-    error(409,lambda:native(state,result,context=context))
+    if change == 'root':
+        # Root liveness narrows current play availability, not receipt membership.
+        # Preserve the lock assertion above and prove both sides of that contract.
+        current=native(state,result,context=context)
+        assert current['status']=='ready'
+        bindings=current['data']['bindings']
+        assert [binding['row_ref'] for binding in bindings]==[row['id'] for row in result['tracks']]
+        affected=next(binding for binding in bindings
+            if binding['inventory_track_ref']==f"inventory-track:{context.library_id}:{track['id']}")
+        assert affected['allowed_actions']['can_resolve_native_play'] is False
+        metadata=native(state,result,operation='single',selected=[affected['row_ref']],context=context)
+        target=metadata['data']['native_target']
+        assert target['inventory_track_ref']==affected['inventory_track_ref']
+        assert target['source_readable'] is True and target['allowed_actions']['can_read'] is True
+        assert target['availability']!='local'
+        assert target['allowed_actions']['can_play'] is False
+        assert target['playback_state']['can_start_here'] is False
+        error(404,lambda:native(state,result,operation='single',intent='play',
+            selected=[affected['row_ref']],context=context),code='item_unavailable')
+    else:
+        error(409,lambda:native(state,result,context=context))
 
 
 def test_writer_first_does_not_hold_revision_lock_while_waiting_inventory(native_activity,monkeypatch):
@@ -491,7 +511,8 @@ def test_durable_listener_media_grant_cannot_authorize_actor_native_and_library_
     assert target['allowed_actions']['can_play'] is False
     # Browse intentionally supplies intrinsic self preference management. A
     # separate account-scoped manage grant must not be mistaken for its source.
-    assert target['track_preference']['allowed_actions']=={'can_rate':True,'can_set_love_tier':True}
+    assert target['track_preference']['allowed_actions']=={
+        'can_rate':True,'can_set_love_tier':True,'client_surface_class':'private_web'}
     listener_ctx,actor_ctx=prelocked[-1]
     evaluator=PolicyEvaluator()
     media=replace(actor_ctx,action='library.media.read',resource=ResourceScope('track',str(track['id'])))

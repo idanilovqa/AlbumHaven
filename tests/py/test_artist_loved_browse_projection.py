@@ -215,11 +215,26 @@ def test_final_root_policy_recheck_after_wait_can_remove_launch(io):
     assert calls == [str(ROOT)] * 4
 
 
-def test_missing_create_denied_by_real_policy_before_root_query(io):
+def test_browse_intrinsically_allows_create_without_separate_grant(io):
+    supplied = context(grants=(BROWSE,))
+    assert PolicyEvaluator().evaluate(replace(supplied, action=CREATE)).decision.allowed
+    _, copied, memo, found = copied_payload()
+    con = connection([Step("id=any", [row()])])
+    assert len(project(con, copied, memo, found, supplied=supplied)) == 2
+    con.done()
+
+
+def test_create_narrowing_denied_by_real_policy_before_root_query(io):
     _, copied, memo, found = copied_payload()
     con = connection()
+    seen = []
+    def constraints(ctx):
+        seen.append(ctx.action)
+        return PolicyEvaluationConstraints(request_origin_allowed=ctx.action != CREATE)
     with pytest.raises(authority.PrivateLibraryAuthorityError):
-        project(con, copied, memo, found, supplied=context(grants=(BROWSE,)))
+        project(con, copied, memo, found, supplied=context(grants=(BROWSE,)),
+                constraints=constraints)
+    assert seen == [BROWSE, CREATE]
     con.done()
 
 
@@ -396,21 +411,29 @@ def test_live_viewer_scoped_browse_create_without_media(canonical_db):
     assert len(staged) == 1 and staged[0][2]["descriptor"]["root_artist_id"] == str(db.browse_root)
 
 
-@pytest.mark.parametrize("change", ["membership", "create", "session"])
+@pytest.mark.parametrize("change", ["membership", "create_constraint", "session"])
 def test_live_revocation_between_capture_and_fresh_admission(canonical_db, change):
     db = canonical_db
     with db.connect() as con:
         if change == "membership":
             con.execute("delete from library.library_memberships where account_id=%s and library_id=%s",
                         (db.owner.account_id, db.library))
-        elif change == "create":
-            con.execute("delete from app.capabilities where account_id=%s and capability_key=%s",
-                        (db.owner.account_id, CREATE))
-        else:
+        elif change == "session":
             con.execute("update app.account_sessions set revoked_at=%s where id=%s",
                         (db.now, db.owner.session_id))
+    def constraints(ctx):
+        return PolicyEvaluationConstraints(
+            request_origin_allowed=not (change == "create_constraint" and ctx.action == CREATE))
     with pytest.raises(authority.PrivateLibraryAuthorityError):
-        live_project(db)
+        live_project(db, constraints=constraints)
+
+
+def test_live_separate_create_grant_removal_preserves_intrinsic_browse_create(canonical_db):
+    db = canonical_db
+    with db.connect() as con:
+        con.execute("delete from app.capabilities where account_id=%s and capability_key=%s",
+                    (db.owner.account_id, CREATE))
+    assert len(live_project(db)) == 1
 
 
 def test_live_deleted_root_replacement_same_name_never_rebinds(canonical_db):

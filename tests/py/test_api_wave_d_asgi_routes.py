@@ -579,7 +579,7 @@ def test_asgi_cover_lookup_gallery_validation_and_start_queue(app, monkeypatch):
         "artist_website_fallback",
     ]
     assert payload["task"]["manual_urls"] == ["https://covers.example/one.jpg"]
-    assert payload["gallery"]["album_root"] == str(track_path.parent)
+    assert "gallery" not in payload
     assert gallery_status == 200
     gallery_payload = _decode_json(gallery_body)
     assert gallery_payload["ok"] is True
@@ -3246,6 +3246,7 @@ def test_local_cover_selection_uses_postgres_inventory_with_empty_runtime_state(
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://unused@localhost/test"
     monkeypatch.setitem(globals(), "_seed_album_state", seed_database_inventory)
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths", selected_entries)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", selected_entries)
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_album_payloads_by_track_paths", selected_albums)
     test_asgi_local_cover_selection_persists_before_success_and_logs_safe_completion(app, monkeypatch)
 
@@ -3277,6 +3278,8 @@ def test_postgres_local_cover_commit_updates_live_runtime_not_inventory_snapshot
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_album_payloads_by_track_paths",
                         lambda self, paths: [{"tracks": [{**entry, "path": path} for path, entry in inventory.items()]}])
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_track_file_entries_by_paths",
+                        lambda self, paths: {path: dict(inventory[path]) for path in paths})
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths",
                         lambda self, paths: {path: dict(inventory[path]) for path in paths})
     monkeypatch.setattr(routes, "persist_cover_selection_for_tracks",
                         lambda *args, **kwargs: kwargs["commit_guard"](lambda: {"album_rows_updated": 1, "track_file_rows_updated": 2}))
@@ -3338,3 +3341,12 @@ def test_cover_gallery_preserves_saved_remote_cover_with_cold_postgres_inventory
     assert (remote["width"], remote["height"]) == (640, 640)
     assert loads == ([] if cached else [{str(track_path)}])
     assert app.library_state["file_cache"] == ({str(track_path): entry} if cached else {})
+
+
+def test_cover_lookup_task_identity_does_not_repeat_validated_album_resolution():
+    from music_app.routes import api_wave_d_asgi_routes as routes
+
+    assert routes._task_matches_album_context(
+        {"track_paths": ["C:/Music/Artist/Album/song.mp3"]},
+        track_paths={"C:/Music/Artist/Album/song.mp3"},
+    ) is True

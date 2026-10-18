@@ -4951,6 +4951,23 @@ test('cover notification text selection retries only the atomic connected-node g
   assert.doesNotMatch(selectionAction, /element\.click\(|dispatchEvent|selection\.addRange/);
 });
 
+test('cover lookup records decoded candidate readiness before response hashing', () => {
+  const performanceSpec = read('tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js');
+  const decodeReadyIndex = performanceSpec.indexOf(
+    'await coverLookupActions.waitForRemoteCandidateDecoded(readyCandidate.id);',
+  );
+  const timingIndex = performanceSpec.indexOf(
+    'candidateReadyMs = performance.now() - lookupStartedAt;',
+  );
+  const hashEvidenceIndex = performanceSpec.indexOf(
+    'await coverLookupActions.readRemoteCandidateEvidence(readyCandidate.id);',
+  );
+
+  assert.notEqual(decodeReadyIndex, -1, 'candidate readiness must wait for displayed decode');
+  assert.ok(timingIndex > decodeReadyIndex, 'timing must follow displayed decode');
+  assert.ok(hashEvidenceIndex > timingIndex, 'response hashing must stay outside readiness timing');
+});
+
 test('cover lookup hashes only decoded visible currentSrc response evidence', () => {
   const coverLookup = read('tests/e2e/actions/coverLookupActions.js');
 
@@ -4964,6 +4981,57 @@ test('cover lookup hashes only decoded visible currentSrc response evidence', ()
   assert.match(coverLookup, /sourceUrl\.origin !== location\.origin/);
   assert.match(coverLookup, /fetch\(expected\.currentSrc, \{ mode: 'same-origin' \}\)/);
   assert.doesNotMatch(coverLookup, /fetch\((?:src|displayedSource|productionSrc)/);
+});
+
+test('cover lookup decode readiness wakes on image load without polling delay', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href;
+  const { waitForDisplayedImageDecode } = await import(moduleUrl);
+  const originalImageElement = globalThis.HTMLImageElement;
+  class FakeImageElement extends EventTarget {
+    constructor() {
+      super();
+      this.complete = false;
+      this.naturalWidth = 0;
+      this.naturalHeight = 0;
+      this.currentSrc = 'http://127.0.0.1:4173/cover.jpg';
+      this.decodeCalls = 0;
+    }
+
+    async decode() {
+      this.decodeCalls += 1;
+    }
+
+    getAttribute() {
+      return '';
+    }
+
+    hasAttribute() {
+      return false;
+    }
+
+    getBoundingClientRect() {
+      return { width: 240, height: 240 };
+    }
+  }
+  globalThis.HTMLImageElement = FakeImageElement;
+  try {
+    const image = new FakeImageElement();
+    const readiness = waitForDisplayedImageDecode(image);
+    image.complete = true;
+    image.naturalWidth = 480;
+    image.naturalHeight = 480;
+    image.dispatchEvent(new Event('load'));
+
+    const state = await readiness;
+
+    assert.equal(image.decodeCalls, 1);
+    assert.equal(state.complete, true);
+    assert.equal(state.naturalWidth, 480);
+    assert.equal(state.width, 240);
+  } finally {
+    if (originalImageElement === undefined) delete globalThis.HTMLImageElement;
+    else globalThis.HTMLImageElement = originalImageElement;
+  }
 });
 
 test('cover lookup rejects a pending gallery blob transition before hashing response evidence', async () => {

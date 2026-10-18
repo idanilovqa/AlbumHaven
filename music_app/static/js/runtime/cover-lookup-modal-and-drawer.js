@@ -1481,6 +1481,38 @@ async function clearCoverLookupTaskNotification(taskId) {
   }
 }
 
+function releaseDeferredCoverLookupPreviews(root) {
+  const images = root?.querySelectorAll?.('[data-cover-lookup-deferred-src]') || [];
+  images.forEach((image) => {
+    const src = String(image.getAttribute('data-cover-lookup-deferred-src') || '').trim();
+    if (!src) return;
+    image.src = src;
+    image.removeAttribute('data-cover-lookup-deferred-src');
+  });
+}
+
+function scheduleDeferredCoverLookupPreviews(root) {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const requestFrame = typeof window.requestAnimationFrame === 'function'
+      ? callback => window.requestAnimationFrame(callback)
+      : typeof window.setTimeout === 'function'
+      ? callback => window.setTimeout(callback, 0)
+      : callback => callback();
+    requestFrame(() => requestFrame(() => releaseDeferredCoverLookupPreviews(root)));
+  };
+  const priorityImage = root?.querySelector?.('.cover-lookup-art-preview-image[fetchpriority="high"]');
+  if (!priorityImage || priorityImage.complete) {
+    release();
+    return;
+  }
+  priorityImage.addEventListener('load', release, { once: true });
+  priorityImage.addEventListener('error', release, { once: true });
+  window.setTimeout?.(release, 500);
+}
+
 function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = false) {
   const resolution = item?.resolution || ((item?.width && item?.height) ? `${item.width}x${item.height}` : 'Unknown');
   const isRemoteKind = kind === 'remote' || kind === 'saved-remote';
@@ -1553,6 +1585,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
     : isRemoteKind
       ? 'loading="eager" fetchpriority="high"'
       : 'loading="eager"';
+  const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
+    ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
+    : `src="${escapeHtml(imageUrl)}"`;
   const actionLabel = kind === 'saved-remote'
     ? (isActive ? 'Selected' : 'Linked remote cover')
     : (isActive ? 'Selected' : 'Select');
@@ -1567,7 +1602,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
       <div class="cover-lookup-art-card ${isActive ? 'is-active' : ''} ${isOtherRemoteArt ? 'is-preview-only' : ''}" ${roleAttr} ${selectAttr} ${itemKeyAttr} ${localActiveAttr} ${lightboxDataAttrs}>
         <span class="cover-lookup-art-preview">
           ${fallbackPreviewHtml}
-          ${imageUrl ? `<img class="cover-lookup-art-preview-image" src="${imageUrl}" alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
+        ${imageUrl ? `<img class="cover-lookup-art-preview-image" ${previewSourceAttr} alt="${previewAlt}" ${previewLoadingAttrs} decoding="async" onload="this.closest('.cover-lookup-art-preview')?.classList.remove('has-load-error');" onerror="this.style.display='none'; this.removeAttribute('src'); var preview=this.parentElement; if(preview){ preview.classList.add('has-load-error'); }">` : ''}
           <button class="cover-lookup-art-preview-button" type="button" ${previewAttrs} aria-label="${previewButtonLabel}">
             <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
               <path d="M10.5 4a6.5 6.5 0 1 0 4.07 11.57l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-.75 1.75h1.5v2h2v1.5h-2v2h-1.5v-2h-2v-1.5h2v-2Z" fill="currentColor"></path>
@@ -1743,7 +1778,7 @@ function renderCoverLookupModal() {
     : '';
   const possibleMatchesMarkup = possibleMatches.length
     ? `
-        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item, index) => buildCoverLookupCard(item, 'remote', index < 4)).join('')}</div>` : ''}
+        ${serviceMatches.length ? `<div class="cover-lookup-subsection-title">From services</div><div class="cover-lookup-gallery">${serviceMatches.map((item, index) => buildCoverLookupCard(item, 'remote', index === 0)).join('')}</div>` : ''}
         ${groupedDiscogsMatches.length ? `<div class="cover-lookup-subsection-title">Discogs</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="discogs">${groupedDiscogsMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${groupedArchiveMatches.length ? `<div class="cover-lookup-subsection-title">Cover Art Archive</div><div class="cover-lookup-gallery" data-cover-lookup-provider-group="cover_art_archive">${groupedArchiveMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
         ${manualLinkMatches.length ? `<div class="cover-lookup-subsection-title">MANUAL LINKS</div><div class="cover-lookup-gallery">${manualLinkMatches.map((item) => buildCoverLookupCard(item, 'remote')).join('')}</div>` : ''}
@@ -1807,6 +1842,7 @@ function renderCoverLookupModal() {
       </section>
     `;
   restoreCoverLookupModalScrollAnchor(els.body, scrollAnchor);
+  scheduleDeferredCoverLookupPreviews(els.body);
   if (els.saveRemote) {
     syncCoverLookupManualControlsUi();
     syncCoverLookupSaveButton();
@@ -1967,6 +2003,8 @@ async function loadCoverLookupTasks(options = {}) {
 }
 
 let coverLookupPollingRequest = null;
+let coverLookupBackgroundPollTicks = 0;
+let coverLookupPollInFlight = false;
 let coverLookupHistoryRequest = null;
 
 async function loadNextCoverLookupTaskPage(options = {}) {
@@ -2012,21 +2050,34 @@ async function loadCoverLookupTasksForPolling(options = {}) {
 function ensureCoverLookupPolling() {
   if (state.coverLookup.pollingTimer) return;
   state.coverLookup.pollingTimer = window.setInterval(async () => {
-    await loadCoverLookupTasksForPolling({ toast: false });
-    const snapshot = state.coverLookup.modal.candidateSnapshot;
+    if (coverLookupPollInFlight) return;
     const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-    const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
-      String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
-      && ['pending', 'running'].includes(String(task?.status || ''))
-    ));
-    if (
-      modalOpen
-      && !hasMatchingActiveTask
-      && ['pending', 'running'].includes(String(snapshot?.status || ''))
-    ) {
-      await refreshCoverLookupGallery(false);
+    if (!modalOpen) {
+      coverLookupBackgroundPollTicks += 1;
+      if (coverLookupBackgroundPollTicks < 25) return;
+      coverLookupBackgroundPollTicks = 0;
+    } else {
+      coverLookupBackgroundPollTicks = 0;
     }
-  }, 2500);
+    coverLookupPollInFlight = true;
+    try {
+      await loadCoverLookupTasksForPolling({ toast: false });
+      const snapshot = state.coverLookup.modal.candidateSnapshot;
+      const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
+        String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
+        && ['pending', 'running'].includes(String(task?.status || ''))
+      ));
+      if (
+        modalOpen
+        && !hasMatchingActiveTask
+        && ['pending', 'running'].includes(String(snapshot?.status || ''))
+      ) {
+        await refreshCoverLookupGallery(false);
+      }
+    } finally {
+      coverLookupPollInFlight = false;
+    }
+  }, 100);
 }
 
 function stopCoverLookupPollingIfIdle() {
@@ -2037,6 +2088,7 @@ function stopCoverLookupPollingIfIdle() {
   if (state.coverLookup.pollingTimer) {
     window.clearInterval(state.coverLookup.pollingTimer);
     state.coverLookup.pollingTimer = 0;
+    coverLookupBackgroundPollTicks = 0;
   }
 }
 
@@ -2160,10 +2212,7 @@ async function openCoverLookupModal(album, options = {}) {
   }
   renderCoverLookupModal();
   ensureCoverLookupPolling();
-  await Promise.all([
-    loadCoverLookupTasks({ toast: false, refreshModalGallery: false }),
-    refreshCoverLookupGallery(),
-  ]);
+  await refreshCoverLookupGallery();
 }
 
 function closeCoverLookupModal() {
@@ -2182,6 +2231,7 @@ function closeCoverLookupModal() {
   state.coverLookup.modal.pastedImages = [];
   state.coverLookup.modal.manualImageAttachments = [];
   state.coverLookup.modal.manualBusy = false;
+  state.coverLookup.modal.saving = false;
   state.coverLookup.modal.album = null;
   state.coverLookup.modal.taskId = '';
   state.coverLookup.modal.localCovers = [];
@@ -2231,11 +2281,9 @@ function closeCoverLookupDeleteConfirm() {
 
 async function startCoverLookupForAlbum(album, options = {}) {
   if (!album) return;
-  const session = coverLookupModalSession;
   const backgroundOnly = Boolean(options?.backgroundOnly);
   const triggerButton = backgroundOnly ? options?.triggerButton : null;
   const triggerWasDisabled = Boolean(triggerButton?.disabled);
-  const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
   if (!backgroundOnly) {
     const selectedLocalCard = document.getElementById('cover-lookup-modal-body')
       ?.querySelector?.('[data-select-local-cover][data-cover-lookup-local-active]');
@@ -2296,12 +2344,6 @@ async function startCoverLookupForAlbum(album, options = {}) {
     );
     if (backgroundOnly) {
       await loadCoverLookupTasks({ toast: false });
-    } else if (modalOpen && session === coverLookupModalSession) {
-      if (data.gallery && typeof data.gallery === 'object') {
-        applyCoverLookupGalleryPayload(data.gallery);
-      } else {
-        await refreshCoverLookupGallery(false);
-      }
     }
   } catch (error) {
     console.error('[AlbumHaven][CoverLookup] Failed to start lookup.', error);

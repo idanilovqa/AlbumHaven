@@ -294,8 +294,6 @@ def _resolved_snapshot_album_context(
 def _task_matches_album_context(
     task_payload: Mapping[str, object],
     *,
-    repository: AlbumCoverCandidateSnapshotRepository,
-    album_id: int,
     track_paths: set[str],
 ) -> bool:
     task_track_paths = {
@@ -305,12 +303,7 @@ def _task_matches_album_context(
     }
     if task_track_paths != track_paths:
         return False
-    try:
-        return repository.resolve_album_id_for_track_paths(
-            track_paths=task_track_paths
-        ) == album_id
-    except Exception:
-        return False
+    return True
 
 
 @router.get("/utilities/cover-lookup/tasks/counts")
@@ -425,8 +418,6 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     task_payload = cover_lookup_result(task_id) if task_id else {}
     if task_payload and not _task_matches_album_context(
         task_payload,
-        repository=repository,
-        album_id=int(album_id),
         track_paths=album_context.track_paths,
     ):
         return _json_response(
@@ -533,12 +524,6 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         {
             "ok": True,
             "task": serialize_cover_lookup_task_payload(cover_lookup_result(task_id)),
-            "gallery": await _serialize_cover_gallery_from_asgi(
-                request,
-                album_context.album_root,
-                album_context.track_paths,
-                task_id,
-            ),
         }
     )
 
@@ -992,8 +977,6 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             return _json_response(identity_error)
         if not _task_matches_album_context(
             task_payload,
-            repository=repository,
-            album_id=int(album_id),
             track_paths=album_context.track_paths,
         ):
             return _json_response(

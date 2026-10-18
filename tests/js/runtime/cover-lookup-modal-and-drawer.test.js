@@ -910,10 +910,6 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   const overlay = { hidden: true };
   const saveButton = new TestButton();
   const fetchCalls = [];
-  const returnedGallery = {
-    local_covers: [],
-    possible_matches: [{ id: 'flaming-row-primary' }],
-  };
   let taskReloads = 0;
   let galleryReloads = 0;
   let appliedGallery = null;
@@ -931,7 +927,6 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
             id: 'flaming-row-lookup',
             progress_label: 'Searching...',
           },
-          gallery: returnedGallery,
         }),
       };
     },
@@ -962,14 +957,16 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   context.applyCoverLookupGalleryPayload = (gallery) => { appliedGallery = gallery; };
 
   await context.openCoverLookupModal(secondAlbum, { taskId: 'flaming-row-lookup' });
+  assert.equal(taskReloads, 0, 'opening the modal must not load notification history');
+  assert.equal(galleryReloads, 1, 'opening the modal must load its gallery');
   taskReloads = 0;
   galleryReloads = 0;
   await context.startCoverLookupForAlbum(secondAlbum);
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(taskReloads, 0, 'start response already contains the queued task');
-  assert.equal(galleryReloads, 0, 'start response gallery must replace the immediate refetch');
-  assert.deepEqual(appliedGallery, returnedGallery);
+  assert.equal(galleryReloads, 0, 'starting a lookup must retain the gallery already loaded by the open modal');
+  assert.equal(appliedGallery, null);
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album: secondAlbum,
     manual_urls: [],
@@ -1682,6 +1679,7 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 ;(async () => {
   const intervalCalls = [];
   const requestUrls = [];
+  let resolveTaskPoll;
   const context = loadHelper({
     window: {
       setInterval(callback, delay) {
@@ -1695,8 +1693,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
     },
     fetch: async (url) => {
       requestUrls.push(url);
-      if (url === '/utilities/cover-lookup/tasks?limit=50') {
-        return { ok: true, json: async () => ({ ok: true, tasks: [] }) };
+      if (url.startsWith('/utilities/cover-lookup/tasks?')) {
+        return new Promise((resolve) => { resolveTaskPoll = resolve; });
       }
       if (url === '/utilities/cover-lookup/gallery/mark-seen') {
         return { ok: true, json: async () => ({ ok: true }) };
@@ -1738,13 +1736,16 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   await context.refreshCoverLookupGallery(false);
   context.ensureCoverLookupPolling();
   assert.equal(intervalCalls.length, 1);
-  await Promise.resolve(intervalCalls[0].callback());
-  await Promise.resolve();
+  assert.equal(intervalCalls[0].delay, 100);
+  const firstTick = intervalCalls[0].callback();
+  const overlappingTick = intervalCalls[0].callback();
+  resolveTaskPoll({ ok: true, json: async () => ({ ok: true, tasks: [] }) });
+  await Promise.all([firstTick, overlappingTick]);
 
   assert.equal(
     requestUrls.filter((url) => url === '/utilities/cover-lookup/gallery').length,
     2,
-    'a running automatic snapshot must keep refreshing the open gallery without a task',
+    'overlapping timer callbacks must share one running-snapshot gallery refresh',
   );
 })().catch((error) => {
   console.error(error);
@@ -3523,4 +3524,103 @@ require('node:test')('visible service cover previews receive eager browser prior
 
   assert.match(visible, /loading="eager" fetchpriority="high"/);
   assert.match(deferred, /loading="lazy" fetchpriority="low"/);
+  const deferredImage = deferred.match(/<img class="cover-lookup-art-preview-image"[^>]*>/)?.[0] || '';
+  assert.match(deferredImage, /data-cover-lookup-deferred-src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages\.example%2Fthumbnail\.jpg/);
+  assert.doesNotMatch(deferredImage, /\ssrc=/);
+});
+
+require('node:test')('deferred previews start after the prioritized preview loads and paints', () => {
+  const context = loadHelper();
+  const callbacks = [];
+  const listeners = {};
+  const priorityImage = {
+    complete: false,
+    addEventListener: (name, callback) => { listeners[name] = callback; },
+  };
+  const attributes = { 'data-cover-lookup-deferred-src': '/covers/deferred.jpg' };
+  const deferredImage = {
+    src: '',
+    getAttribute: name => attributes[name] || '',
+    removeAttribute: name => { delete attributes[name]; },
+  };
+  const root = {
+    querySelector: () => priorityImage,
+    querySelectorAll: () => [deferredImage],
+  };
+  context.window.requestAnimationFrame = callback => { callbacks.push(callback); };
+
+  context.scheduleDeferredCoverLookupPreviews(root);
+  assert.equal(deferredImage.src, '');
+  listeners.load();
+  callbacks.shift()();
+  assert.equal(deferredImage.src, '');
+  callbacks.shift()();
+  assert.equal(deferredImage.src, '/covers/deferred.jpg');
+  assert.equal(attributes['data-cover-lookup-deferred-src'], undefined);
+});
+
+require('node:test')('deferred previews have a bounded fallback when the prioritized preview stalls', () => {
+  const context = loadHelper();
+  const frames = [];
+  const timeouts = [];
+  const priorityImage = {
+    complete: false,
+    addEventListener() {},
+  };
+  const attributes = { 'data-cover-lookup-deferred-src': '/covers/deferred.jpg' };
+  const deferredImage = {
+    src: '',
+    getAttribute: name => attributes[name] || '',
+    removeAttribute: name => { delete attributes[name]; },
+  };
+  const root = {
+    querySelector: () => priorityImage,
+    querySelectorAll: () => [deferredImage],
+  };
+  context.window.requestAnimationFrame = callback => { frames.push(callback); };
+  context.window.setTimeout = (callback, delay) => {
+    timeouts.push({ callback, delay });
+    return timeouts.length;
+  };
+
+  context.scheduleDeferredCoverLookupPreviews(root);
+  assert.equal(timeouts.length, 1);
+  assert.equal(timeouts[0].delay, 500);
+  timeouts[0].callback();
+  frames.shift()();
+  frames.shift()();
+
+  assert.equal(deferredImage.src, '/covers/deferred.jpg');
+});
+
+require('node:test')('only the first service cover preview receives eager browser priority', () => {
+  const bodyElement = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  context.getCoverLookupModalElements = () => ({
+    overlay: {},
+    body: bodyElement,
+    subtitle: { textContent: '' },
+    status: null,
+    saveRemote: null,
+  });
+  context.captureCoverLookupModalScrollAnchor = () => null;
+  context.restoreCoverLookupModalScrollAnchor = () => {};
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Album' },
+    loading: false,
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: Array.from({ length: 4 }, (_value, index) => ({
+      id: `service-${index + 1}`,
+      source: 'spotify',
+      album: 'Provider fixture',
+      thumbnail_url: `https://images.example/service-${index + 1}.jpg`,
+    })),
+  };
+
+  context.renderCoverLookupModal();
+
+  assert.equal((bodyElement.innerHTML.match(/loading="eager" fetchpriority="high"/g) || []).length, 1);
+  assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
 });

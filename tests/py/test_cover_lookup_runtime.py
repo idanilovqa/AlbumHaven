@@ -1593,6 +1593,7 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
     requested_track_paths = {str(track_path)}
     cancel_event = Event()
     updates: list[dict[str, object]] = []
+    candidate_publication_counts: list[int] = []
     candidate = {
         "id": "apple-before-deadline",
         "url": "https://images.example/apple-before-deadline.jpg",
@@ -1624,6 +1625,13 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
             assert callable(should_cancel)
             if callable(on_candidates):
                 on_candidates([candidate])
+                candidate_publication_counts.append(
+                    sum(update.get("possible_matches") == [candidate] for update in updates)
+                )
+                on_candidates([candidate])
+                candidate_publication_counts.append(
+                    sum(update.get("possible_matches") == [candidate] for update in updates)
+                )
             while not should_cancel():
                 time.sleep(0.005)
             time.sleep(0.05)
@@ -1679,6 +1687,7 @@ def test_run_cover_lookup_task_keeps_service_candidates_found_before_deadline(
         manual_urls=[],
     )
 
+    assert candidate_publication_counts == [1, 1]
     completed = updates[-1]
     assert completed["status"] == "completed"
     assert completed["result_kind"] == "possible-matches"
@@ -2258,6 +2267,7 @@ def test_run_cover_lookup_save_remote_task_preserves_spotify_linked_cover_withou
         "changes": {
             "cover_path": None,
             "cover_selection_origin": "user",
+            "explicit_selection": True,
             "remote_cover_url": "https://images.example/cover.jpg",
             "remote_cover_thumbnail_url": "https://images.example/thumb.jpg",
             "remote_cover_source": "spotify",
@@ -2588,6 +2598,7 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
         "changes": {
             "cover_path": written_cover,
             "cover_selection_origin": "user",
+            "explicit_selection": True,
             "remote_cover_url": None,
             "remote_cover_thumbnail_url": None,
             "remote_cover_source": None,

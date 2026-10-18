@@ -1594,10 +1594,10 @@ test('cover lookup times the first decoded candidate before Spotify save setup',
 
   assert.match(
     spec,
-    /readyCandidate = candidates\[0\][\s\S]*?readRemoteCandidateEvidence\(readyCandidate\.id\)[\s\S]*?const candidateReadyMs/,
+    /readyCandidate = candidates\[0\][\s\S]*?waitForRemoteCandidateDecoded\(readyCandidate\.id\)[\s\S]*?candidateReadyMs = performance\.now\(\) - lookupStartedAt[\s\S]*?readRemoteCandidateEvidence\(readyCandidate\.id\)/,
   );
   assert.match(
     spec,
-    /const candidateReadyMs[\s\S]*?selectedCandidate = candidates\.find\([\s\S]*?spotify/,
+    /candidateReadyMs = performance\.now\(\) - lookupStartedAt[\s\S]*?selectedCandidate = candidates\.find\([\s\S]*?spotify/,
   );
 });

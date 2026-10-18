@@ -602,6 +602,21 @@ def fetch_musicbrainz_release_context(
     return artists, labels
 
 
+def _release_artist_credit(release: dict[str, object]) -> tuple[str, list[str]]:
+    credits = [
+        credit
+        for credit in (release.get("artist-credit") or [])
+        if isinstance(credit, dict) and str(credit.get("name") or "").strip()
+    ]
+    names = [str(credit.get("name") or "").strip() for credit in credits]
+    rendered = "".join(
+        str(credit.get("name") or "").strip()
+        + str(credit.get("joinphrase") or "")
+        for credit in credits
+    ).strip()
+    return rendered or ", ".join(names), names
+
+
 def search_cover_art_archive_candidates(
     artist: str,
     album: str,
@@ -719,15 +734,12 @@ def search_cover_art_archive_candidates(
     )
 
     ranked_releases: list[tuple[float, dict[str, object]]] = []
+    component_release_ids: set[str] = set()
     for release in releases:
         if not isinstance(release, dict):
             continue
         release_title = str(release.get("title") or "").strip()
-        artist_credit = ", ".join(
-            str((credit or {}).get("name") or "").strip()
-            for credit in (release.get("artist-credit") or [])
-            if isinstance(credit, dict) and str((credit or {}).get("name") or "").strip()
-        )
+        artist_credit, artist_credit_names = _release_artist_credit(release)
         release_year = parse_year(release.get("date"))
         release_score = match_score(
             target_artist=normalized_artist,
@@ -740,10 +752,30 @@ def search_cover_art_archive_candidates(
             enforce_year=bool(year),
         )
         if release_score <= 0:
+            release_score = max(
+                (
+                    match_score(
+                        target_artist=normalized_artist,
+                        target_album=normalized_album,
+                        target_edition=edition,
+                        target_year=year,
+                        candidate_artist=credit_name,
+                        candidate_album=release_title,
+                        candidate_year=release_year,
+                        enforce_year=bool(year),
+                    )
+                    for credit_name in artist_credit_names
+                ),
+                default=0.0,
+            )
+            if release_score > 0:
+                component_release_ids.add(str(release.get("id") or ""))
+        if release_score <= 0:
             continue
         ranked_releases.append((release_score, release))
     ranked_releases.sort(
         key=lambda item: (
+            int(str((item[1] or {}).get("id") or "") in component_release_ids),
             -float(item[0] or 0.0),
             -int(parse_year((item[1] or {}).get("date")) == year) if isinstance(year, int) else 0,
         ),

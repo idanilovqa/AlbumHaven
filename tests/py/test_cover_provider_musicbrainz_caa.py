@@ -4,7 +4,7 @@ from threading import Event, Thread
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from config import Config
-from music_app.services import cover_provider_musicbrainz_caa
+from music_app.services import cover_provider_matching, cover_provider_musicbrainz_caa
 
 
 def _normalize(value: str) -> str:
@@ -674,6 +674,121 @@ def test_cover_art_archive_does_not_cache_candidates_after_mid_release_cancellat
     assert candidates == []
     assert probe_calls == []
     assert disk_writes == []
+
+
+def test_cover_art_archive_accepts_structured_component_artist_credit():
+    target_artist = "Susanne Sundfør with Kit Downes"
+    fetched: list[str] = []
+
+    def release_art(url, *_args, **_kwargs):
+        fetched.append(str(url).rsplit("/", 1)[-1])
+        return {
+            "images": [{
+                "front": True,
+                "image": "https://images.example/revelations.jpg",
+                "width": 1200,
+                "height": 1200,
+            }]
+        }
+
+    candidates = cover_provider_musicbrainz_caa.search_cover_art_archive_candidates(
+        target_artist,
+        "Revelations of Divine Love",
+        None,
+        2026,
+        "AlbumHavenTests/1.0",
+        limit=1,
+        normalize=_normalize,
+        parse_year=_parse_year,
+        match_score=cover_provider_matching.match_score,
+        normalize_remote_image_url=lambda value: value,
+        probe_candidate_metrics=lambda *_args, **_kwargs: None,
+        http_get_json=release_art,
+        http_get_json_via_curl=lambda *_args, **_kwargs: None,
+        http_get_json_via_subprocess=lambda *_args, **_kwargs: None,
+        get_caa_disk_cache=lambda _key: None,
+        set_caa_disk_cache=lambda _key, _candidates: None,
+        search_musicbrainz_release_candidates=lambda **_kwargs: [{
+            "id": "revelations-release",
+            "title": "Revelations of Divine Love",
+            "artist-credit": [
+                {"name": "Susanne Sundfør", "joinphrase": " & "},
+                {"name": "Kit Downes"},
+            ],
+            "date": "2026-01-01",
+        }],
+        log_event=lambda *_args, **_kwargs: None,
+    )
+
+    assert fetched == ["revelations-release"]
+    assert [candidate["url"] for candidate in candidates] == [
+        "https://images.example/revelations.jpg"
+    ]
+
+
+def test_cover_art_archive_prefers_full_credit_over_component_fallback():
+    target_artist = "Susanne Sundfør with Kit Downes"
+    fetched: list[str] = []
+
+    def tiered_match_score(**kwargs) -> float:
+        candidate_artist = str(kwargs.get("candidate_artist") or "")
+        if candidate_artist == target_artist:
+            return 0.8
+        if candidate_artist in {"Susanne Sundfør", "Kit Downes"}:
+            return 0.95
+        return 0.0
+
+    def release_art(url, *_args, **_kwargs):
+        release_id = str(url).rsplit("/", 1)[-1]
+        fetched.append(release_id)
+        return {
+            "images": [{
+                "front": True,
+                "image": f"https://images.example/{release_id}.jpg",
+                "width": 1200,
+                "height": 1200,
+            }]
+        }
+
+    candidates = cover_provider_musicbrainz_caa.search_cover_art_archive_candidates(
+        target_artist,
+        "Revelations of Divine Love",
+        None,
+        2026,
+        "AlbumHavenTests/1.0",
+        limit=1,
+        normalize=_normalize,
+        parse_year=_parse_year,
+        match_score=tiered_match_score,
+        normalize_remote_image_url=lambda value: value,
+        probe_candidate_metrics=lambda *_args, **_kwargs: None,
+        http_get_json=release_art,
+        http_get_json_via_curl=lambda *_args, **_kwargs: None,
+        http_get_json_via_subprocess=lambda *_args, **_kwargs: None,
+        get_caa_disk_cache=lambda _key: None,
+        set_caa_disk_cache=lambda _key, _candidates: None,
+        search_musicbrainz_release_candidates=lambda **_kwargs: [
+            {
+                "id": "component-release",
+                "title": "Revelations of Divine Love",
+                "artist-credit": [
+                    {"name": "Susanne Sundfør", "joinphrase": " & "},
+                    {"name": "Kit Downes"},
+                ],
+                "date": "2026-01-01",
+            },
+            {
+                "id": "exact-release",
+                "title": "Revelations of Divine Love",
+                "artist-credit": [{"name": target_artist}],
+                "date": "2026-01-01",
+            },
+        ],
+        log_event=lambda *_args, **_kwargs: None,
+    )
+
+    assert fetched == ["exact-release"]
+    assert candidates[0]["release_mbid"] == "exact-release"
 
 
 def test_cover_art_archive_ranks_limits_filters_probes_and_stops_at_limit():

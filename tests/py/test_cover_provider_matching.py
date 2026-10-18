@@ -436,6 +436,29 @@ def test_match_score_preserves_album_variant_guard_for_composite_target_credit()
     ) == 0.0
 
 
+def test_match_score_prefers_full_composite_credit_over_component_fallback():
+    shared = {
+        "target_artist": "Susanne Sundfør with Kit Downes",
+        "target_album": "Revelations of Divine Love",
+        "target_edition": None,
+        "target_year": 2026,
+        "candidate_album": "Revelations of Divine Love",
+        "candidate_year": 2026,
+    }
+
+    exact_score = matching.match_score(
+        **shared,
+        candidate_artist="Susanne Sundfør with Kit Downes",
+    )
+    component_score = matching.match_score(
+        **shared,
+        candidate_artist="Susanne Sundfør",
+    )
+
+    assert component_score > 0.0
+    assert exact_score > component_score
+
+
 def test_match_score_preserves_year_penalty_for_composite_target_credit():
     shared = {
         "target_artist": "Susanne Sundfør with Kit Downes",

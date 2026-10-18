@@ -414,6 +414,8 @@ def match_score(
     if artist_match_target is None:
         return 0.0
     artist_score = similarity(artist_match_target, candidate_artist)
+    if artist_match_target != target_artist:
+        artist_score *= 0.98
     album_score = similarity(target_album, candidate_album)
     if incompatible_album_variant_markers(target_album) != incompatible_album_variant_markers(
         candidate_album

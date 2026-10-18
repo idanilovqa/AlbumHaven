@@ -42,6 +42,26 @@ def friends(taste_database):
         fixture.refs={row['account_id']:str(row['account_ref']) for row in c.execute('select account_id,account_ref from app.social_profiles where account_id=any(%s)',(ids,)).fetchall()}
     fixture.args=lambda actor=None,target=None:{'account_id':actor or fixture.a,'library_id':library,
         **({'target_account_id':target} if target else {})}
+    def compare_args(actor=None, target=None, library_id=None):
+        from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
+        from music_app.services.policy import PolicyContext, RequestOrigin
+        actor = fixture.a if actor is None else actor
+        target = fixture.b if target is None else target
+        selected_library = library if library_id is None else library_id
+        # Durable fixture grants, membership and issued session form the same
+        # preflight context as a request. The real store re-locks/revalidates all.
+        with fixture.connect() as con:
+            grants = con.execute('select capability_key,scope_kind,scope_id from app.capabilities where account_id=%s and revoked_at is null', (actor,)).fetchall()
+            member = con.execute('select membership_role from library.library_memberships where account_id=%s and library_id=%s', (actor,selected_library)).fetchone()
+        current = CurrentActor(state=ActorState.ACTIVE, account_id=actor,
+            session_id=fixture.sessions[actor], current_library_id=selected_library,
+            library_relationships=() if member is None else (LibraryRelationship(selected_library, member['membership_role'], False),),
+            capability_grants=tuple(CapabilityGrant(row['capability_key'],row['scope_kind'],row['scope_id']) for row in grants))
+        context = PolicyContext.build(actor=current, action='library.browse.read', library_id=selected_library,
+            deployment_mode='self_hosted',request_origin=RequestOrigin('network','synthetic:friends'),client_surface_class='private_web')
+        return {'account_id':actor,'library_id':selected_library,'target_account_id':target,
+            'actor_session_id':fixture.sessions[actor],'context':context,'expected_subject_ref':fixture.refs[target]}
+    fixture.compare_args=compare_args
     fixture.write_args=lambda actor=None,target=None:{**fixture.args(actor,target),'actor_session_id':fixture.sessions[actor or fixture.a]}
     try:
         yield fixture
@@ -110,7 +130,7 @@ def test_current_authority_revocation_hides_profile_history_and_taste(friends,ch
     with pytest.raises(FriendScopeError):
         f.store.profile(**f.args(target=f.b))
     with pytest.raises(FriendScopeError):
-        f.store.compare_taste(**f.write_args(target=f.b))
+        f.store.compare_taste(**f.compare_args(target=f.b))
     with f.connect() as c, pytest.raises(FriendScopeError):
         with authorized_friend_read(c,**f.args(target=f.b)):
             pytest.fail('Revoked friend history became visible.')
@@ -131,7 +151,7 @@ def test_unfriend_remains_after_automatic_policy_toggles_and_reactivation(friend
         c.execute('update app.accounts set is_active=true where id=%s',(f.b,))
     assert f.store.profile(**f.args(target=f.b))['relationship']['state']=='removed'
     with pytest.raises(FriendScopeError):
-        f.store.compare_taste(**f.write_args(target=f.b))
+        f.store.compare_taste(**f.compare_args(target=f.b))
     assert befriend(f)['state']=='accepted'
 
 
@@ -157,7 +177,7 @@ def test_cross_library_self_outsider_and_non_admin_fail_closed(friends):
         f.store.policy(**f.write_args(f.b),auto_friend=True)
     assert f.store.profile(account_id=f.a,library_id=f.main,target_account_id=f.b)['relationship']['state']=='none'
     with pytest.raises(FriendScopeError):
-        f.store.compare_taste(account_id=f.a,library_id=f.main,target_account_id=f.b,actor_session_id=f.sessions[f.a])
+        f.store.compare_taste(**f.compare_args(target=f.b,library_id=f.main))
 
 
 def test_concurrent_reciprocal_requests_create_one_pending_pair(friends):
@@ -196,11 +216,11 @@ def test_taste_projection_uses_current_scoped_preferences_without_paths(friends)
         for account,rating,love in [(f.a,1,'loved'),(f.b,5,'obsessed')]:
             c.execute("insert into app.track_preferences(account_id,library_id,track_key,rating,love_tier) values(%s,%s,%s,%s,%s)",(account,f.library,f.prefix,rating,love))
         c.execute("insert into app.album_ratings(account_id,library_id,album_key,rating,provenance) values(%s,%s,%s,9,'fixture')",(f.b,f.library,f.prefix))
-    result=f.store.compare_taste(**f.write_args(target=f.b))
+    result=f.store.compare_taste(**f.compare_args(target=f.b))
     assert len(result['rows'])==1
     assert result['rows'][0]['own_rating']==1 and result['rows'][0]['friend_rating']==5
     assert '/private/' not in str(result) and f.prefix not in str(result)
-    assert f.store.compare_taste(**f.write_args(target=f.b),kind='albums')['rows'][0]['friend_rating']==9
+    assert f.store.compare_taste(**f.compare_args(target=f.b),kind='albums')['rows'][0]['friend_rating']==9
     from music_app.services.friends_postgres import load_friend_taste
     with f.connect() as c:
         frozen=load_friend_taste(c,**f.args(target=f.b),kind='tracks',resource_ids=[track])
@@ -214,7 +234,7 @@ def test_taste_projection_uses_current_scoped_preferences_without_paths(friends)
         c.execute("""update library.local_track_files set metadata=jsonb_set(metadata,'{scan_cache}',
             coalesce(metadata->'scan_cache','{}'::jsonb) || '{"stale":true}'::jsonb,true)
             where track_id=%s""",(track,))
-    assert f.store.compare_taste(**f.write_args(target=f.b))['rows']==[]
+    assert f.store.compare_taste(**f.compare_args(target=f.b))['rows']==[]
 
 
 @pytest.mark.parametrize('kind',['membership','grant','account'])
@@ -360,20 +380,36 @@ def test_standalone_taste_read_rejects_session_revoked_during_account_lock_wait(
     from threading import Event
     from music_app.services import friends_postgres as service
     f=friends;befriend(f)
-    entered=Event()
-    original=service.authorized_friend_read
+    from music_app.services import private_library_authority as authority
+    import time
+    entered=Event(); pid=[]
+    original=authority.current_library_transaction
+    real_connect=f.store._connect
     @contextmanager
-    def observe(connection,**kwargs):
+    def observed_connect(url):
+        with real_connect(url) as connection:
+            pid.append(connection.info.backend_pid)
+            yield connection
+    @contextmanager
+    def observe(*args,**kwargs):
         entered.set()
-        with original(connection,**kwargs) as scope:
+        with original(*args,**kwargs) as scope:
             yield scope
-    monkeypatch.setattr(service,'authorized_friend_read',observe)
+    monkeypatch.setattr(f.store,'_connect',observed_connect)
+    monkeypatch.setattr(authority,'current_library_transaction',observe)
     executor=ThreadPoolExecutor(max_workers=1)
     try:
         with f.connect() as blocker:
             blocker.execute('select id from app.accounts where id=%s for update',(f.a,))
-            future=executor.submit(f.store.compare_taste,**f.write_args(target=f.b))
+            future=executor.submit(f.store.compare_taste,**f.compare_args(target=f.b))
             assert entered.wait(5)
+            deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                if pid and blocker.info.backend_pid in blocker.execute('select pg_blocking_pids(%s) as pids',(pid[0],)).fetchone()['pids']:
+                    break
+                time.sleep(.01)
+            else:
+                pytest.fail('Initial ordered authority lock wait was not observed')
             blocker.execute('update app.account_sessions set revoked_at=now() where id=%s',(f.sessions[f.a],))
         with pytest.raises(FriendScopeError):
             future.result(timeout=10)
@@ -396,4 +432,4 @@ def test_standalone_taste_read_holds_session_through_projection_and_rechecks_exp
         return result
     monkeypatch.setattr(service,'read_friend_taste_page',checkpoint)
     with pytest.raises(FriendScopeError):
-        f.store.compare_taste(**f.write_args(target=f.b))
+        f.store.compare_taste(**f.compare_args(target=f.b))

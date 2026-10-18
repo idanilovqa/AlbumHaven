@@ -244,6 +244,27 @@ def test_selection_requires_existing_transaction_and_never_starts_an_implicit_wr
 
 def compare(state, *, kind="tracks", period="week", allowed=social_read, **query):
     from music_app.services.home_activity import ComparisonQuery
+    # Album comparisons separately require viewer Browse; history/taste alone
+    # never grants it. Keep caller narrowing callbacks and all old assertions.
+    if kind == "albums":
+        from music_app.services.policy import PolicyContext, RequestOrigin, ResourceScope
+        from music_app.services.policy_evaluator import PolicyEvaluator
+        original = allowed
+        def allowed(resource_kind, reference):
+            requested = original(resource_kind, reference)
+            actions = []
+            for action in ("library.social.history.read", "library.social.taste.read", "library.browse.read"):
+                if action != "library.browse.read" and not requested.allows(action):
+                    continue
+                context = PolicyContext.build(actor=state["actor"], action=action,
+                    library_id=state["actor"].current_library_id,
+                    deployment_mode="self_hosted", request_origin=RequestOrigin("network", "synthetic:friend-home"),
+                    client_surface_class="private_web", resource=ResourceScope(resource_kind,str(reference)),
+                    target_account_id=None if action == "library.browse.read" else state["peer"])
+                if PolicyEvaluator().evaluate(context).decision.allowed:
+                    actions.append(action)
+            return AllowedActions(tuple(actions))
+        allowed.scope_wide = getattr(original, "scope_wide", False) is True
     return read_home_activity(state["db"].config, actor=state["actor"],
         subject_account_id=state["peer"], comparison=True,
         query=ComparisonQuery(kind=kind, period=period, **query),

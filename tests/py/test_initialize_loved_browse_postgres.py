@@ -385,3 +385,47 @@ def test_trigger_rows_are_seeded_counts_only_and_never_migration_ignored(owner):
         assert owner.FRESH_COUNTS.get(key, 0) == 0
         assert owner.SEEDED_COUNTS[key] == 1
         assert key not in owner.MIGRATION_OWNED
+
+
+@pytest.mark.parametrize("platform", ["Linux", "Windows"])
+@pytest.mark.parametrize("change,expected", [
+    ("path", "PGPASSFILE does not exactly match the original job-local password file."),
+    ("override", "A PGPASSWORD override is not permitted for job-local password-file authentication."),
+    ("both", "PGPASSFILE does not exactly match the original job-local password file."),
+])
+def test_password_source_rejection_is_specific_and_never_echoes_values(owner, tmp_path, monkeypatch, platform, change, expected):
+    env = environment(tmp_path, platform)
+    if change in {"path", "both"}:
+        env["PGPASSFILE"] = "synthetic-wrong-path-do-not-echo"
+    if change in {"override", "both"}:
+        env["PGPASSWORD"] = "synthetic-override-do-not-echo"
+    before = dict(env)
+    def forbidden_file_access(*args, **kwargs):
+        raise AssertionError("Rejected authentication source must precede file access")
+    monkeypatch.setattr(owner, "plain_file", forbidden_file_access)
+    with pytest.raises(RuntimeError) as error:
+        owner.job_identity(env)
+    assert str(error.value) == expected
+    assert env == before
+    assert "synthetic-wrong-path-do-not-echo" not in str(error.value)
+    assert "synthetic-override-do-not-echo" not in str(error.value)
+
+
+@pytest.mark.parametrize("override", [None, ""])
+def test_windows_exact_pgpass_binding_accepts_absent_or_empty_override(owner, tmp_path, override):
+    env = environment(tmp_path, "Windows")
+    if override is not None:
+        env["PGPASSWORD"] = override
+    before = dict(env)
+    identity = owner.job_identity(env)
+    assert identity.runtime_url == env["DATABASE_APP_URL"]
+    assert env == before
+
+
+def test_windows_initializer_clears_process_override_before_script_without_changing_linux_step():
+    workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/pr-gates.yml").read_text(encoding="utf-8")
+    marker = "      - name: Initialize fresh persistent Loved producer bootstrap baseline\n"
+    assert workflow.count(marker) == 1
+    step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
+    assert step.strip() == "run: |\n          $env:PGPASSWORD = $null\n          python scripts/ci/initialize-loved-browse-postgres.py"
+    assert workflow.count("        run: python scripts/ci/initialize-loved-browse-postgres.py") == 1

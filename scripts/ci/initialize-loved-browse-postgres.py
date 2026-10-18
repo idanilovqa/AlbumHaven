@@ -130,8 +130,10 @@ def job_identity(env):
         raise RuntimeError("An absolute plain runner temporary directory is required.")
     filename = database + ".pgpass" if platform == "Linux" else f"album-haven-postgres-{suffix}.pgpass"
     pgpass = temp / filename
-    if env.get("PGPASSFILE") != str(pgpass) or env.get("PGPASSWORD"):
-        raise RuntimeError("The original job-local password file is required.")
+    if env.get("PGPASSFILE") != str(pgpass):
+        raise RuntimeError("PGPASSFILE does not exactly match the original job-local password file.")
+    if env.get("PGPASSWORD"):
+        raise RuntimeError("A PGPASSWORD override is not permitted for job-local password-file authentication.")
     info = plain_file(pgpass)  # Metadata only: never open credential contents.
     if platform == "Linux":
         if stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.getuid():

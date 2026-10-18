@@ -607,6 +607,387 @@ def _project_artist_loved_launches_for_request(
             target[field_name] = value
 
 
+# Own album taste is projected only here, after every metadata/legacy producer.
+_ALBUM_PREFERENCE_HEADERS = {"Cache-Control": "private, no-store"}
+_ALBUM_TASTE_ALIASES = frozenset({
+    "album_preference", "album_preference_overlay", "album_rating", "rating",
+    "album_rating_source", "album_rating_provenance", "rating_provenance",
+    "provenance", "favorite", "is_favorite", "album_favorite",
+    "favorite_override", "favorite_source", "taste_state", "preference_revision",
+    "can_edit", "can_edit_preferences", "can_manage_album_preferences",
+    "inventory_album_ref", "canonical_album_ref", "preference_context_ref",
+    "context_ref", "_album_taste_stamp", "to_listen", "is_relisten", "can_toggle_to_listen",
+})
+
+
+def _own_album_containers(payload):
+    """Known album containers only; never interpret arbitrary nested dictionaries."""
+    pending = []
+    if isinstance(payload.get("album"), dict):
+        pending.append(payload["album"])
+    if isinstance(payload.get("albums"), list):
+        pending.extend(payload["albums"])
+    groups = []
+    for field in _ARTIST_LOVED_BROWSE_GROUP_FIELDS:
+        if isinstance(payload.get(field), list):
+            groups.extend(payload[field])
+    seen_groups = set()
+    for group in groups:
+        if not isinstance(group, dict) or id(group) in seen_groups:
+            continue
+        seen_groups.add(id(group))
+        if isinstance(group.get("albums"), list):
+            pending.extend(group["albums"])
+        for field in ("sections", "subsections"):
+            if isinstance(group.get(field), list):
+                groups.extend(group[field])
+    seen = set()
+    for album in pending:
+        if not isinstance(album, dict) or id(album) in seen:
+            continue
+        seen.add(id(album))
+        if isinstance(album.get("duplicate_sources"), list):
+            pending.extend(album["duplicate_sources"])
+        yield album
+
+
+def _clear_own_album_taste(album):
+    # A producer can share summary dictionaries between metadata copies. Give
+    # each canonical album its own taste sink without touching shared caches.
+    summary = None
+    block = album.get("gallery_list_block")
+    if isinstance(block, dict):
+        block = dict(block)
+        album["gallery_list_block"] = block
+        if isinstance(block.get("summary"), dict):
+            summary = dict(block["summary"])
+            block["summary"] = summary
+    for target in (album, summary):
+        if not isinstance(target, dict):
+            continue
+        for key in _ALBUM_TASTE_ALIASES:
+            target.pop(key, None)
+        if str(target.get("album_ref") or "").startswith("inventory-album:"):
+            target.pop("album_ref", None)
+        actions = target.get("allowed_actions")
+        if isinstance(actions, dict):
+            target["allowed_actions"] = {
+                key: value for key, value in actions.items()
+                if key not in {"can_manage_album_preferences", "can_toggle_to_listen"}
+            }
+        # Separately labelled tag_album_rating remains metadata, never fallback.
+
+
+def _install_own_album_taste(album, value):
+    album["album_preference"] = value
+    album["album_rating"] = value["rating"]
+    block = album.get("gallery_list_block")
+    if isinstance(block, dict) and isinstance(block.get("summary"), dict):
+        block["summary"]["album_preference"] = deepcopy(value)
+        block["summary"]["album_rating"] = value["rating"]
+
+
+def _album_preference_request_context(request):
+    from music_app.services.client_surfaces import client_surface_from_request
+    from music_app.services.policy import PolicyContext
+    from music_app.services.policy_asgi import _deployment_mode, _request_origin
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+    from music_app.services.album_preferences import AlbumPreferenceError
+    actor = getattr(request.state, "current_actor", None)
+    if actor is None or not actor.is_authenticated:
+        raise AlbumPreferenceError("authentication_required", 401)
+    context = PolicyContext.build(
+        actor=actor, action="library.browse.read", library_id=actor.current_library_id,
+        deployment_mode=_deployment_mode(request), request_origin=_request_origin(request),
+        client_surface_class=client_surface_from_request(request),
+    )
+    reference = private_ui_context_ref(request)
+    if not reference:
+        raise AlbumPreferenceError("album_preference_context_unavailable", 403)
+    def constraints(target):
+        resolver = getattr(request.app.state, "policy_constraint_resolver", None)
+        return resolver(target) if callable(resolver) else PolicyEvaluationConstraints()
+    return context, reference, constraints
+
+
+def _require_album_preference_context(request, reference):
+    """Bind client intent to the captured current actor/session/library stamp."""
+    import hmac
+    from music_app.services.album_preferences import AlbumPreferenceError
+    supplied = request.headers.get("x-albumhaven-context", "")
+    # No trimming, case folding or decoding: only the exact canonical digest
+    # issued to this client may authorize acting on its visible personal state.
+    if (not isinstance(supplied, str) or len(supplied) != 64
+            or not supplied.isascii()
+            or any(character not in "0123456789abcdef" for character in supplied)
+            or not hmac.compare_digest(supplied, reference)):
+        raise AlbumPreferenceError("stale_context", 409)
+
+
+def _same_album_preference_request(request, context, reference):
+    from music_app.services.album_preferences import AlbumPreferenceError
+    current, current_reference, _ = _album_preference_request_context(request)
+    if (current_reference != reference or current.actor != context.actor
+            or current.library_id != context.library_id
+            or current.deployment_mode != context.deployment_mode
+            or current.request_origin != context.request_origin
+            or current.client_surface_class != context.client_surface_class):
+        raise AlbumPreferenceError("album_preference_context_changed", 409)
+
+
+def _read_own_album_preferences(request, context, reference, constraints, receipts, *, strict=False):
+    """One bounded caller-owned authority transaction, buffered through its exit."""
+    from datetime import datetime, timezone
+    from music_app.services.album_preferences import AlbumPreferenceError, BROWSE, MANAGE
+    from music_app.services.album_preferences_postgres import load_album_preferences_on_connection
+    from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
+    from music_app.services.private_library_authority import (
+        current_library_transaction, require_private_action, PrivateLibraryAuthorityError,
+    )
+    if len(receipts) > 1000:
+        return {}, {}
+    states, editable = {}, {}
+    with current_library_transaction(
+        _app_config(request).get("ALBUM_HAVEN_APP_DATABASE_URL"), context,
+        constraints=constraints, read_only=True,
+    ) as (connection, live, _):
+        if live.target_account_id not in (None, live.actor.account_id):
+            raise AlbumPreferenceError("forbidden", 403)
+        admitted = {}
+        for album_id, receipt in sorted(receipts.items()):
+            if receipt[0] != live.library_id:
+                continue
+            try:
+                require_private_action(live, BROWSE,
+                    resource=ResourceScope("album", str(album_id)), constraints=constraints)
+            except PrivateLibraryAuthorityError:
+                if strict:
+                    raise
+                continue
+            admitted[album_id] = receipt
+        loaded = load_album_preferences_on_connection(
+            connection, account_id=live.actor.account_id,
+            library_id=live.library_id, album_ids=sorted(admitted),
+        )
+        # The seam locks the exact canonical album and active witnesses, then
+        # reselects after waits. Never rebind a receipt by its stale display key.
+        require_private_action(live, BROWSE, constraints=constraints)
+        for album_id, receipt in admitted.items():
+            state = loaded.get(album_id)
+            if (state is None or state.get("account_id") != live.actor.account_id
+                    or (state.get("library_id"), state.get("album_id"),
+                        state.get("album_key")) != receipt):
+                continue
+            try:
+                require_private_action(live, BROWSE,
+                    resource=ResourceScope("album", str(album_id)), constraints=constraints)
+            except PrivateLibraryAuthorityError:
+                if strict:
+                    raise
+                continue
+            can_edit = True
+            try:
+                for resource in (None, ResourceScope("album", str(album_id))):
+                    require_private_action(live, MANAGE, resource=resource, constraints=constraints)
+            except PrivateLibraryAuthorityError:
+                can_edit = False
+            states[album_id], editable[album_id] = state, can_edit
+        _same_album_preference_request(request, context, reference)
+        # Locked membership/grants are stable; time and deployment callbacks are not.
+        require_private_action(live, BROWSE, constraints=constraints)
+        for album_id in tuple(states):
+            resource = ResourceScope("album", str(album_id))
+            try:
+                require_private_action(live, BROWSE, resource=resource, constraints=constraints)
+            except PrivateLibraryAuthorityError:
+                if strict:
+                    raise
+                del states[album_id]
+                editable.pop(album_id, None)
+                continue
+            if editable[album_id]:
+                try:
+                    for scope in (None, resource):
+                        require_private_action(live, MANAGE, resource=scope, constraints=constraints)
+                except PrivateLibraryAuthorityError:
+                    editable[album_id] = False
+        lock_current_actor_session(connection, actor_account_id=live.actor.account_id,
+            actor_session_id=live.actor.session_id, clock=lambda: datetime.now(timezone.utc))
+    _same_album_preference_request(request, context, reference)
+    require_private_action(live, BROWSE, constraints=constraints)
+    for album_id in tuple(states):
+        resource = ResourceScope("album", str(album_id))
+        try:
+            require_private_action(live, BROWSE, resource=resource, constraints=constraints)
+        except PrivateLibraryAuthorityError:
+            if strict:
+                raise
+            del states[album_id]
+            editable.pop(album_id, None)
+            continue
+        if editable[album_id]:
+            try:
+                for scope in (None, resource):
+                    require_private_action(live, MANAGE, resource=scope, constraints=constraints)
+            except PrivateLibraryAuthorityError:
+                editable[album_id] = False
+    return states, editable
+
+
+def _project_own_album_preferences(request, payload):
+    from music_app.services.album_preferences import serialize_own_album_preference
+    from music_app.services.library_browse_postgres import AlbumPreferenceCandidate
+    context, reference, constraints = _album_preference_request_context(request)
+    albums = list(_own_album_containers(payload))
+    receipts, identities_by_key, ambiguous = {}, {}, set()
+    candidates = []
+    for album in albums:
+        _clear_own_album_taste(album)
+        _install_own_album_taste(album, serialize_own_album_preference(
+            None, library_id=context.library_id, context_ref=reference,
+            expected_account_id=context.actor.account_id,
+        ))
+        if type(album) is not AlbumPreferenceCandidate:
+            continue
+        receipt = album.album_preference_receipt
+        if (not isinstance(receipt, tuple) or len(receipt) != 3
+                or any(type(v) is not int or v <= 0 for v in receipt[:2])
+                or receipt[0] != context.library_id
+                or not isinstance(receipt[2], str) or not receipt[2]
+                or type(album.get("album_id")) is not int
+                or album.get("album_id") != receipt[1]
+                or album.get("key") != receipt[2]
+                or album.get("inventory_status") == "missing"):
+            continue
+        album_id = receipt[1]
+        if album_id in receipts and receipts[album_id] != receipt:
+            ambiguous.add(album_id)
+        prior = identities_by_key.setdefault(receipt[2], album_id)
+        if prior != album_id:
+            ambiguous.update((prior, album_id))
+        receipts[album_id] = receipt
+        candidates.append((album, receipt))
+    # The limit bounds the entire request, not a succession of unbounded chunks.
+    if len(receipts) > 1000:
+        receipts = {}
+    else:
+        receipts = {key: value for key, value in receipts.items() if key not in ambiguous}
+    states, editable = _read_own_album_preferences(
+        request, context, reference, constraints, receipts,
+    )
+    for album, receipt in candidates:
+        state = states.get(receipt[1])
+        if state is None:
+            continue
+        _install_own_album_taste(album, serialize_own_album_preference(
+            state, library_id=context.library_id, context_ref=reference,
+            expected_account_id=context.actor.account_id, expected_album_id=receipt[1],
+            can_edit=editable[receipt[1]],
+            # No current independent progress receipt exists in these producers.
+            # Omit generic defaults; a taste response cannot reset verified progress.
+        ))
+    _same_album_preference_request(request, context, reference)
+    return payload
+
+
+def _album_preference_error_response(error):
+    from music_app.services.album_preferences import AlbumPreferenceError
+    from music_app.services.private_library_authority import PrivateLibraryAuthorityError
+    from music_app.services.admin_member_mutation_postgres import RecentAuthenticationRequired
+    if isinstance(error, AlbumPreferenceError):
+        status, code = error.status, error.code
+    elif isinstance(error, HTTPException) and error.status_code in (401, 403):
+        status = error.status_code
+        code = "authentication_required" if status == 401 else "forbidden"
+    elif isinstance(error, (PrivateLibraryAuthorityError, PrivateUIContextError, RecentAuthenticationRequired)):
+        status, code = 403, "forbidden"
+    elif getattr(error, "sqlstate", None) in {"23505", "23503", "40001", "40P01", "55P03"}:
+        status, code = 409, "album_preference_conflict"
+    else:
+        status, code = 503, "album_preference_unavailable"
+    return JSONResponse({"error": code}, status_code=status, headers=_ALBUM_PREFERENCE_HEADERS)
+
+
+async def _read_album_preference_json(request):
+    import json
+    from music_app.services.album_preferences import AlbumPreferenceError
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 4096:
+            raise AlbumPreferenceError("invalid_album_preference_command")
+        body.extend(chunk)
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise AlbumPreferenceError("invalid_album_preference_command")
+            value[key] = item
+        return value
+    def invalid_constant(_):
+        raise AlbumPreferenceError("invalid_album_preference_command")
+    try:
+        value = json.loads(body.decode("utf-8"), object_pairs_hook=unique_object,
+                           parse_constant=invalid_constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise AlbumPreferenceError("invalid_album_preference_command") from None
+    if not isinstance(value, dict):
+        raise AlbumPreferenceError("invalid_album_preference_command")
+    return value
+
+
+def _commit_album_preference(request, command, context, reference, constraints):
+    from music_app.services.album_preferences import AlbumPreferenceError, serialize_own_album_preference
+    from music_app.services.album_preferences_postgres import PostgresAlbumPreferencesStore
+    _same_album_preference_request(request, context, reference)
+    _require_album_preference_context(request, reference)
+    state = PostgresAlbumPreferencesStore(_app_config(request)).patch_preference(
+        command, context=context, constraints=constraints,
+    )
+    # Reauthorize publication after commit, on the original request binding. A
+    # changed live constraint or a newer writer suppresses the stale response.
+    receipt = (command.library_id, command.album_id, state["album_key"])
+    states, editable = _read_own_album_preferences(
+        request, context, reference, constraints, {command.album_id: receipt}, strict=True,
+    )
+    current = states.get(command.album_id)
+    if current != state:
+        raise AlbumPreferenceError("album_preference_conflict", 409)
+    if editable.get(command.album_id) is not True:
+        raise AlbumPreferenceError("forbidden", 403)
+    value = serialize_own_album_preference(
+        current, library_id=command.library_id, context_ref=reference, can_edit=True,
+        expected_account_id=context.actor.account_id, expected_album_id=command.album_id,
+    )
+    _same_album_preference_request(request, context, reference)
+    # PrivateUITransport.request validates the top-level stamp. The personal
+    # object's stamp is the same verified reference, never a second context.
+    return {"context_ref": reference, "album_preference": value}
+
+
+@router.post("/album-preferences")
+async def album_preferences(request: Request) -> JSONResponse:
+    from music_app.services.album_preferences import parse_album_preference_command
+    try:
+        await current_actor_from_request(request)
+        context, reference, constraints = _album_preference_request_context(request)
+        # Reject stale client intent before awaiting any request-body input.
+        _require_album_preference_context(request, reference)
+        command = parse_album_preference_command(
+            await _read_album_preference_json(request), library_id=context.library_id,
+        )
+        payload = await run_in_threadpool(
+            _commit_album_preference, request, command, context, reference, constraints,
+        )
+        _same_album_preference_request(request, context, reference)
+        if (payload.get("context_ref") != reference
+                or payload["album_preference"].get("context_ref") != reference):
+            from music_app.services.album_preferences import AlbumPreferenceError
+            raise AlbumPreferenceError("album_preference_context_changed", 409)
+    except Exception as error:
+        return _album_preference_error_response(error)
+    return JSONResponse(payload, headers=_ALBUM_PREFERENCE_HEADERS)
+
+
 def _private_browse_response(
     request: Request, payload: dict[str, object], *, transient: bool = False,
     artist_loved_roots: Iterable[ArtistLovedBrowseRootReceipt] = (),
@@ -708,6 +1089,10 @@ def _private_browse_response(
         _project_artist_loved_launches_for_request(
             request, payload, artist_loved_roots=tuple(artist_loved_roots), copy_memo=copy_memo,
         )
+    try:
+        _project_own_album_preferences(request, payload)
+    except Exception as error:
+        return _album_preference_error_response(error)
     return JSONResponse(payload, headers=headers)
 
 
@@ -1192,6 +1577,16 @@ async def home_data(request: Request) -> JSONResponse:
     return JSONResponse({**payload, "context_ref": private_ui_context_ref(request)}, headers={"Cache-Control": "private, no-store"})
 
 
+def _private_album_detail_response(request, album):
+    payload = deepcopy({"ok": True, "album": album})
+    _project_missing_album_actions_for_request(request, payload["album"])
+    try:
+        _project_own_album_preferences(request, payload)
+    except Exception as error:
+        return _album_preference_error_response(error)
+    return JSONResponse(payload, headers=_ALBUM_PREFERENCE_HEADERS)
+
+
 @router.get("/album-details")
 async def album_details(request: Request) -> JSONResponse:
     album_key = str(request.query_params.get("album_key") or "").strip()
@@ -1237,8 +1632,7 @@ async def album_details(request: Request) -> JSONResponse:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
         if payload is None:
             return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
-        _project_missing_album_actions_for_request(request, payload)
-        return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
+        return _private_album_detail_response(request, payload)
 
     _hydrate_cached_library_for_asgi(request)
     inventory_library_id = await run_in_threadpool(
@@ -1257,8 +1651,7 @@ async def album_details(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "Album not found"}, status_code=404)
     if browse_state.get("scan_in_progress"):
         _apply_transient_scan_album_rating_overlays(request, [payload])
-    _project_missing_album_actions_for_request(request, payload)
-    return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
+    return _private_album_detail_response(request, payload)
 
 
 def _should_use_postgres_album_detail_path(

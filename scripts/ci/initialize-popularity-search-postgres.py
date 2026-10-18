@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ("app", "integration", "library", "ops", "catalog")
@@ -25,6 +26,8 @@ FRESH_COUNTS = {("catalog", "popularity_api_refresh_state"): 1}
 CLOCK_TABLES = ("public_metadata_source_state", "gallery_projection_state")
 INITIALIZED_COUNTS = {
     **FRESH_COUNTS,
+    ("app", "social_profiles"): 1,
+    ("app", "friend_policies"): 1,
     ("library", "public_metadata_source_state"): 1,
     ("library", "gallery_projection_state"): 1,
     ("app", "accounts"): 1,
@@ -32,6 +35,50 @@ INITIALIZED_COUNTS = {
     ("library", "libraries"): 1,
     ("library", "relation_alias_endpoint_publications"): 1,
 }
+
+
+def bootstrap_social_baseline(connection, library, baseline=None):
+    """Verify only the canonical trigger-created rows; never adopt or repair drift."""
+    owners = connection.execute("""select a.id as account_id,a.account_kind,
+        a.metadata as account_metadata,b.metadata as owner_metadata
+        from app.bootstrap_owners b join app.accounts a on a.id=b.account_id
+        join library.libraries l on l.owner_account_id=a.id
+        where b.owner_key='local-bootstrap-owner' and l.id=%s
+          and l.name='Local Library' and l.library_kind='local'""", (library,)).fetchall()
+    source = {"source": "isolated_e2e_launcher"}
+    if (type(library) is not int or library <= 0 or len(owners) != 1
+            or type(owners[0]["account_id"]) is not int or owners[0]["account_id"] <= 0
+            or owners[0]["account_kind"] != "bootstrap_owner"
+            or owners[0]["account_metadata"] != source or owners[0]["owner_metadata"] != source):
+        raise RuntimeError("Canonical social baseline owner differs.")
+    owner = owners[0]["account_id"]
+    profiles = connection.execute("""select to_jsonb(p) as data from app.social_profiles p
+        where account_id=%s""", (owner,)).fetchall()
+    policies = connection.execute("""select to_jsonb(p) as data,isfinite(updated_at) as finite
+        from app.friend_policies p where library_id=%s""", (library,)).fetchall()
+    if len(profiles) != 1 or len(policies) != 1:
+        raise RuntimeError("Canonical trigger-created social rows are missing or duplicated.")
+    profile, policy = profiles[0]["data"], policies[0]["data"]
+    if (not isinstance(profile, dict) or set(profile) != {"account_id", "account_ref"}
+            or type(profile["account_id"]) is not int or profile["account_id"] != owner
+            or not isinstance(profile["account_ref"], str)):
+        raise RuntimeError("Canonical social profile differs.")
+    try:
+        valid_ref = str(UUID(profile["account_ref"])) == profile["account_ref"]
+    except (ValueError, AttributeError, TypeError):
+        valid_ref = False
+    if not valid_ref:
+        raise RuntimeError("Canonical social profile UUID is invalid.")
+    if (not isinstance(policy, dict)
+            or set(policy) != {"library_id", "auto_friend", "updated_by_account_id", "updated_at"}
+            or type(policy["library_id"]) is not int or policy["library_id"] != library
+            or policy["auto_friend"] is not False or policy["updated_by_account_id"] is not None
+            or policy["updated_at"] is None or policies[0]["finite"] is not True):
+        raise RuntimeError("Canonical friend policy defaults differ.")
+    current = {"profile": dict(profile), "policy": dict(policy)}
+    if baseline is not None and current != baseline:
+        raise RuntimeError("Canonical social baseline changed; quarantine required.")
+    return current
 
 
 def assert_application_counts(connection, expected):
@@ -201,6 +248,7 @@ def main():
         seeded_counts[("library", "relation_alias_endpoint_publications")] = 0
         assert_application_counts(con, seeded_counts)
         seeded_library = con.execute("select id from library.libraries").fetchone()["id"]
+        social_baseline = bootstrap_social_baseline(con, seeded_library)
         clock_baseline = assert_bootstrap_clocks(con, seeded_library)
         assert_refresh_singleton(con, refresh_baseline)
     views = serialize_relation_views(build_relation_views_from_postgres_rows({}, []))
@@ -223,6 +271,7 @@ def main():
         library = rows[0]["id"]
         if library != seeded_library:
             raise RuntimeError("Supported bootstrap library identity changed.")
+        bootstrap_social_baseline(con, library, social_baseline)
         con.execute("""update library.libraries set metadata=metadata ||
             jsonb_build_object('scan_cache',%s::jsonb),updated_at=now() where id=%s""", (Jsonb(cache), library))
         status = replace_relation_alias_endpoints_in_transaction(con, views,
@@ -234,10 +283,12 @@ def main():
         assert_identity(con, database, setup_role, isolatedPostgres.SETUP_ROLE)
         assert_migration_ledger(con)
         assert_application_counts(con, INITIALIZED_COUNTS)
+        bootstrap_social_baseline(con, library, social_baseline)
         assert_refresh_singleton(con, refresh_baseline)
         assert_bootstrap_clocks(con, library, clock_baseline)
     with isolatedPostgres._connect(runtime_url) as con:
         assert_identity(con, database, runtime_role, isolatedPostgres.RUNTIME_ROLE)
+        bootstrap_social_baseline(con, library, social_baseline)
         if not con.execute("select library.relation_alias_endpoints_ready(%s) as ready",
                            (library,)).fetchone()["ready"]:
             raise RuntimeError("Committed empty endpoint baseline is not ready.")

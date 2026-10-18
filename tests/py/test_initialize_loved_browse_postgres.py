@@ -34,8 +34,9 @@ def environment(tmp_path, platform="Linux"):
     database = "album_haven_ci_" + suffix
     roles = {"migrator": "album_haven_migrator_" + suffix,
              "app": "album_haven_app_" + suffix, "readonly": "album_haven_readonly_" + suffix}
-    setup = f"postgresql://{roles['migrator']}@127.0.0.1:5432/{database}"
-    runtime = f"postgresql://{roles['app']}@127.0.0.1:5432/{database}"
+    authority = "127.0.0.1:5432" if platform == "Linux" else "127.0.0.1"
+    setup = f"postgresql://{roles['migrator']}@{authority}/{database}"
+    runtime = f"postgresql://{roles['app']}@{authority}/{database}"
     pgpass = tmp_path / (database + ".pgpass" if platform == "Linux" else f"album-haven-postgres-{suffix}.pgpass")
     pgpass.touch()  # Empty placeholder; no credentials are read or generated.
     pgpass.chmod(0o600)
@@ -50,9 +51,10 @@ def environment(tmp_path, platform="Linux"):
     return env
 
 
-@pytest.mark.parametrize("platform", ["Linux", "Windows"])
-def test_exact_job_identity_preserves_routing_and_never_reads_password_file(owner, tmp_path, monkeypatch, platform):
+@pytest.mark.parametrize("platform,batch", [("Linux", "loved_backend"), ("Linux", "favorites_backend"), ("Windows", "loved_backend")])
+def test_exact_job_identity_preserves_routing_and_never_reads_password_file(owner, tmp_path, monkeypatch, platform, batch):
     env = environment(tmp_path, platform)
+    env["FEATURE_BATCH"] = batch
     before = dict(env)
     real = Path.read_text
     def guarded(path, *args, **kwargs):
@@ -74,7 +76,7 @@ def test_exact_job_identity_preserves_routing_and_never_reads_password_file(owne
 
 @pytest.mark.parametrize("key,value", [
     ("GITHUB_ACTIONS", "false"), ("GITHUB_RUN_ID", "../1"), ("GITHUB_RUN_ATTEMPT", "0"),
-    ("RUNNER_OS", "macOS"), ("GITHUB_JOB", "other"), ("FEATURE_BATCH", "listener_postgres"),
+    ("RUNNER_OS", "macOS"), ("GITHUB_JOB", "other"), ("FEATURE_BATCH", "listener_postgres"), ("FEATURE_BATCH", "favorites_backend_extra"),
     ("DATABASE_APP_URL", "postgresql://wrong@127.0.0.1:5432/wrong"),
     ("ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL", "different"),
     ("PGPASSFILE", "other"), ("PGPASSWORD", "forbidden"), ("RUNNER_TEMP", "relative"),
@@ -184,7 +186,7 @@ def test_connection_bounds_cover_seed_and_restore_only_timeout_environment(owner
     assert os.environ["DATABASE_APP_URL"] == "preserved"
 
 
-@pytest.mark.parametrize("failure", [None, "dirty", "seed", "post_seed", "runtime_readback"])
+@pytest.mark.parametrize("failure", [None, "dirty", "seed", "post_seed", "runtime_readback", "social_readback"])
 def test_initializer_order_no_repair_and_failure_quarantine(owner, tmp_path, monkeypatch, failure):
     ident = owner.Identity("db", "setup", "runtime", "setup-url", "runtime-url", tmp_path / "attempt")
     events = []
@@ -221,6 +223,11 @@ def test_initializer_order_no_repair_and_failure_quarantine(owner, tmp_path, mon
     monkeypatch.setattr(owner, "refresh_state", lambda con: {"stable": True})
     monkeypatch.setattr(owner, "assert_seed", check_seed)
     monkeypatch.setattr(owner, "bootstrap_clocks", lambda *a: {"clock": 1})
+    def check_social(con, library, baseline=None):
+        if failure == "social_readback" and con == ident.runtime_url:
+            raise RuntimeError("synthetic social drift")
+        return {"social": "stable"}
+    monkeypatch.setattr(owner, "bootstrap_social_baseline", check_social)
     if failure is None:
         owner.initialize(ident, fake, root=tmp_path)
         assert events[-1] == "release"
@@ -276,3 +283,105 @@ def test_migration_owned_refresh_state_is_only_an_idle_singleton(owner, change):
     if change is None: assert owner.refresh_state(con) == row
     else:
         with pytest.raises(RuntimeError): owner.refresh_state(con)
+
+
+@pytest.mark.parametrize("platform", ["Linux", "Windows"])
+def test_job_identity_rejects_other_platform_default_port_spelling(owner, tmp_path, platform):
+    env = environment(tmp_path, platform)
+    for key in ("DATABASE_MIGRATOR_URL", "DATABASE_APP_URL", "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL"):
+        env[key] = env[key].replace("@127.0.0.1:5432/", "@127.0.0.1/") if platform == "Linux" else env[key].replace("@127.0.0.1/", "@127.0.0.1:5432/")
+    with pytest.raises(RuntimeError, match="Database URLs do not match"):
+        owner.job_identity(env)
+
+
+@pytest.fixture(params=[
+    "scripts/ci/initialize-loved-browse-postgres.py",
+    "scripts/ci/initialize-popularity-search-postgres.py",
+    "tests/py/popularity_search_bootstrap_support.py",
+])
+def social_owner(request):
+    # Extract ONLY this closed read-only validator. No product/support module
+    # imports or top-level execution; its sole external name is stdlib UUID.
+    import ast
+    from uuid import UUID
+    root = Path(__file__).resolve().parents[2]
+    paths = ["scripts/ci/initialize-loved-browse-postgres.py",
+             "scripts/ci/initialize-popularity-search-postgres.py",
+             "tests/py/popularity_search_bootstrap_support.py"]
+    definitions = []
+    for path in paths:
+        tree = ast.parse((root / path).read_text(encoding="utf-8"))
+        matches = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                   and node.name == "bootstrap_social_baseline"]
+        assert len(matches) == 1
+        definitions.append(matches[0])
+    assert len({ast.dump(node, include_attributes=False) for node in definitions}) == 1
+    node = definitions[paths.index(request.param)]
+    namespace = {"UUID": UUID}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), request.param, "exec"), namespace)
+    return namespace["bootstrap_social_baseline"]
+
+
+def social_rows():
+    source = {"source": "isolated_e2e_launcher"}
+    owner = dict(account_id=11, account_kind="bootstrap_owner",
+                 account_metadata=source, owner_metadata=source)
+    profile = dict(account_id=11, account_ref="6ca88738-fd8e-4f0c-9380-899250ccecca")
+    policy = dict(library_id=23, auto_friend=False, updated_by_account_id=None,
+                  updated_at="2026-10-18T00:00:00+00:00")
+    return [[owner], [{"data": profile}], [{"data": policy, "finite": True}]]
+
+
+@pytest.mark.parametrize("change", [None, "owner_missing", "owner_duplicate", "owner_id",
+    "owner_kind", "owner_metadata", "profile_missing", "profile_duplicate", "profile_account",
+    "profile_uuid", "profile_extra", "policy_missing", "policy_duplicate", "policy_library",
+    "policy_auto", "policy_updater", "policy_time_null", "policy_time_infinite", "policy_extra"])
+def test_trigger_created_social_rows_have_exact_canonical_shape_and_defaults(social_owner, change):
+    rows = social_rows()
+    if change == "owner_missing": rows[0] = []
+    elif change == "owner_duplicate": rows[0] *= 2
+    elif change == "owner_id": rows[0][0]["account_id"] = True
+    elif change == "owner_kind": rows[0][0]["account_kind"] = "managed_user"
+    elif change == "owner_metadata": rows[0][0]["owner_metadata"] = {}
+    elif change == "profile_missing": rows[1] = []
+    elif change == "profile_duplicate": rows[1] *= 2
+    elif change == "profile_account": rows[1][0]["data"]["account_id"] = 12
+    elif change == "profile_uuid": rows[1][0]["data"]["account_ref"] = "invalid"
+    elif change == "profile_extra": rows[1][0]["data"]["extra"] = None
+    elif change == "policy_missing": rows[2] = []
+    elif change == "policy_duplicate": rows[2] *= 2
+    elif change == "policy_library": rows[2][0]["data"]["library_id"] = 24
+    elif change == "policy_auto": rows[2][0]["data"]["auto_friend"] = True
+    elif change == "policy_updater": rows[2][0]["data"]["updated_by_account_id"] = 11
+    elif change == "policy_time_null": rows[2][0]["data"]["updated_at"] = None
+    elif change == "policy_time_infinite": rows[2][0]["finite"] = False
+    elif change == "policy_extra": rows[2][0]["data"]["extra"] = None
+    con = Queries(rows)
+    if change is None:
+        expected = {"profile": dict(rows[1][0]["data"]), "policy": dict(rows[2][0]["data"])}
+        assert social_owner(con, 23) == expected
+        assert con.replies == []
+    else:
+        with pytest.raises(RuntimeError): social_owner(con, 23)
+
+
+@pytest.mark.parametrize("change", [None, "profile_uuid", "policy_timestamp"])
+def test_valid_social_rows_cannot_replace_captured_baseline(social_owner, change):
+    baseline = social_owner(Queries(social_rows()), 23)
+    rows = social_rows()
+    if change == "profile_uuid":
+        rows[1][0]["data"]["account_ref"] = "6ca88738-fd8e-4f0c-9380-899250cceccb"
+    elif change == "policy_timestamp":
+        rows[2][0]["data"]["updated_at"] = "2026-10-19T00:00:00+00:00"
+    if change is None:
+        assert social_owner(Queries(rows), 23, baseline) == baseline
+    else:
+        with pytest.raises(RuntimeError, match="changed"):
+            social_owner(Queries(rows), 23, baseline)
+
+
+def test_trigger_rows_are_seeded_counts_only_and_never_migration_ignored(owner):
+    for key in (("app", "social_profiles"), ("app", "friend_policies")):
+        assert owner.FRESH_COUNTS.get(key, 0) == 0
+        assert owner.SEEDED_COUNTS[key] == 1
+        assert key not in owner.MIGRATION_OWNED

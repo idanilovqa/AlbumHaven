@@ -1,6 +1,6 @@
-"""Seed only a fresh job-owned Loved producer baseline; never reset or repair.
+"""Seed only a fresh job-owned personal-album producer baseline; never reset or repair.
 
-Admitted only for the Linux Loved batch or the freshly provisioned Windows
+Admitted only for the Linux Loved/favorites batches or the freshly provisioned Windows
 persistent-contract database, before any test fixtures use that database.
 No database URLs or credentials are changed, exported, read or printed.
 """
@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ("app", "integration", "library", "ops", "catalog")
@@ -24,7 +25,8 @@ MIGRATION_OWNED = frozenset({
 })
 FRESH_COUNTS = {("catalog", "popularity_api_refresh_state"): 1}
 SEEDED_COUNTS = {
-    **FRESH_COUNTS, ("app", "accounts"): 1, ("app", "bootstrap_owners"): 1,
+    **FRESH_COUNTS, ("app", "social_profiles"): 1, ("app", "friend_policies"): 1,
+    ("app", "accounts"): 1, ("app", "bootstrap_owners"): 1,
     ("library", "libraries"): 1,
     ("library", "public_metadata_source_state"): 1,
     ("library", "gallery_projection_state"): 1,
@@ -40,6 +42,50 @@ class Identity:
     setup_url: str
     runtime_url: str
     marker: Path
+
+
+def bootstrap_social_baseline(connection, library, baseline=None):
+    """Verify only the canonical trigger-created rows; never adopt or repair drift."""
+    owners = connection.execute("""select a.id as account_id,a.account_kind,
+        a.metadata as account_metadata,b.metadata as owner_metadata
+        from app.bootstrap_owners b join app.accounts a on a.id=b.account_id
+        join library.libraries l on l.owner_account_id=a.id
+        where b.owner_key='local-bootstrap-owner' and l.id=%s
+          and l.name='Local Library' and l.library_kind='local'""", (library,)).fetchall()
+    source = {"source": "isolated_e2e_launcher"}
+    if (type(library) is not int or library <= 0 or len(owners) != 1
+            or type(owners[0]["account_id"]) is not int or owners[0]["account_id"] <= 0
+            or owners[0]["account_kind"] != "bootstrap_owner"
+            or owners[0]["account_metadata"] != source or owners[0]["owner_metadata"] != source):
+        raise RuntimeError("Canonical social baseline owner differs.")
+    owner = owners[0]["account_id"]
+    profiles = connection.execute("""select to_jsonb(p) as data from app.social_profiles p
+        where account_id=%s""", (owner,)).fetchall()
+    policies = connection.execute("""select to_jsonb(p) as data,isfinite(updated_at) as finite
+        from app.friend_policies p where library_id=%s""", (library,)).fetchall()
+    if len(profiles) != 1 or len(policies) != 1:
+        raise RuntimeError("Canonical trigger-created social rows are missing or duplicated.")
+    profile, policy = profiles[0]["data"], policies[0]["data"]
+    if (not isinstance(profile, dict) or set(profile) != {"account_id", "account_ref"}
+            or type(profile["account_id"]) is not int or profile["account_id"] != owner
+            or not isinstance(profile["account_ref"], str)):
+        raise RuntimeError("Canonical social profile differs.")
+    try:
+        valid_ref = str(UUID(profile["account_ref"])) == profile["account_ref"]
+    except (ValueError, AttributeError, TypeError):
+        valid_ref = False
+    if not valid_ref:
+        raise RuntimeError("Canonical social profile UUID is invalid.")
+    if (not isinstance(policy, dict)
+            or set(policy) != {"library_id", "auto_friend", "updated_by_account_id", "updated_at"}
+            or type(policy["library_id"]) is not int or policy["library_id"] != library
+            or policy["auto_friend"] is not False or policy["updated_by_account_id"] is not None
+            or policy["updated_at"] is None or policies[0]["finite"] is not True):
+        raise RuntimeError("Canonical friend policy defaults differ.")
+    current = {"profile": dict(profile), "policy": dict(policy)}
+    if baseline is not None and current != baseline:
+        raise RuntimeError("Canonical social baseline changed; quarantine required.")
+    return current
 
 
 def plain_file(path):
@@ -58,8 +104,8 @@ def job_identity(env):
         raise RuntimeError("Invalid job identity.")
     platform = env.get("RUNNER_OS")
     if platform == "Linux":
-        if env.get("GITHUB_JOB") != "test_feature_batches_linux" or env.get("FEATURE_BATCH") != "loved_backend":
-            raise RuntimeError("Only the Loved feature batch may initialize this service.")
+        if env.get("GITHUB_JOB") != "test_feature_batches_linux" or env.get("FEATURE_BATCH") not in {"loved_backend", "favorites_backend"}:
+            raise RuntimeError("Only the Loved or favorites feature batch may initialize this service.")
         suffix = f"tops_{run}_{attempt}"
     elif platform == "Windows":
         if env.get("GITHUB_JOB") != "test_python":
@@ -71,8 +117,10 @@ def job_identity(env):
         raise RuntimeError("Job identity exceeds admitted role bounds.")
     database = "album_haven_ci_" + suffix
     setup_role, runtime_role = "album_haven_migrator_" + suffix, "album_haven_app_" + suffix
-    setup = f"postgresql://{setup_role}@127.0.0.1:5432/{database}"
-    runtime = f"postgresql://{runtime_role}@127.0.0.1:5432/{database}"
+    # Match each guarded provisioner exactly; Windows omits its default port.
+    authority = "127.0.0.1:5432" if platform == "Linux" else "127.0.0.1"
+    setup = f"postgresql://{setup_role}@{authority}/{database}"
+    runtime = f"postgresql://{runtime_role}@{authority}/{database}"
     if (env.get("DATABASE_MIGRATOR_URL"), env.get("DATABASE_APP_URL")) != (setup, runtime):
         raise RuntimeError("Database URLs do not match this fresh job.")
     if platform == "Linux" and env.get("ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL") != runtime:
@@ -231,11 +279,13 @@ def initialize(identity, isolated, *, root=ROOT):
             assert_migration_ledger(connection, root)
             assert_counts(connection, SEEDED_COUNTS)
             library = assert_seed(connection)
+            social = bootstrap_social_baseline(connection, library)
             clocks = bootstrap_clocks(connection, library)
             if refresh_state(connection) != refresh:
                 raise RuntimeError("Migration-owned refresh state changed during seed.")
         with isolated._connect(identity.runtime_url) as connection:
             assert_identity(connection, identity, setup=False)
+            bootstrap_social_baseline(connection, library, social)
             if assert_seed(connection) != library or bootstrap_clocks(connection, library) != clocks:
                 raise RuntimeError("Committed bootstrap identity or clocks changed.")
     lease.release()

@@ -10,6 +10,8 @@ foreign keys/checks remain untouched. Runtime readers never decode an image.
 """
 import asyncio
 from contextlib import contextmanager
+from copy import copy
+from dataclasses import replace
 from hashlib import sha256
 import json
 from urllib.parse import urlsplit
@@ -20,8 +22,10 @@ import pytest
 from music_app.routes import public_album_tops_asgi as routes
 from music_app.services import public_album_tops_postgres as reader
 from music_app.services.owned_album_tops import ACCESS, BROWSE, AlbumTopError
-from music_app.services.policy import RequestOrigin
-from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+from music_app.services.capabilities import grant_keys_for_action
+from music_app.services.current_actor import CapabilityGrant
+from music_app.services.policy import RequestOrigin, ResourceScope
+from music_app.services.policy_evaluator import PolicyEvaluationConstraints, PolicyEvaluator
 from tests.py.postgres_runtime_role_contract import assert_runtime_role
 from tests.py.test_owned_album_tops_postgres import db, urls, assert_error
 from tests.py.test_top_artwork_publication_retention_postgres import publication_case, POSIX_CAPTURE, runtime
@@ -35,6 +39,31 @@ from tests.py.test_album_top_collaboration_postgres import member
 
 GUEST_SECRET = 'synthetic-d-guest-pagination-key-only'
 ARTWORK = 'library.artwork.read'
+
+
+def effective_policy(case, action, *, resource=None, constraints=None):
+    """Evaluate actual persisted grants; never install this context as authority."""
+    with case.db.connect() as connection:
+        rows = connection.execute('''select capability_key,scope_kind,scope_id from app.capabilities
+            where account_id=%s and revoked_at is null order by id''',
+            (case.db.owner.account_id,)).fetchall()
+    actor = replace(case.db.owner, capability_grants=tuple(
+        CapabilityGrant(row['capability_key'], row['scope_kind'], row['scope_id']) for row in rows))
+    context = replace(case.db.context(actor), action=action,
+        resource=resource or ResourceScope('album_top', case.top['top_ref']))
+    narrowed = constraints(context) if constraints else None
+    return PolicyEvaluator().evaluate(context, constraints=narrowed).decision.allowed
+
+
+def revoke_effective_action(case, action):
+    """Remove all current aliases, then prove the intended effective denial."""
+    assert effective_policy(case, action) is True
+    keys = sorted(grant_keys_for_action(action))
+    with case.db.connect() as connection:
+        connection.execute('''update app.capabilities set revoked_at=clock_timestamp()
+            where account_id=%s and capability_key=any(%s) and revoked_at is null''',
+            (case.db.owner.account_id, keys))
+    assert effective_policy(case, action) is False
 
 
 def publish(case, *, action='enable_external', kind='saved'):
@@ -206,10 +235,8 @@ def test_current_durable_owner_revocation_blocks_every_guest_representation(publ
         elif failure == 'membership':
             connection.execute('delete from library.library_memberships where account_id=%s and library_id=%s',
                                (case.db.owner.account_id, case.db.library))
-        else:
-            capability = {'browse': BROWSE, 'access': ACCESS, 'artwork': ARTWORK}[failure]
-            connection.execute('update app.capabilities set revoked_at=clock_timestamp() where account_id=%s and capability_key=%s',
-                               (case.db.owner.account_id, capability))
+    if failure in {'browse', 'access', 'artwork'}:
+        revoke_effective_action(case, {'browse': BROWSE, 'access': ACCESS, 'artwork': ARTWORK}[failure])
     for action in (lambda: metadata(case, service), lambda: metadata(case, service, item_ref=str(rows[0]['item_ref'])),
                    lambda: image(case, service, rows[0]), lambda: image(case, service, rows[0], head_only=True),
                    lambda: admit(case, service, rows[0])):
@@ -285,10 +312,7 @@ def test_real_response_construction_gap_requires_fresh_current_admission(publish
         if change == 'revoke':
             case.top = case.db.service.execute(case.db.context(), case.db.command('revoke_external', case.top))
         elif change == 'republish': publish(case, action='save')
-        elif change == 'policy':
-            with case.db.connect() as connection:
-                connection.execute('update app.capabilities set revoked_at=clock_timestamp() where account_id=%s and capability_key=%s',
-                                   (case.db.owner.account_id, ARTWORK))
+        elif change == 'policy': revoke_effective_action(case, ARTWORK)
         else: case.db.service._config['ALBUM_HAVEN_PUBLIC_SHARING_ENABLED'] = False
     if representation == 'png':
         original = routes.Response
@@ -422,14 +446,17 @@ def test_real_final_service_policy_runs_after_completed_result_validation(publis
 
 
 @POSIX_CAPTURE
-def test_foreign_top_asset_is_not_readable_under_another_real_publication(published_artwork, tmp_path):
-    from tests.py.test_top_artwork_publication_retention_postgres import PublicationCase
-    from tests.py.test_top_artwork_publication_postgres import configure
+def test_foreign_top_asset_is_not_readable_under_another_real_publication(published_artwork):
     case, _, rows, service = published_artwork
-    directory = tmp_path / 'other-top'; directory.mkdir()
-    # Same synthetic DB/owner is intentionally reused; the established
-    # retained-aware fixture owns all this owner's history on final teardown.
-    other = configure(PublicationCase(case.db, directory)).build(1)
+    # Allocate a distinct Top/item through the genuine owner over existing
+    # source rows. Rebuilding the same Database would duplicate its track keys.
+    # Assets are Top-scoped; retained-aware teardown owns both publications.
+    other = copy(case)
+    other.top, _ = case.db.create(refs=case.catalog_refs[:1])
+    other_item = case.db.read(other.top)['items'][0]
+    other.items = [{**case.items[0], 'item_ref': other_item['ref']}]
+    other.payload = {**case.payload, 'revision': other.top['revision'],
+                     'request_key': str(uuid4()), 'items': other.items}
     publish(other); other_row = publication_rows(other, other.top)[2][0]
     assert case.top['top_ref'] != other.top['top_ref']
     assert str(other_row['asset_ref']) != str(rows[0]['asset_ref'])
@@ -465,13 +492,21 @@ def test_private_working_link_keeps_v1_and_v2_top_acl_and_artwork_eligibility(c2
                  'top_unavailable', 404)
     assert metadata(case, service)['items'][0]['artwork_ref'] is not None if version == 2 else (
         metadata(case, service)['items'][0]['artwork_ref'] is None)
-    with case.db.connect() as connection:
-        connection.execute('update app.capabilities set revoked_at=clock_timestamp() where account_id=%s and capability_key=%s',
-                           (case.db.owner.account_id, ARTWORK))
+    target = ResourceScope('album', str(case.album_ids[0]))
+    def deny_artwork(context):
+        return PolicyEvaluationConstraints(request_origin_allowed=not (
+            context.action == ARTWORK and context.resource == target))
+    # Browse itself aliases ARTWORK, so durable removal cannot independently
+    # deny Artwork while preserving the private reader's required Browse.
+    assert effective_policy(case, BROWSE, constraints=deny_artwork) is True
+    assert effective_policy(case, ARTWORK, resource=target) is True
+    assert effective_policy(case, ARTWORK, resource=target, constraints=deny_artwork) is False
     if version == 2:
-        assert_error(lambda: case.db.service.resolve_public_link(case.db.context(), share_ref=share), 'unavailable', 404)
+        assert_error(lambda: case.db.service.resolve_public_link(case.db.context(),
+            share_ref=share, constraints=deny_artwork), 'unavailable', 404)
     else:
-        assert case.db.service.resolve_public_link(case.db.context(), share_ref=share) == case.top['top_ref']
+        assert case.db.service.resolve_public_link(case.db.context(),
+            share_ref=share, constraints=deny_artwork) == case.top['top_ref']
 
 
 @POSIX_CAPTURE

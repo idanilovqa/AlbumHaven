@@ -237,8 +237,14 @@ def test_existing_metadata_only_http_preview_enable_and_save_keep_v1(c2_case, mo
             assert row['contract_version'] == row['seal_contract_version'] == 1
             assert connection.execute('select 1 from app.album_top_artwork_publication_lineage where top_ref=%s',
                                       (case.top['top_ref'],)).fetchone() is None
-        body = {'request_key': str(uuid4()), 'revision': case.top['revision'],
-                'title': 'Ordinary v1 header edit'}
+        if action == 'enable_external':
+            status, fresh, _ = json_exchange(app, 'review',
+                path=f"/album-tops/{case.top['top_ref']}/publication-preview",
+                payload={'revision': case.top['revision'], 'items': selected})
+            assert status == 200 and fresh['status'] == 'ready'
+            body = {'request_key': str(uuid4()), 'revision': case.top['revision'],
+                    'title': 'Ordinary v1 header edit',
+                    'evidence_revision': fresh['data']['evidence_revision']}
 
 
 @pytest.mark.parametrize('kind', ['saved', 'draft'])
@@ -400,13 +406,45 @@ def test_changed_offpage_full_source_is_rejected_for_preview_and_execute(c2_case
             connection.execute('update library.album_metadata_sources set year=2001 where ref=%s',
                                (case.source_refs[25],))
     else:
-        case.cover_paths[25].write_bytes(b'changed-source-after-genuine-capture')
+        # Change selected source identity, not the replaceable leaf bytes.
+        with maintenance(case.db) as connection:
+            connection.execute('update library.local_albums set cover_path=%s where id=%s',
+                (str(case.cover_paths[25].with_name('changed-selected-cover.png')), case.album_ids[25]))
     before = durable_snapshot(case)
     status, raw, _ = image_response(case, app, kind, state, payload, approved, approved['items'][25])
     assert status == 409 and json.loads(raw)['ok'] is False
     result = http_execute(case, app, body, expected=409)
     assert result['ok'] is False and result['error'] in {'invalid_or_stale_review', 'artwork_source_changed'}
     assert durable_snapshot(case) == before
+
+
+@POSIX_CAPTURE
+@pytest.mark.parametrize('kind', ['saved', 'draft'])
+def test_in_place_leaf_overwrite_keeps_exact_captured_png_and_publication(c2_case, kind, monkeypatch):
+    case = c2_case.build(26, excluded=range(25))
+    app = app_for(case)
+    state, payload = http_ready(case, app, kind)
+    approved, body = http_review(case, app, kind, state, payload)
+    row = approved['items'][25]
+    status, original, _ = image_response(case, app, kind, state, payload, approved, row)
+    assert status == 200 and original.startswith(b'\x89PNG')
+    before = durable_snapshot(case)
+    # Captured immutable pixels intentionally survive current leaf replacement.
+    # The selected path/root identity is unchanged; no re-acquisition is allowed.
+    case.cover_paths[25].write_bytes(b'changed-leaf-after-genuine-capture')
+    trap_pixels(monkeypatch)
+    status, retained, _ = image_response(case, app, kind, state, payload, approved, row)
+    assert status == 200 and retained == original
+    assert durable_snapshot(case) == before
+    receipt = http_execute(case, app, body)
+    rows = publication_rows(case, receipt)[2]
+    included = [item for item in rows if item['included']]
+    assert len(included) == 1
+    with maintenance(case.db) as connection:
+        asset = connection.execute('select png,content_digest from app.album_top_artwork_assets where ref=%s',
+                                   (included[0]['asset_ref'],)).fetchone()
+    assert bytes(asset['png']) == original
+    assert asset['content_digest'] == sha256(original).hexdigest()
 
 
 @pytest.mark.parametrize('kind', ['saved', 'draft'])
@@ -461,13 +499,22 @@ def test_current_exact_scope_denial_blocks_genuine_png_and_final_publication(c2_
         return PolicyEvaluationConstraints(request_origin_allowed=target != expected)
     app.state.policy_constraint_resolver = constraints
     before = durable_snapshot(case)
+    # Typed proofs bind current root inventory, including Browse eligibility.
+    # A saved prior witness also binds that inventory digest. These exact
+    # fail-closed boundaries precede the later policy fence for those requests.
+    review_status, review_code = ((409, 'artwork_source_changed')
+        if scope == 'artwork_root' and kind == 'draft' else (403, 'forbidden'))
+    read_status, read_code = ((409, 'artwork_source_changed' if kind == 'draft' else 'invalid_or_stale_review')
+        if scope == 'artwork_root' else (403, 'forbidden'))
     denied_review = request_json(case, app, 'review', kind=kind, preparation_ref=state['preparation_ref'],
         payload={**identity(case, kind, payload), 'preparation_revision': state['preparation_revision'],
-                 **HEADER, 'action': 'enable_external'}, expected=403)
-    assert denied_review == {'ok': False, 'error': 'forbidden'}
+                 **HEADER, 'action': 'enable_external'}, expected=review_status)
+    assert denied_review == {'ok': False, 'error': review_code}
+    assert durable_snapshot(case) == before
     status, raw, _ = image_response(case, app, kind, state, payload, approved, approved['items'][0])
-    assert status == 403 and json.loads(raw) == {'ok': False, 'error': 'forbidden'}
-    assert http_execute(case, app, body, expected=403) == {'ok': False, 'error': 'forbidden'}
+    assert status == read_status and json.loads(raw) == {'ok': False, 'error': read_code}
+    assert not raw.startswith(b'\x89PNG') and durable_snapshot(case) == before
+    assert http_execute(case, app, body, expected=read_status) == {'ok': False, 'error': read_code}
     assert expected in seen and durable_snapshot(case) == before
 
 

@@ -505,6 +505,51 @@ def test_resolve_album_context_uses_saved_library_roots_and_disc_parent(config):
     assert context.track_paths == {str(track_path)}
 
 
+@pytest.mark.parametrize(
+    ("category", "layout_mode"),
+    [
+        ("new_arrivals_roots", None),
+        ("hoarding_library_roots", None),
+        ("main_library_roots", "genre/artist"),
+    ],
+)
+def test_resolve_album_context_allows_album_directly_under_any_configured_root(
+    config,
+    category: str,
+    layout_mode: str | None,
+):
+    library_root = (Path(config["DATA_DIR"]) / category).resolve()
+    album_root = (library_root / "Album").resolve()
+    track_path = (album_root / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+
+    root_entry = {
+        "id": f"{category}-1",
+        "path": str(library_root),
+    }
+    if layout_mode:
+        root_entry["layout_mode"] = layout_mode
+    settings = {
+        "main_library_roots": [{
+            "id": "main-1",
+            "path": str(config["MUSIC_DIR"]),
+            "layout_mode": "artist",
+        }],
+        category: [root_entry],
+    }
+    save_library_root_settings(
+        config,
+        settings,
+    )
+
+    context = resolve_album_context(config, {"tracks": [{"path": str(track_path)}]})
+
+    assert context is not None
+    assert context.album_root == album_root
+    assert context.track_paths == {str(track_path)}
+
+
 def test_resolve_album_context_rejects_tracks_outside_configured_library_roots(config, tmp_path: Path):
     outside_track = (tmp_path / "outside" / "Artist" / "Album" / "song.mp3").resolve()
     outside_track.parent.mkdir(parents=True, exist_ok=True)

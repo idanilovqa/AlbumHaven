@@ -83,6 +83,7 @@ def resolve_album_root_from_track_paths(
     if not resolved_dirs:
         return None
     resolved_album_roots = [path.resolve(strict=False) for path in resolved_dirs]
+    enforce_layout_depth = False
     if len(resolved_album_roots) == 1:
         album_root = resolved_album_roots[0]
     else:
@@ -100,7 +101,13 @@ def resolve_album_root_from_track_paths(
             if not all(_is_path_within(path, common_root) for path in resolved_album_roots):
                 return None
             album_root = common_root
-    if not _is_valid_album_root(config, album_root, configured_roots=configured_roots):
+            enforce_layout_depth = True
+    if not _is_valid_album_root(
+        config,
+        album_root,
+        configured_roots=configured_roots,
+        enforce_layout_depth=enforce_layout_depth,
+    ):
         return None
     return album_root
 
@@ -150,6 +157,7 @@ def _is_valid_album_root(
     album_root: Path,
     *,
     configured_roots: list[dict[str, object]] | None = None,
+    enforce_layout_depth: bool = False,
 ) -> bool:
     matching_roots = _matching_library_roots(
         config,
@@ -165,7 +173,9 @@ def _is_valid_album_root(
         return False
     if not relative_parts:
         return False
-    return len(relative_parts) >= _minimum_album_folder_depth(root)
+    if enforce_layout_depth:
+        return len(relative_parts) >= _minimum_album_folder_depth(root)
+    return True
 
 
 def _minimum_album_folder_depth(root: dict[str, object]) -> int:

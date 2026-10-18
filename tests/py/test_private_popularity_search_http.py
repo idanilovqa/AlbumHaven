@@ -535,8 +535,15 @@ def test_real_cold_bootstrap_preserves_duplicate_and_visibility_input_for_guarde
 
 
 def test_ordinary_cold_bootstrap_still_uses_real_preview_builder(ordinary_artist_repository):
-    from tests.py.test_global_love_search_cold_shell import bootstrap
-    payload = bootstrap('ordinary text')
+    from starlette.datastructures import QueryParams
+    from music_app.routes import web_asgi
+    # search_* selectors intentionally classify a request as private.
+    payload = web_asgi._build_bootstrap_payload(
+        query_args=QueryParams({'surface': 'albums', 'q': 'ordinary text',
+                                'artist': 'Requested Artist'}),
+        config={}, logger=None, library_state={}, query_raw='ordinary text',
+        selected_artist='Requested Artist', refreshed=False, request_started_epoch_ms=1,
+    )[0]
     assert payload['initial_view']['artist_groups'][0]['albums'][0]['name'] == 'Unfiltered Family Album'
     assert payload['bootstrap']['startupPreview']['renderedGalleryMarkup'] is True
 

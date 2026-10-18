@@ -287,7 +287,7 @@ def test_inventory_lock_prefix_excludes_real_late_file_and_genre_writers(popular
                 writer_pid.append(con.info.backend_pid)
                 if change == 'genre': set_genre(con, db.tracks[-1], 'progressive rock')
                 elif change == 'file': con.execute("update library.local_track_files set content_signature='late' where track_id=%s", (db.tracks[-1],))
-                elif change == 'stale': con.execute('update library.local_track_files set scan_cache_stale=true where track_id=%s', (db.tracks[-1],))
+                elif change == 'stale': con.execute("update library.local_track_files set metadata=jsonb_set(metadata, '{scan_cache,stale}', 'true'::jsonb) where track_id=%s", (db.tracks[-1],))
                 elif change == 'root': con.execute('update library.library_roots set is_active=false where id=%s', (db.root_id,))
                 else:
                     con.execute("""insert into library.local_track_files(track_id,library_root_id,private_path,content_signature,metadata)
@@ -352,10 +352,17 @@ def test_actual_settings_writer_and_native_follow_settings_before_inventory(popu
 
 
 def test_alias_projection_readiness_scoped_aliases_and_denied_names(popular_db):
-    from music_app.services.relation_projection_postgres import RELATION_PROJECTION_BUILDER_VERSION
+    from music_app.services.library_inventory_postgres import local_inventory_identity_key
     db = popular_db
     with db.connect() as con:
-        artists = con.execute('select id,name from library.local_artists where library_id=%s order by id', (db.library,)).fetchall()
+        artists = con.execute(
+            'select id,name from library.local_artists where library_id=%s and id=any(%s) order by id',
+            (db.library, db.artists)).fetchall()
+        assert {artist['id'] for artist in artists} == set(db.artists)
+        # Endpoint binding uses the normal inventory identity, not fixture tokens.
+        for artist in artists:
+            con.execute('update library.local_artists set artist_key=%s where library_id=%s and id=%s',
+                        (local_inventory_identity_key(artist['name']), db.library, artist['id']))
     with db.app_connect(db.app_url) as con:
         db.publish_aliases(con, {'Verified alias': artists[0]['name'], artists[1]['name']: artists[0]['name']})
     captured = capture(db, query=':popular artist:"Verified alias"')

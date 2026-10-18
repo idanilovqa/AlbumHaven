@@ -105,7 +105,7 @@ def test_real_local_availability_excludes_ineligible_files(popular_db, change):
         if change == 'missing':
             con.execute('delete from library.local_track_files where track_id=%s', (db.tracks[0],))
         elif change == 'stale':
-            con.execute('update library.local_track_files set scan_cache_stale=true where track_id=%s', (db.tracks[0],))
+            con.execute("update library.local_track_files set metadata=jsonb_set(metadata, '{scan_cache,stale}', 'true'::jsonb) where track_id=%s", (db.tracks[0],))
         elif change == 'inactive':
             con.execute('update library.library_roots set is_active=false where id=%s', (db.root_id,))
         else:

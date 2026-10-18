@@ -266,15 +266,18 @@ def test_url_singletons_reject_even_identical_duplicates(key, value):
         normalize_private_search_request(QueryParams(pairs + [(key, value), (key, value)]))
 
 
-def test_category_repetition_bound_and_tracks_only_presentation_location():
+def test_category_repetition_bound_and_supported_presentations_location():
     category = library_category_slugs()[0]
     pairs = [('q', ':popular')] + [('category', category)] * 32
     assert normalize_private_search_request(QueryParams(pairs)).categories == (category,)
     with pytest.raises(PrivateSearchError):
         normalize_private_search_request(QueryParams(pairs + [('category', category)]))
     query = ':popular artist:"😀 Rush"'
+    for presentation in ('tracks', 'albums'):
+        assert normalize_private_search_request(QueryParams(
+            {'q': query, 'search_presentation': presentation})).presentation == presentation
     with pytest.raises(PrivateSearchError) as caught:
-        normalize_private_search_request(QueryParams({'q': query, 'search_presentation': 'albums'}))
+        normalize_private_search_request(QueryParams({'q': query, 'search_presentation': 'artists'}))
     assert caught.value.code == 'unsupported_private_search_combination'
     assert caught.value.location == {'start': 0, 'end': len(query) + 1}
 

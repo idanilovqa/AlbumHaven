@@ -111,3 +111,81 @@ def test_migration_and_ledger_insert_roll_back_together(migration_store):
         isolated.apply_all_migrations('owned-test-url')
     assert connection.applied == []
     assert list(connection.ledger) == [first.name]
+
+
+class CaptureResetConnection:
+    def __init__(self, *, migrated=True, occupied=False, rows=None):
+        self.migrated=migrated;self.occupied=occupied
+        self.rows=[] if rows is None else rows
+        self.inserts=0;self.queries=[];self.role_checked=False
+
+    def __enter__(self):return self
+    def __exit__(self,*args):pass
+
+    def execute(self,sql,params=None):
+        assert self.role_checked
+        query=' '.join(sql.lower().split());self.queries.append(query)
+        if 'to_regclass' in query:
+            return Result([{'name':'integration.playback_capture_budget' if self.migrated else None}])
+        if query.startswith('select exists('):return Result([{'occupied':self.occupied}])
+        if query.startswith('select id,account_id,'):return Result(self.rows)
+        if query.startswith('insert into integration.playback_capture_budget'):
+            self.inserts+=1;self.rows=[capture_budget_row()];return Result([])
+        raise AssertionError(query)
+
+
+def capture_budget_row():
+    return dict(id=1,account_id=None,is_global=True,reserved_bytes=0,rate_tokens=8,finite=True)
+
+
+def setup_capture_reset(monkeypatch,connection):
+    monkeypatch.setattr(isolated,'_connect',lambda url:connection)
+    def check_role(actual,role):
+        assert actual is connection and role==isolated.SETUP_ROLE
+        actual.role_checked=True
+    monkeypatch.setattr(isolated,'_assert_connected_role',check_role)
+
+
+def test_initial_migration_global_budget_is_preserved_without_insert(monkeypatch):
+    connection=CaptureResetConnection(rows=[capture_budget_row()]);setup_capture_reset(monkeypatch,connection)
+    isolated.restore_empty_capture_budget_after_reset('owned-test-url')
+    assert connection.inserts==0 and connection.rows==[capture_budget_row()]
+
+
+def test_reused_database_reset_restores_exactly_one_zero_global_budget(monkeypatch):
+    connection=CaptureResetConnection();setup_capture_reset(monkeypatch,connection)
+    isolated.restore_empty_capture_budget_after_reset('owned-test-url')
+    isolated.restore_empty_capture_budget_after_reset('owned-test-url')
+    assert connection.inserts==1 and connection.rows==[capture_budget_row()]
+
+
+@pytest.mark.parametrize('change',['capture_rows','additional_budget','account_budget','nonzero','spent_tokens','infinite'])
+def test_reset_rejects_unexpected_capture_state_without_repair(monkeypatch,change):
+    row=capture_budget_row();rows=[row]
+    if change=='additional_budget':rows.append(dict(row,id=2))
+    elif change=='account_budget':row.update(account_id=7,is_global=False)
+    elif change=='nonzero':row['reserved_bytes']=256
+    elif change=='spent_tokens':row['rate_tokens']=7
+    elif change=='infinite':row['finite']=False
+    connection=CaptureResetConnection(occupied=change=='capture_rows',rows=rows)
+    setup_capture_reset(monkeypatch,connection)
+    with pytest.raises(RuntimeError):isolated.restore_empty_capture_budget_after_reset('owned-test-url')
+    assert connection.inserts==0
+
+
+def test_older_partial_migration_fixture_does_not_create_capture_schema(monkeypatch):
+    connection=CaptureResetConnection(migrated=False);setup_capture_reset(monkeypatch,connection)
+    isolated.restore_empty_capture_budget_after_reset('owned-test-url')
+    assert connection.inserts==0 and len(connection.queries)==1
+
+
+def test_supported_prepare_restores_only_after_reset_and_migration_completion(monkeypatch):
+    calls=[]
+    for name in ('reset_application_tables','apply_all_migrations','restore_empty_capture_budget_after_reset',
+                 'grant_runtime_role_privileges','seed_bootstrap_owner_and_library',
+                 'assert_runtime_connection','assert_runtime_grants'):
+        monkeypatch.setattr(isolated,name,lambda *args,owned_name=name:calls.append(owned_name))
+    isolated.prepare_isolated_database('setup-owned','runtime-owned')
+    assert calls==['reset_application_tables','apply_all_migrations','restore_empty_capture_budget_after_reset',
+                   'grant_runtime_role_privileges','seed_bootstrap_owner_and_library',
+                   'assert_runtime_connection','assert_runtime_grants']

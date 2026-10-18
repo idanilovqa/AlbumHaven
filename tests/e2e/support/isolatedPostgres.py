@@ -966,9 +966,41 @@ def assert_runtime_grants(runtime_database_url: str) -> None:
         )
 
 
+
+def restore_empty_capture_budget_after_reset(setup_database_url: str) -> None:
+    """Restore migration0142's singleton only after the owned isolated reset."""
+    with _connect(setup_database_url) as connection:
+        _assert_connected_role(connection, SETUP_ROLE)
+        table = connection.execute(
+            "select to_regclass('integration.playback_capture_budget') as name"
+        ).fetchone()["name"]
+        if table is None:
+            return
+        occupied = connection.execute("""select exists(
+            select 1 from integration.playback_capture_session
+            union all select 1 from integration.playback_capture_checkpoint
+            union all select 1 from integration.playback_capture_run
+            union all select 1 from integration.playback_capture_anchor
+        ) as occupied""").fetchone()["occupied"]
+        if occupied:
+            raise RuntimeError("Capture rows survived the isolated reset.")
+        rows = connection.execute("""select id,account_id,is_global,reserved_bytes,rate_tokens,
+            isfinite(rate_updated_at) as finite from integration.playback_capture_budget""").fetchall()
+        if rows:
+            if (len(rows) != 1 or type(rows[0]["id"]) is not int or rows[0]["id"] <= 0
+                    or rows[0]["account_id"] is not None or rows[0]["is_global"] is not True
+                    or rows[0]["reserved_bytes"] != 0 or rows[0]["rate_tokens"] != 8
+                    or rows[0]["finite"] is not True):
+                raise RuntimeError("Unexpected capture budget after isolated reset.")
+        else:
+            connection.execute("insert into integration.playback_capture_budget(is_global) values(true)")
+
+
+
 def prepare_isolated_database(setup_database_url: str, runtime_database_url: str) -> None:
     reset_application_tables(setup_database_url)
     apply_all_migrations(setup_database_url)
+    restore_empty_capture_budget_after_reset(setup_database_url)
     grant_runtime_role_privileges(setup_database_url, runtime_database_url)
     seed_bootstrap_owner_and_library(setup_database_url)
     assert_runtime_connection(runtime_database_url)

@@ -36,6 +36,36 @@ def _expired():
     return HomeActivityError("Activity changed or expired. Refresh the activity.", 410, "activity_snapshot_expired")
 
 
+def _album_comparison(scope, query):
+    return scope.audience == "comparison" and query.kind == "albums"
+
+
+def _external_coverage(coverage):
+    # The stamp is receipt evidence, never a public coverage fact.
+    return {key: value for key, value in coverage.items() if key != "_album_taste_stamp"}
+
+
+def _checked_album_stamp(value, scope):
+    keys = {"version", "library_id", "viewer_account_id", "subject_account_id", "epochs"}
+    if not isinstance(value, dict) or set(value) != keys:
+        raise _expired()
+    for key, expected in (("version", 1), ("library_id", scope.library_id),
+                          ("viewer_account_id", scope.account_id),
+                          ("subject_account_id", scope.source_account_id)):
+        if type(value[key]) is not int or value[key] != expected or value[key] < 1:
+            raise _expired()
+    accounts = sorted({scope.account_id, scope.source_account_id})
+    epochs = value["epochs"]
+    if len(accounts) != 2 or type(epochs) is not list or len(epochs) != 2:
+        raise _expired()
+    for entry, account in zip(epochs, accounts):
+        if (type(entry) is not list or len(entry) != 2
+                or type(entry[0]) is not int or entry[0] != account
+                or type(entry[1]) is not int or entry[1] < 0):
+            raise _expired()
+    return value
+
+
 def _selection_canonical(row_key, provenance):
     """One interpretation shared by Home exports and listener receipt access."""
     parts = row_key.split(":")
@@ -63,7 +93,7 @@ class _ListenerReceipt:
         s = self.snapshot
         return {"expires_at": s["expires_at"].isoformat(), "total_tracks": s["total_rows"],
                 "total_listens": s["total_listens"], "period_label": s["period_label"],
-                "range_label": s["range_label"], "coverage": dict(s["coverage"])}
+                "range_label": s["range_label"], "coverage": _external_coverage(s["coverage"])}
 
     @staticmethod
     def _entry(row):
@@ -250,6 +280,26 @@ class HomeActivityPostgresRepository:
         return (*result, values[scope.account_id]) if scope.audience == "comparison" else result
 
     @staticmethod
+    def _album_stamp(connection, scope):
+        accounts = sorted({scope.account_id, scope.source_account_id})
+        rows = connection.execute("""select account_id,album_taste_revision
+            from app.activity_source_revisions where library_id=%s and account_id=any(%s)
+            order by account_id""", (scope.library_id, accounts)).fetchall()
+        if len(rows) != 2 or [row["account_id"] for row in rows] != accounts:
+            raise _expired()
+        return _checked_album_stamp({"version": 1, "library_id": scope.library_id,
+            "viewer_account_id": scope.account_id, "subject_account_id": scope.source_account_id,
+            "epochs": [[row["account_id"], row["album_taste_revision"]] for row in rows]}, scope)
+
+    @staticmethod
+    def _album_account_policy(scope, project):
+        actions = project.policy("account", str(scope.source_account_id))
+        if (not isinstance(actions, AllowedActions)
+                or not actions.allows("library.social.taste.read")
+                or not actions.allows(scope.read_action)):
+            raise _expired()
+
+    @staticmethod
     @contextmanager
     def _friend_authority(connection, scope):
         if scope.audience == "own":
@@ -321,7 +371,15 @@ class HomeActivityPostgresRepository:
                 token = query.snapshot_ref
             else:
                 token, snapshot = self._create(connection, scope, query, now, authority, project, friend)
+            album_comparison = _album_comparison(scope, query)
+            if album_comparison:
+                coverage = snapshot["coverage"]
+                stamp = _checked_album_stamp(
+                    coverage.get("_album_taste_stamp") if isinstance(coverage, dict) else None, scope)
+                self._album_account_policy(scope, project)
             revisions = self._revisions(connection, scope, lock=True)
+            if album_comparison and self._album_stamp(connection, scope) != stamp:
+                raise _expired()
             expected_revisions = (snapshot["ledger_revision"], snapshot["inventory_revision"])
             if scope.audience == "comparison":
                 expected_revisions += (snapshot["viewer_ledger_revision"],)
@@ -340,6 +398,24 @@ class HomeActivityPostgresRepository:
             if snapshot["expires_at"] <= checked_at:
                 raise _expired()
             yield snapshot, token, friend
+            if album_comparison:
+                # Consumers may wait on source locks after the initial check.
+                # Buffer their result until this context and its friend guard exit.
+                self._album_account_policy(scope, project)
+                self._validate_policy(connection, snapshot, project)
+                if self._revisions(connection, scope, lock=True) != expected_revisions:
+                    raise _expired()
+                if self._album_stamp(connection, scope) != stamp:
+                    raise _expired()
+                with self._friend_authority(connection, scope) as final_friend:
+                    if (final_friend["profile"]["account_ref"] != friend["profile"]["account_ref"]
+                            or final_friend["profile"]["relationship_revision"] != snapshot["relationship_revision"]
+                            or final_friend["fingerprint"] != snapshot["subject_authority_fingerprint"]):
+                        raise _expired()
+                checked_at = self._lock_authority(connection, scope)
+                if (snapshot["expires_at"] <= checked_at
+                        or self._authority(connection, scope, checked_at) != authority):
+                    raise _expired()
 
     def read(self, *, scope, query, now, build_projection, listener=None):
         if (not isinstance(scope, ActivityScope) or not isinstance(query, ActivityQuery)
@@ -515,6 +591,9 @@ class HomeActivityPostgresRepository:
                 values(%s,%s) on conflict do nothing""", (scope.library_id, account))
         revisions = self._revisions(connection, scope)
         ledger_revision, inventory_revision = revisions[:2]
+        album_stamp = self._album_stamp(connection, scope) if _album_comparison(scope, query) else None
+        if album_stamp is not None:
+            self._album_account_policy(scope, build_projection)
         window = resolve_activity_window(query.period, now=now,
             timezone_name=get_lastfm_user_timezone(self.config, account_id=scope.account_id))
         issued, secret = issue_opaque_token(), secrets.token_bytes(32)
@@ -561,7 +640,10 @@ class HomeActivityPostgresRepository:
             from music_app.services.home_activity_comparison_postgres import finalize_comparison
             finalize_comparison(connection, snapshot_id=snapshot_id, scope=scope, query=query,
                                 project=build_projection, secret=secret, window=window)
-            coverage["taste_freshness"] = "Preferences are frozen at capture; refresh to read later edits."
+            coverage["taste_freshness"] = (
+                "Album taste edits expire this comparison; refresh to capture current preferences."
+                if album_stamp is not None else
+                "Preferences are frozen at capture; refresh to read later edits.")
         connection.execute("""with numbered as (
             select row_key,row_number() over(order by latest_at desc,latest_event_id desc,row_key desc) as ordinal
             from app.activity_snapshot_rows where snapshot_id=%s)
@@ -573,6 +655,10 @@ class HomeActivityPostgresRepository:
         # concurrent update since capture as a serialization failure here.
         if self._revisions(connection, scope, lock=True) != revisions:
             raise _expired()
+        if album_stamp is not None:
+            if self._album_stamp(connection, scope) != album_stamp:
+                raise _expired()
+            coverage["_album_taste_stamp"] = album_stamp
         snapshot = connection.execute("""update app.activity_snapshots set ready=true,total_listens=%s,
             total_rows=(select count(*) from app.activity_snapshot_rows where snapshot_id=%s),coverage=%s
             where id=%s returning *""", (total_listens, snapshot_id, Jsonb(coverage), snapshot_id)).fetchone()
@@ -636,7 +722,8 @@ class HomeActivityPostgresRepository:
 
     @staticmethod
     def _validate_policy(connection, snapshot, project):
-        if project.scope_wide_policy:
+        if project.scope_wide_policy and not (
+                snapshot["audience"] == "comparison" and snapshot["kind"] == "albums"):
             # The normal installed evaluator's only grants are global/library/
             # account scoped. Its current route admission + durable authority
             # fingerprint covers every retained row, including the total.
@@ -699,7 +786,7 @@ class HomeActivityPostgresRepository:
             "rows": [dict(row["payload"]) for row in rows], "total_listens": snapshot["total_listens"],
             "period_label": snapshot["period_label"], "range_label": snapshot["range_label"],
             "snapshot_ref": token, "expires_at": snapshot["expires_at"].isoformat(),
-            "coverage": dict(snapshot["coverage"]), "next_cursor": None,
+            "coverage": _external_coverage(snapshot["coverage"]), "next_cursor": None,
         }
         if numbered:
             payload["pagination"] = {"mode": "numbered", "page": page, "page_size": PAGE_SIZE, "total_rows": total_rows}

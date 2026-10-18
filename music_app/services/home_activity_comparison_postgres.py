@@ -12,7 +12,7 @@ _TASTE = "library.social.taste.read"
 
 def _zero_side():
     return {"listen_count": 0, "last_listened_at": None, "rating": None,
-            "favorite": None, "play_count": None, "full_listen_count": None}
+            "favorite": None, "taste_state": "unavailable", "play_count": None, "full_listen_count": None}
 
 
 def _resources(connection, scope, kind, ids):
@@ -36,20 +36,32 @@ def _resources(connection, scope, kind, ids):
     return {row["id"]: [("album", row["id"])] + ([("artist", row["artist_id"])] if row["artist_id"] else []) for row in rows}
 
 
-def _readable(project, resources):
+def _readable(project, resources, *, subject_id=None):
     if not resources:
         return False
+    if subject_id is not None:
+        account_actions = project.policy("account", str(subject_id))
+        if (not isinstance(account_actions, AllowedActions)
+                or not account_actions.allows(_HISTORY) or not account_actions.allows(_TASTE)):
+            return False
     for kind, reference in resources:
         actions = project.policy(kind, reference)
         if not isinstance(actions, AllowedActions):
             raise HomeActivityError("Activity policy is unavailable.", 503, "activity_unavailable")
         if not actions.allows(_HISTORY) or not actions.allows(_TASTE):
             return False
+        if subject_id is not None and kind == "album" and not actions.allows("library.browse.read"):
+            return False
     return True
 
 
-def _provenance(resources):
-    return [[kind, reference, action] for kind, reference in resources for action in (_HISTORY, _TASTE)]
+def _provenance(resources, *, subject_id=None):
+    result = [[kind, reference, action] for kind, reference in resources for action in (_HISTORY, _TASTE)]
+    if subject_id is not None:
+        result.extend([["account", subject_id, action] for action in (_HISTORY, _TASTE)])
+        result.extend([[kind, reference, "library.browse.read"]
+                       for kind, reference in resources if kind == "album"])
+    return result
 
 
 def finalize_comparison(connection, *, snapshot_id, scope, query, project, secret, window):
@@ -66,7 +78,7 @@ def finalize_comparison(connection, *, snapshot_id, scope, query, project, secre
           (array_agg(payload order by latest_at desc,latest_event_id desc))[1] as display,
           jsonb_object_agg(split_part(row_key,'/',1),jsonb_build_object(
             'listen_count',listen_count,'last_listened_at',latest_at,
-            'rating',null,'favorite',null,'play_count',null,'full_listen_count',null)) as sides
+            'rating',null,'favorite',null,'taste_state','unavailable','play_count',null,'full_listen_count',null)) as sides
         from app.activity_snapshot_rows where snapshot_id=%s group by split_part(row_key,'/',2)
       ) insert into app.activity_snapshot_rows(
           snapshot_id,row_key,latest_at,latest_event_id,listen_count,source_labels,payload)
@@ -82,14 +94,22 @@ def finalize_comparison(connection, *, snapshot_id, scope, query, project, secre
     shared = {"account_id": scope.account_id, "library_id": scope.library_id,
               "target_account_id": scope.source_account_id, "kind": query.kind}
     singular = {"tracks": "track", "albums": "album"}[query.kind]
+    subject_id = scope.source_account_id if query.kind == "albums" else None
+
+    def resource_allowed(identity):
+        # The candidate page must use this before its internal taste loader.
+        resources = _resources(connection, scope, query.kind, [identity])
+        return _readable(project, resources.get(identity, []), subject_id=subject_id)
+
     after = 0
     while True:
-        page = read_friend_taste_page(connection, **shared, after=after, limit=100)
+        page = read_friend_taste_page(connection, **shared, after=after, limit=100,
+            resource_allowed=resource_allowed)
         resources = _resources(connection, scope, query.kind, [row["resource_id"] for row in page["rows"]])
         for row in page["rows"]:
             identity = row["resource_id"]
             permitted = resources.get(identity, [])
-            if not _readable(project, permitted):
+            if not _readable(project, permitted, subject_id=subject_id):
                 continue
             key = f"{singular}:{identity}"
             payload = {"id": "activity_" + hmac.new(secret, key.encode(), hashlib.sha256).hexdigest(),
@@ -101,7 +121,7 @@ def finalize_comparison(connection, *, snapshot_id, scope, query, project, secre
                 snapshot_id,row_key,latest_at,latest_event_id,listen_count,source_labels,payload,resource_ids)
                 values(%s,%s,%s,0,0,array[]::text[],%s,%s) on conflict(snapshot_id,row_key) do nothing""",
                 (snapshot_id, key, window.start or datetime.min.replace(tzinfo=timezone.utc),
-                 Jsonb(payload), Jsonb(_provenance(permitted))))
+                 Jsonb(payload), Jsonb(_provenance(permitted, subject_id=subject_id))))
         if page["next_after"] is None:
             break
         after = page["next_after"]
@@ -115,21 +135,28 @@ def finalize_comparison(connection, *, snapshot_id, scope, query, project, secre
         if not rows:
             break
         ids = [int(row["row_key"].split(":")[1]) for row in rows]
-        tastes = load_friend_taste(connection, **shared, resource_ids=ids)["items"]
+        resources = _resources(connection, scope, query.kind, ids)
+        admitted = [identity for identity in ids
+                    if _readable(project, resources.get(identity, []), subject_id=subject_id)]
+        tastes = load_friend_taste(connection, **shared, resource_ids=admitted)["items"] if admitted else {}
+        # Source acquisition may wait. Repeat constraints on the same identities
+        # before retaining any personal data; final receipt checks run again.
         resources = _resources(connection, scope, query.kind, ids)
         for row, identity in zip(rows, ids):
             facts, permitted = tastes.get(identity), resources.get(identity, [])
-            if facts is None or not _readable(project, permitted):
+            if facts is None or not _readable(project, permitted, subject_id=subject_id):
                 continue
             payload = dict(row["payload"])
             for side, prefix in (("yours", "own"), ("friend", "friend")):
                 values = dict(payload[side])
-                values["rating"] = facts.get(prefix + "_rating")
-                values["taste_state"] = (facts.get(prefix + "_taste_state", "unavailable")
-                    if prefix + "_rating" in facts else "unavailable")
+                available = facts.get(prefix + "_taste_state") == "available"
+                values["rating"] = facts.get(prefix + "_rating") if available else None
+                values["taste_state"] = "available" if available else "unavailable"
                 tier = facts.get(prefix + "_love_tier")
-                values["favorite"] = tier in {"loved", "obsessed"} if tier in {"off", "loved", "obsessed"} else facts.get(prefix + "_favorite")
+                favorite = (tier in {"loved", "obsessed"} if tier in {"off", "loved", "obsessed"}
+                            else facts.get(prefix + "_favorite"))
+                values["favorite"] = favorite if available and type(favorite) is bool else None
                 payload[side] = values
             connection.execute("""update app.activity_snapshot_rows set payload=%s,resource_ids=%s
-                where snapshot_id=%s and row_key=%s""", (Jsonb(payload), Jsonb(_provenance(permitted)), snapshot_id, row["row_key"]))
+                where snapshot_id=%s and row_key=%s""", (Jsonb(payload), Jsonb(_provenance(permitted, subject_id=subject_id)), snapshot_id, row["row_key"]))
         after_key = rows[-1]["row_key"]

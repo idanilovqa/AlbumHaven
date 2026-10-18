@@ -761,7 +761,7 @@ begin
         select * into proof from app.album_top_artwork_publication_proofs where top_ref=l.top_ref and value_digest=r.proof_value_digest;
         if not found or (proof.library_id,proof.owner_account_id) is distinct from (l.library_id,l.owner_account_id)
             or not app._artwork_publication_pair_shape(proof.source_stamp,proof.acquisition_stamp,l.library_id,r.local_album_id)
-            or proof.proof_version<>case when proof.source_stamp ? 'descriptor_version' then 2 else 1 end
+            or proof.proof_version<>(case when proof.source_stamp ? 'descriptor_version' then 2 else 1 end)
             or app._artwork_publication_proof_digest(l.top_ref,l.library_id,l.owner_account_id,
               proof.source_stamp,proof.acquisition_stamp) is distinct from r.proof_value_digest
             or r.proof_value_digest is distinct from r.staged_proof_value_digest

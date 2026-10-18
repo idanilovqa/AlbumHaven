@@ -348,3 +348,249 @@ async def start_retained_process(source, capability, before_input, after_input, 
             finally:
                 source._launching = False
     return process
+
+
+# Dormant shared ownership. No instance or background work is created on import.
+import threading as _ownership_threading
+
+_TRANSFER_LOCK = _ownership_threading.Lock()
+
+
+class _SourceInterest:
+    def __init__(self, owner, kind):
+        self.owner, self.kind, self.live = owner, kind, True
+
+
+class _SourcePin:
+    def __init__(self, owner, interest):
+        self._owner, self._interest = owner, interest
+        self._gate = _ownership_threading.Lock()
+        self._released = False
+
+    def check(self):
+        # This operation-local gate also prevents release during physical I/O.
+        with self._gate:
+            if self._released:
+                raise SourceUnavailable('pin_released')
+            self._owner._validate_pin(self)
+            result = self._owner._source.check()
+            self._owner._validate_pin(self)
+            return result
+
+    def reader(self):
+        with self._gate:
+            if self._released or self._interest.kind != 'playback':
+                raise SourceUnavailable('playback_pin_required')
+            self._owner._validate_pin(self)
+            # Rooted reader owns its independent reservation after this returns.
+            return self._owner._source.reader()
+
+    def release(self):
+        with self._gate:
+            if self._released:
+                return
+            with self._owner._state:
+                if self not in self._owner._live_pins:
+                    raise SourceUnavailable('source_pin_invalid')
+                self._owner._live_pins.remove(self)
+                self._owner._pins[self._interest.kind] -= 1
+                self._released = True
+        self._owner.try_close()
+
+
+class ChildResponsibility:
+    """Trusted future launch lifecycle ticket; never infers reap from EOF/kill.
+
+    Callers must retain this ticket through ambiguous spawn cancellation and
+    pipe/inheritance cleanup. There is deliberately no automatic __exit__.
+    """
+    def __init__(self, owner):
+        self._owner = owner
+        self._gate = _ownership_threading.Lock()
+        self._rooted_ticket = None
+        self._phase = 'reserving'
+        self._settlement = None
+
+    def mark_launched(self):
+        with self._gate:
+            if self._phase != 'launching':
+                raise SourceUnavailable('child_state_invalid')
+            self._phase = 'launched'
+
+    def release_no_child(self, *, proved_no_child, cleanup_complete):
+        if proved_no_child is not True or cleanup_complete is not True:
+            raise SourceUnavailable('child_cleanup_unproven')
+        self._settle('no_child', None)
+
+    def release_after_reap(self, *, wait_result, cleanup_complete):
+        # An actual successful process.wait() result, asserted by its trusted
+        # lifecycle owner. bool, returncode inspection and EOF are not proof.
+        if type(wait_result) is not int or cleanup_complete is not True:
+            raise SourceUnavailable('child_reap_unproven')
+        self._settle('reaped', wait_result)
+
+    def _settle(self, kind, result):
+        with self._gate:
+            if self._settlement is not None:
+                if self._settlement != (kind, result):
+                    raise SourceUnavailable('child_settlement_conflict')
+                return
+            required = 'launching' if kind == 'no_child' else 'launched'
+            if self._phase != required:
+                raise SourceUnavailable('child_state_invalid')
+            self._phase = 'settling'
+            try:
+                self._rooted_ticket.close()
+            except BaseException:
+                self._phase = 'cleanup_failed'
+                # Keep owner responsibility charged; never retry uncertain close.
+                raise
+            self._settlement = (kind, result)
+            self._phase = 'settled'
+            with self._owner._state:
+                if self._owner._child is not self:
+                    raise SourceUnavailable('child_owner_mismatch')
+                self._owner._child = None
+        self._owner.try_close()
+
+
+class SharedPlaybackSourceOwner:
+    """Exclusive rooted source owner with separate P/E/operation lifetimes."""
+    @classmethod
+    def create(cls, source):
+        from music_app.services.rooted_local_file import RootedRegularFile
+        if type(source) is not RetainedPlaybackSource:
+            raise SourceUnavailable('retained_source_required')
+        rooted = getattr(source, '_rooted_lease', None)
+        if type(rooted) is not RootedRegularFile:
+            raise SourceUnavailable('accepted_rooted_source_required')
+        owner = cls.__new__(cls)
+        owner._state = _ownership_threading.Lock()
+        owner._source, owner._rooted = source, rooted
+        owner._p = _SourceInterest(owner, 'playback')
+        owner._e = None
+        owner._pins = {'playback': 0, 'evidence': 0}
+        owner._live_pins = set()
+        owner._child = None
+        owner._close_state = 'pending'
+        owner._close_attempted = False
+        result = (owner, owner._p)  # Allocate transfer result before consuming claim.
+        # One scalar marker on the source, never a growing global identity map.
+        # Allocation precedes transfer. No source/rooted I/O under these locks.
+        with _TRANSFER_LOCK:
+            with rooted._state:
+                if (getattr(source, '_shared_owner_claimed', False)
+                        or source._closed or source._failed or source._launching
+                        or source._cleanup_task is not None
+                        or not rooted._adapter_claimed or rooted._closing
+                        or rooted._failed or rooted._active):
+                    raise SourceUnavailable('source_ownership_unavailable')
+                source._shared_owner_claimed = True
+        return result
+
+    def _validate_locked(self, interest):
+        expected = self._p if interest is self._p else self._e
+        if (interest is None or interest is not expected or not interest.live
+                or self._close_attempted):
+            raise SourceUnavailable('source_interest_unavailable')
+
+    def _validate_interest(self, interest):
+        with self._state:
+            self._validate_locked(interest)
+
+    def _validate_pin(self, pin):
+        with self._state:
+            if pin not in self._live_pins:
+                raise SourceUnavailable('source_pin_invalid')
+            self._validate_locked(pin._interest)
+
+    def attach_evidence(self, playback_token):
+        token = _SourceInterest(self, 'evidence')
+        with self._state:
+            if playback_token is not self._p:
+                raise SourceUnavailable('playback_token_required')
+            self._validate_locked(playback_token)
+            if self._e is not None:
+                raise SourceUnavailable('evidence_already_attached')
+            self._e = token
+        return token
+
+    def _pin(self, token, kind, limit):
+        pin = _SourcePin(self, token)
+        with self._state:
+            if token is not (self._p if kind == 'playback' else self._e):
+                raise SourceUnavailable('source_token_invalid')
+            self._validate_locked(token)
+            if self._pins[kind] >= limit:
+                raise SourceUnavailable('source_pin_capacity')
+            self._live_pins.add(pin)
+            self._pins[kind] += 1
+        return pin
+
+    def pin_playback(self, token):
+        return self._pin(token, 'playback', 4)
+
+    def pin_evidence(self, token):
+        # Registry owns generation checks and its fixed scheduler reservation.
+        return self._pin(token, 'evidence', 2)
+
+    def begin_child(self, playback_token):
+        ticket = ChildResponsibility(self)
+        with self._state:
+            if playback_token is not self._p:
+                raise SourceUnavailable('playback_token_required')
+            self._validate_locked(playback_token)
+            if self._child is not None:
+                raise SourceUnavailable('child_capacity')
+            self._child = ticket
+        try:
+            ticket._rooted_ticket = self._rooted.reserve_child_use()
+        except BaseException:
+            # Accepted rooted reserve allocates before its atomic increment and
+            # cannot raise after acquiring ownership. No arbitrary adapter here.
+            with self._state:
+                self._child = None
+            raise
+        ticket._phase = 'launching'
+        return ticket
+
+    def release_playback(self, token):
+        with self._state:
+            if token is not self._p:
+                raise SourceUnavailable('playback_token_required')
+            if not token.live:
+                return
+            if self._child is not None or self._pins['playback']:
+                raise SourceUnavailable('playback_responsibility_pending')
+            token.live = False
+        self.try_close()
+
+    def release_evidence(self, token):
+        with self._state:
+            if token is None or token is not self._e:
+                raise SourceUnavailable('evidence_token_required')
+            token.live = False
+        # Caller must invoke try_close outside registry locks.
+
+    def try_close(self):
+        with self._state:
+            if self._close_state in ('disposed', 'cleanup_failed', 'closing'):
+                return self._close_state if self._close_state != 'closing' else 'pending'
+            if (self._p.live or self._e is not None and self._e.live
+                    or any(self._pins.values()) or self._child is not None):
+                return 'pending'
+            attempt = not self._close_attempted
+            self._close_attempted = True
+            self._close_state = 'closing'
+        try:
+            if attempt:
+                self._source.close()
+            failed = self._rooted.cleanup_failed is True
+            disposed = (self._rooted.cleanup_complete is True
+                        and self._rooted.drained.is_set() and not failed)
+            status = 'cleanup_failed' if failed else ('disposed' if disposed else 'pending')
+        except BaseException:
+            status = 'cleanup_failed'
+        with self._state:
+            self._close_state = status
+        return status

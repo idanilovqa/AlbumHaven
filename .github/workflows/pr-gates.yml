@@ -488,6 +488,9 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/tops-linux-evidence/head.txt"
           python --version > "$RUNNER_TEMP/tops-linux-evidence/python.txt"
           cat > "$RUNNER_TEMP/tops-linux-evidence/tests.txt" <<'TESTS'
+          tests/py/test_top_artwork_owner_http.py
+          tests/py/test_top_artwork_owner_sources_postgres.py
+          tests/py/test_top_artwork_owner_publication_postgres.py
           tests/py/test_top_artwork_publication_retention_postgres.py
           tests/py/test_top_artwork_publication_seals_postgres.py
           tests/py/test_top_artwork_publication_closure_postgres.py

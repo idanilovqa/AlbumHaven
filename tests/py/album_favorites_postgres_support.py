@@ -337,6 +337,24 @@ class FavoritesDatabase:
         assert len(rows) <= 1
         self.preference_ids.update(row['id'] for row in rows)
 
+    def revoke_fixture_view_authority(self, actor=None):
+        """Revoke both known case-owned grants that independently imply View."""
+        actor = actor or self.owner
+        assert actor.account_id in self.accounts, 'Only case-owned accounts may be changed'
+        expected = {'capability.view', 'capability.social'}
+        with self.connect() as con:
+            rows = con.execute("""select capability_key,scope_kind,scope_id from app.capabilities
+                where account_id=%s and revoked_at is null for update""",
+                (actor.account_id,)).fetchall()
+            assert len(rows) == 2 and {row['capability_key'] for row in rows} == expected
+            assert all(row['scope_kind'] == 'library' and row['scope_id'] == self.library for row in rows)
+            revoked = con.execute("""update app.capabilities set revoked_at=clock_timestamp()
+                where account_id=%s and scope_kind='library' and scope_id=%s
+                  and revoked_at is null and capability_key=any(%s)
+                returning capability_key""",
+                (actor.account_id, self.library, sorted(expected))).fetchall()
+            assert len(revoked) == 2 and {row['capability_key'] for row in revoked} == expected
+
     def rows(self):
         with self.connect() as con:
             return [r['data'] for r in con.execute('select to_jsonb(p) as data from app.album_ratings p where library_id=%s order by id',
@@ -378,7 +396,7 @@ class FavoritesDatabase:
                     ('integration.listen_history', self.event_ids, 'library_id=%s', (self.library,)),
                     ('app.account_sessions', self.sessions, 'account_id=any(%s)', (self.accounts,))):
                 actual={r['id'] for r in con.execute('select id from '+table+' where '+predicate,params).fetchall()}
-                assert actual<=expected, 'Unknown dependent row prohibits cleanup'
+                assert actual<=expected, ('Unknown dependent row prohibits cleanup', table, len(actual-expected))
             featured=con.execute('select library_id,album_id,artist_id,featured_kind from library.local_album_featured_artists where library_id=%s',(self.library,)).fetchall()
             assert all((row['library_id'],row['album_id'],row['artist_id'],row['featured_kind']) in
                 {(self.library,a['id'],a['artist'],'owner') for a in self.albums} for row in featured)
@@ -628,7 +646,7 @@ class BootstrapFavoritesDatabase(FavoritesDatabase):
             }
             for table,expected in expected_tables.items():
                 actual={r['id'] for r in con.execute('select id from '+table).fetchall()}
-                assert actual<=expected, 'Unknown dependent row prohibits cleanup'
+                assert actual<=expected, ('Unknown dependent row prohibits cleanup', table, len(actual-expected))
             featured=con.execute('select library_id,album_id,artist_id,featured_kind from library.local_album_featured_artists').fetchall()
             assert all((row['library_id'],row['album_id'],row['artist_id'],row['featured_kind']) in
                 {(self.library,a['id'],a['artist'],'owner') for a in self.albums} for row in featured)

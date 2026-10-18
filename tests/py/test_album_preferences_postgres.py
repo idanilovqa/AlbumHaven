@@ -47,7 +47,9 @@ def test_migrated_schema_defaults_constraints_and_no_new_counter_privilege(favor
             for privilege in ('UPDATE','DELETE','TRUNCATE'):
                 assert not con.execute('select has_table_privilege(%s,%s,%s) as ok',
                     (role, 'app.activity_source_revisions', privilege)).fetchone()['ok']
-        assert not con.execute("select has_table_privilege('album_haven_app','app.album_ratings','DELETE') as ok").fetchone()['ok']
+        # 0034 explicitly grants DELETE for recurring semantic-album reconciliation.
+        # 0141 preserves that existing table privilege; counters/functions stay denied above.
+        assert con.execute("select has_table_privilege('album_haven_app','app.album_ratings','DELETE') as ok").fetchone()['ok']
         # PUBLIC ACL is checked directly, not through a privileged owner.
         assert not con.execute("""select exists(select 1 from pg_proc p
             join pg_namespace n on n.oid=p.pronamespace,
@@ -173,14 +175,14 @@ def test_unavailable_source_never_mints_false_available_or_writes(favorites_db, 
 @pytest.mark.parametrize('fault', ['account','membership','view','session'])
 def test_durable_denial_prevents_write(favorites_db, fault):
     db = favorites_db
+    if fault == 'view':
+        db.revoke_fixture_view_authority()
     with db.connect() as con:
         if fault == 'account':
             con.execute('update app.accounts set is_active=false where id=%s', (db.owner.account_id,))
         elif fault == 'membership':
             con.execute('delete from library.library_memberships where account_id=%s and library_id=%s', (db.owner.account_id,db.library))
-        elif fault == 'view':
-            con.execute("update app.capabilities set revoked_at=clock_timestamp() where account_id=%s and capability_key='capability.view'", (db.owner.account_id,))
-        else:
+        elif fault == 'session':
             con.execute('update app.account_sessions set revoked_at=clock_timestamp() where id=%s', (db.owner.session_id,))
     error(403, lambda: db.patch(db.albums[0], {'favorite': True}))
     assert db.rows() == []
@@ -364,7 +366,9 @@ def test_actual_importer_wins_absent_row_race_without_stale_patch_overwrite(favo
         importing=workers.start(import_then_pause)
         assert importer_held.reached.wait(5)
         def before(sql,params,con):
-            if 'insert into app.album_ratings' in sql:
+            # Authority locks precede rating DML. The import's FK key-share
+            # lease can block this account FOR UPDATE before INSERT is reached.
+            if 'with locked_accounts as' in sql and 'for update' in sql:
                 writer_pid.append(con.info.backend_pid);started.set()
         writing=workers.start(lambda:db.patch(album,{'favorite':True},actor=db.bootstrap_owner,
             connect=observed(db,before=before)))

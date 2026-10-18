@@ -440,12 +440,27 @@ def test_current_policy_denies_mutation_using_actual_evaluator(favorites_http, s
     assert (db.rows(), db.epochs()) == before
 
 
+def test_retained_social_grant_still_authorizes_personal_preferences(favorites_http):
+    client, db = favorites_http, favorites_http.db
+    with db.connect() as con:
+        revoked = con.execute("""update app.capabilities set revoked_at=clock_timestamp()
+            where account_id=%s and scope_kind='library' and scope_id=%s
+              and capability_key='capability.view' and revoked_at is null
+            returning capability_key""", (db.owner.account_id, db.library)).fetchall()
+        assert revoked == [{'capability_key': 'capability.view'}]
+        retained = con.execute("""select capability_key from app.capabilities
+            where account_id=%s and revoked_at is null""", (db.owner.account_id,)).fetchall()
+        assert retained == [{'capability_key': 'capability.social'}]
+    result = private_response(client.command(db.albums[0], {'favorite': True}), 200)
+    assert result['album_preference']['is_favorite'] is True
+    assert result['album_preference']['preference_revision'] == 1
+
+
 def test_revoked_durable_view_grant_is_not_replaced_by_cached_actor(favorites_http):
     client, db = favorites_http, favorites_http.db
     headers = client.headers()
-    with db.connect() as con:
-        con.execute("update app.capabilities set revoked_at=now() where account_id=%s and scope_id=%s and capability_key='capability.view'",
-                    (db.owner.account_id, db.library))
+    # Social also implies durable View authority; revoke both fixture grants.
+    db.revoke_fixture_view_authority()
     before = db.rows(), db.epochs()
     response = client.request('POST', '/album-preferences', authenticated=False,
         headers=headers, payload={'album_ref': f'inventory-album:{db.library}:{db.albums[0]["id"]}',

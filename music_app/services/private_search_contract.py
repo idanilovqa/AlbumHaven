@@ -142,7 +142,16 @@ def normalize_own_love_query(query):
                            tuple(value for value in ('loved', 'obsessed') if value in exclude))
 
 
+def is_popularity_search_request(params):
+    """Shared admission classifier; the normalizer still owns all validation."""
+    return any(re.search(r'(?:^|\s)-*(?::popular|sort:|per_artist:)',
+                         str(value), re.IGNORECASE) for value in params.getlist('q'))
+
+
 def normalize_private_search_request(params):
+    # Route popularity before handles so mixed selectors cannot become history.
+    if is_popularity_search_request(params):
+        return normalize_popularity_search_request(params)
     if any(word.startswith('@') for word in str(params.get('q', '')).split()):
         return _normalize_listener_search_request(params)
     allowed = {'surface', 'q', 'payload_tier', 'artist', 'all_artists', 'omit_sidebar',
@@ -310,3 +319,170 @@ def _normalize_listener_search_request(params):
         raise PrivateSearchError()
     query = params.get('q', '')
     return ListenerSearchRequest(query, normalize_listener_search_query(query), 'tracks', int(size), cursor)
+
+
+@dataclass(frozen=True)
+class PopularitySearchCriteria:
+    """Display provenance and once-normalized matching terms are distinct."""
+    artist_include: tuple[str, ...] = ()
+    artist_exclude: tuple[str, ...] = ()
+    genre_include: tuple[str, ...] = ()
+    genre_exclude: tuple[str, ...] = ()
+    per_artist: int | None = None
+    artist_include_terms: tuple[tuple[str, ...], ...] = ()
+    artist_exclude_terms: tuple[tuple[str, ...], ...] = ()
+    genre_include_terms: tuple[tuple[str, ...], ...] = ()
+    genre_exclude_terms: tuple[tuple[str, ...], ...] = ()
+
+    def as_payload(self):
+        return {'predicate_domain': 'tracks',
+                'sort': {'provider': 'lastfm', 'metric': 'overall_scrobbles', 'direction': 'desc'},
+                'artist': {'include': list(self.artist_include), 'exclude': list(self.artist_exclude)},
+                'genre': {'include': list(self.genre_include), 'exclude': list(self.genre_exclude)},
+                'per_artist': self.per_artist}
+
+    def semantic_payload(self):
+        """Private digest input, not the display wire or a second normalization."""
+        payload = self.as_payload()
+        for field in ('artist', 'genre'):
+            payload[field] = {sign: [list(terms) for terms in getattr(self, field + '_' + sign + '_terms')]
+                              for sign in ('include', 'exclude')}
+        return payload
+
+
+@dataclass(frozen=True)
+class PopularitySearchRequest:
+    query: str
+    criteria: PopularitySearchCriteria
+    presentation: str = 'tracks'
+    limit: int = 100
+    cursor: str | None = None
+    gallery_scope: str = 'all'
+    categories: tuple[str, ...] = ()
+
+    def visibility_scope(self):
+        return [self.gallery_scope, list(self.categories)]
+
+    def visibility_payload(self):
+        return {'gallery_scope': self.gallery_scope, 'categories': list(self.categories)}
+
+
+def _popularity_location(query, start, end):
+    """Original-query offsets transported in UTF-16 units."""
+    return {'start': len(query[:start].encode('utf-16-le')) // 2,
+            'end': len(query[:end].encode('utf-16-le')) // 2}
+
+
+def _popularity_tokens(query):
+    """Located shlex-style values; original prefixes retain strict selectors."""
+    index, length = 0, len(query)
+    while index < length:
+        if query[index].isspace():
+            index += 1
+            continue
+        start, decoded = index, []
+        while index < length and not query[index].isspace():
+            char = query[index]
+            if char in ('"', "'"):
+                quote, opening = char, index
+                index += 1
+                while index < length and query[index] != quote:
+                    char = query[index]
+                    if quote == '"' and char == '\\' and index + 1 < length and query[index + 1] in ('"', '\\'):
+                        index += 1
+                        char = query[index]
+                    decoded.append(char)
+                    index += 1
+                if index == length:
+                    raise PrivateSearchError(location=_popularity_location(query, opening, length))
+                index += 1
+            elif char == '\\':
+                if index + 1 == length:
+                    raise PrivateSearchError(location=_popularity_location(query, index, length))
+                decoded.append(query[index + 1])
+                index += 2
+            else:
+                decoded.append(char)
+                index += 1
+        yield ''.join(decoded), query[start:index], _popularity_location(query, start, index)
+
+
+def normalize_popularity_search_query(query):
+    from music_app.services.view_search import split_search_terms
+
+    if (not isinstance(query, str) or not query.strip() or len(query) > 200 or '\0' in query
+            or any('\ud800' <= ch <= '\udfff' for ch in query)):
+        raise PrivateSearchError()
+    predicates = {key: {} for key in ('artist_include', 'artist_exclude', 'genre_include', 'genre_exclude')}
+    popular, per_artist, cap_seen = False, None, False
+    for decoded, raw, location in _popularity_tokens(query):
+        token = raw.casefold()
+        if token in {':popular', 'sort:popular'}:
+            popular = True
+        elif token == ':tracks':
+            pass
+        elif re.match(r'per_artist:', token):
+            value = raw.split(':', 1)[1]
+            if cap_seen or not re.fullmatch(r'[0-9]+', value) or not 1 <= int(value) <= 5000:
+                raise PrivateSearchError('unsupported_private_search_combination', location=location)
+            cap_seen, per_artist = True, int(value)
+        elif re.match(r'-?(?:artist|genre):', token):
+            prefix = raw.split(':', 1)[0]
+            field = prefix.lstrip('-').casefold()
+            value = decoded[len(prefix) + 1:]
+            terms = split_search_terms(value)
+            if not terms:
+                raise PrivateSearchError(location=location)
+            # The shared normalizer is not idempotent and delimiter alternatives
+            # matter. Preserve its terms exactly once; never normalize the wire.
+            canonical = tuple(terms)
+            group = predicates[field + ('_exclude' if prefix.startswith('-') else '_include')]
+            representative = value.strip()
+            group[canonical] = min(group.get(canonical, representative), representative)
+        else:
+            raise PrivateSearchError('unsupported_private_search_combination', location=location)
+    if not popular:
+        raise PrivateSearchError('unsupported_private_search_combination',
+                                 location=_popularity_location(query, 0, len(query)))
+    values = {}
+    for key, group in predicates.items():
+        terms = tuple(sorted(group))
+        values[key] = tuple(group[item] for item in terms)
+        values[key + '_terms'] = terms
+    return PopularitySearchCriteria(**values, per_artist=per_artist)
+
+
+def normalize_popularity_search_request(params):
+    from music_app.services.library_roots import library_category_slugs
+
+    allowed = {'surface', 'q', 'search_presentation', 'search_page_size', 'search_cursor',
+               'gallery_scope', 'category'}
+    pairs = list(params.multi_items())
+    if len(pairs) > 38 or set(params) - allowed:
+        raise PrivateSearchError()
+    counts = {}
+    for key, value in pairs:
+        counts[key] = counts.get(key, 0) + 1
+        if ((key != 'category' and counts[key] > 1) or not isinstance(value, str)
+                or '\0' in value or any('\ud800' <= ch <= '\udfff' for ch in value)):
+            raise PrivateSearchError()
+    if counts.get('category', 0) > 32 or params.get('surface', 'albums') != 'albums':
+        raise PrivateSearchError()
+    query = params.get('q', '')
+    criteria = normalize_popularity_search_query(query)
+    if params.get('search_presentation', 'tracks') != 'tracks':
+        raise PrivateSearchError('unsupported_private_search_combination',
+                                 location=_popularity_location(query, 0, len(query)))
+    size = params.get('search_page_size', '100')
+    if not re.fullmatch(r'[0-9]{1,3}', size) or not 1 <= int(size) <= 100:
+        raise PrivateSearchError()
+    cursor = params.get('search_cursor')
+    if cursor is not None and (not cursor or not cursor.isascii() or len(cursor) > 4096):
+        raise PrivateSearchError()
+    scope = params.get('gallery_scope', 'all')
+    categories = params.getlist('category')
+    if scope not in {'all', 'new_arrivals'} or any(value not in library_category_slugs() for value in categories):
+        raise PrivateSearchError()
+    scope = normalize_gallery_scope(scope)
+    return PopularitySearchRequest(query, criteria, 'tracks', int(size), cursor, scope,
+        tuple(sorted(normalize_visible_categories(categories, scope))))

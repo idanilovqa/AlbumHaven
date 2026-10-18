@@ -119,6 +119,37 @@ def inventory_revision(row):
         "is_compilation", "file_tags")})
 
 
+def normalize_cached_inventory_row(row):
+    """Normalize one captured row without I/O or Mix grouping decisions."""
+    if row["availability"] != "local":
+        return None, None, None
+    track_id = row["original_local_track_id"]
+    recording, artist, reason = local_identity(row)
+    if reason is None and (not row["mapping_revision"]
+            or row["mapped_inventory_revision"] != inventory_revision(row)
+            or row["mapped_recording_mbid"] != recording):
+        reason = (row["last_result"] if row["checked_inventory_revision"] == inventory_revision(row)
+                  and row["last_result"] in ("ambiguous_attribution", "provider_unavailable")
+                  else "missing_provider_mapping")
+    if reason:
+        return None, None, reason
+    track = LocalTrackEvidence(track_id, row["mapping_revision"], "lastfm",
+        row["source_entity_id"], recording, "lastfm.track.getInfo.mbid",
+        row["mapped_artist_mbid"], "lastfm.track.getInfo.artist.mbid"
+        if row["mapped_artist_mbid"] else None)
+    snapshot = None
+    if row["source_revision"] is not None:
+        if any(value.utcoffset() is None for value in (row["observed_at"], row["imported_at"])):
+            raise ValueError("Popularity timestamps must be timezone-aware")
+        observation = PopularityObservation("lastfm", "overall_scrobbles",
+            row["source_entity_id"], row["source_revision"],
+            row["observed_at"].astimezone(timezone.utc),
+            row["imported_at"].astimezone(timezone.utc), row["count"], row["attribution_state"])
+        validate_observation(observation)
+        snapshot = CachedPopularity(track_id, row["mapping_revision"], observation)
+    return track, snapshot, None
+
+
 def read_snapshot(connection, live_context, *, is_readable, track_ids=None, album_order=None):
     """Admit real IDs before metadata, cache validation or group composition."""
     library_id = live_context.library_id
@@ -147,13 +178,7 @@ def read_snapshot(connection, live_context, *, is_readable, track_ids=None, albu
         if row["availability"] != "local":
             continue
         track_id = row["original_local_track_id"]
-        recording, artist, reason = local_identity(row)
-        if reason is None and (not row["mapping_revision"]
-                or row["mapped_inventory_revision"] != inventory_revision(row)
-                or row["mapped_recording_mbid"] != recording):
-            reason = (row["last_result"] if row["checked_inventory_revision"] == inventory_revision(row)
-                      and row["last_result"] in ("ambiguous_attribution", "provider_unavailable")
-                      else "missing_provider_mapping")
+        track, snapshot, reason = normalize_cached_inventory_row(row)
         if reason:
             diagnostics.append((track_id, reason))
             continue
@@ -161,25 +186,14 @@ def read_snapshot(connection, live_context, *, is_readable, track_ids=None, albu
         credits = album_artists.get(album_id, set())
         primary = row["mapped_artist_mbid"] if row["is_compilation"] is True or album_id is None else (
             next(iter(credits)) if len(credits) == 1 else None)
-        track = LocalTrackEvidence(track_id, row["mapping_revision"], "lastfm",
-            row["source_entity_id"], recording, "lastfm.track.getInfo.mbid",
-            row["mapped_artist_mbid"], "lastfm.track.getInfo.artist.mbid"
-            if row["mapped_artist_mbid"] else None)
         candidates.append(LibraryMixCandidate(track,
             f"inventory-album:{library_id}:{album_id}" if album_id is not None else None,
             f"musicbrainz-artist:{primary}" if primary else None,
             (album_order.index(album_id) if album_order is not None
              else album_id if album_id is not None else 2**63 - 1),
             row["disc_number"], row["track_number"]))
-        if row["source_revision"] is not None:
-            if any(value.utcoffset() is None for value in (row["observed_at"], row["imported_at"])):
-                raise ValueError("Popularity timestamps must be timezone-aware")
-            observation = PopularityObservation("lastfm", "overall_scrobbles",
-                row["source_entity_id"], row["source_revision"],
-                row["observed_at"].astimezone(timezone.utc),
-                row["imported_at"].astimezone(timezone.utc), row["count"], row["attribution_state"])
-            validate_observation(observation)
-            snapshots[track_id] = CachedPopularity(track_id, row["mapping_revision"], observation)
+        if snapshot is not None:
+            snapshots[track_id] = snapshot
     from music_app.services.library_popularity_jobs import read_job
     job = read_job(connection, library_id)
     return LibraryMixSnapshot(library_id, tuple(candidates), snapshots, tuple(diagnostics),

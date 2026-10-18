@@ -270,6 +270,33 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Accept dormant Windows native rooted-file baseline
+        id: windows_rooted_native
+        timeout-minutes: 6
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          $env:PYTEST_ADDOPTS = $null
+          $env:PYTEST_PLUGINS = $null
+          $env:PYTHONPATH = $null
+          $env:PYTHONHOME = $null
+          $env:PYTHONSTARTUP = $null
+          $env:PYTHONINSPECT = $null
+          python -I -B tests/windows_native/test_rooted_local_file_windows_native.py --ci
+          $nativeExitCode = $LASTEXITCODE
+          if ($nativeExitCode -ne 0) {
+            throw "Windows native rooted-file acceptance failed with exit code $nativeExitCode."
+          }
+
+      - name: Upload dormant Windows native rooted-file evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-rooted-native-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\albumhaven-w0-${{ github.run_id }}-${{ github.run_attempt }}\evidence
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Set up pinned Python Chrome for Testing
         id: setup_python_chrome
         uses: browser-actions/setup-chrome@v2
@@ -466,6 +493,9 @@ jobs:
           tests/py/test_top_artwork_publication_closure_postgres.py
           tests/py/test_top_artwork_publication.py
           tests/py/test_top_artwork_publication_postgres.py
+          tests/py/test_public_album_top_artwork_reader.py
+          tests/py/test_public_album_top_artwork_http.py
+          tests/py/test_public_album_top_artwork_reader_postgres.py
           tests/py/test_artwork_proof_codec.py
           tests/py/test_top_artwork_resolution.py
           tests/py/test_rooted_local_file.py

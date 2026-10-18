@@ -23,7 +23,8 @@ MIGRATION_OWNED = frozenset({
     ("app", "client_surface_classes"), ("app", "deployment_mode_rules"),
     ("app", "e2e_problematic_file_fixture_seeds"), ("ops", "schema_migrations"),
 })
-FRESH_COUNTS = {("catalog", "popularity_api_refresh_state"): 1}
+FRESH_COUNTS = {("catalog", "popularity_api_refresh_state"): 1,
+                ("integration", "playback_capture_budget"): 1}
 SEEDED_COUNTS = {
     **FRESH_COUNTS, ("app", "social_profiles"): 1, ("app", "friend_policies"): 1,
     ("app", "accounts"): 1, ("app", "bootstrap_owners"): 1,
@@ -104,8 +105,8 @@ def job_identity(env):
         raise RuntimeError("Invalid job identity.")
     platform = env.get("RUNNER_OS")
     if platform == "Linux":
-        if env.get("GITHUB_JOB") != "test_feature_batches_linux" or env.get("FEATURE_BATCH") not in {"loved_backend", "favorites_backend"}:
-            raise RuntimeError("Only the Loved or favorites feature batch may initialize this service.")
+        if env.get("GITHUB_JOB") != "test_feature_batches_linux" or env.get("FEATURE_BATCH") not in {"loved_backend", "favorites_backend", "capture_backend"}:
+            raise RuntimeError("Only an allowlisted Loved, favorites or capture feature batch may initialize this service.")
         suffix = f"tops_{run}_{attempt}"
     elif platform == "Windows":
         if env.get("GITHUB_JOB") != "test_python":
@@ -226,6 +227,19 @@ def refresh_state(connection):
     return dict(rows[0])
 
 
+def capture_budget_state(connection):
+    """Only migration0142's untouched global zero-budget singleton is fresh."""
+    rows = connection.execute("""select id,account_id,is_global,reserved_bytes,rate_tokens,
+        rate_updated_at,isfinite(rate_updated_at) as finite
+        from integration.playback_capture_budget""").fetchall()
+    if (len(rows) != 1 or type(rows[0]["id"]) is not int or rows[0]["id"] <= 0
+            or rows[0]["account_id"] is not None or rows[0]["is_global"] is not True
+            or rows[0]["reserved_bytes"] != 0 or rows[0]["rate_tokens"] != 8
+            or rows[0]["finite"] is not True):
+        raise RuntimeError("Unexpected migration-owned capture budget singleton.")
+    return dict(rows[0])
+
+
 def assert_seed(connection):
     rows = connection.execute("""select a.account_kind,a.metadata as account_metadata,
         b.owner_key,b.metadata as owner_metadata,l.id,l.name,l.library_kind,l.metadata
@@ -272,6 +286,7 @@ def initialize(identity, isolated, *, root=ROOT):
             assert_migration_ledger(connection, root)
             assert_counts(connection, FRESH_COUNTS)
             refresh = refresh_state(connection)
+            capture_budget = capture_budget_state(connection)
         with isolated._connect(identity.runtime_url) as connection:
             assert_identity(connection, identity, setup=False)
         isolated.assert_runtime_grants(identity.runtime_url)
@@ -283,11 +298,15 @@ def initialize(identity, isolated, *, root=ROOT):
             library = assert_seed(connection)
             social = bootstrap_social_baseline(connection, library)
             clocks = bootstrap_clocks(connection, library)
+            if capture_budget_state(connection) != capture_budget:
+                raise RuntimeError("Migration-owned capture budget changed during seed.")
             if refresh_state(connection) != refresh:
                 raise RuntimeError("Migration-owned refresh state changed during seed.")
         with isolated._connect(identity.runtime_url) as connection:
             assert_identity(connection, identity, setup=False)
             bootstrap_social_baseline(connection, library, social)
+            if capture_budget_state(connection) != capture_budget:
+                raise RuntimeError("Committed capture budget changed.")
             if assert_seed(connection) != library or bootstrap_clocks(connection, library) != clocks:
                 raise RuntimeError("Committed bootstrap identity or clocks changed.")
     lease.release()

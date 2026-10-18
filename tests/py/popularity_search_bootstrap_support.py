@@ -157,6 +157,7 @@ class BootstrapPopularityDatabase:
             self.social_baseline = bootstrap_social_baseline(con, self.library)
             validate_readonly_binding(self)
             self.refresh_baseline, self.clock_baseline = preserved_state(con, self.library)
+            self.capture_budget_baseline = capture_budget_state(con)
             self.owner = self.member(con)
             self.root_id = con.execute("""insert into library.library_roots(library_id,root_path,metadata)
                 values(%s,%s,%s) returning id""",
@@ -324,6 +325,7 @@ class BootstrapPopularityDatabase:
             assert all(row['track_id'] in self.owned_tracks and row['library_id'] == self.library
                        and row['library_root_id'] in (None,self.root_id) for row in files), 'Foreign file ownership'
             refresh, clocks = preserved_state(con, self.library)
+            assert capture_budget_state(con) == self.capture_budget_baseline, "Capture budget changed; quarantine"
             assert refresh == self.refresh_baseline, 'Refresh singleton changed; quarantine'
             assert all(clocks[name] >= value for name,value in self.clock_baseline.items())
             for table, owned in (('local_tracks',self.owned_tracks), ('local_albums',set(self.albums)),
@@ -364,6 +366,7 @@ class BootstrapPopularityDatabase:
                 expected_identity=self.epoch_identity)
             assert (library, owner, metadata) == (self.library, self.bootstrap_owner, self.baseline)
             refresh, clocks = preserved_state(con, self.library)
+            assert capture_budget_state(con) == self.capture_budget_baseline, "Capture budget changed; quarantine"
             assert refresh == self.refresh_baseline
             assert all(clocks[name] >= value for name,value in self.clock_baseline.items())
 
@@ -374,6 +377,7 @@ class BootstrapPopularityDatabase:
         with self.connect() as con:
             assert retained_database_identity(con) == self.epoch_identity, 'Retained database identity changed; quarantine'
             bootstrap_social_baseline(con, self.library, self.social_baseline)
+            assert capture_budget_state(con) == self.capture_budget_baseline, "Capture budget changed; quarantine"
             epochs = read_retained_epochs(con, self.library, self.completed_epochs, exact=True)
         remember_completed(self.setup_url, self.epoch_identity, epochs)
 
@@ -414,6 +418,19 @@ def bootstrap_identity(con):
         and l.library_kind='local'""").fetchall()
     assert len(rows) == 1, 'Require unique supported pre-provisioned bootstrap library'
     return rows[0]['id'], rows[0]['account_id']
+
+
+def capture_budget_state(connection):
+    """Only migration0142's untouched global zero-budget singleton is fresh."""
+    rows = connection.execute("""select id,account_id,is_global,reserved_bytes,rate_tokens,
+        rate_updated_at,isfinite(rate_updated_at) as finite
+        from integration.playback_capture_budget""").fetchall()
+    if (len(rows) != 1 or type(rows[0]["id"]) is not int or rows[0]["id"] <= 0
+            or rows[0]["account_id"] is not None or rows[0]["is_global"] is not True
+            or rows[0]["reserved_bytes"] != 0 or rows[0]["rate_tokens"] != 8
+            or rows[0]["finite"] is not True):
+        raise RuntimeError("Unexpected migration-owned capture budget singleton.")
+    return dict(rows[0])
 
 
 def preserved_state(con, library):
@@ -462,9 +479,11 @@ def preflight(con, app_url, connect, *, epochs=None, owned_accounts=(),
                 ('app','accounts'):1, ('app','bootstrap_owners'):1,
                 ('library','libraries'):1, ('library','relation_alias_endpoint_publications'):1,
                 ('library','gallery_projection_state'):1, ('library','public_metadata_source_state'):1,
-                ('catalog','popularity_api_refresh_state'):1}
+                ('catalog','popularity_api_refresh_state'):1,
+                ('integration','playback_capture_budget'):1}
     social = bootstrap_social_baseline(con, library)
     preserved_state(con, library)
+    capture_budget_state(con)
     tables = con.execute("""select n.nspname as schema_name,c.relname as table_name
         from pg_class c join pg_namespace n on n.oid=c.relnamespace
         where n.nspname=any(%s) and c.relkind in ('r','p')""",

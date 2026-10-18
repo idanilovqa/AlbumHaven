@@ -51,7 +51,7 @@ def environment(tmp_path, platform="Linux"):
     return env
 
 
-@pytest.mark.parametrize("platform,batch", [("Linux", "loved_backend"), ("Linux", "favorites_backend"), ("Windows", "loved_backend")])
+@pytest.mark.parametrize("platform,batch", [("Linux", "loved_backend"), ("Linux", "favorites_backend"), ("Linux", "capture_backend"), ("Windows", "loved_backend")])
 def test_exact_job_identity_preserves_routing_and_never_reads_password_file(owner, tmp_path, monkeypatch, platform, batch):
     env = environment(tmp_path, platform)
     env["FEATURE_BATCH"] = batch
@@ -186,7 +186,7 @@ def test_connection_bounds_cover_seed_and_restore_only_timeout_environment(owner
     assert os.environ["DATABASE_APP_URL"] == "preserved"
 
 
-@pytest.mark.parametrize("failure", [None, "dirty", "seed", "post_seed", "runtime_readback", "social_readback"])
+@pytest.mark.parametrize("failure", [None, "dirty", "seed", "post_seed", "runtime_readback", "social_readback", "capture_post_seed", "capture_runtime_readback"])
 def test_initializer_order_no_repair_and_failure_quarantine(owner, tmp_path, monkeypatch, failure):
     ident = owner.Identity("db", "setup", "runtime", "setup-url", "runtime-url", tmp_path / "attempt")
     events = []
@@ -221,6 +221,13 @@ def test_initializer_order_no_repair_and_failure_quarantine(owner, tmp_path, mon
     monkeypatch.setattr(owner, "assert_migration_ledger", lambda *a: None)
     monkeypatch.setattr(owner, "assert_counts", counts)
     monkeypatch.setattr(owner, "refresh_state", lambda con: {"stable": True})
+    budget_calls = []
+    def check_capture_budget(con):
+        budget_calls.append(con)
+        changed = ((failure == "capture_post_seed" and len(budget_calls) == 2)
+                   or (failure == "capture_runtime_readback" and con == ident.runtime_url))
+        return {"stable": not changed}
+    monkeypatch.setattr(owner, "capture_budget_state", check_capture_budget)
     monkeypatch.setattr(owner, "assert_seed", check_seed)
     monkeypatch.setattr(owner, "bootstrap_clocks", lambda *a: {"clock": 1})
     def check_social(con, library, baseline=None):
@@ -429,3 +436,55 @@ def test_windows_initializer_clears_process_override_before_script_without_chang
     step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
     assert step.strip() == "run: |\n          $env:PGPASSWORD = $null\n          python scripts/ci/initialize-loved-browse-postgres.py"
     assert workflow.count("        run: python scripts/ci/initialize-loved-browse-postgres.py") == 1
+
+
+@pytest.mark.parametrize("change", [None,"missing","duplicate","account","not-global","nonzero","tokens","infinite","bad-id"])
+def test_capture_migration_singleton_requires_exact_untouched_global_budget(capture_budget_owner,change):
+    row=dict(id=1,account_id=None,is_global=True,reserved_bytes=0,rate_tokens=8,
+             rate_updated_at="synthetic-time",finite=True)
+    if change=="account":row["account_id"]=7
+    elif change=="not-global":row["is_global"]=False
+    elif change=="nonzero":row["reserved_bytes"]=256
+    elif change=="tokens":row["rate_tokens"]=7
+    elif change=="infinite":row["finite"]=False
+    elif change=="bad-id":row["id"]=0
+    rows=[] if change=="missing" else [row,row] if change=="duplicate" else [row]
+    con=Queries([rows])
+    if change is None:assert capture_budget_owner(con)==row
+    else:
+        with pytest.raises(RuntimeError,match="capture budget singleton"):capture_budget_owner(con)
+
+
+def test_capture_budget_is_counted_not_exempted_from_pristine_baseline(owner):
+    key=("integration","playback_capture_budget")
+    assert key not in owner.MIGRATION_OWNED
+    assert owner.FRESH_COUNTS[key]==owner.SEEDED_COUNTS[key]==1
+    tables=sorted(owner.MIGRATION_OWNED | set(owner.SEEDED_COUNTS))
+    replies=[[dict(schema_name=s,table_name=t) for s,t in tables]]
+    for table in sorted(set(tables)-owner.MIGRATION_OWNED):
+        replies.append(dict(count=2 if table==key else owner.FRESH_COUNTS.get(table,0)))
+    with pytest.raises(RuntimeError,match="Unexpected application baseline"):
+        owner.assert_counts(Queries(replies),owner.FRESH_COUNTS)
+
+
+@pytest.fixture(params=[
+    "scripts/ci/initialize-loved-browse-postgres.py",
+    "scripts/ci/initialize-popularity-search-postgres.py",
+    "tests/py/popularity_search_bootstrap_support.py",
+])
+def capture_budget_owner(request):
+    import ast
+    root=Path(__file__).resolve().parents[2]
+    definitions=[]
+    paths=["scripts/ci/initialize-loved-browse-postgres.py",
+           "scripts/ci/initialize-popularity-search-postgres.py",
+           "tests/py/popularity_search_bootstrap_support.py"]
+    for path in paths:
+        tree=ast.parse((root/path).read_text())
+        matches=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='capture_budget_state']
+        assert len(matches)==1
+        definitions.append(matches[0])
+    assert len({ast.dump(node,include_attributes=False) for node in definitions})==1
+    namespace={}
+    exec(compile(ast.Module(body=[definitions[paths.index(request.param)]],type_ignores=[]),request.param,'exec'),namespace)
+    return namespace['capture_budget_state']

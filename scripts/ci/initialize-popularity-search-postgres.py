@@ -22,7 +22,8 @@ MIGRATION_OWNED = frozenset({
     ("app", "e2e_problematic_file_fixture_seeds"),
     ("ops", "schema_migrations"),
 })
-FRESH_COUNTS = {("catalog", "popularity_api_refresh_state"): 1}
+FRESH_COUNTS = {("catalog", "popularity_api_refresh_state"): 1,
+                ("integration", "playback_capture_budget"): 1}
 CLOCK_TABLES = ("public_metadata_source_state", "gallery_projection_state")
 INITIALIZED_COUNTS = {
     **FRESH_COUNTS,
@@ -96,6 +97,19 @@ def assert_application_counts(connection, expected):
             sql.Identifier(schema), sql.Identifier(table))).fetchone()["count"]
         if count != expected.get((schema, table), 0):
             raise RuntimeError(f"Unexpected application baseline: {schema}.{table}.")
+
+
+def capture_budget_state(connection):
+    """Only migration0142's untouched global zero-budget singleton is fresh."""
+    rows = connection.execute("""select id,account_id,is_global,reserved_bytes,rate_tokens,
+        rate_updated_at,isfinite(rate_updated_at) as finite
+        from integration.playback_capture_budget""").fetchall()
+    if (len(rows) != 1 or type(rows[0]["id"]) is not int or rows[0]["id"] <= 0
+            or rows[0]["account_id"] is not None or rows[0]["is_global"] is not True
+            or rows[0]["reserved_bytes"] != 0 or rows[0]["rate_tokens"] != 8
+            or rows[0]["finite"] is not True):
+        raise RuntimeError("Unexpected migration-owned capture budget singleton.")
+    return dict(rows[0])
 
 
 def assert_refresh_singleton(connection, baseline=None):
@@ -209,6 +223,7 @@ def main():
         assert_migration_ledger(con)
         assert_application_counts(con, FRESH_COUNTS)
         refresh_baseline = assert_refresh_singleton(con)
+        capture_baseline = capture_budget_state(con)
     with isolatedPostgres._connect(runtime_url) as con:
         assert_identity(con, database, runtime_role, isolatedPostgres.RUNTIME_ROLE)
         for table in ("library.relation_alias_endpoint_publications", "library.relation_alias_endpoints"):
@@ -251,6 +266,8 @@ def main():
         social_baseline = bootstrap_social_baseline(con, seeded_library)
         clock_baseline = assert_bootstrap_clocks(con, seeded_library)
         assert_refresh_singleton(con, refresh_baseline)
+        if capture_budget_state(con) != capture_baseline:
+            raise RuntimeError("Migration-owned capture budget changed during initialization.")
     views = serialize_relation_views(build_relation_views_from_postgres_rows({}, []))
     now = datetime.now(timezone.utc)
     metadata = build_ready_relation_projection_metadata(relation_source_fingerprint([]),
@@ -285,10 +302,14 @@ def main():
         assert_application_counts(con, INITIALIZED_COUNTS)
         bootstrap_social_baseline(con, library, social_baseline)
         assert_refresh_singleton(con, refresh_baseline)
+        if capture_budget_state(con) != capture_baseline:
+            raise RuntimeError("Migration-owned capture budget changed during initialization.")
         assert_bootstrap_clocks(con, library, clock_baseline)
     with isolatedPostgres._connect(runtime_url) as con:
         assert_identity(con, database, runtime_role, isolatedPostgres.RUNTIME_ROLE)
         bootstrap_social_baseline(con, library, social_baseline)
+        if capture_budget_state(con) != capture_baseline:
+            raise RuntimeError("Committed capture budget changed.")
         if not con.execute("select library.relation_alias_endpoints_ready(%s) as ready",
                            (library,)).fetchone()["ready"]:
             raise RuntimeError("Committed empty endpoint baseline is not ready.")

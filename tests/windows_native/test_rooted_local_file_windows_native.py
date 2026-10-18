@@ -47,6 +47,12 @@ MAX_PIPE = 16384
 CHILD_SECONDS = 20.0
 REAP_SECONDS = 5.0
 REPARSE = 0x400
+STAGES = frozenset(('admission', 'bootstrap', 'fixture_setup', 'scenario',
+    'rename_acquire', 'rename_move_out', 'rename_replacement_create',
+    'rename_check_changed', 'rename_replacement_remove', 'rename_restore',
+    'rename_check_sticky', 'cleanup', 'complete'))
+# Fail closed even if setup or evidence writing interrupts the ordinary stop path.
+_can_continue = True
 
 
 def require(condition, code):
@@ -185,15 +191,7 @@ def bounded_child(command, environment):
             'stdout': bytes(buffers[0]), 'stderr': bytes(buffers[1]), 'reaped': True}
 
 
-def validate_result(result, scenario):
-    require(type(result) is dict and set(result) == {
-        'version', 'scenario', 'ok', 'cleanup', 'checks', 'counts', 'host', 'error'},
-        'w0_result_schema')
-    require(result['version'] == 1 and result['scenario'] == scenario
-            and result['ok'] is True and result['cleanup'] is True and result['error'] == '',
-            'w0_native_or_cleanup_failure')
-    require(result['checks'] == {CHECKS[scenario]: True}, 'w0_checkpoint_missing')
-    host = result['host']
+def validate_host(host):
     require(type(host) is dict and set(host) == {'platform', 'python', 'pointer_bytes',
             'wchar_bytes', 'windows_build', 'ntfs', 'no_thread_token_observed'} and
             host['platform'] == 'win32' and type(host['python']) is list and
@@ -203,17 +201,74 @@ def validate_result(result, scenario):
             type(host['windows_build']) is int and 0 < host['windows_build'] < 1000000 and
             host['ntfs'] is True and host['no_thread_token_observed'] is True,
             'w0_host_evidence_missing')
-    counts = result['counts']
+
+
+def validate_counts(counts, *, balanced):
     require(type(counts) is dict and set(counts) == {'native_opens', 'native_closes',
             'crt_transfers', 'crt_closes', 'oracle_opens', 'oracle_closes'} and
-            all(type(value) is int and 0 <= value < 20000 for value in counts.values()) and
-            counts['native_opens'] == counts['native_closes'] + counts['crt_transfers'] and
-            counts['crt_transfers'] == counts['crt_closes'] and
-            counts['oracle_opens'] == counts['oracle_closes'], 'w0_ownership_evidence')
+            all(type(value) is int and 0 <= value < 20000 for value in counts.values()),
+            'w0_ownership_evidence')
+    if balanced:
+        require(counts['native_opens'] == counts['native_closes'] + counts['crt_transfers'] and
+                counts['crt_transfers'] == counts['crt_closes'] and
+                counts['oracle_opens'] == counts['oracle_closes'], 'w0_ownership_evidence')
+
+
+def validate_schema(result, scenario):
+    """Project failure evidence only after the same closed, bounded wire check."""
+    require(type(result) is dict and set(result) == {
+        'version', 'scenario', 'ok', 'cleanup', 'checks', 'counts', 'host', 'error',
+        'diagnostic'}, 'w0_result_schema')
+    require(type(result['version']) is int and result['version'] == 2 and
+            result['scenario'] == scenario and type(result['ok']) is bool and
+            type(result['cleanup']) is bool and type(result['error']) is str and
+            re.fullmatch(r'[A-Za-z0-9_]{0,80}', result['error']) and
+            bool(result['error']) is (not result['ok']), 'w0_result_schema')
+    require(type(result['checks']) is dict and result['checks'] in
+            ({}, {CHECKS[scenario]: True}) and all(value is True
+            for value in result['checks'].values()), 'w0_checkpoint_schema')
+    value = result['diagnostic']
+    require(type(value) is dict and set(value) == {'stage', 'errno', 'winerror'} and
+            type(value['stage']) is str and value['stage'] in STAGES and
+            all(value[name] is None or type(value[name]) is int and
+                0 <= value[name] < 2**32 for name in ('errno', 'winerror')),
+            'w0_diagnostic_schema')
+    if result['host'] != {}:
+        validate_host(result['host'])
+    if result['counts'] != {}:
+        validate_counts(result['counts'], balanced=False)
+    require(type(result['host']) is dict and type(result['counts']) is dict,
+            'w0_result_schema')
+
+
+def validate_result(result, scenario):
+    validate_schema(result, scenario)
+    require(result['ok'] is True and result['cleanup'] is True and result['error'] == '',
+            'w0_native_or_cleanup_failure')
+    require(result['checks'] == {CHECKS[scenario]: True}, 'w0_checkpoint_missing')
+    require(result['diagnostic'] == {'stage': 'complete', 'errno': None, 'winerror': None},
+            'w0_success_diagnostic')
+    validate_host(result['host'])
+    validate_counts(result['counts'], balanced=True)
+
+
+def validate_clean_case(case, nonce):
+    plain_chain(case)
+    require({entry.name for entry in case.iterdir()} == {'.owner'}, 'w0_scratch_not_clean')
+    marker = case / '.owner'
+    marker_stat = marker.lstat()
+    require(stat.S_ISREG(marker_stat.st_mode) and marker_stat.st_size == 32 and
+            not marker_stat.st_file_attributes & REPARSE, 'w0_case_marker_kind')
+    require(marker.read_text('ascii') == nonce, 'w0_case_owner_changed')
 
 
 @pytest.mark.parametrize('scenario', SCENARIOS, ids=SCENARIOS)
 def test_native_scenario(scenario):
+    global _can_continue
+    if not _can_continue:
+        pytest.exit('w0_prior_case_cleanup_unconfirmed', returncode=1)
+    _can_continue = False
+    continuation_safe = False
     clean_environment()
     _, worker = origin()
     run, nonce = owned_run()
@@ -240,35 +295,53 @@ def test_native_scenario(scenario):
             result = json.loads(captured['stdout'].decode('ascii'))
     except (UnicodeError, ValueError, RecursionError):
         summary['supervisor_error'] = 'child_result_invalid'
-    # Never persist arbitrary child output: only a bounded schema or failure code.
-    if type(result) is dict:
-        error = result.get('error')
-        if type(error) is str and re.fullmatch(r'[A-Za-z0-9_]{0,80}', error):
-            summary['worker_error'] = error
+    # Never persist arbitrary child output: only a complete bounded schema.
     try:
+        validate_schema(result, scenario)
+    except (RuntimeError, TypeError, KeyError):
+        result = None
+        summary['supervisor_error'] = 'child_result_invalid'
+    else:
+        summary['result'] = result
+        summary['worker_error'] = result['error']
+    try:
+        if (not captured['error'] and captured['reaped'] and not captured['stderr']
+                and captured['returncode'] == 1 and result is not None
+                and result['ok'] is False and result['cleanup'] is True):
+            # A safely reaped, positively cleaned failed scenario may be followed
+            # by another exclusive child. It remains a FAILED test, never a pass.
+            validate_host(result['host'])
+            validate_counts(result['counts'], balanced=True)
+            validate_clean_case(case, nonce)
+            require(owned_run() == (run, nonce), 'w0_run_owner_changed')
+            plain_chain(cases)
+            plain_chain(evidence)
+            continuation_safe = True
         require(not captured['error'] and captured['reaped'] and
                 captured['returncode'] == 0 and not captured['stderr'],
                 'w0_child_failed_' + str(summary.get('worker_error', captured['error'])))
         validate_result(result, scenario)
-        plain_chain(case)
-        require({entry.name for entry in case.iterdir()} == {'.owner'}, 'w0_scratch_not_clean')
-        require((case / '.owner').read_text('ascii') == nonce, 'w0_case_owner_changed')
+        validate_clean_case(case, nonce)
         marker = case / '.owner'
-        marker_stat = marker.lstat()
-        require(stat.S_ISREG(marker_stat.st_mode) and marker_stat.st_size == 32 and
-                not marker_stat.st_file_attributes & REPARSE, 'w0_case_marker_kind')
         marker.unlink()
         plain_chain(case)
         case.rmdir()  # Empty case only, after verified native cleanup and child reap.
         require(not case.exists(), 'w0_case_removal_failed')
-        summary['result'] = result
+        require(owned_run() == (run, nonce), 'w0_run_owner_changed')
+        plain_chain(cases)
+        plain_chain(evidence)
         summary['accepted'] = True
+        continuation_safe = True
     finally:
         clean_environment()
+        summary['continuation_safe'] = continuation_safe
         encoded = json.dumps(summary, sort_keys=True, separators=(',', ':'))
         require(len(encoded) < MAX_PIPE, 'w0_evidence_bound')
         with (evidence / (scenario + '.json')).open('x', encoding='ascii') as output:
             output.write(encoded + '\n')
+        _can_continue = continuation_safe
+        if not continuation_safe:
+            pytest.exit('w0_case_cleanup_unconfirmed', returncode=1)
 
 
 class Inventory:
@@ -330,7 +403,7 @@ def main():
         return collection_code or 1
     run_inventory = Inventory()
     junit = evidence / 'junit.xml'
-    run_code = int(pytest.main([*args, '-x', '-q', '-vv', '--junitxml=' + str(junit)],
+    run_code = int(pytest.main([*args, '-q', '-vv', '--junitxml=' + str(junit)],
                               plugins=[run_inventory]))
     clean_environment()
     accepted = run_code == 0 and tuple(run_inventory.items) == NODE_IDS

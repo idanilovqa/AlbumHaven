@@ -316,6 +316,7 @@ class Fixture:
         self.readers = []
         self.junctions = set()
         self.checks = {}
+        self.stage = 'scenario'
         self.selector = self.backend._selector(case.drive)
         root_handle = self.oracle.open(self.root, directory=True)
         try:
@@ -527,21 +528,28 @@ def missing_and_kinds(f):
 
 
 def rename_case(f, kind):
+    f.stage = 'rename_acquire'
     lease = f.acquire()
     old = {'root': f.root, 'intermediate': f.root / 'middle', 'leaf': f.leaf}[kind]
     renamed = old.with_name({'root': 'root-old', 'intermediate': 'middle-old',
                              'leaf': 'leaf-old.BIN'}[kind])
+    f.stage = 'rename_move_out'
     old.rename(renamed)
+    f.stage = 'rename_replacement_create'
     if kind == 'leaf':
         old.write_bytes(PAYLOAD)
     else:
         old.mkdir()
+    f.stage = 'rename_check_changed'
     f.rejects(lease.check)
+    f.stage = 'rename_replacement_remove'
     if kind == 'leaf':
         old.unlink()
     else:
         old.rmdir()
+    f.stage = 'rename_restore'
     renamed.rename(old)
+    f.stage = 'rename_check_sticky'
     f.rejects(lease.check, 'source_failed')
     f.checks['rename_and_sticky_failure'] = True
 
@@ -691,10 +699,23 @@ DISPATCH = {
 }
 
 
+def diagnostic(stage, error=None):
+    """Fixed phase and numeric OS codes only; never paths or exception text."""
+    values = {'stage': stage, 'errno': None, 'winerror': None}
+    if isinstance(error, OSError):
+        for name in ('errno', 'winerror'):
+            value = getattr(error, name, None)
+            if type(value) is int and 0 <= value < 2**32:
+                values[name] = value
+    return values
+
+
 def main():
-    result = {'version': 1, 'scenario': 'invalid', 'ok': False, 'cleanup': False,
-              'checks': {}, 'counts': {}, 'host': {}, 'error': 'worker_not_admitted'}
+    result = {'version': 2, 'scenario': 'invalid', 'ok': False, 'cleanup': False,
+              'checks': {}, 'counts': {}, 'host': {}, 'error': 'worker_not_admitted',
+              'diagnostic': diagnostic('admission')}
     fixture = None
+    stage = 'admission'
     try:
         require(len(sys.argv) == 4 and sys.argv[1] in SCENARIOS, 'scenario_not_admitted')
         scenario, case_text, nonce = sys.argv[1:]
@@ -713,7 +734,9 @@ def main():
         owner_marker(run / '.owner', nonce)
         owner_marker(case / '.owner', nonce)
         require({entry.name for entry in case.iterdir()} == {'.owner'}, 'fixture_ownership')
+        stage = 'bootstrap'
         windows, neutral = bootstrap()
+        stage = 'fixture_setup'
         fixture = Fixture(case, nonce, windows, neutral)
         version = sys.getwindowsversion()
         result['host'] = {'platform': 'win32', 'python': list(sys.version_info[:3]),
@@ -724,7 +747,9 @@ def main():
         result['checks'] = fixture.checks
         result['ok'] = True
         result['error'] = ''
+        result['diagnostic'] = diagnostic('complete')
     except BaseException as error:
+        result['diagnostic'] = diagnostic(fixture.stage if fixture is not None else stage, error)
         result['error'] = (str(error) if type(error) is CaseFailure else type(error).__name__)
         if not re.fullmatch(r'[A-Za-z0-9_]{1,80}', result['error']):
             result['error'] = 'bounded_worker_failure'
@@ -733,7 +758,9 @@ def main():
             try:
                 fixture.cleanup()
                 result['cleanup'] = True
-            except BaseException:
+            except BaseException as error:
+                if result['ok']:
+                    result['diagnostic'] = diagnostic('cleanup', error)
                 result['ok'] = False
                 result['error'] = 'owned_cleanup_failed'
             result['counts'] = {

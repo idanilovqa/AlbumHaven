@@ -2421,6 +2421,23 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
+      - name: Capture unreviewed rooted stdlib metadata
+        id: rooted_stdlib_metadata
+        if: ${{ matrix.batch == 'retained_ownership' }}
+        timeout-minutes: 1
+        run: |
+          set -o noclobber
+          python -I -S -B scripts/ci/capture-rooted-stdlib-metadata.py > "${{ runner.temp }}/rooted-stdlib-metadata.json"
+
+      - name: Upload unreviewed rooted stdlib metadata
+        if: ${{ always() && matrix.batch == 'retained_ownership' && steps.rooted_stdlib_metadata.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rooted-stdlib-metadata-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rooted-stdlib-metadata.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Install existing Python requirements
         run: python -m pip install -r requirements.txt
 
@@ -2504,10 +2521,14 @@ jobs:
               ;;
             popularity_bootstrap)
               printf '%s\n' \
+                'tests/py/test_popularity_epoch_ledger.py' \
                 'tests/py/test_private_popularity_search_contract.py' \
                 'tests/py/test_private_popularity_search_inventory.py' \
                 'tests/py/test_private_popularity_search_postgres.py' \
                 'tests/py/test_private_popularity_search_http.py' \
+                'tests/py/test_private_popularity_gallery_contract.py' \
+                'tests/py/test_private_popularity_gallery_postgres.py' \
+                'tests/py/test_private_popularity_gallery_http.py' \
                 'tests/py/test_relation_alias_endpoint_projection_postgres.py' > "$evidence/tests.txt"
               ;;
             favorites_backend)
@@ -2518,6 +2539,7 @@ jobs:
               ;;
             retained_ownership)
               printf '%s\n' \
+                'tests/py/test_current_actor_canonical_selector.py' \
                 'tests/py/test_retained_playback_shared_owner.py' \
                 'tests/py/test_playback_evidence_leases.py' \
                 'tests/py/test_rooted_playback_adapter.py' > "$evidence/tests.txt"

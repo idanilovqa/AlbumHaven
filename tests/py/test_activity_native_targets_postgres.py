@@ -151,7 +151,8 @@ def test_revoked_private_source_cannot_be_used_as_native_authority(native_activi
         if change=='unfriend':
             con.execute("update app.friend_connections set state='removed',revision=revision+1 where library_id=%s and low_account_id=%s and high_account_id=%s",state['pair'])
         else:con.execute('update app.account_sessions set revoked_at=now() where id=%s',(ctx.actor.session_id,))
-    with pytest.raises((HomeActivityError,PrivateLibraryAuthorityError)):
+    expected = PrivateLibraryAuthorityError if change == 'unfriend' else (HomeActivityError, PrivateLibraryAuthorityError)
+    with pytest.raises(expected):
         service.resolve(ctx,origin=origin,row_ref=rows[0]['id'],intent='play')
     assert not probes
 
@@ -280,9 +281,9 @@ def test_friend_track_and_album_overlay_use_subject_taste_and_never_viewer_fallb
         prefs.patch_preference(track['key'],{'rating':rating,'love_tier':love},account_id=account,library_id=ctx.library_id,expected_track_id=track['id'])
     with state['db'].connect() as con:
         album_key=con.execute('select album_key from library.local_albums where id=%s',(state['data']['album'],)).fetchone()['album_key']
-        for account,rating in ((ctx.actor.account_id,2),(state['peer'],9)):
-            con.execute("insert into app.album_ratings(account_id,library_id,album_key,rating,provenance) values(%s,%s,%s,%s,'explicit_import')",
-                (account,ctx.library_id,album_key,rating))
+        for account,rating,favorite in ((ctx.actor.account_id,2,True),(state['peer'],9,None)):
+            con.execute("insert into app.album_ratings(account_id,library_id,album_key,rating,favorite,provenance) values(%s,%s,%s,%s,%s,'explicit_import')",
+                (account,ctx.library_id,album_key,rating,favorite))
     origin,rows=capture(native_activity)
     projected=service.project(ctx,origin=origin,rows=rows)
     subject=next(row for row in projected if row['inventory_track_ref']==f"inventory-track:{ctx.library_id}:{track['id']}")
@@ -290,7 +291,9 @@ def test_friend_track_and_album_overlay_use_subject_taste_and_never_viewer_fallb
     result=service.resolve(ctx,origin=origin,row_ref=subject['id'],intent='details',target_kind='album')
     overlay=result['native_target']['subject_taste']
     assert overlay['subject_ref']==state['peer_ref'] and overlay['read_only'] is True
-    assert overlay['rating']==9 and overlay['favorite'] is None
+    # Available subject taste defaults a null override to false, never viewer true.
+    assert overlay['rating']==9 and overlay['favorite'] is False
+    assert overlay['taste_state']=='available'
     album_origin,album_rows=capture(native_activity,'albums')
     assert service.project(ctx,origin=album_origin,rows=album_rows)[0]['rating']==9
     assert next(row for row in overlay['tracks'] if row['inventory_track_ref']==subject['inventory_track_ref'])['rating']==5

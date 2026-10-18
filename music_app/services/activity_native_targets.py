@@ -11,7 +11,7 @@ import hashlib
 import hmac
 from uuid import UUID
 
-from music_app.services.friends_postgres import authorized_friend_read
+from music_app.services.friends_postgres import authorized_friend_read, FriendScopeError
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.private_album_artwork import album_artwork_url
 from music_app.services.allowed_actions import AllowedActions
@@ -22,7 +22,7 @@ from music_app.services.admin_member_mutation_postgres import lock_current_actor
 from music_app.services.home_activity import ActivityScope, ActivityQuery, ComparisonQuery, HomeActivityError
 from music_app.services.home_activity_postgres import HomeActivityPostgresRepository
 from music_app.services.policy import PolicyContext, ResourceScope
-from music_app.services.private_library_authority import current_library_transaction
+from music_app.services.private_library_authority import current_library_transaction, PrivateLibraryAuthorityError
 from music_app.services.private_native_targets import PrivateNativeTargets, NativeTargetError, allows
 from music_app.services import playlist_creation_sources_postgres as inventory
 
@@ -286,11 +286,15 @@ class ActivityNativeTargets:
         subject=self._subject_binding(connection,origin,expected_subject_id)
         guard=(authorized_friend_read(connection,account_id=context.actor.account_id,
             library_id=context.library_id,target_account_id=subject) if subject is not None else nullcontext())
-        with guard:
-            yield
-            self._subject_binding(connection,origin,expected_subject_id)
-            lock_current_actor_session(connection,actor_account_id=context.actor.account_id,
-                actor_session_id=context.actor.session_id,clock=self.clock or (lambda:datetime.now(timezone.utc)))
+        try:
+            with guard:
+                yield
+                self._subject_binding(connection,origin,expected_subject_id)
+                lock_current_actor_session(connection,actor_account_id=context.actor.account_id,
+                    actor_session_id=context.actor.session_id,clock=self.clock or (lambda:datetime.now(timezone.utc)))
+        except FriendScopeError:
+            # A revoked peer scope is a denial, not an infrastructure failure.
+            raise PrivateLibraryAuthorityError('Private library access is unavailable.') from None
 
     def _export(self,connection,context,origin,query,row_refs,constraints,expected_subject_id=None):
         subject=self._subject_binding(connection,origin,expected_subject_id)

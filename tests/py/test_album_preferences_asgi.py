@@ -541,8 +541,9 @@ def browse_request(client, surface, *, actor=None):
     album, db = client.db.albums[0], client.db
     if surface == 'detail':
         return client.request('GET', '/album-details', actor=actor, query={'album_key': album['key']})
-    query = {'surface': 'albums', 'payload_tier': 'full'}
+    query = {'surface': 'albums'}
     if surface == 'selected':
+        query['payload_tier'] = 'full'
         with db.connect() as con:
             query['artist'] = con.execute('select name from library.local_artists where id=%s',
                                          (album['artist'],)).fetchone()['name']
@@ -551,6 +552,20 @@ def browse_request(client, surface, *, actor=None):
     else:
         assert surface == 'root'
     return client.request('GET', '/view-data', actor=actor, query=query)
+
+
+def test_root_browse_request_uses_the_supported_query_shape():
+    calls = []
+    sentinel = object()
+    def record_request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return sentinel
+    client = SimpleNamespace(db=SimpleNamespace(albums=[{'key': 'unused'}]),
+                             request=record_request)
+    assert browse_request(client, 'root', actor='current-actor') is sentinel
+    assert calls == [('GET', '/view-data', {
+        'actor': 'current-actor', 'query': {'surface': 'albums'},
+    })]
 
 
 def matching_albums(payload, album):

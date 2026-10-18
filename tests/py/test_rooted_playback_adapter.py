@@ -597,8 +597,9 @@ class AdditionalBoundaries(Case):
         source.resource.mutated = True
         task = self.caller(decoder.read_credited_frames(max_frames=1))
         await self.pump(task.done)
-        with self.assertRaises(self.m.retained.SourceUnavailable):
-            task.result()
+        # Rooted checks preserve their failure without clearing the owner traceback.
+        self.assertIsInstance(task.exception(), self.m.rooted.RootedFileUnavailable)
+        self.assertRegex(str(task.exception()), '^source_changed$')
         self.assertIsNone(record._candidate)
         self.assertTrue(record._decode_failed)
 

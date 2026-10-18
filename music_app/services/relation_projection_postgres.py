@@ -490,14 +490,16 @@ def _artist_search_projection_rows(
     identity_to_canonical: dict[str, str] = {}
     alias_to_canonical = relation_views.get("alias_to_canonical")
     if isinstance(alias_to_canonical, Mapping):
-        for alias, canonical in alias_to_canonical.items():
+        # JSONB object order differs from caller insertion order. Keep the
+        # legacy winner stable so reloading cannot manufacture stale readiness.
+        for alias, canonical in sorted(alias_to_canonical.items(), key=lambda item: str(item[0])):
             normalized_key = local_inventory_identity_key(alias)
             canonical_name = str(canonical or "").strip()
             if normalized_key and canonical_name:
                 identity_to_canonical.setdefault(normalized_key, canonical_name)
     canonical_to_aliases = relation_views.get("canonical_to_aliases")
     if isinstance(canonical_to_aliases, Mapping):
-        for canonical, aliases in canonical_to_aliases.items():
+        for canonical, aliases in sorted(canonical_to_aliases.items(), key=lambda item: str(item[0])):
             canonical_name = str(canonical or "").strip()
             if not canonical_name:
                 continue

@@ -430,12 +430,18 @@ def test_second_healthy_under_advisory_branch_repairs_only_endpoints(db, monkeyp
         assert ready(con, db) and metadata(con, db) == healthy
 
 
-def wait_for_lock_wait(db, pid, event):
+def wait_for_lock_wait(db, pid, blocker_pid):
     deadline = monotonic() + 5
     while monotonic() < deadline:
         with db.connect() as observer:
-            row = observer.execute("select wait_event_type,wait_event from pg_stat_activity where pid=%s", (pid,)).fetchone()
-        if row and row['wait_event_type'] == 'Lock' and row['wait_event'] == event: return
+            # pg_stat_activity hides other-role wait details. Observe the exact
+            # table lock and holder edge without expanding fixture privileges.
+            row = observer.execute("""select exists (
+                select 1 from pg_locks where pid=%s and locktype='relation'
+                  and relation='library.relation_alias_endpoint_publications'::regclass
+                  and not granted) as waiting, pg_blocking_pids(%s) as blockers""",
+                (pid, pid)).fetchone()
+        if row['waiting'] and blocker_pid in row['blockers']: return
         sleep(.02)
     pytest.fail('Writer did not reach its real PostgreSQL lock wait')
 
@@ -459,7 +465,7 @@ def test_cancelled_endpoint_writer_rolls_back_and_never_publishes_unavailable(db
                     views, metadata=body['relation_projection'],
                     relations_last_built=body['relations_last_built'])
         future = pool.submit(work)
-        wait_for_lock_wait(db, pid, 'relation')
+        wait_for_lock_wait(db, pid, holder.info.backend_pid)
         writer.cancel()
         with pytest.raises(InterruptedError, match='Alias endpoint operation cancelled'):
             future.result(timeout=5)
@@ -548,6 +554,38 @@ def initialized_legacy_projection(db, aliases, groups):
             con.execute('update library.libraries set metadata=%s where id=%s', (Jsonb(original), db.library))
             projection.replace_artist_search_projection_in_transaction(con, cache['relation_views'],
                 metadata=cache['relation_projection'], relations_last_built=cache['relations_last_built'])
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('origin', ['aliases', 'groups'])
+def test_case_colliding_legacy_alias_winner_survives_jsonb_order(db, reverse, origin):
+    pairs = [('Alias', 'One'), ('ALIAS', 'Two')]
+    if reverse:
+        pairs.reverse()
+    aliases, groups = dict(pairs), {}
+    expected = [{'normalized_artist_key': 'alias', 'canonical_artist_name': 'Two'}]
+    if origin == 'groups':
+        pairs = [('Alpha', ['Shared']), ('ALPHA', ['Shared'])]
+        if reverse:
+            pairs.reverse()
+        aliases, groups = {}, dict(pairs)
+        expected = [{'normalized_artist_key': key, 'canonical_artist_name': 'ALPHA'}
+                    for key in ('alpha', 'shared')]
+    with initialized_legacy_projection(db, aliases, groups) as original:
+        cache = original['scan_cache']
+        assert projection._artist_search_projection_rows(cache['relation_views']) == expected
+        with db.connect() as con:
+            stored = metadata(con, db)['scan_cache']['relation_views']
+            assert projection._artist_search_projection_rows(stored) == expected
+        result = projection.ensure_relation_projection_ready(db.config, connect=db.app_connect)
+        assert result['ready'] and not result['startup_rebuilt']
+        with db.connect() as con:
+            assert metadata(con, db) == original
+            header, rows = state(con, db)
+            if origin == 'aliases':
+                assert header['reason_code'] == 'unsupported_membership' and rows == []
+            else:
+                assert header['status'] == 'ready' and ready(con, db)
 
 
 @pytest.mark.parametrize('unsupported', [False, True])
@@ -846,7 +884,7 @@ def test_both_healthy_path_callback_cancellation_preserves_exact_state(db, monke
             if future.done(): future.result()
             sleep(.02)
         assert len(repair_connections) == 1
-        wait_for_lock_wait(db, repair_connections[0].info.backend_pid, 'relation')
+        wait_for_lock_wait(db, repair_connections[0].info.backend_pid, holder.info.backend_pid)
         # Exercise the readiness API's actual cancellation watcher, rather
         # than manually cancelling the connection as the test stimulus.
         cancel_requested.set()

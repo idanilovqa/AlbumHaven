@@ -107,6 +107,61 @@ _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
 )
 
 
+class AlbumPreferenceCandidate(dict):
+    """Metadata with immutable, server-only same-query canonical provenance.
+
+    JSON sees only dict entries. A plain dict copy intentionally loses authority;
+    deepcopy preserves it without breaking the response's shared copy memo.
+    This is generation evidence, never actor authorization or progress evidence.
+    """
+    __slots__ = ("_album_preference_receipt",)
+
+    def __init__(self, payload, *, receipt):
+        if (type(receipt) is not tuple or len(receipt) != 3
+                or any(type(value) is not int or not 0 < value <= 9223372036854775807
+                       for value in receipt[:2])
+                or not isinstance(receipt[2], str) or not receipt[2]):
+            raise ValueError("Invalid album producer receipt.")
+        super().__init__(payload)
+        object.__setattr__(self, "_album_preference_receipt", receipt)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("Album producer receipts are immutable.")
+
+    def __delattr__(self, name):
+        raise AttributeError("Album producer receipts are immutable.")
+
+    @property
+    def album_preference_receipt(self):
+        return self._album_preference_receipt
+
+    def __deepcopy__(self, memo):
+        copied = type(self)({}, receipt=self._album_preference_receipt)
+        memo[id(self)] = copied
+        for key, value in self.items():
+            copied[deepcopy(key, memo)] = deepcopy(value, memo)
+        return copied
+
+
+def _album_preference_candidate(payload, row):
+    receipt = (row.get("library_id"), row.get("album_id"), row.get("album_key"))
+    if (any(type(value) is not int or not 0 < value <= 9223372036854775807
+            for value in receipt[:2])
+            or not isinstance(receipt[2], str) or not receipt[2]
+            or payload.get("album_id") != receipt[1]
+            or payload.get("key") != receipt[2]):
+        return dict(payload)
+    return AlbumPreferenceCandidate(payload, receipt=receipt)
+
+
+def _same_album_producer_row(payload, row):
+    if (type(payload) is AlbumPreferenceCandidate
+            and payload.album_preference_receipt != (
+                row.get("library_id"), row.get("album_id"), row.get("album_key"))):
+        return dict(payload)  # Ambiguous aggregate: permanently lose its receipt.
+    return payload
+
+
 @dataclass(frozen=True)
 class ArtistLovedBrowseRootReceipt:
     """Request-local producer provenance; never part of a browse payload/cache."""
@@ -5867,16 +5922,37 @@ def _selected_artist_family_groups_from_preview_rows(
     family_album_payloads = _root_album_browse_album_payloads(rows, "", include_artist_members=True)
     if not family_album_payloads:
         return []
-    payloads_by_key = {
-        str(payload.get("key") or payload.get("album_ref") or "").strip(): payload
-        for payload in family_album_payloads
-        if str(payload.get("key") or payload.get("album_ref") or "").strip()
-    }
-    album_objects = [
-        SimpleNamespace(**payload)
-        for payload in family_album_payloads
-        if str(payload.get("key") or payload.get("album_ref") or "").strip()
-    ]
+    # The membership owner passes these same objects to its serializer. Retain
+    # that exact call lineage: a key lookup could choose a different generation
+    # and dict(payload) would discard the verified SQL producer receipt.
+    album_objects = []
+    producer_by_object = {}
+    for payload in family_album_payloads:
+        if not str(payload.get("key") or payload.get("album_ref") or "").strip():
+            continue
+        album = SimpleNamespace(**payload)
+        album_objects.append(album)
+        producer_by_object[id(album)] = (album, payload)
+
+    def serialize_family_album(album):
+        producer = producer_by_object.get(id(album))
+        if producer is None or producer[0] is not album:
+            return {}  # An arbitrary object cannot acquire SQL provenance.
+        payload = producer[1]
+        if type(payload) is not AlbumPreferenceCandidate:
+            return deepcopy(dict(payload))
+        receipt = payload.album_preference_receipt
+        if (type(getattr(album, "album_id", None)) is not int
+                or getattr(album, "album_id", None) != payload.get("album_id")
+                or payload.get("album_id") != receipt[1]
+                or getattr(album, "key", None) != payload.get("key")
+                or payload.get("key") != receipt[2]
+                or type(getattr(album, "library_id", receipt[0])) is not int
+                or getattr(album, "library_id", receipt[0]) != receipt[0]
+                or type(payload.get("library_id", receipt[0])) is not int
+                or payload.get("library_id", receipt[0]) != receipt[0]):
+            return deepcopy(dict(payload))  # Preserve metadata, lose authority.
+        return deepcopy(payload)
     match_cache: dict[tuple[str, str], object] = {}
     family_artist_groups = _membership_build_artist_membership_groups(
         album_objects,
@@ -5887,7 +5963,7 @@ def _selected_artist_family_groups_from_preview_rows(
         matches_group_artist_for_album=lambda album, artist: cached_album_matches_group_artist(
             album, artist, alias_to_canonical, match_cache,
         ),
-        album_serializer=lambda album: dict(payloads_by_key.get(str(getattr(album, "key", "") or "").strip(), {})),
+        album_serializer=serialize_family_album,
     )
     family_artist_groups = _membership_merge_duplicate_artist_groups(family_artist_groups)
     family_artist_groups = _restore_selected_artist_family_group_labels(
@@ -6128,11 +6204,55 @@ def _decorate_selected_artist_group_payloads(
 ) -> list[dict[str, object]]:
     from music_app.services.view_payloads import _decorate_selected_artist_group_payloads as decorate
 
-    return decorate(
+    decorated = decorate(
         artist_groups,
         alias_to_canonical=alias_to_canonical,
         canonical_to_aliases=canonical_to_aliases,
     )
+    # This inspected decorator keeps group/album order but makes plain dict
+    # copies. Carry only typed same-query provenance along that exact call
+    # lineage, never by finding a matching key elsewhere in current inventory.
+    sources = [group for group in artist_groups if isinstance(group, dict)]
+    if len(sources) != len(decorated):
+        return decorated
+    replacements, ambiguous = {}, set()
+    for source, target in zip(sources, decorated):
+        if (not isinstance(target, dict) or not isinstance(source.get("albums"), list)
+                or not isinstance(target.get("albums"), list)):
+            continue
+        source_albums = [album for album in source["albums"] if isinstance(album, dict)]
+        target_albums = target["albums"]
+        if len(source_albums) != len(target_albums):
+            continue
+        for original, copied in zip(source_albums, target_albums):
+            if type(original) is not AlbumPreferenceCandidate or not isinstance(copied, dict):
+                continue
+            receipt = original.album_preference_receipt
+            if (type(copied.get("album_id")) is int
+                    and copied.get("album_id") == original.get("album_id") == receipt[1]
+                    and copied.get("key") == original.get("key") == receipt[2]
+                    and type(original.get("library_id", receipt[0])) is int
+                    and original.get("library_id", receipt[0]) == receipt[0]
+                    and type(copied.get("library_id", receipt[0])) is int
+                    and copied.get("library_id", receipt[0]) == receipt[0]):
+                prior = replacements.get(id(copied))
+                if prior is not None and prior.album_preference_receipt != receipt:
+                    ambiguous.add(id(copied))
+                replacements[id(copied)] = AlbumPreferenceCandidate(copied, receipt=receipt)
+    for identity in ambiguous:
+        replacements.pop(identity, None)
+    containers = list(decorated)
+    seen = set()
+    for container in containers:
+        if not isinstance(container, dict) or id(container) in seen:
+            continue
+        seen.add(id(container))
+        if isinstance(container.get("albums"), list):
+            container["albums"] = [replacements.get(id(album), album) for album in container["albums"]]
+        for field in ("sections", "subsections"):
+            if isinstance(container.get(field), list):
+                containers.extend(container[field])
+    return decorated
 
 
 def _selected_artist_family_filter_payloads(
@@ -6315,10 +6435,13 @@ def _selected_artist_album_payloads(rows: list[object], artist_display: str) -> 
                 "open_directory_paths": [],
                 "preview_only": False,
             }
+            album = _album_preference_candidate(album, row_payload)
             albums[album_identity] = album
             track_ids_by_album[album_identity] = set()
             directory_paths_by_album[album_identity] = []
             seen_directory_paths_by_album[album_identity] = set()
+        album = _same_album_producer_row(album, row_payload)
+        albums[album_identity] = album
         track_id = row_payload.get("track_id")
         track_key = str(row_payload.get("track_key") or "").strip()
         track_identity = track_id if track_id is not None else track_key
@@ -6418,6 +6541,7 @@ def _root_album_browse_album_payloads(
             else ""
         )
         if album_identity in albums:
+            albums[album_identity] = _same_album_producer_row(albums[album_identity], row_payload)
             if matched_artist:
                 existing_artists = albums[album_identity].setdefault("artists", [])
                 existing_artist_keys = {
@@ -6488,7 +6612,7 @@ def _root_album_browse_album_payloads(
                 album_payload["artists"].append(matched_artist)
             album_payload["is_compilation"] = bool(metadata.get("is_compilation"))
             album_payload["release_date"] = metadata.get("release_date")
-        albums[album_identity] = album_payload
+        albums[album_identity] = _album_preference_candidate(album_payload, row_payload)
     return sorted(
         albums.values(),
         key=lambda album: (
@@ -7010,6 +7134,7 @@ def _selected_artist_sql() -> str:
           selected_artist_albums.artist_id,
           selected_artist_albums.artist_name,
           selected_artist_albums.artist_sort_name,
+          selected_artist_albums.library_id,
           selected_artist_albums.album_id,
           selected_artist_albums.album_key,
           selected_artist_albums.album_title,
@@ -7260,6 +7385,7 @@ def _root_album_browse_sql() -> str:
           album_rows.artist_id,
           album_rows.artist_name,
           album_rows.artist_sort_name,
+          album_rows.library_id,
           album_rows.album_id,
           album_rows.album_key,
           album_rows.album_title,
@@ -7542,6 +7668,7 @@ def _root_startup_payload_sql(artist_limit: int) -> str:
             matched_album_rows.artist_id,
             matched_album_rows.artist_name,
             matched_album_rows.artist_sort_name,
+            matched_album_rows.library_id,
             matched_album_rows.album_id,
             matched_album_rows.album_key,
             matched_album_rows.album_title,
@@ -7943,6 +8070,7 @@ def _selected_artist_preview_sql(
           matched_album_rows.artist_id,
           matched_album_rows.artist_name,
           matched_album_rows.artist_sort_name,
+          matched_album_rows.library_id,
           matched_album_rows.album_id,
           matched_album_rows.album_key,
           matched_album_rows.album_title,
@@ -8044,6 +8172,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
           matched_album_rows.artist_id,
           matched_album_rows.artist_name,
           matched_album_rows.artist_sort_name,
+          matched_album_rows.library_id,
           matched_album_rows.album_id,
           matched_album_rows.album_key,
           matched_album_rows.album_title,
@@ -8504,6 +8633,7 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
           active_preview_rows as (
             select
               'active'::text as search_partition,
+              matched_album_rows.library_id,
               matched_album_rows.artist_id,
               matched_album_rows.display_artist as artist_name,
               matched_album_rows.artist_sort_name,
@@ -8533,6 +8663,7 @@ def _search_preview_sql(album_limit: int | None = None) -> str:
           missing_preview_rows as (
             select
               'missing'::text as search_partition,
+              library.local_albums.library_id,
               library.local_artists.id as artist_id,
               library.local_artists.name as artist_name,
               library.local_artists.sort_name as artist_sort_name,

@@ -359,6 +359,8 @@ jobs:
           "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Collect Python test inventory
+        env:
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: favorites_windows17
         run: |
           python -m pytest --collect-only -q 2>&1 | Tee-Object -FilePath "${{ runner.temp }}\pytest-collection.txt"
           $collectionExitCode = $LASTEXITCODE
@@ -370,6 +372,8 @@ jobs:
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-collection=${{ runner.temp }}\pytest-collection.txt
 
       - name: Run Python tests
+        env:
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: favorites_windows17
         run: |
           $env:PGPASSWORD = $null
           python -m pytest -q --junitxml="${{ runner.temp }}\pytest-results.xml" -vv --durations=20 -o faulthandler_timeout=60
@@ -2360,6 +2364,10 @@ jobs:
             timeout_minutes: 30
           - batch: popularity_bootstrap
             timeout_minutes: 30
+          - batch: favorites_backend
+            timeout_minutes: 30
+          - batch: retained_ownership
+            timeout_minutes: 20
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
@@ -2402,8 +2410,8 @@ jobs:
           CI_POSTGRES_ADMIN_PASSWORD: album-haven-disposable-ci-only
         run: python scripts/ci/bootstrap-linux-tops-postgres.py --suffix "tops_${{ github.run_id }}_${{ github.run_attempt }}"
 
-      - name: Initialize fresh Loved producer bootstrap baseline
-        if: ${{ matrix.batch == 'loved_backend' }}
+      - name: Initialize fresh personal-album producer bootstrap baseline
+        if: ${{ matrix.batch == 'loved_backend' || matrix.batch == 'favorites_backend' }}
         env:
           FEATURE_BATCH: ${{ matrix.batch }}
         run: python scripts/ci/initialize-loved-browse-postgres.py
@@ -2482,6 +2490,17 @@ jobs:
                 'tests/py/test_private_popularity_search_http.py' \
                 'tests/py/test_relation_alias_endpoint_projection_postgres.py' > "$evidence/tests.txt"
               ;;
+            favorites_backend)
+              printf '%s\n' \
+                'tests/py/test_album_preferences_postgres.py' \
+                'tests/py/test_album_preferences_asgi.py' \
+                'tests/py/test_album_preference_subject_projection.py' > "$evidence/tests.txt"
+              ;;
+            retained_ownership)
+              printf '%s\n' \
+                'tests/py/test_retained_playback_shared_owner.py' \
+                'tests/py/test_playback_evidence_leases.py' > "$evidence/tests.txt"
+              ;;
             *) echo "Unknown feature batch" >&2; exit 1 ;;
           esac
           test -s "$evidence/tests.txt"
@@ -2491,6 +2510,9 @@ jobs:
 
       - name: Collect exact feature batch
         id: feature_collection
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: ${{ matrix.batch == 'favorites_backend' && 'favorites_linux17' || '' }}
         run: |
           evidence="$RUNNER_TEMP/feature-batch-evidence"
           mapfile -t selected < "$evidence/tests.txt"
@@ -2505,6 +2527,9 @@ jobs:
 
       - name: Run complete feature batch sequentially
         id: feature_runtime
+        env:
+          FEATURE_BATCH: ${{ matrix.batch }}
+          ALBUM_HAVEN_FAVORITES_TEST_MODE: ${{ matrix.batch == 'favorites_backend' && 'favorites_linux17' || '' }}
         run: |
           evidence="$RUNNER_TEMP/feature-batch-evidence"
           mapfile -t selected < "$evidence/tests.txt"

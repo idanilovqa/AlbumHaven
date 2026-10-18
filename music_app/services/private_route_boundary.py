@@ -207,6 +207,15 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/album-tops/{top_ref}"): "library.browse.read",
     ("GET", "/album-tops/edit-requests"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/sharing"): "library.browse.read",
+    ("GET", "/album-tops/{top_ref}/artwork-publication"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-publication/sources"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/start"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/status"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/advance"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/review"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/preview"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-publication/save"): "library.browse.read",
+    ("POST", "/album-tops/{top_ref}/artwork-publication/enable"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/items/{item_ref}/publication-sources"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/access-grants"): "library.album_tops.access.manage",
     ("GET", "/album-tops/{top_ref}/access-candidates"): "library.album_tops.access.manage",
@@ -287,6 +296,18 @@ def install_private_route_boundary(app: FastAPI) -> None:
         try:
             return await _require_private_authentication(request, call_next)
         except Exception:
+            if (request.method, _matched_route_path(app, request)) in {
+                    ("GET", "/album-tops/{top_ref}/artwork-publication"),
+                    ("POST", "/album-tops/{top_ref}/artwork-publication/sources"),
+                    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/start"),
+                    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/status"),
+                    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/advance"),
+                    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/review"),
+                    ("POST", "/album-tops/{top_ref}/artwork-preparations/{kind}/{preparation_ref}/preview"),
+                    ("POST", "/album-tops/{top_ref}/artwork-publication/save"),
+                    ("POST", "/album-tops/{top_ref}/artwork-publication/enable")}:
+                return JSONResponse({"ok": False, "error": "unavailable"}, status_code=503,
+                                    headers={"Cache-Control": "private, no-store"})
             if (request.method, _matched_route_path(app, request)) in {
                     ("POST", "/album-top-catalog/remote-search"),
                     ("POST", "/album-top-catalog/remote-acquisitions"),

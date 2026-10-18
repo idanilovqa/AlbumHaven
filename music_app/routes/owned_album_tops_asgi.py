@@ -550,8 +550,8 @@ def _artwork_key(request):
 def _artwork_identity(request, top_ref, kind=None, preparation_ref=None):
     if request.scope.get('query_string', b'') != b'' or request.query_params:
         raise AlbumTopError('invalid_query')
-    context, constraints = _context(request, BROWSE)
     captured = _require_context(request)
+    context, constraints = _context(request, BROWSE)
     ref = top_uuid(top_ref)
     if ref == '00000000-0000-0000-0000-000000000000':
         raise AlbumTopError('invalid_command')

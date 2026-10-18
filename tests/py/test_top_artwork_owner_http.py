@@ -266,7 +266,7 @@ def test_exact_full_router_inventory_adds_only_nine_private_patterns():
     assert len(actual) == len(set(actual))
     assert set(actual) == LEGACY_ROUTES | expected_new
     for method, path in expected_new:
-        assert private_action_for_route(method, path) is None  # Existing default-private app.access admission.
+        assert private_action_for_route(method, path) == "library.browse.read"
         assert csrf_mode_for_route(method, path) == ('none' if method == 'GET' else 'session_header')
         assert not _is_public(method, path)
 
@@ -489,6 +489,20 @@ async def invoke_actual_handler(req, operation, kind='saved'):
 
 
 @pytest.mark.parametrize('operation', OPERATIONS)
+@pytest.mark.parametrize('actor_state', ['absent', 'anonymous', 'inactive'])
+def test_direct_artwork_context_admission_denies_nonactive_actor(adapters, operation, actor_state):
+    current = (CurrentActor.anonymous() if actor_state == 'anonymous' else
+               replace(actor(), state=ActorState.INACTIVE) if actor_state == 'inactive' else actor())
+    req = request(adapters[0], payload=body_for(operation), current_actor=current,
+                  no_actor=actor_state == 'absent')
+    req.scope.update(path=route_path(operation), method='GET' if operation == 'state' else 'POST')
+    response = asyncio.run(invoke_actual_handler(req, operation))
+    assert response.status_code == 403
+    assert decoded(response) == {'ok': False, 'error': 'forbidden'}
+    assert all_calls(adapters) == []
+
+
+@pytest.mark.parametrize('operation', OPERATIONS)
 @pytest.mark.parametrize('key', [None, '', 'short', 3, '\ud800' * 40])
 def test_real_context_helper_rejects_global_key_loss_before_execute(adapters, operation, key):
     req = request(adapters[0], payload=body_for(operation))
@@ -578,3 +592,23 @@ def test_optional_key_adapter_is_not_an_independent_eager_key_validator(settings
     assert routes._artwork_key(req) is None
     # Pure collaborator lookup only. Actual HTTP admission with these global
     # settings must fail as tested above; this does not claim keyless HTTP replay.
+
+
+@pytest.mark.parametrize('operation', OPERATIONS)
+@pytest.mark.parametrize('failure', ['missing_key', 'short_key', 'surrogate_key', 'resolver_error'])
+def test_mounted_artwork_early_errors_are_sanitized_private(adapters, monkeypatch, operation, failure):
+    app = middleware_app(adapters[0], actor())
+    headers = mutation_headers(app, actor())
+    if failure == 'resolver_error':
+        def unavailable(token):
+            raise RuntimeError('private fixture diagnostic must not escape')
+        monkeypatch.setattr(app.state.current_actor_resolver, 'resolve', unavailable)
+    else:
+        app.state.auth_policy_config['hmac']['secret'] = {
+            'missing_key': None, 'short_key': 'short', 'surrogate_key': '\ud800' * 40,
+        }[failure]
+    status, raw, pairs = asyncio.run(http_exchange(app, operation, payload=body_for(operation), headers=headers))
+    assert status == 503
+    assert json.loads(raw) == {'ok': False, 'error': 'unavailable'}
+    assert dict(pairs)[b'cache-control'] == b'private, no-store'
+    assert all_calls(adapters) == []

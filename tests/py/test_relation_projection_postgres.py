@@ -335,6 +335,20 @@ def test_relation_source_fingerprint_is_order_independent_and_source_sensitive()
     assert projection.relation_source_fingerprint(rows) != projection.relation_source_fingerprint(changed)
 
 
+def test_relation_source_fingerprint_cooperates_during_large_source_hashing():
+    source = _morse_rows()[0]
+    rows = [{**source, "album_id": index + 1} for index in range(513)]
+    cooperative_yields = []
+
+    fingerprint = projection.relation_source_fingerprint(
+        rows,
+        cooperate=lambda: cooperative_yields.append(None),
+    )
+
+    assert fingerprint
+    assert len(cooperative_yields) >= 2
+
+
 def test_relation_source_fingerprint_changes_with_root_category():
     rows = _compilation_rows()
     changed = deepcopy(rows)
@@ -538,6 +552,33 @@ def test_ensure_relation_projection_ready_rebuilds_missing_projection_and_persis
         assert phase in rendered_log
     for private_value in ("C:/Music", "MPG A", "MPG B", "song.mp3"):
         assert private_value not in rendered_log
+
+
+def test_cancellable_relation_projection_build_cooperates_with_foreground_work(
+    monkeypatch,
+):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    rows = _morse_rows()
+    relation_views = projection.build_relation_views_from_postgres_rows(_config(), rows)
+    database = _ProjectionDatabase(source_rows=rows)
+    cooperative_callbacks = []
+
+    def build(_config, _rows, *, cooperate=None):
+        cooperative_callbacks.append(cooperate)
+        cooperate()
+        return relation_views
+
+    monkeypatch.setattr(projection, "build_relation_views_from_postgres_rows", build)
+
+    result = projection.ensure_relation_projection_ready(
+        _config(),
+        connect=database.connect,
+        cancel_requested=Event(),
+    )
+
+    assert result["ready"] is True
+    assert len(cooperative_callbacks) == 1
+    assert callable(cooperative_callbacks[0])
 
 
 def test_healthy_relation_snapshot_rebuilds_missing_artist_search_projection(monkeypatch):
@@ -1129,6 +1170,26 @@ def test_relation_projection_completeness_requires_every_builder_owned_key(missi
     assert projection.relation_projection_structure_complete(relation_views) is False
 
 
+def test_relation_projection_source_query_does_not_multiply_memberships_by_track_files():
+    sql = " ".join(projection.load_relation_source_rows_sql().split()).lower()
+
+    location_branch, separator, member_branch = sql.rpartition(" union all ")
+
+    assert separator
+    assert "join library.local_album_featured_artists" in member_branch
+    assert "join library.local_tracks" in location_branch
+    assert "library.local_album_featured_artists" not in location_branch
+
+
+def test_relation_projection_source_query_collapses_track_files_by_album_directory():
+    sql = " ".join(projection.load_relation_source_rows_sql().split()).lower()
+
+    assert "relation_locations as materialized" in sql
+    assert "group by live_files.library_id, live_files.album_id" in sql
+    assert "regexp_replace(" in sql
+    assert "'(^|/)[^/]*$'" in sql
+
+
 def test_relation_projection_source_query_uses_safe_generated_stale_normalization():
     sql = projection.load_relation_source_rows_sql()
 
@@ -1151,9 +1212,9 @@ def test_relation_projection_source_query_marks_only_single_track_artist_albums_
     sql = " ".join(projection.load_relation_source_rows_sql().split()).lower()
 
     assert "album_track_artist_summary" in sql
-    assert "count(*) = count(library.local_tracks.artist_id)" in sql
-    assert "count(distinct library.local_tracks.artist_id) = 1" in sql
-    assert "album_track_artist_summary.sole_track_artist_id = member_artist.id" in sql
+    assert "count(*) = count(live_files.track_artist_id)" in sql
+    assert "count(distinct live_files.track_artist_id) = 1" in sql
+    assert "album_facts.sole_track_artist_id = member_artist.id" in sql
     assert "as member_artist_is_album_wide_track_artist" in sql
 
 
@@ -1188,7 +1249,7 @@ def test_relation_projection_source_query_prefers_soundtrack_path_evidence_over_
         "library.local_album_featured_artists.metadata ->> 'relation_evidence_kind'"
     )
     album_metadata_evidence = sql.index(
-        "library.local_albums.metadata ->> 'relation_evidence_kind'"
+        "album_facts.metadata ->> 'relation_evidence_kind'"
     )
 
     assert derived_path_evidence < featured_metadata_evidence
@@ -1201,8 +1262,8 @@ def test_relation_projection_source_query_derives_soundtrack_from_private_path_w
     evidence_case_end = sql.index("then 'soundtrack_root'", evidence_case_start)
     evidence_case = sql[evidence_case_start:evidence_case_end]
 
-    assert "library.library_roots.root_path" in evidence_case
-    assert "library.local_track_files.private_path" in evidence_case
+    assert "relation_locations.root_path" in evidence_case
+    assert "relation_locations.private_path" in evidence_case
     assert "(soundtracks?|ost)(/|$)" in evidence_case
     assert all(
         collaboration_token not in evidence_case

@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import lru_cache
 import json
 from pathlib import PurePosixPath, PureWindowsPath
 import re
+
+
+_COOPERATIVE_YIELD_INTERVAL = 256
+
+
+def _yield_periodically(
+    cooperate: Callable[[], None] | None,
+    index: int,
+) -> None:
+    if cooperate is not None and index % _COOPERATIVE_YIELD_INTERVAL == 0:
+        cooperate()
 
 
 _VA_NAMES = {"va", "v.a.", "various artists", "various artist", "various"}
@@ -303,10 +314,14 @@ def _merge_artist_alias(
 
 
 def _album_facts(
-    rows: list[object], *, include_family_data: bool = True
+    rows: list[object],
+    *,
+    include_family_data: bool = True,
+    cooperate: Callable[[], None] | None = None,
 ) -> tuple[PostgresRelationAlbumFact, ...]:
     buckets: dict[int, dict[str, object]] = {}
-    for raw_row in rows:
+    for row_index, raw_row in enumerate(rows):
+        _yield_periodically(cooperate, row_index)
         row = _row_mapping(raw_row)
         try:
             album_id = int(row.get("album_id") or 0)
@@ -411,11 +426,14 @@ def _album_facts(
 
 def _build_alias_views(
     albums: tuple[PostgresRelationAlbumFact, ...],
+    *,
+    cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     artist_counts: Counter[str] = Counter()
     normalized_buckets: dict[str, list[str]] = defaultdict(list)
     container_to_artists: dict[tuple[str, tuple[str, ...]], set[str]] = defaultdict(set)
-    for album in albums:
+    for album_index, album in enumerate(albums):
+        _yield_periodically(cooperate, album_index)
         candidates = list(dict.fromkeys((album.album_artist, *album.artists)))
         containers = {
             (location.library_root_id, location.relative_parts[:2])
@@ -549,13 +567,16 @@ def _is_ignored_folder(name: str) -> bool:
 def _build_family_views(
     albums: tuple[PostgresRelationAlbumFact, ...],
     alias_to_canonical: Mapping[str, str],
+    *,
+    cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     dir_artists: dict[tuple[str, tuple[str, ...]], set[str]] = defaultdict(set)
     container_children: dict[
         tuple[str, tuple[str, ...]],
         set[tuple[str, tuple[str, ...]]],
     ] = defaultdict(set)
-    for album in albums:
+    for album_index, album in enumerate(albums):
+        _yield_periodically(cooperate, album_index)
         if album.family_excluded or _is_va_name(album.album_artist):
             continue
         family_source_artists = (
@@ -633,15 +654,37 @@ def _build_family_views(
     }
 
 
-def build_postgres_relation_alias_views(rows: list[object]) -> dict[str, object]:
+def build_postgres_relation_alias_views(
+    rows: list[object],
+    *,
+    cooperate: Callable[[], None] | None = None,
+) -> dict[str, object]:
     """Build current search aliases without unrelated family projections."""
-    return _build_alias_views(_album_facts(rows, include_family_data=False))
+    if cooperate is None:
+        return _build_alias_views(_album_facts(rows, include_family_data=False))
+    return _build_alias_views(
+        _album_facts(rows, include_family_data=False, cooperate=cooperate),
+        cooperate=cooperate,
+    )
 
 
-def build_postgres_relation_views(rows: list[object]) -> dict[str, object]:
-    albums = _album_facts(rows)
-    alias_views = _build_alias_views(albums)
-    family_views = _build_family_views(albums, alias_views["alias_to_canonical"])
+def build_postgres_relation_views(
+    rows: list[object],
+    *,
+    cooperate: Callable[[], None] | None = None,
+) -> dict[str, object]:
+    if cooperate is None:
+        albums = _album_facts(rows)
+        alias_views = _build_alias_views(albums)
+        family_views = _build_family_views(albums, alias_views["alias_to_canonical"])
+    else:
+        albums = _album_facts(rows, cooperate=cooperate)
+        alias_views = _build_alias_views(albums, cooperate=cooperate)
+        family_views = _build_family_views(
+            albums,
+            alias_views["alias_to_canonical"],
+            cooperate=cooperate,
+        )
     artists_sidebar = alias_views["artists_sidebar"]
     return {
         "artists": [entry["artist"] for entry in artists_sidebar],

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from threading import Event, Thread
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 
 from music_app.services.artist_family_postgres import (
@@ -36,11 +36,18 @@ RELATION_PROJECTION_METADATA_KEY = "relation_projection"
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _PROJECTION_READY_MAX_ATTEMPTS = 3
 _ARTIST_SEARCH_PROJECTION_ROWS_KEY = "_artist_search_projection_rows"
+_COOPERATIVE_YIELD_INTERVAL = 256
+_BACKGROUND_COOPERATIVE_SLEEP_SECONDS = 0.002
 
 
 def _raise_if_projection_cancelled(cancel_requested: object | None) -> None:
     if cancel_requested is not None and cancel_requested.is_set():
         raise InterruptedError("Relation projection readiness was cancelled.")
+
+
+def _cooperate_with_foreground(cancel_requested: object) -> None:
+    _raise_if_projection_cancelled(cancel_requested)
+    sleep(_BACKGROUND_COOPERATIVE_SLEEP_SECONDS)
 
 
 @contextmanager
@@ -170,9 +177,16 @@ def relation_projection_readiness_stale_reason(scan_cache: object) -> str:
     )
 
 
-def relation_source_fingerprint(rows: list[object]) -> str:
-    facts = sorted(
-        {
+def relation_source_fingerprint(
+    rows: list[object],
+    *,
+    cooperate: Callable[[], None] | None = None,
+) -> str:
+    facts = set()
+    for row_index, row in enumerate(rows):
+        if cooperate is not None and row_index % _COOPERATIVE_YIELD_INTERVAL == 0:
+            cooperate()
+        facts.add(
             (
                 _int_value(row, "album_id"),
                 _int_value(row, "owner_artist_id"),
@@ -191,19 +205,21 @@ def relation_source_fingerprint(rows: list[object]) -> str:
                 _text_value(row, "relative_path"),
                 _text_value(row, "private_path"),
             )
-            for row in rows
-        }
-    )
-    payload = json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+        )
+    payload = json.dumps(sorted(facts), ensure_ascii=False, separators=(",", ":"))
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def build_relation_views_from_postgres_rows(
     config: Mapping[str, object],
     rows: list[object],
+    *,
+    cooperate: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     del config
-    return build_postgres_relation_views(rows)
+    if cooperate is None:
+        return build_postgres_relation_views(rows)
+    return build_postgres_relation_views(rows, cooperate=cooperate)
 
 
 def build_ready_relation_projection_metadata(
@@ -343,12 +359,25 @@ def _ensure_relation_projection_ready(
                 source_row_count = len(rows)
                 _raise_if_projection_cancelled(cancel_requested)
                 phase_started_at = perf_counter()
-                source_fingerprint = relation_source_fingerprint(rows)
+                if cancel_requested is None:
+                    source_fingerprint = relation_source_fingerprint(rows)
+                else:
+                    source_fingerprint = relation_source_fingerprint(
+                        rows,
+                        cooperate=lambda: _cooperate_with_foreground(cancel_requested),
+                    )
                 phase_timings_ms["fingerprint"] = (
                     perf_counter() - phase_started_at
                 ) * 1000
                 phase_started_at = perf_counter()
-                relation_views = build_relation_views_from_postgres_rows(config, rows)
+                if cancel_requested is None:
+                    relation_views = build_relation_views_from_postgres_rows(config, rows)
+                else:
+                    relation_views = build_relation_views_from_postgres_rows(
+                        config,
+                        rows,
+                        cooperate=lambda: _cooperate_with_foreground(cancel_requested),
+                    )
                 phase_timings_ms["pure_build"] = (
                     perf_counter() - phase_started_at
                 ) * 1000
@@ -910,86 +939,147 @@ def load_relation_source_rows_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
-        album_track_artist_summary as (
+        live_files as not materialized (
           select
             library.local_tracks.library_id,
             library.local_tracks.album_id,
-            min(library.local_tracks.artist_id) as sole_track_artist_id
-          from library.local_tracks
-          join bootstrap_context
-            on bootstrap_context.library_id = library.local_tracks.library_id
+            library.local_tracks.artist_id as track_artist_id,
+            library.local_track_files.id as track_file_id,
+            library.local_track_files.library_root_id,
+            library.library_roots.root_kind,
+            library.library_roots.root_path,
+            library.local_track_files.relative_path,
+            library.local_track_files.private_path
+          from bootstrap_context
+          join library.local_tracks
+            on library.local_tracks.library_id = bootstrap_context.library_id
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
            and library.local_track_files.scan_cache_stale is false
+          join library.library_roots
+            on library.library_roots.id = library.local_track_files.library_root_id
+           and library.library_roots.library_id = bootstrap_context.library_id
           where library.local_tracks.album_id is not null
+        ),
+        relation_locations as materialized (
+          select
+            live_files.library_id,
+            live_files.album_id,
+            min(live_files.track_file_id) as track_file_id,
+            live_files.library_root_id,
+            live_files.root_kind,
+            live_files.root_path,
+            min(live_files.relative_path) as relative_path,
+            min(live_files.private_path) as private_path
+          from live_files
           group by
-            library.local_tracks.library_id,
-            library.local_tracks.album_id
-          having count(*) = count(library.local_tracks.artist_id)
-             and count(distinct library.local_tracks.artist_id) = 1
+            live_files.library_id,
+            live_files.album_id,
+            live_files.library_root_id,
+            live_files.root_kind,
+            live_files.root_path,
+            regexp_replace(
+              replace(btrim(coalesce(live_files.relative_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            ),
+            regexp_replace(
+              replace(btrim(coalesce(live_files.private_path, '')), chr(92), '/'),
+              '(^|/)[^/]*$',
+              ''
+            )
+        ),
+        album_track_artist_summary as (
+          select
+            live_files.library_id,
+            live_files.album_id,
+            case
+              when count(*) = count(live_files.track_artist_id)
+               and count(distinct live_files.track_artist_id) = 1
+              then min(live_files.track_artist_id)
+            end as sole_track_artist_id
+          from live_files
+          group by live_files.library_id, live_files.album_id
+        ),
+        album_facts as materialized (
+          select
+            library.local_albums.id as album_id,
+            library.local_albums.library_id,
+            owner_artist.id as owner_artist_id,
+            owner_artist.name as owner_artist_name,
+            coalesce(
+              nullif(library.local_albums.metadata ->> 'album_artist', ''),
+              owner_artist.name
+            ) as album_artist,
+            lower(btrim(coalesce(
+              library.local_albums.metadata ->> 'is_compilation',
+              'false'
+            ))) in ('true', 't', 'yes', 'y', 'on', '1') as album_is_compilation,
+            library.local_albums.metadata,
+            album_track_artist_summary.sole_track_artist_id
+          from album_track_artist_summary
+          join library.local_albums
+            on library.local_albums.library_id = album_track_artist_summary.library_id
+           and library.local_albums.id = album_track_artist_summary.album_id
+          left join library.local_artists as owner_artist
+            on owner_artist.id = library.local_albums.artist_id
         )
         select
-          library.local_albums.id as album_id,
-          owner_artist.id as owner_artist_id,
-          owner_artist.name as owner_artist_name,
-          coalesce(nullif(library.local_albums.metadata ->> 'album_artist', ''), owner_artist.name) as album_artist,
-          lower(btrim(coalesce(
-            library.local_albums.metadata ->> 'is_compilation',
-            'false'
-          ))) in ('true', 't', 'yes', 'y', 'on', '1') as album_is_compilation,
-          member_artist.id as member_artist_id,
-          member_artist.name as member_artist_name,
-          library.local_album_featured_artists.featured_kind,
-          coalesce(
-            album_track_artist_summary.sole_track_artist_id = member_artist.id,
-            false
-          ) as member_artist_is_album_wide_track_artist,
+          album_facts.album_id,
+          album_facts.owner_artist_id,
+          album_facts.owner_artist_name,
+          album_facts.album_artist,
+          album_facts.album_is_compilation,
+          null as member_artist_id,
+          null as member_artist_name,
+          null as featured_kind,
+          false as member_artist_is_album_wide_track_artist,
           coalesce(
             case
               when regexp_replace(
-                     replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                      '/+$',
                      ''
                    ) ~ '(^|/)(soundtracks?|ost)$'
                 or regexp_replace(
-                     replace(lower(btrim(coalesce(library.local_track_files.relative_path, ''))), chr(92), '/'),
+                replace(lower(btrim(coalesce(relation_locations.relative_path, ''))), chr(92), '/'),
                      '^/+',
                      ''
                    ) ~ '^(soundtracks?|ost)(/|$)'
                 or (
-                     nullif(btrim(coalesce(library.local_track_files.relative_path, '')), '') is null
+                nullif(btrim(coalesce(relation_locations.relative_path, '')), '') is null
                  and regexp_replace(
-                       replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                        '/+$',
                        ''
                      ) <> ''
                  and left(
                        replace(
-                         lower(btrim(coalesce(library.local_track_files.private_path, ''))),
+                    lower(btrim(coalesce(relation_locations.private_path, ''))),
                          chr(92),
                          '/'
                        ),
                        char_length(
                          regexp_replace(
-                           replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                            '/+$',
                            ''
                          )
                        ) + 1
                      ) = regexp_replace(
-                           replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                            '/+$',
                            ''
                          ) || '/'
                  and substring(
                        replace(
-                         lower(btrim(coalesce(library.local_track_files.private_path, ''))),
+                    lower(btrim(coalesce(relation_locations.private_path, ''))),
                          chr(92),
                          '/'
                        )
                        from char_length(
                          regexp_replace(
-                           replace(lower(btrim(coalesce(library.library_roots.root_path, ''))), chr(92), '/'),
+                    replace(lower(btrim(coalesce(relation_locations.root_path, ''))), chr(92), '/'),
                            '/+$',
                            ''
                          )
@@ -998,41 +1088,53 @@ def load_relation_source_rows_sql() -> str:
                    )
               then 'soundtrack_root'
             end,
-            nullif(library.local_album_featured_artists.metadata ->> 'relation_evidence_kind', ''),
-            nullif(library.local_albums.metadata ->> 'relation_evidence_kind', ''),
+            nullif(album_facts.metadata ->> 'relation_evidence_kind', ''),
             ''
           ) as relation_evidence_kind,
-          library.local_track_files.id as track_file_id,
-          library.local_track_files.library_root_id,
-          library.library_roots.root_kind,
-          library.library_roots.root_path,
-          library.local_track_files.relative_path,
-          library.local_track_files.private_path as private_path
-        from library.local_albums
-        join bootstrap_context on bootstrap_context.library_id = library.local_albums.library_id
-        left join album_track_artist_summary
-          on album_track_artist_summary.library_id = library.local_albums.library_id
-         and album_track_artist_summary.album_id = library.local_albums.id
-        left join library.local_artists as owner_artist
-          on owner_artist.id = library.local_albums.artist_id
-        left join library.local_album_featured_artists
-          on library.local_album_featured_artists.library_id = library.local_albums.library_id
-         and library.local_album_featured_artists.album_id = library.local_albums.id
+          relation_locations.track_file_id,
+          relation_locations.library_root_id,
+          relation_locations.root_kind,
+          relation_locations.root_path,
+          relation_locations.relative_path,
+          relation_locations.private_path
+        from album_facts
+        join relation_locations
+          on relation_locations.library_id = album_facts.library_id
+         and relation_locations.album_id = album_facts.album_id
+        union all
+        select
+          album_facts.album_id,
+          album_facts.owner_artist_id,
+          album_facts.owner_artist_name,
+          album_facts.album_artist,
+          album_facts.album_is_compilation,
+          member_artist.id as member_artist_id,
+          member_artist.name as member_artist_name,
+          library.local_album_featured_artists.featured_kind,
+          coalesce(
+            album_facts.sole_track_artist_id = member_artist.id,
+            false
+          ) as member_artist_is_album_wide_track_artist,
+          coalesce(
+            nullif(
+              library.local_album_featured_artists.metadata ->> 'relation_evidence_kind',
+              ''
+            ),
+            nullif(album_facts.metadata ->> 'relation_evidence_kind', ''),
+            ''
+          ) as relation_evidence_kind,
+          null as track_file_id,
+          null as library_root_id,
+          null as root_kind,
+          null as root_path,
+          null as relative_path,
+          null as private_path
+        from album_facts
+        join library.local_album_featured_artists
+          on library.local_album_featured_artists.library_id = album_facts.library_id
+         and library.local_album_featured_artists.album_id = album_facts.album_id
         left join library.local_artists as member_artist
-          on member_artist.id = library.local_album_featured_artists.artist_id
-        join library.local_tracks
-          on library.local_tracks.library_id = library.local_albums.library_id
-         and library.local_tracks.album_id = library.local_albums.id
-        join library.local_track_files
-          on library.local_track_files.track_id = library.local_tracks.id
-         and library.local_track_files.scan_cache_stale is false
-        join library.library_roots
-          on library.library_roots.id = library.local_track_files.library_root_id
-         and library.library_roots.library_id = bootstrap_context.library_id
-        order by
-          library.local_albums.id,
-          member_artist.id nulls first,
-          library.local_track_files.id nulls first;
+          on member_artist.id = library.local_album_featured_artists.artist_id;
     """
 
 

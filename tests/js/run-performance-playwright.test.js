@@ -498,6 +498,8 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
       'utility-problematic-files',
       'utility-rules',
       'selected-artist',
+      'album-title-search',
+      'track-title-search',
       'search-browse',
       'root-album-browse',
       'artist-tree-scroll-navigation',
@@ -515,7 +517,7 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
     'scan-error',
     ]
   );
-  assert.equal(targets.length, 24);
+  assert.equal(targets.length, 26);
 });
 test('resolveRequestedTargets rejects an unknown performance group', () => {
   assert.throws(() => _private.resolveRequestedTargets({
@@ -582,6 +584,8 @@ test('resolveRequestedTargets can limit the run to the real-app group', () => {
       'utility-problematic-files',
       'utility-rules',
       'selected-artist',
+      'album-title-search',
+      'track-title-search',
       'search-browse',
       'root-album-browse',
       'artist-tree-scroll-navigation',
@@ -590,7 +594,7 @@ test('resolveRequestedTargets can limit the run to the real-app group', () => {
       'rules-focused',
     ]
   );
-  assert.equal(targets.length, 12);
+  assert.equal(targets.length, 14);
 });
 
 test('resolveRequestedTargets can limit the run to the idle-memory group', () => {
@@ -670,7 +674,11 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['utility-problematic-files'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['utility-rules'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['selected-artist'], 'real-app-library-browse-load');
+  assert.equal(classesByTarget['notification-history'], 'real-app-library-browse-load');
+  assert.equal(classesByTarget['edit-tags-post-edit'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['cover-lookup'], 'real-app-library-browse-load');
+  assert.equal(classesByTarget['album-title-search'], 'real-app-library-browse-load');
+  assert.equal(classesByTarget['track-title-search'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['search-browse'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['root-album-browse'], 'real-app-library-browse-load');
   assert.equal(classesByTarget['artist-tree-scroll-navigation'], 'real-app-library-browse-load');
@@ -682,7 +690,7 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['scan-add-album'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-metadata'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-page'], 'scanner-index-cache');
-  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 14);
+  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 18);
   assert.equal(classesByTarget['paired-search-calibration'], 'real-app-library-browse-load');
 });
 
@@ -1398,9 +1406,20 @@ test('one-off synthetic performance launch strips owner paths before spawning th
 
   assert.ok(launched, 'expected the one-off target to spawn run-playwright');
   assert.ok(launched.args.includes('--real-app-port=5123'));
+  assert.equal(launched.options.env.PLAYWRIGHT_PROVIDER_PORT, '5125');
   for (const name of inheritedNames) {
     assert.equal(launched.options.env[name], '', name);
   }
+});
+
+test('notification-history performance target publishes its report contract', () => {
+  const target = _private.resolvePerformanceTarget('notification-history');
+  assert.equal(target.reportId, 'notificationHistoryLocal');
+  assert.equal(
+    target.specPath,
+    'tests/e2e/syntheticLargeLibrary/notificationHistoryPerformance.spec.js',
+  );
+  assert.equal(target.grep, 'FTC-NOTIFICATIONS-001P');
 });
 
 test('parseCliArgs rejects the CI timing contract outside trusted PR Actions provenance', (t) => {
@@ -2026,11 +2045,11 @@ function validTimingValidation(overrides = {}) {
     metricId: 'artist-family.treeNealSelectionMs',
     contractName: 'ci',
     units: 'ms',
-    actual: 851,
-    targetMaximum: 650,
+    actual: 301,
+    targetMaximum: 100,
     graceMs: 200,
-    hardCeiling: 850,
-    allowedMaximum: 850,
+    hardCeiling: 300,
+    allowedMaximum: 300,
     passed: false,
     performanceStatus: 'hard-fail',
     ...overrides,
@@ -2064,10 +2083,10 @@ test('classifyPerformanceAttempt permits recovery only for complete CI timing ha
       validTimingValidation({
         key: 'treeCosmicSelectionMs',
         metricId: 'artist-family.treeCosmicSelectionMs',
-        actual: 901,
-        targetMaximum: 700,
-        hardCeiling: 900,
-        allowedMaximum: 900,
+        actual: 301,
+        targetMaximum: 100,
+        hardCeiling: 300,
+        allowedMaximum: 300,
       }),
     ],
   }, 'ci'), {
@@ -2079,8 +2098,8 @@ test('classifyPerformanceAttempt permits recovery only for complete CI timing ha
 
 test('classifyPerformanceAttempt treats target-met and grace-used as terminal passes', () => {
   for (const timing of [
-    validTimingValidation({ actual: 640, passed: true, performanceStatus: 'target-met' }),
-    validTimingValidation({ actual: 800, passed: true, performanceStatus: 'grace-used' }),
+    validTimingValidation({ actual: 90, passed: true, performanceStatus: 'target-met' }),
+    validTimingValidation({ actual: 250, passed: true, performanceStatus: 'grace-used' }),
   ]) {
     assert.deepEqual(_private.classifyPerformanceAttempt({
       status: 0,
@@ -2153,7 +2172,7 @@ test('local timing hard failures remain single-attempt failures', () => {
     functionalChecksComplete: true,
     nonTimingChecksComplete: true,
     validationResults: [validTimingValidation({
-      contractName: 'local', actual: 651, targetMaximum: 450, hardCeiling: 650,
+      contractName: 'local', actual: 301, targetMaximum: 100, hardCeiling: 300,
     })],
   }, 'local'), {
     outcome: 'hard-fail',
@@ -2922,7 +2941,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 24);
+  assert.equal(calls.length, 26);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
   assert.equal(
     calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
@@ -2934,7 +2953,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   );
   assert.deepEqual(
     calls.map((call) => call.args[1]),
-    new Array(24).fill('test'),
+    new Array(26).fill('test'),
   );
   assert.equal(calls[3].args.includes('--real-app-port=5001'), true);
   assert.equal(calls[4].args.includes('--real-app-port=5011'), true);
@@ -2947,7 +2966,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[11].args.includes('--real-app-port=5101'), true);
   assert.equal(calls[12].args.includes('--real-app-port=5111'), true);
   assert.equal(calls[13].args.includes('--real-app-port=5121'), true);
-  for (const call of calls.slice(3, 15)) {
+  for (const call of calls.slice(3, 17)) {
     assert.deepEqual(call.options.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE, 'postgres');
   }
   assert.equal(calls[6].options.env.ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY, undefined);
@@ -2964,12 +2983,12 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-016')).options.env.PLAYWRIGHT_PORT, '4176');
   assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-017')).options.env.PLAYWRIGHT_PORT, '4177');
   assert.equal(calls.find((call) => call.args.includes('--grep=FTC-OPS-003(C|E)')).options.env.PLAYWRIGHT_PORT, '4178');
-  assert.equal(calls[16].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cold');
-  assert.equal(calls[17].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
-  assert.equal(calls[18].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
-  assert.equal(calls[19].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'metadata');
+  assert.equal(calls[18].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cold');
+  assert.equal(calls[19].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
   assert.equal(calls[20].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
-  const scanSamplePaths = calls.slice(16, 23).map(
+  assert.equal(calls[21].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'metadata');
+  assert.equal(calls[22].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'add-album');
+  const scanSamplePaths = calls.slice(18, 25).map(
     (call) => call.options.env.ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH,
   );
   assert.equal(new Set(scanSamplePaths).size, 7);
@@ -2979,8 +2998,8 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.match(scanSamplePaths[3], /scan-metadata-port-4177-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[4], /scan-page-port-4178-attempt-1-[0-9a-f-]{36}\.jsonl$/);
   assert.match(scanSamplePaths[6], /scan-error-port-4180-attempt-1-[0-9a-f-]{36}\.jsonl$/);
-  assert.equal(calls[22].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
-  assert.equal(calls[22].args.includes('--grep=FTC-OPS-003G'), true);
+  assert.equal(calls[24].options.env.ALBUM_HAVEN_SCAN_PERFORMANCE_SCENARIO, 'cached');
+  assert.equal(calls[24].args.includes('--grep=FTC-OPS-003G'), true);
   for (const samplesPath of scanSamplePaths) assert.equal(fs.existsSync(samplesPath), false);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
@@ -3011,18 +3030,20 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(calls[6].args.includes('--grep=FTC-UTIL-PROBLEMS-009'), true);
   assert.equal(calls[7].args.includes('--grep=FTC-UTIL-RULES-002'), true);
   assert.equal(calls[8].args.includes('--grep=FTC-GALLERY-STARTUP-005Q'), true);
-  assert.equal(calls[9].args.includes('--grep=FTC-GALLERY-STARTUP-005R'), true);
-  assert.equal(calls[10].args.includes('--grep=FTC-GALLERY-STARTUP-005S'), true);
-  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3|4|5)'), true);
-  assert.equal(calls[12].args.includes('--grep=FTC-GALLERY-NAV-036'), true);
-  assert.equal(calls[13].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
-  assert.equal(calls[14].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);
-  assert.equal(calls[15].args.includes('--grep=FTC-UTIL-RULES-002P'), true);
-  assert.equal(calls[16].args.includes('--grep=FTC-OPS-014'), true);
-  assert.equal(calls[17].args.includes('--grep=FTC-OPS-015'), true);
-  assert.equal(calls[18].args.includes('--grep=FTC-OPS-016'), true);
-  assert.equal(calls[19].args.includes('--grep=FTC-OPS-017'), true);
-  assert.equal(calls[20].args.includes('--grep=FTC-OPS-003(C|E)'), true);
+  assert.equal(calls[9].args.includes('--grep=FTC-SEARCH-NAV-029P'), true);
+  assert.equal(calls[10].args.includes('--grep=FTC-SEARCH-NAV-030P'), true);
+  assert.equal(calls[11].args.includes('--grep=FTC-GALLERY-STARTUP-005R'), true);
+  assert.equal(calls[12].args.includes('--grep=FTC-GALLERY-STARTUP-005S'), true);
+  assert.equal(calls[13].args.includes('--grep=FTC-GALLERY-NAV-03(?:2|3|4|5)'), true);
+  assert.equal(calls[14].args.includes('--grep=FTC-GALLERY-NAV-036'), true);
+  assert.equal(calls[15].args.includes('--grep=FTC-GALLERY-STARTUP-005T'), true);
+  assert.equal(calls[16].args.includes('--grep=FTC-UTIL-PROBLEMS-010'), true);
+  assert.equal(calls[17].args.includes('--grep=FTC-UTIL-RULES-002P'), true);
+  assert.equal(calls[18].args.includes('--grep=FTC-OPS-014'), true);
+  assert.equal(calls[19].args.includes('--grep=FTC-OPS-015'), true);
+  assert.equal(calls[20].args.includes('--grep=FTC-OPS-016'), true);
+  assert.equal(calls[21].args.includes('--grep=FTC-OPS-017'), true);
+  assert.equal(calls[22].args.includes('--grep=FTC-OPS-003(C|E)'), true);
 });
 
 test('resolvePerformanceAttemptStatus rejects a false-zero child status when Playwright reported a failed test', () => {
@@ -3185,10 +3206,10 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 24);
+  assert.equal(calls.length, 26);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
   }
-  assert.equal(calls[20].options.env.PLAYWRIGHT_PORT, '4178');
-  assert.equal(calls[20].args.includes('--timeout=240000'), true);
+  assert.equal(calls[22].options.env.PLAYWRIGHT_PORT, '4178');
+  assert.equal(calls[22].args.includes('--timeout=240000'), true);
 });

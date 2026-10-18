@@ -4,6 +4,7 @@ from datetime import datetime
 
 import pytest
 
+import music_app.services.cover_lookup_tasks_postgres as cover_lookup_tasks_postgres
 from music_app.services.cover_lookup_tasks_postgres import CoverLookupTasksPostgresAdapter
 
 
@@ -45,6 +46,37 @@ def _adapter(connection):
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example/test"},
         connect=lambda _database_url: connection,
     )
+
+
+def test_adapter_uses_prewarmed_default_pool_when_connector_not_injected(monkeypatch):
+    database_url = "postgresql://example/test"
+    connection = _Connection(
+        count_rows=[{"total_count": 528, "active_count": 3, "finished_count": 525}]
+    )
+    pool_calls = []
+
+    def pooled_connection(actual_database_url, *, workload):
+        pool_calls.append((actual_database_url, workload))
+        return connection
+
+    monkeypatch.setattr(
+        cover_lookup_tasks_postgres,
+        "_pooled_connection",
+        pooled_connection,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cover_lookup_tasks_postgres,
+        "_connect",
+        lambda _database_url: pytest.fail("direct connection should not be opened"),
+    )
+
+    adapter = CoverLookupTasksPostgresAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": database_url}
+    )
+
+    assert adapter.count_notifications()["total_count"] == 528
+    assert pool_calls == [(database_url, "default")]
 
 
 def _row(task_id: str, timestamp: str, *, status: str = "completed"):
@@ -101,6 +133,7 @@ def test_interrupt_stale_notifications_atomically_terminalizes_active_rows():
     assert "source_family" in sql
     assert "candidate_updated_at" in sql
     assert "greatest(" in sql
+    assert "'message', %s::text" in sql
     assert "returning ops.cover_lookup_tasks.task_key" in sql
     assert ["pending", "running"] in params
     assert stale_before in params

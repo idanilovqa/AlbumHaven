@@ -374,6 +374,21 @@ function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
   ];
 }
 
+function buildNotificationHistoryLocalSummaryCards(_checkpoints, metricsPayload) {
+  return [
+    ['Drawer Open', metricsPayload?.drawerOpenMs, 'First 50-row page'],
+    ['Slowest Page', metricsPayload?.paginationMaximumMs, 'Cursor pagination maximum'],
+    ['Post-History Search', metricsPayload?.searchGalleryReadyMs, 'Search and decoded gallery'],
+    ['Post-History Tree', metricsPayload?.treeGalleryReadyMs, 'Direct Artist Tree selection'],
+    ['Notification Cover Lookup', metricsPayload?.coverLookupModalReadyMs, 'Correct task modal'],
+    ['Post-History Gallery Scroll', metricsPayload?.galleryScrollMs, 'Native wheel response'],
+  ].map(([label, timingMs, note]) => ({
+    label,
+    value: Number.isFinite(timingMs) ? `${Math.round(timingMs)} ms` : 'Not recorded',
+    note,
+  }));
+}
+
 function buildEditTagsPostEditSummaryCards(_checkpoints, metricsPayload) {
   return [
     ['Search Gallery', metricsPayload?.searchGalleryReadyMs, 'Post-edit exact-artist search'],
@@ -1126,6 +1141,25 @@ export const test = base.extend({
         'cover-lookup.candidateReadyMs',
         'cover-lookup.candidateSelectionMs',
         'cover-lookup.saveAcceptedMs',
+      ],
+    });
+  },
+
+  notificationHistoryLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'notification-history-local',
+      reportId: 'notificationHistoryLocal',
+      caseId: 'FTC-NOTIFICATIONS-001P',
+      title: 'Notification History Performance Benchmark',
+      intro: 'This synthetic performance report measures a 528-row PostgreSQL notification history, bounded virtualization, retained memory and DOM, and same-session interaction responsiveness.',
+      buildSummaryCards: buildNotificationHistoryLocalSummaryCards,
+      expectedTimingMetricIds: [
+        'notification-history.drawerOpenMs',
+        'notification-history.paginationMs',
+        'notification-history.searchGalleryReadyMs',
+        'notification-history.treeGalleryReadyMs',
+        'notification-history.coverLookupModalReadyMs',
+        'notification-history.galleryScrollMs',
       ],
     });
   },

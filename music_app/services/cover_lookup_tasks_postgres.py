@@ -7,6 +7,8 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
 
+from music_app.services.postgres_connections import pooled_connection as _pooled_connection
+
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
     from psycopg.rows import dict_row
@@ -47,6 +49,7 @@ class CoverLookupTasksPostgresAdapter:
         connect: Callable[[str], Any] | None = None,
     ) -> None:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+        self._use_shared_connection_pool = connect is None
         self._connect = connect or _connect
 
     def load_notifications(self) -> list[dict[str, object]]:
@@ -226,6 +229,8 @@ class CoverLookupTasksPostgresAdapter:
             raise RuntimeError(
                 "ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres cover lookup tasks."
             )
+        if self._use_shared_connection_pool:
+            return _pooled_connection(self._database_url, workload="default")
         return self._connect(self._database_url)
 
 
@@ -873,7 +878,7 @@ def _interrupt_stale_notifications_sql() -> str:
                         'progress_label', 'Interrupted',
                         'result_kind', 'interrupted',
                         'finished_at', %s::timestamptz::text,
-                        'message', %s
+                        'message', %s::text
                     )
             )
         from bootstrap_context

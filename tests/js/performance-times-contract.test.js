@@ -167,6 +167,30 @@ test('checked-in timing authority contains the approved local and CI triplets', 
       local: [800, 400, 1200],
       ci: [800, 400, 1200],
     },
+    'notification-history.drawerOpenMs': {
+      local: [500, 200, 700],
+      ci: [500, 200, 700],
+    },
+    'notification-history.paginationMs': {
+      local: [500, 200, 700],
+      ci: [500, 200, 700],
+    },
+    'notification-history.searchGalleryReadyMs': {
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
+    },
+    'notification-history.treeGalleryReadyMs': {
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
+    },
+    'notification-history.coverLookupModalReadyMs': {
+      local: [1000, 400, 1400],
+      ci: [1000, 400, 1400],
+    },
+    'notification-history.galleryScrollMs': {
+      local: [800, 400, 1200],
+      ci: [800, 400, 1200],
+    },
     'root-album-browse.rootAlbumBrowseApiMs': {
       local: [6000, 400, 6400],
       ci: [6000, 400, 6400],

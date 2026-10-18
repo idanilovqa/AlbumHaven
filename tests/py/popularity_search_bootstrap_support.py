@@ -8,7 +8,7 @@ import os
 from psycopg.conninfo import conninfo_to_dict
 from pathlib import Path
 from threading import Lock
-from uuid import uuid4
+from uuid import UUID, uuid4
 import wave
 
 import psycopg
@@ -29,6 +29,50 @@ from music_app.services.popularity_snapshots import PopularityObservation
 from music_app.services.relation_projection_postgres import replace_relation_alias_endpoints_in_transaction
 
 ACTIONS = (BROWSE,)
+
+
+def bootstrap_social_baseline(connection, library, baseline=None):
+    """Verify only the canonical trigger-created rows; never adopt or repair drift."""
+    owners = connection.execute("""select a.id as account_id,a.account_kind,
+        a.metadata as account_metadata,b.metadata as owner_metadata
+        from app.bootstrap_owners b join app.accounts a on a.id=b.account_id
+        join library.libraries l on l.owner_account_id=a.id
+        where b.owner_key='local-bootstrap-owner' and l.id=%s
+          and l.name='Local Library' and l.library_kind='local'""", (library,)).fetchall()
+    source = {"source": "isolated_e2e_launcher"}
+    if (type(library) is not int or library <= 0 or len(owners) != 1
+            or type(owners[0]["account_id"]) is not int or owners[0]["account_id"] <= 0
+            or owners[0]["account_kind"] != "bootstrap_owner"
+            or owners[0]["account_metadata"] != source or owners[0]["owner_metadata"] != source):
+        raise RuntimeError("Canonical social baseline owner differs.")
+    owner = owners[0]["account_id"]
+    profiles = connection.execute("""select to_jsonb(p) as data from app.social_profiles p
+        where account_id=%s""", (owner,)).fetchall()
+    policies = connection.execute("""select to_jsonb(p) as data,isfinite(updated_at) as finite
+        from app.friend_policies p where library_id=%s""", (library,)).fetchall()
+    if len(profiles) != 1 or len(policies) != 1:
+        raise RuntimeError("Canonical trigger-created social rows are missing or duplicated.")
+    profile, policy = profiles[0]["data"], policies[0]["data"]
+    if (not isinstance(profile, dict) or set(profile) != {"account_id", "account_ref"}
+            or type(profile["account_id"]) is not int or profile["account_id"] != owner
+            or not isinstance(profile["account_ref"], str)):
+        raise RuntimeError("Canonical social profile differs.")
+    try:
+        valid_ref = str(UUID(profile["account_ref"])) == profile["account_ref"]
+    except (ValueError, AttributeError, TypeError):
+        valid_ref = False
+    if not valid_ref:
+        raise RuntimeError("Canonical social profile UUID is invalid.")
+    if (not isinstance(policy, dict)
+            or set(policy) != {"library_id", "auto_friend", "updated_by_account_id", "updated_at"}
+            or type(policy["library_id"]) is not int or policy["library_id"] != library
+            or policy["auto_friend"] is not False or policy["updated_by_account_id"] is not None
+            or policy["updated_at"] is None or policies[0]["finite"] is not True):
+        raise RuntimeError("Canonical friend policy defaults differ.")
+    current = {"profile": dict(profile), "policy": dict(policy)}
+    if baseline is not None and current != baseline:
+        raise RuntimeError("Canonical social baseline changed; quarantine required.")
+    return current
 
 
 def publish_stored(con, library, metadata):
@@ -106,6 +150,7 @@ class BootstrapPopularityDatabase:
     def setup(self):
         with self.connect() as con:
             self.library, self.bootstrap_owner, self.baseline = preflight(con, self.app_url, self.app_connect)
+            self.social_baseline = bootstrap_social_baseline(con, self.library)
             validate_readonly_binding(self)
             self.refresh_baseline, self.clock_baseline = preserved_state(con, self.library)
             self.owner = self.member(con)
@@ -254,6 +299,7 @@ class BootstrapPopularityDatabase:
         if self.library is None:
             return
         with self.connect() as con:
+            bootstrap_social_baseline(con, self.library, self.social_baseline)
             current = bootstrap_identity(con)
             assert current == (self.library, self.bootstrap_owner)
             assert con.execute('select count(*) as n from library.libraries where id<>%s',
@@ -300,8 +346,10 @@ class BootstrapPopularityDatabase:
                     where provider='lastfm' and metric='overall_scrobbles' and source_entity_id=any(%s)""", (keys,))
         with self.app_connect(self.app_url) as con:
             assert bootstrap_identity(con) == (self.library,self.bootstrap_owner)
+            bootstrap_social_baseline(con, self.library, self.social_baseline)
             publish_stored(con, self.library, self.baseline)
         with self.connect() as con:
+            bootstrap_social_baseline(con, self.library, self.social_baseline)
             library, owner, metadata = preflight(con, self.app_url, self.app_connect)
             assert (library, owner, metadata) == (self.library, self.bootstrap_owner, self.baseline)
             refresh, clocks = preserved_state(con, self.library)
@@ -366,10 +414,12 @@ def preflight(con, app_url, connect):
     isolatedPostgres._assert_connected_role(con, isolatedPostgres.SETUP_ROLE)
     library, owner = bootstrap_identity(con)
     from psycopg import sql
-    expected = {('app','accounts'):1, ('app','bootstrap_owners'):1,
+    expected = {('app','social_profiles'):1, ('app','friend_policies'):1,
+                ('app','accounts'):1, ('app','bootstrap_owners'):1,
                 ('library','libraries'):1, ('library','relation_alias_endpoint_publications'):1,
                 ('library','gallery_projection_state'):1, ('library','public_metadata_source_state'):1,
                 ('catalog','popularity_api_refresh_state'):1}
+    social = bootstrap_social_baseline(con, library)
     preserved_state(con, library)
     tables = con.execute("""select n.nspname as schema_name,c.relname as table_name
         from pg_class c join pg_namespace n on n.oid=c.relnamespace
@@ -402,6 +452,7 @@ def preflight(con, app_url, connect):
     assert all(views[key] == [] for key in ('artists','artists_sidebar','sidebar_families'))
     with connect(app_url) as app:
         isolatedPostgres._assert_connected_role(app, isolatedPostgres.RUNTIME_ROLE)
+        bootstrap_social_baseline(app, library, social)
         flags = app.execute("""select
             pg_has_role(current_user,'album_haven_app','USAGE') as app,
             not pg_has_role(current_user,'album_haven_migrator','MEMBER') as limited,

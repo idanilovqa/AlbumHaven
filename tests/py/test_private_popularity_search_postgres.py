@@ -477,3 +477,32 @@ def test_final_album_media_revoke_downgrades_details_playability(popular_db,monk
     monkeypatch.setattr(PrivateNativeTargets,'resolve_album',resolve)
     result = native(db,initial,operation='single',intent='details',constraints=constraints)
     assert result['data']['native_target']['allowed_actions'] == {'can_view_details':True,'can_play_album':False}
+
+
+def test_owned_popularity_cleanup_preserves_canonical_social_rows(monkeypatch, tmp_path):
+    from tests.py.popularity_search_bootstrap_support import (
+        bootstrap_popularity_db, bootstrap_social_baseline,
+    )
+    # Exercise the real owned fixture, its ordinary runtime reads and cleanup.
+    # Additional test accounts create their own profiles; only their recorded
+    # parents may be removed. The canonical profile and policy remain exact.
+    with bootstrap_popularity_db(monkeypatch, tmp_path) as db:
+        baseline = db.social_baseline
+        with db.app_connect(db.app_url) as con:
+            assert bootstrap_social_baseline(con, db.library, baseline) == baseline
+        with db.connect() as con:
+            assert con.execute('select count(*) as n from app.social_profiles').fetchone()['n'] > 1
+        real_cleanup = db.cleanup
+        cleanups = []
+        def checked_cleanup():
+            assert not cleanups, 'The context finalizer must invoke cleanup once'
+            real_cleanup()
+            # The context releases its ownership lease only after this wrapper
+            # returns, so committed singleton reads cannot race the next fixture.
+            with db.connect() as con:
+                assert bootstrap_social_baseline(con, db.library, baseline) == baseline
+                assert con.execute('select count(*) as n from app.social_profiles').fetchone()['n'] == 1
+                assert con.execute('select count(*) as n from app.friend_policies').fetchone()['n'] == 1
+            cleanups.append(True)
+        monkeypatch.setattr(db, 'cleanup', checked_cleanup)
+    assert cleanups == [True]

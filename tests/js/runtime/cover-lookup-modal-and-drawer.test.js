@@ -264,6 +264,7 @@ function createDrawerHarness(overrides = {}) {
   return {
     context,
     bodyElement,
+    badgeElement,
     clearElement,
     intervalCalls,
     clearedIntervals,
@@ -298,7 +299,7 @@ function createDrawerHarness(overrides = {}) {
 
 require('node:test')('notification startup loads authoritative counts without loading history', async () => {
   const requestedUrls = [];
-  const { context } = createDrawerHarness({
+  const { context, badgeElement } = createDrawerHarness({
     fetch: async (url) => {
       requestedUrls.push(String(url));
       return {
@@ -318,6 +319,7 @@ require('node:test')('notification startup loads authoritative counts without lo
 
   assert.deepEqual(requestedUrls, ['/utilities/cover-lookup/tasks/counts']);
   assert.equal(context.state.coverLookup.notificationCounts.total_count, 528);
+  assert.equal(badgeElement.textContent, '528');
   assert.deepEqual(context.state.coverLookup.tasks || [], []);
 });
 

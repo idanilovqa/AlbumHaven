@@ -15,10 +15,19 @@ in-flight operation and reader, and defers physical close until those uses drain
 A raw reader must be wrapped by the neutral owner's reader-local operation guard.
 Do not use this private resource as a thread-safe public lease.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass
 import os
 import re
 import sys
+
+from music_app.services.rooted_local_file import (
+    _CleanupDomain, _CleanupOwner, _CleanupScope, _cleanup_current,
+)
+
+# Reachable for process lifetime, including dropped backend/exception objects.
+# Explicit native injection is a trusted isolated implementation/test seam.
+_DEFAULT_WINDOWS_CLEANUP_DOMAIN = _CleanupDomain()
 
 
 class WindowsUnavailable(RuntimeError):
@@ -291,6 +300,13 @@ class WindowsBackend:
 
     def __init__(self, native=None):
         self._native = native
+        if native is None:
+            self._cleanup_domain = _DEFAULT_WINDOWS_CLEANUP_DOMAIN
+        else:
+            domain = getattr(native, '_cleanup_domain', None)
+            if domain is None:
+                domain = native._cleanup_domain = _CleanupDomain()
+            self._cleanup_domain = domain
 
     @property
     def native(self):
@@ -303,7 +319,7 @@ class WindowsBackend:
         return self._native is not None and bool(self._native.quarantined)
 
     def _usable(self):
-        if self.quarantined:
+        if self.quarantined or self._cleanup_domain.is_blocked():
             raise WindowsUnavailable("windows_backend_quarantined")
 
     def _selector(self, drive):
@@ -319,30 +335,74 @@ class WindowsBackend:
 
     def _open(self, parent, name, *, directory):
         self._usable()
+        owner = _cleanup_current('owner')
+        if owner is None:
+            raise WindowsUnavailable("windows_ownership_required")
+        # Allocate/register before any resource-producing native operation.
+        record = owner.reserve('handle', self.native.close)
         request = OpenRequest(name, parent, directory)
-        result = self.native.open(request)
+        with _CleanupScope(owner=owner, record=record):
+            result = self.native.open(request)
+        # Keep the result even if subsequent validation/record.bind raises.
+        record.storage = result
         if not isinstance(result, NativeOpenResult):
+            record.uncertain(pending=True)
+            self.native.quarantine(result)
             raise WindowsUnavailable("windows_native_result_incomplete")
+        if type(result.handle) is int and result.handle > 0:
+            record.value = result.handle
         if (type(result.completed) is not bool or type(result.status) is not int
                 or not 0 <= result.status < 2 ** 32 or type(result.io_status) is not int
                 or not 0 <= result.io_status < 2 ** 32
                 or type(result.information) is not int or result.information < 0):
+            record.uncertain(pending=True)
             self.native.quarantine(result)
             raise WindowsNativePending("windows_native_pending")
         if (not result.completed or result.status == STATUS_PENDING
                 or result.io_status == STATUS_PENDING):
-            # The native implementation must not free buffers or parent handles.
-            # Real bindings park the running owner; fakes may raise the special
-            # exception to inspect retained ownership without running native I/O.
+            record.uncertain(pending=True)
             self.native.quarantine(result)
             raise WindowsNativePending("windows_native_pending")
         if (result.status != STATUS_SUCCESS or result.io_status != STATUS_SUCCESS
                 or result.information != FILE_OPENED
                 or type(result.handle) is not int or result.handle <= 0):
-            if type(result.handle) is int and result.handle > 0:
-                self.native.close(result.handle)
+            # Preserve the completed-open failure even if its handle close fails.
+            try:
+                record.close()
+            except BaseException:
+                pass
             raise WindowsUnavailable("windows_native_open_failed")
+        record.bind(result.handle)
         return result.handle
+
+    def _record(self, handle):
+        owner = _cleanup_current('owner')
+        if owner is None:
+            raise WindowsUnavailable("windows_ownership_required")
+        for record in owner.records():
+            if record.kind == 'handle' and record.value == handle:
+                return record
+        raise WindowsUnavailable("windows_ownership_missing")
+
+    def _close_handle(self, handle):
+        owner = _cleanup_current('owner')
+        if owner is not None and any(r.state == 'pending' for r in owner.records()):
+            return  # A pending operation can still reference every parent.
+        self._record(handle).close()
+
+    @contextmanager
+    def _temporary(self, parent, name, *, directory):
+        handle = self._open(parent, name, directory=directory)
+        try:
+            yield handle
+        except BaseException:
+            try:
+                self._close_handle(handle)
+            except BaseException:
+                pass  # Primary validation failure remains the public failure.
+            raise
+        else:
+            self._close_handle(handle)
 
     def _info(self, handle, *, directory, volume=None):
         value = _valid_info(self.native.info(handle), directory=directory)
@@ -366,66 +426,65 @@ class WindowsBackend:
         volume = self._volume(root)
         if self._selector(drive) != selector:
             raise WindowsUnavailable("windows_bootstrap_changed")
-        fresh = self._open(None, selector.drive_target + "\\", directory=True)
-        try:
+        with self._temporary(None, selector.drive_target + "\\", directory=True) as fresh:
             if (self._info(fresh, directory=True).identity != info.identity
                     or self._volume(fresh) != volume):
                 raise WindowsUnavailable("windows_bootstrap_changed")
-        finally:
-            self.native.close(fresh)
         return root, info.identity, volume, selector
 
     def _acquire(self, selection, expected_root_stamp, *, directory_only):
         drive, root_parts, relative_parts = parse_selection(
             selection, require_leaf=not directory_only)
+        self._usable()
+        owner = _CleanupOwner(self._cleanup_domain)
+        with _CleanupScope(owner=owner):
+            try:
+                return self._build(selection, expected_root_stamp, directory_only,
+                                   drive, root_parts, relative_parts, owner)
+            except BaseException:
+                try:
+                    owner.close_all()
+                except BaseException:
+                    pass
+                raise
+
+    def _build(self, selection, expected_root_stamp, directory_only,
+               drive, root_parts, relative_parts, owner):
         handles = []
         links = []
-        resource = None
-        try:
-            bootstrap, boot_identity, volume, selector = self._bootstrap(drive, handles)
-            for part in root_parts + relative_parts:
-                validate_component(part, volume.maximum_component_units)
-            current = bootstrap
-            for name in root_parts:
+        bootstrap, boot_identity, volume, selector = self._bootstrap(drive, handles)
+        for part in root_parts + relative_parts:
+            validate_component(part, volume.maximum_component_units)
+        current = bootstrap
+        for name in root_parts:
+            child = self._open(current, name, directory=True)
+            handles.append(child)
+            info = self._info(child, directory=True, volume=boot_identity.volume_serial)
+            links.append(_Link(current, name, child, info.identity))
+            current = child
+        root_identity = self._info(current, directory=True).identity
+        stamp = WindowsRootStamp("win32", root_identity, selector)
+        if expected_root_stamp is not None and expected_root_stamp != stamp:
+            raise WindowsUnavailable("windows_root_changed")
+        if not directory_only:
+            for name in relative_parts[:-1]:
                 child = self._open(current, name, directory=True)
                 handles.append(child)
                 info = self._info(child, directory=True, volume=boot_identity.volume_serial)
                 links.append(_Link(current, name, child, info.identity))
                 current = child
-            root_identity = self._info(current, directory=True).identity
-            stamp = WindowsRootStamp("win32", root_identity, selector)
-            if expected_root_stamp is not None and expected_root_stamp != stamp:
-                raise WindowsUnavailable("windows_root_changed")
-            if not directory_only:
-                for name in relative_parts[:-1]:
-                    child = self._open(current, name, directory=True)
-                    handles.append(child)
-                    info = self._info(child, directory=True, volume=boot_identity.volume_serial)
-                    links.append(_Link(current, name, child, info.identity))
-                    current = child
-                name = relative_parts[-1]
-                anchor = self._open(current, name, directory=False)
-                handles.append(anchor)
-                info = self._info(anchor, directory=False, volume=boot_identity.volume_serial)
-                observation = WindowsObservation("win32", root_identity, info.identity,
-                    info.size, info.last_write_time, info.change_time, name, _suffix(name))
-            else:
-                anchor, name, observation = None, None, None
-            resource = WindowsResource(self, tuple(handles), tuple(links), bootstrap,
-                boot_identity, volume, stamp, current, anchor, name, observation)
-            resource.check()
-            return resource
-        except BaseException:
-            if resource is not None:
-                resource.close()
-            elif not self.quarantined:
-                for handle in reversed(handles):
-                    try:
-                        self.native.close(handle)
-                    except BaseException:
-                        # Attempt every close; preserve the admission failure.
-                        pass
-            raise
+            name = relative_parts[-1]
+            anchor = self._open(current, name, directory=False)
+            handles.append(anchor)
+            info = self._info(anchor, directory=False, volume=boot_identity.volume_serial)
+            observation = WindowsObservation("win32", root_identity, info.identity,
+                info.size, info.last_write_time, info.change_time, name, _suffix(name))
+        else:
+            anchor, name, observation = None, None, None
+        resource = WindowsResource(self, tuple(handles), tuple(links), bootstrap,
+            boot_identity, volume, stamp, current, anchor, name, observation, owner)
+        resource.check()
+        return resource
 
     def acquire(self, selection, expected_root_stamp=None):
         return self._acquire(selection, expected_root_stamp, directory_only=False)
@@ -443,8 +502,11 @@ class WindowsResource:
     platform = "win32"
 
     def __init__(self, backend, handles, links, bootstrap, bootstrap_identity,
-            volume, root_stamp, parent, anchor, leaf_name, observation):
+            volume, root_stamp, parent, anchor, leaf_name, observation, cleanup_owner):
         self.backend = backend
+        self._cleanup_owner = cleanup_owner
+        self._cleanup_domain = backend._cleanup_domain
+        cleanup_owner.subject = self
         self._handles = handles
         self._links = links
         self._bootstrap = bootstrap
@@ -470,6 +532,10 @@ class WindowsResource:
         return obs.leaf_identity, obs.size, obs.last_write_time, obs.change_time
 
     def check(self):
+        with _CleanupScope(owner=self._cleanup_owner):
+            return self._check()
+
+    def _check(self):
         self._usable()
         backend = self.backend
         selector = self.root_stamp.selector
@@ -477,34 +543,25 @@ class WindowsResource:
         try:
             if backend._selector(selector.drive) != selector:
                 raise WindowsUnavailable("windows_bootstrap_changed")
-            fresh = backend._open(None, selector.drive_target + "\\", directory=True)
-            try:
+            with backend._temporary(None, selector.drive_target + "\\", directory=True) as fresh:
                 if (backend._info(fresh, directory=True).identity != self._bootstrap_identity
                         or backend._volume(fresh) != self._volume):
                     raise WindowsUnavailable("windows_bootstrap_changed")
-            finally:
-                backend.native.close(fresh)
             if backend._info(self._bootstrap, directory=True).identity != self._bootstrap_identity:
                 raise WindowsUnavailable("windows_bootstrap_changed")
             for link in self._links:
                 if backend._info(link.child, directory=True, volume=volume_serial).identity != link.identity:
                     raise WindowsUnavailable("windows_directory_changed")
-                check_handle = backend._open(link.parent, link.name, directory=True)
-                try:
+                with backend._temporary(link.parent, link.name, directory=True) as check_handle:
                     if backend._info(check_handle, directory=True, volume=volume_serial).identity != link.identity:
                         raise WindowsUnavailable("windows_directory_changed")
-                finally:
-                    backend.native.close(check_handle)
             if self._anchor is not None:
                 expected = self._expected_file_state()
                 if _file_state(backend._info(self._anchor, directory=False, volume=volume_serial)) != expected:
                     raise WindowsUnavailable("windows_source_changed")
-                check_handle = backend._open(self._parent, self._leaf_name, directory=False)
-                try:
+                with backend._temporary(self._parent, self._leaf_name, directory=False) as check_handle:
                     if _file_state(backend._info(check_handle, directory=False, volume=volume_serial)) != expected:
                         raise WindowsUnavailable("windows_source_changed")
-                finally:
-                    backend.native.close(check_handle)
             if backend._selector(selector.drive) != selector:
                 raise WindowsUnavailable("windows_bootstrap_changed")
         except BaseException:
@@ -513,51 +570,79 @@ class WindowsResource:
         return self.observation
 
     def reader(self):
+        with _CleanupScope(owner=self._cleanup_owner):
+            return self._reader()
+
+    def _reader(self):
         self._usable()
         if self._anchor is None:
             raise WindowsUnavailable("windows_source_required")
-        handle = None
-        stream = None
+        record = None
         try:
             self.check()
             handle = self.backend._open(self._parent, self._leaf_name, directory=False)
+            record = self.backend._record(handle)
             info = self.backend._info(handle, directory=False,
                 volume=self._bootstrap_identity.volume_serial)
             if _file_state(info) != self._expected_file_state():
                 raise WindowsUnavailable("windows_source_changed")
             self.check()
-            # The bridge consumes this handle on BOTH success and failure.
-            transferred, handle = handle, None
-            stream = self.backend.native.to_reader(transferred)
+            # An opaque injected bridge consumes on failure too. Only the fixed
+            # ctypes bridge can report its exact HANDLE/fd/stream stage.
+            record.state = 'bridge'
+            with _CleanupScope(record=record):
+                stream = self.backend.native.to_reader(handle)
+            record.value, record.kind = stream, 'stream'
+            record.closer = _close_stream
+            record.bind(stream)
             if stream.tell() != 0 or stream.writable():
                 raise WindowsUnavailable("windows_reader_invalid")
-            return stream
+            return _TrackedWindowsReader(stream, record)
         except BaseException:
             self._failed = True
-            if stream is not None:
-                stream.close()
-            if handle is not None and not self.backend.quarantined:
-                self.backend.native.close(handle)
+            if record is not None:
+                if record.state == 'bridge':
+                    record.uncertain()
+                try:
+                    record.close()
+                except BaseException:
+                    pass
             raise
+
+    @property
+    def cleanup_failed(self):
+        return self._cleanup_owner.failed
+
+    @property
+    def cleanup_complete(self):
+        return self._closed and self._cleanup_owner.complete
 
     def close(self):
         if self._closed:
-            return
+            return  # Never retry an uncertain generation.
         self._closed = True
-        if self.backend.quarantined:
-            # Real pending calls still own this frame/chain through the parked
-            # operation. Never close a handle the kernel might still reference.
-            return
-        handles, self._handles = self._handles, ()
-        first_error = None
-        for handle in reversed(handles):
-            try:
-                self.backend.native.close(handle)
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
-        if first_error is not None:
-            raise first_error
+        with _CleanupScope(owner=self._cleanup_owner):
+            self._cleanup_owner.close_all()
+
+
+def _close_stream(stream):
+    return stream.close()
+
+
+class _TrackedWindowsReader:
+    """Private stream facade: physical close is the registered generation."""
+    def __init__(self, stream, record):
+        self._stream, self._record = stream, record
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    @property
+    def cleanup_complete(self):
+        return self._record.state == 'closed'
+
+    def close(self):
+        self._record.close()
 
 
 class CtypesWindowsNative:
@@ -685,6 +770,9 @@ class CtypesWindowsNative:
                 raise WindowsUnavailable("windows_invalid_bootstrap")
         else:
             validate_component(request.name)
+        record = _cleanup_current('record')
+        if record is None:
+            raise WindowsUnavailable("windows_ownership_required")
         ctypes = self.ctypes
         units = utf16_units(request.name)
         buffer = ctypes.create_unicode_buffer(request.name, units + 1)
@@ -698,18 +786,30 @@ class CtypesWindowsNative:
         iosb.Status = sentinel
         iosb.Information = 0
         handle = self._HANDLE()
-        status = int(self.ntdll.NtCreateFile(ctypes.byref(handle), request.access,
-            ctypes.byref(attrs), ctypes.byref(iosb), None, 0, FILE_SHARE_ALL,
-            FILE_OPEN, request.options, None, 0)) & 0xFFFFFFFF
-        io_status = int(iosb.Status) & 0xFFFFFFFF
+        invalid_handle = self._HANDLE(-1).value
+        # Storage is rooted before the kernel sees any pointer, including the
+        # output HANDLE. A packaging/allocation failure cannot drop this owner.
         storage = (request, buffer, name, attrs, iosb, handle)
-        incomplete = (status == STATUS_PENDING or io_status == STATUS_PENDING
-            or status == STATUS_SUCCESS and io_status == sentinel)
-        handle_value = -1 if handle.value == self._HANDLE(-1).value else handle.value
+        record.storage = storage
+        try:
+            status = int(self.ntdll.NtCreateFile(ctypes.byref(handle), request.access,
+                ctypes.byref(attrs), ctypes.byref(iosb), None, 0, FILE_SHARE_ALL,
+                FILE_OPEN, request.options, None, 0)) & 0xFFFFFFFF
+            io_status = int(iosb.Status) & 0xFFFFFFFF
+            incomplete = (status == STATUS_PENDING or io_status == STATUS_PENDING
+                or status == STATUS_SUCCESS and io_status == sentinel)
+            handle_value = -1 if handle.value == invalid_handle else handle.value
+            if type(handle_value) is int and handle_value > 0:
+                record.value = handle_value
+        except BaseException:
+            record.uncertain(pending=True)
+            self.quarantine(storage)
+            raise
+        if incomplete:
+            record.uncertain(pending=True)
+            self.quarantine(storage)
         result = NativeOpenResult(handle_value, status, io_status,
             int(iosb.Information), not incomplete, storage)
-        if incomplete:
-            self.quarantine(result)
         return result
 
     def quarantine(self, result):
@@ -773,28 +873,79 @@ class CtypesWindowsNative:
             raise WindowsUnavailable("windows_close_failed")
 
     def to_reader(self, handle):
-        """Consume HANDLE exactly once, including every conversion failure."""
-        descriptor = None
-        stream = None
+        """Consume HANDLE with explicit stage reporting through the fixed scope."""
+        record = _cleanup_current('record')
+        standalone = record is None
+        if standalone:
+            # Existing private __new__/controlled-module callers need no DLLs.
+            domain = getattr(self, '_cleanup_domain', None)
+            if domain is None:
+                domain = self._cleanup_domain = _CleanupDomain()
+            owner = _CleanupOwner(domain, limit=1)
+            owner.subject = self
+            owner.unrecorded = handle
+            try:
+                record = owner.reserve('handle', self.close, handle)
+            except BaseException:
+                try:
+                    if owner.records():
+                        owner.close_all()
+                    else:
+                        result = self.close(handle)
+                        if result is not None and result is not True:
+                            owner.fail()
+                except BaseException as cleanup_error:
+                    owner.fail(cleanup_error)
+                if not owner.failed:
+                    owner.unrecorded = None
+                owner.finish()
+                raise
+            owner.unrecorded = None
+        else:
+            owner = record.owner
+            record.state = 'owned'  # The HANDLE is still ours before transfer.
         try:
             import msvcrt
-            descriptor = msvcrt.open_osfhandle(handle,
-                os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
-        except BaseException:
-            self.close(handle)
-            raise
-        try:
+            open_handle = msvcrt.open_osfhandle
+            flags = os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT
+            close_descriptor = os.close
+            # The call can transfer ownership before Python return packaging
+            # raises. Its exception cannot authorize a CloseHandle retry.
+            record.state = 'bridge'
+            descriptor = open_handle(handle, flags)
+            # A returned value is positive ownership of the new stage, even if
+            # later validation/bind fails before a stream can be published.
+            record.value, record.kind, record.closer = descriptor, 'descriptor', close_descriptor
+            record.state = 'owned'
+            record.bind(descriptor)
             if (os.get_inheritable(descriptor)
                     or os.get_handle_inheritable(msvcrt.get_osfhandle(descriptor))):
                 raise WindowsUnavailable("windows_reader_inheritable")
-            stream = os.fdopen(descriptor, "rb", buffering=0)
-            descriptor = None  # The FileIO is now the only close owner.
+            open_stream = os.fdopen
+            # FileIO can consume and close this fd before fdopen raises. Never
+            # infer continuing descriptor ownership from an unconfirmed return.
+            record.state = 'bridge'
+            stream = open_stream(descriptor, "rb", buffering=0)
+            record.value, record.kind, record.closer = stream, 'stream', _close_stream
+            record.state = 'owned'
+            record.bind(stream)
             if stream.tell() != 0 or stream.writable():
                 raise WindowsUnavailable("windows_reader_invalid")
+            if standalone:
+                # Legacy direct bridge caller receives sole stream ownership.
+                record.transferred()
+                owner.finish()
             return stream
-        except BaseException:
-            if stream is not None:
-                stream.close()
-            elif descriptor is not None:
-                os.close(descriptor)
+        except BaseException as error:
+            if record.state == 'bridge':
+                try:
+                    record.uncertain(error)
+                except BaseException:
+                    pass  # The original transfer error stays primary.
+            try:
+                record.close()
+            except BaseException:
+                pass
+            if standalone:
+                owner.finish()
             raise

@@ -16,6 +16,227 @@ class RootedFileUnavailable(ValueError):
     pass
 
 
+_cleanup_local = threading.local()
+# Owners must survive removal of local backend/Future/exception references.
+# Register before resources exist; terminal failure never needs a new allocation.
+_LIVE_CLEANUP_DOMAINS = set()
+_cleanup_domains_lock = threading.Lock()
+
+
+class _CleanupScope:
+    """Fixed synchronous ownership handoff; no caller-selected collaborators."""
+    def __init__(self, *, job=None, owner=None, record=None, closing=None):
+        self.job, self.owner, self.record, self.closing = job, owner, record, closing
+        self.parent = None
+
+    def __enter__(self):
+        self.parent = getattr(_cleanup_local, 'scope', None)
+        _cleanup_local.scope = self
+        return self
+
+    def __exit__(self, *_):
+        _cleanup_local.scope = self.parent
+
+
+def _cleanup_current(name):
+    scope = getattr(_cleanup_local, 'scope', None)
+    while scope is not None:
+        value = getattr(scope, name)
+        if value is not None:
+            return value
+        scope = scope.parent
+    return None
+
+
+class _CleanupDomain:
+    """Strong live owners and a terminal admission latch, never a retry queue.
+
+    Successful caller-held leases were never bounded by AcquisitionBudget. Each
+    owner bounds its own records; the first uncertainty prevents new admission
+    in this domain. Already admitted owners may finish safe cleanup. No reset.
+    """
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._owners = set()
+        self._blocked = False
+
+    def _admit(self, owner):
+        with self._lock:
+            if self._blocked:
+                raise RootedFileUnavailable('source_cleanup_quarantined')
+            self._owners.add(owner)
+            try:
+                with _cleanup_domains_lock:
+                    _LIVE_CLEANUP_DOMAINS.add(self)
+            except BaseException:
+                self._owners.discard(owner)
+                raise
+
+    def _fail(self):
+        with self._lock:
+            self._blocked = True
+
+    def _retire(self, owner):
+        with self._lock:
+            self._owners.discard(owner)
+            if not self._owners and not self._blocked:
+                with _cleanup_domains_lock:
+                    _LIVE_CLEANUP_DOMAINS.discard(self)
+
+    def is_blocked(self):
+        with self._lock:
+            return self._blocked
+
+
+class _CleanupOwner:
+    """Registered before resources; records are ownership generations, not IDs."""
+    def __init__(self, domain, *, limit=264):
+        self.domain, self.limit = domain, limit
+        self._lock = threading.Lock()
+        self._records = {}
+        self.failed = self._finished = False
+        self.subject = None
+        self.unrecorded = None  # Preallocated anchor for an admitted raw transfer.
+        self._job = _cleanup_current('job')
+        domain._admit(self)
+        try:
+            if self._job is not None:
+                self._job._register_cleanup_owner(self)
+        except BaseException:
+            domain._retire(self)  # No resource operation has started.
+            raise
+
+    @property
+    def complete(self):
+        with self._lock:
+            return (self._finished and not self._records and not self.failed
+                    and self.unrecorded is None)
+
+    def reserve(self, kind, closer, value=None):
+        record = _CleanupRecord(self, kind, closer, value)
+        with self._lock:
+            if self.failed or self._finished or len(self._records) >= self.limit:
+                raise RootedFileUnavailable('source_cleanup_unavailable')
+            self._records[record] = None
+        return record
+
+    def records(self):
+        with self._lock:
+            return tuple(self._records)
+
+    def fail(self, error=None):
+        with self._lock:
+            self.failed = True
+        self.domain._fail()
+        if self._job is not None:
+            self._job._cleanup_failed(self, error)
+
+    def _forget(self, record):
+        with self._lock:
+            self._records.pop(record, None)
+        self._retire_if_complete()
+
+    def finish(self):
+        with self._lock:
+            self._finished = True
+        self._retire_if_complete()
+
+    def _retire_if_complete(self):
+        if self.complete:
+            self.domain._retire(self)
+            self.subject = None
+            job, self._job = self._job, None
+            if job is not None:
+                job._forget_cleanup_owner(self)
+
+    def close_all(self):
+        # Snapshot allocation precedes every close. A failed snapshot cannot
+        # discharge ownership; domain/job still retain this exact owner.
+        try:
+            records = self.records()
+        except BaseException as error:
+            self.fail(error)
+            raise
+        if any(record.state == 'pending' for record in records):
+            self.finish()
+            return  # Pending native work may still reference every parent.
+        first = None
+        for record in reversed(records):
+            if record.state in ('uncertain', 'pending', 'attempted'):
+                continue
+            try:
+                record.close()
+            except BaseException as error:
+                if first is None:
+                    first = error
+        self.finish()
+        if first is not None:
+            raise first
+
+
+class _CleanupRecord:
+    """Exactly one low-level close attempt; uncertain numbers are never retried."""
+    def __init__(self, owner, kind, closer, value):
+        self.owner, self.kind, self.closer, self.value = owner, kind, closer, value
+        self.storage = None
+        self.reservation = None
+        self.state = 'reserved' if value is None else 'owned'
+        self._lock = threading.Lock()
+
+    def bind(self, value, *, kind=None, closer=None):
+        with self._lock:
+            if self.state not in ('reserved', 'owned', 'bridge'):
+                raise RootedFileUnavailable('source_cleanup_transition_invalid')
+            self.value = value
+            if kind is not None:
+                self.kind = kind
+            if closer is not None:
+                self.closer = closer
+            self.state = 'owned'
+
+    def uncertain(self, error=None, *, pending=False):
+        with self._lock:
+            if self.state in ('closed', 'transferred'):
+                return
+            self.state = 'pending' if pending else 'uncertain'
+        self.owner.fail(error)
+
+    def transferred(self):
+        with self._lock:
+            if self.state in ('uncertain', 'pending', 'attempted'):
+                raise RootedFileUnavailable('source_cleanup_incomplete')
+            self.state = 'transferred'
+            self.value = self.storage = None
+        self.owner._forget(self)
+
+    def close(self):
+        with self._lock:
+            if self.state in ('closed', 'transferred'):
+                return
+            if self.state in ('uncertain', 'pending', 'attempted', 'bridge'):
+                raise RootedFileUnavailable('source_cleanup_incomplete')
+            value, closer = self.value, self.closer
+            self.state = 'attempted'
+        try:
+            if value is not None:
+                with _CleanupScope(owner=self.owner, closing=self):
+                    result = closer(value)
+                if result is not None and result is not True:
+                    raise RootedFileUnavailable('source_cleanup_incomplete')
+                if getattr(value, 'cleanup_complete', True) is not True:
+                    raise RootedFileUnavailable('source_cleanup_incomplete')
+        except BaseException as error:
+            self.uncertain(error)
+            raise
+        with self._lock:
+            self.state = 'closed'
+            self.value = self.storage = None
+        self.owner._forget(self)
+
+
+_DEFAULT_CLEANUP_DOMAIN = _CleanupDomain()
+
+
 @dataclass(frozen=True)
 class RootSelection:
     platform: str
@@ -233,8 +454,8 @@ fileno is borrowed only: callers must retain this reader and prohibit concurrent
 close while an external consumer uses it. Child lifetime requires a separate lease
 reservation through reap; a raw descriptor is never a transferable ownership token.
 """
-    def __init__(self, stream, ticket):
-        self._stream, self._ticket = stream, ticket
+    def __init__(self, stream, ticket, record):
+        self._stream, self._ticket, self._record = stream, ticket, record
         self._gate = threading.Lock()
         self._state = threading.Lock()
         self._closing = False
@@ -270,12 +491,17 @@ reservation through reap; a raw descriptor is never a transferable ownership tok
         with self._state:
             self._closing = True
         with self._gate:
-            if self._ticket is not None:
-                ticket, self._ticket = self._ticket, None
-                try:
-                    self._stream.close()
-                finally:
-                    ticket.close()
+            if self._ticket is None:
+                return
+            try:
+                self._record.close()
+            except BaseException:
+                self._ticket.owner._cleanup_failed()
+                # The record retains both stream responsibility and reservation.
+                raise
+            ticket, self._ticket = self._ticket, None
+            self._record.reservation = None
+            ticket.close()
 
     def __enter__(self):
         return self
@@ -286,21 +512,77 @@ reservation through reap; a raw descriptor is never a transferable ownership tok
 
 class RootedRegularFile:
     """One resource owner; no state mutex held during resource/native methods."""
-    def __init__(self, resource):
+    def __init__(self, resource, *, _cleanup_owner=None, _resource_record=None):
         self._resource = resource
-        self.observation = resource.observation
-        self.root_stamp = resource.root_stamp
-        self.original_name = getattr(resource.observation, 'original_name',
-                                     getattr(resource, 'name', ''))
-        self.original_suffix = getattr(resource.observation, 'original_suffix',
-                                       getattr(resource, 'original_suffix', ''))
-        self._state, self._io = threading.Lock(), threading.Lock()
-        self._closing = self._failed = self._disposed = False
-        self._adapter_claimed = False
-        self._active = self._readers = 0
-        self.drained = threading.Event()
+        self._cleanup_owner = (_cleanup_owner if _cleanup_owner is not None else
+            _CleanupOwner(getattr(resource, '_cleanup_domain', _DEFAULT_CLEANUP_DOMAIN), limit=5))
+        self._cleanup_owner.subject = self
+        self._resource_record = _resource_record
+        try:
+            if self._resource_record is None:
+                self._resource_record = self._cleanup_owner.reserve(
+                    'resource', _close_resource, resource)
+            self.observation = resource.observation
+            self.root_stamp = resource.root_stamp
+            self.original_name = getattr(resource.observation, 'original_name',
+                                         getattr(resource, 'name', ''))
+            self.original_suffix = getattr(resource.observation, 'original_suffix',
+                                           getattr(resource, 'original_suffix', ''))
+            self._state, self._io = threading.Lock(), threading.Lock()
+            self._closing = self._failed = self._disposed = False
+            self._dispose_attempted = False
+            self._adapter_claimed = False
+            self._active = self._readers = 0
+            self.drained = threading.Event()
+        except BaseException:
+            try:
+                if self._resource_record is not None:
+                    self._resource_record.close()
+                elif self._cleanup_owner.records():
+                    # A registration seam may raise after inserting its record.
+                    self._cleanup_owner.close_all()
+                else:
+                    # Allocation failed before registration. The admitted
+                    # owner.subject already roots this exact resource.
+                    result = resource.close()
+                    if (result is not None and result is not True) or getattr(resource, 'cleanup_complete', True) is not True:
+                        self._cleanup_owner.fail()
+            except BaseException as cleanup_error:
+                self._cleanup_owner.fail(cleanup_error)
+            self._cleanup_owner.finish()
+            raise
+
+    @property
+    def cleanup_complete(self):
+        return self.drained.is_set()
+
+    @property
+    def cleanup_failed(self):
+        return self._cleanup_owner.failed
+
+    def _cleanup_failed(self):
+        with self._state:
+            self._closing = self._failed = True
+        self._cleanup_owner.fail()
+
+    def _dispose(self):
+        try:
+            self._cleanup_owner.close_all()
+            if not self._cleanup_owner.complete:
+                raise RootedFileUnavailable('source_cleanup_incomplete')
+        except BaseException:
+            self._cleanup_failed()
+            raise
+        finally:
+            self._cleanup_owner.finish()
+        with self._state:
+            self._disposed = True
+        # Only confirmed completion, never a finally path, signals drained.
+        if self._cleanup_owner.complete:
+            self.drained.set()
 
     def _reserve(self, reader=False):
+        ticket = _Reservation(self, reader)  # Allocation precedes counter change.
         with self._state:
             if self._closing or self._failed:
                 raise RootedFileUnavailable('source_closed' if self._closing else 'source_failed')
@@ -308,20 +590,17 @@ class RootedRegularFile:
                 raise RootedFileUnavailable('reader_limit')
             self._active += 1
             self._readers += int(reader)
-        return _Reservation(self, reader)
+        return ticket
 
     def _release(self, reader=False):
         dispose = False
         with self._state:
             self._active -= 1
             self._readers -= int(reader)
-            if self._closing and not self._active and not self._disposed:
-                self._disposed = dispose = True
+            if self._closing and not self._active and not self._dispose_attempted:
+                self._dispose_attempted = dispose = True
         if dispose:
-            try:
-                self._resource.close()
-            finally:
-                self.drained.set()
+            self._dispose()
 
     def _publish(self):
         with self._state:
@@ -348,26 +627,52 @@ class RootedRegularFile:
 
     def independent_reader(self):
         ticket = self._reserve(reader=True)
-        stream = None
+        record = None
         try:
+            # Registration precedes resource.reader(), including wrapper failures.
+            record = self._cleanup_owner.reserve('reader', lambda value: value.close())
+            record.reservation = ticket
             with self._io:
                 try:
                     self._publish()
                     self._resource.check()
                     stream = self._resource.reader()
+                    record.value = stream  # Retain before bind/wrapper allocation.
+                    record.bind(stream)
                     self._resource.check()
                     self._publish()
-                    owned = OwnedReader(stream, ticket)
+                    owned = OwnedReader(stream, ticket, record)
                 except BaseException:
                     self.poison()
                     raise
             return owned
         except BaseException:
-            try:
-                if stream is not None:
-                    stream.close()
-            finally:
-                ticket.close()
+            incomplete = False
+            if record is not None:
+                if (record.value is None
+                        and getattr(self._resource, 'cleanup_failed', False) is True):
+                    # The native reader may have failed cleanup before it could
+                    # return a stream. Retain this reservation and its exact
+                    # resource owner rather than treating an empty wrapper as
+                    # proof that no stream responsibility remains.
+                    record.storage = self._resource
+                    record.uncertain()
+                    self._cleanup_failed()
+                    incomplete = True
+                else:
+                    try:
+                        record.close()
+                    except BaseException:
+                        self._cleanup_failed()
+                        incomplete = True
+                if not incomplete:
+                    record.reservation = None
+            if not incomplete:
+                try:
+                    ticket.close()
+                except BaseException:
+                    self._cleanup_failed()
+            # Preserve original failure. Uncertain record retains stream/ticket.
             raise
 
     def reserve_child_use(self):
@@ -385,32 +690,44 @@ class RootedRegularFile:
         dispose = False
         with self._state:
             self._closing = True
-            if not self._active and not self._disposed:
-                self._disposed = dispose = True
+            if not self._active and not self._dispose_attempted:
+                self._dispose_attempted = dispose = True
         if dispose:
-            try:
-                self._resource.close()
-            finally:
-                self.drained.set()
+            self._dispose()
+        elif self._cleanup_owner.failed:
+            raise RootedFileUnavailable('source_cleanup_incomplete')
+
+
+def _close_resource(resource):
+    return resource.close()
 
 
 def acquire(selection, expected_root_stamp=None, *, backend=None):
     """Dormant acquisition; caller owns off-loop admission and abandonment budget."""
     if type(selection) is not RootSelection:
         raise RootedFileUnavailable('source_invalid')
-    if backend is not None:
-        resource = backend.acquire(selection, expected_root_stamp)
-    elif selection.platform == 'posix':
-        resource = PosixResource(selection, expected_root_stamp)
-    elif selection.platform == 'win32':
+    if backend is None and selection.platform == 'win32':
         from music_app.services._rooted_local_file_windows import WindowsBackend
-        resource = WindowsBackend().acquire(selection, expected_root_stamp)
-    else:
+        backend = WindowsBackend()
+    if backend is None and selection.platform != 'posix':
         raise RootedFileUnavailable('platform_unavailable')
+    domain = getattr(backend, '_cleanup_domain', _DEFAULT_CLEANUP_DOMAIN)
+    owner = _CleanupOwner(domain, limit=5)
     try:
-        return RootedRegularFile(resource)
+        record = owner.reserve('resource', _close_resource)
+        if backend is None:
+            resource = PosixResource(selection, expected_root_stamp)
+        else:
+            resource = backend.acquire(selection, expected_root_stamp)
+        record.value = resource
+        record.bind(resource)
+        return RootedRegularFile(resource, _cleanup_owner=owner,
+                                 _resource_record=record)
     except BaseException:
-        resource.close()
+        try:
+            owner.close_all()
+        except BaseException:
+            pass  # Registered uncertainty does not replace the primary failure.
         raise
 
 
@@ -474,8 +791,8 @@ class _SingleReleaseJob:
     Only an original executor worker releases after dequeue/discard or completed
     delivery/cleanup. Even a submit exception can mean the job was enqueued: the
     caller abandons but never releases uncertain capacity or cancels the Future.
-    The probe adapter alone enables deadline-at-claim and cleanup quarantine;
-    acquisition keeps its original defaults and lease disposal policy.
+    The probe adapter enables deadline-at-claim; acquisition keeps its legacy
+    delivery deadline. Both owners retain uncertain cleanup without slot release.
     """
     def __init__(self, release, *, deadline=None, clock=None,
                  quarantine_cleanup=False):
@@ -532,8 +849,8 @@ class _SingleReleaseJob:
             if self._released or self._quarantined:
                 return
             if self._quarantine_cleanup and self._decision is None:
-                # The probe policy cannot release completed-but-unclaimed or
-                # otherwise undecided ownership. Legacy behavior is unchanged.
+                # Quarantining owners cannot release completed-but-unclaimed
+                # or otherwise undecided ownership.
                 return
             self._released = True
         self._release_slot()
@@ -580,27 +897,85 @@ class _SingleReleaseJob:
 
 
 class _AcquisitionJob(_SingleReleaseJob):
-    """Legacy lease adapter; deadline and cleanup quarantine remain disabled."""
+    """Original worker owns construction, delivery decision and uncertain cleanup."""
+    def __init__(self, release, *, retire=None, retain=None):
+        super().__init__(release, quarantine_cleanup=True)
+        self._retire = retire
+        self._retain = retain
+        self._cleanup_lock = threading.Lock()
+        self._cleanup_owners = set()
+        self._lease = None
+
+    def release_once(self):
+        with self._condition:
+            claimed_live = (self._decision == 'claimed' and self._error is None
+                            and self._result is not None)
+            if claimed_live:
+                if self._released:
+                    return
+                self._released = True
+        if claimed_live:
+            self._release_slot()
+        else:
+            super().release_once()
+
+    def _register_cleanup_owner(self, owner):
+        with self._cleanup_lock:
+            self._cleanup_owners.add(owner)
+
+    def _forget_cleanup_owner(self, owner):
+        with self._cleanup_lock:
+            self._cleanup_owners.discard(owner)
+
+    def _cleanup_failed(self, owner=None, error=None):
+        with self._condition:
+            if self.cleanup_error is None and error is not None:
+                self.cleanup_error = error
+            self._quarantined = True
+        if self._retain is not None:
+            self._retain(self)
+
+    def _incomplete_factory(self):
+        with self._cleanup_lock:
+            owners = tuple(self._cleanup_owners)
+        for owner in owners:
+            if not owner.complete:
+                owner.fail()
 
     def run(self, factory, selection, expected_root_stamp):
         try:
             if not self.start_work():
-                # Dequeue proves this retained queue entry can release capacity.
-                return
-            try:
-                lease = factory(selection, expected_root_stamp)
-                error = None
-            except BaseException as caught:
-                lease, error = None, caught
-            if not self.publish_and_wait(lease, error) and lease is not None:
-                # Same bounded acquisition worker, still owning its slot.
+                return  # Original dequeue/discard proves queued ownership gone.
+            with _CleanupScope(job=self):
                 try:
-                    lease.close()
+                    lease = factory(selection, expected_root_stamp)
+                    self._lease = lease
+                    error = None
                 except BaseException as caught:
-                    self.report_cleanup_failure(caught)
-                    raise
+                    lease, error = None, caught
+                    try:
+                        self._incomplete_factory()
+                    except BaseException as cleanup_error:
+                        # Keep the factory error primary even if bookkeeping
+                        # cannot finish its already strongly rooted inventory.
+                        self._cleanup_failed(error=cleanup_error)
+                if not self.publish_and_wait(lease, error) and lease is not None:
+                    try:
+                        lease.close()
+                        if getattr(lease, 'cleanup_complete', True) is not True:
+                            raise RootedFileUnavailable('source_cleanup_incomplete')
+                    except BaseException as caught:
+                        self._cleanup_failed(error=caught)
+                        raise
+                if not self.is_quarantined():
+                    # A claim transfers the live lease, not its future close, to
+                    # the caller. Native/neutral owners still retain their job
+                    # callback and domain if later cleanup becomes uncertain.
+                    self._lease = None
         finally:
             self.release_once()
+            if self._retire is not None:
+                self._retire(self)
 
 
 class AcquisitionBudget:
@@ -617,6 +992,21 @@ class AcquisitionBudget:
         self._executor = executor or ThreadPoolExecutor(max_workers=2,
             thread_name_prefix='rooted-source')
         self._slots = threading.BoundedSemaphore(6)
+        self._jobs_lock = threading.Lock()
+        self._jobs = set()
+        self._quarantined = set()
+
+    def _retain_job(self, job):
+        with self._jobs_lock:
+            self._jobs.add(job)
+            self._quarantined.add(job)
+
+    def _retire_job(self, job):
+        with self._jobs_lock:
+            if job.is_quarantined():
+                self._quarantined.add(job)
+            else:
+                self._jobs.discard(job)
 
     def acquire(self, selection, expected_root_stamp=None, *, timeout=2.0,
                 factory=acquire):
@@ -624,7 +1014,16 @@ class AcquisitionBudget:
             raise RootedFileUnavailable('acquisition_deadline_invalid')
         if not self._slots.acquire(blocking=False):
             raise RootedFileUnavailable('acquisition_busy')
-        job = _AcquisitionJob(self._slots.release)
+        try:
+            job = _AcquisitionJob(self._slots.release,
+                                  retire=self._retire_job, retain=self._retain_job)
+            with self._jobs_lock:
+                self._jobs.add(job)
+        except BaseException:
+            # Nothing was submitted or opened: this pre-admission failure is
+            # positively different from an uncertain executor.submit result.
+            self._slots.release()
+            raise
         try:
             self._executor.submit(job.run, factory, selection, expected_root_stamp)
         except BaseException:

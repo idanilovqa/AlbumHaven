@@ -1,4 +1,4 @@
-"""Protected Search contracts; only the own-love subset has HTTP admission."""
+"""Protected Search contracts for own Love and authorized listener history."""
 from dataclasses import dataclass
 import re
 
@@ -15,7 +15,7 @@ class PrivateSearchError(ValueError):
 
 @dataclass(frozen=True)
 class ListenerHistoryCriteria:
-    """Confirmed listener shorthand; not yet admitted by the HTTP normalizer."""
+    """The unchanged raw history reader's selector."""
     username: str
 
     def __post_init__(self):
@@ -143,6 +143,8 @@ def normalize_own_love_query(query):
 
 
 def normalize_private_search_request(params):
+    if any(word.startswith('@') for word in str(params.get('q', '')).split()):
+        return _normalize_listener_search_request(params)
     allowed = {'surface', 'q', 'payload_tier', 'artist', 'all_artists', 'omit_sidebar',
                'search_presentation', 'search_page_size', 'search_cursor', 'search_sidebar_cursor',
                'search_detail_album_ref', 'search_sidebar_only', 'gallery_scope', 'gallery_display', 'gallery_display_mode',
@@ -218,3 +220,93 @@ def normalize_private_search_request(params):
         normalized_scope, tuple(sorted(normalize_visible_categories(category_values, normalized_scope))),
         normalize_gallery_display_mode(params.get('gallery_display') or params.get('gallery_display_mode')),
         normalize_gallery_scale_percent(scale), sidebar_only=sidebar_only)
+
+
+@dataclass(frozen=True)
+class ListenerSearchCriteria:
+    username: str
+    love_include: tuple[str, ...] = ()
+    love_exclude: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, 'username', ListenerHistoryCriteria(self.username).username)
+        for values in (self.love_include, self.love_exclude):
+            if type(values) is not tuple or values != tuple(
+                    value for value in ('loved', 'obsessed') if value in values):
+                raise PrivateSearchError()
+
+    @property
+    def filtered(self):
+        return bool(self.love_include or self.love_exclude)
+
+    def tiers(self):
+        return OwnLoveCriteria(self.love_include, self.love_exclude).tiers()
+
+    def as_payload(self):
+        return {**ListenerHistoryCriteria(self.username).as_payload(),
+                'love': {'include': list(self.love_include), 'exclude': list(self.love_exclude)}}
+
+
+@dataclass(frozen=True)
+class ListenerSearchRequest:
+    query: str
+    criteria: ListenerSearchCriteria
+    presentation: str = 'tracks'
+    limit: int = 100
+    cursor: str | None = None
+
+
+def normalize_listener_search_query(query):
+    """Fixed tracks/all history plus the existing Love vocabulary, not a DSL."""
+    if (not isinstance(query, str) or not query.strip() or len(query) > 200 or '\0' in query
+            or any('\ud800' <= ch <= '\udfff' for ch in query)):
+        raise PrivateSearchError()
+    username, selectors, include, exclude = None, set(), set(), set()
+    for match in re.finditer(r'\S+', query):
+        word = match.group()
+        location = {'start': match.start(), 'end': match.end()}
+        if word.startswith('@'):
+            try:
+                current = normalize_login_identifier(word[1:])
+            except ValueError:
+                raise PrivateSearchError(location=location) from None
+            if username is not None and current != username:
+                raise PrivateSearchError('unsupported_private_search_combination', location=location)
+            username = current
+            continue
+        token = word.casefold()
+        if token in {':tracks', 'listened:all'}:
+            if token in selectors:
+                raise PrivateSearchError('unsupported_private_search_combination', location=location)
+            selectors.add(token)
+            continue
+        try:
+            love = normalize_own_love_query(word)
+        except PrivateSearchError as error:
+            raise PrivateSearchError(error.code, error.status_code, location) from None
+        include.update(love.include)
+        exclude.update(love.exclude)
+    if username is None:
+        raise PrivateSearchError('unsupported_private_search_combination')
+    return ListenerSearchCriteria(username,
+        tuple(value for value in ('loved', 'obsessed') if value in include),
+        tuple(value for value in ('loved', 'obsessed') if value in exclude))
+
+
+def _normalize_listener_search_request(params):
+    allowed = {'surface', 'q', 'search_presentation', 'search_page_size', 'search_cursor'}
+    pairs = list(params.multi_items())
+    if (set(params) - allowed or len(pairs) != len(set(params))
+            or any(not isinstance(value, str) or '\0' in value
+                   or any('\ud800' <= ch <= '\udfff' for ch in value) for _, value in pairs)
+            or params.get('surface', 'albums') != 'albums'
+            or params.get('search_presentation', 'tracks') != 'tracks'):
+        raise PrivateSearchError()
+    size = params.get('search_page_size', '100')
+    if not re.fullmatch(r'[0-9]{1,3}', size) or not 1 <= int(size) <= 100:
+        raise PrivateSearchError()
+    cursor = params.get('search_cursor')
+    if cursor is not None and (not cursor or len(cursor) > 4096):
+        raise PrivateSearchError()
+    query = params.get('q', '')
+    return ListenerSearchRequest(query, normalize_listener_search_query(query), 'tracks', int(size), cursor)

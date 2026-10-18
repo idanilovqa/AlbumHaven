@@ -648,6 +648,24 @@ async def search_native_target(request: Request) -> JSONResponse:
     return await private_search_native_target_response(request)
 
 
+@router.post("/search/listener-native-bindings")
+async def api_listener_search_native_bindings(request: Request):
+    from music_app.routes.private_search_asgi import listener_search_native_bindings_response
+    return await listener_search_native_bindings_response(request)
+
+
+@router.post("/search/listener-native-target")
+async def api_listener_search_native_target(request: Request):
+    from music_app.routes.private_search_asgi import listener_search_native_target_response
+    return await listener_search_native_target_response(request)
+
+
+@router.post("/search/listener-native-targets")
+async def api_listener_search_native_targets(request: Request):
+    from music_app.routes.private_search_asgi import listener_search_native_targets_response
+    return await listener_search_native_targets_response(request)
+
+
 @router.post("/search/native-targets")
 async def search_native_targets(request: Request) -> JSONResponse:
     from music_app.routes.private_search_asgi import private_search_native_targets_response

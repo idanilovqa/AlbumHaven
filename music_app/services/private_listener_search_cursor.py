@@ -115,3 +115,88 @@ def decode_listener_cursor(token, *, secret):
     except (InvalidToken, ValueError, TypeError, UnicodeError, RecursionError):
         raise ValueError('Invalid Listener cursor.') from None
     return payload
+
+
+LIVE_VERSION = 'listener-search-v1'
+MAX_SAFE_INTEGER = 9007199254740991
+_LIVE_SCOPE_KEYS = _SCOPE_KEYS | {
+    'love_include', 'love_exclude', 'page_size', 'love_revision', 'taste_policy_digest',
+}
+
+
+def _valid_live_scope(scope):
+    if type(scope) is not dict or set(scope) != _LIVE_SCOPE_KEYS:
+        return False
+    if not _valid_scope({key: scope[key] for key in _SCOPE_KEYS}):
+        return False
+    for key in ('love_include', 'love_exclude'):
+        values = scope[key]
+        if type(values) is not list or values != [v for v in ('loved', 'obsessed') if v in values]:
+            return False
+    if type(scope['page_size']) is not int or not 1 <= scope['page_size'] <= 100:
+        return False
+    revision, digest = scope['love_revision'], scope['taste_policy_digest']
+    if not (scope['love_include'] or scope['love_exclude']):
+        return revision is None and digest is None
+    return (type(revision) is int and 0 <= revision <= _MAX_BIGINT
+            and isinstance(digest, str) and _CONTEXT_REF.fullmatch(digest) is not None)
+
+
+def _valid_live_payload(payload, purpose):
+    if type(purpose) is not str or purpose not in {'cursor', 'result'} or type(payload) is not dict:
+        return False
+    keys = {'version', 'purpose', 'scope', 'snapshot_ref'} | ({'position'} if purpose == 'cursor' else set())
+    if (set(payload) != keys or payload['version'] != LIVE_VERSION or payload['purpose'] != purpose
+            or not _valid_live_scope(payload['scope'])):
+        return False
+    snapshot = payload['snapshot_ref']
+    if not isinstance(snapshot, str) or not _SNAPSHOT_REF.fullmatch(snapshot):
+        return False
+    try:
+        hash_opaque_token(snapshot)
+    except (TypeError, ValueError):
+        return False
+    if purpose == 'cursor':
+        position = payload['position']
+        if type(position) is not dict or set(position) != {'after_ordinal', 'matched_before'}:
+            return False
+        after, matched = position['after_ordinal'], position['matched_before']
+        if (type(after) is not int or type(matched) is not int
+                or not 1 <= after <= MAX_SAFE_INTEGER or not 0 <= matched <= after):
+            return False
+        if not (payload['scope']['love_include'] or payload['scope']['love_exclude']) and matched != after:
+            return False
+    return True
+
+
+def encode_listener_search_token(snapshot_ref, *, secret, scope, purpose, position=None):
+    payload = {'version': LIVE_VERSION, 'purpose': purpose, 'scope': scope, 'snapshot_ref': snapshot_ref}
+    if purpose == 'cursor':
+        payload['position'] = position
+    elif position is not None:
+        raise ValueError('Invalid Listener Search token.')
+    if not _valid_live_payload(payload, purpose):
+        raise ValueError('Invalid Listener Search token.')
+    token = _cipher(secret).encrypt(json.dumps(payload, separators=(',', ':')).encode()).decode('ascii')
+    if len(token) > _MAX_TOKEN_LENGTH:
+        raise ValueError('Invalid Listener Search token.')
+    return token
+
+
+def decode_listener_search_token(token, *, secret, purpose):
+    if token is None and purpose == 'cursor':
+        return None
+    if (not isinstance(token, str) or not token or len(token) > _MAX_TOKEN_LENGTH
+            or not _CIPHERTEXT.fullmatch(token)):
+        raise ValueError('Invalid Listener Search token.')
+    try:
+        encoded = token.encode('ascii')
+        binary = base64.b64decode(encoded, altchars=b'-_', validate=True)
+        if base64.urlsafe_b64encode(binary) != encoded:
+            raise ValueError
+        payload = json.loads(_cipher(secret).decrypt(encoded), object_pairs_hook=_unique_object)
+        if not _valid_live_payload(payload, purpose):
+            raise ValueError
+    except (InvalidToken, ValueError, TypeError, UnicodeError, RecursionError):
+        raise ValueError('Invalid Listener Search token.') from None
+    return payload

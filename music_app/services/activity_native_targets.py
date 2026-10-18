@@ -17,13 +17,115 @@ from music_app.services.subject_home_taste import project_subject_taste, subject
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.home_activity import ActivityScope, ActivityQuery, ComparisonQuery, HomeActivityError
 from music_app.services.home_activity_postgres import HomeActivityPostgresRepository
-from music_app.services.policy import ResourceScope
+from music_app.services.policy import PolicyContext, ResourceScope
 from music_app.services.private_library_authority import current_library_transaction
 from music_app.services.private_native_targets import PrivateNativeTargets, NativeTargetError, allows
 from music_app.services import playlist_creation_sources_postgres as inventory
 
 
 _ROW=re.compile(r'activity_[a-f0-9]{64}\Z')
+
+
+def _listener_actor_native_context(listener_context):
+    if not isinstance(listener_context,PolicyContext):
+        raise NativeTargetError('private_search_unavailable',503)
+    return replace(listener_context,target_account_id=None)
+
+
+def _listener_row_hints(rows):
+    hints=[]
+    for row in rows:
+        resource=row['canonical_resource']
+        if resource is not None and (resource.get('kind')!='track'
+                or type(resource.get('id')) is not int or resource['id']<=0):
+            raise NativeTargetError('private_search_unavailable',503)
+        hints.append((row['row_ref'],resource['id'] if resource else None))
+    return tuple(hints)
+
+
+def _listener_admissions(context,hints,constraints):
+    return tuple((ref,identity is not None and allows(context,'library.browse.read',
+        ResourceScope('track',str(identity)),constraints)) for ref,identity in hints)
+
+
+def _listener_closure(connection,library_id,identities):
+    if not identities:
+        return ((),(),(),(),())
+    tracks=connection.execute("""select id,album_id,artist_id from library.local_tracks
+        where library_id=%s and id=any(%s::bigint[]) order by id""",(library_id,list(identities))).fetchall()
+    present=[row['id'] for row in tracks]
+    files=connection.execute("""select id,track_id,library_root_id from library.local_track_files
+        where track_id=any(%s::bigint[]) order by id""",(present,)).fetchall()
+    albums=sorted({row['album_id'] for row in tracks if row['album_id'] is not None})
+    artists=sorted({row['artist_id'] for row in tracks if row['artist_id'] is not None})
+    roots=sorted({row['library_root_id'] for row in files if row['library_root_id'] is not None})
+    locked_albums=tuple(row['id'] for row in connection.execute("""select id from library.local_albums
+        where library_id=%s and id=any(%s::bigint[]) order by id""",(library_id,albums)).fetchall())
+    locked_artists=tuple(row['id'] for row in connection.execute("""select id from library.local_artists
+        where library_id=%s and id=any(%s::bigint[]) order by id""",(library_id,artists)).fetchall())
+    locked_roots=tuple(row['id'] for row in connection.execute("""select id from library.library_roots
+        where library_id=%s and id=any(%s::bigint[]) order by id""",(library_id,roots)).fetchall())
+    if (locked_albums!=tuple(albums) or locked_artists!=tuple(artists) or locked_roots!=tuple(roots)):
+        # An out-of-library dependency was not frozen by the inventory owner.
+        # Never discover and lock such a target after receipt acquisition.
+        raise NativeTargetError('search_cursor_restart_required',409)
+    return (tuple((row['id'],row['album_id'],row['artist_id']) for row in tracks),
+            tuple((row['id'],row['track_id'],row['library_root_id']) for row in files),
+            locked_albums,locked_artists,locked_roots)
+
+
+class _ListenerNativePolicy:
+    """Observe native decisions and recompute them before publication."""
+    def __init__(self,constraints):
+        self.constraints=constraints
+        self.decisions={}
+        self.changed=False
+
+    def __call__(self,context):
+        from music_app.services.policy_evaluator import PolicyEvaluator, PolicyEvaluationConstraints
+        effective=self.constraints(context) if callable(self.constraints) else self.constraints
+        if effective is not None and not isinstance(effective,PolicyEvaluationConstraints):
+            raise NativeTargetError('private_search_unavailable',503)
+        if context.target_account_id is None:
+            allowed=PolicyEvaluator().evaluate(context,constraints=effective).decision.allowed
+            key=(context.action,context.resource)
+            old=self.decisions.get(key)
+            if old is not None and old[1]!=allowed:self.changed=True
+            self.decisions[key]=(context,allowed)
+        return effective
+
+    def assert_unchanged(self):
+        from music_app.services.policy_evaluator import PolicyEvaluator, PolicyEvaluationConstraints
+        if self.changed:raise NativeTargetError('search_cursor_restart_required',409)
+        for context,expected in tuple(self.decisions.values()):
+            current=self.constraints(context) if callable(self.constraints) else self.constraints
+            if current is not None and not isinstance(current,PolicyEvaluationConstraints):
+                raise NativeTargetError('private_search_unavailable',503)
+            if PolicyEvaluator().evaluate(context,constraints=current).decision.allowed!=expected:
+                raise NativeTargetError('search_cursor_restart_required',409)
+
+
+class _ListenerNativePrelock:
+    def __init__(self,connection,context,hints,admissions,closure,constraints):
+        self.connection,self.context,self.hints=connection,context,hints
+        self.admissions,self.closure=admissions,closure
+        self.identities=tuple(sorted({identity for (ref,identity),(_,allowed) in zip(hints,admissions) if allowed}))
+        self.native_ids=frozenset(row[0] for row in closure[0])
+        self.transaction=connection.execute('select txid_current() as id').fetchone()['id']
+        self.active=True
+        self.policy=_ListenerNativePolicy(constraints)
+
+    def assert_unchanged(self,connection,listener_context,constraints):
+        from psycopg.pq import TransactionStatus
+        context=_listener_actor_native_context(listener_context)
+        if (not self.active or connection is not self.connection or context!=self.context
+                or connection.info.transaction_status!=TransactionStatus.INTRANS
+                or connection.execute('select txid_current() as id').fetchone()['id']!=self.transaction):
+            raise NativeTargetError('private_search_unavailable',503)
+        if (_listener_admissions(context,self.hints,constraints)!=self.admissions
+                or _listener_closure(connection,context.library_id,self.identities)!=self.closure):
+            raise NativeTargetError('search_cursor_restart_required',409)
+        self.policy.assert_unchanged()
 
 
 def canonical_target_identity(secret, kind, identity):
@@ -74,6 +176,80 @@ class ActivityNativeTargets:
         self.connect,self.clock=connect,clock
         self.targets=PrivateNativeTargets(config,media_resolver=media_resolver)
 
+    def prelock_listener_on_connection(self,connection,listener_context,*,row_hints,constraints=None):
+        from psycopg.pq import TransactionStatus
+        context=_listener_actor_native_context(listener_context)
+        if (connection.info.transaction_status!=TransactionStatus.INTRANS
+                or type(row_hints) is not tuple or not 1<=len(row_hints)<=100
+                or any(type(pair) is not tuple or len(pair)!=2 or not isinstance(pair[0],str)
+                    or not _ROW.fullmatch(pair[0]) or pair[1] is not None and (
+                        type(pair[1]) is not int or not 0<pair[1]<=9223372036854775807) for pair in row_hints)
+                or len({pair[0] for pair in row_hints})!=len(row_hints)):
+            raise NativeTargetError('private_search_unavailable',503)
+        admissions=_listener_admissions(context,row_hints,constraints)
+        identities=sorted({identity for (_,identity),(_,allowed) in zip(row_hints,admissions) if allowed})
+        # Before any final receipt lock; config=None suppresses probes only here.
+        if identities:
+            inventory.inventory_rows(connection,context.library_id,identities,lock=True,config=None)
+        closure=_listener_closure(connection,context.library_id,identities)
+        return _ListenerNativePrelock(connection,context,row_hints,admissions,closure,constraints)
+
+    def _listener_prelocked(self,connection,listener_context,origin,row_refs,prelock,constraints):
+        if type(prelock) is not _ListenerNativePrelock:
+            raise NativeTargetError('private_search_unavailable',503)
+        refs=_listener_row_refs(list(row_refs))
+        if tuple(refs)!=tuple(ref for ref,_ in prelock.hints):
+            raise NativeTargetError('private_search_unavailable',503)
+        prelock.assert_unchanged(connection,listener_context,constraints)
+        origin,query=normalize_listener_native_origin(origin)
+        context=_listener_actor_native_context(listener_context)
+        exported=self._export(connection,context,origin,query,refs,prelock.policy)
+        if _listener_row_hints(exported)!=prelock.hints:
+            raise NativeTargetError('search_cursor_restart_required',409)
+        return context,origin,query
+
+    def project_listener_on_connection(self,connection,listener_context,*,origin,row_refs,prelock,constraints=None):
+        context,origin,query=self._listener_prelocked(connection,listener_context,origin,row_refs,prelock,constraints)
+        projected=self._project_on_connection(connection,context,origin=origin,query=query,
+            rows=[{'id':ref} for ref in row_refs],constraints=prelock.policy,subject_taste=False,
+            expected_hints=prelock.hints,native_track_ids=prelock.native_ids)
+        prelock.assert_unchanged(connection,listener_context,constraints)
+        return {'origin':origin,'bindings':[
+            {'row_ref':row['id'],'allowed_actions':row['allowed_actions'],
+             'inventory_track_ref':row['inventory_track_ref'],'artwork_url':row['artwork_url'],
+             **{key:row[key] for key in ('album_target','artist_target') if key in row}}
+            for row in projected]}
+
+    def resolve_listener_on_connection(self,connection,listener_context,*,origin,row_ref,intent,
+                                       target_kind=None,prelock,constraints=None):
+        if (not isinstance(intent,str) or intent not in {'metadata','play','details'}
+                or target_kind is not None and (not isinstance(target_kind,str)
+                    or target_kind not in {'album','artist'} or intent!='details')):
+            raise NativeTargetError('invalid_command',422)
+        context,origin,query=self._listener_prelocked(connection,listener_context,origin,[row_ref],prelock,constraints)
+        identity=prelock.hints[0][1]
+        if identity is None:raise NativeTargetError()
+        if not prelock.admissions[0][1]:raise NativeTargetError('forbidden',403)
+        if identity not in prelock.native_ids:raise NativeTargetError()
+        result=self._resolve_on_connection(connection,context,origin=origin,query=query,row_ref=row_ref,
+            intent=intent,target_kind=target_kind,constraints=prelock.policy,subject_taste=False,
+            expected_hints=prelock.hints)
+        prelock.assert_unchanged(connection,listener_context,constraints)
+        return result
+
+    def resolve_listener_batch_on_connection(self,connection,listener_context,*,origin,row_refs,intent,
+                                             prelock,constraints=None):
+        context,origin,_=self._listener_prelocked(connection,listener_context,origin,row_refs,prelock,constraints)
+        if not isinstance(intent,str) or intent not in {'metadata','play'}:
+            raise NativeTargetError('invalid_command',422)
+        identities=sorted(prelock.native_ids)
+        resolver=self.targets.resolve_metadata_batch if intent=='metadata' else self.targets.resolve_play_queue
+        targets=resolver(connection,context,identities,constraints=prelock.policy) if identities else {}
+        items=[{'row_ref':ref,'status':'ready' if identity in targets else 'unavailable',
+                'native_target':targets.get(identity)} for ref,identity in prelock.hints]
+        prelock.assert_unchanged(connection,listener_context,constraints)
+        return {'origin':origin,'intent':intent,'items':items}
+
     def _export(self,connection,context,origin,query,row_refs,constraints):
         subject=None
         if origin['audience']!='own':
@@ -87,7 +263,8 @@ class ActivityNativeTargets:
             actions=(scope.read_action,'library.social.taste.read') if scope.audience=='comparison' else (scope.read_action,)
             granted=all(allows(target,action,ResourceScope(kind,str(identity)),constraints) for action in actions)
             return AllowedActions(actions if granted else ())
-        allowed.scope_wide=not callable(constraints)
+        allowed.scope_wide=(not callable(constraints)
+            or type(constraints) is _ListenerNativePolicy and not callable(constraints.constraints))
         return HomeActivityPostgresRepository(self.config).read_native_selection(connection,scope=scope,
             query=query,row_refs=row_refs,allowed_actions_for_resource=allowed)
 
@@ -108,42 +285,48 @@ class ActivityNativeTargets:
         if target_kind is not None and (intent != "details" or not isinstance(target_kind,str) or target_kind not in {"album","artist"}):
             raise NativeTargetError("invalid_command",422)
         with current_library_transaction(self.url,context,constraints=constraints,connect=self.connect,clock=self.clock,read_only=True) as (con,live,now):
-            rows=self._export(con,live,origin,query,[row_ref],constraints)
-            resource=rows[0]['canonical_resource']
-            if resource is None:raise NativeTargetError()
-            kind,identity=resource['kind'],resource['id']
-            if target_kind is not None:
-                if kind=='track':
-                    if not allows(live,'library.browse.read',ResourceScope('track',str(identity)),constraints):
-                        raise NativeTargetError('forbidden',403)
-                    parents=con.execute('select album_id,artist_id from library.local_tracks where id=%s and library_id=%s',
-                        (identity,live.library_id)).fetchone()
-                    identity=parents.get(target_kind+'_id') if parents else None
-                    if identity is None:raise NativeTargetError()
-                    kind=target_kind
-                elif kind!=target_kind:raise NativeTargetError()
+            return self._resolve_on_connection(con,live,origin=origin,query=query,row_ref=row_ref,intent=intent,
+                target_kind=target_kind,constraints=constraints,subject_taste=subject_taste)
+
+    def _resolve_on_connection(self,con,live,*,origin,query,row_ref,intent,target_kind,constraints,subject_taste,expected_hints=None):
+        rows=self._export(con,live,origin,query,[row_ref],constraints)
+        if expected_hints is not None and _listener_row_hints(rows) != expected_hints:
+            raise NativeTargetError('search_cursor_restart_required',409)
+        resource=rows[0]['canonical_resource']
+        if resource is None:raise NativeTargetError()
+        kind,identity=resource['kind'],resource['id']
+        if target_kind is not None:
             if kind=='track':
-                target=self.targets.resolve(con,live,identity,intent=intent,constraints=constraints)
-            elif intent=='details' and kind=='album':
-                target=self.targets.resolve_album(con,live,identity,constraints=constraints)
-            elif intent=='details' and kind=='artist':
-                scoped=ResourceScope('artist',str(identity))
-                if not allows(live,'library.browse.read',scoped,constraints):raise NativeTargetError('forbidden',403)
-                row=con.execute('select artist_key,name from library.local_artists where id=%s and library_id=%s',
+                if not allows(live,'library.browse.read',ResourceScope('track',str(identity)),constraints):
+                    raise NativeTargetError('forbidden',403)
+                parents=con.execute('select album_id,artist_id from library.local_tracks where id=%s and library_id=%s',
                     (identity,live.library_id)).fetchone()
-                if row is None or not row['artist_key']:raise NativeTargetError()
-                target={'artist_ref':row['artist_key'],'title':row['name'],'allowed_actions':{'can_view_details':True}}
-            else:raise NativeTargetError()
-            if intent=='details' and 'album_ref' in target:
-                album=con.execute('select a.id,a.title,ar.name as artist from library.local_albums a left join library.local_artists ar on ar.id=a.artist_id and ar.library_id=a.library_id where a.library_id=%s and a.album_key=%s',
-                    (live.library_id,target['album_ref'])).fetchone()
-                if album is None:raise NativeTargetError()
-                target={**target,'title':album['title'],'artist':album['artist']}
-                if subject_taste and origin['audience']!='own':
-                    target['subject_taste']=subject_album_overlay(con,live,origin,album['id'],constraints=constraints)
-            lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
-                clock=self.clock or (lambda:datetime.now(timezone.utc)))
-            return {'origin':origin,'row_ref':row_ref,'intent':intent,'native_target':target}
+                identity=parents.get(target_kind+'_id') if parents else None
+                if identity is None:raise NativeTargetError()
+                kind=target_kind
+            elif kind!=target_kind:raise NativeTargetError()
+        if kind=='track':
+            target=self.targets.resolve(con,live,identity,intent=intent,constraints=constraints)
+        elif intent=='details' and kind=='album':
+            target=self.targets.resolve_album(con,live,identity,constraints=constraints)
+        elif intent=='details' and kind=='artist':
+            scoped=ResourceScope('artist',str(identity))
+            if not allows(live,'library.browse.read',scoped,constraints):raise NativeTargetError('forbidden',403)
+            row=con.execute('select artist_key,name from library.local_artists where id=%s and library_id=%s',
+                (identity,live.library_id)).fetchone()
+            if row is None or not row['artist_key']:raise NativeTargetError()
+            target={'artist_ref':row['artist_key'],'title':row['name'],'allowed_actions':{'can_view_details':True}}
+        else:raise NativeTargetError()
+        if intent=='details' and 'album_ref' in target:
+            album=con.execute('select a.id,a.title,ar.name as artist from library.local_albums a left join library.local_artists ar on ar.id=a.artist_id and ar.library_id=a.library_id where a.library_id=%s and a.album_key=%s',
+                (live.library_id,target['album_ref'])).fetchone()
+            if album is None:raise NativeTargetError()
+            target={**target,'title':album['title'],'artist':album['artist']}
+            if subject_taste and origin['audience']!='own':
+                target['subject_taste']=subject_album_overlay(con,live,origin,album['id'],constraints=constraints)
+        lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
+            clock=self.clock or (lambda:datetime.now(timezone.utc)))
+        return {'origin':origin,'row_ref':row_ref,'intent':intent,'native_target':target}
 
     def project(self,context,*,origin,rows,constraints=None):
         origin,query=normalize_native_origin(origin)
@@ -172,56 +355,65 @@ class ActivityNativeTargets:
         refs=[row['id'] for row in rows]
         if len(refs)>100:raise NativeTargetError('invalid_command',422)
         with current_library_transaction(self.url,context,constraints=constraints,connect=self.connect,clock=self.clock,read_only=True) as (con,live,now):
-            exported=self._export(con,live,origin,query,refs,constraints)
-            mappings={row['row_ref']:row['canonical_resource'] for row in exported}
-            snapshot=con.execute('select row_secret from app.activity_snapshots where token_digest=%s and account_id=%s and session_id=%s and library_id=%s',
-                (hash_opaque_token(query.snapshot_ref),live.actor.account_id,live.actor.session_id,live.library_id)).fetchone()
-            if snapshot is None:raise NativeTargetError('source_unavailable',403)
-            secret=bytes(snapshot['row_secret'])
-            track_ids=[resource['id'] for resource in mappings.values() if resource and resource['kind']=='track'
-                and allows(live,'library.browse.read',ResourceScope('track',str(resource['id'])),constraints)]
-            tracks=inventory.inventory_rows(con,live.library_id,track_ids,config=self.config)
-            parents={row['id']:row for row in con.execute('select id,album_id,artist_id from library.local_tracks where library_id=%s and id=any(%s::bigint[])',
-                (live.library_id,track_ids)).fetchall()}
-            create=allows(live,'library.playlists.create',None,constraints)
-            items=allows(live,'library.playlists.items.manage',None,constraints)
-            taste=project_subject_taste(con,live,origin,mappings,constraints=constraints) if subject_taste and origin['audience']!='comparison' else {}
-            output=[]
-            for row in rows:
-                resource=mappings[row['id']]
-                actions={**row.get('allowed_actions',{}),'can_resolve_native_play':False,
-                    'can_resolve_native_details':False,'can_select_for_playlist':False}
-                if resource is None:
-                    actions['can_select_for_playlist']=create and origin['audience']!='comparison' and query.kind in {'tracks','listens'}
-                else:
-                    kind,identity=resource['kind'],resource['id']
-                    readable=allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints)
-                    if kind=='track' and identity in tracks and readable:
-                        current=tracks[identity]
-                        actions['can_resolve_native_play']=current['availability']=='local' and allows(live,'library.media.read',ResourceScope(kind,str(identity)),constraints)
-                        album=current['original_album_id']
-                        actions['can_resolve_native_details']=album is not None and allows(live,'library.browse.read',ResourceScope('album',str(album)),constraints)
-                        actions['can_select_for_playlist']=create or items
-                    elif kind in {'album','artist'}:
-                        actions['can_resolve_native_details']=readable
-                inventory_ref=(f"inventory-track:{live.library_id}:{resource['id']}"
-                    if resource and resource['kind']=='track' and resource['id'] in tracks else None)
-                album_id=(resource['id'] if resource and resource['kind']=='album' else
-                    tracks[resource['id']].get('original_album_id') if resource and resource['kind']=='track' and resource['id'] in tracks else None)
-                projected={**row,**taste.get(row['id'],{}),'allowed_actions':actions,'inventory_track_ref':inventory_ref,
-                    'artwork_url':album_artwork_url(live,album_id,constraints=constraints)}
-                detail_ids={}
-                if resource and resource['kind']=='track' and resource['id'] in tracks:
-                    detail_ids={kind:parents.get(resource['id'],{}).get(kind+'_id') for kind in ('album','artist')}
-                elif resource and resource['kind'] in {'album','artist'}:
-                    detail_ids={resource['kind']:resource['id']}
-                for kind,identity in detail_ids.items():
-                    if identity is not None and allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints):
-                        projected[kind+'_target']={'kind':kind,'ref':row['id'],'origin':origin,
-                            'identity_ref':canonical_target_identity(secret,kind,identity),
-                            'allowed_actions':{'can_view_details':True}}
-                actions['can_resolve_native_details']=any(kind+'_target' in projected for kind in ('album','artist'))
-                output.append(projected)
-            lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
-                clock=self.clock or (lambda:datetime.now(timezone.utc)))
-            return output
+            return self._project_on_connection(con,live,origin=origin,query=query,rows=rows,
+                constraints=constraints,subject_taste=subject_taste)
+
+    def _project_on_connection(self,con,live,*,origin,query,rows,constraints,subject_taste,expected_hints=None,native_track_ids=None):
+        refs=[row['id'] for row in rows]
+        exported=self._export(con,live,origin,query,refs,constraints)
+        if expected_hints is not None and _listener_row_hints(exported) != expected_hints:
+            raise NativeTargetError('search_cursor_restart_required',409)
+        mappings={row['row_ref']:row['canonical_resource'] for row in exported}
+        snapshot=con.execute('select row_secret from app.activity_snapshots where token_digest=%s and account_id=%s and session_id=%s and library_id=%s',
+            (hash_opaque_token(query.snapshot_ref),live.actor.account_id,live.actor.session_id,live.library_id)).fetchone()
+        if snapshot is None:raise NativeTargetError('source_unavailable',403)
+        secret=bytes(snapshot['row_secret'])
+        track_ids=[resource['id'] for resource in mappings.values() if resource and resource['kind']=='track'
+            and (native_track_ids is None or resource['id'] in native_track_ids)
+            and allows(live,'library.browse.read',ResourceScope('track',str(resource['id'])),constraints)]
+        tracks=({} if native_track_ids is not None and not track_ids else
+                inventory.inventory_rows(con,live.library_id,track_ids,config=self.config))
+        parents={row['id']:row for row in con.execute('select id,album_id,artist_id from library.local_tracks where library_id=%s and id=any(%s::bigint[])',
+            (live.library_id,track_ids)).fetchall()}
+        create=allows(live,'library.playlists.create',None,constraints)
+        items=allows(live,'library.playlists.items.manage',None,constraints)
+        taste=project_subject_taste(con,live,origin,mappings,constraints=constraints) if subject_taste and origin['audience']!='comparison' else {}
+        output=[]
+        for row in rows:
+            resource=mappings[row['id']]
+            actions={**row.get('allowed_actions',{}),'can_resolve_native_play':False,
+                'can_resolve_native_details':False,'can_select_for_playlist':False}
+            if resource is None:
+                actions['can_select_for_playlist']=create and origin['audience']!='comparison' and query.kind in {'tracks','listens'}
+            else:
+                kind,identity=resource['kind'],resource['id']
+                readable=allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints)
+                if kind=='track' and identity in tracks and readable:
+                    current=tracks[identity]
+                    actions['can_resolve_native_play']=current['availability']=='local' and allows(live,'library.media.read',ResourceScope(kind,str(identity)),constraints)
+                    album=current['original_album_id']
+                    actions['can_resolve_native_details']=album is not None and allows(live,'library.browse.read',ResourceScope('album',str(album)),constraints)
+                    actions['can_select_for_playlist']=create or items
+                elif kind in {'album','artist'}:
+                    actions['can_resolve_native_details']=readable
+            inventory_ref=(f"inventory-track:{live.library_id}:{resource['id']}"
+                if resource and resource['kind']=='track' and resource['id'] in tracks else None)
+            album_id=(resource['id'] if resource and resource['kind']=='album' else
+                tracks[resource['id']].get('original_album_id') if resource and resource['kind']=='track' and resource['id'] in tracks else None)
+            projected={**row,**taste.get(row['id'],{}),'allowed_actions':actions,'inventory_track_ref':inventory_ref,
+                'artwork_url':album_artwork_url(live,album_id,constraints=constraints)}
+            detail_ids={}
+            if resource and resource['kind']=='track' and resource['id'] in tracks:
+                detail_ids={kind:parents.get(resource['id'],{}).get(kind+'_id') for kind in ('album','artist')}
+            elif resource and resource['kind'] in {'album','artist'}:
+                detail_ids={resource['kind']:resource['id']}
+            for kind,identity in detail_ids.items():
+                if identity is not None and allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints):
+                    projected[kind+'_target']={'kind':kind,'ref':row['id'],'origin':origin,
+                        'identity_ref':canonical_target_identity(secret,kind,identity),
+                        'allowed_actions':{'can_view_details':True}}
+            actions['can_resolve_native_details']=any(kind+'_target' in projected for kind in ('album','artist'))
+            output.append(projected)
+        lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
+            clock=self.clock or (lambda:datetime.now(timezone.utc)))
+        return output

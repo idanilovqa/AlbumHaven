@@ -36,6 +36,81 @@ def _expired():
     return HomeActivityError("Activity changed or expired. Refresh the activity.", 410, "activity_snapshot_expired")
 
 
+def _selection_canonical(row_key, provenance):
+    """One interpretation shared by Home exports and listener receipt access."""
+    parts = row_key.split(":")
+    if len(parts) == 2 and parts[0] in {"track", "album", "artist"}:
+        return {"kind": parts[0], "id": int(parts[1])}
+    if len(parts) == 3 and parts[:2] == ["listen", "event"]:
+        track = next((identity for kind, identity in provenance.get(row_key, []) if kind == "track"), None)
+        return {"kind": "track", "id": track} if track is not None else None
+    return None
+
+
+class _ListenerReceipt:
+    """Borrowed access to one protected receipt; never owns a transaction."""
+    def __init__(self, connection, snapshot):
+        self.connection, self.snapshot, self.active = connection, snapshot, True
+
+    def _check(self):
+        from psycopg.pq import TransactionStatus
+        if not self.active or self.connection.info.transaction_status != TransactionStatus.INTRANS:
+            raise HomeActivityError("Receipt access has ended.", 503, "activity_transaction_required")
+
+    @property
+    def summary(self):
+        self._check()
+        s = self.snapshot
+        return {"expires_at": s["expires_at"].isoformat(), "total_tracks": s["total_rows"],
+                "total_listens": s["total_listens"], "period_label": s["period_label"],
+                "range_label": s["range_label"], "coverage": dict(s["coverage"])}
+
+    @staticmethod
+    def _entry(row):
+        return {"ordinal": row["ordinal"], "row_ref": row["payload"]["id"],
+                "payload": dict(row["payload"]), "canonical_resource": _selection_canonical(row["row_key"], {})}
+
+    def window(self, after_ordinal, candidate_limit=100):
+        self._check()
+        if (type(after_ordinal) is not int or after_ordinal < 0
+                or type(candidate_limit) is not int or not 1 <= candidate_limit <= 100):
+            raise HomeActivityError()
+        rows = self.connection.execute("""select ordinal,row_key,payload from app.activity_snapshot_rows
+            where snapshot_id=%s and ordinal>%s order by ordinal limit %s""",
+            (self.snapshot["id"], after_ordinal, candidate_limit)).fetchall()
+        return [self._entry(row) for row in rows]
+
+    def selection(self, row_refs):
+        self._check()
+        if (not isinstance(row_refs, (list, tuple)) or not 1 <= len(row_refs) <= 100
+                or any(not isinstance(ref, str) or not re.fullmatch(r"activity_[a-f0-9]{64}", ref) for ref in row_refs)
+                or len(set(row_refs)) != len(row_refs)):
+            raise HomeActivityError()
+        rows = self.connection.execute("""select ordinal,row_key,payload from app.activity_snapshot_rows
+            where snapshot_id=%s and ordinal is not null and payload->>'id'=any(%s)""",
+            (self.snapshot["id"], list(row_refs))).fetchall()
+        found = {row["payload"]["id"]: self._entry(row) for row in rows}
+        if set(found) != set(row_refs):
+            raise HomeActivityError("Selection is outside the activity receipt.", 403, "activity_denied")
+        return [found[ref] for ref in row_refs]
+
+    def iter_canonical_track_refs(self, chunk_size=1000):
+        self._check()
+        if type(chunk_size) is not int or not 1 <= chunk_size <= 1000:
+            raise HomeActivityError()
+        after = 0
+        while True:
+            self._check()
+            rows = self.connection.execute("""select ordinal,row_key,payload->>'id' as row_ref
+                from app.activity_snapshot_rows where snapshot_id=%s and ordinal>%s
+                order by ordinal limit %s""", (self.snapshot["id"], after, chunk_size)).fetchall()
+            if not rows:
+                return
+            yield [{"row_ref": row["row_ref"], "canonical_resource": _selection_canonical(row["row_key"], {})}
+                   for row in rows]
+            after = rows[-1]["ordinal"]
+
+
 @contextmanager
 def _capture_lock(connection, scope, *, enabled):
     if not enabled:
@@ -323,6 +398,37 @@ class HomeActivityPostgresRepository:
             allowed_actions_for_resource=allowed_actions_for_resource,now=now,
             kinds={"tracks","listens","albums","artists"},audiences={"own","friend","comparison"})
 
+    @contextmanager
+    def listener_search_receipt(self, connection, *, scope, snapshot_ref, listener,
+                                allowed_actions_for_resource, now):
+        """Protected tracks/all access on a caller-owned transaction; no capture."""
+        from psycopg.pq import TransactionStatus
+        from music_app.services.private_search_subject import ListenerHistoryExpectation
+        if (not isinstance(scope, ActivityScope) or scope.audience not in {"own", "friend"}
+                or type(listener) is not ListenerHistoryExpectation or not snapshot_ref
+                or not callable(allowed_actions_for_resource)
+                or connection.info.transaction_status != TransactionStatus.INTRANS
+                or not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None):
+            raise HomeActivityError()
+        query = ActivityQuery(kind="tracks", period="all", snapshot_ref=snapshot_ref)
+
+        def policy_only(*_args):
+            raise AssertionError("Listener receipt access cannot capture")
+
+        policy_only.policy = allowed_actions_for_resource
+        policy_only.read_action = scope.read_action
+        policy_only.scope_wide_policy = getattr(allowed_actions_for_resource, "scope_wide", False) is True
+        with self._validated_snapshot(connection, scope, query, now, policy_only, listener=listener) as (snapshot, _, _):
+            receipt = _ListenerReceipt(connection, snapshot)
+            try:
+                yield receipt
+                # Validate again after the consumer has assembled its result.
+                # _lock_authority checks expiry against the database clock.
+                with self._validated_snapshot(connection, scope, query, now, policy_only, listener=listener):
+                    pass
+            finally:
+                receipt.active = False
+
     def _read_selection(self, connection, *, scope, query, row_refs, allowed_actions_for_resource,
                         now, kinds, audiences, source_order=False):
         """Export selected track metadata on the caller's still-open transaction.
@@ -385,14 +491,7 @@ class HomeActivityPostgresRepository:
             result = []
             for ref in row_refs:
                 stored_row = by_ref[ref]
-                parts = stored_row["row_key"].split(":")
-                canonical = None
-                if len(parts) == 2 and parts[0] in {"track", "album", "artist"}:
-                    canonical = {"kind": parts[0], "id": int(parts[1])}
-                elif len(parts) == 3 and parts[:2] == ["listen", "event"]:
-                    track = next((resource_id for kind, resource_id in provenance.get(stored_row["row_key"], [])
-                                  if kind == "track"), None)
-                    canonical = {"kind": "track", "id": track} if track is not None else None
+                canonical = _selection_canonical(stored_row["row_key"], provenance)
                 facts = {key: stored_row["payload"].get(key) for key in
                          ("kind", "title", "artist", "album_title", "duration_seconds", "source_label", "availability")}
                 result.append({"row_ref": ref, "facts": facts, "canonical_resource": canonical,

@@ -137,6 +137,105 @@ def normalize_popularity_native_command(command, *, operation):
     return refs
 
 
+def normalize_popularity_album_command(command, *, operation):
+    """Exact G1 bodies; syntax rejection precedes native or inventory work."""
+    if type(command) is not dict or operation not in {'target', 'matches'}:
+        raise PrivateSearchError()
+
+    def token(value):
+        if (type(value) is not str or not value.isascii() or not 1 <= len(value) <= 4096
+                or re.fullmatch(r'[A-Za-z0-9_-]+={0,2}', value) is None):
+            raise PrivateSearchError()
+
+    def ref(value, pattern):
+        if type(value) is not str or re.fullmatch(pattern, value) is None:
+            raise PrivateSearchError()
+
+    if operation == 'target':
+        if set(command) != {'result_token', 'album_ref'}:
+            raise PrivateSearchError()
+        token(command['result_token'])
+        ref(command['album_ref'], r'popular_album_[0-9a-f]{64}')
+        return command
+    if set(command) != {'source', 'native_album_ref', 'page_key', 'rows'}:
+        raise PrivateSearchError()
+    source = command['source']
+    if type(source) is not dict or type(source.get('kind')) is not str:
+        raise PrivateSearchError()
+    if source['kind'] == 'track-publication':
+        keys, field, pattern = {'kind', 'result_token', 'row_ref'}, 'row_ref', r'popular_[0-9a-f]{64}'
+    elif source['kind'] == 'album-publication':
+        keys, field, pattern = {'kind', 'result_token', 'album_ref'}, 'album_ref', r'popular_album_[0-9a-f]{64}'
+    else:
+        raise PrivateSearchError()
+    if set(source) != keys:
+        raise PrivateSearchError()
+    token(source['result_token'])
+    ref(source[field], pattern)
+    native = command['native_album_ref']
+    if (type(native) is not str or not 1 <= len(native) <= 16384 or '\0' in native
+            or any('\ud800' <= ch <= '\udfff' for ch in native)):
+        raise PrivateSearchError()
+    ref(command['page_key'], r'search-detail-page-[1-9][0-9]*')
+    if len(command['page_key']) > 80:
+        raise PrivateSearchError()
+    rows = command['rows']
+    if type(rows) is not list or not 1 <= len(rows) <= 100:
+        raise PrivateSearchError('invalid_command', 422)
+    slots, identities = set(), set()
+    for row in rows:
+        if type(row) is not dict or set(row) != {'slot', 'inventory_track_ref'}:
+            raise PrivateSearchError()
+        ref(row['slot'], r'search-detail-row-[1-9][0-9]*')
+        if len(row['slot']) > 80:
+            raise PrivateSearchError()
+        ref(row['inventory_track_ref'], r'inventory-track:[1-9][0-9]{0,18}:[1-9][0-9]{0,18}')
+        coordinates = row['inventory_track_ref'].split(':')[1:]
+        if any(int(value) > 9223372036854775807 for value in coordinates):
+            raise PrivateSearchError('invalid_command', 422)
+        if row['slot'] in slots or row['inventory_track_ref'] in identities:
+            raise PrivateSearchError('invalid_command', 422)
+        slots.add(row['slot'])
+        identities.add(row['inventory_track_ref'])
+    return command
+
+
+def _album_groups(captured, selection):
+    """Group original selected copies only, AFTER the unchanged global C1 cap."""
+    grouped = {}
+    for ordinal, track in enumerate(selection.tracks):
+        album_id = captured.matched_rows[track.track_id]['original_album_id']
+        if type(album_id) is not int or not 1 <= album_id <= 9223372036854775807:
+            _unavailable()
+        if captured.decision_map.get(('album', album_id)) is not True:
+            _restart()
+        if album_id not in grouped:
+            grouped[album_id] = [ordinal, []]
+        grouped[album_id][1].append(track.track_id)
+    return tuple((album_id, tuple(grouped[album_id][1]))
+        for album_id in sorted(grouped, key=lambda identity: (grouped[identity][0], identity)))
+
+
+def _album_row(captured, album_id, ref, selected_ids):
+    # Use the already-admitted exact facet, never a metadata query or name join.
+    facets = {row['identity']['original_local_track_id']: row for row in captured.facet_frame['rows']}
+    facet = facets.get(selected_ids[0])
+    if (facet is None or facet['coordinates']['album_id'] != album_id
+            or facet['identity']['original_album_id'] != album_id
+            or captured.decision_map.get(('album', album_id)) is not True):
+        _restart()
+    identity, metadata = facet['identity'], facet['album_metadata']
+    if type(metadata) is not dict:
+        _unavailable()
+    year = identity['release_year']
+    if year is not None and (type(year) is not int or not 1 <= year <= _UINT):
+        _unavailable()
+    return {'id': ref, 'kind': 'album', 'name': _label(identity['album_title']),
+        'artist': _label(facet['album_artist_name']), 'year': year,
+        'edition': _label(metadata.get('edition')), 'matches_search': True,
+        'allowed_actions': {'can_read': True, 'can_view_details': True}}
+
+
 def _native_target(target, *, intent, library_id, track_id):
     """Validate the actual native owner's exact target; never invent authority."""
     coordinate = f'inventory-track:{library_id}:{track_id}'
@@ -228,6 +327,10 @@ class PostgresPopularitySearch:
     def _scope(self, live, request, context_ref):
         if type(context_ref) is not str or re.fullmatch('[0-9a-f]{64}', context_ref) is None:
             raise PrivateSearchError('stale_context', 409)
+        if request.presentation == 'albums':
+            return _digest(['popularity-search-albums-v2', live.actor.account_id, live.actor.session_id,
+                live.library_id, context_ref, request.criteria.semantic_payload(),
+                request.visibility_payload(), 'albums', request.limit])
         return _digest(['popularity-search-v1', live.actor.account_id, live.actor.session_id,
             live.library_id, context_ref, request.criteria.semantic_payload(),
             request.visibility_payload(), request.limit])
@@ -246,15 +349,21 @@ class PostgresPopularitySearch:
         if selection.total != len(selection.tracks) or selection.total > _UINT:
             _unavailable()
         selected = tuple(track.track_id for track in selection.tracks)
-        evidence = _digest({'version': 1, 'scope': scope, 'universe': captured.universe,
+        evidence_payload = {'version': 1, 'scope': scope, 'universe': captured.universe,
             'facets': captured.facet_frame_text,
             'decisions': sorted((kind, identity, allowed) for (kind, identity), allowed in captured.decision_map.items()),
             'cache_rows': [captured.matched_rows[key] for key in sorted(captured.matched_rows)],
-            'selected': selected})
+            'selected': selected}
+        if request.presentation == 'albums':
+            evidence_payload.update(version=2, album_groups=_album_groups(captured, selection))
+        evidence = _digest(evidence_payload)
         if token is not None and not hmac.compare_digest(evidence, token['evidence_digest']):
             _restart()
-        refs = {codec.row_ref(evidence, live.library_id, identity): identity for identity in selected}
-        if len(refs) != len(selected):
+        identities = ([album_id for album_id, _ in _album_groups(captured, selection)]
+            if request.presentation == 'albums' else selected)
+        make_ref = codec.album_ref if request.presentation == 'albums' else codec.row_ref
+        refs = {make_ref(evidence, live.library_id, identity): identity for identity in identities}
+        if len(refs) != len(identities):
             _unavailable()
         return captured, selection, scope, evidence, refs
 
@@ -267,8 +376,10 @@ class PostgresPopularitySearch:
         except inventory.CaptureChanged:
             # An authority change is not the initial capture-race retry case.
             _restart()
-        if self._now() >= expires_at:
+        now = self._now()
+        if now >= expires_at:
             _restart()
+        return now
 
     @staticmethod
     def _payload(request, scope, evidence, offset, issued_at):
@@ -295,8 +406,11 @@ class PostgresPopularitySearch:
             'refresh_status': captured.refresh_status}
 
     def read(self, context, *, request, context_ref, cursor_secret, constraints=None):
-        if type(request) is not PopularitySearchRequest:
+        if type(request) is not PopularitySearchRequest or request.presentation not in {'tracks', 'albums'}:
             raise PrivateSearchError()
+        if request.presentation == 'albums':
+            return self._read_albums(context, request=request, context_ref=context_ref,
+                cursor_secret=cursor_secret, constraints=constraints)
         codec = PopularitySearchCodec(cursor_secret)
         now = self._now()
         token = codec.decode(request.cursor, 'page', now) if request.cursor is not None else None
@@ -448,4 +562,184 @@ class PostgresPopularitySearch:
     def resolve_targets(self, context, *, result_token, row_refs, intent, context_ref, cursor_secret, constraints=None):
         return self._native(context, operation='batch',
             command={'result_token': result_token, 'row_refs': row_refs, 'intent': intent},
+            context_ref=context_ref, cursor_secret=cursor_secret, constraints=constraints)
+
+    def _finalize_album_source(self, connection, live, captured, request, expires_at, constraints):
+        """Recheck the complete captured frame, without another C1 evaluation.
+
+        The unchanged C1 SQL gate compares universe, alias publication and raw
+        facet JSON before admitting any cached facts. This read adds no locks
+        or requested-child metadata callbacks. Ranking ran exactly once.
+        """
+        try:
+            inventory.recheck_admission(live, captured.universe, captured.decision_map, constraints=constraints)
+        except inventory.CaptureChanged:
+            _restart()
+        aliases = captured.facet_frame['aliases']
+        params = {'library_id': live.library_id, 'universe': inventory._json(captured.universe),
+            'alias_coordinates': inventory._json(aliases['coordinates']),
+            'alias_source_proof': aliases['source_proof'],
+            'alias_publication_proof': aliases['publication_proof'],
+            'alias_binding_proof': aliases['binding_proof'],
+            'admitted_ids': [row['id'] for row in inventory._admitted(captured.universe, captured.decision_map)],
+            'artist_ids': sorted(identity for (kind, identity), allowed in captured.decision_map.items()
+                if kind == 'artist' and allowed is True),
+            'visible_categories': list(request.categories), 'category_count': len(request.categories),
+            'facet_frame': captured.facet_frame_text, 'matched_ids': sorted(captured.matched_rows)}
+        rows = connection.execute(inventory._capture_sql(), params).fetchall()
+        if not rows or any(row['capture_ok'] is not True or row['alias_ready'] is not True for row in rows):
+            _restart()
+        current = {row['original_local_track_id']: {key: value for key, value in row.items()
+            if key not in ('capture_ok', 'alias_ready')} for row in rows
+            if row['original_local_track_id'] is not None}
+        if not hmac.compare_digest(_digest(current), _digest(captured.matched_rows)):
+            _restart()
+        return self._finalize(connection, live, captured, expires_at, constraints)
+
+    @staticmethod
+    def _album_payload(request, scope, evidence, offset, issued_at):
+        return {**PostgresPopularitySearch._payload(request, scope, evidence, offset, issued_at),
+            'version': 2, 'kind': 'album-publication', 'presentation': 'albums'}
+
+    @staticmethod
+    def _lifetime(token, now):
+        issued, expires = token['issued_at'], token['expires_at']
+        if (type(issued) is not int or type(expires) is not int or type(now) is not int
+                or not 0 <= issued <= now < expires <= _UINT or expires != issued + 1800):
+            _restart()
+        return {'issued_at': issued, 'expires_at': expires, 'server_now': now}
+
+    def _read_albums(self, context, *, request, context_ref, cursor_secret, constraints):
+        codec = PopularitySearchCodec(cursor_secret)
+        now = self._now()
+        token = codec.decode(request.cursor, 'album-page', now) if request.cursor is not None else None
+        issued = token['issued_at'] if token else now
+        codec.encode(self._album_payload(request, '0' * 64, '0' * 64, 0, issued), 'album-publication', now)
+        for attempt in range(2 if token is None else 1):
+            try:
+                with self._authorized(context, constraints) as (connection, live, _):
+                    captured, selection, scope, evidence, refs = self._evaluate(
+                        connection, live, request, context_ref, codec, token, constraints)
+                    groups = dict(_album_groups(captured, selection))
+                    total, offset = len(refs), token['offset'] if token else 0
+                    if token is not None and offset >= total:
+                        _restart()
+                    albums = [_album_row(captured, refs[ref], ref, groups[refs[ref]])
+                        for ref in list(refs)[offset:offset + request.limit]]
+                    payload = self._album_payload(request, scope, evidence, offset, issued)
+                    result_token = codec.encode(payload, 'album-publication', self._now())
+                    has_more = offset + len(albums) < total
+                    next_cursor = codec.encode({**payload, 'kind': 'album-page', 'offset': offset + len(albums)},
+                        'album-page', self._now()) if has_more else None
+                    result = {'status': 'ready', 'private_search': True,
+                        'contract_version': 'popularity-search-albums-v1', 'context_ref': context_ref,
+                        'query': request.query, 'criteria': request.criteria.as_payload(),
+                        'presentation': 'albums', 'albums': albums,
+                        'page': {'limit': request.limit, 'returned_count': len(albums), 'has_more': has_more,
+                            'next_cursor': next_cursor, 'total_matches': total},
+                        'popularity': self._coverage(captured, selection), 'native': {'result_token': result_token}}
+                    final_now = self._finalize_album_source(connection, live, captured, request, payload['expires_at'], constraints)
+                    result['lifetime'] = self._lifetime(payload, final_now)
+                    return result
+            except inventory.CaptureChanged:
+                if token is not None or attempt:
+                    _restart()
+        _restart()
+
+    def _resolve_album(self, targets, connection, live, album_id, constraints):
+        try:
+            target = targets.resolve_album(connection, live, album_id, constraints=constraints)
+        except NativeTargetError as error:
+            if error.code in {'forbidden', 'item_unavailable'}:
+                return None
+            _unavailable()
+        return _native_target(target, intent='details', library_id=live.library_id, track_id=None)
+
+    def _album_media_fence(self, connection, live, album_id, target, constraints):
+        if target is None:
+            return
+        try:
+            for action in ('library.browse.read', 'library.media.read'):
+                require_private_action(live, action, resource=ResourceScope('album', str(album_id)),
+                    constraints=constraints)
+            tracks = connection.execute('''select id from library.local_tracks
+                where library_id=%s and album_id=%s order by id''', (live.library_id, album_id)).fetchall()
+            media = bool(tracks)
+            for track in tracks:
+                for action in ('library.browse.read', 'library.media.read'):
+                    require_private_action(live, action, resource=ResourceScope('track', str(track['id'])),
+                        constraints=constraints)
+        except PrivateLibraryAuthorityError:
+            media = False
+        target['allowed_actions']['can_play_album'] = target['allowed_actions']['can_play_album'] and media
+
+    def _album_operation(self, context, *, operation, command, context_ref, cursor_secret, constraints):
+        normalize_popularity_album_command(command, operation=operation)
+        source = ({'kind': 'album-publication', 'result_token': command['result_token'],
+            'album_ref': command['album_ref']} if operation == 'target' else command['source'])
+        album_source = source['kind'] == 'album-publication'
+        codec = PopularitySearchCodec(cursor_secret)
+        token = codec.decode(source['result_token'], 'album-publication' if album_source else 'publication', self._now())
+        request = PopularitySearchRequest(query=token['query'],
+            criteria=normalize_popularity_search_query(token['query']),
+            presentation='albums' if album_source else 'tracks', limit=token['limit'],
+            gallery_scope=token['visibility']['gallery_scope'], categories=tuple(token['visibility']['categories']))
+        try:
+            with self._authorized(context, constraints) as (connection, live, _):
+                # Existing settings-before-inventory order; no per-witness child resolver.
+                targets = self._native_targets(connection, live)
+                if operation == 'matches' and any(int(row['inventory_track_ref'].split(':')[1]) != live.library_id
+                        for row in command['rows']):
+                    raise PrivateSearchError('invalid_command', 422)
+                captured, selection, scope, evidence, refs = self._evaluate(
+                    connection, live, request, context_ref, codec, token, constraints)
+                offset, total = token['offset'], len(refs)
+                if offset > total or offset == total and offset != 0:
+                    _restart()
+                source_ref = source['album_ref' if album_source else 'row_ref']
+                if source_ref not in set(list(refs)[offset:offset + token['limit']]):
+                    raise PrivateSearchError('private_search_forbidden', 403)
+                album_id = refs[source_ref] if album_source else captured.matched_rows[refs[source_ref]]['original_album_id']
+                target = self._resolve_album(targets, connection, live, album_id, constraints)
+                if operation == 'target':
+                    self._album_media_fence(connection, live, album_id, target, constraints)
+                    result = {'private_search': True, 'contract_version': 'popularity-search-album-native-v1',
+                        'context_ref': context_ref, 'result_token': command['result_token'],
+                        'data': {'album_ref': source_ref, 'status': 'ready' if target is not None else 'unavailable',
+                            'native_target': target}}
+                else:
+                    if target is None or target['album_ref'] != command['native_album_ref']:
+                        _restart()
+                    # Identity-only admission from the complete captured C1 universe.
+                    # No inventory_rows, metadata/preferences, or new child locks.
+                    coordinates = {row['id']: row for row in captured.universe['tracks']}
+                    admitted = {row['id'] for row in inventory._admitted(captured.universe, captured.decision_map)
+                        if row['album_exists'] is True and row['artist_exists'] is True
+                        and row['album_artist_exists'] is True}
+                    selected = {track.track_id for track in selection.tracks}
+                    items = []
+                    for row in command['rows']:
+                        identity = int(row['inventory_track_ref'].split(':')[2])
+                        coordinate = coordinates.get(identity)
+                        known = (identity in admitted and coordinate is not None
+                            and coordinate['library_id'] == live.library_id and coordinate['album_id'] == album_id)
+                        items.append({'slot': row['slot'], 'match_state': 'known' if known else 'unavailable',
+                            'matches_search': identity in selected if known else None})
+                    result = {'private_search': True, 'contract_version': 'popularity-search-album-matches-v1',
+                        'context_ref': context_ref, 'page_key': command['page_key'], 'data': {'items': items}}
+                final_now = self._finalize_album_source(connection, live, captured, request, token['expires_at'], constraints)
+                result['lifetime'] = self._lifetime(token, final_now)
+                return result
+        except inventory.CaptureChanged:
+            _restart()
+
+    def resolve_album_target(self, context, *, result_token, album_ref, context_ref, cursor_secret, constraints=None):
+        return self._album_operation(context, operation='target',
+            command={'result_token': result_token, 'album_ref': album_ref}, context_ref=context_ref,
+            cursor_secret=cursor_secret, constraints=constraints)
+
+    def album_matches(self, context, *, source, native_album_ref, page_key, rows,
+                      context_ref, cursor_secret, constraints=None):
+        return self._album_operation(context, operation='matches', command={'source': source,
+            'native_album_ref': native_album_ref, 'page_key': page_key, 'rows': rows},
             context_ref=context_ref, cursor_secret=cursor_secret, constraints=constraints)

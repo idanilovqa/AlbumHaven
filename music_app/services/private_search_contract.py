@@ -470,7 +470,7 @@ def normalize_popularity_search_request(params):
         raise PrivateSearchError()
     query = params.get('q', '')
     criteria = normalize_popularity_search_query(query)
-    if params.get('search_presentation', 'tracks') != 'tracks':
+    if params.get('search_presentation', 'tracks') not in {'tracks', 'albums'}:
         raise PrivateSearchError('unsupported_private_search_combination',
                                  location=_popularity_location(query, 0, len(query)))
     size = params.get('search_page_size', '100')
@@ -484,5 +484,5 @@ def normalize_popularity_search_request(params):
     if scope not in {'all', 'new_arrivals'} or any(value not in library_category_slugs() for value in categories):
         raise PrivateSearchError()
     scope = normalize_gallery_scope(scope)
-    return PopularitySearchRequest(query, criteria, 'tracks', int(size), cursor, scope,
+    return PopularitySearchRequest(query, criteria, params.get('search_presentation', 'tracks'), int(size), cursor, scope,
         tuple(sorted(normalize_visible_categories(categories, scope))))

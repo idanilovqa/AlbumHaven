@@ -19,6 +19,7 @@ from music_app.services.social_cursors import decode_search_cursor, SearchCursor
 from music_app.services.private_search_contract import ListenerSearchRequest, PrivateSearchRequest, PopularitySearchRequest
 from music_app.services.private_popularity_search_postgres import (
     PostgresPopularitySearch, normalize_popularity_native_command,
+    normalize_popularity_album_command,
 )
 from music_app.services.private_listener_search_postgres import PostgresListenerSearch, normalize_listener_native_command
 
@@ -27,6 +28,8 @@ _NATIVE_QUERY_KEYS = frozenset({'q', 'surface', 'artist', 'all_artists',
                               'search_presentation', 'gallery_scope', 'category'})
 _NATIVE_BODY_LIMIT = 1024
 _NATIVE_BATCH_BODY_LIMIT = 16 * 1024
+_POPULARITY_ALBUM_TARGET_BODY_LIMIT = 8192
+_POPULARITY_ALBUM_MATCHES_BODY_LIMIT = 98304
 
 
 def _private_search_context(request):
@@ -81,7 +84,11 @@ async def _native_command(request, *, batch=False):
     return command
 
 
-async def _native_json(request, *, limit):
+def _reject_json_number(value):
+    raise PrivateSearchError()
+
+
+async def _native_json(request, *, limit, strict=False):
     if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
         raise PrivateSearchError()
     length = request.headers.get('content-length')
@@ -94,7 +101,9 @@ async def _native_json(request, *, limit):
             raise PrivateSearchError()
         body.extend(chunk)
     try:
-        command = json.loads(body.decode('utf-8'), object_pairs_hook=_native_object)
+        options = ({'parse_constant': _reject_json_number,
+                    'parse_float': _reject_json_number} if strict else {})
+        command = json.loads(body.decode('utf-8'), object_pairs_hook=_native_object, **options)
     except (ValueError, UnicodeError, RecursionError):
         raise PrivateSearchError() from None
     return command
@@ -279,3 +288,50 @@ async def popularity_search_native_target_response(request):
 
 async def popularity_search_native_targets_response(request):
     return await _popularity_native_response(request, operation='batch')
+
+
+def _popularity_album_context(request, expected_context_ref):
+    current = _private_search_context(request)
+    if not hmac.compare_digest(current[1], expected_context_ref):
+        raise PrivateSearchError('stale_context', 409)
+    return current
+
+
+async def _popularity_album_response(request, *, operation):
+    """Bounded read commands with context fences around every await boundary."""
+    try:
+        if request.query_params:
+            raise PrivateSearchError()
+        # Context admission precedes even reading the streaming body.
+        context, context_ref, constraints, secret = _private_search_context(request)
+        limit = (_POPULARITY_ALBUM_TARGET_BODY_LIMIT if operation == 'target'
+                 else _POPULARITY_ALBUM_MATCHES_BODY_LIMIT)
+        command = await _native_json(request, limit=limit, strict=True)
+        normalize_popularity_album_command(command, operation=operation)
+        context, _, constraints, secret = _popularity_album_context(request, context_ref)
+        service = getattr(request.app.state, 'private_popularity_search_service', None)
+        if service is None:
+            service = PostgresPopularitySearch(request.app.state.config)
+        method = service.resolve_album_target if operation == 'target' else service.album_matches
+        payload = await run_in_threadpool(method, context, context_ref=context_ref,
+            cursor_secret=secret, constraints=constraints, **command)
+        _popularity_album_context(request, context_ref)
+        if (type(payload) is not dict or type(payload.get('context_ref')) is not str
+                or not hmac.compare_digest(payload['context_ref'], context_ref)):
+            raise PrivateSearchError('stale_context', 409)
+        return JSONResponse(payload, headers=_NO_STORE)
+    except PrivateLibraryAuthorityError:
+        error = PrivateSearchError('private_search_forbidden', 403)
+    except PrivateSearchError as caught:
+        error = caught
+    except Exception:
+        error = PrivateSearchError('private_search_unavailable', 503)
+    return _error_response(error)
+
+
+async def popularity_search_album_target_response(request):
+    return await _popularity_album_response(request, operation='target')
+
+
+async def popularity_search_album_matches_response(request):
+    return await _popularity_album_response(request, operation='matches')

@@ -491,6 +491,8 @@ jobs:
           tests/py/test_top_artwork_owner_http.py
           tests/py/test_top_artwork_owner_sources_postgres.py
           tests/py/test_top_artwork_owner_publication_postgres.py
+          tests/py/test_rooted_cleanup_ownership.py
+          tests/py/test_rooted_windows_cleanup_ownership.py
           tests/py/test_top_artwork_publication_retention_postgres.py
           tests/py/test_top_artwork_publication_seals_postgres.py
           tests/py/test_top_artwork_publication_closure_postgres.py
@@ -519,6 +521,36 @@ jobs:
           mapfile -t selected < "$RUNNER_TEMP/tops-linux-evidence/tests.txt"
           for test_path in "${selected[@]}"; do test -f "$test_path"; done
           python -m pytest --collect-only -q "${selected[@]}" 2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/collection.txt"
+
+      # Observation only: report the first known E failure before the long gate.
+      # Separate bounded invocations never replace or short-circuit the full run.
+      - name: Diagnose first E HTTP failure
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          set +e
+          python -m pytest -q -vv --maxfail=1 --tb=short -o faulthandler_timeout=60 \
+            --junitxml="$RUNNER_TEMP/tops-linux-evidence/e-http-first-failure.xml" \
+            'tests/py/test_top_artwork_owner_http.py::test_exact_fixed_service_dispatch_current_context_and_server_owned_key[state-saved]' \
+            2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/e-http-first-failure.txt"
+          diagnostic_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${diagnostic_status[0]}" > "$RUNNER_TEMP/tops-linux-evidence/e-http-first-failure.exit-code.txt"
+          if [ "${diagnostic_status[0]}" -ne 0 ]; then exit "${diagnostic_status[0]}"; fi
+          exit "${diagnostic_status[1]}"
+
+      - name: Diagnose first E publication HTTP failure
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          set +e
+          python -m pytest -q -vv --maxfail=1 --tb=short -o faulthandler_timeout=60 \
+            --junitxml="$RUNNER_TEMP/tops-linux-evidence/e-publication-first-failure.xml" \
+            'tests/py/test_top_artwork_owner_publication_postgres.py::test_genuine_http_prepare_review_png_then_separate_explicit_publish[saved]' \
+            2>&1 | tee "$RUNNER_TEMP/tops-linux-evidence/e-publication-first-failure.txt"
+          diagnostic_status=("${PIPESTATUS[@]}")
+          printf '%s\n' "${diagnostic_status[0]}" > "$RUNNER_TEMP/tops-linux-evidence/e-publication-first-failure.exit-code.txt"
+          if [ "${diagnostic_status[0]}" -ne 0 ]; then exit "${diagnostic_status[0]}"; fi
+          exit "${diagnostic_status[1]}"
 
       - name: Run selected backend contracts sequentially
         run: |

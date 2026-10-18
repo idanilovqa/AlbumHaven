@@ -198,10 +198,12 @@ def test_unexpected_service_error_is_sanitized_and_head_still_has_no_body(method
     assert b"sentinel" not in body and headers[b"referrer-policy"] == b"no-referrer"
 
 
-def test_public_routes_are_only_the_two_reserved_get_head_pairs():
+def test_public_routes_are_only_the_three_reserved_get_head_pairs():
     assert {(route.path, frozenset(route.methods)) for route in routes.router.routes} == {
         ("/public/album-tops/{share_ref}", frozenset({"GET", "HEAD"})),
-        ("/public/album-tops/{share_ref}/items/{item_ref}", frozenset({"GET", "HEAD"}))}
+        ("/public/album-tops/{share_ref}/items/{item_ref}", frozenset({"GET", "HEAD"})),
+        ("/public/album-tops/{share_ref}/publications/{publication_ref}/items/{item_ref}/artwork/{asset_ref}.png",
+         frozenset({"GET", "HEAD"}))}
 
 
 def test_app_composition_source_registers_the_same_router_inside_existing_owner():

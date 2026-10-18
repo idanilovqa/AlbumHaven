@@ -85,7 +85,7 @@ READ_STATEMENTS = frozenset({
         p.publication_revision,p.contract_version,p.title,p.description,s.item_count
         from app.album_list_publications p join app.album_list_publication_seals s
           on s.publication_ref=p.ref and s.sealed_at is not null
-            and s.seal_contract_version=1 and s.content_digest ~ '^[0-9a-f]{64}$'
+            and s.seal_contract_version=p.contract_version and s.content_digest ~ '^[0-9a-f]{64}$'
         where p.ref=%s and p.top_ref=%s and p.library_id=%s"""),
 })
 

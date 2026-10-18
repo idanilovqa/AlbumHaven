@@ -16,6 +16,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 import pytest
 from tests.e2e.support import isolatedPostgres
+from tests.py.popularity_epoch_ledger import completed_epochs, remember_completed, validate_epochs
 from tests.py.test_isolated_postgres_live import _dedicated_database_urls_or_skip
 from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship
 from music_app.services.library_mix_inventory_postgres import inventory_revision, read_inventory
@@ -149,7 +150,10 @@ class BootstrapPopularityDatabase:
 
     def setup(self):
         with self.connect() as con:
-            self.library, self.bootstrap_owner, self.baseline = preflight(con, self.app_url, self.app_connect)
+            self.epoch_identity = retained_database_identity(con)
+            self.library, self.bootstrap_owner, self.baseline, self.epoch_baseline = preflight(
+                con, self.app_url, self.app_connect, expected_identity=self.epoch_identity,
+                epochs=completed_epochs(self.setup_url, self.epoch_identity), exact_epochs=True)
             self.social_baseline = bootstrap_social_baseline(con, self.library)
             validate_readonly_binding(self)
             self.refresh_baseline, self.clock_baseline = preserved_state(con, self.library)
@@ -302,6 +306,9 @@ class BootstrapPopularityDatabase:
             bootstrap_social_baseline(con, self.library, self.social_baseline)
             current = bootstrap_identity(con)
             assert current == (self.library, self.bootstrap_owner)
+            assert retained_database_identity(con) == self.epoch_identity, 'Retained database identity changed; quarantine'
+            before_cleanup_epochs = read_retained_epochs(con, self.library,
+                self.epoch_baseline, owned_accounts=self.accounts, allow_new=True)
             assert con.execute('select count(*) as n from library.libraries where id<>%s',
                                (self.library,)).fetchone()['n'] == 0, 'Foreign library residue prohibits cleanup'
             assert self.bootstrap_owner not in self.accounts
@@ -347,14 +354,28 @@ class BootstrapPopularityDatabase:
         with self.app_connect(self.app_url) as con:
             assert bootstrap_identity(con) == (self.library,self.bootstrap_owner)
             bootstrap_social_baseline(con, self.library, self.social_baseline)
+            assert retained_database_identity(con) == self.epoch_identity, 'Retained database identity changed; quarantine'
             publish_stored(con, self.library, self.baseline)
         with self.connect() as con:
             bootstrap_social_baseline(con, self.library, self.social_baseline)
-            library, owner, metadata = preflight(con, self.app_url, self.app_connect)
+            library, owner, metadata, self.completed_epochs = preflight(
+                con, self.app_url, self.app_connect, epochs=before_cleanup_epochs,
+                owned_accounts=self.accounts, allow_new_epochs=True,
+                expected_identity=self.epoch_identity)
             assert (library, owner, metadata) == (self.library, self.bootstrap_owner, self.baseline)
             refresh, clocks = preserved_state(con, self.library)
             assert refresh == self.refresh_baseline
             assert all(clocks[name] >= value for name,value in self.clock_baseline.items())
+
+
+    def publish_completed_epochs(self):
+        # Recheck live identity and exact final counters at the handoff boundary.
+        # A mismatch must not overwrite the previously completed ledger record.
+        with self.connect() as con:
+            assert retained_database_identity(con) == self.epoch_identity, 'Retained database identity changed; quarantine'
+            bootstrap_social_baseline(con, self.library, self.social_baseline)
+            epochs = read_retained_epochs(con, self.library, self.completed_epochs, exact=True)
+        remember_completed(self.setup_url, self.epoch_identity, epochs)
 
 
 def validate_readonly_binding(db):
@@ -410,11 +431,34 @@ def preserved_state(con, library):
     return row['value'], clocks
 
 
-def preflight(con, app_url, connect):
-    isolatedPostgres._assert_connected_role(con, isolatedPostgres.SETUP_ROLE)
+def retained_database_identity(con):
     library, owner = bootstrap_identity(con)
+    social = bootstrap_social_baseline(con, library)
+    row = con.execute("""select current_database() as name,oid::bigint as oid
+        from pg_database where datname=current_database()""").fetchone()
+    assert row is not None and isinstance(row['name'], str) and row['name']
+    assert type(row['oid']) is int and row['oid'] > 0
+    return (row['name'], row['oid'], library, owner, social['profile']['account_ref'])
+
+
+def read_retained_epochs(con, library, baseline, *, owned_accounts=(), allow_new=False, exact=False):
+    rows = con.execute("""select library_id,account_id,revision,love_revision,album_taste_revision
+        from app.activity_source_revisions""").fetchall()
+    return validate_epochs(rows, library=library, baseline=baseline,
+        owned_accounts=owned_accounts, allow_global=allow_new, exact=exact)
+
+
+def preflight(con, app_url, connect, *, epochs=None, owned_accounts=(),
+              allow_new_epochs=False, exact_epochs=False, expected_identity=None):
+    isolatedPostgres._assert_connected_role(con, isolatedPostgres.SETUP_ROLE)
+    if expected_identity is not None:
+        assert retained_database_identity(con) == expected_identity, 'Retained database identity changed; quarantine'
+    library, owner = bootstrap_identity(con)
+    retained_epochs = read_retained_epochs(con, library, epochs or {},
+        owned_accounts=owned_accounts, allow_new=allow_new_epochs, exact=exact_epochs)
     from psycopg import sql
-    expected = {('app','social_profiles'):1, ('app','friend_policies'):1,
+    expected = {('app','activity_source_revisions'):len(retained_epochs),
+                ('app','social_profiles'):1, ('app','friend_policies'):1,
                 ('app','accounts'):1, ('app','bootstrap_owners'):1,
                 ('library','libraries'):1, ('library','relation_alias_endpoint_publications'):1,
                 ('library','gallery_projection_state'):1, ('library','public_metadata_source_state'):1,
@@ -466,7 +510,9 @@ def preflight(con, app_url, connect):
         for function in ('library.replace_relation_alias_endpoints(jsonb)', 'library.relation_alias_endpoints_ready(bigint)'):
             assert app.execute("select has_function_privilege(current_user,%s,'EXECUTE') as ok", (function,)).fetchone()['ok']
         assert app.execute('select library.relation_alias_endpoints_ready(%s) as ready', (library,)).fetchone()['ready']
-    return library, owner, metadata
+    if expected_identity is not None:
+        assert retained_database_identity(con) == expected_identity, 'Retained database identity changed; quarantine'
+    return library, owner, metadata, retained_epochs
 
 
 @contextmanager
@@ -489,4 +535,7 @@ def bootstrap_popularity_db(monkeypatch, tmp_path):
         # No reset, migration, grant, schema/database creation/drop, or seeding here.
         db.cleanup()
         if setup_complete:
+            # Publish provenance only after every cleanup/preflight check passed,
+            # while still holding the existing exclusive database ownership lock.
+            db.publish_completed_epochs()
             ownership.release()

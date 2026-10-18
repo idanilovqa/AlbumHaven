@@ -23,6 +23,18 @@ from music_app.services.current_actor import (
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 
 
+def canonical_library_selector_sql() -> str:
+    """Return the existing scalar canonical-library selector SQL."""
+    return """select library.libraries.id
+                         from app.bootstrap_owners as runtime_owner
+                         join library.libraries
+                           on library.libraries.owner_account_id = runtime_owner.account_id
+                         where runtime_owner.owner_key = 'local-bootstrap-owner'
+                           and library.libraries.library_kind = 'local'
+                         order by library.libraries.id
+                         limit 1"""
+
+
 class PostgresCurrentActorResolver:
     """Resolve one safe actor snapshot after the session authority succeeds."""
 
@@ -55,7 +67,7 @@ class PostgresCurrentActorResolver:
 
         with self._connect(self._database_url) as connection:
             rows = connection.execute(
-                """
+                f"""
                 select app.accounts.id as account_id,
                        app.accounts.username_display,
                        app.accounts.display_name,
@@ -68,14 +80,7 @@ class PostgresCurrentActorResolver:
                            and app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
                        ) as is_bootstrap_owner,
                        (
-                         select library.libraries.id
-                         from app.bootstrap_owners as runtime_owner
-                         join library.libraries
-                           on library.libraries.owner_account_id = runtime_owner.account_id
-                         where runtime_owner.owner_key = 'local-bootstrap-owner'
-                           and library.libraries.library_kind = 'local'
-                         order by library.libraries.id
-                         limit 1
+                         {canonical_library_selector_sql()}
                        ) as current_library_id,
                        coalesce((
                          select jsonb_agg(

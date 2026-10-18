@@ -4,16 +4,20 @@ Listener entry points are server-owned service seams only. HTTP admission stays
 with its existing owners; the raw listener-history-v1 reader is unchanged.
 """
 from dataclasses import replace
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 import re
 import hashlib
 import hmac
 from uuid import UUID
 
+from music_app.services.friends_postgres import authorized_friend_read
+from music_app.services.postgres_connections import pooled_connection
 from music_app.services.private_album_artwork import album_artwork_url
 from music_app.services.allowed_actions import AllowedActions
 from music_app.services.auth_tokens import hash_opaque_token
-from music_app.services.subject_home_taste import project_subject_taste, subject_album_overlay
+from music_app.services.subject_home_taste import (project_subject_taste, subject_album_overlay,
+    readable_taste, UNKNOWN_ALBUM, UNKNOWN_TRACK)
 from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.home_activity import ActivityScope, ActivityQuery, ComparisonQuery, HomeActivityError
 from music_app.services.home_activity_postgres import HomeActivityPostgresRepository
@@ -203,7 +207,8 @@ class ActivityNativeTargets:
         prelock.assert_unchanged(connection,listener_context,constraints)
         origin,query=normalize_listener_native_origin(origin)
         context=_listener_actor_native_context(listener_context)
-        exported=self._export(connection,context,origin,query,refs,prelock.policy)
+        exported=self._export(connection,context,origin,query,refs,prelock.policy,
+            listener_context.target_account_id if origin['audience']!='own' else None)
         if _listener_row_hints(exported)!=prelock.hints:
             raise NativeTargetError('search_cursor_restart_required',409)
         return context,origin,query
@@ -212,7 +217,8 @@ class ActivityNativeTargets:
         context,origin,query=self._listener_prelocked(connection,listener_context,origin,row_refs,prelock,constraints)
         projected=self._project_on_connection(connection,context,origin=origin,query=query,
             rows=[{'id':ref} for ref in row_refs],constraints=prelock.policy,subject_taste=False,
-            expected_hints=prelock.hints,native_track_ids=prelock.native_ids)
+            expected_hints=prelock.hints,native_track_ids=prelock.native_ids,
+            expected_subject_id=listener_context.target_account_id if origin['audience']!='own' else None)
         prelock.assert_unchanged(connection,listener_context,constraints)
         return {'origin':origin,'bindings':[
             {'row_ref':row['id'],'allowed_actions':row['allowed_actions'],
@@ -233,7 +239,8 @@ class ActivityNativeTargets:
         if identity not in prelock.native_ids:raise NativeTargetError()
         result=self._resolve_on_connection(connection,context,origin=origin,query=query,row_ref=row_ref,
             intent=intent,target_kind=target_kind,constraints=prelock.policy,subject_taste=False,
-            expected_hints=prelock.hints)
+            expected_hints=prelock.hints,
+            expected_subject_id=listener_context.target_account_id if origin['audience']!='own' else None)
         prelock.assert_unchanged(connection,listener_context,constraints)
         return result
 
@@ -250,19 +257,48 @@ class ActivityNativeTargets:
         prelock.assert_unchanged(connection,listener_context,constraints)
         return {'origin':origin,'intent':intent,'items':items}
 
-    def _export(self,connection,context,origin,query,row_refs,constraints):
-        subject=None
-        if origin['audience']!='own':
+    def _subject_hint(self,origin):
+        if origin['audience']=='own':return None
+        with (self.connect or pooled_connection)(self.url) as connection:
+            connection.execute('set transaction read only')
             row=connection.execute('select account_id from app.social_profiles where account_ref=%s',
                 (origin['subject_ref'],)).fetchone()
-            if row is None:raise NativeTargetError('source_unavailable',403)
-            subject=row['account_id']
+            if row is None or type(row['account_id']) is not int or row['account_id']<1:
+                raise NativeTargetError('source_unavailable',403)
+            return row['account_id']
+
+    def _subject_binding(self,connection,origin,expected_subject_id):
+        if origin['audience']=='own':
+            if expected_subject_id is not None:raise NativeTargetError('source_unavailable',403)
+            return None
+        if type(expected_subject_id) is not int or expected_subject_id<1:
+            raise NativeTargetError('source_unavailable',403)
+        row=connection.execute("""select account_id from app.social_profiles
+            where account_ref=%s and account_id=%s for share""",
+            (origin['subject_ref'],expected_subject_id)).fetchone()
+        if row is None:raise NativeTargetError('source_unavailable',403)
+        return expected_subject_id
+
+    @contextmanager
+    def _subject_guard(self,connection,context,origin,expected_subject_id):
+        subject=self._subject_binding(connection,origin,expected_subject_id)
+        guard=(authorized_friend_read(connection,account_id=context.actor.account_id,
+            library_id=context.library_id,target_account_id=subject) if subject is not None else nullcontext())
+        with guard:
+            yield
+            self._subject_binding(connection,origin,expected_subject_id)
+            lock_current_actor_session(connection,actor_account_id=context.actor.account_id,
+                actor_session_id=context.actor.session_id,clock=self.clock or (lambda:datetime.now(timezone.utc)))
+
+    def _export(self,connection,context,origin,query,row_refs,constraints,expected_subject_id=None):
+        subject=self._subject_binding(connection,origin,expected_subject_id)
         scope=ActivityScope(context.actor.account_id,context.actor.session_id,context.library_id,subject,origin['audience'])
         def allowed(kind,identity):
             target=replace(context,target_account_id=scope.source_account_id)
             actions=(scope.read_action,'library.social.taste.read') if scope.audience=='comparison' else (scope.read_action,)
             granted=all(allows(target,action,ResourceScope(kind,str(identity)),constraints) for action in actions)
-            return AllowedActions(actions if granted else ())
+            browse=allows(replace(context,target_account_id=None),'library.browse.read',ResourceScope(kind,str(identity)),constraints)
+            return AllowedActions(actions + (('library.browse.read',) if browse else ())) if granted else AllowedActions(())
         allowed.scope_wide=(not callable(constraints)
             or type(constraints) is _ListenerNativePolicy and not callable(constraints.constraints))
         return HomeActivityPostgresRepository(self.config).read_native_selection(connection,scope=scope,
@@ -284,12 +320,16 @@ class ActivityNativeTargets:
             raise NativeTargetError('invalid_command',422)
         if target_kind is not None and (intent != "details" or not isinstance(target_kind,str) or target_kind not in {"album","artist"}):
             raise NativeTargetError("invalid_command",422)
-        with current_library_transaction(self.url,context,constraints=constraints,connect=self.connect,clock=self.clock,read_only=True) as (con,live,now):
-            return self._resolve_on_connection(con,live,origin=origin,query=query,row_ref=row_ref,intent=intent,
-                target_kind=target_kind,constraints=constraints,subject_taste=subject_taste)
+        subject=self._subject_hint(origin)
+        with current_library_transaction(self.url,context,constraints=constraints,connect=self.connect,clock=self.clock,
+                read_only=True,target_account_id=subject) as (con,live,now):
+            with self._subject_guard(con,live,origin,subject):
+                result=self._resolve_on_connection(con,live,origin=origin,query=query,row_ref=row_ref,intent=intent,
+                    target_kind=target_kind,constraints=constraints,subject_taste=subject_taste,expected_subject_id=subject)
+        return result
 
-    def _resolve_on_connection(self,con,live,*,origin,query,row_ref,intent,target_kind,constraints,subject_taste,expected_hints=None):
-        rows=self._export(con,live,origin,query,[row_ref],constraints)
+    def _resolve_on_connection(self,con,live,*,origin,query,row_ref,intent,target_kind,constraints,subject_taste,expected_hints=None,expected_subject_id=None):
+        rows=self._export(con,live,origin,query,[row_ref],constraints,expected_subject_id)
         if expected_hints is not None and _listener_row_hints(rows) != expected_hints:
             raise NativeTargetError('search_cursor_restart_required',409)
         resource=rows[0]['canonical_resource']
@@ -323,9 +363,21 @@ class ActivityNativeTargets:
             if album is None:raise NativeTargetError()
             target={**target,'title':album['title'],'artist':album['artist']}
             if subject_taste and origin['audience']!='own':
-                target['subject_taste']=subject_album_overlay(con,live,origin,album['id'],constraints=constraints)
+                target['subject_taste']=subject_album_overlay(con,live,origin,album['id'],constraints=constraints,expected_subject_id=expected_subject_id)
         lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
             clock=self.clock or (lambda:datetime.now(timezone.utc)))
+        final=self._export(con,live,origin,query,[row_ref],constraints,expected_subject_id)
+        if final!=rows:raise NativeTargetError('source_unavailable',403)
+        if not allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints):
+            raise NativeTargetError('forbidden',403)
+        if intent=='play' and not allows(live,'library.media.read',ResourceScope(kind,str(identity)),constraints):
+            raise NativeTargetError('forbidden',403)
+        if 'subject_taste' in target:
+            overlay=target['subject_taste']
+            if not readable_taste(live,expected_subject_id,'album',album['id'],constraints):
+                overlay.update(UNKNOWN_ALBUM)
+            overlay['tracks']=[item for item in overlay['tracks'] if readable_taste(live,expected_subject_id,
+                'track',int(item['inventory_track_ref'].rsplit(':',1)[1]),constraints)]
         return {'origin':origin,'row_ref':row_ref,'intent':intent,'native_target':target}
 
     def project(self,context,*,origin,rows,constraints=None):
@@ -352,18 +404,23 @@ class ActivityNativeTargets:
 
     def _project(self,context,*,origin,query,rows,constraints,subject_taste):
         if not rows:return rows
-        refs=[row['id'] for row in rows]
-        if len(refs)>100:raise NativeTargetError('invalid_command',422)
-        with current_library_transaction(self.url,context,constraints=constraints,connect=self.connect,clock=self.clock,read_only=True) as (con,live,now):
-            return self._project_on_connection(con,live,origin=origin,query=query,rows=rows,
-                constraints=constraints,subject_taste=subject_taste)
+        refs=_listener_row_refs([row['id'] for row in rows])
+        subject=self._subject_hint(origin)
+        with current_library_transaction(self.url,context,constraints=constraints,connect=self.connect,clock=self.clock,
+                read_only=True,target_account_id=subject) as (con,live,now):
+            with self._subject_guard(con,live,origin,subject):
+                result=self._project_on_connection(con,live,origin=origin,query=query,rows=rows,
+                    constraints=constraints,subject_taste=subject_taste,expected_subject_id=subject)
+        return result
 
-    def _project_on_connection(self,con,live,*,origin,query,rows,constraints,subject_taste,expected_hints=None,native_track_ids=None):
+    def _project_on_connection(self,con,live,*,origin,query,rows,constraints,subject_taste,expected_hints=None,native_track_ids=None,expected_subject_id=None):
         refs=[row['id'] for row in rows]
-        exported=self._export(con,live,origin,query,refs,constraints)
+        exported=self._export(con,live,origin,query,refs,constraints,expected_subject_id)
         if expected_hints is not None and _listener_row_hints(exported) != expected_hints:
             raise NativeTargetError('search_cursor_restart_required',409)
         mappings={row['row_ref']:row['canonical_resource'] for row in exported}
+        admissions={ref:allows(live,'library.browse.read',ResourceScope(resource['kind'],str(resource['id'])),constraints)
+            for ref,resource in mappings.items() if resource is not None}
         snapshot=con.execute('select row_secret from app.activity_snapshots where token_digest=%s and account_id=%s and session_id=%s and library_id=%s',
             (hash_opaque_token(query.snapshot_ref),live.actor.account_id,live.actor.session_id,live.library_id)).fetchone()
         if snapshot is None:raise NativeTargetError('source_unavailable',403)
@@ -377,7 +434,7 @@ class ActivityNativeTargets:
             (live.library_id,track_ids)).fetchall()}
         create=allows(live,'library.playlists.create',None,constraints)
         items=allows(live,'library.playlists.items.manage',None,constraints)
-        taste=project_subject_taste(con,live,origin,mappings,constraints=constraints) if subject_taste and origin['audience']!='comparison' else {}
+        taste=project_subject_taste(con,live,origin,mappings,constraints=constraints,expected_subject_id=expected_subject_id) if subject_taste and origin['audience']!='comparison' else {}
         output=[]
         for row in rows:
             resource=mappings[row['id']]
@@ -416,4 +473,15 @@ class ActivityNativeTargets:
             output.append(projected)
         lock_current_actor_session(con,actor_account_id=live.actor.account_id,actor_session_id=live.actor.session_id,
             clock=self.clock or (lambda:datetime.now(timezone.utc)))
+        final=self._export(con,live,origin,query,refs,constraints,expected_subject_id)
+        if final!=exported:raise NativeTargetError('source_unavailable',403)
+        for projected in output:
+            resource=mappings[projected['id']]
+            if resource is not None:
+                kind,identity=resource['kind'],resource['id']
+                if admissions[projected['id']]!=allows(live,'library.browse.read',ResourceScope(kind,str(identity)),constraints):
+                    raise NativeTargetError('forbidden',403)
+                if projected['id'] in taste and not readable_taste(live,
+                        expected_subject_id if origin['audience']!='own' else live.actor.account_id,kind,identity,constraints):
+                    projected.update(UNKNOWN_ALBUM if kind=='album' else UNKNOWN_TRACK)
         return output

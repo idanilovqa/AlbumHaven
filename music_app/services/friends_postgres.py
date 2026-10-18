@@ -14,6 +14,7 @@ from music_app.services.admin_member_mutation_postgres import lock_current_actor
 from music_app.services.capabilities import grant_keys_for_action
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.track_preferences_postgres import load_track_preferences_on_connection
+from music_app.services.album_preferences_postgres import load_album_preferences_on_connection
 
 
 class FriendScopeError(PermissionError):
@@ -150,24 +151,26 @@ def load_friend_taste(connection, *, account_id, library_id, target_account_id, 
                     facts[name + '_taste_state'] = 'available' if valid else 'unavailable'
                 items[row['id']] = facts
         else:
-            rows = connection.execute("""select a.id,own.rating as own_rating,peer.rating as friend_rating
-                from library.local_albums a
-                left join app.album_ratings own on own.library_id=a.library_id and own.album_key=a.album_key and own.account_id=%(account_id)s
-                left join app.album_ratings peer on peer.library_id=a.library_id and peer.album_key=a.album_key and peer.account_id=%(target_account_id)s
-                where a.library_id=%(library_id)s and a.id=any(%(resource_ids)s)
-                  and exists(select 1 from library.local_tracks t join library.local_track_files f on f.track_id=t.id
-                    where t.album_id=a.id and t.library_id=a.library_id and f.scan_cache_stale is false)
-                order by a.id""", params).fetchall()
-            items = {row['id']: {'own_rating': row['own_rating'], 'friend_rating': row['friend_rating'],
-                     'own_favorite': None, 'friend_favorite': None,
-                     'own_taste_state': 'available', 'friend_taste_state': 'available'} for row in rows}
+            own = load_album_preferences_on_connection(connection, account_id=account_id,
+                library_id=library_id, album_ids=ids)
+            peer = load_album_preferences_on_connection(connection, account_id=target_account_id,
+                library_id=library_id, album_ids=ids)
+            for identity in ids:
+                facts = {}
+                for name, lookup in (('own', own), ('friend', peer)):
+                    taste = lookup.get(identity)
+                    for field in ('rating', 'favorite', 'preference_revision'):
+                        facts[name + '_' + field] = taste.get(field) if taste else None
+                    facts[name + '_taste_state'] = taste['taste_state'] if taste else 'unavailable'
+                items[identity] = facts
+
     revision = hashlib.sha256(json.dumps(
         {'kind': kind, 'resource_ids': ids, 'items': items}, sort_keys=True, separators=(',', ':'),
     ).encode()).hexdigest()
     return {'items': items, 'revision': revision}
 
 
-def read_friend_taste_page(connection, *, account_id,library_id,target_account_id,kind='tracks',after=0,limit=50):
+def read_friend_taste_page(connection, *, account_id,library_id,target_account_id,kind='tracks',after=0,limit=50,resource_allowed=None):
     """Enumerate one bounded canonical taste page on the supplied transaction."""
     if kind not in {'tracks','albums'} or type(after) is not int or after<0 or type(limit) is not int or not 1<=limit<=100:
         raise ValueError('Invalid taste page.')
@@ -190,27 +193,28 @@ def read_friend_taste_page(connection, *, account_id,library_id,target_account_i
                           and f.scan_cache_stale is false and f.private_path=p.track_key)))
                 order by t.id limit %(limit)s""",params).fetchall()
         else:
-            rows=connection.execute("""select a.id as resource_id,a.title,artist.name as artist_name,
-                  own.rating as own_rating,peer.rating as friend_rating
+            rows=connection.execute("""select a.id as resource_id,a.title,artist.name as artist_name
                 from library.local_albums a
                 left join library.local_artists artist on artist.id=a.artist_id and artist.library_id=a.library_id
                 left join app.album_ratings own on own.library_id=a.library_id and own.album_key=a.album_key and own.account_id=%(account_id)s
                 left join app.album_ratings peer on peer.library_id=a.library_id and peer.album_key=a.album_key and peer.account_id=%(target_account_id)s
                 where a.library_id=%(library_id)s and a.id>%(after)s
-                  and (own.rating is not null or peer.rating is not null)
+                  and (own.rating is not null or peer.rating is not null or own.favorite is true or peer.favorite is true)
                   and exists (select 1 from library.local_tracks t join library.local_track_files f on f.track_id=t.id
                     where t.album_id=a.id and t.library_id=a.library_id and f.scan_cache_stale is false)
                 order by a.id limit %(limit)s""",params).fetchall()
         taste = load_friend_taste(connection, account_id=account_id, library_id=library_id,
             target_account_id=target_account_id, kind=kind,
-            resource_ids=[row['resource_id'] for row in rows[:limit]])
+            resource_ids=[row['resource_id'] for row in rows[:limit]
+                if resource_allowed is None or resource_allowed(row['resource_id'])])
         projected = []
         for row in rows[:limit]:
             facts = taste['items'].get(row['resource_id'])
-            if facts is None:
+            if facts is None or resource_allowed is not None and not resource_allowed(row['resource_id']):
                 continue
             if not any(facts[name + '_rating'] is not None
                        or facts.get(name + '_love_tier') in {'loved', 'obsessed'}
+                       or facts.get(name + '_favorite') is True
                        for name in ('own', 'friend')):
                 continue
             projected.append({**{key:value for key,value in row.items() if key!='track_key'}, **facts})
@@ -412,12 +416,40 @@ class PostgresFriendsStore:
             _admin_authority(connection,account_id,library_id)
         return {'auto_friend':bool(row and row['auto_friend'])}
 
-    def compare_taste(self, *, account_id,library_id,target_account_id,actor_session_id,kind='tracks',after=0,limit=50):
-        with self._connect(self._url) as connection:
-            with authorized_friend_read(connection, account_id=account_id, library_id=library_id,
-                                        target_account_id=target_account_id):
-                _session(connection, account_id, actor_session_id)
-                result = read_friend_taste_page(connection, account_id=account_id, library_id=library_id,
-                    target_account_id=target_account_id, kind=kind, after=after, limit=limit)
-                _session(connection, account_id, actor_session_id)
-                return result
+    def compare_taste(self, *, account_id,library_id,target_account_id,actor_session_id,
+                      kind='tracks',after=0,limit=50,context=None,constraints=None,expected_subject_ref=None):
+        from music_app.services.policy import ResourceScope
+        from music_app.services.private_library_authority import (
+            PrivateLibraryAuthorityError, current_library_transaction, require_private_action)
+        from music_app.services.subject_home_taste import readable_taste, subject_taste_context
+        if (context is None or context.actor.account_id!=account_id or context.library_id!=library_id
+                or context.actor.session_id!=actor_session_id or not expected_subject_ref):
+            raise FriendScopeError('Social scope is unavailable.')
+        origin={'audience':'friend','subject_ref':expected_subject_ref}
+        try:
+            with current_library_transaction(self._url,context,connect=self._connect,constraints=constraints,
+                    target_account_id=target_account_id,read_only=True) as (connection,live,_now):
+                with authorized_friend_read(connection, account_id=account_id, library_id=library_id,
+                                            target_account_id=target_account_id):
+                    scoped,_=subject_taste_context(connection,live,origin,expected_subject_id=target_account_id)
+                    require_private_action(scoped,'library.social.taste.read',
+                        resource=ResourceScope('account',str(target_account_id)),constraints=constraints)
+                    def permitted(identity):
+                        return readable_taste(scoped,target_account_id,
+                            'track' if kind=='tracks' else 'album',identity,constraints)
+                    result = read_friend_taste_page(connection, account_id=account_id, library_id=library_id,
+                        target_account_id=target_account_id, kind=kind, after=after, limit=limit,
+                        resource_allowed=permitted)
+                    # Dynamic constraints are evaluated after all loaders/source waits.
+                    result['rows']=[row for row in result['rows'] if permitted(row['resource_id'])]
+                    # Revisions belong to internal digest evidence, not the peer DTO.
+                    for row in result['rows']:
+                        row.pop('own_preference_revision',None)
+                        row.pop('friend_preference_revision',None)
+                    subject_taste_context(connection,live,origin,expected_subject_id=target_account_id)
+                    require_private_action(scoped,'library.social.taste.read',
+                        resource=ResourceScope('account',str(target_account_id)),constraints=constraints)
+                    _session(connection, account_id, actor_session_id)
+        except PrivateLibraryAuthorityError:
+            raise FriendScopeError('Social scope is unavailable.') from None
+        return result

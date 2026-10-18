@@ -140,8 +140,8 @@ class ProcessCases(Case):
             process_factory=factory, capability_probe=types.SimpleNamespace(matches=lambda _: True),
             pipe_completion=lambda _: True))
         await self.pump(task.done)
-        with self.assertRaises(OSError):
-            task.result()
+        # Observe the failure without clearing a still-live owner traceback.
+        self.assertIsInstance(task.exception(), OSError)
         await self.pump(lambda: record._driver.done())
         self.assertIn(record, self.pool._records)
         self.assertIsNotNone(source.owner._child)
@@ -155,8 +155,8 @@ class ProcessCases(Case):
             process_factory=Factory(self.m.adapter.NoChildCreated()),
             capability_probe=types.SimpleNamespace(matches=lambda _: True), pipe_completion=lambda _: True))
         await self.pump(task.done)
-        with self.assertRaises(self.m.adapter.NoChildCreated):
-            task.result()
+        # Observe the failure without clearing a still-live owner traceback.
+        self.assertIsInstance(task.exception(), self.m.adapter.NoChildCreated)
         await self.pump(lambda: record not in self.pool._records)
         self.assertIsNone(source.owner._child)
         self.assertEqual(source.resource.closes, 1)
@@ -207,8 +207,9 @@ class ProcessCases(Case):
                     process_factory=Factory(process), capability_probe=types.SimpleNamespace(matches=lambda _: True),
                     pipe_completion=lambda _: True))
                 await self.pump(task.done)
-                with self.assertRaisesRegex(self.m.adapter.AdapterUnavailable, 'missing_process_pipe'):
-                    task.result()
+                # Observe the failure without clearing a still-live owner traceback.
+                self.assertIsInstance(task.exception(), self.m.adapter.AdapterUnavailable)
+                self.assertRegex(str(task.exception()), 'missing_process_pipe')
                 await self.pump(lambda: record not in self.pool._records)
                 self.assertEqual(process.waits, 1)
                 self.assertEqual(source.resource.closes, 1)
@@ -223,8 +224,8 @@ class ProcessCases(Case):
             process_factory=Factory(process), capability_probe=types.SimpleNamespace(matches=lambda _: True),
             pipe_completion=lambda _: True))
         await self.pump(task.done)
-        with self.assertRaises(OSError):
-            task.result()
+        # Observe the failure without clearing a still-live owner traceback.
+        self.assertIsInstance(task.exception(), OSError)
         await self.pump(lambda: record._driver.done())
         self.assertEqual(process.waits, 1)
         self.assertEqual(source.resource.streams[0].close_attempts, 1)
@@ -584,8 +585,9 @@ class AdditionalBoundaries(Case):
             task = self.caller(record.start(self.command(), capability=cap, process_factory=factory,
                 capability_probe=types.SimpleNamespace(matches=lambda _: True), pipe_completion=lambda _: True))
             await self.pump(task.done)
-            with self.assertRaisesRegex(self.m.adapter.AdapterUnavailable, 'capability_unavailable'):
-                task.result()
+            # Observe the failure without clearing a still-live owner traceback.
+            self.assertIsInstance(task.exception(), self.m.adapter.AdapterUnavailable)
+            self.assertRegex(str(task.exception()), 'capability_unavailable')
             await self.pump(lambda: record not in self.pool._records)
             self.assertEqual(factory.calls, [])
             self.assertEqual(source.resource.reader_opens, 0)

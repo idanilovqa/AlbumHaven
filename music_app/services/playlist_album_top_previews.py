@@ -152,6 +152,51 @@ class PlaylistAlbumTopPreviews:
             _authorize_snapshot(self.tops, connection, live, row, constraints)
             return _project(row)
 
+    def resolve_album(self, context, *, preview_ref, album_ref, context_ref, constraints=None):
+        """Open only a live captured member through its unchanged source occurrence."""
+        from music_app.services.private_native_targets import PrivateNativeTargets, NativeTargetError
+        ref, album_ref = top_uuid(preview_ref), top_uuid(album_ref)
+        with self.tops._authorized(context, constraints) as (connection, live, _now):
+            row = _load(connection, live, ref, context_ref, self.tops._clock())
+            refs = _authorize_snapshot(self.tops, connection, live, row, constraints)
+            if row['saved_top_ref'] is not None or album_ref not in refs:
+                raise AlbumTopError('preview_unavailable', 404)
+            playlist = _source(connection, live, str(row['playlist_ref']), constraints)
+            if playlist['revision'] != row['playlist_revision']:
+                raise AlbumTopError('revision_conflict', 409)
+            index = refs.index(album_ref)
+            included = [item for item in row['snapshot']['report'] if item['reason'] == 'included']
+            # Neither current Playlist revision nor display metadata proves that
+            # inventory has not been remapped since capture. Lock and compare
+            # the exact captured occurrence, track and canonical album together.
+            member = connection.execute("""select t.id as track_id,a.id as album_id,l.catalog_ref
+                from app.playlist_items i
+                join library.local_tracks t on t.id=i.local_track_id and t.library_id=i.library_id
+                join library.local_albums a on a.id=t.album_id and a.library_id=t.library_id
+                join library.catalog_album_links l on l.local_album_id=a.id and l.library_id=a.library_id
+                where i.playlist_ref=%s and i.library_id=%s and i.ref=%s
+                for share of i,t,a""",
+                (row['playlist_ref'], live.library_id, included[index]['playlist_item_ref'])).fetchone()
+            if (member is None or member['track_id'] != row['source_track_ids'][index]
+                    or str(member['catalog_ref']) != album_ref):
+                raise AlbumTopError('preview_member_changed', 409)
+            try:
+                target = PrivateNativeTargets(self.tops._config).resolve_album(
+                    connection, live, member['album_id'], constraints=constraints)
+            except NativeTargetError as error:
+                raise AlbumTopError(error.code, error.status_code) from None
+            # Native resolution can wait on inventory locks. Recheck the whole
+            # receipt after those waits before releasing any native identity.
+            _authorize_snapshot(self.tops, connection, live, row, constraints)
+            if not _readable(live, 'album', member['album_id'], constraints):
+                raise AlbumTopError('forbidden', 403)
+            if row['expires_at'] <= self.tops._clock():
+                raise AlbumTopError('preview_expired', 410)
+            return {'preview_ref': ref, 'album_ref': album_ref,
+                    'source': {'playlist_ref': str(row['playlist_ref']), 'revision': str(row['playlist_revision'])},
+                    'native_target': {'album_ref': target['album_ref'],
+                                      'allowed_actions': {'can_view_details': True, 'can_play_album': False}}}
+
     def discard(self, context, *, preview_ref, context_ref, constraints=None):
         ref = top_uuid(preview_ref)
         with self.tops._authorized(context, constraints) as (connection, live, now):

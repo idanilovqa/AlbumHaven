@@ -234,6 +234,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/album-tops"): "library.album_tops.create",
     ("POST", "/album-tops/playlist-previews/{playlist_ref}"): "library.album_tops.create",
     ("DELETE", "/album-tops/playlist-previews/{preview_ref}"): "library.browse.read",
+    ("GET", "/album-tops/playlist-previews/{preview_ref}/albums/{album_ref}/native-target"): "library.browse.read",
     ("POST", "/album-tops/{top_ref}/{action}"): "library.browse.read",
     ("POST", "/album-top-catalog/inventory"): "library.album_tops.create",
     ("GET", "/album-top-catalog/search"): "library.browse.read",

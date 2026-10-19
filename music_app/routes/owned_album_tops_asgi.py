@@ -298,6 +298,21 @@ async def capture_playlist_album_top(request: Request, playlist_ref: str):
         return _error(error)
 
 
+@router.get('/album-tops/playlist-previews/{preview_ref}/albums/{album_ref}/native-target')
+async def resolve_playlist_album_top_member(request: Request, preview_ref: str, album_ref: str):
+    from music_app.services.playlist_album_top_previews import PlaylistAlbumTopPreviews
+    try:
+        if request.query_params:
+            raise AlbumTopError('invalid_command')
+        context, constraints = _context(request, BROWSE)
+        context_ref = _require_context(request)
+        value = await run_in_threadpool(PlaylistAlbumTopPreviews(_service(request)).resolve_album,
+            context, preview_ref=preview_ref, album_ref=album_ref, context_ref=context_ref, constraints=constraints)
+        return _response(request, value)
+    except AlbumTopError as error:
+        return _error(error)
+
+
 @router.delete('/album-tops/playlist-previews/{preview_ref}')
 async def discard_playlist_album_top(request: Request, preview_ref: str):
     from music_app.services.playlist_album_top_previews import PlaylistAlbumTopPreviews

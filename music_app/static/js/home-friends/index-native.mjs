@@ -1,3 +1,4 @@
+import {normalizeArtistLovedDescriptor, normalizeArtistLovedLaunch, normalizeSavedArtistLovedRecipe} from '../playlists/artist-loved-recipe.mjs';
 import {createGoalsOwner} from './goals-owner.mjs';
 import {captureArtistMixScope} from '../playlists/library-mix-recipe.mjs';
 import {createPresencePublisher} from './presence.mjs';
@@ -16,6 +17,7 @@ import {mountAlbumTops} from '../album-tops/index.mjs';
 import {createAlbumTopBackendProviders} from '../album-tops/backend-providers.mjs';
 import {mountLibraryNavigation} from './library-navigation.mjs';
 import {mountSearchResults} from '../search-results/native.mjs';
+import {mountArtistPage} from '../artist-page/native.mjs';
 
 let requestedProviders = null, providers = {}, providerGeneration = 0, activeController = null, homeOwner = null, mountedRuntime = null;
 let friendNotifications = null, ownedHomeProviders = null, presencePublisher = null, notificationsView = null;
@@ -173,8 +175,17 @@ mount();
 
 let playlistMount = null, playlistProviders = null, ownedPlaylistProviders = null, ownedMatchProviders = null;
 let playlistAction = null, playlistProviderGeneration = 0;
+let playlistMountOwner = null, playlistMountChanging = false;
+let customPlaylistProviders = false, playlistBackendRuntime = null;
+function playlistRuntimeCurrent(owner) {
+  if (!owner || owner.retired) return false;
+  if (playlistMountOwner !== owner || window.AlbumHavenPlaylistRuntime !== owner.runtime
+    || document.getElementById('playlists-root') !== owner.host) owner.retired = true;
+  return !owner.retired;
+}
 function playlistBackend(runtime) {
   if (playlistProviders === null) {
+    playlistBackendRuntime = runtime;
     ownedPlaylistProviders = window.AlbumHavenPrivateUITransport
       ? createPlaylistBackendProviders({transport: window.AlbumHavenPrivateUITransport, runtime}) : null;
     ownedMatchProviders = ownedPlaylistProviders ? createPlaylistMatchProviders({transport: window.AlbumHavenPrivateUITransport, runtime}) : null;
@@ -277,9 +288,46 @@ window.AlbumHavenPlaytableUI = Object.freeze({mount: mountPlaytableSelection, op
   actions: (anchor, options) => window.AlbumHavenPlaylistRuntime?.openChoice?.(anchor, {...options, actionMenu: true, menuWidth: 'content', updateTriggerLabel: false, initialFocus: 'first'}) || null});
 window.dispatchEvent(new Event('albumhaven:playtable-ui-ready'));
 function mountPlaylistSurface() {
+  // Nested readiness during disposal/acquisition fails closed. No successor can
+  // mount into a host that the detached old owner's disposer is still clearing.
+  if (playlistMountChanging) {
+    if (playlistMountOwner) playlistRuntimeCurrent(playlistMountOwner);
+    return;
+  }
   const host = document.getElementById('playlists-root'), runtime = window.AlbumHavenPlaylistRuntime;
-  if (!playlistMount && host && runtime) {
-    playlistMount = mountPlaylists({host, runtime, providers: playlistBackend(runtime)});
+  if (playlistRuntimeCurrent(playlistMountOwner)) return;
+  const replaceProviders = Boolean(playlistMountOwner) || playlistBackendRuntime && playlistBackendRuntime !== runtime;
+  const previous = playlistMount, oldPlaylist = replaceProviders ? ownedPlaylistProviders : null,
+    oldMatch = replaceProviders ? ownedMatchProviders : null;
+  if (playlistMountOwner) playlistMountOwner.retired = true;
+  playlistMount = null; playlistMountOwner = null;
+  if (replaceProviders) {
+    ownedPlaylistProviders = null; ownedMatchProviders = null; playlistBackendRuntime = null;
+    if (!customPlaylistProviders) playlistProviders = null;
+  }
+  playlistMountChanging = true;
+  let failure;
+  const release = callback => {try {callback();} catch (error) {failure ||= error;}};
+  try {
+    release(() => previous?.dispose());
+    release(() => oldPlaylist?.dispose());
+    release(() => oldMatch?.dispose());
+    if (failure) throw failure;
+    if (!host || !runtime || window.AlbumHavenPlaylistRuntime !== runtime
+      || document.getElementById('playlists-root') !== host) return;
+    const owner = {runtime, host, retired: false}; playlistMountOwner = owner;
+    const configuration = playlistProviderGeneration, providers = playlistBackend(runtime);
+    if (!playlistRuntimeCurrent(owner) || configuration !== playlistProviderGeneration) return;
+    const mounted = mountPlaylists({host, runtime, providers, isRuntimeCurrent: () => playlistRuntimeCurrent(owner)});
+    if (!playlistRuntimeCurrent(owner) || configuration !== playlistProviderGeneration) {
+      owner.retired = true; mounted.dispose(); return;
+    }
+    playlistMount = mounted;
+  } finally {
+    if (!playlistMount && playlistMountOwner) {
+      playlistMountOwner.retired = true; playlistMountOwner = null;
+    }
+    playlistMountChanging = false;
   }
 }
 let activityInspect = null;
@@ -312,8 +360,33 @@ async function inspectActivityMissing(options) {
     return packet && current() ? playlistMount.prepareActivityDraft(packet, options.scopeKey) : false;
   } finally {if (activityInspect === request) activityInspect = null;}
 }
+function canOpenArtistLoved({descriptor, launchContext} = {}) {
+  try {
+    const parsed = normalizeArtistLovedDescriptor(descriptor);
+    const native = window.AlbumHavenPlaylistRuntime;
+    // Observation retires A before any B lease can later round-trip back to A.
+    if (playlistMountOwner) playlistRuntimeCurrent(playlistMountOwner);
+    if (!parsed || !native || launchContext?.descriptor !== descriptor
+      || launchContext.runtime !== native || launchContext.providerGeneration !== playlistProviderGeneration
+      || launchContext.isCurrent?.() !== true) return false;
+    return launchContext.responseStamp === window.AlbumHavenPrivateUITransport?.context()
+      && launchContext.transportGeneration === window.AlbumHavenPrivateUITransport?.generation()
+      && launchContext.isCurrent?.() === true;
+  } catch {return false;}
+}
 window.AlbumHavenPlaylistUI = Object.freeze({
   activityMissingEligibility, inspectActivityMissing,
+  normalizeArtistLovedLaunch, normalizeSavedArtistLovedRecipe,
+  artistLovedProviderGeneration: () => playlistProviderGeneration,
+  canOpenArtistLoved,
+  openArtistLoved(input) {
+    if (!canOpenArtistLoved(input)) return false;
+    const generation = playlistProviderGeneration, native = window.AlbumHavenPlaylistRuntime;
+    mountPlaylistSurface();
+    if (generation !== playlistProviderGeneration || native !== window.AlbumHavenPlaylistRuntime || !canOpenArtistLoved(input)) return false;
+    return playlistRuntimeCurrent(playlistMountOwner) && playlistMountOwner.runtime === native
+      ? playlistMount?.openArtistLoved(input) ?? false : false;
+  },
   openLibraryMix() {mountPlaylistSurface(); return playlistMount?.openLibraryMix() ?? false;},
   canOpenArtistPopular({groups,albums,filters}) {return captureArtistMixScope(groups,albums,filters) !== null;},
   openArtistPopular({groups,albums,filters}) {
@@ -341,7 +414,7 @@ window.AlbumHavenPlaylistUI = Object.freeze({
     if (!current()) return;
     const replacement = {...next};
     if (!current()) return;
-    playlistProviders = replacement;
+    customPlaylistProviders = true; playlistProviders = replacement;
     playlistMount?.configureProviders(playlistProviders);
   },
   refresh() {return playlistMount?.refresh();},
@@ -392,3 +465,52 @@ function mountSearchSurface() {
 }
 window.addEventListener('albumhaven:search-runtime-ready', mountSearchSurface);
 mountSearchSurface();
+
+let artistMountOwner = null;
+function mountArtistSurface() {
+  const runtime = window.AlbumHavenArtistPageRuntime, host = document.getElementById('artist-page-root');
+  if (!runtime || !host) return;
+  if (artistMountOwner?.runtime === runtime && artistMountOwner.host === host) return;
+  const previous = artistMountOwner;
+  // Claim before callbacks. Repeated ready events during mounting are inert;
+  // a reentrant successor owns its own transaction and cannot be overwritten.
+  const owner = {runtime, host, mounted: null, unsubscribe: null, retired: false}; artistMountOwner = owner;
+  const current = () => !owner.retired && artistMountOwner === owner && window.AlbumHavenArtistPageRuntime === runtime
+    && document.getElementById('artist-page-root') === host;
+  owner.dispose = () => {
+    if (owner.retired) return;
+    owner.retired = true;
+    const stop = owner.unsubscribe, mounted = owner.mounted;
+    owner.unsubscribe = null; owner.mounted = null;
+    // Unsubscribe before disposal callbacks; cleanup remains idempotent even
+    // if a callback acquires a successor or throws.
+    try {stop?.();} finally {mounted?.dispose();}
+  };
+  let refreshing = false;
+  const refreshLoved = () => {
+    if (!current() || refreshing) return;
+    refreshing = true;
+    try {
+      // Read the actual settled presentation and a fresh launch lease. This
+      // does not admit a view or turn runtime readiness into authority.
+      window.updateGalleryArtistLovedControl?.();
+    } finally {refreshing = false;}
+  };
+  try {
+    previous?.dispose();
+    if (!current()) {owner.dispose(); return;}
+    const mounted = mountArtistPage({host, runtime});
+    if (!current()) {mounted?.dispose(); owner.dispose(); return;}
+    owner.mounted = mounted;
+    const unsubscribe = runtime.subscribe(refreshLoved);
+    if (!current()) {unsubscribe?.(); owner.dispose(); return;}
+    owner.unsubscribe = unsubscribe;
+    refreshLoved();
+  } catch (error) {
+    if (artistMountOwner === owner) artistMountOwner = null;
+    owner.dispose();
+    throw error;
+  }
+}
+window.addEventListener('albumhaven:artist-page-runtime-ready', mountArtistSurface);
+mountArtistSurface();

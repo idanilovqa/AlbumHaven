@@ -1,3 +1,4 @@
+import {normalizeArtistLovedDescriptor} from './artist-loved-recipe.mjs';
 import {createPlaylistEditNotifications} from './edit-request-notifications.mjs';
 import {createPlaylistController, granted} from './model.mjs';
 import {mountPlaylistsView, mountPlaylistDirectory} from './native-app.mjs';
@@ -11,7 +12,7 @@ import {mountLibraryMixSetup, mountLibraryMixPage} from './native-library-mix.mj
 
 // The existing production boot owns when/where to mount this slice. No global
 // bridge, second boot, history store, mock provider or persistent client data.
-export function mountPlaylists({host, runtime, providers = {}}) {
+export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent = () => globalThis.window?.AlbumHavenPlaylistRuntime === runtime}) {
   if (!host || !runtime || typeof runtime.snapshot !== 'function' || typeof runtime.subscribe !== 'function') throw new TypeError('A native playlist host and runtime are required.');
   const controller = createPlaylistController({readPlaylists: runtime.readPlaylists, providers});
   let configuredProviders = {...providers};
@@ -44,7 +45,17 @@ export function mountPlaylists({host, runtime, providers = {}}) {
       else view = mounted;
     } else view.update(props);
   }
-  const mixCurrent = owner => !disposed && activeMix === owner && !owner.retired;
+  // The covered header lease ends at transfer; runtime ownership never does.
+  // Once replacement is observed, even restoring the same object cannot revive it.
+  let lovedRuntimeRetired = false;
+  const lovedRuntimeCurrent = () => {
+    if (disposed || lovedRuntimeRetired) return false;
+    try {if (isRuntimeCurrent() !== true) lovedRuntimeRetired = true;}
+    catch {lovedRuntimeRetired = true;}
+    return !lovedRuntimeRetired;
+  };
+  const mixCurrent = owner => !disposed && activeMix === owner && !owner.retired
+    && (!owner.artistLovedDescriptor || lovedRuntimeCurrent());
   const clearMix = owner => {
     if (activeMix !== owner) return;
     activeMix = null; owner.retired = true; owner.controller.dispose();
@@ -55,8 +66,10 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     const owner = activeMix;
     if (!owner) return;
     const shell = runtime.snapshot();
-    if (!shell.authenticated || shell.scopeKey !== owner.scopeKey
-      || owner.phase === 'setup' && shell.entryKey !== owner.entryKey) {
+    if (owner.artistLovedDescriptor && !lovedRuntimeCurrent()
+      || !shell.authenticated || shell.scopeKey !== owner.scopeKey
+      || owner.phase === 'setup' && shell.entryKey !== owner.entryKey
+      || owner.artistLovedDescriptor && owner.phase === 'page' && shell.retainedDraftToken !== owner.token) {
       owner.retired = true; runtime.releaseDraft?.(owner.token); clearMix(owner);
     }
   };
@@ -78,9 +91,9 @@ export function mountPlaylists({host, runtime, providers = {}}) {
   }
   async function openSavedMix(owner, receipt) {
     if (!mixCurrent(owner) || owner.controller.getSnapshot().mutation.data !== receipt) return false;
-    // The server already acknowledged the one saved playlist. Retire only this
-    // temporary owner before ordinary native navigation takes over.
-    try {return await runtime.completeLibraryMixDraft({token: owner.token, scopeKey: owner.scopeKey, playlist_id: receipt.playlist_id});}
+    // An acknowledged Loved save retains this owner until destination admission.
+    // Retrying this action only navigates; it never sends another Create.
+    try {return await runtime.completeLibraryMixDraft({token: owner.token, scopeKey: owner.scopeKey, playlist_id: receipt.playlist_id, artistLoved: Boolean(owner.artistLovedDescriptor)});}
     catch {runtime.notifyPlaytableCreation?.(); return false;}
   }
   const mountNotifications = () => {
@@ -265,7 +278,12 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     if (mix && mixCurrent(mix) && shell.scopeKey === mix.scopeKey && shell.draftToken === mix.token && mix.phase === 'page') {
       show('mix-page', mix, props => mountLibraryMixPage(host, mix.runtime, props),
         {controller: mix.controller, readDetail: configuredProviders.readDetail,
-          onClose: () => runtime.closeDraft(mix.token), onSaved: receipt => openSavedMix(mix, receipt)}, current);
+          onClose: () => runtime.closeDraft(mix.token), onSaved: receipt => openSavedMix(mix, receipt),
+          consumeAutomaticPlay: mix.artistLovedDescriptor ? () => {
+            if (mix.autoPlayConsumed) return false;
+            mix.autoPlayConsumed = true;
+            return mixCurrent(mix) && mix.phase === 'page' && mix.playbackIntent?.() === true;
+          } : undefined}, current);
       return;
     }
     if (!shell.visible || state.scopeKey !== shell.scopeKey) {clearView(); return;}
@@ -336,6 +354,49 @@ export function mountPlaylists({host, runtime, providers = {}}) {
     throw error;
   }
   return Object.freeze({
+    openArtistLoved({descriptor, launchContext} = {}) {
+      const normalized = normalizeArtistLovedDescriptor(descriptor);
+      const leaseCurrent = () => {try {return launchContext?.runtime === runtime && lovedRuntimeCurrent()
+        && launchContext?.descriptor === descriptor && launchContext?.isCurrent?.() === true;} catch {return false;}};
+      if (!normalized || !leaseCurrent()) return false;
+      const shell = runtime.snapshot(), configuration = generation;
+      if (disposed || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
+        || typeof configuredProviders.beginArtistLoved !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function'
+        || typeof runtime.openDraft !== 'function' || !leaseCurrent() || generation !== configuration) return false;
+      const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, entryKey: shell.entryKey,
+        phase: 'transferring', retired: false, artistLovedDescriptor: normalized, autoPlayConsumed: false};
+      owner.playbackIntent = runtime.captureLibraryMixPlaybackIntent?.();
+      if (!leaseCurrent() || disposed || activeMix || activeDraft || generation !== configuration) return false;
+      owner.controller = createLibraryMixController({providers: configuredProviders, scopeKey: owner.scopeKey,
+        artistLovedDescriptor: normalized, isCurrent: () => mixCurrent(owner)});
+      activeMix = owner;
+      try {
+        owner.runtime = runtime.createLibraryMixRuntime({scopeKey: owner.scopeKey, isCurrent: () => mixCurrent(owner),
+          source: () => owner.controller.source(), order: () => owner.controller.getSnapshot().playbackOrder,
+          automaticPlayCurrent: () => owner.playbackIntent?.() === true});
+        if (!mixCurrent(owner) || !leaseCurrent() || generation !== configuration) {clearMix(owner); return false;}
+        // Transfer validates the parent lease before ownership changes. After the
+        // accepted push, token and scope replace only the covered header lease;
+        // mixCurrent retains the permanently fenced bound-runtime owner.
+        let transferring = true;
+        const opened = runtime.openDraft({token: owner.token, scopeKey: owner.scopeKey, fromGlobal: true,
+          isCurrent: () => mixCurrent(owner) && (!transferring || leaseCurrent()),
+          onDiscard: () => clearMix(owner),
+          confirmLeave: async () => {
+            const before = owner.controller.getSnapshot();
+            if (!mixCurrent(owner) || before.mutation.status === 'loading') return false;
+            if (!before.dirty) return true;
+            return await runtime.confirmDraft?.(owner.token, 'Discard this unsaved Loved and Obsessed playlist?') === true
+              && mixCurrent(owner) && owner.controller.getSnapshot() === before;
+          }, onTransfer: () => {transferring = false;}});
+        transferring = false;
+        if (!opened || !mixCurrent(owner)) {runtime.releaseDraft?.(owner.token); clearMix(owner); return false;}
+        owner.phase = 'page'; requestRender();
+        if (!mixCurrent(owner)) return false;
+        void owner.controller.prepare();
+        return mixCurrent(owner);
+      } catch (error) {runtime.releaseDraft?.(owner.token); clearMix(owner); throw error;}
+    },
     openLibraryMix(options = {}) {
       const artistScope = options.artistScope == null ? null : normalizeArtistMixScope(options.artistScope);
       if (options.artistScope != null && !artistScope) return false;

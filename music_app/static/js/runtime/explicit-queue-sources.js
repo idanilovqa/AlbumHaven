@@ -104,8 +104,9 @@ async function readLibraryMixNativeQueue({sourceRef, sourceRevision, entryRefs, 
   if (!uuid(sourceRef) || !uuid(sourceRevision) || !Array.isArray(entryRefs) || !entryRefs.length || entryRefs.length > 5000
     || entryRefs.some(ref => !uuid(ref)) || new Set(entryRefs).size !== entryRefs.length || !entryRefs.includes(startingEntryRef))
     throw new Error('Mix queue membership is unavailable.');
-  if (!['library_mix_selection_v1','artist_popular_selection_v1'].includes(sourceProtocol)) throw new Error('Mix protocol is unavailable.');
-  const route=sourceProtocol==='artist_popular_selection_v1'?'artist-popular':'library-mix';
+  const routes = {library_mix_selection_v1: 'library-mix', artist_popular_selection_v1: 'artist-popular', artist_loved_selection_v1: 'artist-loved'};
+  if (!Object.hasOwn(routes, sourceProtocol)) throw new Error('Mix protocol is unavailable.');
+  const route = routes[sourceProtocol];
   const reply = await PrivateUITransport.request(`/playlists/creation-source/${route}/native-queue`, {
     method: 'POST', signal, body: {source_ref: sourceRef, source_revision: sourceRevision,
       entry_refs: entryRefs, starting_entry_ref: startingEntryRef}});

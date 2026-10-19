@@ -66,7 +66,7 @@ const PlaylistReactRuntime = (() => {
     } finally {owner.onDiscard();}
     return true;
   }
-  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null, fromGlobal = false} = {}) {
+  function openDraft({token, scopeKey, isCurrent, confirmLeave, onDiscard, externalScopeKey = null, fromGlobal = false, onTransfer = null} = {}) {
     const start = sync(), navigation = window.AlbumHavenSettingsNavigation?.instance;
     const home = externalScopeKey === null ? null : window.AlbumHavenHomeRuntime?.snapshot();
     const external = home?.visible === true && home.authenticated === true && home.scopeKey === externalScopeKey;
@@ -80,7 +80,12 @@ const PlaylistReactRuntime = (() => {
     draft = owner;
     owner.unregister = navigation.setPlaylistDraftOwner({token, scopeKey, isCurrent: () => draftCurrent(owner),
       confirmLeave: () => {interruptDraftNavigation(); return confirmLeave();}, discard: () => {releaseDraft(token); sync();}});
-    if (!owner.unregister) {draft = null; return false;}
+    if (!owner.unregister) {if (draft === owner) draft = null; return false;}
+    if (onTransfer) {
+      if (!draftCurrent(owner)) {if (draft === owner) releaseDraft(token); return false;}
+      onTransfer();
+      if (!draftCurrent(owner)) {if (draft === owner) releaseDraft(token); return false;}
+    }
     const url = new URL('/', window.location.href); url.searchParams.set('surface', 'playlists');
     interruptDraftNavigation();
     try {navigation.writeLibraryHistory(url.href, {playlistDraft: {token, scopeKey}}, {mode: 'push'});}
@@ -137,9 +142,14 @@ const PlaylistReactRuntime = (() => {
       ? {kind: 'album', ref: row.album_ref, allowed_actions: {can_view_details: true}} : null);
     return resourceTarget(target, 'album', origin);
   }
+  const lovedRecipe = detail => detail?.playlist_kind === 'artist_loved' && detail.library_mix == null
+    ? window.AlbumHavenPlaylistUI?.normalizeSavedArtistLovedRecipe?.(detail.artist_loved) ?? null : null;
+  const generatedRecipe = detail => detail?.playlist_kind === 'artist_loved' ? lovedRecipe(detail) : detail?.library_mix;
   function authority(payload) {
     const detail = payload?.playlist_detail;
     if (!detail || !Array.isArray(detail.track_rows)) return null;
+    if (detail.playlist_kind === 'artist_loved' && !lovedRecipe(detail)
+      || detail.artist_loved != null && detail.playlist_kind !== 'artist_loved') return null;
     // Denied identities still participate in duplicate checks, without retaining
     // their media path, metadata or playback grant.
     const origin = resourceOrigin(detail);
@@ -148,6 +158,7 @@ const PlaylistReactRuntime = (() => {
       playlist_kind: detail.playlist_kind,
       library_mix: detail.playlist_kind === 'library_mix' && ['regular', 'shuffle', 'unplayed_first'].includes(detail.library_mix?.playback_order)
         ? {playback_order: detail.library_mix.playback_order} : null,
+      artist_loved: lovedRecipe(detail),
       allowed_actions: {can_play: exactGrant(detail.allowed_actions, 'can_play')},
       track_rows: Array.from(detail.track_rows, row => row && typeof row === 'object' ? unreadable(row)
         ? copy(row, ['playlist_item_id']) : {
@@ -179,18 +190,21 @@ const PlaylistReactRuntime = (() => {
     if (payload.playlist_index && !Array.isArray(payload.playlist_index.playlists)) return null;
     if (payload.playlist_detail && !Array.isArray(payload.playlist_detail.track_rows)) return null;
     if (!payload.playlist_index && !payload.playlist_detail) return null;
+    const declarations = [...payload.playlist_sidebar.items, ...(payload.playlist_index?.playlists || []),
+      ...(payload.playlist_detail ? [payload.playlist_detail] : [])];
+    if (declarations.some(item => item?.playlist_kind === 'artist_loved' ? !lovedRecipe(item) : item?.artist_loved != null)) return null;
     const origin = resourceOrigin(payload.playlist_detail);
     const preferenceBatch = epoch !== undefined ? TrackActionsRuntime.readBatch(epoch) : null;
     const result = {playlist_sidebar: {active_playlist_id: payload.playlist_sidebar.active_playlist_id,
-      items: payload.playlist_sidebar.items.map(item => copy(item, ['playlist_id', 'title', 'item_count', 'playlist_kind', 'allowed_actions']))}};
+      items: payload.playlist_sidebar.items.map(item => copy(item, ['playlist_id', 'title', 'item_count', 'playlist_kind', 'artist_loved', 'allowed_actions']))}};
     result.playlist_creation_protocol = payload.playlist_creation_protocol;
     result.playlist_actions = {can_create: Object.prototype.hasOwnProperty.call(payload, 'playlist_actions') && exactGrant(payload.playlist_actions, 'can_create')};
     result.playlist_creation_source = creationSource(Object.prototype.hasOwnProperty.call(payload, 'playlist_creation_source') ? payload.playlist_creation_source : null);
     if (payload.playlist_index) result.playlist_index = {query: payload.playlist_index.query,
-      playlists: payload.playlist_index.playlists.map(item => copy(item, ['playlist_id', 'title', 'description', 'visibility', 'item_count', 'playlist_kind', 'allowed_actions']))};
+      playlists: payload.playlist_index.playlists.map(item => copy(item, ['playlist_id', 'title', 'description', 'visibility', 'item_count', 'playlist_kind', 'artist_loved', 'allowed_actions']))};
     for (const row of payload.playlist_detail?.track_rows || []) if (!unreadable(row)) preferenceBatch?.accept(row);
     if (payload.playlist_detail) result.playlist_detail = {...copy(payload.playlist_detail,
-      ['playlist_id', 'title', 'description', 'visibility', 'playlist_kind', 'items_complete', 'query', 'active_sort', 'saved_default_sort', 'playback_mode', 'listen_to_suggestions_after_playlist', 'library_mix', 'popularity_refresh_status', 'popularity_refresh_error', 'allowed_actions']),
+      ['playlist_id', 'title', 'description', 'visibility', 'playlist_kind', 'items_complete', 'query', 'active_sort', 'saved_default_sort', 'playback_mode', 'listen_to_suggestions_after_playlist', 'library_mix', 'artist_loved', 'popularity_refresh_status', 'popularity_refresh_error', 'allowed_actions']),
       revision: origin?.snapshot_ref ?? null,
       missing_playlist_creation_source: creationSource(Object.prototype.hasOwnProperty.call(payload.playlist_detail, 'missing_playlist_creation_source') ? payload.playlist_detail.missing_playlist_creation_source : null),
       track_rows: payload.playlist_detail.track_rows.map(row => {
@@ -378,7 +392,7 @@ const PlaylistReactRuntime = (() => {
     const source = playableRow(intent, row, options), owner = raw, detail = raw?.playlist_detail;
     if (activationToken !== (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null)) throw aborted();
     if (!source || !detail) throw failure('This track action is unavailable.', 403);
-    if (!detail.library_mix && TrackActionsRuntime.canPlay(source)) {TrackActionsRuntime.play(source); return;}
+    if (!generatedRecipe(detail) && TrackActionsRuntime.canPlay(source)) {TrackActionsRuntime.play(source); return;}
     const request = ++nativeSequence, scopeKey = sync().scopeKey;
     const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
     const current = () => request === nativeSequence && raw === owner && sync().visible && sync().scopeKey === scopeKey
@@ -392,7 +406,7 @@ const PlaylistReactRuntime = (() => {
     if (rows.some(item => !item)) throw failure('Playlist order changed.', 409);
     const candidates = rows.filter(item => exactGrant(item.allowed_actions, 'can_play'));
     const previous = state.player.playbackQueue;
-    if (!(detail.library_mix && options.fromStart === true) && previous?.playlistId === detail.playlist_id && previous.playlistRevision === detail.revision
+    if (!(generatedRecipe(detail) && options.fromStart === true) && previous?.playlistId === detail.playlist_id && previous.playlistRevision === detail.revision
       && previous.contextGeneration === PrivateUITransport.generation()
       && JSON.stringify(previous.displayedItemIds) === JSON.stringify(ids)
       && typeof playlistQueueCurrentIndex === 'function'
@@ -424,7 +438,7 @@ const PlaylistReactRuntime = (() => {
       return {src: `/track?path=${encodeURIComponent(target.path)}`, path: target.path, title: target.title,
         artist: target.artist, album: target.album_title, durationSeconds: target.duration_seconds,
         playlistItemId: item.playlist_item_id, inventory_track_ref: target.inventory_track_ref, albumRef: byItem.get(item.playlist_item_id)?.album_ref || null,
-        ...(detail.library_mix ? {personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null} : {})};
+        ...(generatedRecipe(detail) ? {personalPlayCount: Number.isSafeInteger(item.play_count) && item.play_count >= 0 ? item.play_count : null} : {})};
     });
     if (orderChoice?.mode === 'unplayed_first') tracks = [...tracks.filter(item => item.personalPlayCount === 0), ...tracks.filter(item => item.personalPlayCount !== 0)];
     const index = tracks.findIndex(track => track.playlistItemId === source.playlist_item_id);
@@ -432,7 +446,7 @@ const PlaylistReactRuntime = (() => {
     let selected = tracks[index];
     const previousQueue = state.player.playbackQueue;
     const shuffled = orderChoice?.mode === 'shuffle';
-    const fromStart = detail.library_mix && options.fromStart === true;
+    const fromStart = generatedRecipe(detail) && options.fromStart === true;
     const ordered = typeof playlistQueueOrder === 'function' ? playlistQueueOrder(tracks, shuffled,
       fromStart ? null : selected.path, fromStart ? null : selected.playlistItemId) : tracks;
     if (fromStart) selected = ordered[0];
@@ -470,7 +484,7 @@ const PlaylistReactRuntime = (() => {
     const owned = queue?.playlistId === options.playlist_id;
     const mode = orderChoice?.scopeKey === shell.scopeKey && orderChoice.playlist_id === options.playlist_id ? orderChoice.mode : 'regular';
     return {status: 'ready', data: {scopeKey: options.scopeKey, playlist_id: options.playlist_id, revision: JSON.stringify([queueRevision, current?.playlistItemId || null]),
-      ...(detail.library_mix ? {library_mix_order: mode} : {}),
+      ...(generatedRecipe(detail) ? {library_mix_order: mode} : {}),
       shuffle: owned ? queue.shuffle === true : mode === 'shuffle', repeat: owned ? queue.repeatMode || 'off' : 'off',
       current_playlist_id: current ? queue.playlistId : null, current_playlist_item_id: current?.playlistItemId || null,
       allowed_actions: {can_shuffle: true, can_repeat: owned && Boolean(current),
@@ -480,8 +494,8 @@ const PlaylistReactRuntime = (() => {
     const shell = sync();
     if (shell.scopeKey !== options.scopeKey || !shell.visible) return {status: 'denied'};
     if (!orderChoice || orderChoice.scopeKey !== options.scopeKey || orderChoice.playlist_id !== options.playlist_id) {
-      const mixMode = raw?.playlist_detail?.library_mix?.playback_order;
-      const isMix = raw?.playlist_detail?.playlist_kind === 'library_mix' && ['regular', 'shuffle', 'unplayed_first'].includes(mixMode);
+      const mixMode = generatedRecipe(raw?.playlist_detail)?.playback_order;
+      const isMix = Boolean(generatedRecipe(raw?.playlist_detail)) && ['regular', 'shuffle', 'unplayed_first'].includes(mixMode);
       const value = !isMix && typeof playbackPreferences.read === 'function' ? await playbackPreferences.read(options) : null;
       if (options.signal?.aborted || sync().scopeKey !== shell.scopeKey || !sync().visible || sync().playlistId !== options.playlist_id) throw aborted();
       orderChoice = {scopeKey: options.scopeKey, playlist_id: options.playlist_id,
@@ -543,7 +557,7 @@ const PlaylistReactRuntime = (() => {
     if (start.retainedDraftToken || document.getElementById('app-shell')?.hidden === true) return false;
     await navigateCurrent(playlist_id, start, active); return true;
   }
-  async function navigateCurrent(playlist_id, start, sourceCurrent = () => true) {
+  async function navigateCurrent(playlist_id, start, sourceCurrent = () => true, retainedToken = null) {
     if (!sourceCurrent() || sync().scopeKey !== start.scopeKey || document.getElementById('app-shell')?.hidden === true
       || new URL(window.location.href).pathname !== '/') throw aborted();
     const params = new URLSearchParams({surface: 'playlists'}); if (playlist_id) params.set('playlist_id', playlist_id);
@@ -563,7 +577,10 @@ const PlaylistReactRuntime = (() => {
     }});
     requestId = state.ui.activeViewRequestId;
     const applied = await pending, next = sync();
-    if (state.ui.activeViewRequestId !== requestId || next.scopeKey !== start.scopeKey || !next.visible
+    const retainedDestination = retainedToken && next.retainedDraftToken === retainedToken
+      && window.history.state?.playlistDraft?.token === retainedToken
+      && new URL(window.location.href).searchParams.get('playlist_id') === playlist_id;
+    if (state.ui.activeViewRequestId !== requestId || next.scopeKey !== start.scopeKey || !(next.visible || retainedDestination)
       || applied === false && !rejectedTarget && state.view !== priorView) throw aborted();
     if (rejectedTarget || applied === false || next.playlistId !== playlist_id
       || playlist_id !== null && !next.payload?.playlist_detail) throw failure('This playlist could not be opened.');
@@ -683,7 +700,15 @@ const PlaylistReactRuntime = (() => {
       const home = window.AlbumHavenHomeRuntime?.snapshot?.();
       return home?.authenticated === true && home.scopeKey === scopeKey;
     },
-    createLibraryMixRuntime({scopeKey, source, order, isCurrent}) {
+    captureLibraryMixPlaybackIntent() {
+      const scopeKey = sync().scopeKey, transportGeneration = PrivateUITransport.generation();
+      const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
+      const queue = state.player.playbackQueue;
+      return () => sync().scopeKey === scopeKey && PrivateUITransport.generation() === transportGeneration
+        && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null)
+        && state.player.playbackQueue === queue;
+    },
+    createLibraryMixRuntime({scopeKey, source, order, isCurrent, automaticPlayCurrent}) {
       const targets = new Map();
       let activation = 0;
       const current = () => isCurrent() === true && sync().authenticated && sync().scopeKey === scopeKey;
@@ -702,10 +727,12 @@ const PlaylistReactRuntime = (() => {
         trackPlayback: row => current() && targets.has(row.playlist_item_id) && state.player.playbackQueue?.libraryMixRef === source()?.source.ref
           ? TrackActionsRuntime.playback(targets.get(row.playlist_item_id)) : {isCurrent: false, isPlaying: false},
         async trackIntent(intent, row, options = {}) {
-          if (intent !== 'play' || !canPlay(row)) throw failure('Mix playback is unavailable.', 403);
+          if (intent !== 'play' || options.automatic === true && automaticPlayCurrent?.() !== true || !canPlay(row)) throw failure('Mix playback is unavailable.', 403);
           const retained = source(), sequence = ++activation;
+          let publishing = false;
           const playerToken = typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null;
           const valid = () => current() && source() === retained && activation === sequence && !options.signal?.aborted
+            && (options.automatic !== true || publishing || automaticPlayCurrent?.() === true)
             && playerToken === (typeof playerTrackSelectionToken === 'number' ? playerTrackSelectionToken : null);
           const ids = options.displayedItemIds || retained.entry_refs;
           if (!Array.isArray(ids) || ids.length !== retained.entry_refs.length || new Set(ids).size !== ids.length
@@ -731,6 +758,7 @@ const PlaylistReactRuntime = (() => {
             options.fromStart === true ? null : selected.path, options.fromStart === true ? null : selected.playlistItemId);
           if (options.fromStart === true) selected = tracks[0];
           if (!selected || !valid() || typeof playTrackFromPayload !== 'function') throw aborted();
+          publishing = true;
           const previousQueue = state.player.playbackQueue;
           const queue = {tracks, regularTracks, shuffle: mode === 'shuffle', repeatMode: 'off', currentIndex: tracks.indexOf(selected),
             playbackContext: null, albumRef: '', albumSnapshot: null, playlistId: null, libraryMixRef: retained.source.ref,
@@ -756,17 +784,27 @@ const PlaylistReactRuntime = (() => {
       };
     },
     readPlayback, playbackIntent,
-    async completeLibraryMixDraft({token, playlist_id, scopeKey}) {
+    async completeLibraryMixDraft({token, playlist_id, scopeKey, artistLoved = false}) {
       const start = sync();
       if (!draftCurrent(draft) || draft.token !== token || start.scopeKey !== scopeKey || !start.authenticated) return false;
+      if (artistLoved) {
+        const owner = draft;
+        const accepted = await retainDraft(token, async () => {
+          await navigateCurrent(playlist_id, start, () => draftCurrent(owner), token);
+          const destination = sync();
+          return draftCurrent(owner) && destination.scopeKey === scopeKey && destination.playlistId === playlist_id
+            && destination.payload?.playlist_detail?.playlist_id === playlist_id;
+        });
+        if (accepted !== true || !draftCurrent(owner)) return false;
+        releaseDraft(token); lastView = null; sync(); return true;
+      }
       releaseDraft(token);
       await navigateCurrent(playlist_id, start); return true;
     },
     setLibraryMixOrder({scopeKey, playlist_id, mode}) {
       const shell = sync(), detail = raw?.playlist_detail;
       if (!shell.visible || shell.scopeKey !== scopeKey || shell.playlistId !== playlist_id
-        || detail?.playlist_id !== playlist_id || detail.playlist_kind !== 'library_mix'
-        || !detail.library_mix || !['regular', 'shuffle', 'unplayed_first'].includes(mode)) return false;
+        || detail?.playlist_id !== playlist_id || !generatedRecipe(detail) || !['regular', 'shuffle', 'unplayed_first'].includes(mode)) return false;
       orderChoice = {scopeKey, playlist_id, mode, preferences: null}; notifyPlayback(); return true;
     },
     acceptPlaylistPreferences(value) {

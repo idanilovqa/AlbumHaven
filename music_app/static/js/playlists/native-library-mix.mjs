@@ -124,7 +124,7 @@ export function mountLibraryMixPage(host,runtime,initialProps){
   const receipt=await(check?owner.retrySave():owner.save());
   if(receipt&&!disposed&&props.controller===owner)await view.onSaved(receipt);
  }
- async function play(){
+ async function play(automatic=false){
   if(disposed||starting)return;
   const view=props,version=revision,state=view.controller.getSnapshot();
   if(!alive(version,view))return;
@@ -140,7 +140,7 @@ export function mountLibraryMixPage(host,runtime,initialProps){
    }
    if(!row||!current())return;
    starting=true;message='';
-   const result=intent.call(runtime,'play',row,{playlist_id:detail.playlist_id,scopeKey:state.scopeKey,displayedItemIds:rows.map(item=>item.playlist_item_id),playbackOrder:state.playbackOrder,fromStart:true});
+   const result=intent.call(runtime,'play',row,{playlist_id:detail.playlist_id,scopeKey:state.scopeKey,displayedItemIds:rows.map(item=>item.playlist_item_id),playbackOrder:state.playbackOrder,fromStart:true,automatic:automatic===true});
    if(current())render();
    await result;
   }catch(error){if(!disposed&&props.controller===view.controller&&runtime.trackIntent===intent&&error?.name!=='AbortError')message='This mix could not be played.';}
@@ -195,13 +195,15 @@ export function mountLibraryMixPage(host,runtime,initialProps){
   if(description.value!==state.description)description.value=state.description||'';
   notes.replaceChildren();
   const note=text=>{const p=node(notes,'p','playlists__note');p.setAttribute('role','status');p.textContent=text;};
-  note(`Temporary mix · ${rows.length} songs · Last.fm global plays${state.recipe?.auto_update?' · Auto-updating after save; generated membership is locked':' · Save keeps this selection'}`);
+  if(state.artistLovedDescriptor)note('Loved and Obsessed · updates automatically after saving');
+  else note(`Temporary mix · ${rows.length} songs · Last.fm global plays${state.recipe?.auto_update?' · Auto-updating after save; generated membership is locked':' · Save keeps this selection'}`);
   if(state.artistScope)note('Saved scope keeps these selected Artist IDs. Automatic updates are optional; new family members are not added.');
   if(state.selectionError)note('The selection could not be updated. The previous captured list is retained.');
   if(Number.isSafeInteger(state.coverage.excluded_count))note(`${state.coverage.excluded_count} local tracks excluded because popularity or grouping could not be resolved.`);
   if(['queued','running'].includes(state.popularityRefreshStatus))note('Last.fm popularity refresh is in progress. This temporary mix keeps its captured selection; create another mix later to use newly resolved counts.');
   if(state.popularityRefreshStatus==='blocked'||state.popularityRefreshError)note(`${state.popularityRefreshError==='not_configured'?'Last.fm popularity refresh is not configured.':'Last.fm popularity refresh is unavailable.'} Resolved cached counts are still used.`);
-  if(!rows.length&&detail)note('No local songs with resolved Last.fm popularity match this mix.');
+  if(!rows.length&&detail)note(state.artistLovedDescriptor?'No loved or obsessed tracks yet':'No local songs with resolved Last.fm popularity match this mix.');
+  if(state.artistLovedDescriptor&&state.mutation.data?.creation_outcome==='existing')note('You already saved this playlist.');
   if(detail){
    const tableProps={rows,detail,controller:view.controller,state,selected,currentItemId:null,
     onSelect:row=>{if(current()){selected=row.row_key;render();}},onError:value=>{if(current()){message=value;render();}},onDisplayedRowsChange:value=>{if(current())displayedView=value;}};
@@ -221,6 +223,11 @@ export function mountLibraryMixPage(host,runtime,initialProps){
   mutation.element.hidden=state.mutation.status==='idle';retryHost.hidden=!pending||busy;savedHost.hidden=!saved;
   const html=message?runtime.alertHtml({severity:'error',role:'alert',message}):'';
   if(current())errorHost.innerHTML=html;
+  if(current()&&state.artistLovedDescriptor&&state.resource.status==='ready'&&typeof view.consumeAutomaticPlay==='function') {
+   // Consume the one gesture even for an empty selection or a superseded player intent.
+   const accepted=view.consumeAutomaticPlay();
+   if(current()&&accepted===true&&rows.length)void play(true);
+  }
  }
  try{
   scope.defer(()=>release(()=>host.replaceChildren()));
@@ -326,7 +333,7 @@ export function mountSavedLibraryMixOrder(host,runtime,initial){
   for(const row of rows){const allowed=runtime.canTrackIntent?.('play',row,{scopeKey:view.scopeKey,playlist_id:view.detail.playlist_id});if(!valid())return;if(allowed===true){first=row;break;}}
   const ready=choice?.scopeKey===view.scopeKey&&choice.playlistId===view.detail.playlist_id;
   button.update({label:'Play mix',icon:'play',disabled:!ready||starting||!first||view.detail.allowed_actions.can_play!==true,onClick:play});if(!valid())return;
-  select.update({label:'Playback order',value:ready?choice.mode:view.detail.library_mix.playback_order,options:MIX_ORDER_OPTIONS,title:'Order for the next playlist start; saved default is unchanged',disabled:!ready||starting||view.detail.allowed_actions.can_play!==true||typeof runtime.setLibraryMixOrder!=='function',onChange:mode=>{
+  select.update({label:'Playback order',value:ready?choice.mode:(view.detail.playlist_kind==='artist_loved'?view.detail.artist_loved:view.detail.library_mix).playback_order,options:MIX_ORDER_OPTIONS,title:'Order for the next playlist start; saved default is unchanged',disabled:!ready||starting||view.detail.allowed_actions.can_play!==true||typeof runtime.setLibraryMixOrder!=='function',onChange:mode=>{
    if(!valid())return;
    const accepted=runtime.setLibraryMixOrder({scopeKey:view.scopeKey,playlist_id:view.detail.playlist_id,mode});
    if(accepted&&valid()){choice={scopeKey:view.scopeKey,playlistId:view.detail.playlist_id,mode};render();}
@@ -338,7 +345,7 @@ export function mountSavedLibraryMixOrder(host,runtime,initial){
   scope.defer(()=>release(()=>host.replaceChildren()));
   const playHost=node(host,'span'),orderHost=node(host,'span');errorHost=node(host);
   button=own(mountButton(playHost,runtime,{label:'Play mix',icon:'play'}));
-  select=own(mountChoice(orderHost,runtime,{label:'Playback order',value:props.detail.library_mix.playback_order,options:MIX_ORDER_OPTIONS}));
+  select=own(mountChoice(orderHost,runtime,{label:'Playback order',value:(props.detail.playlist_kind==='artist_loved'?props.detail.artist_loved:props.detail.library_mix).playback_order,options:MIX_ORDER_OPTIONS}));
   connect();render();
  }catch(error){try{dispose();}catch{/* Preserve the construction failure. */}throw error;}
  return {element:host,update(next){

@@ -26,8 +26,8 @@ test('clear after private Search synchronously retires source and never rehydrat
 
 test('recent-query activation goes through native commit and starts a new read, never cached private admission',async t=>{
   const h=fixture(t);await h.mount();await admit(h);h.c.recordRecentSearchQuery(':obsessed');h.c.openRecentSearchPopover();
-  const option=[...h.document.querySelectorAll('[data-recent-search-index]')].find(node=>node.textContent===':obsessed');assert.ok(option,'actual recent-search renderer produced option');
-  const previous=h.runtime().snapshot();h.c.handleGalleryBootstrapSearchClick({target:option,preventDefault(){}});
+  const option=[...h.document.querySelectorAll('[data-search-suggestion-index]')].find(node=>node.textContent===':obsessed');assert.ok(option,'actual recent-search renderer produced option');
+  const previous=h.runtime().snapshot();h.dispatch(option,'click');
   assert.equal(h.runtime().isCurrent(previous),false);assert.equal(h.requests.length,2);assert.equal(new URL(h.requests[1].url,h.location).searchParams.get('q'),':obsessed');
   h.reply(1,ready({query:':obsessed'}));await h.invocations.at(-1).outcome;assert.equal(h.runtime().snapshot().status,'ready');
 });
@@ -94,7 +94,7 @@ test('private Search lifetime and admission work while the real Home runtime is 
   h.change('library');await h.flush();assert.equal(h.runtime().isCurrent(snapshot),false);
 });
 
-for(const query of ['@maya','@maya :tracks listened:all'])test(`unsupported listener expression ${query} reaches server unchanged and stays inactive`,async t=>{
+for(const query of ['@maya :albums','@maya :tracks listened:week'])test(`unsupported listener expression ${query} reaches server unchanged and stays inactive`,async t=>{
   const h=fixture(t);await h.mount();const work=h.submit(query);assert.equal(h.requests.length,1);
   assert.equal(new URL(h.requests[0].url,h.location).searchParams.get('q'),query);
   h.reply(0,{ok:false,error_code:'unsupported_private_search_combination',error:'This search combination is not supported.'},400);await work;

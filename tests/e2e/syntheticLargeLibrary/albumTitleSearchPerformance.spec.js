@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
-import { expect, test as performanceTest } from '../support/performanceFixtures.js';
+import { expect, test } from '../support/performanceFixtures.js';
 import {
   expectPostgresLibraryBrowseTelemetry,
   expectTimingBudget,
@@ -16,8 +16,8 @@ const CASE_ID = 'FTC-SEARCH-NAV-029P';
 const ALBUM = 'Студийные записи';
 const BUDGET = Object.freeze(performanceTimingBudget('album-title-search.albumVisibleMs'));
 
-performanceTest.describe(`${CASE_ID} synthetic-large album-title search performance`, () => {
-  performanceTest('correct album becomes visible within the approved budget', async ({
+test.describe(`${CASE_ID} synthetic-large album-title search performance`, () => {
+  test('correct album becomes visible within the approved budget', async ({
     albumTitleSearchLocalReport,
     galleryActions,
     navigationPanelActions,
@@ -25,7 +25,7 @@ performanceTest.describe(`${CASE_ID} synthetic-large album-title search performa
     searchToolbarActions,
     stepLogger,
   }) => {
-    performanceTest.setTimeout(180000);
+    test.setTimeout(180000);
     requirePostgresRuntimeEnv('the album-title search benchmark');
 
     await stepLogger.step('Open the production app and wait for root readiness', async () => {

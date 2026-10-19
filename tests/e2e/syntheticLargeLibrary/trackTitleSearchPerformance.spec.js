@@ -1,6 +1,6 @@
 import { performance } from 'node:perf_hooks';
 
-import { expect, test as performanceTest } from '../support/performanceFixtures.js';
+import { expect, test } from '../support/performanceFixtures.js';
 import {
   expectPostgresLibraryBrowseTelemetry,
   expectTimingBudget,
@@ -20,8 +20,8 @@ const HIGHLIGHT_BUDGET = Object.freeze(
   performanceTimingBudget('track-title-search.matchingTrackVisibleMs'),
 );
 
-performanceTest.describe(`${CASE_ID} synthetic-large track-title search performance`, () => {
-  performanceTest('correct album and highlighted track become visible within approved budgets', async ({
+test.describe(`${CASE_ID} synthetic-large track-title search performance`, () => {
+  test('correct album and highlighted track become visible within approved budgets', async ({
     galleryActions,
     navigationPanelActions,
     page,
@@ -30,7 +30,7 @@ performanceTest.describe(`${CASE_ID} synthetic-large track-title search performa
     trackModalActions,
     trackTitleSearchLocalReport,
   }) => {
-    performanceTest.setTimeout(180000);
+    test.setTimeout(180000);
     requirePostgresRuntimeEnv('the track-title search benchmark');
 
     await stepLogger.step('Open the production app and wait for root readiness', async () => {

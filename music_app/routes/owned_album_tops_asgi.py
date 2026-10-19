@@ -246,6 +246,75 @@ def read_album_top_access_candidates(request: Request, top_ref: str):
         return _error(error)
 
 
+
+def _source_import_service(request):
+    from music_app.services.album_top_source_imports import TopSourceImports
+    service = getattr(request.app.state, 'album_top_source_import_service', None)
+    return service if service is not None else TopSourceImports(_service(request))
+
+
+async def _source_import_request(request, operation, job_ref=None):
+    try:
+        admitted = _require_context(request)
+        context, constraints = _context(request, CREATE)
+        params = request.query_params
+        allowed = {'cursor'} if operation == 'list' else set()
+        if set(params) - allowed or len(params.multi_items()) != len(params):
+            raise AlbumTopError('invalid_query')
+        arguments = {}
+        try:
+            if operation == 'submit':
+                arguments['payload'] = await read_bounded_json_object(request, max_bytes=MAX_TOP_COMMAND_BYTES)
+            elif operation in ('process', 'cancel'):
+                payload = await read_bounded_json_object(request, max_bytes=1024)
+                if payload != {}:
+                    raise AlbumTopError('invalid_command')
+        except JSONBodyTooLarge:
+            raise
+        except (ValueError, TypeError):
+            raise AlbumTopError('invalid_command') from None
+        if job_ref is not None:
+            arguments['ref'] = top_uuid(job_ref)
+        if operation == 'list':
+            arguments['cursor'] = params.get('cursor')
+        if _context_ref(request) != admitted:
+            raise AlbumTopError('stale_context', 409)
+        value = await run_in_threadpool(getattr(_source_import_service(request), operation),
+            context, constraints=constraints, **arguments)
+        if _context_ref(request) != admitted:
+            raise AlbumTopError('stale_context', 409)
+        return _response(request, value)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+
+
+@router.get('/album-tops/source-imports')
+async def list_album_top_source_imports(request: Request):
+    return await _source_import_request(request, 'list')
+
+
+@router.post('/album-tops/source-imports')
+async def submit_album_top_source_import(request: Request):
+    return await _source_import_request(request, 'submit')
+
+
+@router.get('/album-tops/source-imports/{job_ref}')
+async def read_album_top_source_import(request: Request, job_ref: str):
+    return await _source_import_request(request, 'read', job_ref)
+
+
+@router.post('/album-tops/source-imports/{job_ref}/process')
+async def process_album_top_source_import(request: Request, job_ref: str):
+    return await _source_import_request(request, 'process', job_ref)
+
+
+@router.post('/album-tops/source-imports/{job_ref}/cancel')
+async def cancel_album_top_source_import(request: Request, job_ref: str):
+    return await _source_import_request(request, 'cancel', job_ref)
+
+
 @router.get("/album-tops/{top_ref}")
 def read_album_top(request: Request, top_ref: str):
     try:

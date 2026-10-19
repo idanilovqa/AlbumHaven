@@ -221,3 +221,120 @@ test('temporary Mix rechecks synchronous playback notifications and restores onl
     unsubscribe();
   }
 });
+
+// The unchanged native fixture loads the real queue and playlist-runtime owners.
+async function lovedTemporary({empty = false} = {}) {
+  const {createLibraryMixController} = await import('../../../music_app/static/js/playlists/library-mix.mjs');
+  const {capture} = require('./library-mix-fixtures.cjs');
+  const h = nativeFixture(), scopeKey = h.runtime.snapshot().scopeKey;
+  const descriptor = {version: 1, root_artist_id: '9223372036854775807', scope_mode: 'family'};
+  let active = true;
+  const controller = createLibraryMixController({scopeKey, artistLovedDescriptor: descriptor, isCurrent: () => active,
+    providers: {beginArtistLoved: async () => {
+      const result = capture({scopeKey, source_protocol: 'artist_loved_selection_v1',
+        artist_loved: {...descriptor, source: 'artist_loved', auto_update: true, playback_order: 'regular'}, ...(empty ? {entries: []} : {})});
+      delete result.data.library_mix; delete result.data.coverage; return result;
+    }}});
+  const automaticPlayCurrent = h.runtime.captureLibraryMixPlaybackIntent();
+  await controller.prepare();
+  const mix = h.runtime.createLibraryMixRuntime({scopeKey, source: () => controller.source(),
+    order: () => controller.getSnapshot().playbackOrder, isCurrent: () => active, automaticPlayCurrent});
+  const reply = (body, mutate = value => value) => h.reply(body, {mutate: value => {
+    value.data.source_protocol = 'artist_loved_selection_v1'; return mutate(value);
+  }});
+  const network = (mutate = value => value) => {h.c.fetch = async (url, options) => {
+    h.calls.requests.push({url, ...options});
+    assert.equal(url, '/playlists/creation-source/artist-loved/native-queue');
+    return reply(JSON.parse(options.body), mutate);
+  };};
+  return {...h, scopeKey, controller, mix, rows: controller.source().detail.track_rows, reply, network,
+    retire() {active = false; controller.dispose();}};
+}
+test('Loved temporary queue and queue return use exact artist-loved route with complete captured ordered membership', async () => {
+  const h = await lovedTemporary(); h.network();
+  await h.mix.trackIntent('play', h.rows[2], {displayedItemIds: [id(13), id(11), id(12)]});
+  const queue = h.state.player.playbackQueue;
+  assert.equal(queue.playlistId, null); assert.equal(queue.libraryMixRef, id(1));
+  assert.equal(queue.libraryMixProtocol, 'artist_loved_selection_v1');
+  assert.deepEqual(ids(queue.tracks), [id(13), id(11), id(12)]);
+  assert.deepEqual(plain(queue.sourceEntryRefs), [id(11), id(12), id(13)]);
+  const returned = await h.c.refreshExplicitQueueReturnTrack({nativeQueue: queue}, queue.tracks[0]);
+  assert.equal(returned.playlistItemId, id(13)); assert.equal(h.calls.requests.length, 2);
+  assert.ok(h.calls.requests.every(x => x.url === '/playlists/creation-source/artist-loved/native-queue'));
+  h.retire();
+});
+test('Loved automatic intent captured before admission cannot overwrite newer player intent, but later explicit play remains possible', async () => {
+  const h = await lovedTemporary(), prior = h.state.player.playbackQueue; h.network();
+  h.c.playerTrackSelectionToken++;
+  await assert.rejects(h.mix.trackIntent('play', h.rows[0], {automatic: true, fromStart: true}), {status: 403});
+  assert.equal(h.state.player.playbackQueue, prior); assert.equal(h.calls.requests.length, 0); assert.equal(h.calls.starts.length, 0);
+  await h.mix.trackIntent('play', h.rows[0], {fromStart: true}); assert.equal(h.calls.starts.length, 1); h.retire();
+});
+test('Loved native validation rejects Popular reply, missing membership and changed return target without queue publication', async () => {
+  for (const mutate of [value => {value.data.source_protocol = 'artist_popular_selection_v1'; return value;},
+    value => {value.data.tracks.pop(); return value;}, value => {value.data.source.revision = id(99); return value;}]) {
+    const h = await lovedTemporary(), prior = h.state.player.playbackQueue; h.network(mutate);
+    await assert.rejects(h.mix.trackIntent('play', h.rows[0]));
+    assert.equal(h.state.player.playbackQueue, prior); assert.equal(h.calls.starts.length, 0); h.retire();
+  }
+  const h = await lovedTemporary(); h.network(); await h.mix.trackIntent('play', h.rows[0]);
+  const queue = h.state.player.playbackQueue;
+  h.network(value => {value.data.tracks[0].native_target.path = '/changed.flac'; return value;});
+  await assert.rejects(h.c.refreshExplicitQueueReturnTrack({nativeQueue: queue}, queue.tracks[0])); h.retire();
+});
+test('Loved empty capture cannot publish or request native queue', async () => {
+  const h = await lovedTemporary({empty: true}), prior = h.state.player.playbackQueue; h.network();
+  assert.equal(h.mix.canTrackIntent('play', null), false); await assert.rejects(h.mix.trackIntent('play', null));
+  assert.equal(h.calls.requests.length, 0); assert.equal(h.state.player.playbackQueue, prior); h.retire();
+});
+test('Loved deferred queue retires on actor, library, intent, abort and original owner loss', async () => {
+  for (const invalidate of [h => {h.shell.dataset.nativeAccountId = '99';}, h => {h.shell.dataset.nativeLibraryId = '99';},
+    h => {h.c.playerTrackSelectionToken++;}, h => h.retire(), (h, abort) => abort.abort()]) {
+    const h = await lovedTemporary(), wait = deferred(), entered = deferred(), abort = new AbortController(), prior = h.state.player.playbackQueue;
+    let body; h.c.fetch = async (_url, options) => {body = JSON.parse(options.body); entered.resolve(); return wait.promise;};
+    const pending = h.mix.trackIntent('play', h.rows[0], {signal: abort.signal, automatic: true});
+    await entered.promise; invalidate(h, abort); wait.resolve(h.reply(body));
+    await assert.rejects(pending, {name: 'AbortError'}); assert.equal(h.state.player.playbackQueue, prior);
+    assert.equal(h.calls.starts.length, 0); h.retire();
+  }
+});
+test('saved Loved default and session order use actual saved runtime without ordinary preference reads or source recapture', async t => {
+  const artist_loved = {version: 1, source: 'artist_loved', root_artist_id: '7', scope_mode: 'artist', auto_update: true,
+    playback_order: 'unplayed_first', last_evaluated_at: '2026-10-18T00:00:00Z', root_state: 'present', refresh_status: 'current'};
+  const data = payload({playlist_kind: 'artist_loved', artist_loved}); delete data.playlist_detail.library_mix;
+  // Boot the actual native entry so the bridge consumes the production saved
+  // recipe normalizer exported by AlbumHavenPlaylistUI, never a permissive stub.
+  const {nativeMixFixture} = require('./library-mix-react-fixture.cjs');
+  const h = await nativeMixFixture(t);
+  // Reply only to the exact native entry hydration. Every other startup URL
+  // remains a failure; there is no catch-all successful network response.
+  h.c.fetch = async (url, options = {}) => {
+    h.calls.requests.push({url, ...options});
+    assert.equal(url, `/view-data?surface=playlists&playlist_id=${id(80)}`);
+    assert.equal(options.method || 'GET', 'GET');
+    assert.equal(h.calls.requests.length, 1, 'one bounded native entry hydration');
+    return response(h.state.view);
+  };
+  await h.boot({}); await h.settle();
+  assert.deepEqual(h.calls.requests.map(request => request.url ?? request[0]), [`/view-data?surface=playlists&playlist_id=${id(80)}`],
+    'actual native entry performs exactly its selected saved playlist hydration before custom providers are configured');
+  const startupRequests = h.calls.requests.length;
+  h.state.view = data; h.runtime.sync(); await h.settle();
+  const actualRecipe = await import('../../../music_app/static/js/playlists/artist-loved-recipe.mjs');
+  assert.equal(h.c.AlbumHavenPlaylistUI.normalizeSavedArtistLovedRecipe, actualRecipe.normalizeSavedArtistLovedRecipe);
+  assert.equal(h.c.AlbumHavenPlaylistUI.normalizeSavedArtistLovedRecipe({...artist_loved, root_artist_id: '07'}), null,
+    'actual entry keeps strict malformed-recipe denial');
+  assert.equal(h.calls.requests.length, startupRequests, 'saved Loved sync adds no ordinary preference or source reads');
+  const options = {scopeKey: h.runtime.snapshot().scopeKey, playlist_id: id(80), fromStart: true};
+  let reads = 0, writes = 0; h.runtime.configurePlaybackPreferences({read() {reads++;}, write() {writes++;}});
+  const initial = await h.runtime.readPlayback(options);
+  assert.equal(initial.status, 'ready', 'real entry admits valid saved Loved recipe');
+  assert.equal(initial.data.library_mix_order, 'unplayed_first');
+  assert.equal(h.runtime.setLibraryMixOrder({...options, mode: 'shuffle'}), true);
+  const changed = await h.runtime.readPlayback(options); assert.equal(changed.status, 'ready');
+  assert.equal(changed.data.library_mix_order, 'shuffle');
+  h.network({temporary: false}); await h.runtime.trackIntent('play', row(1), options);
+  assert.equal(h.state.player.playbackQueue.playlistId, id(80)); assert.equal(h.state.player.playbackQueue.shuffle, true);
+  assert.equal(reads, 0); assert.equal(writes, 0); assert.equal(data.playlist_detail.artist_loved.playback_order, 'unplayed_first');
+  assert.ok(h.calls.requests.slice(startupRequests).every(x => x.url === `/playlists/${id(80)}/native-queue`));
+});

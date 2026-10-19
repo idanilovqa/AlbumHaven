@@ -284,3 +284,53 @@ test('closure handles cycles and rejects missing files and symlink escapes', () 
   assert.throws(() => closure(root, 'entry.mjs', missingChild, identity), /Missing module/);
   assert.throws(() => closure(root, 'entry.mjs', read, () => path.resolve(root, '../outside.mjs')), /symlink escapes/);
 });
+
+
+// First Artist host delivery. These checks extend the existing static delivery
+// reader; they neither import the product entry nor invoke the build CLI.
+test('Artist uses the actual confined native entry closure and no React alternative', () => {
+  const reached = closure(fs.realpathSync(staticRoot), entry);
+  assert.ok(reached.has('artist-page/native.mjs'));
+  const imports = moduleImports(fs.readFileSync(path.join(staticRoot, entry), 'utf8'));
+  assert.equal(imports.filter(value => value === '../artist-page/native.mjs').length, 1);
+  assert.deepEqual(moduleImports(fs.readFileSync(path.join(staticRoot, 'artist-page/native.mjs'), 'utf8')),
+    ['../home-friends/native-controls.mjs']);
+  for (const name of reached) assert.doesNotMatch(name, /(?:react|bundle|\.jsx$)/i);
+});
+
+test('each exclusive served gallery branch contains exactly one root at the original viewport dock', () => {
+  const html = template();
+  const docks = [...html.matchAll(/<div\b[^>]*\bid="albums-scroll"[^>]*>\s*(<[^>]*\bid="artist-page-root"[^>]*>[\s\S]*?<\/[^>]+>)\s*<div\b[^>]*\bid="albums-viewport"/g)];
+  assert.equal(docks.length, 2, 'both existing mutually exclusive startup/template branches');
+  assert.equal((html.match(/\bid="albums-scroll"/g) || []).length, 2);
+  assert.equal((html.match(/\bid="artist-page-root"/g) || []).length, 2);
+  for (const dock of docks) assert.match(dock[1], /\bhidden\b/);
+  const css = [...html.matchAll(/<link\b[^>]*href="([^"]*css\/runtime\/artist-page\.css[^"]*)"[^>]*>/g)];
+  assert.equal(css.length, 1); assert.match(css[0][1], /\?v=\{\{\s*runtime_asset_version\s*\}\}$/);
+  const mobileLayout = html.indexOf('css/mobile-layout.css');
+  assert.ok(mobileLayout >= 0, 'actual mobile-layout predecessor exists');
+  assert.ok(mobileLayout < css[0].index, 'scoped Artist CSS follows mobile layout');
+  assert.equal((html.match(/data-artist-page-action-slot="loved"/g) || []).length, 1,
+    'one action slot in the ordinary outer GalleryBar template');
+});
+
+test('Artist bridge follows actual dependencies and precedes bootstrap in the runtime manifest', () => {
+  const source = fs.readFileSync(path.join(repository, 'scripts/build-runtime-bundle.cjs'), 'utf8');
+  const match = source.match(/const RUNTIME_SCRIPT_PATHS\s*=\s*\[([\s\S]*?)\];/); assert.ok(match);
+  const files = [...match[1].matchAll(/['"](js\/runtime\/[^'"]+\.js)['"]/g)].map(row => row[1]);
+  const bridge = files.indexOf('js/runtime/artist-page-bridge.js'); assert.ok(bridge >= 0);
+  assert.equal(files.filter(file => file === 'js/runtime/artist-page-bridge.js').length, 1);
+  assert.equal(files[bridge - 1], 'js/runtime/search-results-runtime.js');
+  for (const dependency of ['virtual-artist-grid', 'intrinsic-disclosure', 'mobile-navigation', 'response-state-helpers'])
+    assert.ok(files.indexOf(`js/runtime/${dependency}.js`) < bridge && files.indexOf(`js/runtime/${dependency}.js`) >= 0);
+  assert.ok(bridge < files.indexOf('js/runtime/bootstrap-event-handlers.js'));
+  assert.ok(bridge < files.indexOf('js/runtime/bootstrap-init.js'));
+});
+
+test('root-provided generated runtime exactly matches composed sources', {
+  skip: process.env.ARTIST_HOST_GENERATED_BUNDLE_GATE !== '1' ? 'Root has not opened the generated-output validation gate' : false,
+}, () => {
+  const {buildRuntimeBundle} = require(path.join(repository, 'scripts/build-runtime-bundle.cjs'));
+  const delivered = fs.readFileSync(path.join(staticRoot, 'runtime-bundle.js'), 'utf8');
+  assert.equal(delivered, buildRuntimeBundle(), 'read-only generator comparison; no build output is written');
+});

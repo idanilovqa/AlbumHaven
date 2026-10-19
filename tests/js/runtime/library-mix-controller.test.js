@@ -157,3 +157,137 @@ test('saved model preserves verified recipe/default, refresh state, exact grants
     assert.deepEqual(normal.track_rows, detail.track_rows); assert.deepEqual(normal.allowed_actions, detail.allowed_actions);
   }
 });
+
+// Loved uses the existing controller owner, with no Popular preparation endpoint.
+const lovedDescriptor = patch => ({version: 1, root_artist_id: '9223372036854775807', scope_mode: 'family', ...patch});
+const lovedRecipe = patch => ({...lovedDescriptor(), source: 'artist_loved', auto_update: true, playback_order: 'regular', ...patch});
+function lovedCapture(patch = {}) {
+  const value = capture({source_protocol: 'artist_loved_selection_v1', artist_loved: lovedRecipe(), ...patch});
+  delete value.data.library_mix; delete value.data.coverage; delete value.data.popularity_refresh_status;
+  return value;
+}
+function lovedController(overrides = {}, descriptor = lovedDescriptor()) {
+  let current = true, pending = false;
+  const calls = {capture: [], save: [], retry: []};
+  const providers = {
+    beginArtistLoved: async options => {calls.capture.push(options); return lovedCapture();},
+    beginLibraryMix: () => assert.fail('Loved must not capture Popular'),
+    beginArtistMix: () => assert.fail('Loved must not capture Artist Popular'),
+    regenerateArtistMix: () => assert.fail('Loved must not regenerate Popular'),
+    createPlaylistFromSelection: async options => {calls.save.push(options); return receipt(options.request_key, {creation_outcome: 'created'});},
+    hasPendingPlaylistOperation: () => pending,
+    retryPlaylistOperation: async options => {calls.retry.push(options); return receipt(id(90), {creation_outcome: 'existing'});},
+    ...overrides,
+  };
+  const controller = createLibraryMixController({providers, scopeKey: SCOPE, artistLovedDescriptor: descriptor,
+    isCurrent: () => current, requestKey: () => id(90)});
+  return {controller, providers, calls, retire() {current = false;}, pending(value) {pending = value;}};
+}
+test('Loved controller captures once with exact bigint descriptor and no Popular recipe inputs', async () => {
+  const h = lovedController(), c = h.controller;
+  assert.equal(await c.prepare(), true);
+  assert.deepEqual(h.calls.capture[0].descriptor, lovedDescriptor());
+  assert.deepEqual(Object.keys(h.calls.capture[0]).sort(), ['descriptor', 'scopeKey', 'signal']);
+  assert.equal(Object.isFrozen(h.calls.capture[0].descriptor), true);
+  assert.equal(c.source().source_protocol, 'artist_loved_selection_v1');
+  assert.deepEqual(c.source().artistLovedDescriptor, lovedDescriptor());
+  assert.deepEqual(c.getSnapshot().artistLovedDescriptor, lovedDescriptor());
+  assert.deepEqual(c.source().recipe, lovedRecipe());
+  assert.equal(await c.prepare(recipe({songs_per_group: 1})), false);
+  assert.equal(h.calls.capture.length, 1);
+  assert.equal(c.setOrder('shuffle'), true); assert.equal(h.calls.capture.length, 1);
+  assert.deepEqual(c.source().entry_refs, [id(11), id(12), id(13)]);
+  assert.equal(c.source().recipe.playback_order, 'regular');
+});
+test('Loved controller rejects malformed or simultaneously supplied Popular scope', () => {
+  for (const descriptor of [undefined, {}, lovedDescriptor({root_artist_id: 1}), lovedDescriptor({scope_mode: 'all'})]) {
+    if (descriptor === undefined) continue;
+    assert.throws(() => lovedController({}, descriptor), TypeError);
+  }
+  assert.throws(() => createLibraryMixController({providers: {}, scopeKey: SCOPE, isCurrent: () => true,
+    artistLovedDescriptor: lovedDescriptor(), artistScope: {}}), TypeError);
+});
+test('Loved controller rejects wrong recipes, source tuples, grants and incomplete membership without empty success', async () => {
+  for (const patch of [{artist_loved: lovedRecipe({root_artist_id: '2'})}, {artist_loved: lovedRecipe({scope_mode: 'artist'})},
+    {artist_loved: lovedRecipe({auto_update: false})}, {artist_loved: lovedRecipe({playback_order: 'shuffle'})},
+    {artist_loved: lovedRecipe({provider: 'lastfm'})}, {source_protocol: 'artist_popular_selection_v1'},
+    {scopeKey: 'other'}, {mode: 'missing'}, {source: {kind: 'playlist', ref: id(1), revision: id(2)}},
+    {entries_complete: false}, {entries: [row(1), row(1)]}, {entries: [row(1, {entry_ref: 'bad'})]},
+    {allowed_actions: {can_read: true, can_use_for_playlist: 'true'}}, {entries: [row(1, {allowed_actions: {can_read: true}})]}]) {
+    const h = lovedController({beginArtistLoved: async () => lovedCapture(patch)});
+    assert.equal(await h.controller.prepare(), false);
+    assert.equal(h.controller.source(), null); assert.equal(h.controller.canSave(), false);
+    assert.equal(h.controller.getSnapshot().resource.status, 'error');
+    assert.equal(await h.controller.save(), false); assert.equal(h.calls.save.length, 0);
+  }
+});
+test('Loved empty captured membership can save with a complete ordinary command and retain created or existing ID', async () => {
+  for (const outcome of ['created', 'existing']) {
+    const h = lovedController({beginArtistLoved: async () => lovedCapture({entries: []}),
+      createPlaylistFromSelection: async options => {h.calls.save.push(options); return receipt(options.request_key, {creation_outcome: outcome});}});
+    const c = h.controller; assert.equal(await c.prepare(), true);
+    assert.deepEqual(c.source().entry_refs, []); assert.equal(c.canSave(), true);
+    c.edit({title: '  Empty loved family  ', description: 'Keep the recipe'}); c.setOrder('unplayed_first');
+    const saved = await c.save(); assert.equal(saved.playlist_id, id(80)); assert.equal(saved.creation_outcome, outcome);
+    assert.deepEqual({...h.calls.save[0], signal: null}, {scopeKey: SCOPE, source_protocol: 'artist_loved_selection_v1',
+      mode: 'ordinary', source: {kind: 'library', ref: id(1), revision: id(2)}, title: 'Empty loved family',
+      description: 'Keep the recipe', entry_refs: [], mix_playback_order: 'unplayed_first', request_key: id(90), signal: null});
+    assert.equal(await c.save(), false); assert.equal(await c.prepare(), false); assert.equal(h.calls.save.length, 1);
+  }
+});
+test('Loved uncertain command reconciles the original operation and refuses capture or resave', async () => {
+  const h = lovedController({createPlaylistFromSelection: async options => {h.calls.save.push(options); h.pending(true); throw new Error('lost');}});
+  const c = h.controller; await c.prepare(); assert.equal(await c.save(), false);
+  assert.equal(c.pendingSave(), true); assert.equal(await c.prepare(), false); assert.equal(await c.save(), false);
+  assert.equal(c.edit({title: 'New command'}), false);
+  const saved = await c.retrySave(); assert.equal(saved.creation_outcome, 'existing'); assert.equal(saved.playlist_id, id(80));
+  assert.deepEqual(h.calls.retry, [{scopeKey: SCOPE, action: 'create', request_key: id(90)}]); assert.equal(h.calls.save.length, 1);
+});
+test('Loved capture and save never publish after disposal, scope retirement or synchronous notification retirement', async () => {
+  for (const invalidate of [h => h.retire(), h => h.controller.dispose()]) {
+    const wait = deferred(), h = lovedController({beginArtistLoved: () => wait.promise});
+    const pending = h.controller.prepare(); invalidate(h); wait.resolve(lovedCapture());
+    assert.equal(await pending, false); assert.equal(h.controller.source(), null);
+    const savedWait = deferred(), s = lovedController({createPlaylistFromSelection: () => savedWait.promise});
+    await s.controller.prepare(); const saving = s.controller.save(); invalidate(s);
+    savedWait.resolve(receipt(id(90), {creation_outcome: 'existing'})); assert.equal(await saving, false);
+  }
+  const h = lovedController(); h.controller.subscribe(() => h.controller.dispose());
+  assert.equal(await h.controller.prepare(), false); assert.equal(h.calls.capture.length, 0);
+});
+test('Loved initial and reconciled receipts require exact created or existing discriminator', async () => {
+  for (const creation_outcome of [undefined, null, '', 'saved', true]) {
+    const h = lovedController({createPlaylistFromSelection: async () => receipt(id(90), {creation_outcome}),
+      retryPlaylistOperation: async () => receipt(id(90), {creation_outcome})});
+    await h.controller.prepare(); assert.equal(await h.controller.save(), false);
+    assert.equal(h.controller.canSave(), false); assert.equal(await h.controller.save(), false);
+    h.pending(true); assert.equal(await h.controller.retrySave(), false);
+    assert.equal(h.controller.getSnapshot().dirty, true);
+  }
+});
+test('saved Loved model retains typed status and locks membership without changing ordinary metadata grants', () => {
+  for (const refresh_status of ['current', 'unavailable', 'too_large', 'last_computed', 'owner_refresh_required']) {
+    const artist_loved = lovedRecipe({last_evaluated_at: '2026-10-18T00:00:00Z', root_state: 'present', refresh_status});
+    const input = {playlist_sidebar: {items: []}, playlist_detail: {playlist_id: id(80), revision: '1',
+      playlist_kind: 'artist_loved', artist_loved, track_rows: [], items_complete: true,
+      allowed_actions: {can_open: true, can_edit: true, can_share: true, can_add: false, can_reorder: false}}};
+    const detail = normalizePlaylistPayload(input).detail;
+    assert.equal(detail.playlist_kind, 'artist_loved'); assert.deepEqual(detail.artist_loved, artist_loved);
+    assert.equal(Object.hasOwn(detail, 'library_mix'), false);
+    assert.equal(detail.allowed_actions.can_edit, true); assert.equal(detail.allowed_actions.can_share, true);
+    assert.equal(detail.allowed_actions.can_add, false); assert.equal(detail.allowed_actions.can_reorder, false);
+    for (const patch of [{artist_loved: {...artist_loved, root_artist_id: '01'}}, {library_mix: mixMetadata()},
+      {playlist_kind: 'ordinary'}, {artist_loved: {...artist_loved, refresh_status: 'fresh'}}]) {
+      assert.throws(() => normalizePlaylistPayload({...input, playlist_detail: {...input.playlist_detail, ...patch}}), TypeError);
+    }
+  }
+});
+
+test('Loved uncertain receipt cannot reconcile a different request key even from a custom provider', async () => {
+  const h = lovedController({createPlaylistFromSelection: async () => receipt(id(90), {creation_outcome: 'unknown'}),
+    retryPlaylistOperation: async () => receipt(id(91), {creation_outcome: 'existing'})});
+  await h.controller.prepare(); assert.equal(await h.controller.save(), false);
+  assert.equal(h.controller.pendingSave(), true); assert.equal(await h.controller.retrySave(), false);
+  assert.equal(h.controller.pendingSave(), true); assert.equal(h.controller.canSave(), false);
+  assert.equal(h.controller.getSnapshot().dirty, true);
+});

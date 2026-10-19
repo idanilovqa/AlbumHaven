@@ -214,3 +214,124 @@ test('ordinary paged and complete inventory rereads retain their existing routes
   assert.equal(all.data.source_protocol, 'complete_inventory_selection_v1'); assert.equal(all.data.entries_complete, true);
   assert.ok([...paged.calls, ...complete.calls].every(call => !call.path.includes('/library-mix')));
 });
+
+const lovedInput = () => ({scopeKey: SCOPE, signal: new AbortController().signal,
+  descriptor: {version: 1, root_artist_id: '9223372036854775807', scope_mode: 'family'}});
+function lovedResponse(patch = {}) {
+  const value = capture({source_protocol: 'artist_loved_selection_v1', artist_loved: {
+    ...lovedInput().descriptor, source: 'artist_loved', auto_update: true, playback_order: 'regular'}, ...patch});
+  delete value.data.library_mix; delete value.data.coverage; return value;
+}
+function lovedProvider(handler = () => undefined) {
+  return fixture((path, options) => {
+    const custom = handler(path, options); if (custom !== undefined) return custom;
+    if (path.startsWith('/playlists/creation-source/artist-loved')) return lovedResponse();
+    if (path === '/playlists') return receipt(options.body.request_key, {creation_outcome: 'created'});
+  });
+}
+test('Loved capture posts only exact descriptor and retained GET dispatches only exact source tuple', async () => {
+  const h = lovedProvider(), input = lovedInput(), first = await h.providers.beginArtistLoved(input);
+  assert.equal(h.calls[0].path, '/playlists/creation-source/artist-loved'); assert.equal(h.calls[0].method, 'POST');
+  assert.deepEqual(h.calls[0].body, input.descriptor); assert.equal(h.calls[0].signal, input.signal);
+  assert.equal(h.calls[0].expected, 'context:mix');
+  const read = await h.providers.readPlaylistCreationSource({...input, source: first.data.source, mode: 'ordinary', q: 'ignored', cursor: 'ignored'});
+  const url = new URL(h.calls[1].path, 'https://albumhaven.test');
+  assert.equal(url.pathname, '/playlists/creation-source/artist-loved');
+  assert.deepEqual([...url.searchParams], [['source_ref', id(1)], ['source_revision', id(2)]]);
+  assert.equal(h.calls[1].body, undefined); assert.deepEqual(read.data.source, first.data.source);
+  assert.equal(read.data.source_protocol, 'artist_loved_selection_v1');
+  for (const key of ['actor_scope', 'context_ref', 'capture_ref']) assert.equal(Object.hasOwn(first.data, key), false);
+});
+test('Loved capture validates descriptor before network and admits only the exact typed server recipe', async () => {
+  for (const descriptor of [{...lovedInput().descriptor, root_artist_id: 1}, {...lovedInput().descriptor, root_artist_id: '01'},
+    {...lovedInput().descriptor, scope_mode: 'all'}, {...lovedInput().descriptor, songs_per_group: 3}]) {
+    const h = lovedProvider(); await assert.rejects(async () => h.providers.beginArtistLoved({...lovedInput(), descriptor}));
+    assert.equal(h.calls.length, 0);
+  }
+  for (const patch of [{source_protocol: 'artist_popular_selection_v1'}, {entries_complete: false},
+    {artist_loved: {...lovedResponse().data.artist_loved, root_artist_id: '1'}},
+    {artist_loved: {...lovedResponse().data.artist_loved, scope_mode: 'artist'}},
+    {artist_loved: {...lovedResponse().data.artist_loved, auto_update: false}},
+    {actor_scope: {account_id: 0, library_id: 5}}, {allowed_actions: {can_read: true, can_use_for_playlist: 1}}]) {
+    const h = lovedProvider(() => lovedResponse(patch)); await assert.rejects(h.providers.beginArtistLoved(lovedInput()));
+    assert.equal(h.calls.length, 1);
+  }
+});
+test('Loved created and existing acknowledgements preserve saved identity and serialize complete capture including zero entries', async () => {
+  for (const creation_outcome of ['created', 'existing']) for (const empty of [false, true]) {
+    const h = lovedProvider((path, options) => path === '/playlists'
+      ? receipt(options.body.request_key, {creation_outcome})
+      : path.endsWith('/artist-loved') ? lovedResponse(empty ? {entries: []} : {}) : undefined);
+    const value = await h.providers.beginArtistLoved(lovedInput());
+    const saved = await h.providers.createPlaylistFromSelection(command(value.data));
+    assert.equal(saved.data.creation_outcome, creation_outcome); assert.equal(saved.data.playlist_id, id(80));
+    assert.deepEqual(h.calls.at(-1).body, {source_protocol: 'artist_loved_selection_v1', mode: 'ordinary',
+      source: value.data.source, title: 'Captured mix', description: '', entry_refs: empty ? [] : [id(11), id(12), id(13)],
+      mix_playback_order: 'shuffle', request_key: id(90)});
+  }
+});
+test('Loved malformed success stays pending and validates the same discriminator during original-operation reconciliation', async () => {
+  for (const creation_outcome of [undefined, null, 'saved', true]) {
+    let committed = false;
+    const h = lovedProvider(path => path === '/playlists' ? receipt(id(90), {creation_outcome})
+      : path.startsWith('/playlists/operations/') ? committed
+        ? {status: 'committed', receipt: receipt(id(90), {creation_outcome}).data} : {status: 'unknown'} : undefined);
+    const first = await h.providers.beginArtistLoved(lovedInput());
+    await assert.rejects(h.providers.createPlaylistFromSelection(command(first.data)));
+    assert.equal(h.providers.hasPendingPlaylistOperation({scopeKey: SCOPE, action: 'create'}), true);
+    committed = true; await assert.rejects(h.providers.retryPlaylistOperation({scopeKey: SCOPE, action: 'create'}));
+    assert.equal(h.providers.hasPendingPlaylistOperation({scopeKey: SCOPE, action: 'create'}), true);
+    assert.equal(h.calls.filter(x => x.path === '/playlists').length, 1);
+    await assert.rejects(h.providers.beginArtistLoved(lovedInput()));
+    assert.equal(h.calls.filter(x => x.path === '/playlists/creation-source/artist-loved').length, 1);
+  }
+});
+test('Loved lost acknowledgement recovers existing receipt without new capture or command key', async () => {
+  let committed = false;
+  const h = lovedProvider(path => path === '/playlists' ? Promise.reject(new Error('response lost'))
+    : path.startsWith('/playlists/operations/') ? committed
+      ? {status: 'committed', receipt: receipt(id(90), {creation_outcome: 'existing'}).data} : {status: 'unknown'} : undefined);
+  const first = await h.providers.beginArtistLoved(lovedInput());
+  await assert.rejects(h.providers.createPlaylistFromSelection(command(first.data)));
+  committed = true; const saved = await h.providers.retryPlaylistOperation({scopeKey: SCOPE, action: 'create'});
+  assert.equal(saved.data.creation_outcome, 'existing'); assert.equal(saved.data.request_key, id(90));
+  assert.equal(h.calls.filter(x => x.path === '/playlists').length, 1);
+  assert.equal(h.calls.filter(x => x.path === '/playlists/creation-source/artist-loved').length, 1);
+});
+test('Loved new session uses fresh source and request key rather than reading prior session operation', async () => {
+  const old = lovedProvider(), first = await old.providers.beginArtistLoved(lovedInput());
+  await old.providers.createPlaylistFromSelection(command(first.data)); old.providers.dispose();
+  const next = lovedProvider((path, options) => path === '/playlists' ? receipt(options.body.request_key, {creation_outcome: 'existing'})
+    : path.endsWith('/artist-loved') ? lovedResponse({source: {kind: 'library', ref: id(21), revision: id(22)}}) : undefined);
+  const fresh = await next.providers.beginArtistLoved(lovedInput());
+  const saved = await next.providers.createPlaylistFromSelection(command(fresh.data, {request_key: id(91)}));
+  assert.equal(saved.data.playlist_id, id(80)); assert.equal(saved.data.request_key, id(91));
+  assert.deepEqual(next.calls[1].body.source, {kind: 'library', ref: id(21), revision: id(22)});
+  assert.ok(next.calls.every(x => !x.path.includes('/operations/')));
+});
+test('Loved late capture and GET cannot cross transport, scope, cancellation or provider disposal', async () => {
+  for (const reread of [false, true]) for (const invalidate of [h => h.rotate(), h => h.retire(),
+    (_h, abort) => abort.abort(), h => h.providers.dispose()]) {
+    const wait = deferred(), entered = deferred(); let defer = !reread;
+    const h = lovedProvider(path => {if (defer && path.startsWith('/playlists/creation-source/artist-loved')) {entered.resolve(); return wait.promise;}});
+    const source = reread ? (await h.providers.beginArtistLoved(lovedInput())).data.source : null; defer = true;
+    const abort = new AbortController(), input = {...lovedInput(), signal: abort.signal};
+    const pending = reread ? h.providers.readPlaylistCreationSource({...input, source, mode: 'ordinary'}) : h.providers.beginArtistLoved(input);
+    await entered.promise; invalidate(h, abort); wait.resolve(lovedResponse());
+    await assert.rejects(pending, {name: 'AbortError'});
+  }
+});
+
+test('Loved Create cannot truncate, reorder or duplicate the full captured source and GET cannot rewrite its snapshot', async () => {
+  const h = lovedProvider(), first = await h.providers.beginArtistLoved(lovedInput());
+  for (const entry_refs of [[id(11)], [id(13), id(12), id(11)], [id(11), id(11), id(12)], []])
+    await assert.rejects(async () => h.providers.createPlaylistFromSelection(command(first.data, {entry_refs})));
+  assert.equal(h.calls.filter(x => x.path === '/playlists').length, 0);
+  for (const patch of [{entries: [...lovedResponse().data.entries].reverse()},
+    {entries: lovedResponse().data.entries.slice(1)}, {artist_loved: {...lovedResponse().data.artist_loved, root_artist_id: '3'}}]) {
+    const changed = lovedProvider(path => path.startsWith('/playlists/creation-source/artist-loved?') ? lovedResponse(patch) : undefined);
+    const retained = await changed.providers.beginArtistLoved(lovedInput());
+    await assert.rejects(changed.providers.readPlaylistCreationSource({...lovedInput(), mode: 'ordinary', source: retained.data.source}));
+    assert.equal(changed.calls.filter(x => x.method === 'POST').length, 1);
+  }
+});

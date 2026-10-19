@@ -790,3 +790,105 @@ def test_persisted_gallery_anchor_resolves_published_artist_alias(monkeypatch, s
     assert page[0]["artist_name"] == displayed_artist
     assert metadata["anchor_artist"] == "Artist alias"
     assert metadata["anchor_group_artist"] == displayed_artist
+
+
+def test_structural_edit_patches_current_gallery_generation_without_full_membership_query():
+    from music_app.services import gallery_projection_postgres as projection
+    from music_app.services.relation_projection_postgres import (
+        RELATION_PROJECTION_BUILDER_VERSION,
+    )
+
+    root_state = browse._root_sidebar_view_state({})
+    root_scope_key = projection.gallery_projection_scope_key(root_state)
+    old_rows = [
+        {**membership("Ovderhead", "source-album"), "album_id": 10},
+        {**membership("Unchanged", "other-album"), "album_id": 20},
+    ]
+    replacement_rows = [
+        {**membership("Overhead", "corrected-album"), "album_id": 10},
+        {**membership("Overhead", "split-album"), "album_id": 11},
+    ]
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def __init__(self):
+            self.membership_calls = []
+            self.publications = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=None):
+            if "pg_advisory_xact_lock" in sql:
+                return Cursor([])
+            if "to_regclass('library.gallery_projection_state')" in sql:
+                return Cursor([{"installed": True}])
+            if "join library.gallery_projection_state state" in sql:
+                return Cursor([{"library_id": 1, "generation": 6}])
+            if "from library.gallery_projection_snapshots snapshot" in sql:
+                return Cursor([
+                    {
+                        "scope_key": root_scope_key,
+                        "source_generation": 5,
+                        "builder_version": projection.BUILDER_VERSION,
+                        "payload": row,
+                    }
+                    for row in old_rows
+                ])
+            if "canonical_to_aliases" in sql:
+                return Cursor([{
+                    "alias_to_canonical": {},
+                    "canonical_to_aliases": {},
+                    "relation_projection": {
+                        "status": "ready",
+                        "builder_version": RELATION_PROJECTION_BUILDER_VERSION,
+                        "source_fingerprint": "same-source",
+                        "built_from_fingerprint": "same-source",
+                    },
+                    "projection_structure_complete": True,
+                }])
+            if "search_candidate_album_ids" in sql:
+                self.membership_calls.append(params)
+                return Cursor(replacement_rows)
+            if "library.replace_gallery_projection" in sql:
+                self.publications.append(params)
+                return Cursor([{"published": True}])
+            raise AssertionError(sql)
+
+    connection = Connection()
+    result = projection.patch_gallery_projections_after_structural_edit(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"},
+        source_album_id=10,
+        destination_album_id=11,
+        connect=lambda _: connection,
+    )
+
+    assert connection.membership_calls == [
+        {**browse._root_sidebar_params(root_state), "gallery_album_ids": [10, 11]}
+    ]
+    assert result == {"patched": 1, "generation": 6}
+    published = connection.publications[0]
+    occurrences = published["occurrences"].obj
+    assert [(row["artist_name"], row["album_id"]) for row in occurrences] == [
+        ("Overhead", 10),
+        ("Overhead", 11),
+        ("Unchanged", 20),
+    ]
+    assert all(row["artist_name"] != "Ovderhead" for row in occurrences)
+    assert published["generation"] == 6
+    assert published["sidebar"].obj == [
+        {"artist": "Overhead", "artist_display": "Overhead", "count": 2},
+        {"artist": "Unchanged", "artist_display": "Unchanged", "count": 1},
+    ]

@@ -7819,10 +7819,21 @@ def _eligible_album_tracks_cte_sql(
 
 
 
-def _root_gallery_membership_sql() -> str:
+def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
     # Reuse the exact eligibility predicate; membership returns only lightweight
     # identities and ordering fields. EXISTS needs no per-track duration rollup.
     # Album payload hydration stays page-bounded.
+    eligible_tracks = _eligible_album_tracks_cte_sql(
+        materialized=True,
+        candidate_albums_only=candidate_albums_only,
+        aggregate_tracks=False,
+    )
+    candidate_albums = """
+        search_candidate_album_ids as (
+          select library_id, id as album_id from library.local_albums
+          where id = any(%(gallery_album_ids)s::bigint[])
+        ),
+    """ if candidate_albums_only else ""
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -7830,7 +7841,7 @@ def _root_gallery_membership_sql() -> str:
             on library.libraries.owner_account_id = app.bootstrap_owners.account_id
            and library.libraries.name = 'Local Library' and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1
-        ), {_eligible_album_tracks_cte_sql(materialized=True, aggregate_tracks=False)}
+        ), {candidate_albums} {eligible_tracks}
         select distinct artist.id as artist_id, artist.name as artist_name,
           artist.sort_name as artist_sort_name, featured.featured_kind,
           album.id as album_id, album.album_key,

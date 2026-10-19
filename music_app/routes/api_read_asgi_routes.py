@@ -570,7 +570,15 @@ def _transient_scan_view_response(
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
-    if "gallery_page_size" in request.query_params or "gallery_cursor" in request.query_params:
+    default_root_gallery_page = (
+        _is_postgres_root_album_browse_request(request)
+        and not str(request.query_params.get("payload_tier") or "").strip()
+    )
+    if (
+        "gallery_page_size" in request.query_params
+        or "gallery_cursor" in request.query_params
+        or default_root_gallery_page
+    ):
         params = dict(request.query_params)
         params.pop("gallery_page_size", None)
         params.pop("gallery_cursor", None)

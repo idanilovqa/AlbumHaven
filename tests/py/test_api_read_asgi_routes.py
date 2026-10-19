@@ -2752,9 +2752,10 @@ def test_postgres_selected_artist_request_does_not_require_omit_sidebar(app, asg
 
 
 @pytest.mark.parametrize("all_artists", [None, "1"])
-@pytest.mark.parametrize("payload_tier", [None, "full"])
-def test_asgi_root_album_browse_uses_postgres_browse_without_flask_bridge(app, asgi_app, monkeypatch, all_artists, payload_tier):
+def test_asgi_full_root_album_browse_uses_postgres_browse_without_flask_bridge(app, asgi_app, monkeypatch, all_artists):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    payload_tier = "full"
 
     def fail_hydrate():
         raise AssertionError("Postgres root album browse path must not hydrate the JSON cache")
@@ -2843,6 +2844,65 @@ def test_asgi_root_album_browse_uses_postgres_browse_without_flask_bridge(app, a
     assert payload["album_count"] == 1
     assert "connection" not in headers
     assert payload["artist_count"] == 1
+
+
+@pytest.mark.parametrize("all_artists", [None, "1"])
+def test_asgi_queryless_root_album_browse_defaults_to_bounded_gallery_page(
+    app, asgi_app, monkeypatch, all_artists
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, config):
+            assert config["ALBUM_HAVEN_APP_DATABASE_URL"] == "postgresql://album_haven_app@localhost/app"
+
+        def build_root_album_browse_payload(self, *, query_params=None):
+            raise AssertionError("Queryless Home must not build the full root album payload")
+
+        def build_root_startup_preview_payload(self, *, query_params=None, library_state=None):
+            assert query_params.get("surface") == "albums"
+            assert query_params.get("gallery_page_size") == "50"
+            assert query_params.get("all_artists") == all_artists
+            assert library_state is asgi_app.state.library_state
+            return {
+                "surface": {"active_surface": "albums"},
+                "shell_layout": {"active_surface": "albums"},
+                "artist_groups": [{"artist": "Broadcast", "albums": []}],
+                "artists_sidebar": [{"artist": "Broadcast", "artist_display": "Broadcast", "count": 1}],
+                "album_count": 1,
+                "artist_count": 1,
+                "query": "",
+                "selected_artist": "",
+                "all_artists_active": bool(all_artists),
+                "payload_tier": "gallery_page",
+                "gallery_page": {"offset": 0, "has_more": True, "next_cursor": "next"},
+                "persistence_backend": "postgres",
+                "persistence_seam": "library_browse",
+                "view_data_source": "postgres_library_browse",
+            }
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        "music_app.services.library_browse_postgres.psycopg",
+        type("FakePsycopg", (), {"connect": lambda self: None})(),
+    )
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/view-data",
+        query={
+            "surface": "albums",
+            **({"all_artists": all_artists} if all_artists else {}),
+        },
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["payload_tier"] == "gallery_page"
+    assert payload["gallery_page"]["has_more"] is True
 
 
 def test_asgi_sidebar_postgres_selection_raises_when_adapter_unavailable(

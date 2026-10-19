@@ -1,7 +1,7 @@
 /* One session-local planner around the existing native queue and streaming
    facade. Source callbacks hold private authority; public snapshots never do. */
 const ExplicitQueueRuntime = (() => {
-  let scopeToken=null, planner=null, serial=0, session=0, generation=0, snapshot=null;
+  let scopeToken=null, planner=null, serial=0, session=0, generation=0, snapshot=null, ownershipEpoch=0;
   let prepared=null, refreshController=null, pendingStart=null, snapshotFacts='', successorCache=null, metadataRequest=0;
   const sources=new Map(), listeners=new Set(), trackKeys=new WeakMap(), queues=new WeakMap();
   const aborted=()=>Object.assign(new Error('Queue action was superseded.'),{name:'AbortError'});
@@ -51,27 +51,64 @@ const ExplicitQueueRuntime = (() => {
     if(target.availability!=='local'||target.playback_state?.can_start_here!==true)source.target=null;
     return accepted;
   }
+  function captureStop() {
+    const epoch=ownershipEpoch, owner=planner, refresh=refreshController, start=pendingStart;
+    let scope;
+    try {scope=TrackActionsRuntime.scope();} catch {scope={token:scopeToken,actor:null,library:null};}
+    return {epoch,owner,refresh,start,scope,generation,session};
+  }
+  function isStopCurrent(capture) {
+    return capture.epoch===ownershipEpoch&&capture.owner===planner&&capture.refresh===refreshController
+      &&capture.start===pendingStart&&capture.generation===generation&&capture.session===session;
+  }
+  function commitStop(capture) {
+    if(!isStopCurrent(capture))return null;
+    const refresh=refreshController,start=pendingStart;
+    refreshController=null;pendingStart=null;prepared=null;successorCache=null;generation++;
+    if(capture.scope.token!==scopeToken) {
+      sources.clear();scopeToken=capture.scope.token;
+      planner=createExplicitQueuePlanner({canPlay:playable});session++;
+    }
+    planner.halt();snapshot=null;
+    const epoch=++ownershipEpoch,owner=planner,committedGeneration=generation,committedSession=session;
+    return ()=>{
+      const errors=[];
+      try {refresh?.abort();} catch(error) {errors.push(error);}
+      try {start?.abort();} catch(error) {errors.push(error);}
+      if(epoch===ownershipEpoch&&owner===planner&&committedGeneration===generation&&committedSession===session
+        &&refreshController===null&&pendingStart===null)notify();
+      if(errors.length)throw new AggregateError(errors,'Queue retirement failed');
+    };
+  }
   function sync() {
-    const scope=TrackActionsRuntime.scope();
+    const epoch=ownershipEpoch,scope=TrackActionsRuntime.scope();
+    if(epoch!==ownershipEpoch)return Boolean(scope.actor&&scope.library);
     if(scope.token!==scopeToken) {
-      const retiring=prepared, wasExplicit=Boolean(planner?.getSnapshot().currentId), oldStart=pendingStart;
-      refreshController?.abort();generation++;prepared=null;successorCache=null;pendingStart=null;sources.clear();scopeToken=scope.token;
-      planner=createExplicitQueuePlanner({canPlay:playable});session++;snapshot=null;oldStart?.abort();
-      if(retiring)retireContinuity('queue-session-changed');
-      if(wasExplicit&&typeof stopStreamingPlayback==='function') {
-        const stopped=stopStreamingPlayback('queue-session-changed');
-        if(typeof observeStreamingFacadeCallback==='function')observeStreamingFacadeCallback(stopped,'queue-session-changed');else void Promise.resolve(stopped).catch(()=>{});
+      const wasExplicit=Boolean(planner?.getSnapshot().currentId),wasPrepared=Boolean(prepared);
+      const attempt=typeof streamingEngineState==='function'?streamingEngineState().playbackAttempt:null;
+      const oldRefresh=refreshController,oldStart=pendingStart;
+      // Commit the new scope before abort callbacks can register a successor.
+      refreshController=null;pendingStart=null;generation++;prepared=null;successorCache=null;
+      sources.clear();scopeToken=scope.token;planner=createExplicitQueuePlanner({canPlay:playable});session++;snapshot=null;
+      const committedEpoch=++ownershipEpoch;
+      // Retire the captured engine before dispatch; never recapture after abort.
+      if((wasExplicit||wasPrepared)&&attempt&&typeof stopStreamingPlayback==='function') {
+        const stopped=stopStreamingPlayback('queue-session-changed',{expectedAttempt:attempt,notifyQueue:false});
+        void stopped.catch(error=>console.error('Queue retirement failed',error));
       }
+      oldRefresh?.abort();oldStart?.abort();
+      if(committedEpoch!==ownershipEpoch)return Boolean(scope.actor&&scope.library);
     }
     return Boolean(scope.actor&&scope.library);
   }
   function retireContinuity(reason) {
     const engine=typeof streamingEngineState==='function'?streamingEngineState():null;
-    if(!engine||state.player.loopActive)return;
+    if(!engine||state.player.loopActive||engine.stopPromise)return;
+    const attempt=engine.playbackAttempt;
     engine.pendingContinuityTrack=null;engine.pendingContinuityOptions=null;
-    if(engine.roles?.continuity&&closeStreamingContinuityRole(reason)!==true&&typeof stopStreamingPlayback==='function') {
-      const stopped=stopStreamingPlayback(reason);
-      if(typeof observeStreamingFacadeCallback==='function')observeStreamingFacadeCallback(stopped,reason);else void Promise.resolve(stopped).catch(()=>{});
+    if(engine.roles?.continuity&&closeStreamingContinuityRole(reason)!==true&&attempt&&typeof stopStreamingPlayback==='function') {
+      const stopped=stopStreamingPlayback(reason,{expectedAttempt:attempt});
+      void stopped.catch(error=>console.error('Queue retirement failed',error));
     }
   }
   const trackKey=track=>{if(!trackKeys.has(track))trackKeys.set(track,`ordinary-${++serial}`);return trackKeys.get(track);};
@@ -403,7 +440,7 @@ const ExplicitQueueRuntime = (() => {
   window.AlbumHavenExplicitQueue=Object.freeze(api);
   return Object.freeze({
     currentChanged(){notify();},
-    selectionStarted(){refreshController?.abort();generation++;prepared=null;successorCache=null;},
+    selectionStarted(){const old=refreshController;refreshController=null;ownershipEpoch++;generation++;prepared=null;successorCache=null;old?.abort();},
     hasNext(){sync();if(!planner.getSnapshot().entries.length&&!planner.getSnapshot().currentId)return false;return Boolean(payload(preview()));},
     async skip(offset) {
       sync();const before=describe();if(offset<0)return before.source==='explicit'?false:undefined;
@@ -444,6 +481,7 @@ const ExplicitQueueRuntime = (() => {
       planner.reconcile(describe(next));prepared=null;notify();reschedule();},
     ended(){sync();refreshController?.abort();generation++;const before=describe();
       planner.advance(before,{...before,ended:true},{stopPriority:true});prepared=null;prune();notify();},
-    stopped(){sync();refreshController?.abort();generation++;prepared=null;planner.halt();notify();},
+    captureStop,isStopCurrent,commitStop,
+    stopped(){const captured=captureStop(),dispatch=commitStop(captured);if(dispatch)dispatch();},
   });
 })();

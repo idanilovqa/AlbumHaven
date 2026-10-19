@@ -312,6 +312,7 @@ function currentQueueIndex() {
 }
 
 async function playCompactQueueOffset(offset) {
+  if (isPlaybackLockedByAnotherTab()) return false;
   if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
     const result = await ExplicitQueueRuntime.skip(offset);
     if (result !== undefined) return result;
@@ -334,7 +335,7 @@ async function playCompactQueueOffset(offset) {
   } catch (error) {
     if (isCurrentCompactQueueSelection(selection)) {
       if (typeof observeStreamingFacadeCallback === 'function') {
-        observeStreamingFacadeCallback(Promise.reject(error), 'compact-track-selection-start-error');
+        console.warn('[AlbumHaven][Playback] Compact selection failed.', error);
       } else {
         console.warn('[AlbumHaven][Playback] Compact track selection failed.', error);
       }
@@ -359,16 +360,18 @@ function syncCompactPlayerUi(snapshot = {}) {
   const els = compactPlayerElements();
   if (!els.player) return;
   const playback = snapshot.playback || getPlayerPlaybackSnapshot();
-  const track = snapshot.displayTrack || state.player.current;
-  const hasTrack = snapshot.hasTrack ?? Boolean(track && (playback.src || track.src));
-  const locked = snapshot.lockedByAnotherTab ?? (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab());
+  const locked = snapshot.lockedByAnotherTab ?? isPlaybackLockedByAnotherTab();
+  const track = locked ? (Object.prototype.hasOwnProperty.call(snapshot, 'displayTrack') ? snapshot.displayTrack : getMirroredPlaybackTrack())
+    : (snapshot.displayTrack || state.player.current);
+  const hasTrack = locked || (snapshot.hasTrack ?? Boolean(track && (playback.src || track.src)));
+  if (locked) clearCompactPlayerArtClick();
   const trackKey = track?.path || null;
   if (trackKey !== compactPlayerTrackKey) {
     clearCompactPlayerArtClick();
     hideCompactPlayerMetadata(els);
   }
   compactPlayerTrackKey = trackKey;
-  if (els.titleText) els.titleText.textContent = track?.title || track?.name || 'Nothing playing';
+  if (els.titleText) els.titleText.textContent = track?.title || track?.name || (locked ? 'Playing in another tab' : 'Nothing playing');
   if (els.artistText) els.artistText.textContent = track?.artist || '';
   const summary = buildCompactPlayerMetadataSummary(track ? { ...track, album: '' } : null);
   const album = String(track?.album || '').trim();
@@ -380,10 +383,10 @@ function syncCompactPlayerUi(snapshot = {}) {
   }
   scheduleCompactPlayerMetadataRowRefresh(els);
   if (els.cover) {
-    els.cover.style.backgroundImage = track?.coverPath
+    els.cover.style.backgroundImage = !locked && track?.coverPath
       ? `url("/cover?path=${encodeURIComponent(track.coverPath)}")`
       : '';
-    els.cover.classList.toggle('is-idle-placeholder', !track);
+    els.cover.classList.toggle('is-idle-placeholder', locked || !track);
     els.cover.disabled = !track && !['docked', 'rail_artbox'].includes(compactPlayerPresentation);
     const openLabel = compactPlayerPresentation === 'floating' ? 'Double-click to open album details' : 'Expand player; double-click or Arrow Up for album details';
     els.cover.setAttribute('aria-label', openLabel);
@@ -423,8 +426,10 @@ function initCompactPlayer() {
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));
   const openCurrentAlbumDetails = () => {
-    const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
+    if (isPlaybackLockedByAnotherTab()) return;
+    const selected = state.player.current;
+    const album = resolveAlbumForPlayerTrack(selected);
+    if (album && selected === state.player.current && !isPlaybackLockedByAnotherTab()) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
   };
   els.albumLink?.addEventListener('click', openCurrentAlbumDetails);
   els.cover?.addEventListener('click', event => {

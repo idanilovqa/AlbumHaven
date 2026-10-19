@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from music_app.services import save_tasks as save_tasks_module
+from music_app.services.edit_tag_timings import EditTagTimingRecorder
 from music_app.services.save_tasks import (
     create_save_task,
     finalize_save_task,
@@ -76,6 +77,27 @@ def test_create_save_task_returns_pending_payload():
     assert payload["kind"] == "repair-tags"
     assert payload["status"] == "pending"
     assert payload["created_at"]
+
+
+def test_finalize_save_task_preserves_edit_tag_phase_timings(tmp_path):
+    persistence: Future[None] = Future()
+    persistence.set_result(None)
+    task_id = create_save_task("edit-tags")
+    timing_recorder = EditTagTimingRecorder(task_id)
+    timing_recorder.record("media_writes", 12.5)
+
+    finalize_save_task(
+        task_id,
+        **_durable_save_finalize_kwargs(
+            tmp_path,
+            schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
+        ),
+        timing_recorder=timing_recorder,
+    )
+
+    payload = save_task_result(task_id)
+    assert payload["status"] == "completed"
+    assert payload["phase_timings_ms"]["media_writes"] == 12.5
 
 
 def test_queue_finalize_save_task_can_complete_inline_before_return(tmp_path):
@@ -1349,6 +1371,44 @@ def test_structural_tag_edit_save_task_completes_only_after_targeted_commit(tmp_
     assert "warnings" not in terminal_task
 
 
+def test_structural_tag_edit_schedules_stale_projection_rebuild_after_commit(tmp_path):
+    task_id = create_save_task("edit-tags")
+    scheduled: list[str] = []
+
+    finalize_structural_tag_edit_save_task(
+        task_id,
+        config=_explicit_config(tmp_path),
+        logger=_logger_stub(),
+        get_state=lambda: {"albums": [], "file_cache": {}},
+        rebuild_affected_albums_in_state=lambda *_args, **_kwargs: None,
+        persist_structural_tag_edit=lambda **_kwargs: {
+            "album_rows_updated": 1,
+            "projection_mode": "stale",
+            "rebuild_reason": "structural_tag_edit_requires_full_projection",
+        },
+        schedule_relation_projection_rebuild=scheduled.append,
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        find_albums_by_track_paths=lambda _paths: [],
+        find_problematic_album_by_track_paths=lambda _paths: None,
+        updated_file_cache={
+            "track-1.mp3": {"path": "track-1.mp3", "artist": "Overhead"},
+        },
+        previous_file_cache={
+            "track-1.mp3": {"path": "track-1.mp3", "artist": "Ovderhead"},
+        },
+        changed_paths={"track-1.mp3"},
+        requested_track_paths={"track-1.mp3"},
+        separate_release_keys=set(),
+        changed_field_names={"artist"},
+        structural_edit_fields={"artist"},
+        log_entry={"action": "Tags edited"},
+    )
+
+    assert scheduled == ["structural_tag_edit_requires_full_projection"]
+    assert save_task_result(task_id)["status"] == "completed"
+
+
 def test_structural_year_edit_publishes_committed_separate_release_key_before_rebuild(
     tmp_path,
 ):
@@ -1490,6 +1550,15 @@ def test_structural_tag_edit_runtime_refresh_preserves_cover_selected_after_comm
 def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(tmp_path):
     task_id = create_save_task("edit-tags")
     compensations: list[dict[str, object]] = []
+    publication_attempts = {"history": 0, "event": 0}
+
+    def fail_history(*_args, **_kwargs):
+        publication_attempts["history"] += 1
+        raise RuntimeError("history unavailable")
+
+    def fail_event(*_args, **_kwargs):
+        publication_attempts["event"] += 1
+        raise RuntimeError("event log unavailable")
 
     finalize_structural_tag_edit_save_task(
         task_id,
@@ -1503,12 +1572,8 @@ def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(t
         compensate_structural_tag_edit=lambda **kwargs: compensations.append(
             dict(kwargs)
         ),
-        append_log_history=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("history unavailable")
-        ),
-        log_app_event=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("event log unavailable")
-        ),
+        append_log_history=fail_history,
+        log_app_event=fail_event,
         find_albums_by_track_paths=lambda _paths: [
             {"key": "canonical-new-album", "name": "New Album"}
         ],
@@ -1541,9 +1606,13 @@ def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(t
         {"key": "canonical-new-album", "name": "New Album"}
     ]
     assert compensations == []
+    replayed_payload = save_task_result(task_id)
+    assert replayed_payload["status"] == "completed"
+    assert replayed_payload["completed_at"] == payload["completed_at"]
+    assert publication_attempts == {"history": 1, "event": 1}
 
 
-def test_structural_tag_edit_canonical_reconciliation_error_cannot_publish_success(
+def test_structural_tag_edit_canonical_lookup_failure_after_commit_reports_completed_warning(
     tmp_path,
 ):
     task_id = create_save_task("edit-tags")
@@ -1558,7 +1627,11 @@ def test_structural_tag_edit_canonical_reconciliation_error_cannot_publish_succe
             "memory-rebuilt"
         ),
         persist_structural_tag_edit=lambda **_kwargs: events.append("committed") or {
-            "album_rows_updated": 1
+            "album_rows_updated": 1,
+            "destination_album_id": 42,
+            "destination_album_key": "album:telepathic-minds",
+            "destination_artist_name": "Overhead",
+            "orphaned_source_artists": ["Ovderhead"],
         },
         append_log_history=lambda *_args, **_kwargs: None,
         log_app_event=lambda *_args, **_kwargs: None,
@@ -1582,9 +1655,17 @@ def test_structural_tag_edit_canonical_reconciliation_error_cannot_publish_succe
 
     assert events == ["committed", "memory-rebuilt"]
     terminal_task = save_task_result(task_id)
-    assert terminal_task["status"] == "failed"
-    assert terminal_task["error"] == "canonical album reconciliation unavailable"
-    assert terminal_task.get("updated_albums") in (None, [])
+    assert terminal_task["status"] == "completed"
+    assert terminal_task["reconciliation_pending"] is True
+    assert "canonical album reconciliation unavailable" in " ".join(
+        terminal_task["warnings"]
+    )
+    assert "error" not in terminal_task
+    assert terminal_task["updated_albums"] == []
+    assert terminal_task["destination_album_id"] == 42
+    assert terminal_task["destination_album_key"] == "album:telepathic-minds"
+    assert terminal_task["destination_artist"] == "Overhead"
+    assert terminal_task["orphaned_source_artists"] == ["Ovderhead"]
 
 
 def test_structural_tag_edit_save_task_fails_without_publishing_memory_on_commit_error(

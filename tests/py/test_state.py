@@ -4102,3 +4102,86 @@ def test_startup_persistence_recovery_preserves_journal_and_exclusion_migration_
     monkeypatch.setattr(state_module, "_call_hydrate_library_state_from_disk", lambda *_args, **_kwargs: pytest.fail("Recovery must not hydrate the whole library"))
     state_module.recover_runtime_library_persistence_on_startup(runtime)
     assert calls == [("recover", runtime), ("migrate", config)]
+
+
+def test_relation_projection_rebuild_scheduler_is_bounded_and_non_blocking(monkeypatch):
+    submitted: list[tuple[object, tuple[object, ...]]] = []
+    rebuilt: list[dict[str, object]] = []
+
+    class DeferredExecutor:
+        def submit(self, callback, *args):
+            submitted.append((callback, args))
+            return object()
+
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
+    monkeypatch.setattr(
+        state_module,
+        "ensure_relation_projection_ready",
+        lambda config, **_kwargs: rebuilt.append(config) or {"ready": True},
+    )
+    monkeypatch.setattr(
+        state_module,
+        "_RELATION_REBUILD_PENDING",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        state_module,
+        "_RELATION_REBUILD_REQUEST_GENERATION",
+        0,
+        raising=False,
+    )
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}
+    state_module.schedule_relation_projection_rebuild(
+        config,
+        reason="structural_tag_edit_requires_full_projection",
+    )
+    state_module.schedule_relation_projection_rebuild(config, reason="duplicate")
+
+    assert len(submitted) == 1
+    callback, args = submitted[0]
+    callback(*args)
+    assert rebuilt == [config]
+
+    state_module.schedule_relation_projection_rebuild(config, reason="later")
+    assert len(submitted) == 2
+
+
+def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_during_build(monkeypatch):
+    submitted: list[tuple[object, tuple[object, ...]]] = []
+    rebuilt: list[str] = []
+
+    class DeferredExecutor:
+        def submit(self, callback, *args):
+            submitted.append((callback, args))
+            return object()
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}
+
+    def rebuild(_config, **_kwargs):
+        rebuilt.append("rebuild")
+        if len(rebuilt) == 1:
+            state_module.schedule_relation_projection_rebuild(
+                config,
+                reason="edit_committed_during_rebuild",
+            )
+        return {"ready": True}
+
+    monkeypatch.setattr(state_module, "_HYDRATE_EXECUTOR", DeferredExecutor())
+    monkeypatch.setattr(state_module, "ensure_relation_projection_ready", rebuild)
+    monkeypatch.setattr(state_module, "_RELATION_REBUILD_PENDING", False, raising=False)
+    monkeypatch.setattr(
+        state_module,
+        "_RELATION_REBUILD_REQUEST_GENERATION",
+        0,
+        raising=False,
+    )
+
+    state_module.schedule_relation_projection_rebuild(config, reason="first")
+
+    callback, args = submitted[0]
+    callback(*args)
+
+    assert rebuilt == ["rebuild", "rebuild"]
+    assert len(submitted) == 1

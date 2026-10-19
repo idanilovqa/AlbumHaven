@@ -469,6 +469,7 @@ def _finalize_save_task(
     before_persistence_commit: Callable[[object], object] | None = None,
     complete_scoped_persistence: Callable[[], object] | None = None,
     record_scoped_persistence_failure: ScopedPersistenceFailureRecorder | None = None,
+    timing_recorder: EditTagTimingRecorder | None = None,
 ) -> None:
     finalize_started = perf_counter()
     persistence_started = finalize_started
@@ -715,6 +716,9 @@ def _finalize_save_task(
     }
     if warnings:
         completion["warnings"] = warnings
+    if timing_recorder is not None:
+        completion.update(timing_recorder.snapshot())
+        completion["_timing_recorder"] = timing_recorder
     update_save_task(task_id, **completion)
 
 
@@ -754,6 +758,7 @@ def finalize_structural_tag_edit_save_task(
     structural_edit_fields: set[str],
     log_entry: JsonDict,
     relation_projection_edit_fields: set[str] | None = None,
+    schedule_relation_projection_rebuild: Callable[[str], object] | None = None,
     run_state_mutation: StateMutationGuard | None = None,
     structural_tag_edit_reservation: object | None = None,
     before_persistence_commit: Callable[[object], object] | None = None,
@@ -816,6 +821,20 @@ def finalize_structural_tag_edit_save_task(
             return
 
         warnings: list[str] = []
+        if (
+            persistence_result.get("projection_mode") == "stale"
+            and schedule_relation_projection_rebuild is not None
+        ):
+            rebuild_reason = str(
+                persistence_result.get("rebuild_reason")
+                or "structural_tag_edit_requires_full_projection"
+            )
+            _post_commit_value(
+                warnings,
+                "Relation projection rebuild scheduling",
+                lambda: schedule_relation_projection_rebuild(rebuild_reason),
+                None,
+            )
         committed_separate_release_key = str(
             persistence_result.get("separate_release_key") or ""
         ).strip()
@@ -909,25 +928,21 @@ def finalize_structural_tag_edit_save_task(
                 lambda: state_guard(refresh_runtime_state),
                 None,
             )
-        try:
-            with (
-                timing_recorder.measure("canonical_album_lookup")
-                if timing_recorder is not None
-                else nullcontext()
-            ):
-                updated_albums = find_albums_by_track_paths(requested_track_paths)
-        except Exception as exc:
-            _fail_save_task(
-                task_id,
-                config=config,
-                logger=logger,
-                append_log_history=append_log_history,
-                log_app_event=log_app_event,
-                log_entry=log_entry,
-                changed_paths=set(changed_paths),
-                error=exc,
+        warning_count_before_canonical_lookup = len(warnings)
+        with (
+            timing_recorder.measure("canonical_album_lookup")
+            if timing_recorder is not None
+            else nullcontext()
+        ):
+            updated_albums = _post_commit_value(
+                warnings,
+                "Canonical album reconciliation",
+                lambda: find_albums_by_track_paths(requested_track_paths),
+                [],
             )
-            return
+        reconciliation_pending = (
+            len(warnings) > warning_count_before_canonical_lookup
+        )
         with (
             timing_recorder.measure("history_publication")
             if timing_recorder is not None
@@ -976,6 +991,13 @@ def finalize_structural_tag_edit_save_task(
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "updated_albums": updated_albums,
             "updated_problematic_album": updated_problematic_album,
+            "reconciliation_pending": reconciliation_pending,
+            "destination_album_id": persistence_result.get("destination_album_id"),
+            "destination_album_key": persistence_result.get("destination_album_key"),
+            "destination_artist": persistence_result.get("destination_artist_name"),
+            "orphaned_source_artists": list(
+                persistence_result.get("orphaned_source_artists") or []
+            ),
             "requires_view_refresh": bool(
                 changed_field_names & structural_edit_fields
             )

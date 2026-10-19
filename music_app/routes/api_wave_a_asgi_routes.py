@@ -96,6 +96,7 @@ from music_app.services.state import (
     hydrate_library_state_for_config,
     invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
+    schedule_relation_projection_rebuild,
     start_background_refresh_for_state,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
@@ -818,6 +819,12 @@ def _is_selected_postgres_targeted_structural_edit_request(
     if len(field_sets) == 1 and next(iter(field_sets)) in {
         frozenset({"album"}),
         frozenset({"year"}),
+        frozenset({"artist"}),
+        frozenset({"album_artist"}),
+        frozenset({"artist", "album_artist"}),
+        frozenset({"album", "artist"}),
+        frozenset({"album", "album_artist"}),
+        frozenset({"album", "artist", "album_artist"}),
     }:
         return True
     return bool(field_sets) and all(
@@ -1192,6 +1199,13 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
             find_problematic_album_by_track_paths=_empty_problematic_album_by_track_paths,
             structural_edit_fields=set(_SELECTED_POSTGRES_MEDIA_WRITE_REFRESH_FIELDS),
             relation_projection_edit_fields=set(_RELATION_PROJECTION_EDIT_FIELDS),
+            schedule_relation_projection_rebuild=lambda reason: (
+                schedule_relation_projection_rebuild(
+                    config,
+                    reason=reason,
+                    logger=_asgi_logger(request),
+                )
+            ),
             **kwargs,
         )
 
@@ -1426,6 +1440,11 @@ def _authoritative_edit_tags_response(
         "updated_problematic_album",
         "requires_view_refresh",
         "warnings",
+        "reconciliation_pending",
+        "destination_album_id",
+        "destination_album_key",
+        "destination_artist",
+        "orphaned_source_artists",
         "operation_id",
         "phase_timings_ms",
         "pool_lease_timings_ms",

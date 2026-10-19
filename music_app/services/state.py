@@ -67,6 +67,9 @@ _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="album
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
 _MBID_ASSERTION_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-mbid")
+_RELATION_REBUILD_LOCK = threading.Lock()
+_RELATION_REBUILD_PENDING = False
+_RELATION_REBUILD_REQUEST_GENERATION = 0
 _BULK_COVER_JOB_WORKERS = 1
 _SCAN_FILE_ERROR_HISTORY_LIMIT = 50
 
@@ -356,6 +359,54 @@ def ensure_runtime_relation_projection_ready(
             _raise_if_projection_cancelled(cancel_requested)
             PostgresLibraryBrowseRepository(app.config).queue_settings_projection_prewarm()
     return result
+
+
+def _run_scheduled_relation_projection_rebuild(
+    config: dict[str, object],
+    logger: object | None,
+    reason: str,
+) -> None:
+    global _RELATION_REBUILD_PENDING
+    while True:
+        with _RELATION_REBUILD_LOCK:
+            requested_generation = _RELATION_REBUILD_REQUEST_GENERATION
+        try:
+            if logger is not None:
+                logger.info("Deferred relation projection rebuild started: %s", reason)
+            ensure_relation_projection_ready(config, logger=logger)
+        except Exception:
+            if logger is not None:
+                logger.exception("Deferred relation projection rebuild failed: %s", reason)
+        with _RELATION_REBUILD_LOCK:
+            if requested_generation != _RELATION_REBUILD_REQUEST_GENERATION:
+                continue
+            _RELATION_REBUILD_PENDING = False
+            return
+
+
+def schedule_relation_projection_rebuild(
+    config: dict[str, object],
+    *,
+    reason: str,
+    logger: object | None = None,
+) -> None:
+    global _RELATION_REBUILD_PENDING, _RELATION_REBUILD_REQUEST_GENERATION
+    with _RELATION_REBUILD_LOCK:
+        _RELATION_REBUILD_REQUEST_GENERATION += 1
+        if _RELATION_REBUILD_PENDING:
+            return
+        _RELATION_REBUILD_PENDING = True
+    try:
+        _HYDRATE_EXECUTOR.submit(
+            _run_scheduled_relation_projection_rebuild,
+            dict(config),
+            logger,
+            str(reason or "structural_tag_edit_requires_full_projection"),
+        )
+    except Exception:
+        with _RELATION_REBUILD_LOCK:
+            _RELATION_REBUILD_PENDING = False
+        raise
 
 def scan_percent_for_state(library_state: dict[str, object]) -> int:
     total = int(library_state.get("scan_total") or 0)

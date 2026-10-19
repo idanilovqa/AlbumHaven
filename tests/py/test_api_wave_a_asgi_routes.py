@@ -4499,7 +4499,7 @@ def test_asgi_edit_tags_never_acknowledges_an_uncommitted_save_task(
     assert payload["log_entry"] == task_log_entry
 
 
-def test_asgi_edit_tags_returns_committed_values_only_after_terminal_save_task(
+def test_asgi_edit_tags_completed_warning_returns_committed_values_and_destination(
     asgi_app,
     monkeypatch,
 ):
@@ -4539,6 +4539,12 @@ def test_asgi_edit_tags_returns_committed_values_only_after_terminal_save_task(
             updated_albums=[],
             updated_problematic_album=None,
             requires_view_refresh=False,
+            warnings=["Canonical album reconciliation failed after persistence committed"],
+            reconciliation_pending=True,
+            destination_album_id=42,
+            destination_album_key="album:telepathic-minds",
+            destination_artist="Overhead",
+            orphaned_source_artists=["Ovderhead"],
         )
         kwargs["structural_tag_edit_reservation"].release()
         return {
@@ -4588,6 +4594,82 @@ def test_asgi_edit_tags_returns_committed_values_only_after_terminal_save_task(
     assert payload["phase_timings_ms"]["response_construction"] >= 0
     assert payload["pool_lease_timings_ms"]["default"]["held_ms"] == 4.25
     assert payload["pool_lease_counts"]["default"]["released"] == 1
+    assert payload["warnings"] == [
+        "Canonical album reconciliation failed after persistence committed"
+    ]
+    assert payload["reconciliation_pending"] is True
+    assert payload["destination_album_id"] == 42
+    assert payload["destination_album_key"] == "album:telepathic-minds"
+    assert payload["destination_artist"] == "Overhead"
+    assert payload["orphaned_source_artists"] == ["Ovderhead"]
+
+
+def test_asgi_edit_tags_disconnect_after_commit_recovers_completed_task(
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.save_tasks import create_save_task, update_save_task
+
+    captured: dict[str, str] = {}
+
+    def fake_handle_edit_tags_request(**kwargs):
+        task_id = create_save_task("edit-tags")
+        captured["task_id"] = task_id
+        update_save_task(
+            task_id,
+            status="completed",
+            operation_id=task_id,
+            warnings=["Response delivery unavailable after persistence committed"],
+            reconciliation_pending=True,
+            destination_album_id=42,
+            destination_album_key="album:telepathic-minds",
+            destination_artist="Overhead",
+        )
+        kwargs["structural_tag_edit_reservation"].release()
+        return {"ok": True, "save_task_id": task_id}
+
+    monkeypatch.setattr(asgi_routes, "handle_edit_tags_request", fake_handle_edit_tags_request)
+    monkeypatch.setattr(
+        asgi_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, config: SimpleNamespace(
+            seam_id=seam_id,
+            effective_backend="file",
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "_authoritative_edit_tags_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("response disconnected")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="response disconnected"):
+        _run_asgi_request(
+            asgi_app,
+            "POST",
+            "/utilities/edit-tags",
+            json_body={
+                "confirmed": True,
+                "album": {"tracks": [{"path": "track-1.flac"}]},
+                "updates": {"track-1.flac": {"title": "Changed"}},
+            },
+        )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        f"/utilities/save-task/{captured['task_id']}",
+    )
+    payload = _decode_json(body)
+    assert status == 200
+    assert payload["status"] == "completed"
+    assert payload["operation_id"] == captured["task_id"]
+    assert payload["destination_album_id"] == 42
+    assert payload["destination_album_key"] == "album:telepathic-minds"
+    assert payload["destination_artist"] == "Overhead"
 
 
 def test_selected_postgres_media_compensation_is_path_scoped_and_restores_exception(
@@ -4706,6 +4788,47 @@ def test_selected_postgres_album_edit_skips_unrelated_relation_projection_rebuil
         "rebuild_relation_projection": False,
         "relation_projection_edit_fields": {"album_artist", "artist"},
     }
+
+
+def test_selected_postgres_structural_edit_wires_deferred_relation_rebuild(
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+
+    scheduled: list[tuple[dict[str, object], str]] = []
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "schedule_relation_projection_rebuild",
+        lambda config, *, reason, logger=None: scheduled.append((config, reason)),
+        raising=False,
+    )
+
+    def run_finalizer(**kwargs):
+        kwargs["schedule_relation_projection_rebuild"](
+            "structural_tag_edit_requires_full_projection"
+        )
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_finalize_structural_tag_edit_save_task",
+        run_finalizer,
+    )
+
+    callback = (
+        asgi_routes._asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
+            SimpleNamespace(app=asgi_app, state=SimpleNamespace())
+        )
+    )
+    callback(config=asgi_app.state.config)
+
+    assert scheduled == [
+        (
+            asgi_app.state.config,
+            "structural_tag_edit_requires_full_projection",
+        )
+    ]
 
 
 def test_asgi_bridge_finalize_default_problematic_matcher_uses_explicit_dependencies(app, monkeypatch):

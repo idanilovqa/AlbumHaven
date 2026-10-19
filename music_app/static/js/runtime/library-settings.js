@@ -673,8 +673,8 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
   const widthMode = menuWidth === 'content' ? 'content' : matchTriggerWidth ? 'anchor' : 'fixed';
   menu.setAttribute('data-choice-width', widthMode);
   menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label, title: choice.reason || choice.label,
-    disabled: choice.disabled === true, className: 'gallery-menu-action', attributes: {role: actionMenu ? 'menuitem' : 'menuitemradio',
-      ...(actionMenu ? {} : {'aria-checked': String(choice.value === String(selected))}), 'data-foobar-format': choice.value}})).join('');
+    disabled: choice.disabled === true, className: 'gallery-menu-action', attributes: {role: actionMenu ? 'menuitem' : choice.kind === 'checkbox' ? 'menuitemcheckbox' : 'menuitemradio',
+      ...(actionMenu ? {} : {'aria-checked': String(choice.kind === 'checkbox' ? choice.checked === true : choice.value === String(selected))}), 'data-foobar-format': choice.value}})).join('');
   document.body.append(menu);
   let closed = false, escapeHeld = false;
   const ownedEvents = new WeakSet();

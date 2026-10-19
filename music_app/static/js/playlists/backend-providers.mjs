@@ -1,5 +1,8 @@
 import {normalizeArtistLovedDescriptor, normalizeArtistLovedRecipe} from './artist-loved-recipe.mjs';
 import {queueOccurrences} from './queue-provenance.mjs';
+import {createFilterPreferenceProviders} from './filter-preferences.mjs';
+import {createAlbumTopBackendProviders} from '../album-tops/backend-providers.mjs';
+import {projectPlaylistTopPreview, isPlaylistTopPreviewRef, isPlaylistTopPreviewRevision} from './album-top-preview.mjs';
 // Authenticated transport adapter. Actor/context evidence and inventory links
 // remain private here; components receive only lifecycle-scoped projections.
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -56,6 +59,25 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
   function active(token, signal) {
     const [context, scopeKey] = JSON.parse(token);
     if (signal?.aborted || owner !== context || context !== transport.context() || !acceptsScope(scopeKey)) throw aborted();
+  }
+  const albumTops = createAlbumTopBackendProviders({transport, acceptsScope});
+  const filterPreferences = createFilterPreferenceProviders({request: async (path, options, method = 'GET', body) => {
+    const token = identity(options.scopeKey), context = JSON.parse(token)[0];
+    active(token, options.signal);
+    const response = await transport.request(path, {method, expected: context, signal: options.signal,
+      ...(body === undefined ? {} : {body})});
+    active(token, options.signal);
+    if (response?.context_ref !== context) throw fail('Playlist filter context changed.', 409);
+    return response;
+  }});
+  async function previewRequest(path, options, method = 'GET', body) {
+    const token = identity(options.scopeKey), context = JSON.parse(token)[0];
+    active(token, options.signal);
+    const response = await transport.request(path, {signal: options.signal, expected: context, method, ...(body ? {body} : {})});
+    active(token, options.signal);
+    if (response?.status !== 'ready' || response.context_ref !== context || !response.data || typeof response.data !== 'object')
+      throw fail('Album Top preview response was not acknowledged.', 502);
+    return response.data;
   }
   function acceptActor(value) {
     if (!Number.isSafeInteger(value?.account_id) || value.account_id < 1 || !Number.isSafeInteger(value.library_id) || value.library_id < 1) throw fail('Invalid Playlist actor.');
@@ -262,9 +284,43 @@ export function createPlaylistBackendProviders({transport, runtime} = {}) {
     }
   }
   return Object.freeze({
+    ...filterPreferences,
     hasPendingPlaylistOperation(options) {try {identity(options.scopeKey); return Boolean(pendingOperation(options));} catch {return false;}},
     retryPlaylistOperation: retryOriginal,
-    dispose() {disposed = true; unsubscribe?.(); clear();},
+    dispose() {disposed = true; unsubscribe?.(); albumTops.dispose(); clear();},
+    async captureAlbumTopPreview(command, options) {
+      if (!isPlaylistTopPreviewRef(command?.playlist_ref) || !isPlaylistTopPreviewRef(command.request_key)
+        || !isPlaylistTopPreviewRevision(command.revision)) throw fail('Invalid Album Top preview source.');
+      const value = await previewRequest(`/album-tops/playlist-previews/${command.playlist_ref}`, options, 'POST',
+        {request_key: command.request_key, revision: command.revision});
+      return projectPlaylistTopPreview(value, command);
+    },
+    async discardAlbumTopPreview(ref, options) {
+      if (!isPlaylistTopPreviewRef(ref)) throw fail('Invalid Album Top preview.');
+      const value = await previewRequest(`/album-tops/playlist-previews/${ref}`, options, 'DELETE');
+      if (value.preview_ref !== ref || value.discarded !== true) throw fail('Preview discard was not acknowledged.');
+      return {preview_ref: ref, discarded: true};
+    },
+    async saveAlbumTopPreview(command, options) {
+      const token = identity(options.scopeKey);
+      if (!isPlaylistTopPreviewRef(command?.playlist_preview_ref) || command.request_key !== command.playlist_preview_ref
+        || Object.keys(command).length !== 4 || typeof command.title !== 'string' || typeof command.description !== 'string') throw fail('Invalid Album Top preview Save.');
+      active(token, options.signal);
+      const value = await albumTops.execute('create', command, options);
+      active(token, options.signal); return value;
+    },
+    async resolveAlbumTopPreview(preview, albumRef, options) {
+      if (!isPlaylistTopPreviewRef(preview?.preview_ref) || !isPlaylistTopPreviewRef(albumRef)
+        || !isPlaylistTopPreviewRef(preview.source?.playlist_ref) || !isPlaylistTopPreviewRevision(preview.source?.revision)
+        || !preview.albums?.some(row => row.album_ref === albumRef)) throw fail('Preview album unavailable.');
+      const value = await previewRequest(`/album-tops/playlist-previews/${preview.preview_ref}/albums/${albumRef}/native-target`, options);
+      if (value.preview_ref !== preview.preview_ref || value.album_ref !== albumRef
+        || value.source?.playlist_ref !== preview.source.playlist_ref || value.source.revision !== preview.source.revision
+        || typeof value.native_target?.album_ref !== 'string' || !value.native_target.album_ref
+        || value.native_target.allowed_actions?.can_view_details !== true || value.native_target.allowed_actions.can_play_album !== false)
+        throw fail('Preview Album Details were not acknowledged.');
+      return {album_ref: value.native_target.album_ref, allowed_actions: {can_open_album: true, can_play_album: false}};
+    },
     async readPlaylists(options) {
       const token = identity(options.scopeKey), payload = await runtime.readPlaylists(options);
       active(token, options.signal); rememberRevisions(payload);

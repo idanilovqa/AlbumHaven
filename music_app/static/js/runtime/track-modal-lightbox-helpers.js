@@ -117,7 +117,8 @@ function resolveTrackModalSourcePageOwner(candidate, albumKey, restrictions) {
   if (candidate.token && trackModalSourcePageOwners.get(candidate.token) === candidate) return candidate;
   if (typeof candidate.isCurrent !== 'function') return null;
   return Object.freeze({token: `album-source-${Date.now().toString(36)}-${++trackModalSourcePageSequence}-${Math.random().toString(36).slice(2)}`,
-    albumKey, restrictions, isCurrent: candidate.isCurrent, revalidate: candidate.revalidate});
+    albumKey, restrictions, isCurrent: candidate.isCurrent, revalidate: candidate.revalidate,
+    ...(typeof candidate.retainNavigation === 'function' ? {retainNavigation: candidate.retainNavigation} : {})});
 }
 function retainTrackModalSourcePageOwner(owner) {
   if (!owner) return;
@@ -151,15 +152,26 @@ async function restoreTrackModalSourcePage(descriptor, {signal, isCurrent, prese
     if (!restrictions.can_open_album_page) return false;
     const refreshed = Object.freeze({...owner, restrictions, isCurrent: result.isCurrent});
     retainTrackModalSourcePageOwner(refreshed);
-    let invoked = false;
+    let invoked = false, requested = false, handoffResult;
     const open = () => {
-      if (invoked || signal?.aborted || !isCurrent?.() || presentationAttempt && !presentationAttempt.isCurrent()) return false;
-      invoked = true;
-      return openTrackModal(result.album, {sourcePageOwner: refreshed, presentationRestrictions: restrictions,
-        searchPresentationAttempt: presentationAttempt, coverLightboxGallery: false});
+      if (requested || signal?.aborted || !isCurrent?.() || presentationAttempt && !presentationAttempt.isCurrent()) return false;
+      requested = true;
+      let accepting = true;
+      const handoff = () => {
+        if (!accepting || invoked || trackModalSourcePageReplay !== pending
+          || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)
+          || signal?.aborted || !isCurrent?.() || !refreshed.isCurrent()
+          || presentationAttempt && !presentationAttempt.isCurrent()) return false;
+        invoked = true;
+        handoffResult = openTrackModal(result.album, {sourcePageOwner: refreshed, presentationRestrictions: restrictions,
+          searchPresentationAttempt: presentationAttempt, coverLightboxGallery: false});
+        return handoffResult;
+      };
+      try {return typeof refreshed.retainNavigation === 'function' ? refreshed.retainNavigation(handoff) : handoff();}
+      finally {accepting = false;}
     };
     const presented = typeof present === 'function' ? await present(open) : open();
-    completed = invoked && presented !== false && (!presentationAttempt || presentationAttempt.isCommitted());
+    completed = invoked && handoffResult !== false && presented !== false && (!presentationAttempt || presentationAttempt.isCommitted());
     return completed;
   } finally {
     if (trackModalSourcePageReplay === pending) trackModalSourcePageReplay = null;

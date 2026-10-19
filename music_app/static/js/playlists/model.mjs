@@ -1,5 +1,6 @@
 import {normalizeSavedArtistLovedRecipe} from './artist-loved-recipe.mjs';
 import {DEFAULT_PLAYLIST_FILTERS, normalizePlaylistFacts, normalizePlaylistFilters, matchesPlaylistFilters, playlistFiltersActive} from './filters.mjs';
+import {createPlaylistFilterMemory} from './filter-preferences.mjs';
 import {normalizeCreationDescriptor} from './creation.mjs';
 import {detailSelection} from '../home-friends/resource-target.mjs';
 import {mixRefreshStatus, mixRefreshError, normalizeMixRecipe, mixSourceProtocol, normalizeArtistMixScope, normalizeMixCoverage} from './library-mix-recipe.mjs';
@@ -25,7 +26,7 @@ const freeze = value => {
 };
 const resource = (status = 'unavailable', data = null) => Object.freeze({status, data});
 const idle = () => Object.freeze({status: 'idle', action: null, playlist_id: null});
-const initial = scopeKey => freeze({scopeKey, resource: resource(), selectedPlaylistId: null, drafts: {}, filters: {}, mutation: idle()});
+const initial = scopeKey => freeze({scopeKey, resource: resource(), selectedPlaylistId: null, drafts: {}, filters: {}, filterSync: 'idle', mutation: idle()});
 const failStatus = error => [401, 403].includes(error?.status) ? 'denied' : 'error';
 const GRANT_BY_ACTION = Object.freeze({savePlaylist: 'can_edit', addTracks: 'can_add', createPlaylist: 'can_create',
   createAlbumTop: 'can_create_album_top', createSamplePlaylist: 'can_create_sample', saveSharing: 'can_share',
@@ -174,7 +175,7 @@ export function draftDirty(detail, draft) {
 }
 
 export function createPlaylistController({readPlaylists, providers = {}} = {}) {
-  let configured = {...providers}, state = initial(null), disposed = false, sequence = 0, lifecycleVersion = 0, sharing = null;
+  let configured = {...providers}, state = initial(null), disposed = false, sequence = 0, lifecycleVersion = 0, sharing = null, filterEditVersion = 0;
   const pending = new Map(), listeners = new Set();
   const publish = patch => {if (!disposed) {state = freeze({...state, ...patch}); listeners.forEach(listener => listener());}};
   const abort = channel => {pending.get(channel)?.abort(); pending.delete(channel);};
@@ -184,6 +185,13 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
   const reader = () => typeof configured.readPlaylists === 'function' ? configured.readPlaylists : readPlaylists;
   const detail = () => state.resource.data?.detail;
   const permission = action => granted(action === 'createPlaylist' ? state.resource.data : detail(), GRANT_BY_ACTION[action]);
+  const filterMemory = createPlaylistFilterMemory({providers: () => configured,
+    onRestore: filters => {if (!disposed && state.resource.status === 'ready' && state.selectedPlaylistId)
+      publish({filters: {...state.filters, [state.selectedPlaylistId]: filters}});},
+    onStatus: filterSync => publish({filterSync}),
+  });
+  const hasFilterMemory = () => typeof configured.readFilterPreferences === 'function'
+    && typeof configured.saveFilterPreferences === 'function';
   const setRead = next => {
     sharing = null;
     let drafts = state.drafts;
@@ -194,13 +202,20 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
         conflict: previous.base_title !== saved.title || previous.base_description !== saved.description
           || previous.base_revision !== saved.revision || Boolean(previous.item_order && previous.base_order.join('\0') !== saved.track_rows.map(row => row.playlist_item_id).join('\0'))}};
     }
+    const restoreFilters = next.status === 'ready' && next.data?.detail && hasFilterMemory();
+    // Attach the correct resource intent owner before ready subscribers run.
+    // No request/status callback is dispatched until the ready publication.
+    if (restoreFilters) filterMemory.open(state.scopeKey, state.selectedPlaylistId, {defer: true});
+    else filterMemory.suspend();
     publish({resource: next, drafts});
+    if (!disposed && state.resource === next && restoreFilters) filterMemory.retry();
   };
   async function load({afterMutation = false} = {}) {
     if (disposed || state.mutation.status === 'loading' && !afterMutation) return false;
     const read = reader(), selected = state.selectedPlaylistId;
     if (typeof read !== 'function') {setRead(resource('unavailable')); return false;}
     const request = begin('read'), scopeKey = state.scopeKey;
+    filterMemory.suspend();
     publish({resource: resource('loading')});
     try {
       if (!current('read', request, scopeKey)) return false;
@@ -214,22 +229,23 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
     getSnapshot: () => state,
     getLifecycleVersion: () => lifecycleVersion,
     subscribe(listener) {if (typeof listener !== 'function') throw new TypeError('Playlist subscription requires a listener.'); if (!disposed) listeners.add(listener); return () => listeners.delete(listener);},
-    setScope(scopeKey) {if (!disposed && state.scopeKey !== scopeKey) {lifecycleVersion++; abortAll(); state = initial(scopeKey); listeners.forEach(listener => listener());}},
+    setScope(scopeKey) {if (!disposed && state.scopeKey !== scopeKey) {filterMemory.reset(); lifecycleVersion++; abortAll(); state = initial(scopeKey); listeners.forEach(listener => listener());}},
     configure(next = {}) {
       if (disposed) return;
       if (!record(next)) throw new TypeError('Playlist providers must be an object.');
       if (Object.keys({...configured, ...next}).every(key => configured[key] === next[key])) return;
-      configured = {...next}; lifecycleVersion++; abortAll(); state = initial(state.scopeKey); listeners.forEach(listener => listener());
+      filterMemory.reset(); configured = {...next}; lifecycleVersion++; abortAll(); state = initial(state.scopeKey); listeners.forEach(listener => listener());
     },
     load,
-    suspend() {if (!disposed) {lifecycleVersion++; abortAll(); publish({selectedPlaylistId: null, resource: resource(), mutation: idle()});}},
+    suspend() {if (!disposed) {filterMemory.suspend(); lifecycleVersion++; abortAll(); publish({selectedPlaylistId: null, resource: resource(), mutation: idle()});}},
     accept(payload, playlistId = null) {
       if (disposed || playlistId !== null && !ref(playlistId)) return false;
+      filterMemory.suspend();
       abort('read');
       // A fresh native projection may revoke access while a mutation is pending.
       abort('mutation'); abort('sharing'); sharing = null; sequence++;
       const version = sequence, scopeKey = state.scopeKey;
-      publish({selectedPlaylistId: playlistId, mutation: idle()});
+      publish({selectedPlaylistId: playlistId, resource: resource('loading'), mutation: idle()});
       if (disposed || version !== sequence || scopeKey !== state.scopeKey) return false;
       try {setRead(readResult(payload, playlistId)); return true;} catch {setRead(resource('error')); return false;}
     },
@@ -237,6 +253,7 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
       if (disposed || !fromNavigation && state.mutation.status === 'loading' || playlistId !== null && !ref(playlistId)) return false;
       if (!fromNavigation && playlistId !== null && !state.resource.data?.items.some(item => item.playlist_id === playlistId && granted(item, 'can_open'))) return false;
       if (playlistId === state.selectedPlaylistId) return true;
+      filterMemory.suspend();
       abortAll(); const version = sequence, scopeKey = state.scopeKey;
       publish({selectedPlaylistId: playlistId, resource: resource('loading'), mutation: idle()});
       if (disposed || version !== sequence || scopeKey !== state.scopeKey) return false;
@@ -270,12 +287,27 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
       const drafts = {...state.drafts}; delete drafts[playlistId]; publish({drafts, mutation: idle()}); return true;
     },
     filter(patch) {
-      if (disposed || !state.selectedPlaylistId || !record(patch)) return;
+      if (disposed || state.resource.status !== 'ready' || !state.selectedPlaylistId || !record(patch)) return;
+      const filterScope = state.scopeKey, filterId = state.selectedPlaylistId, filterVersion = lifecycleVersion;
+      const editVersion = ++filterEditVersion;
       const previous = playlistFilters(state);
-      const next = {...normalizePlaylistFilters({...previous, ...patch}), query: own(patch, 'query') ? text(patch.query).slice(0, 200) : previous.query,
+      let query = own(patch, 'query') ? text(patch.query).slice(0, 200) : previous.query;
+      // Do not create a lone surrogate by truncating a valid supplementary pair.
+      if (own(patch, 'query') && text(patch.query).length > 200 && /[\uD800-\uDBFF]$/.test(query)) query = query.slice(0, -1);
+      const next = {...normalizePlaylistFilters({...previous, ...patch}), query,
         availability: own(patch, 'availability') && ['all', 'local', 'missing', 'unresolved'].includes(patch.availability) ? patch.availability : previous.availability};
+      // Retain this admitted intent before subscribers can reload its resource.
+      // Deferred staging has no status callbacks or requests; a nested edit
+      // replaces it before the current publication can dispatch any write.
+      if (hasFilterMemory()) filterMemory.change(next, {defer: true});
       publish({filters: {...state.filters, [state.selectedPlaylistId]: next}});
+      if (!disposed && state.scopeKey === filterScope && state.selectedPlaylistId === filterId
+        && state.resource.status === 'ready' && lifecycleVersion === filterVersion
+        && filterEditVersion === editVersion && hasFilterMemory()) {
+        filterMemory.retry();
+      }
     },
+    retryFilterPreferences() {if (!disposed && state.resource.status === 'ready' && hasFilterMemory()) filterMemory.retry();},
     async readSharing({signal, q = '', cursor = null} = {}) {
       if (typeof configured.readSharing !== 'function') return resource();
       if (!detail() || !(granted(detail(), 'can_view_sharing') || granted(detail(), 'can_share'))) return resource('denied');
@@ -407,7 +439,7 @@ export function createPlaylistController({readPlaylists, providers = {}} = {}) {
         return false;
       } finally {if (pending.get('mutation') === request) pending.delete('mutation');}
     },
-    dispose() {if (!disposed) {lifecycleVersion++; abortAll(); disposed = true; state = initial(null); listeners.clear();}},
+    dispose() {if (!disposed) {filterMemory.dispose(); lifecycleVersion++; abortAll(); disposed = true; state = initial(null); listeners.clear();}},
   };
   return Object.freeze(controller);
 }

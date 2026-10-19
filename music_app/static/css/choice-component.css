@@ -27,3 +27,7 @@
 :root .settings-foobar-format-menu[data-choice-width="content"] .ui-button__content {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal;
 }
+
+/* A mixed Choice menu may contain an independently controlled checkbox row. */
+.settings-foobar-format-menu .gallery-menu-action[role="menuitemcheckbox"]::before { content: ''; display: inline-grid; place-items: center; box-sizing: border-box; width: 15px; height: 15px; flex: 0 0 15px; border: 1px solid var(--muted); border-radius: 3px; color: var(--text); background: var(--panel); font-size: 12px; line-height: 1; }
+.settings-foobar-format-menu .gallery-menu-action[role="menuitemcheckbox"][aria-checked="true"]::before { content: '\2713'; }

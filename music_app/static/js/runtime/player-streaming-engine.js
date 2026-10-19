@@ -144,12 +144,12 @@ const streamingAttemptRecords = new WeakMap();
 const streamingUnsafeCleanupFailures = new WeakMap();
 const streamingPreparationOutcomes = new WeakMap();
 const streamingCleanupOutcomes = new WeakMap();
-function registerStreamingAttempt(engine, role = null) {
+function registerStreamingAttempt(engine, role = null, incomingTrack = null) {
   const handle = Object.freeze({});
   const record = { engine, request: engine.startRequestId, lifecycle: engine.lifecycleEpoch || 0,
     generation: engine.generation, role, phase: role ? 'role' : 'pending', retired: false,
     outgoing: null, cutover: null, barrier: engine.stopPromise || null,
-    pendingRole:engine.roles.current, pendingContinuity:engine.roles.continuity };
+    pendingRole:engine.roles.current, pendingContinuity:engine.roles.continuity, incomingTrack };
   streamingAttemptRecords.set(handle, record);
   engine.playbackAttempt = handle;
   return handle;
@@ -173,6 +173,67 @@ function captureStreamingPlaybackAttempt() {
     return record?.phase === 'role' && isStreamingPlaybackAttemptCurrent(engine.playbackAttempt) ? engine.playbackAttempt : null;
   }
   return registerStreamingAttempt(engine, engine.roles.current);
+}
+
+// Retire an outgoing source while a different, already admitted start owns the
+// handoff. Keep the logical role until that existing transaction replaces it;
+// the worklet can commit its prepared seek while paused, without rendering it.
+function retireStreamingOutgoingRole(role, attempt) {
+  const engine = streamingEngineState(), record = attempt && streamingAttemptRecords.get(attempt);
+  if (!role || engine.roles.current !== role || !isStreamingPlaybackAttemptCurrent(attempt)
+      || !record.incomingTrack || record.incomingTrack === role.track
+      || (record.phase !== 'pending' && record.phase !== 'replacement')
+      || (record.phase === 'pending' ? record.pendingRole !== role : record.outgoing !== role)
+      || !engine.node || !engine.context || engine.stopPromise) return false;
+  if (record.retiredOutgoing) return record.retiredOutgoing.role === role;
+  const context = engine.context, node = engine.node;
+  const retirement = {role, resume: engine.snapshot.paused !== true};
+  record.retiredOutgoing = retirement;
+  engine.snapshot.paused = true;
+  const current = () => isStreamingPlaybackAttemptCurrent(attempt)
+    && engine.roles.current === role && engine.context === context && engine.node === node;
+  try { node.port.postMessage({type: 'pause', generation: engine.generation}); }
+  catch (error) {
+    if (current()) failStreamingEngine('processor', error, 'retired-outgoing-pause-error');
+    return true;
+  }
+  if (!current()) return true;
+  if (record.phase === 'pending') settleStreamingReplacementCushionWaiter(false);
+  else {
+    maybeGrantDeferredReplacementCredit();
+    if (current() && streamingRetiredOutgoingIncoming(engine.roles.continuity)) {
+      const deferred = Number(engine.deferredCreditFrames?.continuity) || 0;
+      if (deferred > 0) {
+        engine.deferredCreditFrames.continuity = 0;
+        grantStreamingCredit(engine.roles.continuity, deferred);
+      }
+    }
+  }
+  // A prior deliberate pause may have suspended processing. Resume only the
+  // context, never the outgoing worklet stream, so its handoff can finish.
+  if (current() && context.state === 'suspended') {
+    void context.resume().catch(error => {
+      if (current()) failStreamingEngine('context', error, 'retired-outgoing-resume-error');
+    });
+  }
+  return true;
+}
+function streamingRetiredOutgoingIncoming(role) {
+  const engine = streamingEngineState(), attempt = engine.playbackAttempt;
+  const owner = attempt && streamingAttemptRecords.get(attempt);
+  return Boolean(owner?.phase === 'replacement' && owner.role === role
+    && owner.retiredOutgoing?.role === engine.roles.current && isStreamingPlaybackAttemptCurrent(attempt));
+}
+function captureStreamingRetiredOutgoingAttempt() {
+  const engine = streamingEngineState(), attempt = engine.playbackAttempt;
+  const owner = attempt && streamingAttemptRecords.get(attempt);
+  if (!owner?.retiredOutgoing || !isStreamingPlaybackAttemptCurrent(attempt)) return null;
+  const outgoing = owner.retiredOutgoing.role === engine.roles.current
+    && (owner.phase === 'pending' || owner.phase === 'replacement');
+  const awaitingIncomingResume = owner.phase === 'role' && owner.role === engine.roles.current
+    && owner.role !== owner.retiredOutgoing.role && owner.role.track === owner.incomingTrack
+    && owner.retiredOutgoing.resume && owner.retiredOutgoing.awaitingResume === true && engine.snapshot.paused;
+  return outgoing || awaitingIncomingResume ? attempt : null;
 }
 function advanceStreamingAttempt(handle, role, cutover = null) {
   const record = streamingAttemptRecords.get(handle), engine = streamingEngineState();
@@ -646,7 +707,7 @@ function grantStreamingCredit(roleState, requestedFrames) {
     if (requestedFrames <= 0) return 0;
   }
   engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
-  if (engine.snapshot.paused) {
+  if (engine.snapshot.paused && !streamingRetiredOutgoingIncoming(roleState)) {
     if (outgoingReplacementCurrent) return 0;
     engine.deferredCreditFrames[role] += requestedFrames;
     return 0;
@@ -691,6 +752,7 @@ function continuityCreditNeedsOutgoingRenderCushion(roleState) {
   const engine = streamingEngineState();
   const pendingReplacement = engine.pendingSeek;
   const current = engine.roles.current;
+  if (streamingRetiredOutgoingIncoming(roleState)) return false;
   const queuedNextNeedsCushion = roleState?.role === 'continuity'
     && roleState.continuityOptions?.kind === 'queued-next'
     && !current?.eosReceived
@@ -1025,6 +1087,13 @@ function handleStreamingWorkletMessage(message) {
     engine.diagnostics.staleMessages += 1;
     return;
   }
+  const attempt = engine.playbackAttempt, owner = attempt && streamingAttemptRecords.get(attempt);
+  if (owner?.retiredOutgoing?.role === engine.roles.current && isStreamingPlaybackAttemptCurrent(attempt)
+      && message.streamId === engine.roles.current?.streamId
+      && ['first-frame', 'position', 'ended'].includes(message.type)) {
+    engine.diagnostics.staleMessages += 1;
+    return;
+  }
   if (message.type === 'protocol-reject') {
     if (!streamingRoleForId(message.streamId)) {
       engine.diagnostics.staleMessages += 1;
@@ -1050,6 +1119,8 @@ function handleStreamingWorkletMessage(message) {
     const pendingSeek = engine.pendingSeek;
     const current = engine.roles.current;
     const continuity = engine.roles.continuity;
+    const handoffAttempt = engine.playbackAttempt;
+    const handoffOwner = handoffAttempt && streamingAttemptRecords.get(handoffAttempt);
     if (!pendingSeek || !current || !continuity
         || pendingSeek.generation !== message.generation
         || pendingSeek.currentStreamId !== message.outgoingStreamId
@@ -1123,6 +1194,18 @@ function handleStreamingWorkletMessage(message) {
     }
     if (pendingSeek.kind === 'replacement') {
       pendingSeek.resolve?.(continuity);
+    }
+    if (handoffOwner?.retiredOutgoing?.role === current && handoffOwner.retiredOutgoing.resume
+        && isStreamingPlaybackAttemptCurrent(handoffAttempt) && engine.roles.current === continuity) {
+      handoffOwner.retiredOutgoing.awaitingResume = true;
+      void resumeStreamingPlayback(null, null, continuity, handoffAttempt,
+        () => handoffOwner.retiredOutgoing.resume).finally(() => {
+        handoffOwner.retiredOutgoing.awaitingResume = false;
+      }).catch(error => {
+        if (isStreamingPlaybackAttemptCurrent(handoffAttempt) && engine.roles.current === continuity) {
+          failStreamingEngine('context', error, 'retired-outgoing-handoff-resume-error');
+        }
+      });
     }
     publishStreamingDiagnostics();
     return;
@@ -1647,7 +1730,7 @@ async function startStreamingTrack(track, {
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
   engine.lifecycleEpoch ??= 0;
-  const attempt = registerStreamingAttempt(engine);
+  const attempt = registerStreamingAttempt(engine, null, track);
   try { if (typeof onStartAttempt === 'function') onStartAttempt(attempt); }
   catch (error) {
     if (isStreamingPlaybackAttemptCurrent(attempt)) {
@@ -1826,7 +1909,7 @@ async function startStreamingTrack(track, {
     startupBufferFrames: STREAMING_INITIAL_PLAYBACK_CUSHION_FRAMES,
   });
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
-  if (!autoplay) {
+  if (!autoplay || attemptRecord.retiredOutgoing?.resume === false) {
     if (engine.context.state !== 'suspended') {
       await engine.context.suspend();
     }
@@ -1838,7 +1921,12 @@ async function startStreamingTrack(track, {
   const autoplayNode = engine.node;
   const autoplayLifecycleEpoch = engine.lifecycleEpoch;
   const autoplayGeneration = engine.generation;
-  const resumePromise = resumeStreamingPlayback(startRequestId, onAutoplayStarted, current, attempt);
+  if (attemptRecord.retiredOutgoing) attemptRecord.retiredOutgoing.awaitingResume = true;
+  const nativeResume = resumeStreamingPlayback(startRequestId, onAutoplayStarted, current, attempt,
+    attemptRecord.retiredOutgoing ? () => attemptRecord.retiredOutgoing.resume : null);
+  const resumePromise = attemptRecord.retiredOutgoing ? nativeResume.finally(() => {
+    attemptRecord.retiredOutgoing.awaitingResume = false;
+  }) : nativeResume;
   let resumeSettled = false;
   let fallbackRetained = false;
   let settlementTimer = null;
@@ -1890,6 +1978,8 @@ async function startStreamingTrack(track, {
   }
   const resumed = await trackedResumePromise;
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return null;
+  if (!resumed && attemptRecord.retiredOutgoing?.resume === false
+      && engine.roles.current === current && engine.snapshot.paused && engine.mode !== 'error') return current;
   if (!resumed || engine.roles.current !== current) {
     const blockedRestoreIsCurrent = allowSuspendedAutoplayFallback
       && !resumed
@@ -1910,9 +2000,15 @@ async function startStreamingTrack(track, {
 async function pauseStreamingPlayback() {
   const engine = streamingEngineState();
   if (engine.stopPromise || !engine.context || !engine.node) return;
+  const attempt = engine.playbackAttempt, owner = attempt && streamingAttemptRecords.get(attempt);
+  const retiredHandoff = owner?.retiredOutgoing && isStreamingPlaybackAttemptCurrent(attempt);
+  if (retiredHandoff) owner.retiredOutgoing.resume = false;
   const context=engine.context, node=engine.node, request=engine.startRequestId;
   engine.snapshot.paused = true;
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
+  // Keep the processor available to commit an admitted replacement, but never
+  // restart its playback after this explicit pause.
+  if (retiredHandoff && owner.phase === 'replacement' && isStreamingPlaybackAttemptCurrent(attempt)) return;
   await context.suspend();
   if (engine.context!==context || engine.node!==node || engine.startRequestId!==request) return;
   if (engine.mode !== 'error') engine.mode = 'paused';
@@ -1923,8 +2019,10 @@ async function resumeStreamingPlayback(
   onPlaybackStarted = null,
   expectedCurrentRole = null,
   expectedAttempt = null,
+  isCurrent = null,
 ) {
   const engine = streamingEngineState();
+  if (typeof isCurrent === 'function' && !isCurrent()) return false;
   if (engine.stopPromise || !engine.roles.current) return false;
   const attempt = expectedAttempt || captureStreamingPlaybackAttempt();
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
@@ -1935,6 +2033,7 @@ async function resumeStreamingPlayback(
   const lifecycleEpoch = engine.lifecycleEpoch;
   const generation = engine.generation;
   await context.resume();
+  if (typeof isCurrent === 'function' && !isCurrent()) return false;
   if (!isStreamingPlaybackAttemptCurrent(attempt) || engine.context !== context || engine.node !== node
       || engine.lifecycleEpoch !== lifecycleEpoch || engine.generation !== generation
       || context.state !== 'running'
@@ -1946,6 +2045,7 @@ async function resumeStreamingPlayback(
   }
   if (engine.snapshot.paused === false) return true;
   node.port.postMessage({ type: 'play', generation });
+  if (typeof isCurrent === 'function' && !isCurrent()) return false;
   if (!isStreamingPlaybackAttemptCurrent(attempt)) return false;
   engine.snapshot.paused = false;
   maybeGrantDeferredReplacementCredit();

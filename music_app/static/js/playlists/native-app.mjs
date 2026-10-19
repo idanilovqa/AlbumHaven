@@ -318,10 +318,17 @@ export function mountPlaylistsView(host,runtime,initial) {
     filterHost=node(main),
     scroll=node(main,'div','playlists__scroll gallery-scrollbar'),
     navigationHost=node(scroll),
+    filterSyncHost=node(scroll),
+    filterSyncText=node(filterSyncHost,'span'),
+    filterRetryHost=node(filterSyncHost,'span'),
     resourceHost=node(scroll),
     content=node(scroll),
     dialogHost=node(host);
     const header=scope.own(mountPlaylistHeader(headerHost,runtime,{actions:{},onAction:run}));
+    const filterRetry=scope.own(mountButton(filterRetryHost,runtime,{label:'Retry saving filters',onClick:()=>{
+      if(!disposed&&props.state.resource.status==='ready')props.controller.retryFilterPreferences?.();
+    }}));
+    filterSyncHost.setAttribute('role','status');
     const directory=scope.own(mountPlaylistDirectory(directoryHost,runtime, {
       state:props.state,
       onSelect:selectPlaylist,
@@ -551,11 +558,11 @@ export function mountPlaylistsView(host,runtime,initial) {
         exportText(false);
         return;
       }
-      if(['save','copy','top'].includes(action)) {
+      if(action==='top') {await props.onCreateAlbumTop?.(detail); return;}
+      if(['save','copy'].includes(action)) {
         await controller.mutate({
           save:'savePlaylist',
-          copy:'copyPlaylist',
-          top:'createAlbumTop'
+          copy:'copyPlaylist'
         }
         [action]);
         return;
@@ -705,7 +712,10 @@ export function mountPlaylistsView(host,runtime,initial) {
         const enabled= {
           add:!picker&&controller.available('addTracks')&&typeof runtime.pickTracks==='function',
           missing:canOpenPlaylistCreation(state,providers,'missing'),
-          top:controller.available('createAlbumTop'),
+          top:Boolean(detail?.track_rows?.length && granted(detail,'can_create_album_top') && !draftDirty(detail,draft)
+            && typeof props.onCreateAlbumTop==='function' && typeof providers.captureAlbumTopPreview==='function'
+            && typeof providers.saveAlbumTopPreview==='function' && typeof providers.resolveAlbumTopPreview==='function'
+            && typeof providers.discardAlbumTopPreview==='function'),
           export:canExport&&exportRows.some(row=>row.source_readable!==false),
           share:detail&&(granted(detail,'can_view_sharing')||granted(detail,'can_share')),
           copy:controller.available('copyPlaylist'),
@@ -756,6 +766,13 @@ export function mountPlaylistsView(host,runtime,initial) {
           role:'alert',
           message:props.navigationError==='delete'?'The playlist was deleted, but its directory could not be opened. Open Playlists again.':'The playlist could not be opened. Your previous selection has been restored.'
         }):'';
+        const filterStatus=state.filterSync;
+        filterSyncHost.hidden=!detail||!['loading','unsaved','denied'].includes(filterStatus);
+        filterSyncText.textContent=filterStatus==='unsaved'?'Filter preferences could not be saved. '
+          :filterStatus==='denied'?'Saved filter preferences are unavailable. ':'Updating filter preferences…';
+        filterRetryHost.hidden=filterStatus!=='unsaved';
+        filterRetry.update({label:'Retry saving filters',disabled:state.resource.status!=='ready'||busy,
+          onClick:()=>{if(live()&&controller.getSnapshot().resource.status==='ready')controller.retryFilterPreferences?.();}});
         resource.update({
           value:state.resource,
           label:'Playlists',

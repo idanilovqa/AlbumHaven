@@ -442,9 +442,32 @@ function handlePrivateSearchSidebarNavigation(event, node) {
   return true;
 }
 
-function handleSidebarArtistSelectionClick(event) {
+function handleSidebarArtistSelectionClick(event, retainedSourceOwner = null) {
   const sidebarArtistLink = event.target.closest('[data-sidebar-artist]');
   if (!sidebarArtistLink) return false;
+  // Only a link inside this retained Album presentation inherits its draft.
+  // The ordinary sidebar still leaves through the existing confirmation path.
+  const sourceOwner = sidebarArtistLink.closest('#track-modal')
+    && typeof getTrackModalSourcePageOwner === 'function' ? getTrackModalSourcePageOwner() : null;
+  if (sourceOwner && !sourceOwner.isCurrent()) {
+    event.preventDefault();
+    return true;
+  }
+  if (sourceOwner && typeof sourceOwner.retainNavigation === 'function' && retainedSourceOwner !== sourceOwner) {
+    event.preventDefault();
+    if (!sourceOwner.isCurrent()) return true;
+    let accepting = true, invoked = false;
+    try {
+      sourceOwner.retainNavigation(() => {
+        if (!accepting || invoked || getTrackModalSourcePageOwner() !== sourceOwner || !sourceOwner.isCurrent()
+          || !sidebarArtistLink.closest('#track-modal')) return false;
+        invoked = true;
+        return handleSidebarArtistSelectionClick(event, sourceOwner);
+      });
+    } catch (error) {if (error?.name !== 'AbortError') throw error;}
+    finally {accepting = false;}
+    return true;
+  }
   if (sidebarArtistLink.albumHavenPrivateSearchView || state.view?.private_search === true) {
     return handlePrivateSearchSidebarNavigation(event, sidebarArtistLink);
   }

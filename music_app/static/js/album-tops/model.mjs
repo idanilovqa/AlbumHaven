@@ -17,6 +17,8 @@ const required = action => Object.hasOwn(actionPermissions, action) ? actionPerm
 const failure = error => error?.status === 401 || error?.status === 403 ? 'denied' : 'error';
 const clone = value => JSON.parse(JSON.stringify(value));
 const publicationAction = action => ['enable_external', 'revoke_external'].includes(action);
+const remoteItems = detail => Array.isArray(detail?.items) && detail.items.some(row => row.source_kind === 'remote_summary');
+const membershipAction = action => ['create', 'save', 'add', 'remove', 'reorder', 'copy'].includes(action);
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const sameItems = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 function publicationItems(detail, values = detail?.edit_draft?.items) {
@@ -119,7 +121,8 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
       return; // Only the owner-only sharing projection can restore replay authority.
     }
     const permission = required(pending.action), grants = projection(data);
-    const permissions = [BROWSE, permission, ...(pending.action === 'create' ? [CREATE] : [])];
+    const permissions = [BROWSE, permission, ...(pending.action === 'create' ? [CREATE] : []),
+      ...(pending.remoteMembership && pending.membershipEdit ? ['library.album_tops.items.manage'] : [])];
     const progress = pending.action === 'set_manual_completion';
     const hasMembers = Array.isArray(data?.items);
     const member = hasMembers && data.items.some(item => item.album_ref === pending.command.album_ref);
@@ -281,7 +284,8 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     // A recovered private attempt owns only the Top selected when it starts.
     const navigationVersion = privateSelf || publication
       ? (state.selectedTopRef === owner.command.top_ref ? detailVersion : null) : owner.navigationVersion;
-    emit({...(!privateSelf ? clearPublication() : {preparation: empty()}), mutation: {status: 'loading', action: owner.action, command: clone(owner.command), error: null}});
+    emit({...(!privateSelf ? clearPublication() : {preparation: empty()}), mutation: {status: 'loading', action: owner.action, command: clone(owner.command), error: null,
+      remoteMembership: owner.remoteMembership, recovered: recovering}});
     try {
       // A subscriber may retire the actor or selected Top while rendering busy state.
       if (!current(token) || pending !== owner) return false;
@@ -292,15 +296,22 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
         else {pending = null; emit({mutation: idle()});}
         return false;
       }
+      if (owner.remoteMembership && (token.abort.signal.aborted || (owner.denialVersion || 0) !== denialVersion)) {
+        if (owner.attempted) emit({mutation: {status: 'uncertain', action: owner.action, command: clone(owner.command),
+          remoteMembership: true, recovered: recovering, error: new Error('The original remote membership request still needs an exact retry.')}});
+        else {pending = null; emit({mutation: idle()});}
+        return false;
+      }
       owner.attempted = true;
       const receipt = await providers.execute(owner.action, clone(owner.command), token.options);
       if (!current(token) || pending !== owner) return false;
       // Restoration may authorize a new retry, never an attempt that began
       // before a consumed denial. Keep its exact recovery identity unpublished.
-      if ((privateSelf || publication) && (token.abort.signal.aborted
+      if ((privateSelf || publication || owner.remoteMembership) && (token.abort.signal.aborted
         || (owner.denialVersion || 0) !== denialVersion)) throw new Error('Album Top private action authority changed.');
       pending = null;
-      emit({mutation: {status: 'ready', refreshing: true, action: owner.action, command: clone(owner.command), error: null, data: receipt}});
+      emit({mutation: {status: 'ready', refreshing: true, action: owner.action, command: clone(owner.command), error: null, data: receipt,
+        remoteMembership: owner.remoteMembership, recovered: recovering}});
       if (!current(token)) return false;
       // Acknowledged writes remain acknowledged even if the following read fails.
       await Promise.all([load(), ...(owner.action !== 'copy' && navigationVersion === detailVersion
@@ -317,10 +328,11 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
       // Replay rechecks current access, hosting and retained source evidence.
       // A failed replay cannot prove that the original unknown write did not
       // commit. Keep its exact owner until a receipt acknowledges that command.
-      const settled = definitive && !(publication && recovering);
+      const settled = definitive && !((publication || owner.remoteMembership) && recovering);
       if (settled) pending = null;
       else owner.uncertain = true;
       if (publication && recovering && definitive) recordPublicationAuthority(null, owner.command.top_ref, readVersion, true);
+      if (owner.remoteMembership && recovering && definitive) recordRetryAuthority(null, owner.command.top_ref || null, readVersion, true);
       const denied = definitive && failure(error) === 'denied';
       const activityConflict = definitive && error.status === 409
         && (owner.action === 'set_activity' && error.code === 'activity_revision_conflict'
@@ -333,7 +345,7 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
         ? clearPublication({draft: denied}) : {}), ...(denied ? {directory: {status: 'denied', data: null, error},
         detail: {status: 'denied', data: null, error}} : {}),
         mutation: {status: settled ? failure(error) : 'uncertain', refreshing: activityConflict, action: owner.action,
-        command: clone(owner.command), error}});
+        command: clone(owner.command), error, remoteMembership: owner.remoteMembership, recovered: recovering}});
       if (activityConflict) await Promise.all([load(), ...(navigationVersion === detailVersion
         && state.selectedTopRef === owner.command.top_ref ? [open(owner.command.top_ref)] : [])]);
       return false;
@@ -354,7 +366,7 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     return queueMutation(action, data);
   }
   function queueMutation(action, data = {}) {
-    const detail = state.detail.data;
+    const detail = state.detail.data, capturedEpoch = epoch, capturedScope = state.scopeKey, navigationVersion = detailVersion;
     let command;
     if (action === 'set_activity') {
       const activity = detail?.top_viewer_overlay?.activity;
@@ -369,8 +381,20 @@ export function createAlbumTopController({providers, requestKey = () => globalTh
     } else {
       command = {...clone(data), request_key: requestKey(), ...(action === 'create' ? {} : {top_ref: state.selectedTopRef, revision: detail.revision})};
     }
+    // Capture before retirement callbacks or busy-state rendering can replace
+    // the current detail. Recovery belongs to this exact command, not the view.
+    const remoteMembership = membershipAction(action) && (remoteItems(detail)
+      || Array.isArray(command.selections) || Array.isArray(command.item_selections));
+    const membershipEdit = action === 'save' && (Array.isArray(command.items) || Array.isArray(command.item_selections));
+    if (disposed || epoch !== capturedEpoch || state.scopeKey !== capturedScope || detailVersion !== navigationVersion || pending || inFlight) return Promise.resolve(false);
+    // Claim the sole membership owner before abort listeners can reenter.
+    const owner = {action, command, navigationVersion, remoteMembership, membershipEdit};
+    pending = owner;
     retirePreparation(); retireSources();
-    pending = {action, command, navigationVersion: detailVersion};
+    if (disposed || epoch !== capturedEpoch || state.scopeKey !== capturedScope || detailVersion !== navigationVersion || pending !== owner || inFlight) {
+      if (pending === owner) pending = null;
+      return Promise.resolve(false);
+    }
     return startSend();
   }
   function startSend() {

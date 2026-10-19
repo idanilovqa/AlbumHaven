@@ -263,7 +263,9 @@ export function mountAlbumTopPublication(host, runtime, initial) {
       if (publication.can_revoke_external) button('revoke', actions, 'Revoke public link', blocked || confirming
         || typeof runtime.confirm !== 'function', revokeLink);
       if (!enable) text('publication:disabled', root,
-        'Publishing is unavailable with the current editing permissions or hosting settings.', 'playlists__note');
+        items?.some(row => row.source_kind === 'remote_summary')
+          ? 'Public links for remote albums are not available yet. Remote artwork publication is still unavailable; private membership and metadata can be managed separately.'
+          : 'Publishing is unavailable with the current editing permissions or hosting settings.', 'playlists__note');
       if (items) {
         const count = items.length, pages = Math.max(1, Math.ceil(count / ROW_LIMIT));
         albumPage = Math.min(albumPage, pages - 1);

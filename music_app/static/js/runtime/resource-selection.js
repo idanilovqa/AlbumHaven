@@ -16,6 +16,19 @@ const freeze = Object.freeze;
 const grant = (value, name) => object(value) && Object.hasOwn(value, name) && value[name] === true;
 
 function detailOrigin(value) {
+  if (object(value) && ['album_top', 'playlist_album_top_preview'].includes(value.source)) {
+    const preview = value.source === 'playlist_album_top_preview';
+    const identities = preview ? ['preview_ref', 'playlist_ref', 'album_ref'] : ['top_ref', 'item_ref'];
+    const revision = preview ? 'snapshot_ref' : 'revision';
+    const keys = ['source', ...identities, revision];
+    if (Object.keys(value).length !== keys.length || Object.keys(value).some(key => !keys.includes(key))
+      || identities.some(key => typeof value[key] !== 'string' || value[key].length !== 36
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value[key]))
+      || typeof value[revision] !== 'string' || value[revision] !== value[revision].trim()
+      || !/^[1-9][0-9]{0,18}$/.test(value[revision])
+      || BigInt(value[revision]) > 9223372036854775807n) return null;
+    return freeze(Object.fromEntries(keys.map(key => [key, value[key]])));
+  }
   if (object(value) && value.source === 'queue') {
     if (Object.keys(value).some(key => !['source', 'occurrence_refs'].includes(key))
       || !Array.isArray(value.occurrence_refs) || !value.occurrence_refs.length || value.occurrence_refs.length > 5000
@@ -63,9 +76,22 @@ function nativeActions(value, kind = 'album') {
 }
 const error = (message, status = 403) => Object.assign(new Error(message), {status});
 const stale = () => Object.assign(new Error('Resource selection was superseded.'), {name: 'AbortError'});
-function createResourceSelection({sourceResource, retainResource, revalidateResource, authorizeResource, projectAlbum, beginAlbumPresentation} = {}) {
+function createResourceSelection({sourceResource, retainResource, revalidateResource, authorizeResource, projectAlbum, beginAlbumPresentation, retainNavigation} = {}) {
   let sequence = 0, artistReadSequence = 0;
   const artistAlbums = new Set(), mounted = new Set();
+  // Retention covers only this synchronous handoff. Never hold a navigation
+  // exemption over hydration, and never let a delayed/reentrant callback use it.
+  function navigate(callback, current) {
+    let accepting = true, invoked = false, result;
+    const handoff = () => {
+      if (!accepting || invoked || !current()) return false;
+      invoked = true; result = callback(); return result;
+    };
+    try {if (typeof retainNavigation === 'function') retainNavigation(handoff); else handoff();}
+    finally {accepting = false;}
+    if (!invoked) throw stale();
+    return result;
+  }
   const readSource = (target, context) => {
     try {return sourceResource?.(target, context) || null;} catch {return null;}
   };
@@ -263,10 +289,10 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
     const current = () => sequence === active && !context.signal?.aborted;
     if (!current()) throw stale();
     if (typeof deferAppFormPageReplacement === 'function') {
-      const deferred = deferAppFormPageReplacement(() => {
+      const deferred = navigate(() => deferAppFormPageReplacement(() => {
         if (!current()) throw stale();
         return resourceIntent(intent, selection, context);
-      });
+      }), () => current() && fingerprint(source(selection, context, intent)) === fingerprint(admitted));
       if (deferred) return deferred;
     }
     if (intent === 'artist_gallery') {
@@ -279,7 +305,8 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       item.setAttribute('data-sidebar-artist', admitted.gallery_target.artist);
       if (!current() || fingerprint(source(selection, context, intent)) !== key) throw stale();
       releaseTrackModalSelection('gallery');
-      handleSidebarArtistSelectionClick({target: item, preventDefault() {}});
+      navigate(() => handleSidebarArtistSelectionClick({target: item, preventDefault() {}}),
+        () => current() && fingerprint(source(selection, context, intent)) === key);
       return;
     }
     const {album, presentationAttempt} = await hydrate(selection, context, intent, context.signal, current);
@@ -296,12 +323,14 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       if (typeof openTrackModal !== 'function') throw error('Album details are unavailable.', 404);
       const sourceCurrent = retainNativeSource(selection, context, admitted, intent, current);
       if (!sourceCurrent || !sourceCurrent() || !current()) throw stale();
-      const opened = openTrackModal(album, {coverLightboxGallery: false, foreground: true,
+      const opened = navigate(() => openTrackModal(album, {coverLightboxGallery: false, foreground: true,
         searchPresentationAttempt: presentationAttempt,
         deferResourceSelection: () => resourceIntent(intent, selection, context),
         presentationRestrictions: admitted.actions.allowed_actions,
         sourcePageOwner: {isCurrent: sourceCurrent,
-          revalidate: replaySource(selection, context, admitted.actions)}});
+          ...(typeof retainNavigation === 'function' ? {retainNavigation: callback => navigate(callback, sourceCurrent)} : {}),
+          revalidate: replaySource(selection, context, admitted.actions)}}),
+        () => current() && sourceCurrent() && fingerprint(source(selection, context, intent)) === fingerprint(admitted));
       if (opened === false) throw error('This Album presentation is unavailable.');
     }
     completed = true;

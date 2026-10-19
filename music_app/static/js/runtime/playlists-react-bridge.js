@@ -784,6 +784,65 @@ const PlaylistReactRuntime = (() => {
       };
     },
     readPlayback, playbackIntent,
+    createAlbumTopPreviewRuntime({token, scopeKey, preview, resolveAlbum, isCurrent}) {
+      const api = selectionApi(), targets = new Map();
+      let retired = false;
+      const current = () => {
+        if (retired) return false;
+        if (!draftCurrent(draft) || draft.token !== token || draft.scopeKey !== scopeKey || isCurrent?.() !== true) retired = true;
+        return !retired;
+      };
+      if (!api?.create || !preview?.preview_ref || typeof resolveAlbum !== 'function') throw failure('Preview Album Details are unavailable.');
+      const origin = albumRef => api.projectOrigin({source: 'playlist_album_top_preview', preview_ref: preview.preview_ref,
+        playlist_ref: preview.source.playlist_ref, snapshot_ref: preview.source.revision, album_ref: albumRef});
+      const source = (selection, options) => {
+        const target = targets.get(selection?.ref);
+        return current() && options.scopeKey === scopeKey && target && selection.kind === 'album'
+          && JSON.stringify(selection.origin) === JSON.stringify(target.origin)
+          && JSON.stringify(options.origin || selection.origin) === JSON.stringify(target.origin) ? target : null;
+      };
+      async function fresh(albumRef, signal) {
+        if (!current() || signal?.aborted || !preview.albums.some(row => row.album_ref === albumRef)) throw aborted();
+        const native = await resolveAlbum(albumRef, {scopeKey, signal});
+        if (!current() || signal?.aborted) throw aborted();
+        const evidence = origin(albumRef);
+        if (!evidence) throw failure('Preview navigation context is unavailable.');
+        const target = api.projectTarget({kind: 'album', ref: albumRef, origin: evidence,
+          allowed_actions: {can_view_details: true}, native_actions: native});
+        if (!target?.native_actions) throw failure('Preview Album Details are unavailable.');
+        return target;
+      }
+      const selection = api.create({sourceResource: source,
+        retainNavigation: callback => current() ? retainDraft(token, callback) : false,
+        retainResource: (target, options) => {const admitted = source(target, options);
+          return admitted ? {target: admitted, isCurrent: current} : null;},
+        authorizeResource: async (target, options) => {
+          const admitted = source(target, options); if (!admitted) throw aborted();
+          const latest = await fresh(target.ref, options.signal);
+          if (JSON.stringify(latest) !== JSON.stringify(admitted)) throw failure('This preview Album changed. Reopen its details.', 409);
+        },
+        revalidateResource: async (target, options, request) => {
+          if (!source(target, options)) throw aborted();
+          return {target: await fresh(target.ref, request?.signal), isCurrent: current};
+        },
+      });
+      return Object.freeze({
+        async openAlbum(albumRef, {signal} = {}) {
+          const target = await fresh(albumRef, signal);
+          targets.set(albumRef, target);
+          if (!current()) throw aborted();
+          return selection.resourceIntent('open', target, {scopeKey, signal, origin: target.origin});
+        },
+        dispose() {retired = true; targets.clear(); selection.invalidateResourceSelections();},
+      });
+    },
+    async completeAlbumTopPreview({token, scopeKey, top_ref}) {
+      const owner = draft, tops = window.AlbumHavenAlbumTopsRuntime;
+      if (!draftCurrent(owner) || owner.token !== token || owner.scopeKey !== scopeKey || typeof tops?.navigate !== 'function') return false;
+      const opened = await retainDraft(token, () => tops.navigate({top_ref, isCurrent: () => draftCurrent(owner)}));
+      if (opened !== true || !draftCurrent(owner) || tops !== window.AlbumHavenAlbumTopsRuntime || tops.snapshot().topRef !== top_ref) return false;
+      releaseDraft(token); lastView = null; sync(); return true;
+    },
     async completeLibraryMixDraft({token, playlist_id, scopeKey, artistLoved = false}) {
       const start = sync();
       if (!draftCurrent(draft) || draft.token !== token || start.scopeKey !== scopeKey || !start.authenticated) return false;
@@ -861,6 +920,7 @@ const PlaylistReactRuntime = (() => {
     searchHtml: config => buildSearchInputHtml(config),
     alertHtml: config => components.alertHtml(config), galleryBarHtml: config => components.galleryBarHtml(config),
     tableHtml: config => components.tableHtml(config), artboxHtml: config => components.artboxHtml(config),
+    galleryCardHtml: config => components.galleryCardHtml(config),
     detailHeaderHtml: config => components.detailHeaderHtml(config), tabsHtml: config => components.tabsHtml(config),
     artistInfoHtml: config => components.artistInfoHtml(config),
     mountTabs: host => components.mountTabs(host), navigationItemHtml: config => components.navigationItemHtml(config),

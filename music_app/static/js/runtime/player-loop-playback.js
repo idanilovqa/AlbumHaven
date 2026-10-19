@@ -109,7 +109,10 @@ function getPlayerDuration() {
   if (state.player.loopActive && Number.isFinite(editDuration) && editDuration > 0) return editDuration;
   const playbackDuration = Number(getPlayerPlaybackSnapshot().duration);
   if (Number.isFinite(playbackDuration) && playbackDuration > 0) {
-    if (state.player.current) state.player.current.durationSeconds = playbackDuration;
+    // Top payloads retain their exact fresh resolver provenance. The measured
+    // clock remains the presentation duration; do not rewrite that DTO/alias.
+    if (state.player.current && !(typeof TopPlaybackRuntime !== 'undefined'
+      && TopPlaybackRuntime.hasBinding(state.player.current))) state.player.current.durationSeconds = playbackDuration;
     return playbackDuration;
   }
   const currentDuration = Number(state.player.current?.durationSeconds);
@@ -246,7 +249,12 @@ function setCurrentPlayerTrack(track, options = {}) {
   if (!current()) return;
   if (!isPlaybackLockedByAnotherTab() && track && !String(track.coverPath || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
     const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
-    if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
+    if (resolvedCoverPath) {
+      const decorated = { ...track, coverPath: resolvedCoverPath };
+      if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasBinding(track)
+        && !TopPlaybackRuntime.alias(track, decorated)) return;
+      track = decorated;
+    }
   }
   if (!current()) return;
   state.player.current = track;
@@ -361,6 +369,14 @@ function currentPlayerSelection(selection) {
     && !selection.signal?.aborted && isPlaybackOwnershipScopeCurrent(selection.scope)
     && (!selection.handle || isPlaybackOwnershipHandleCurrent(selection.handle));
 }
+function releasePausedPlayerSelection(selection) {
+  if (!selection?.admitted || !selection.pauseAfterAdmission
+      || !currentPlayerSelection(selection) || !getPlayerPlaybackSnapshot().paused) return false;
+  const handle = selection.handle;
+  selection.handle = null;
+  if (handle) releasePlaybackOwnership('paused', handle);
+  return currentPlayerSelection(selection);
+}
 function reconcilePlayerOwnership(role = streamingEngineState().roles.current) {
   const selection = playerSelectionOwnership;
   if (!currentPlayerSelection(selection) || !selection.handle || !selection.attempt
@@ -368,7 +384,9 @@ function reconcilePlayerOwnership(role = streamingEngineState().roles.current) {
     || role?.track?.path !== selection.track.path) return false;
   return commitPlaybackOwnership(selection.handle, role, selection.track);
 }
+let topPlaybackStartEpoch = 0;
 async function playTrackFromPayload(track, options = {}) {
+  const topEntryEpoch = topPlaybackStartEpoch;
   const entryToken = playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
   const scope = capturePlaybackOwnershipScope();
@@ -384,29 +402,59 @@ async function playTrackFromPayload(track, options = {}) {
     } catch { return false; }
   };
   if (typeof track?.path !== 'string' || !track.path.trim() || typeof startStreamingTrack !== 'function' || !allowed() || entryToken !== playerTrackSelectionToken) return false;
+  const topTrack = track.sourceKind === 'album-top'
+    || typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasBinding(track);
+  if (topTrack && (typeof TopPlaybackRuntime === 'undefined' || !TopPlaybackRuntime.hasBinding(track))) return false;
+  if (topTrack && (streamingEngineState().pendingPromotion || streamingEngineState().pendingSeek?.kind === 'replacement')) return false;
+  if (topEntryEpoch !== topPlaybackStartEpoch) return false;
+  const topStartEpoch = ++topPlaybackStartEpoch;
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue)) TopPlaybackRuntime.cancel(state.player.playbackQueue);
+  if (topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) return false;
   if (typeof retirePlayerRestoreAttempt === 'function') retirePlayerRestoreAttempt('manual-selection');
-  if (entryToken !== playerTrackSelectionToken || !allowed() || entryToken !== playerTrackSelectionToken) return false;
+  if (entryToken !== playerTrackSelectionToken || !allowed() || topStartEpoch !== topPlaybackStartEpoch) return false;
+  let admittedSelection = null;
+  if (topTrack) {
+    const engine = streamingEngineState();
+    if (engine.pendingPromotion || engine.pendingSeek?.kind === 'replacement') return false;
+    if (engine.roles?.continuity && closeStreamingContinuityRole('top-manual-selection') !== true) return false;
+    engine.pendingContinuityTrack = null; engine.pendingContinuityOptions = null;
+    track = await TopPlaybackRuntime.prepareStart(track, {signal: options.signal, isCurrent: () =>
+      topStartEpoch === topPlaybackStartEpoch && allowed()
+      && (admittedSelection ? currentPlayerSelection(admittedSelection) : entryToken === playerTrackSelectionToken)});
+    if (!track || topStartEpoch !== topPlaybackStartEpoch || entryToken !== playerTrackSelectionToken || !allowed()) {
+      if (track) TopPlaybackRuntime.cancelStart(track);
+      return false;
+    }
+  }
   const selection = { token: ++playerTrackSelectionToken, track, scope, handle: null, attempt: null,
     signal: options.signal, isCurrent: options.isCurrent };
   playerSelectionOwnership = selection;
+  admittedSelection = selection;
+  try {options.onSelectionAdmitted?.(selection.token);} catch (error) {
+    if (topTrack) TopPlaybackRuntime.cancelStart(track);
+    throw error;
+  }
+  if (topStartEpoch !== topPlaybackStartEpoch) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
   if (typeof ExplicitQueueRuntime !== 'undefined') ExplicitQueueRuntime.selectionStarted();
-  if (!currentPlayerSelection(selection) || !allowed()) return false;
+  if (!currentPlayerSelection(selection) || !allowed()) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
   if (!shouldAutoplay) releasePlaybackOwnership('stopped', getActivePlaybackOwnershipHandle());
-  if (!currentPlayerSelection(selection)) return false;
+  if (!currentPlayerSelection(selection)) {if (topTrack) TopPlaybackRuntime.cancelStart(track); return false;}
   selection.handle = shouldAutoplay ? canStartPlaybackInThisTab(track, { isCurrent: () => currentPlayerSelection(selection) && allowed() }) : null;
   if (shouldAutoplay && !selection.handle || !currentPlayerSelection(selection) || !allowed()) {
     if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
+    if (topTrack) TopPlaybackRuntime.cancelStart(track);
     return false;
   }
   const resetTime = options.resetTime !== false;
   const previousPlaybackSnapshot = getPlayerPlaybackSnapshot();
   const cancelSelection = () => {
+    if (topTrack) TopPlaybackRuntime.cancelStart(track);
     if (selection.handle) releasePlaybackOwnership('stopped', selection.handle);
     else cancelPlaybackAttempt(selection.attempt, 'selection-cancelled');
   };
   options.signal?.addEventListener('abort', cancelSelection, { once: true });
   try {
-    if (!currentPlayerSelection(selection) || !allowed()) { cancelSelection(); return false; }
+    if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch) { cancelSelection(); return false; }
     const role = await startStreamingTrack(track, {
       startSeconds: resetTime ? 0 : Number(previousPlaybackSnapshot.currentTime) || 0,
       autoplay: shouldAutoplay,
@@ -416,17 +464,26 @@ async function playTrackFromPayload(track, options = {}) {
         if (selection.handle) bindPlaybackOwnershipAttempt(selection.handle, attempt);
       },
     });
-    if (!currentPlayerSelection(selection) || !allowed() || !isStreamingPlaybackAttemptCurrent(selection.attempt)) {
+    if (!currentPlayerSelection(selection) || !allowed() || topStartEpoch !== topPlaybackStartEpoch || !isStreamingPlaybackAttemptCurrent(selection.attempt)) {
       cancelSelection(); return false;
     }
     if (!role || role.track?.path !== track.path || streamingEngineState().roles.current !== role) {
+      cancelSelection(); return false;
+    }
+    if (topTrack && (role.track !== track || !TopPlaybackRuntime.receiptCurrent(track) || !TopPlaybackRuntime.commit(track))) {
       cancelSelection(); return false;
     }
     if (typeof ExplicitQueueRuntime !== 'undefined' && options.explicitQueueTransition !== true) ExplicitQueueRuntime.replaced();
     if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
     setCurrentPlayerTrack(track, { previousPlaybackSnapshot, isCurrent: () => currentPlayerSelection(selection) });
     if (!currentPlayerSelection(selection)) { cancelSelection(); return false; }
+    selection.admitted = true;
     reconcilePlayerOwnership(role);
+    if (selection.pauseAfterAdmission && getPlayerPlaybackSnapshot().paused) {
+      if (!releasePausedPlayerSelection(selection)) return false;
+      updatePlayerUi();
+      return currentPlayerSelection(selection);
+    }
     if (role.firstFrameNotified) {
       void Promise.resolve(handleStreamingPlaybackFirstFrame({ generation: role.generation,
         streamId: role.streamId, trackPath: role.track.path })).catch(() => {});
@@ -473,13 +530,15 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
     ? peekNextQueuedTrack()
     : null;
   const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
-  if ((!nextTrack && !explicitProgression) || typeof scheduleStreamingContinuity !== 'function') {
+  const topProgression = typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue);
+  if ((!nextTrack && !explicitProgression && !topProgression) || typeof scheduleStreamingContinuity !== 'function') {
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
   const scheduling = Promise.resolve().then(() => frameCurrent()
-    ? (explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack)) : null);
+    ? (explicitProgression ? ExplicitQueueRuntime.prepareNext()
+      : topProgression ? TopPlaybackRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack)) : null);
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
     await scheduling;
@@ -642,6 +701,8 @@ async function handleStreamingPlaybackBoundary(event = {}) {
   if (!isPlaybackOwnershipHandleCurrent(boundaryHandle) || streamingEngineState().roles.current !== boundaryRole) return;
   if (typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression()) {
     await ExplicitQueueRuntime.prepareNext();
+  } else if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue)) {
+    await TopPlaybackRuntime.prepareNext();
   } else if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
     await scheduleStreamingContinuity(subsequentTrack);
   }
@@ -756,14 +817,20 @@ function getGlobalPlayerLoopControlOptions() {
   };
 }
 
+function isNativePlayerSourceCurrent(track = state.player.current) {
+  const bound = typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasBinding(track);
+  return track?.sourceKind !== 'album-top' && !bound || bound && TopPlaybackRuntime.isPayloadCurrent(track);
+}
+
 function dispatchActiveStreamingLoop() {
   if (isPlaybackLockedByAnotherTab()) return false;
   const track = state.player.current;
-  if (!track || typeof scheduleStreamingContinuity !== 'function') return null;
+  if (!track || !isNativePlayerSourceCurrent(track) || typeof scheduleStreamingContinuity !== 'function') return null;
   const startSeconds = Math.max(0, Number(state.player.loopStart) || 0);
   const endSeconds = Math.max(startSeconds, Number(state.player.loopEnd) || 0);
   const loopSeconds = Math.max(0, endSeconds - startSeconds);
-  const durationSeconds = Math.max(0, Number(track.durationSeconds) || 0);
+  const durationSeconds = typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasBinding(track)
+    ? getPlayerDuration() : Math.max(0, Number(track.durationSeconds) || 0);
   const wholeTrack = startSeconds === 0 && durationSeconds > 0 && endSeconds >= durationSeconds;
   const kind = wholeTrack ? 'whole-track-repeat' : (loopSeconds <= 5 ? 'short-loop' : 'long-loop');
   return scheduleStreamingContinuity(track, { kind, startSeconds, endSeconds });
@@ -784,6 +851,7 @@ function scheduleActiveStreamingLoop() {
 
 function setLoopActive(active) {
   if (active && isPlaybackLockedByAnotherTab()) return false;
+  if (active && !isNativePlayerSourceCurrent()) return false;
   if (active && state.loopCreateAllowed === false) return;
   const playback = getPlayerPlaybackSnapshot();
   if (active && (!state.player.current || !(playback.src || state.player.current?.src))) {
@@ -827,8 +895,10 @@ function setLoopActive(active) {
       ? peekNextQueuedTrack()
       : null;
     const explicitProgression = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.ownsProgression();
-    if ((nextTrack || explicitProgression) && typeof scheduleStreamingContinuity === 'function') {
-      const result = explicitProgression ? ExplicitQueueRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack, {
+    const topProgression = typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(state.player.playbackQueue);
+    if ((nextTrack || explicitProgression || topProgression) && typeof scheduleStreamingContinuity === 'function') {
+      const result = explicitProgression ? ExplicitQueueRuntime.prepareNext()
+        : topProgression ? TopPlaybackRuntime.prepareNext() : scheduleStreamingContinuity(nextTrack, {
         kind: 'queued-next', startSeconds: 0,
       });
       if (typeof observeStreamingFacadeCallback === 'function') {
@@ -841,6 +911,7 @@ function setLoopActive(active) {
 
 function setLoopBoundary(which, value) {
   if (isPlaybackLockedByAnotherTab()) return false;
+  if (!isNativePlayerSourceCurrent()) return false;
   const next = Math.max(0, Number(value) || 0);
   if (which === 'start') {
     state.player.loopStart = next;
@@ -854,6 +925,7 @@ function setLoopBoundary(which, value) {
 
 function setLoopPlaybackHead(value) {
   if (isPlaybackLockedByAnotherTab()) return false;
+  if (!isNativePlayerSourceCurrent()) return false;
   if (!state.player.loopActive) return;
   const next = Math.max(state.player.loopStart, Math.min(state.player.loopEnd, Number(value) || 0));
   if (typeof seekStreamingPlayback !== 'function') return;
@@ -868,13 +940,15 @@ function setLoopPlaybackHead(value) {
 
 function setPlayerPlaybackHead(value, options = {}) {
   if (isPlaybackLockedByAnotherTab()) return false;
+  if (!isNativePlayerSourceCurrent()) return false;
   const next = Math.max(0, Number(value) || 0);
   const playback = getPlayerPlaybackSnapshot();
   const shouldResumeSegment = !playback.paused;
   const track = state.player.current;
   const claim = getActivePlaybackOwnershipHandle();
   closeListenSegment();
-  if (isPlaybackLockedByAnotherTab() || state.player.current !== track || getActivePlaybackOwnershipHandle() !== claim) return;
+  if (isPlaybackLockedByAnotherTab() || state.player.current !== track || getActivePlaybackOwnershipHandle() !== claim
+    || !isNativePlayerSourceCurrent(track)) return;
   if (state.player.loopActive && options.clampToLoop !== false) {
     setLoopPlaybackHead(next);
     if (shouldResumeSegment) void resumeListenSessionPlayback(state.player.current, next);
@@ -955,6 +1029,7 @@ function togglePlayerPlayback(options = {}) {
   const track = state.player.current;
   if (!(playback.src || track?.src)) return false;
   if (!playback.paused) { pausePlayerPlaybackForHandoff(playback); return true; }
+  if (!isNativePlayerSourceCurrent(track)) return false;
   if (playback.ended) {
     void playTrackFromPayload(track, { resetTime: true, isCurrent: () => state.player.current === track }).catch(error => {
       console.warn('[AlbumHaven][Playback] Restart failed.', error);
@@ -968,10 +1043,12 @@ function togglePlayerPlayback(options = {}) {
     || window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')
     || entrySelection !== playerTrackSelectionToken) return false;
   const handle = canStartPlaybackInThisTab(track, { isCurrent: () => state.player.current === track
-    && streamingEngineState().roles.current === role && isStreamingPlaybackAttemptCurrent(attempt) });
+    && streamingEngineState().roles.current === role && isStreamingPlaybackAttemptCurrent(attempt)
+    && isNativePlayerSourceCurrent(track) });
   if (!handle || !bindPlaybackOwnershipAttempt(handle, attempt)) return false;
   const current = () => state.player.current === track && streamingEngineState().roles.current === role
-    && isStreamingPlaybackAttemptCurrent(attempt) && isPlaybackOwnershipHandleCurrent(handle);
+    && isStreamingPlaybackAttemptCurrent(attempt) && isPlaybackOwnershipHandleCurrent(handle)
+    && isNativePlayerSourceCurrent(track);
   if (!current()) { releasePlaybackOwnership('stopped', handle); return false; }
   playerSelectionOwnership = { token: ++playerTrackSelectionToken, track, scope, handle, attempt };
   const resume = async () => {
@@ -992,10 +1069,24 @@ function togglePlayerPlayback(options = {}) {
 function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   if (isPlaybackLockedByAnotherTab()) return Promise.resolve(false);
   const handle = getActivePlaybackOwnershipHandle();
-  const attempt = captureStreamingPlaybackAttempt();
+  const retiredHandoff = typeof captureStreamingRetiredOutgoingAttempt === 'function'
+    ? captureStreamingRetiredOutgoingAttempt() : null;
+  const attempt = captureStreamingPlaybackAttempt() || retiredHandoff;
   if (pendingPlayerPlaybackHandoff) return pendingPlayerPlaybackHandoff;
-  if (playback.paused || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
+  const pauseIncoming = retiredHandoff && playerSelectionOwnership?.attempt === retiredHandoff
+    && currentPlayerSelection(playerSelectionOwnership);
+  const pausedSelection = pauseIncoming ? playerSelectionOwnership : null;
+  if (pauseIncoming) {
+    // Keep the admitted incoming selection until its role is presented paused;
+    // releasing its pending claim here would cancel that same selection.
+    pausedSelection.pauseAfterAdmission = true;
+  }
+  if ((playback.paused && !pauseIncoming) || typeof pauseStreamingPlayback !== 'function') return Promise.resolve(false);
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(() => {
+    if (pauseIncoming) {
+      if (pausedSelection.admitted && releasePausedPlayerSelection(pausedSelection)) updatePlayerUi();
+      return isStreamingPlaybackAttemptCurrent(attempt);
+    }
     if (getActivePlaybackOwnershipHandle() !== handle || !isStreamingPlaybackAttemptCurrent(attempt)) return false;
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);

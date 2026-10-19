@@ -36,7 +36,8 @@ function createExplicitQueuePlanner({canPlay = () => false} = {}) {
     if (q?.source === 'explicit' && !a.entryId && state.returnContext) q=state.returnContext;
     if (a.session !== q?.session) return true;
     if (entry.ready || a.entryId) return false;
-    if(entry.timing==='album'&&q?.albumComplete===false)return true;
+    if(entry.timing==='album'&&q?.albumComplete===false
+      &&!(q.source==='album-top'&&q.albumCaptureComplete===true))return true;
     return ['album','playlist'].includes(entry.timing) ? a.order !== order(q)
       : a.track === q?.tracks?.[q.index] && a.index !== q?.index;
   }
@@ -51,9 +52,13 @@ function createExplicitQueuePlanner({canPlay = () => false} = {}) {
       if (entry.id === state.currentId || entry.ready || entry.invalid || !a) return entry;
       if (a.session !== before.session) return {...entry,invalid:'Playback context was replaced'};
       if (a.entryId ? a.entryId !== before.entryId : before.source === 'explicit') return entry;
+      const crossedTopAlbum=entry.timing==='album'&&before.source==='album-top'&&a.order===order(before)
+        &&before.repeat!=='one'&&before.index<=a.boundary
+        &&(after?.source==='album-top'&&after.session===before.session&&a.order===order(after)
+          &&(after.ended||after.index>a.boundary));
       const reached=['next','end'].includes(entry.timing)
         ? a.index === before.index && a.track === before.tracks[before.index]
-        : before.repeat !== 'one' && a.boundary === before.index && a.boundaryTrack === before.tracks[before.index];
+        : before.repeat !== 'one' && a.boundary === before.index && a.boundaryTrack === before.tracks[before.index] || crossedTopAlbum;
       return reached ? {...entry,ready:true} : entry;
     });
     let currentId=state.currentId, returnContext=state.returnContext;

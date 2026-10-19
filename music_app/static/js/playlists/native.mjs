@@ -1,6 +1,6 @@
 import {normalizeArtistLovedDescriptor} from './artist-loved-recipe.mjs';
 import {createPlaylistEditNotifications} from './edit-request-notifications.mjs';
-import {createPlaylistController, granted} from './model.mjs';
+import {createPlaylistController, granted, playlistDraft, draftDirty} from './model.mjs';
 import {mountPlaylistsView, mountPlaylistDirectory} from './native-app.mjs';
 import {applyPlaylistShell, completeDeletedPlaylistNavigation, playlistShareIntentCurrent} from './shell.mjs';
 import {playlistCreationContext} from './creation-session.mjs';
@@ -9,6 +9,8 @@ import {mountMissingPlaylistDraftPage} from './native-draft.mjs';
 import {createLibraryMixController} from './library-mix.mjs';
 import {normalizeArtistMixScope} from './library-mix-recipe.mjs';
 import {mountLibraryMixSetup, mountLibraryMixPage} from './native-library-mix.mjs';
+import {createPlaylistTopPreview} from './album-top-preview.mjs';
+import {mountPlaylistAlbumTopPreview} from './native-album-top-preview.mjs';
 
 // The existing production boot owns when/where to mount this slice. No global
 // bridge, second boot, history store, mock provider or persistent client data.
@@ -18,7 +20,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
   let configuredProviders = {...providers};
   let disposed = false, generation = 0, navigationSequence = 0, customReader = typeof providers.readPlaylists === 'function';
   let activeDraft = null, deletedNavigation = null, copiedNavigation = null, shareRequest = null, notifications = null;
-  let activeMix = null;
+  let activeMix = null, activeTop = null;
   let view = null, viewKind = null, viewKey = null, viewEpoch = 0;
   let acquiring = true, rendering = false, renderQueued = false, renderRevision = 0, configurationDepth = 0, navigationError = false, lastShell = null, lastNotifiedMutation = null;
   function clearView() {
@@ -61,7 +63,67 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
     activeMix = null; owner.retired = true; owner.controller.dispose();
     if (!disposed) requestRender();
   };
-  let unsubscribeMix, unsubscribeNotifications, unsubscribeSource, unsubscribeRender, unsubscribeShell;
+  let unsubscribeMix, unsubscribeTop, unsubscribeNotifications, unsubscribeSource, unsubscribeRender, unsubscribeShell;
+  const topCurrent = owner => !disposed && activeTop === owner && !owner.retired && lovedRuntimeCurrent();
+  function clearTop(owner) {
+    if (activeTop !== owner) return;
+    owner.controller.dispose(); owner.abort.abort(); owner.details?.dispose(); owner.unsubscribe?.();
+    owner.retired = true; activeTop = null;
+    if (!disposed) requestRender();
+  }
+  function onTopShell() {
+    const owner = activeTop; if (!owner) return;
+    const shell = runtime.snapshot();
+    if (!topCurrent(owner) || !shell.authenticated || shell.scopeKey !== owner.scopeKey
+      || owner.opened && shell.retainedDraftToken !== owner.token) {
+      runtime.releaseDraft?.(owner.token); clearTop(owner);
+    }
+  }
+  function prepareAlbumTop(detail) {
+    const state = controller.getSnapshot(), shell = runtime.snapshot();
+    if (disposed || !detail || activeTop || activeMix || activeDraft || state.resource.data?.detail !== detail
+      || !shell.visible || !shell.authenticated || shell.scopeKey !== state.scopeKey
+      || state.mutation.status === 'loading' || draftDirty(detail, playlistDraft(state))
+      || !detail?.track_rows?.length || !granted(detail, 'can_create_album_top')
+      || typeof configuredProviders.captureAlbumTopPreview !== 'function' || typeof configuredProviders.saveAlbumTopPreview !== 'function'
+      || typeof configuredProviders.resolveAlbumTopPreview !== 'function' || typeof configuredProviders.discardAlbumTopPreview !== 'function'
+      || typeof runtime.openDraft !== 'function' || typeof runtime.closeDraft !== 'function'
+      || typeof runtime.createAlbumTopPreviewRuntime !== 'function' || typeof runtime.completeAlbumTopPreview !== 'function') return false;
+    const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, retired: false, opened: false, abort: new AbortController(), details: null};
+    owner.controller = createPlaylistTopPreview({providers: configuredProviders, scopeKey: owner.scopeKey,
+      playlistRef: detail.playlist_id, sourceRevision: detail.revision, requestKey: owner.token, isCurrent: () => topCurrent(owner)});
+    activeTop = owner;
+    try {
+      const opened = runtime.openDraft({token: owner.token, scopeKey: owner.scopeKey,
+        isCurrent: () => topCurrent(owner), onDiscard: () => clearTop(owner),
+        confirmLeave: async () => {
+          const before = owner.controller.getSnapshot();
+          if (!topCurrent(owner) || !owner.controller.canLeave()) return false;
+          if (before.save.status === 'ready' || !before.preview
+            || before.title === before.preview.title && before.description === before.preview.description) return true;
+          const accepted = await runtime.confirmDraft?.(owner.token, 'Discard this unsaved Album Top?');
+          return accepted === true && topCurrent(owner) && owner.controller.canLeave()
+            && owner.controller.getSnapshot() === before;
+        }});
+      if (!opened || !topCurrent(owner)) {clearTop(owner); return false;}
+      owner.opened = true; owner.unsubscribe = owner.controller.subscribe(requestRender);
+      requestRender(); void owner.controller.load(); return true;
+    } catch (error) {runtime.releaseDraft?.(owner.token); clearTop(owner); throw error;}
+  }
+  function topProps(owner) {
+    return {controller: owner.controller, token: owner.token, onClose: () => runtime.closeDraft(owner.token),
+      onOpenAlbum: albumRef => {
+        if (!topCurrent(owner)) return false;
+        const preview = owner.controller.getSnapshot().preview;
+        if (!preview) return false;
+        if (!owner.details) owner.details = runtime.createAlbumTopPreviewRuntime({token: owner.token, scopeKey: owner.scopeKey,
+          preview, isCurrent: () => topCurrent(owner),
+          resolveAlbum: (ref, options) => configuredProviders.resolveAlbumTopPreview(preview, ref, options)});
+        return owner.details.openAlbum(albumRef, {signal: owner.abort.signal});
+      },
+      onSaved: receipt => topCurrent(owner) && owner.controller.getSnapshot().save.data === receipt
+        ? runtime.completeAlbumTopPreview({token: owner.token, scopeKey: owner.scopeKey, top_ref: receipt.top_ref}) : false};
+  }
   const onMixShell = () => {
     const owner = activeMix;
     if (!owner) return;
@@ -133,7 +195,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
     owner.controller.setContext(playlistCreationContext(source, 'missing'));
   }
   function prepareDraft(packet, externalScopeKey = null) {
-    if (disposed || activeDraft || activeMix || typeof runtime.openDraft !== 'function') return false;
+    if (disposed || activeTop || activeDraft || activeMix || typeof runtime.openDraft !== 'function') return false;
     const external = externalScopeKey !== null;
     if (external && (packet?.source?.kind !== 'activity' || packet.source.source_protocol !== 'missing_activity_selection_v1')) return false;
     const shell = runtime.snapshot();
@@ -287,6 +349,11 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
       return;
     }
     if (!shell.visible || state.scopeKey !== shell.scopeKey) {clearView(); return;}
+    if (activeTop && topCurrent(activeTop) && shell.draftToken === activeTop.token) {
+      const owner = activeTop;
+      show('album-top-preview', owner, props => mountPlaylistAlbumTopPreview(host, runtime, props), topProps(owner), current);
+      return;
+    }
     if (activeDraft && shell.draftToken === activeDraft.token) {
       const owner = activeDraft;
       show('draft', owner, () => {
@@ -306,7 +373,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
       {controller, state, integrationProviders: configuredProviders, readDetail: configuredProviders.readDetail,
         navigationError, shareRequest: shareRequest?.row || null,
         onShareRequestHandled: request => {if (shareRequest?.row === request) shareRequest = null;},
-        onSelect: select, onPrepareDraft: prepareDraft}, current);
+        onSelect: select, onPrepareDraft: prepareDraft, onCreateAlbumTop: prepareAlbumTop}, current);
   }
   function dispose() {
     if (disposed) return;
@@ -319,6 +386,8 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
     clean(() => oldNotifications?.dispose());
     clean(() => unsubscribeNotifications?.());
     clean(() => unsubscribeMix?.());
+    clean(() => unsubscribeTop?.());
+    if (activeTop) {const owner = activeTop; clean(() => runtime.releaseDraft?.(owner.token)); clean(() => clearTop(owner));}
     if (mix) {
       mix.retired = true;
       clean(() => runtime.releaseDraft?.(mix.token));
@@ -342,6 +411,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
   // acquired if native mounting or a synchronous subscription callback fails.
   try {
     unsubscribeMix = runtime.subscribe(onMixShell);
+    unsubscribeTop = runtime.subscribe(onTopShell);
     unsubscribeNotifications = runtime.subscribeNotificationRegistry?.(() => {if (!acquiring) mountNotifications();});
     unsubscribeSource = controller.subscribe(syncDraftContext);
     unsubscribeRender = controller.subscribe(requestRender);
@@ -360,13 +430,13 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
         && launchContext?.descriptor === descriptor && launchContext?.isCurrent?.() === true;} catch {return false;}};
       if (!normalized || !leaseCurrent()) return false;
       const shell = runtime.snapshot(), configuration = generation;
-      if (disposed || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
+      if (disposed || activeTop || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
         || typeof configuredProviders.beginArtistLoved !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function'
         || typeof runtime.openDraft !== 'function' || !leaseCurrent() || generation !== configuration) return false;
       const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, entryKey: shell.entryKey,
         phase: 'transferring', retired: false, artistLovedDescriptor: normalized, autoPlayConsumed: false};
       owner.playbackIntent = runtime.captureLibraryMixPlaybackIntent?.();
-      if (!leaseCurrent() || disposed || activeMix || activeDraft || generation !== configuration) return false;
+      if (!leaseCurrent() || disposed || activeTop || activeMix || activeDraft || generation !== configuration) return false;
       owner.controller = createLibraryMixController({providers: configuredProviders, scopeKey: owner.scopeKey,
         artistLovedDescriptor: normalized, isCurrent: () => mixCurrent(owner)});
       activeMix = owner;
@@ -401,7 +471,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
       const artistScope = options.artistScope == null ? null : normalizeArtistMixScope(options.artistScope);
       if (options.artistScope != null && !artistScope) return false;
       const shell = runtime.snapshot();
-      if (disposed || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
+      if (disposed || activeTop || activeMix || activeDraft || !shell.authenticated || !runtime.canOpenPlaytableForm?.()
         || typeof (artistScope ? configuredProviders.beginArtistMix : configuredProviders.beginLibraryMix) !== 'function' || typeof runtime.createLibraryMixRuntime !== 'function') return false;
       const owner = {token: crypto.randomUUID(), scopeKey: shell.scopeKey, entryKey: shell.entryKey, phase: 'setup', retired: false};
       activeMix = owner;
@@ -423,6 +493,7 @@ export function mountPlaylists({host, runtime, providers = {}, isRuntimeCurrent 
         clearView();
         if (disposed || generation !== configuration) return;
         if (activeMix) {const owner = activeMix; owner.retired = true; runtime.releaseDraft?.(owner.token); clearMix(owner);}
+        if (activeTop) {const owner = activeTop; runtime.releaseDraft?.(owner.token); clearTop(owner);}
         if (disposed || generation !== configuration) return;
         if (activeDraft && changed) {const owner = activeDraft; runtime.releaseDraft?.(owner.token); clearDraft(owner);}
         if (disposed || generation !== configuration) return;

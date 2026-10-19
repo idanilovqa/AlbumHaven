@@ -1,13 +1,15 @@
 import {createAlbumTopController} from './model.mjs';
 import {createEditRequestNotifications} from '../home-friends/edit-request-notifications.mjs';
 import {mountAlbumTopsView} from './app.mjs';
+import {createAlbumTopSourceReplay} from './source-replay.mjs';
 import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
 export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   if (!host || !runtime?.snapshot || !runtime.subscribe) throw new TypeError('A native Album Tops host and runtime are required.');
   const controller = createAlbumTopController({providers});
+  const sourceReplay = createAlbumTopSourceReplay({runtime, providers});
   let disposed = false, mutationOwner = null, completedOperation = null, shareRequest = null, notifications = null, refreshedOperation = null,
-    navigationError = null, savedForm = null, previousScope = Symbol('initial'), previousEnabled = null, previousNavigation = null,
-    view = null, viewScope = null, running = false, queued = false;
+    navigationError = null, savedForm = null, previousScope = Symbol('initial'), previousInLibrary = null, previousEnabled = null, previousNavigation = null,
+    view = null, viewScope = null, viewNavigation = null, running = false, queued = false;
   const make = (parent, tag = 'div') => {const node = parent.ownerDocument.createElement(tag); parent.append(node); return node;};
   const errorHost = make(host), retryHost = make(host), loadingHost = make(host), viewHost = make(host);
   const retry = mountButton(retryHost, runtime, {label: 'Retry opening Album Top', onClick: () => open(navigationError?.topRef)});
@@ -29,6 +31,8 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   const unsubscribeNotifications = runtime.subscribeNotificationRegistry?.(mountNotifications);
   const unsubscribe = controller.subscribe(() => {
     const snapshot = controller.getSnapshot(), mutation = snapshot.mutation;
+    if (mutation.status === 'loading' || snapshot.directory.status === 'denied' || snapshot.detail.status === 'denied') sourceReplay.invalidate();
+    else if (snapshot.detail.status === 'ready') sourceReplay.observeDetail(snapshot.detail.data);
     if (mutation.status === 'ready' && ['visibility', 'grant_editor', 'grant_viewer', 'revoke_editor', 'decide_edit_request'].includes(mutation.action) && refreshedOperation !== mutation.command?.request_key) {refreshedOperation = mutation.command.request_key; notifications?.refresh();}
     if (mutation.status === 'loading' && (mutation.command?.request_key !== mutationOwner?.requestKey || snapshot.scopeKey !== mutationOwner?.scopeKey)) {const shell = runtime.snapshot(); mutationOwner = {requestKey: mutation.command.request_key, scopeKey: shell.scopeKey, viewVersion: shell.viewVersion, viewRequestId: shell.viewRequestId};}
     schedule();
@@ -50,8 +54,9 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   }
   function render() {
     const shell = runtime.snapshot(), scope = shell.authenticated ? shell.scopeKey : null;
+    if (previousInLibrary !== shell.inLibrary) {previousInLibrary = shell.inLibrary; if (!shell.inLibrary) sourceReplay.invalidate();}
     const enabled = shell.authenticated && shell.inLibrary && (shell.active || shell.sidebarMode === 'album_tops');
-    if (previousScope !== scope) {previousScope = scope; savedForm = null; controller.setScope(scope);}
+    if (previousScope !== scope) {previousScope = scope; savedForm = null; sourceReplay.invalidate(); controller.setScope(scope);}
     const enabledKey = JSON.stringify([enabled, shell.scopeKey]);
     if (enabledKey !== previousEnabled) {previousEnabled = enabledKey; if (enabled) controller.load();}
     const navigationKey = JSON.stringify([enabled, shell.scopeKey, shell.active, shell.topRef, shell.viewVersion]);
@@ -78,11 +83,12 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
     errorHost.hidden = retryHost.hidden = !(visible && navigationError);
     if (!errorHost.hidden) errorHost.innerHTML = runtime.alertHtml({severity: 'error', role: 'alert', message: 'This Album Top could not be opened. Try again.'});
     loadingHost.hidden = !visible || showView || Boolean(navigationError);
-    if (!showView || viewScope !== shell.scopeKey) {view?.dispose(); view = null; viewScope = null;}
-    if (showView) {const options = {runtime, controller, state, providers, onOpen: open, onFormSaved: formSaved, shareRequest, onShareRequestHandled: request => {if (shareRequest === request) shareRequest = null;}};
-      if (view) view.update(options); else {viewScope = shell.scopeKey; view = mountAlbumTopsView(viewHost, runtime, options);}}
+    if (!showView || viewScope !== shell.scopeKey || viewNavigation !== shell.viewVersion) {view?.dispose(); view = null; viewScope = null; viewNavigation = null;}
+    if (showView) {const options = {runtime, controller, state, providers, sourceReplay, onOpen: open, onFormSaved: formSaved, shareRequest, onShareRequestHandled: request => {if (shareRequest === request) shareRequest = null;}};
+      if (view) view.update(options); else {viewScope = shell.scopeKey; viewNavigation = shell.viewVersion; view = mountAlbumTopsView(viewHost, runtime, options);}}
     const mutation = state.mutation, owner = mutationOwner, receipt = mutation.data, operation = receipt && JSON.stringify([state.scopeKey, receipt.request_key]);
     if (!enabled || !shell.visible || state.scopeKey !== shell.scopeKey || mutation.status !== 'ready' || mutation.refreshing === true
+      || mutation.action === 'copy' && mutation.recovered === true
       || !['create', 'delete', 'copy'].includes(mutation.action) || !owner || !receipt || receipt.request_key !== owner.requestKey || completedOperation === operation
       || shell.viewRequestId !== owner.viewRequestId || mutation.action === 'copy' && (!Number.isSafeInteger(owner.viewRequestId) || owner.viewRequestId < 0)) return;
     if (mutation.action === 'create' && (savedForm?.scopeKey !== state.scopeKey || savedForm.requestKey !== receipt.request_key || savedForm.topRef !== receipt.top_ref || savedForm.revision !== receipt.revision)) return;
@@ -95,6 +101,6 @@ export function mountAlbumTops({host, sidebarHost, runtime, providers}) {
   }
   mountNotifications(); schedule();
   return Object.freeze({refresh() {if (!disposed && runtime.acceptsPrivateScope(controller.getSnapshot().scopeKey)) return controller.load();},
-    dispose() {if (disposed) return; disposed = true; unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
+    dispose() {if (disposed) return; disposed = true; sourceReplay.dispose(); unsubscribe(); unsubscribeShell(); unsubscribeNotifications?.(); notifications?.dispose(); view?.dispose(); all?.dispose(); directory?.dispose(); retry.dispose(); loading.dispose();
       for (const row of sidebarRows.values()) row.element.removeEventListener('click', row.listener); sidebarRows.clear(); sidebar?.remove(); controller.dispose(); providers.dispose?.(); errorHost.remove(); retryHost.remove(); loadingHost.remove(); viewHost.remove();}});
 }

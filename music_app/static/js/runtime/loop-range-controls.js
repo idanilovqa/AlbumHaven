@@ -11,7 +11,21 @@ function buildLoopEditActionControl({
   enterLabel = 'Create a loop',
   createLabel = 'Create loop',
   cancelLabel = 'Cancel loop creation',
+  presentation = 'loop',
 } = {}) {
+  if (presentation === 'options') {
+    if (typeof ButtonComponent === 'undefined' || typeof ButtonComponent.renderIconSvg !== 'function') {
+      throw new TypeError('Playback options require the shared icon renderer.');
+    }
+    return `
+      <span class="loop-edit-actions" data-loop-action-owner="${escapeLoopControlAttribute(ownerId)}" data-loop-action-presentation="options" data-loop-action-state="idle" data-loop-action-engaged="false">
+        <span class="loop-edit-action-pod" data-loop-action-pod>
+          <button class="loop-edit-action loop-edit-action-enter" type="button" data-loop-action="enter" data-playback-control-action="options" aria-label="${escapeLoopControlAttribute(enterLabel)}" aria-haspopup="menu" aria-expanded="false" title="${escapeLoopControlAttribute(enterLabel)}">${ButtonComponent.renderIconSvg('more', { className: 'loop-edit-action-options-icon' })}</button>
+        </span>
+      </span>
+    `;
+  }
+  if (presentation !== 'loop') throw new TypeError('Unknown loop action presentation.');
   return `
     <span class="loop-edit-actions" data-loop-action-owner="${escapeLoopControlAttribute(ownerId)}" data-loop-action-state="idle" data-loop-action-engaged="false">
       <span class="loop-edit-action-pod" data-loop-action-pod>
@@ -109,7 +123,7 @@ function mountLoopEditActionControl({
     if (enter) {
       enter.hidden = currentActive;
       enter.disabled = disabled;
-      enter.setAttribute('aria-pressed', String(currentActive));
+      if (root.getAttribute?.('data-loop-action-presentation') !== 'options') enter.setAttribute('aria-pressed', String(currentActive));
       enter.setAttribute('aria-disabled', String(disabled));
       enter.setAttribute('title', unavailable ? disabledLabel : enter.getAttribute('aria-label'));
     }

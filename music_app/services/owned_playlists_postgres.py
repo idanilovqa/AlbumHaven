@@ -641,6 +641,7 @@ class PostgresOwnedPlaylistsService:
 
     @classmethod
     def _card(cls,context,row,constraints):
+        from music_app.services.owned_album_tops import AlbumTopError, CREATE as TOP_CREATE, require_top_authority
         manage=cls._allows(context,(BROWSE,MANAGE),constraints,row)
         items=cls._allows(context,(BROWSE,ITEMS),constraints,row)
         settings=cls._allows(context,(BROWSE,SETTINGS),constraints,row)
@@ -652,6 +653,17 @@ class PostgresOwnedPlaylistsService:
             raise PlaylistError("artist_loved_unavailable", 503)
         if loved or mix and library_mixes.recipe_from_row(mix).auto_update:
             items = False
+        can_create_top = False
+        # Persisted sources use the bounded immutable preview protocol, even
+        # when some occurrences need an explicit unresolved/unsupported report.
+        # This is availability only; capture/Save reauthorize the actual source.
+        if 0 < int(row['item_count']) <= 5000 and cls._allows(context, (BROWSE,), constraints, row):
+            try:
+                require_top_authority(replace(context, resource=None), required_actions=(BROWSE, TOP_CREATE),
+                    owner_account_id=None, constraints=constraints)
+                can_create_top = True
+            except AlbumTopError:
+                pass
         return {"playlist_id":str(row["ref"]),"title":row["title"],"description":row["description"],
                 "revision":str(row["revision"]),"item_count":int(row["item_count"]),"visibility":row["visibility"],
                 "playlist_kind":"artist_loved" if loved else "library_mix" if mix else "manual",
@@ -662,7 +674,7 @@ class PostgresOwnedPlaylistsService:
                     "can_delete":delete,"can_play":False,"can_share":access,
                     "can_view_sharing":True,
                     "can_request_edit":row["owner_account_id"]!=context.actor.account_id and not row.get("editor_grant",False),
-                    "can_copy":cls._allows(context,(BROWSE,CREATE),constraints),"can_save_default_sort":settings,"can_create_album_top":False,"can_create_sample":False}}
+                    "can_copy":cls._allows(context,(BROWSE,CREATE),constraints),"can_save_default_sort":settings,"can_create_album_top":can_create_top,"can_create_sample":False}}
 
     @classmethod
     def _track_row(cls,context,row,current,*,constraints=None):

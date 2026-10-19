@@ -72,3 +72,39 @@
 .search-results__tracks .compact-data-table { width: 100%; }
 .search-results__status { min-width: 0; overflow-wrap: anywhere; }
 
+
+/* Native remote authoring shares existing cards and controls. Only layout is
+   scoped here; hidden pools remain hidden even when their panels use flex. */
+.album-top-builder__picker [hidden] { display: none; }
+.album-top-builder__remote, .album-top-builder__remote-management,
+.album-top-builder__remote-parents { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.album-top-builder__remote-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.album-top-builder__remote-fields input { width: 100%; min-width: 0; box-sizing: border-box; }
+.album-top-builder__remote .playlists__actions { flex-wrap: wrap; }
+.album-top-builder__remote .playlists__note { overflow-wrap: anywhere; }
+.album-top-builder__remote > .album-top-builder__cards { max-height: 40vh; overflow: auto; padding: 4px; }
+@media (max-width: 520px) {
+  .album-top-builder__remote-fields { grid-template-columns: minmax(0, 1fr); }
+}
+/* Collection filters share one compact disclosure and phone-form layout.
+   Playlist hooks retain their existing layout while callers adopt shared names. */
+.collection-filter-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+:is(.collection-filter-fields, .playlists__filters) label { display: flex; flex-direction: column; gap: 5px; }
+:is(.collection-filter-fields, .playlists__filters) :is(input, select) { max-width: 100%; min-width: 0; box-sizing: border-box; }
+:is(.collection-filter-fields, .playlists__filters) { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding-block: 10px; }
+:is(.collection-filter-fields, .playlists__filters) > :is(.collection-filter-note, .playlists__note) { flex-basis: 100%; }
+.collection-filter-search { flex: 1 1 100%; min-width: 0; width: 100%; }
+.collection-filter-note { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.collection-filter-surface { flex: none; min-width: 0; }
+.collection-filter-surface--inline { padding-inline: 12px; }
+.collection-filter-surface--inline .ui-choice__label { display: none; }
+.collection-filter-surface--inline :is(.collection-filter-fields, .playlists__filters) { align-items: center; }
+.collection-filter-surface .playlists-filter__search { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+.collection-filter-surface--inline :is(.collection-filter-search, .playlists-filter__search) { --search-field-height: 28px; }
+.collection-filter-surface :is(.collection-filter-fields, .playlists__filters) > :is(.collection-filter-note, .playlists__note) { margin: 0; }
+.collection-filter-surface--form :is(.collection-filter-fields, .playlists__filters) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.collection-filter-surface--form :is(.collection-filter-search, .playlists-filter__search),
+.collection-filter-surface--form :is(.collection-filter-note, .playlists__note) { grid-column: 1 / -1; width: 100%; max-width: none; }
+.collection-filter-surface--form .ui-choice__control,
+.collection-filter-surface--form .ui-choice__trigger { width: 100%; }
+

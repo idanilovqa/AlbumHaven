@@ -25,7 +25,10 @@ export function mountSharedHeader(host, runtime, initial) {
   primaryActions.style.display = 'contents'; finalAction.style.display = 'contents';
   actions.append(primaryActions, finalAction); capsule.append(outsideActions, actions); controls.append(triggerHost, capsule);
   root.append(leading, identity, content, controls); host.replaceChildren(root);
-  const slots = {leading, identity, content, actions: primaryActions, outsideActions, finalAction};
+  const resourceControls = make('div', 'home-header__resource-controls'),
+    resourcePlayback = make('span', 'home-header__resource-playback'), resourceProgress = make('span', 'home-header__resource-progress');
+  resourceControls.append(resourcePlayback, resourceProgress);
+  const slots = {leading, identity, content, actions: primaryActions, outsideActions, finalAction, resourcePlayback, resourceProgress};
   let props = initial, compact = false, outside = false, open = false, disposed = false, frame = 0, lastFocus = null, refCleanup, revision = 0;
   const trigger = () => triggerHost.firstElementChild;
   const focusable = node => node?.isConnected && !node.disabled && node.getAttribute('aria-disabled') !== 'true'
@@ -44,6 +47,11 @@ export function mountSharedHeader(host, runtime, initial) {
   };
   const hasActions = () => primaryActions.childNodes.length > 0 || finalAction.childNodes.length > 0 || outsideActions.childNodes.length > 0;
   const apply = () => {
+    // Playback composition is admitted only for an actual saved Top header.
+    // Goals and ordinary headers keep their existing DOM and ordering.
+    if (props.resourceKind === 'album_top') {
+      if (resourceControls.parentNode !== root) root.append(resourceControls);
+    } else resourceControls.remove();
     root.setAttribute('data-header-compact', String(compact)); root.setAttribute('data-header-outside', String(outside)); root.setAttribute('data-header-open', String(open));
     triggerHost.hidden = !hasActions() || !compact;
     button.update(buttonProps());

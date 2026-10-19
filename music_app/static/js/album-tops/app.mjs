@@ -2,31 +2,47 @@ import {mountButton, mountStatus} from '../home-friends/native-controls.mjs';
 import {mountAlbumProgress} from '../home-friends/album-progress.mjs';
 import {mountSharedHeader} from '../home-friends/shared-header.mjs';
 import {albumTopActionAllowed} from './model.mjs';
-import {isManualProgress, isTopActivity} from './progress.mjs';
+import {isTopActivity} from './progress.mjs';
 import {openShareAlbumTop} from './sharing.mjs';
 import {openAlbumTopBuilder, openAddAlbumTop, mountInlineAlbumTopEdit} from './builder.mjs';
 import {albumTopAddAllowed} from './draft.mjs';
 import {mountMutationNotice} from './mutation-notice.mjs';
+import {mountAlbumTopGallery} from './gallery.mjs';
+import {DEFAULT_TOP_READ_VIEW} from './read-view.mjs';
+import {mountAlbumTopPlaybackControls} from './playback-controls.mjs';
 function node(parent, tag = 'div', className = '') {const result = parent.ownerDocument.createElement(tag); result.className = className; parent.append(result); return result;}
 export function mountAlbumTopsView(host, runtime, props) {
   const {controller, providers} = props;
   let latest = props, disposed = false, dialog = null, dialogIntent = null, inline = null, normalHeader = null, restoreFocus = false, dialogToken = null, updating = false, pending = null;
   const section = node(host, 'section', 'album-tops'); section.setAttribute('aria-label', 'Album Tops');
-  const normal = node(section), headerHost = node(normal), description = node(normal, 'p'), statusHost = node(normal), empty = node(normal), cards = node(normal, 'div', 'home-activity__cards home-activity__cards--albums'), noticeHost = node(normal), editHost = node(section);
+  const normal = node(section), headerHost = node(normal), filterHost = node(normal), description = node(normal, 'p'), statusHost = node(normal), empty = node(normal), cards = node(normal, 'div', 'home-activity__cards home-activity__cards--albums'), noticeHost = node(normal), editHost = node(section);
+  filterHost.hidden = true;
   const status = mountStatus(statusHost, runtime, {value: latest.state.directory, label: 'Album Tops', retry: () => controller.load()});
   const notice = mountMutationNotice(noticeHost, runtime, {controller, value: latest.state.mutation});
   const cardOwners = new Map(), consumedShareRequests = new WeakSet();
+  const galleryHost = node(normal);
+  let gallery = null, galleryKey = null;
+  let readViewKey = null, readView = DEFAULT_TOP_READ_VIEW, inlineFocusOwner = null;
+  function retireGallery() {const previous = gallery; gallery = null; galleryKey = null; previous?.dispose();}
   const failureHost = node(section); failureHost.setAttribute('data-album-top-dialog-fallback', '');
   function retireDialog() {const previous = dialog; dialog = null; dialogToken = null; previous?.dispose();}
   function returnHeaderFocus(preferred) {return [preferred, headerHost.querySelector('[data-header-tools]'), headerHost.querySelector('[data-shared-header]')].find(item => item?.isConnected && !item.disabled && item.getAttribute('aria-disabled') !== 'true' && !item.closest('[hidden],[inert],[aria-hidden="true"]') && item.getClientRects().length > 0);}
   function closeDialog(options) {dialogIntent = null; retireDialog(); if (inline) {const previousInline = inline; inline = null; previousInline.dispose();} restoreFocus ||= options?.restoreFocus === true; update(latest);}
-  function show(kind, top, opener) {if (disposed) return; dialogIntent = {kind, top, topRef: top?.top_ref || latest.state.selectedTopRef, opener, providers: latest.providers, scopeKey: latest.state.scopeKey}; update(latest);}
+  function show(kind, top, opener) {if (disposed) return; inlineFocusOwner = null; restoreFocus = false; dialogIntent = {kind, top, topRef: top?.top_ref || latest.state.selectedTopRef, opener, providers: latest.providers, scopeKey: latest.state.scopeKey}; update(latest);}
   function createHeader(parent, edit = null) {
     const target = parent === headerHost ? parent : node(parent);
     const owner = mountSharedHeader(target, runtime, {id: 'album-tops', tabIndex: -1, ariaLabel: 'Album Tops header', className: 'album-tops__header'});
-    const controls = new Map(); let currentEdit = edit;
+    const controls = new Map(); let currentEdit = edit, headerDisposed = false;
+    const galleryTools = node(owner.slots.actions, 'span'); galleryTools.hidden = true;
     const context = node(owner.slots.content, 'div', 'gallery-bar__context'), title = node(context, 'div', 'gallery-bar__title'), titleText = node(title, 'span');
     const progressHost = node(context, 'span'), progressOwner = mountAlbumProgress(progressHost);
+    const playbackStatus = runtime.playback && !edit ? node(target) : null;
+    const playbackProps = () => ({state: latest.state,
+      resourceKind: latest.state.selectedTopRef && !currentEdit ? 'album_top' : null,
+      isCurrent: () => !disposed && !headerDisposed && !currentEdit});
+    let playbackOwner = null;
+    try {if (playbackStatus) playbackOwner = mountAlbumTopPlaybackControls(owner.slots.resourcePlayback, playbackStatus, runtime, playbackProps());}
+    catch (error) {progressOwner.dispose(); playbackStatus?.remove(); owner.dispose(); if (target !== headerHost) target.remove(); throw error;}
     function control(key, label, options, leading = false) {let item = controls.get(key); if (!item) {const host = node(leading ? owner.slots.leading : owner.slots.actions, 'span'); item = {host, owner: mountButton(host, runtime, {label, ...options})}; controls.set(key, item);} else item.owner.update({label, ...options}); item.host.hidden = false;}
     function refresh(nextEdit = currentEdit) {
       currentEdit = nextEdit; const {state, onOpen} = latest, selected = state.selectedTopRef, detail = state.detail.data;
@@ -55,22 +71,37 @@ export function mountAlbumTopsView(host, runtime, props) {
         if (selected && albumTopActionAllowed(state, 'delete')) control('delete', 'Delete Album Top', {icon: 'delete', disabled: busy, onClick: async () => {const current = controller.getSnapshot(); if (!guarded('delete')) return;
           if (await runtime.confirm(`Delete “${detail.title}”?`, {title: 'Delete Album Top', acceptLabel: 'Delete', danger: true}) !== true || disposed || controller.getSnapshot() !== current) return; await controller.mutate('delete');}});
       }
-      owner.update({id: 'album-tops', tabIndex: -1, ariaLabel: 'Album Tops header', className: 'album-tops__header'});
+      const resourceKind = playbackOwner && selected && !currentEdit ? 'album_top' : null;
+      if (progressHost.parentNode !== (resourceKind ? owner.slots.resourceProgress : context)) (resourceKind ? owner.slots.resourceProgress : context).append(progressHost);
+      playbackOwner?.update(playbackProps());
+      owner.update({id: 'album-tops', tabIndex: -1, ariaLabel: 'Album Tops header', className: 'album-tops__header', resourceKind});
     }
-    refresh(); return {update: refresh, dispose() {progressOwner.dispose(); for (const item of controls.values()) {item.owner.dispose(); item.host.remove();} context.remove(); owner.dispose(); if (target !== headerHost) target.remove();}};
+    function disposeHeader() {if (headerDisposed) return; headerDisposed = true; playbackOwner?.dispose(); playbackStatus?.remove(); progressOwner.dispose(); for (const item of controls.values()) {item.owner.dispose(); item.host.remove();} galleryTools.remove(); context.remove(); owner.dispose(); if (target !== headerHost) target.remove();}
+    try {refresh();} catch (error) {disposeHeader(); throw error;}
+    return {update: refresh, galleryTools, dispose: disposeHeader};
   }
-  normalHeader = createHeader(headerHost);
   function render(next) {
     if (disposed) return; latest = next; const {state} = latest, selected = state.selectedTopRef, detail = state.detail.data;
+    const viewKey = JSON.stringify([state.scopeKey, selected]);
+    if (readViewKey !== viewKey) {readViewKey = viewKey; readView = DEFAULT_TOP_READ_VIEW; inlineFocusOwner = null; restoreFocus = false;}
     const denied = state.directory.status === 'denied' || state.detail.status === 'denied';
-    if (dialogIntent && (dialogIntent.kind === 'add' && (dialogIntent.providers !== latest.providers || dialogIntent.scopeKey !== state.scopeKey) || denied || dialogIntent.topRef && dialogIntent.topRef !== selected)) {dialogIntent = null; retireDialog(); inline?.dispose(); inline = null;}
-    const inlineWanted = dialogIntent?.kind === 'edit' && dialogIntent.top?.edit_draft && !denied;
+    if (inlineFocusOwner && (denied || inlineFocusOwner.providers !== latest.providers || dialogIntent && dialogIntent !== inlineFocusOwner)) {inlineFocusOwner = null; restoreFocus = false;}
+    if (dialogIntent && ((dialogIntent.providers && dialogIntent.providers !== latest.providers || dialogIntent.scopeKey && dialogIntent.scopeKey !== state.scopeKey) || denied || dialogIntent.topRef && dialogIntent.topRef !== selected)) {dialogIntent = null; retireDialog(); inline?.dispose(); inline = null;}
+    const inlineWanted = dialogIntent?.kind === 'edit' && Boolean(dialogIntent.top) && !denied;
     normal.hidden = Boolean(inlineWanted); editHost.hidden = !inlineWanted;
     if (inlineWanted) {
+      retireGallery();
       retireDialog();
       normalHeader?.dispose(); normalHeader = null;
-      if (inline) inline.update({state}); else inline = mountInlineAlbumTopEdit(editHost, runtime, {controller, state, providers, existing: dialogIntent.top,
-        mountHeader: createHeader, onRestoreFocus: () => {restoreFocus = true;}, onClose: closeDialog});
+      if (inline) inline.update({state}); else {
+        const intent = dialogIntent; inlineFocusOwner = intent;
+        inline = mountInlineAlbumTopEdit(editHost, runtime, {controller, state, providers: intent.providers || latest.providers, existing: intent.top,
+          mountHeader: createHeader, onRestoreFocus: () => {
+            if (disposed || inlineFocusOwner !== intent || latest.providers !== intent.providers || latest.state.scopeKey !== intent.scopeKey
+              || latest.state.selectedTopRef !== intent.topRef || latest.state.directory.status === 'denied' || latest.state.detail.status === 'denied') return;
+            inlineFocusOwner = null; restoreFocus = true; update(latest);
+          }, onClose: options => {if (!disposed && dialogIntent === intent) closeDialog(options);}});
+      }
       return;
     }
     if (inline) {const previousInline = inline; inline = null; previousInline.dispose();}
@@ -85,23 +116,23 @@ export function mountAlbumTopsView(host, runtime, props) {
     status.update({value: resource, label: selected ? 'this Album Top' : 'Album Tops', retry: () => selected ? controller.open(selected) : controller.load()});
     empty.hidden = !(selected && ready && detail.items.length === 0); if (!empty.hidden) empty.innerHTML = runtime.alertHtml({severity: 'info', role: 'status', message: 'No albums in this Top'});
     const wanted = new Set();
-    for (const [index, row] of (ready ? selected ? detail.items : state.directory.data.tops : []).entries()) {
-      const ref = selected ? row.item_ref : row.top_ref, key = `${selected || 'directory'}:${ref}`; wanted.add(key);
-      const progressRows = detail?.top_viewer_overlay?.item_progress, progress = selected && progressRows && Object.hasOwn(progressRows, row.album_ref) ? progressRows[row.album_ref] : null;
-      const canChangeProgress = selected && albumTopActionAllowed(state, 'set_manual_completion') && isManualProgress(progress);
-      const complete = selected && isManualProgress(progress) && (canChangeProgress || paused), completed = complete && progress.manual_completed_at !== null;
+    const showGallery = selected && !denied && resource.status === 'ready' && detail?.top_ref === selected;
+    const galleryShell = runtime.snapshot(), nextGalleryKey = JSON.stringify([state.scopeKey, selected, galleryShell.viewVersion, galleryShell.viewRequestId]);
+    cards.hidden = Boolean(selected); galleryHost.hidden = !showGallery;
+    if (!showGallery || galleryKey !== nextGalleryKey) retireGallery();
+    if (showGallery) {
+      const options = {controller, state, providers: latest.providers, toolsHost: normalHeader.galleryTools, panelHost: filterHost, sourceReplay: latest.sourceReplay,
+        readView, onReadViewChange(value) {if (!disposed && readViewKey === viewKey) readView = value;}};
+      if (gallery) gallery.update(options); else {galleryKey = nextGalleryKey; gallery = mountAlbumTopGallery(galleryHost, runtime, options);}
+    }
+    for (const [index, row] of (ready && !selected ? state.directory.data.tops : []).entries()) {
+      const ref = row.top_ref, key = `directory:${ref}`; wanted.add(key);
       let item = cardOwners.get(key);
       if (!item) {const host = node(cards); item = {host, html: null, click: null}; const listener = event => item.click?.(event); item.listener = listener; host.addEventListener('click', listener); cardOwners.set(key, item);}
-      const html = runtime.galleryCardHtml({identity: ref, interaction: !selected || complete ? 'controlled' : 'none', actionRef: selected ? row.album_ref : ref,
-        actions: {open: !selected, complete}, completion: complete ? {completed, disabled: busy || !canChangeProgress, label: `${completed ? 'Clear completion' : 'Mark completed'} in this Top: ${row.title}`} : undefined,
-        title: row.title, artist: selected ? row.artist : [row.description, isTopActivity(row.top_viewer_overlay?.activity) && !row.top_viewer_overlay.activity.active ? 'Inactive for you' : ''].filter(Boolean).join(' · '), year: row.year, displayMode: 'cards', artboxHtml: runtime.artboxHtml({state: 'empty', label: `${row.title} artwork`})});
-      if (item.html !== html) {const active = item.host.ownerDocument.activeElement, preserve = complete && item.host.contains(active) && active?.matches('[data-gallery-card-intent="complete"]'); item.host.innerHTML = html; item.html = html; if (preserve) item.host.querySelector('[data-gallery-card-intent="complete"]:not(:disabled)')?.focus({preventScroll: true});}
-      item.click = event => {if (!selected && event.target.closest('[data-gallery-card-intent="open"]')) {latest.onOpen(ref); return;}
-        const button = event.target.closest('[data-gallery-card-intent="complete"]'), current = controller.getSnapshot();
-        if (!complete || !button || button.disabled || button.getAttribute('aria-disabled') === 'true' || button.getAttribute('data-gallery-card-ref') !== row.album_ref
-          || current.scopeKey !== state.scopeKey || current.detail.data !== detail || current.mutation.refreshing === true || ['loading', 'uncertain'].includes(current.mutation.status)
-          || !albumTopActionAllowed(current, 'set_manual_completion', selected) || !current.detail.data.items.some(item => item.album_ref === row.album_ref)) return;
-        event.preventDefault(); event.stopPropagation(); return controller.mutate('set_manual_completion', {album_ref: row.album_ref, completed: !completed});};
+      const html = runtime.galleryCardHtml({identity: ref, interaction: 'controlled', actionRef: ref, actions: {open: true},
+        title: row.title, artist: [row.description, isTopActivity(row.top_viewer_overlay?.activity) && !row.top_viewer_overlay.activity.active ? 'Inactive for you' : ''].filter(Boolean).join(' · '), year: row.year, displayMode: 'cards', artboxHtml: runtime.artboxHtml({state: 'empty', label: `${row.title} artwork`})});
+      if (item.html !== html) {item.host.innerHTML = html; item.html = html;}
+      item.click = event => {if (event.target.closest('[data-gallery-card-intent="open"]')) latest.onOpen(ref);};
       if (cards.children[index] !== item.host) cards.insertBefore(item.host, cards.children[index] || null);
     }
     for (const [key, item] of cardOwners) if (!wanted.has(key)) {item.host.removeEventListener('click', item.listener); item.host.remove(); cardOwners.delete(key);}
@@ -110,13 +141,13 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (request && !consumedShareRequests.has(request) && !busy && request.isCurrent() && request.row.top_ref === selected && albumTopActionAllowed(state, 'view_sharing')) {
       // Retire locally before notifying the parent: it may synchronously render or close.
       consumedShareRequests.add(request); latest = {...latest, shareRequest: null};
-      dialogIntent = {kind: 'share', topRef: selected}; latest.onShareRequestHandled?.(request);
+      inlineFocusOwner = null; restoreFocus = false; dialogIntent = {kind: 'share', topRef: selected}; latest.onShareRequestHandled?.(request);
     }
     const key = dialogIntent && JSON.stringify([dialogIntent.kind, dialogIntent.topRef || null]);
     if (dialogToken && dialogToken.key !== key) retireDialog();
     if (dialogIntent && !dialogToken) {
       const intent = dialogIntent, opener = intent.opener, token = {key}; dialogToken = token;
-      const options = {runtime, controller, state, providers: intent.kind === 'add' ? intent.providers : providers, existing: intent.top || null, fallbackHost: failureHost,
+      const options = {runtime, controller, state, providers: intent.providers || latest.providers, existing: intent.top || null, fallbackHost: failureHost,
         onClose: options => {if (!disposed && dialogToken === token) closeDialog(options);},
         onFormSaved: latest.onFormSaved, returnFocus: () => returnHeaderFocus(opener)};
       const opened = intent.kind === 'share' ? openShareAlbumTop(options) : intent.kind === 'add' ? openAddAlbumTop(options) : openAlbumTopBuilder(options);
@@ -127,6 +158,7 @@ export function mountAlbumTopsView(host, runtime, props) {
     if (disposed) return; pending = next; if (updating) return; updating = true;
     try {while (pending && !disposed) {const current = pending; pending = null; render(current);}} finally {updating = false;}
   }
-  update(props);
-  return {update, dispose() {if (disposed) return; disposed = true; pending = null; retireDialog(); inline?.dispose(); normalHeader?.dispose(); status.dispose(); notice.dispose(); for (const item of cardOwners.values()) item.host.removeEventListener('click', item.listener); cardOwners.clear(); section.remove();}};
+  function dispose() {if (disposed) return; disposed = true; pending = null; retireGallery(); retireDialog(); inline?.dispose(); normalHeader?.dispose(); status.dispose(); notice.dispose(); for (const item of cardOwners.values()) item.host.removeEventListener('click', item.listener); cardOwners.clear(); section.remove();}
+  try {update(props);} catch (error) {dispose(); throw error;}
+  return {update, dispose};
 }

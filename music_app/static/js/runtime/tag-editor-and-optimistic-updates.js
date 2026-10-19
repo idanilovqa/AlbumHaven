@@ -2691,6 +2691,8 @@ function peekNextQueuedTrack() {
 
 function peekNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) return TopPlaybackRuntime.peek(queue);
+  if (queue?.sourceKind === 'album-top') return null;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const currentPath = String(state.player.current?.path || '');
   const playlistIndex = typeof playlistQueueNextIndex === 'function' ? playlistQueueNextIndex(queue, currentPath) : null;
@@ -2711,6 +2713,8 @@ function getNextQueuedTrack() {
 
 function getNextOrdinaryQueuedTrack() {
   const queue = state.player.playbackQueue;
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) return TopPlaybackRuntime.consume(queue);
+  if (queue?.sourceKind === 'album-top') return null;
   if (queue?.playlistId && typeof playlistQueueNextIndex === 'function') {
     const index = playlistQueueNextIndex(queue, String(state.player.current?.path || ''));
     if (index === null || index < 0) {state.player.playbackQueue = null; return null;}

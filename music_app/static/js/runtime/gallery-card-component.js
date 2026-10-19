@@ -30,7 +30,7 @@ function buildControlledGalleryCardHtml(config) {
     ? `<button class="album-card__artbox-trigger cover" type="button" data-gallery-card-intent="select" data-gallery-card-ref="${escapeHtml(ref)}" aria-label="${escapeHtml(`Select ${title}`)}" aria-pressed="false">${artbox}</button>`
     : `<div class="album-card__artbox-trigger cover">${artbox}</div>`;
   const open = can('open') ? ButtonComponent.renderButton({
-    label: 'Open', ariaLabel: `Open ${title}`, size: 'small', attributes: attributes('open'),
+    label: 'Open', ariaLabel: `Open ${title}`, size: 'small', disabled: config.openDisabled === true, attributes: attributes('open'),
   }) : '';
   const play = can('play') ? ButtonComponent.renderActionButton({
     ariaLabel: `Play ${title}`, icon: 'play', presentation: 'bare', attributes: attributes('play'),
@@ -54,15 +54,40 @@ function syncGalleryCardMetadataMotion(root) {
   if (!mobile) { galleryCardMetadataMotion?.dispose(); return null; }
   if (typeof root?.querySelectorAll !== 'function' || typeof ResizeObserver !== 'function') return galleryCardMetadataMotion;
   if (!galleryCardMetadataMotion) {
+    const controller = createGalleryCardMetadataMotion({onDispose() {
+      if (galleryCardMetadataMotion === controller) galleryCardMetadataMotion = null;
+    }});
+    galleryCardMetadataMotion = controller;
+  }
+  galleryCardMetadataMotion.update(root);
+  return galleryCardMetadataMotion;
+}
+
+const resourceGalleryMetadataOwners = new WeakMap();
+function createGalleryCardMetadataMotion({root = null, isCurrent = () => true, onDispose = () => {}} = {}) {
+    if (root && (root.ownerDocument !== document || typeof root.querySelectorAll !== 'function')) {
+      throw new TypeError('A native Gallery metadata root is required.');
+    }
+    if (typeof ResizeObserver !== 'function') return null;
     const rows = new Map();
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let frame = 0, disposed = false;
+    const current = () => !disposed && (!root || resourceGalleryMetadataOwners.get(root) === controller)
+      && isCurrent() === true && !disposed && (!root || resourceGalleryMetadataOwners.get(root) === controller);
     const refresh = () => {
       if (disposed) return;
       frame = 0;
+      if (!current()) {controller.dispose(); return;}
       for (const [row, text] of rows) {
-        if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); continue; }
-        const motion = !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
+        if (!row.isConnected || !text.isConnected || text.parentElement !== row
+          || !text.matches('[data-gallery-metadata-text]') || root && !root.contains(row)) {
+          observer.unobserve(row); observer.unobserve(text); rows.delete(row);
+          if (!root || root.contains(row)) row.classList.remove('is-card-text-overflowing');
+          continue;
+        }
+        const mobile = !root || typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
+        const motion = mobile && !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
+        if (!current()) {controller.dispose(); return;}
         row.classList.toggle('is-card-text-overflowing', motion.overflowing);
         row.style.setProperty('--card-text-distance', `${motion.distance}px`);
         row.style.setProperty('--card-text-duration', `${motion.durationMs}ms`);
@@ -73,9 +98,11 @@ function syncGalleryCardMetadataMotion(root) {
     reduced.addEventListener('change', schedule);
     document.fonts?.ready.then(schedule);
     const controller = {
-      update(root) {
+      update(nextRoot = root) {
         if (disposed) return;
-        root.querySelectorAll('.album-card [data-gallery-metadata-text]').forEach(text => {
+        if (!current()) {controller.dispose(); return;}
+        if (!nextRoot || root && nextRoot !== root) throw new TypeError('Gallery metadata cannot change its resource root.');
+        nextRoot.querySelectorAll('.album-card [data-gallery-metadata-text]').forEach(text => {
           const row = text.parentElement, previous = rows.get(row);
           if (previous === text) return;
           if (previous) observer.unobserve(previous);
@@ -89,13 +116,21 @@ function syncGalleryCardMetadataMotion(root) {
         if (frame) cancelAnimationFrame(frame);
         frame = 0;
         observer.disconnect(); reduced.removeEventListener('change', schedule);
-        for (const row of rows.keys()) row.classList.remove('is-card-text-overflowing');
+        const ownsRoot = !root || resourceGalleryMetadataOwners.get(root) === controller;
+        if (root && ownsRoot) resourceGalleryMetadataOwners.delete(root);
+        if (ownsRoot) for (const row of rows.keys()) {
+          if (!root || root.contains(row)) row.classList.remove('is-card-text-overflowing');
+        }
         rows.clear();
-        if (galleryCardMetadataMotion === controller) galleryCardMetadataMotion = null;
+        onDispose();
       },
     };
-    galleryCardMetadataMotion = controller;
-  }
-  galleryCardMetadataMotion.update(root);
-  return galleryCardMetadataMotion;
+    if (root) {
+      const previous = resourceGalleryMetadataOwners.get(root);
+      resourceGalleryMetadataOwners.set(root, controller);
+      previous?.dispose();
+      if (!current()) controller.dispose();
+      else controller.update();
+    }
+    return controller;
 }

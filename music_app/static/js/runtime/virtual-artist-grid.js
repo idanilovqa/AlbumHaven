@@ -253,9 +253,9 @@ function resolveGalleryScalePercent(value) {
   return Math.min(MAX_GALLERY_SCALE_PERCENT, Math.max(MIN_GALLERY_SCALE_PERCENT, numericValue));
 }
 
-function resolveGalleryCardWidth(layoutConfig = CARD_GALLERY_LAYOUT_CONFIG) {
+function resolveGalleryCardWidth(layoutConfig = CARD_GALLERY_LAYOUT_CONFIG, scale = state?.view?.gallery_scale_percent) {
   const baseWidth = Math.max(1, Number(layoutConfig?.cardMinWidth) || 240);
-  const scalePercent = resolveGalleryScalePercent(state?.view?.gallery_scale_percent);
+  const scalePercent = resolveGalleryScalePercent(scale);
   return Math.max(1, Math.round(baseWidth * (scalePercent / 100)));
 }
 
@@ -270,6 +270,191 @@ const MAX_RETAINED_ALBUM_CARD_NODES = 48;
 const MAX_VIRTUAL_GRID_DIAGNOSTIC_EVENTS = 24;
 const VIRTUAL_GRID_SCROLL_RENDER_FALLBACK_MS = 100;
 const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
+
+// Shared geometry has no resource, history, renderer, or global-state ownership.
+function resolveGalleryColumnGeometry({width, selectedCardWidth, columnGap, itemCount,
+  columns, cardTrackWidth, preserveCardTrackWidth = false, preserveColumnGeometry = false,
+  mobileGeometry = null}) {
+  const previousCardTrackWidth = Number(cardTrackWidth);
+  const preserve = Boolean(preserveCardTrackWidth
+    && Number.isFinite(previousCardTrackWidth) && previousCardTrackWidth > 0);
+  const target = preserve ? Math.min(previousCardTrackWidth, width) : selectedCardWidth;
+  const preservedColumns = Math.max(1, Math.floor((width + columnGap) / (target + columnGap)));
+  const fill = preserve && itemCount > Math.max(1, Number(columns) || 1);
+  const minimum = selectedCardWidth * MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO;
+  const settledColumns = Math.min(itemCount, Math.max(1, Math.floor((width + columnGap) / (minimum + columnGap))));
+  if (!preserveColumnGeometry) {
+    columns = fill ? settledColumns : preservedColumns;
+    cardTrackWidth = fill || !preserve ? (width - (columns - 1) * columnGap) / columns : target;
+  }
+  if (mobileGeometry) {
+    columns = mobileGeometry.columns;
+    cardTrackWidth = mobileGeometry.cardTrackWidth;
+  }
+  return {columns, cardTrackWidth};
+}
+
+const resourceGalleryHosts = new WeakMap();
+
+// Flat collection galleries share native card sizing without borrowing the
+// Artist index, viewport, history, or renderer. Family keeps its one virtualizer.
+class ResourceGalleryHost {
+  constructor({host, readSnapshot, renderCard, onAction, isCurrent}) {
+    if (!host?.ownerDocument || typeof readSnapshot !== 'function'
+      || typeof renderCard !== 'function' || typeof isCurrent !== 'function') {
+      throw new TypeError('A scoped native Gallery host and owners are required.');
+    }
+    this.host = host; this.readSnapshot = readSnapshot; this.renderCard = renderCard;
+    this.onAction = onAction; this.isCurrent = isCurrent; this.cards = new Map(); this.elements = new WeakMap();
+    this.snapshot = null; this.disposed = false; this.revision = 0; this.committedRevision = 0; this.frame = 0;
+    this.geometry = {columns: 1, cardTrackWidth: 0}; this.preserveWidth = false;
+    this.window = host.ownerDocument.defaultView;
+    this.root = host.ownerDocument.createElement('div'); this.root.className = 'album-row';
+    this.root.style.justifyContent = 'start';
+    const previous = resourceGalleryHosts.get(host);
+    resourceGalleryHosts.set(host, this);
+    previous?.dispose();
+    if (resourceGalleryHosts.get(host) !== this) {this.dispose(); return;}
+    host.append(this.root);
+    this.click = event => {
+      const snapshot = this.snapshot;
+      if (!this.current(snapshot)) {this.dispose(); return;}
+      if (this.committedRevision !== this.revision) return;
+      const action = event.target.closest?.('[data-gallery-card-intent]');
+      if (!action || action.disabled || action.getAttribute('aria-disabled') === 'true'
+        || !this.root.contains(action)) return;
+      for (let element = action; element && element !== this.root; element = element.parentElement) {
+        const card = this.elements.get(element);
+        if (card) {
+          if (this.current(snapshot) && this.committedRevision === this.revision) this.onAction?.(card.row, event, snapshot);
+          return;
+        }
+      }
+    };
+    this.resize = event => {
+      if (!this.snapshot) return;
+      if (!this.current(this.snapshot)) {this.dispose(); return;}
+      if (event?.type === 'album-haven:artist-tree-settled') this.preserveWidth = true;
+      if (!this.preserveWidth && this.host.ownerDocument.getElementById('shell-navigation-rail')
+        ?.classList?.contains('is-transitioning')) return;
+      this.schedule();
+    };
+    this.root.addEventListener('click', this.click);
+    this.window.addEventListener('resize', this.resize);
+    this.window.addEventListener('album-haven:artist-tree-settled', this.resize);
+    this.observer = this.window.ResizeObserver ? new this.window.ResizeObserver(this.resize) : null;
+    this.observer?.observe(host);
+  }
+
+  current(snapshot, revision = this.revision) {
+    if (this.disposed || resourceGalleryHosts.get(this.host) !== this
+      || revision !== this.revision || !snapshot || this.snapshot !== snapshot) return false;
+    const allowed = this.isCurrent() === true && this.readSnapshot() === snapshot;
+    return allowed && !this.disposed && resourceGalleryHosts.get(this.host) === this
+      && revision === this.revision && this.snapshot === snapshot;
+  }
+
+  update(rows) {
+    if (this.disposed || resourceGalleryHosts.get(this.host) !== this) return false;
+    const snapshot = this.readSnapshot();
+    if (!snapshot || typeof snapshot.scopeKey !== 'string' || !snapshot.scopeKey
+      || typeof snapshot.resourceKey !== 'string' || !snapshot.resourceKey
+      || !['list', 'cards', 'covers'].includes(snapshot.displayMode)
+      || this.snapshot && (this.snapshot.scopeKey !== snapshot.scopeKey
+        || this.snapshot.resourceKey !== snapshot.resourceKey) || this.isCurrent() !== true) {
+      this.dispose(); return false;
+    }
+    if (!Array.isArray(rows) || Array.from(rows).some(row => typeof row?.key !== 'string' || !row.key)
+      || new Set(rows.map(row => row.key)).size !== rows.length) {
+      throw new TypeError('Native Gallery requires unique stable row keys.');
+    }
+    this.snapshot = snapshot; this.preserveWidth = false; const revision = ++this.revision;
+    const current = () => this.current(snapshot, revision), wanted = new Set(rows.map(row => row.key));
+    const focused = this.root.contains(this.host.ownerDocument.activeElement) ? this.host.ownerDocument.activeElement : null;
+    try {
+      for (const [key, card] of this.cards) if (!wanted.has(key)) {
+        this.cards.delete(key); this.elements.delete(card.owner.element);
+        card.owner.element.remove(); card.owner.dispose?.();
+        if (!current()) return false;
+      }
+      for (const [index, row] of rows.entries()) {
+        if (!current()) return false;
+        let card = this.cards.get(row.key);
+        if (!card) {
+          const owner = this.renderCard(row, snapshot);
+          if (!current()) {owner?.dispose?.(); return false;}
+          if (!owner?.element || owner.element.ownerDocument !== this.host.ownerDocument
+            || owner.element.parentNode || typeof owner.update !== 'function') {
+            owner?.dispose?.(); throw new TypeError('Gallery renderer must return a detached native card owner.');
+          }
+          card = {row, owner}; this.cards.set(row.key, card); this.elements.set(owner.element, card);
+        } else {
+          card.row = row; card.owner.update(row, snapshot);
+          if (!current()) return false;
+        }
+        if (this.root.children[index] !== card.owner.element) {
+          this.root.insertBefore(card.owner.element, this.root.children[index] || null);
+        }
+      }
+      if (!current()) return false;
+      this.measure(snapshot, revision); this.schedule();
+      if (!current()) return false;
+      this.committedRevision = revision;
+      if (focused?.isConnected && this.root.contains(focused) && !focused.disabled
+        && this.host.ownerDocument.activeElement === this.host.ownerDocument.body && current()) {
+        focused.focus({preventScroll: true});
+      }
+      return current();
+    } catch (error) {
+      if (this.revision === revision && resourceGalleryHosts.get(this.host) === this) this.dispose();
+      throw error;
+    }
+    finally {if (!this.disposed && !this.current(this.snapshot)) this.dispose();}
+  }
+
+  measure(snapshot = this.snapshot, revision = this.revision) {
+    if (!this.current(snapshot, revision)) return;
+    if (!this.preserveWidth && this.host.ownerDocument.getElementById('shell-navigation-rail')
+      ?.classList?.contains('is-transitioning')) return;
+    const width = Math.max(1, this.host.clientWidth - 4), gap = 14;
+    const mobileGeometry = this.window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
+      viewportWidth: this.window.innerWidth, availableWidth: width, mode: snapshot.displayMode,
+      columns: snapshot.mobileColumns ?? 3, gap,
+    });
+    if (!this.current(snapshot, revision)) return;
+    const geometry = resolveGalleryColumnGeometry({width, columnGap: gap, itemCount: this.cards.size,
+      selectedCardWidth: resolveGalleryCardWidth(snapshot.layoutConfig, snapshot.galleryScalePercent ?? DEFAULT_GALLERY_SCALE_PERCENT),
+      columns: this.geometry.columns, cardTrackWidth: this.geometry.cardTrackWidth,
+      preserveCardTrackWidth: this.preserveWidth, mobileGeometry});
+    this.geometry = geometry; this.preserveWidth = false;
+    this.root.style.gridTemplateColumns = buildAlbumRowGridTemplate(geometry.columns, geometry.cardTrackWidth);
+    this.root.setAttribute('data-gallery-display', snapshot.displayMode);
+  }
+
+  schedule() {
+    if (this.frame || this.disposed) return;
+    const snapshot = this.snapshot, revision = this.revision;
+    this.frame = this.window.requestAnimationFrame(() => {
+      this.frame = 0;
+      if (this.current(snapshot, revision)) this.measure(snapshot, revision);
+      else if (!this.current(this.snapshot)) this.dispose();
+      else this.schedule();
+    });
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true; this.revision++;
+    if (resourceGalleryHosts.get(this.host) === this) resourceGalleryHosts.delete(this.host);
+    if (this.frame) this.window.cancelAnimationFrame(this.frame);
+    this.frame = 0; this.observer?.disconnect();
+    this.root.removeEventListener('click', this.click);
+    this.window.removeEventListener('resize', this.resize);
+    this.window.removeEventListener('album-haven:artist-tree-settled', this.resize);
+    const cards = [...this.cards.values()]; this.cards.clear(); this.root.remove();
+    for (const card of cards) {try {card.owner.dispose?.();} catch { /* Retire every owned card. */ }}
+  }
+}
 
 class VirtualArtistGrid {
   constructor() {
@@ -1377,45 +1562,19 @@ class VirtualArtistGrid {
       }
       lease.width = width;
     }
-    const previousCardTrackWidth = Number(this.cardTrackWidth);
-    const preserveCardTrackWidth = Boolean(
-      options.preserveCardTrackWidth && Number.isFinite(previousCardTrackWidth) && previousCardTrackWidth > 0,
-    );
-    const targetCardTrackWidth = preserveCardTrackWidth
-      ? Math.min(previousCardTrackWidth, width)
-      : selectedCardWidth;
-    const preservedColumns = Math.max(
-      1,
-      Math.floor((width + this.columnGap) / (targetCardTrackWidth + this.columnGap)),
-    );
     const largestArtistAlbumCount = this.sections.reduce((largest, section) => Math.max(
-      largest,
-      Array.isArray(section?.group?.albums) ? section.group.albums.length : 0,
+      largest, Array.isArray(section?.group?.albums) ? section.group.albums.length : 0,
     ), 0);
-    const shouldFillSettledRow = preserveCardTrackWidth
-      && largestArtistAlbumCount > Math.max(1, Number(this.columns) || 1);
-    const minimumSettledCardWidth = selectedCardWidth * MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO;
-    const settledColumns = Math.min(
-      largestArtistAlbumCount,
-      Math.max(1, Math.floor(
-        (width + this.columnGap) / (minimumSettledCardWidth + this.columnGap),
-      )),
-    );
-    if (!options.preserveColumnGeometry) {
-      this.columns = shouldFillSettledRow ? settledColumns : preservedColumns;
-      this.cardTrackWidth = shouldFillSettledRow || !preserveCardTrackWidth
-        ? (width - (this.columns - 1) * this.columnGap) / this.columns
-        : targetCardTrackWidth;
-    }
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
     const mobileGeometry = window.AlbumHavenClientLayout?.resolveMobileGalleryGeometry({
       viewportWidth: window.innerWidth, availableWidth: width, mode: displayMode,
       columns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3), gap: this.columnGap,
     });
-    if (mobileGeometry) {
-      this.columns = mobileGeometry.columns;
-      this.cardTrackWidth = mobileGeometry.cardTrackWidth;
-    }
+    const geometry = resolveGalleryColumnGeometry({width, selectedCardWidth, columnGap: this.columnGap,
+      itemCount: largestArtistAlbumCount, columns: this.columns, cardTrackWidth: this.cardTrackWidth,
+      preserveCardTrackWidth: options.preserveCardTrackWidth,
+      preserveColumnGeometry: options.preserveColumnGeometry, mobileGeometry});
+    this.columns = geometry.columns; this.cardTrackWidth = geometry.cardTrackWidth;
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
     const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
       || (displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight);

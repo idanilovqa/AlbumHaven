@@ -1,5 +1,15 @@
+// Top playback authority belongs to the current session, never to saved paths.
+function isSessionOnlyTopPlayback(value) {
+  return value?.sourceKind === 'album-top'
+    || (typeof isTopPlaybackBoundPayload === 'function' && isTopPlaybackBoundPayload(value) === true);
+}
+function containsSessionOnlyTopPlayback(queue) {
+  return isSessionOnlyTopPlayback(queue)
+    || (Array.isArray(queue?.tracks) && queue.tracks.some(isSessionOnlyTopPlayback));
+}
 function buildPersistedPlaybackQueue(currentTrackPath) {
   const queue = state.player.playbackQueue;
+  if (containsSessionOnlyTopPlayback(queue)) return null;
   if (queue?.explicitQueue === true) return null;
   if (!queue || !Array.isArray(queue.tracks) || !queue.tracks.length) return null;
   const normalizedCurrentTrackPath = String(currentTrackPath || '');
@@ -36,6 +46,7 @@ function buildPersistedPlaybackQueue(currentTrackPath) {
 function buildPersistedPlayerState(options = {}) {
   const playback = options.playbackSnapshot || getPlayerPlaybackSnapshot();
   const current = state.player.current;
+  if (isSessionOnlyTopPlayback(current)) return null;
   const src = String(playback.src || current?.src || '');
   if (!current || !src) return null;
   const shouldPreservePlayingState = Boolean(options.preservePlayingState);
@@ -79,6 +90,8 @@ function buildPersistedPlayerState(options = {}) {
 }
 
 function restorePersistedPlaybackQueue(parsedState, currentTrackPath) {
+  if (isSessionOnlyTopPlayback(parsedState?.track)
+    || containsSessionOnlyTopPlayback(parsedState?.playbackQueue)) return false;
   const tracks = Array.isArray(parsedState?.playbackQueue?.tracks)
     ? parsedState.playbackQueue.tracks
       .map((track) => {
@@ -255,6 +268,8 @@ function restorePlayerState() {
   let parsed;
   try { parsed = JSON.parse(getLocalStorageItem(PLAYER_STATE_STORAGE_KEY)); } catch { return; }
   const track = parsed?.track;
+  if (isSessionOnlyTopPlayback(track)
+    || containsSessionOnlyTopPlayback(parsed?.playbackQueue)) return;
   const scope = capturePlaybackOwnershipScope();
   if (!track || Array.isArray(track) || typeof track.src !== 'string' || !track.src.trim()
     || typeof track.path !== 'string' || !track.path.trim() || !scope || !isPlaybackOwnershipScopeCurrent(scope) || entrySelection !== playerTrackSelectionToken || entryRestoreEpoch !== playerRestoreEpoch) return;

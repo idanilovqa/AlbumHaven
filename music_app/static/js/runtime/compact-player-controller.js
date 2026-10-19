@@ -300,6 +300,8 @@ function isCurrentCompactQueueSelection(selection) {
 
 function currentQueueIndex() {
   const queue = state.player.playbackQueue;
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) return TopPlaybackRuntime.currentIndex(queue);
+  if (queue?.sourceKind === 'album-top') return -1;
   if (isCurrentCompactQueueSelection(compactPlayerPendingSelection)) {
     return compactPlayerPendingSelection.index;
   }
@@ -318,6 +320,8 @@ async function playCompactQueueOffset(offset) {
     if (result !== undefined) return result;
   }
   const queue = state.player.playbackQueue;
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) return TopPlaybackRuntime.skip(queue, offset);
+  if (queue?.sourceKind === 'album-top') return false;
   const index = currentQueueIndex();
   if (!queue?.tracks?.length || index < 0) return;
   const targetIndex = index + offset;
@@ -398,6 +402,10 @@ function syncCompactPlayerUi(snapshot = {}) {
   }
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });
+  if (typeof TopPlaybackRuntime !== 'undefined' && TopPlaybackRuntime.hasQueue(queue)) {
+    controls.previousDisabled = !TopPlaybackRuntime.hasOffset(queue, -1);
+    controls.nextDisabled = !TopPlaybackRuntime.hasOffset(queue, 1);
+  }
   if (els.previous) els.previous.disabled = controls.previousDisabled || locked;
   const explicitNext = typeof ExplicitQueueRuntime !== 'undefined' && ExplicitQueueRuntime.hasNext();
   if (els.next) els.next.disabled = (controls.nextDisabled && !explicitNext) || locked;

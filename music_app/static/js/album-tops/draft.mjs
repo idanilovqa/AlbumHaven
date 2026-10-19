@@ -2,8 +2,16 @@
 import {albumTopActionAllowed} from './model.mjs';
 const copy = value => JSON.parse(JSON.stringify(value));
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
-const wire = row => ({item_ref: row.item_ref ?? null, album_ref: row.album_ref,
+const localWire = row => ({item_ref: row.item_ref ?? null, album_ref: row.album_ref,
   ...(row.selected_source_ref ? {selected_local_album_id: row.selected_local_album_id, selected_source_ref: row.selected_source_ref} : {})});
+const rowKey = row => row.album_ref || row.selection_key;
+const isRemote = row => row.source_kind === 'remote_summary' || row.source?.kind?.startsWith('remote_');
+const typedWire = row => ({kind: row.item_ref ? 'existing' : isRemote(row) ? 'new_remote' : 'new_local',
+  ...(row.item_ref ? {item_ref: row.item_ref} : {}), ...(row.album_ref ? {album_ref: row.album_ref} : {}),
+  source: row.source ? copy(row.source) : row.selected_source_ref ? {kind: 'local', selected_local_album_id: row.selected_local_album_id, selected_source_ref: row.selected_source_ref} : {kind: 'unselected'}});
+const wire = row => isRemote(row) ? typedWire(row) : localWire(row);
+const remoteError = code => Object.assign(new Error('Album Top remote preparation is unavailable.'), {code, status: 409});
+const newRef = () => {const value = globalThis.crypto?.randomUUID?.(); if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)) throw remoteError('remote_context_changed'); return value;};
 const busyMutation = value => value?.refreshing === true || ['loading', 'uncertain'].includes(value?.status);
 const ITEM_ACTION = 'library.album_tops.items.manage';
 
@@ -19,17 +27,22 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
   const parent = controller.getSnapshot(), source = parent.selectedTopRef ? parent.detail.data : null;
   const adding = mode === 'add', editing = Boolean(source), scopeKey = parent.scopeKey, topRef = source?.top_ref || null;
   const bindings = new Map();
-  for (const item of source?.edit_draft?.items || []) {
+  for (const item of source?.edit_draft?.item_selections || source?.edit_draft?.items || []) {
     const ref = item.item_ref;
     if (!bindings.has(ref)) bindings.set(ref, item);
   }
-  const initialItems = source?.items?.map(row => ({...copy(row), ...copy(bindings.get(row.item_ref) || {})})) || [];
+  const initialItems = source?.items?.map(row => {const binding = copy(bindings.get(row.item_ref) || {}); return {...copy(row), ...binding, ...(binding.source?.kind === 'local' ? {selected_local_album_id: binding.source.selected_local_album_id, selected_source_ref: binding.source.selected_source_ref} : {})};}) || [];
   const baseline = {title: source?.title || '', description: source?.description || '', items: initialItems.map(wire)};
   let state = {scopeKey, topRef, revision: source?.revision || null, title: baseline.title, description: baseline.description,
     items: adding ? [] : copy(initialItems), ...(adding ? {capacity: Math.max(0, 5000 - initialItems.length), submittedRequestKey: null} : {}), query: '', tab: editing && !adding ? 'selected' : 'all', search: {status: 'idle', items: [], next_cursor: null},
-    busy: false, stale: false, denied: false, dirty: false, error: null};
+    busy: false, stale: false, denied: false, dirty: false, error: null, pool: 'local', formRef: null,
+    remote: {status: 'idle', title: '', artist: '', search: {status: 'idle', candidates: []}, preparation: null, operation: null, ownState: null, maintenance: null, retired: false, membershipRetired: false}};
   const listeners = new Set(), requests = new Set(), cursors = new Set();
   let disposed = false, retired = false, sequence = 0, searchAbort = null, working = false, results = [];
+  let remoteActive = initialItems.some(isRemote), remoteRetired = false, remoteMembershipRetired = false, remoteOperation = null, remoteSearchVersion = 0, remoteSearchAbort = null;
+  let remoteIdentity = null, formRef = null;
+  const remoteContextMethod = providers.remoteContext, ownedParents = new Set(), unavailableParents = new Set();
+  try {if (typeof remoteContextMethod === 'function') remoteIdentity = remoteContextMethod.call(providers);} catch { /* Remote entry stays unavailable; local draft is unaffected. */ }
   const supported = data => !data || (!Object.hasOwn(data, 'type') || data.type === 'manual')
     && (!Object.hasOwn(data, 'source_locked') || data.source_locked === false);
   const metadataAllowed = current => supported(source) && supported(editing ? current.detail.data : null)
@@ -46,6 +59,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
   let memberAuthority = membersAllowed(parent);
   function refresh() {
     if (disposed || retired && !adding) return false;
+    if (remoteActive && !remoteScoped()) retireRemote();
     const current = controller.getSnapshot();
     if (current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef
       || current.directory.status === 'denied' || current.detail.status === 'denied') {
@@ -57,7 +71,7 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
       && ['error', 'denied'].includes(current.mutation.status)) emit({submittedRequestKey: null});
     const stale = editing && current.detail.data?.revision !== state.revision;
     const denied = !metadataAllowed(current) && ['ready', 'empty'].includes(editing ? current.detail.status : current.directory.status);
-    const busy = working || busyMutation(current.mutation);
+    const busy = working || Boolean(remoteOperation) || busyMutation(current.mutation);
     // Add is a captured destination revision, not a reusable authoring session.
     // Once authority/revision is lost, an ABA restoration cannot revive it.
     if (adding && (stale || denied)) {
@@ -65,17 +79,25 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
       emit({stale: Boolean(stale), denied, busy: false, query: '', ...(denied ? {title: '', description: '', items: [], submittedRequestKey: null} : {}),
         search: {status: denied ? 'denied' : 'unavailable', items: [], next_cursor: null}}); return false;
     }
-    const canManageMembers = membersAllowed(current);
-    if (memberAuthority && !canManageMembers) {
+    const canManageMembers = membersAllowed(current), lostMemberAuthority = memberAuthority && !canManageMembers;
+    memberAuthority = canManageMembers; // Capture before notifications can reenter refresh.
+    if (remoteActive && !canManageMembers && !remoteMembershipRetired) {
+      remoteMembershipRetired = true; remoteSearchVersion++; remoteSearchAbort?.abort();
+      if (remoteOperation && ['begin', 'acquire'].includes(remoteOperation.kind)) {
+        const previous = remoteOperation; remoteOperation = null; previous.abort?.abort();
+      }
+      emit({remote: {...state.remote, membershipRetired: true, operation: remoteOperation ? state.remote.operation : null,
+        search: {status: 'unavailable', candidates: []}}});
+    }
+    if (lostMemberAuthority) {
       sequence++; searchAbort?.abort(); results = []; cursors.clear();
       emit({search: {status: 'unavailable', items: [], next_cursor: null}});
     }
-    memberAuthority = canManageMembers;
     if (stale && !state.stale || denied && !state.denied) abortAll();
     if (state.stale !== Boolean(stale) || state.denied !== denied || state.busy !== busy) emit({stale: Boolean(stale), denied, busy});
-    return !state.stale && !state.denied && metadataAllowed(current);
+    return !remoteRetired && !state.stale && !state.denied && metadataAllowed(current);
   }
-  const allowed = (membership = false) => refresh() && !state.busy && (!membership || membersAllowed(controller.getSnapshot()));
+  const allowed = (membership = false) => refresh() && !state.busy && (!membership || !remoteMembershipRetired && membersAllowed(controller.getSnapshot()));
   const options = abort => ({scopeKey, signal: abort.signal, ...(topRef ? {topRef} : {})});
   const begin = () => {const abort = new AbortController(); requests.add(abort); return abort;};
   const excluded = () => new Set([...baseline.items, ...state.items].map(row => row.album_ref));
@@ -106,6 +128,155 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
       }
       return false;
     } finally {requests.delete(abort);}
+  }
+  function remoteScoped() {
+    if (disposed || retired || remoteRetired || !remoteIdentity || providers.remoteContext !== remoteContextMethod) return false;
+    const current = controller.getSnapshot();
+    if (current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef
+      || current.directory.status === 'denied' || current.detail.status === 'denied'
+      || editing && (current.detail.data !== source || source.revision !== state.revision) || !metadataAllowed(current)) return false;
+    try {
+      const identity = remoteContextMethod.call(providers), after = controller.getSnapshot();
+      return identity === remoteIdentity && after === current && !disposed && !retired && !remoteRetired
+        && after.scopeKey === scopeKey && (after.selectedTopRef || null) === topRef && metadataAllowed(after)
+        && (!editing || after.detail.data === source && source.revision === state.revision)
+        && after.directory.status !== 'denied' && after.detail.status !== 'denied';
+    } catch {return false;}
+  }
+  function retireRemote() {
+    if (remoteRetired) return;
+    remoteRetired = true; remoteMembershipRetired = true; remoteSearchVersion++;
+    remoteSearchAbort?.abort(); abortAll();
+    emit({remote: {...state.remote, retired: true, membershipRetired: true, status: 'unavailable', search: {status: 'unavailable', candidates: []}}, busy: false});
+  }
+  function remoteOptions(abort, membership = false) {
+    return {...options(abort), remoteContext: remoteIdentity, isCurrent: () => remoteScoped()
+      && (!membership || !remoteMembershipRetired && membersAllowed(controller.getSnapshot()))};
+  }
+  function activateRemote(membership = true) {
+    remoteActive = true;
+    if (!remoteScoped()) {retireRemote(); return false;}
+    if (membership && (!membersAllowed(controller.getSnapshot()) || remoteMembershipRetired)) {
+      remoteMembershipRetired = true; emit({remote: {...state.remote, membershipRetired: true}}); return false;
+    }
+    return true;
+  }
+  function remoteDestination() {
+    if (!formRef) {formRef = newRef(); emit({formRef});}
+    return topRef ? {kind: 'top', top_ref: topRef, revision: state.revision} : {kind: 'create', draft_ref: formRef};
+  }
+  function remotePatch(patch, extra = {}) {emit({...extra, remote: {...state.remote, ...patch, retired: remoteRetired, membershipRetired: remoteMembershipRetired}});}
+  function invalidateParent(ref) {
+    unavailableParents.add(ref); ownedParents.delete(ref);
+    remotePatch({preparation: state.remote.preparation?.preparation_ref === ref ? null : state.remote.preparation});
+  }
+  function currentRemoteDenial(error) {
+    // Request sequence/physical abort is not a grant to ignore a consumed denial
+    // within this same form and actor. Navigation/context replacement is.
+    if (![401, 403].includes(error?.status) || disposed || retired || remoteRetired) return false;
+    const current = controller.getSnapshot();
+    if (current.scopeKey !== scopeKey || (current.selectedTopRef || null) !== topRef || editing && current.detail.data !== source) return false;
+    // Real transport denies before invalidating its generation. It has already
+    // checked old-session isolation; fake/ordinary denials need live context.
+    if (providers.remoteContext !== remoteContextMethod) return false;
+    try {if (remoteContextMethod.call(providers) !== remoteIdentity) return false;} catch { /* The consumed denial may have retired this exact context. */ }
+    if (error.responseRejected !== true && !remoteScoped()) return false;
+    remoteRetired = true; remoteMembershipRetired = true; remoteOperation = null;
+    controller.observeDenial?.(scopeKey, error); abortAll();
+    emit({denied: true, busy: false, error, remote: {...state.remote, retired: true, membershipRetired: true, status: 'denied', search: {status: 'denied', candidates: []}}});
+    return true;
+  }
+  async function searchRemote() {
+    if (!allowed(true) || !activateRemote() || !state.remote.title.trim()) return false;
+    remoteSearchAbort?.abort();
+    const version = ++remoteSearchVersion, abort = begin(); remoteSearchAbort = abort;
+    const payload = {destination: remoteDestination(), title: state.remote.title.trim(), artist: state.remote.artist.trim()};
+    remotePatch({search: {status: 'loading', candidates: []}});
+    try {
+      if (!remoteScoped() || typeof providers.searchRemoteAlbums !== 'function') throw remoteError('remote_context_changed');
+      const page = await providers.searchRemoteAlbums(copy(payload), remoteOptions(abort, true));
+      if (!remoteScoped() || abort.signal.aborted || version !== remoteSearchVersion || !membersAllowed(controller.getSnapshot()) || remoteMembershipRetired) return false;
+      remotePatch({search: {status: 'ready', candidates: page.candidates.map(copy)}}); return true;
+    } catch (error) {
+      if (currentRemoteDenial(error)) return false;
+      if (!remoteScoped()) {if (!disposed) retireRemote(); return false;}
+      if (!abort.signal.aborted && version === remoteSearchVersion) {remotePatch({search: {status: 'error', candidates: []}}); emit({error});}
+      return false;
+    } finally {requests.delete(abort);}
+  }
+  async function runRemoteOperation(operation) {
+    if (remoteOperation !== operation) return false;
+    // Claim before any currency callback can synchronously request another
+    // retry. The private begin-to-acquire continuation transfers this claim.
+    const abort = begin(), attempt = {}; operation.abort = abort; operation.attempt = attempt; operation.status = 'loading';
+    const ownsAttempt = () => remoteOperation === operation && operation.attempt === attempt && operation.abort === abort;
+    try {
+      if (!remoteScoped() || !ownsAttempt() || busyMutation(controller.getSnapshot().mutation)) return false;
+      if (['begin', 'acquire'].includes(operation.kind) && (remoteMembershipRetired || !membersAllowed(controller.getSnapshot()))) return false;
+      remotePatch({status: 'loading', operation: {kind: operation.kind, status: 'loading', ...(operation.ref ? {preparation_ref: operation.ref} : {})}}); refresh();
+      if (!remoteScoped() || !ownsAttempt() || abort.signal.aborted || busyMutation(controller.getSnapshot().mutation)) return false;
+      let result;
+      if (operation.kind === 'begin') result = await providers.beginRemotePreparation(copy(operation.payload), remoteOptions(abort, true));
+      else if (operation.kind === 'acquire') result = await providers.acquireRemoteAlbum(copy(operation.payload), remoteOptions(abort, true));
+      else if (operation.kind === 'close') result = await providers.closeRemotePreparation(operation.ref, remoteOptions(abort));
+      else if (operation.kind === 'status') result = await providers.readRemotePreparationState(remoteOptions(abort));
+      else result = await providers.maintainRemotePreparations(copy(operation.payload), remoteOptions(abort));
+      if (!remoteScoped() || abort.signal.aborted || !ownsAttempt() || busyMutation(controller.getSnapshot().mutation)) return false;
+      if (['begin', 'acquire'].includes(operation.kind) && (remoteMembershipRetired || !membersAllowed(controller.getSnapshot()))) return false;
+      if (operation.kind === 'begin' && result.state === 'ready') {
+        ownedParents.add(result.preparation_ref); remotePatch({preparation: copy(result)});
+        if (!remoteScoped() || !ownsAttempt() || busyMutation(controller.getSnapshot().mutation)) return false;
+        operation.kind = 'acquire'; operation.payload = {version: 2, preparation_ref: result.preparation_ref, request_key: operation.requestKey,
+          destination: operation.payload.destination, release_group_id: operation.candidate.release_group_id};
+        return await runRemoteOperation(operation);
+      }
+      if (operation.kind === 'acquire' && result.state === 'in_flight') {
+        operation.status = 'in_flight'; remotePatch({status: 'in_flight', operation: {kind: 'acquire', status: 'in_flight', retry_after_seconds: result.retry_after_seconds}}); return false;
+      }
+      if (operation.kind === 'acquire' && result.state === 'pending') {
+        const exists = [...initialItems, ...state.items].some(row => row.release_group_id === result.album.release_group_id);
+        if (!exists && state.items.length < (state.capacity ?? 5000)) {
+          const row = {...copy(result.album), artist: result.album.artist_display, year: result.album.first_release_date ? Number(result.album.first_release_date.slice(0, 4)) : null,
+            item_ref: null, selection_key: 'remote:' + result.acquisition_ref, preparation_ref: result.preparation_ref, expires_at: result.expires_at,
+            source: {kind: 'remote_acquisition', acquisition_ref: result.acquisition_ref, evidence_version: result.evidence_version}};
+          emit({items: [...state.items, row]});
+        }
+      }
+      if (operation.kind === 'close') invalidateParent(operation.ref);
+      if (operation.kind === 'status') remotePatch({ownState: copy(result)});
+      if (operation.kind === 'maintain') remotePatch({maintenance: copy(result)});
+      if (!remoteScoped() || !ownsAttempt() || busyMutation(controller.getSnapshot().mutation)) return false;
+      remoteOperation = null;
+      remotePatch({status: result.state, operation: null, result: copy(result)});
+      // consumed is terminal acquisition detail only. It never settles the
+      // controller's independent pending membership command or navigates.
+      return remoteScoped() && ['pending', 'closed', 'status', 'progress', 'complete'].includes(result.state);
+    } catch (error) {
+      if (currentRemoteDenial(error)) return false;
+      if (!remoteScoped()) {if (!disposed) retireRemote(); return false;}
+      if (abort.signal.aborted || !ownsAttempt()) return false;
+      const unavailable = error?.responseRejected === true && error.status === 409 && error.code === 'remote_preparation_unavailable'
+        && ['acquire', 'close'].includes(operation.kind);
+      if (unavailable) {
+        invalidateParent(operation.kind === 'close' ? operation.ref : operation.payload.preparation_ref);
+        if (!remoteScoped() || !ownsAttempt()) return false;
+        remoteOperation = null; remotePatch({status: 'unavailable', operation: null}, {error});
+      } else {
+        operation.status = 'unknown'; remotePatch({status: 'unknown', operation: {kind: operation.kind, status: 'unknown', ...(operation.ref ? {preparation_ref: operation.ref} : {})}}, {error});
+      }
+      return false;
+    } finally {
+      requests.delete(abort);
+      if (ownsAttempt() && operation.status === 'loading' && remoteScoped() && ownsAttempt()) {
+        operation.status = 'unknown'; remotePatch({status: 'unknown', operation: {kind: operation.kind, status: 'unknown'}});
+      }
+      if (!disposed && !retired) refresh();
+    }
+  }
+  function startRemoteOperation(operation) {
+    if (!allowed() || !activateRemote(false) || remoteOperation || busyMutation(controller.getSnapshot().mutation)) return Promise.resolve(false);
+    remoteOperation = operation;
+    return runRemoteOperation(operation);
   }
   const unsubscribe = controller.subscribe?.(refresh) || (() => {});
   refresh();
@@ -145,21 +316,68 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
     },
     remove(albumRef) {
       if (!allowed(true)) return false;
-      emit({items: state.items.filter(row => row.album_ref !== albumRef), error: null}); emit({search: {...state.search, items: visible()}}); return true;
+      emit({items: state.items.filter(row => rowKey(row) !== albumRef), error: null}); emit({search: {...state.search, items: visible()}}); return true;
     },
     reorder(refs) {
       if (!allowed(true) || !Array.isArray(refs) || refs.length !== state.items.length || new Set(refs).size !== refs.length) return false;
-      const byRef = new Map(state.items.map(row => [row.album_ref, row]));
+      const byRef = new Map(state.items.map(row => [rowKey(row), row]));
       const items = Array.from(refs, ref => byRef.get(ref));
       if (items.some(row => !row)) return false;
       emit({items, error: null}); return true;
     },
+    setPool(pool) {
+      if (!['local', 'remote'].includes(pool) || !allowed(true) || pool === 'remote' && !activateRemote()) return false;
+      emit({pool}); return true;
+    },
+    setRemoteTitle(title) {
+      if (!allowed(true) || !activateRemote() || typeof title !== 'string' || Array.from(title).length > 100 || /[\u0000-\u001f\u007f]/.test(title)) return false;
+      remoteSearchVersion++; remoteSearchAbort?.abort(); remotePatch({title, search: {status: 'idle', candidates: []}}); return true;
+    },
+    setRemoteArtist(artist) {
+      if (!allowed(true) || !activateRemote() || typeof artist !== 'string' || Array.from(artist).length > 100 || /[\u0000-\u001f\u007f]/.test(artist)) return false;
+      remoteSearchVersion++; remoteSearchAbort?.abort(); remotePatch({artist, search: {status: 'idle', candidates: []}}); return true;
+    },
+    searchRemote,
+    async selectRemote(candidate) {
+      if (!allowed(true) || !activateRemote() || !state.remote.search.candidates.includes(candidate)
+        || state.items.length >= (state.capacity ?? 5000) || [...initialItems, ...state.items].some(row => row.release_group_id === candidate.release_group_id)) return false;
+      const target = remoteDestination(), operation = {kind: 'begin', status: 'new', payload: {destination: target, form_ref: formRef}, candidate: copy(candidate), requestKey: newRef()};
+      return startRemoteOperation(operation);
+    },
+    retryRemoteAcquisition() {
+      const operation = remoteOperation;
+      if (!operation || !['unknown', 'in_flight'].includes(operation.status) || busyMutation(controller.getSnapshot().mutation)) return Promise.resolve(false);
+      return runRemoteOperation(operation);
+    },
+    readRemotePreparationState() {return startRemoteOperation({kind: 'status', status: 'new'});},
+    maintainRemotePreparations({discardLegacy = false, confirmed = false} = {}) {
+      if (discardLegacy && confirmed !== true) {remotePatch({status: 'confirmation_required'}); return Promise.resolve(false);}
+      return startRemoteOperation({kind: 'maintain', status: 'new', payload: {mode: discardLegacy ? 'discard_legacy' : 'reclaim'}});
+    },
+    closeRemotePreparation(ref, {confirmed = false} = {}) {
+      if (!allowed() || !activateRemote(false) || remoteOperation || busyMutation(controller.getSnapshot().mutation)) return Promise.resolve(false);
+      if (!ownedParents.has(ref)) {
+        if (!state.remote.ownState?.parents.some(row => row.preparation_ref === ref)) return Promise.resolve(false);
+        if (confirmed !== true) {remotePatch({status: 'confirmation_required'}); return Promise.resolve(false);}
+      }
+      return startRemoteOperation({kind: 'close', status: 'new', ref});
+    },
+    discardRemote() {
+      const ref = ownedParents.values().next().value;
+      return ref ? this.closeRemotePreparation(ref) : Promise.resolve(!remoteOperation && !busyMutation(controller.getSnapshot().mutation));
+    },
     async submit() {
       if (!allowed() || (adding ? !state.items.length : !state.title.trim() || editing && !state.dirty)) return false;
-      const items = state.items.map(wire), membershipChanged = !equal(items, baseline.items);
-      if (membershipChanged && !membersAllowed(controller.getSnapshot())) return false;
-      const payload = adding ? {album_refs: state.items.map(row => row.album_ref)} : {title: state.title, description: state.description,
-        ...(editing ? membershipChanged ? {items} : {} : {album_refs: state.items.map(row => row.album_ref)})};
+      const items = state.items.map(localWire), membershipChanged = !equal(state.items.map(wire), baseline.items), hasRemote = state.items.some(isRemote);
+      if (hasRemote && (!activateRemote(false) || state.items.some(row => row.source?.kind === 'remote_acquisition'
+        && (unavailableParents.has(row.preparation_ref) || Date.parse(row.expires_at) <= Date.now())))) {emit({error: remoteError('remote_acquisition_expired')}); return false;}
+      if (!adding && editing && hasRemote && source.edit_draft?.publication_preview_required) {emit({error: remoteError('remote_publication_unavailable')}); return false;}
+      if (membershipChanged && (remoteMembershipRetired || !membersAllowed(controller.getSnapshot()))) return false;
+      const selections = () => state.items.map(row => isRemote(row) ? copy(row.source) : {kind: 'local_catalog', album_ref: row.album_ref});
+      const payload = adding ? hasRemote ? {selections: selections()} : {album_refs: state.items.map(row => row.album_ref)}
+        : {title: state.title, description: state.description,
+          ...(editing ? membershipChanged ? hasRemote ? {item_selections: state.items.map(typedWire)} : {items} : {}
+            : hasRemote ? {draft_ref: formRef, selections: selections()} : {album_refs: state.items.map(row => row.album_ref)})};
       const abort = begin(); working = true; emit({busy: true, error: null});
       try {
         if (!adding && editing && source.edit_draft?.publication_preview_required) {
@@ -171,17 +389,18 @@ export function createAlbumTopDraft({controller, providers = {}, mode = 'edit'})
           payload.evidence_revision = preview.evidence_revision;
         }
         if (disposed || retired || abort.signal.aborted || !refresh()
-          || membershipChanged && !membersAllowed(controller.getSnapshot())) return false;
+          || membershipChanged && (remoteMembershipRetired || !membersAllowed(controller.getSnapshot()))) return false;
         const beforeMutation = controller.getSnapshot().mutation;
         const attempt = controller.mutate(adding ? 'add' : editing ? 'save' : 'create', payload);
-        if (adding) {
+        if (adding || hasRemote) {
           // mutate synchronously acquires its existing request owner before
           // invoking transport. Bind only this invocation's exact add command;
           // another shared-controller write cannot close an unsent selection.
           const mutation = controller.getSnapshot().mutation, command = mutation.command;
           if (mutation !== beforeMutation && ['loading', 'uncertain'].includes(mutation.status)
-            && mutation.action === 'add' && command?.top_ref === topRef
-            && command.revision === state.revision && equal(command.album_refs, payload.album_refs)) {
+            && mutation.action === (adding ? 'add' : editing ? 'save' : 'create')
+            && (editing ? command?.top_ref === topRef && command.revision === state.revision : command?.draft_ref === formRef)
+            && Object.keys(payload).every(key => equal(command[key], payload[key]))) {
             emit({submittedRequestKey: command.request_key});
           }
         }

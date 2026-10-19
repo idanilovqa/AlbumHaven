@@ -114,6 +114,10 @@ const ExplicitQueueRuntime = (() => {
   const trackKey=track=>{if(!trackKeys.has(track))trackKeys.set(track,`ordinary-${++serial}`);return trackKeys.get(track);};
   function describe(queue=state.player.playbackQueue,current=state.player.current,indexOverride=null) {
     if(queue?.explicitQueue===true) return playback().ended ? Object.freeze({...queue.explicitContext,ended:true}) : queue.explicitContext;
+    if(typeof TopPlaybackRuntime!=='undefined'&&TopPlaybackRuntime.hasQueue(queue)) {
+      const context=TopPlaybackRuntime.describe(queue,indexOverride);
+      return context&&indexOverride===null&&playback().ended?Object.freeze({...context,ended:true}):context;
+    }
     let tracks=queue?.tracks;
     if(!Array.isArray(tracks)||!tracks.length)tracks=current?[current]:[];
     let index=indexOverride;
@@ -133,7 +137,8 @@ const ExplicitQueueRuntime = (() => {
       index,albumComplete,repeat:queue?.repeatMode||'off',shuffle:queue?.shuffle===true,ended:index<0||index>=tracks.length||indexOverride===null&&playback().ended===true,
       nativeQueue:queue,nativeTracks:tracks});
   }
-  function successor(before) {
+  function successor(before,automatic=true) {
+    if(before?.source==='album-top')return TopPlaybackRuntime.successor(before,automatic);
     if(before.source==='explicit')return Object.freeze({...before,ended:true});
     const queue=before.nativeQueue;
     if(!queue)return Object.freeze({...before,ended:true});
@@ -146,10 +151,12 @@ const ExplicitQueueRuntime = (() => {
     const context=next?describe(next,next.tracks[0],0):Object.freeze({...before,ended:true});
     successorCache={before,playbackContext:queue.playbackContext,next:context};return context;
   }
-  const stopPriority=()=>state.player.loopActive===true || typeof isPlaybackLockedByAnotherTab==='function'&&isPlaybackLockedByAnotherTab();
-  function preview() {
+  const stopPriority=(before=null,automatic=true)=>state.player.loopActive===true || typeof isPlaybackLockedByAnotherTab==='function'&&isPlaybackLockedByAnotherTab()
+    || automatic&&(before?.source==='album-top'||before?.source==='explicit'&&planner?.getSnapshot().returnContext?.source==='album-top')
+      &&TopPlaybackRuntime.shouldStop(before.source==='album-top'?before.nativeQueue:planner.getSnapshot().returnContext.nativeQueue);
+  function preview(automatic=true) {
     sync();const before=describe();planner.reconcile(before);
-    return planner.preview(before,successor(before),{stopPriority:stopPriority()}).next;
+    return planner.preview(before,successor(before,automatic),{stopPriority:stopPriority(before,automatic)}).next;
   }
   function payload(context) {
     if(!context||context.ended)return null;
@@ -163,10 +170,13 @@ const ExplicitQueueRuntime = (() => {
   }
   const sameContext=(a,b)=>a?.session===b?.session&&a?.source===b?.source&&a?.entryId===b?.entryId
     &&a?.index===b?.index&&a?.tracks?.[a.index]===b?.tracks?.[b.index]&&a?.ended===b?.ended
-    &&a?.repeat===b?.repeat&&a?.shuffle===b?.shuffle&&a?.albumComplete===b?.albumComplete&&JSON.stringify(a?.tracks)===JSON.stringify(b?.tracks);
+    &&a?.repeat===b?.repeat&&a?.shuffle===b?.shuffle&&(a?.source==='album-top'||a?.albumComplete===b?.albumComplete)
+    &&JSON.stringify(a?.tracks)===JSON.stringify(b?.tracks);
   function editable() {
     sync();const engine=typeof streamingEngineState==='function'?streamingEngineState():null;
-    if(pendingStart||engine?.pendingPromotion||engine?.roles?.current?.boundaryNotified)throw new Error('Wait for the current track transition before editing the Queue.');
+    const topProgression=typeof TopPlaybackRuntime!=='undefined'
+      &&(TopPlaybackRuntime.hasQueue(state.player.playbackQueue)||planner.getSnapshot().returnContext?.source==='album-top');
+    if(pendingStart||engine?.pendingPromotion||topProgression&&engine?.pendingSeek||engine?.roles?.current?.boundaryNotified&&!topProgression)throw new Error('Wait for the current track transition before editing the Queue.');
     if(!state.player.loopActive&&engine?.roles?.continuity
       && (typeof closeStreamingContinuityRole!=='function'||closeStreamingContinuityRole('explicit-queue-change')!==true))throw new Error('The Queue transition is already starting.');
     refreshController?.abort();generation++;prepared=null;
@@ -182,32 +192,55 @@ const ExplicitQueueRuntime = (() => {
     bindIdentity(source,target);
     return Object.freeze({...target});
   }
-  async function refresh() {
+  async function refresh({automatic=true}={}) {
     sync();if(stopPriority())return null;
+    if(typeof TopPlaybackRuntime!=='undefined'&&TopPlaybackRuntime.isStarting(state.player.playbackQueue))return null;
     const engine=typeof streamingEngineState==='function'?streamingEngineState():null;
-    if(!engine?.roles?.current||engine.pendingPromotion||engine.roles.current.boundaryNotified)return null;
+    const topProgression=typeof TopPlaybackRuntime!=='undefined'
+      &&(TopPlaybackRuntime.hasQueue(state.player.playbackQueue)||planner.getSnapshot().returnContext?.source==='album-top');
+    if(!engine?.roles?.current||topProgression&&engine.pendingSeek||(engine.pendingPromotion||engine.roles.current.boundaryNotified)&&!topProgression)return null;
     if(!planner.getSnapshot().entries.length&&!planner.getSnapshot().currentId) {
+      if(typeof TopPlaybackRuntime!=='undefined'&&TopPlaybackRuntime.hasQueue(state.player.playbackQueue))return TopPlaybackRuntime.prepareNext();
       const ordinary=peekNextOrdinaryQueuedTrack();if(ordinary)await scheduleStreamingContinuity(ordinary);return ordinary;
     }
     if(prepared&&engine.roles.continuity&&closeStreamingContinuityRole('explicit-queue-refresh')!==true)return null;
     prepared=null;engine.pendingContinuityTrack=null;engine.pendingContinuityOptions=null;
     refreshController?.abort();const controller=new AbortController();refreshController=controller;
-    const token=++generation,before=describe();let candidate=preview();
+    const token=++generation,before=describe(),outgoing=engine.roles.current;let candidate,topTrack=null;
+    const topCurrent=()=>!controller.signal.aborted&&token===generation&&sameContext(before,describe())
+      &&(engine.roles.current===outgoing||engine.roles.current?.track===topTrack);
     try {
+      if(before?.source==='album-top') {
+        const ordinary=successor(before,automatic);
+        if(!ordinary.ended)topTrack=await TopPlaybackRuntime.prepareContext(ordinary,{automatic,signal:controller.signal,isCurrent:topCurrent});
+      }
+      if(!topCurrent())return null;
+      candidate=preview(automatic);
       // Fresh authorization is required before handing media to native preload.
       while(candidate?.source==='explicit'&&!candidate.ended) {
         const entry=planner.getSnapshot().entries.find(value=>value.id===candidate.entryId),source=sources.get(entry?.trackId);
         try {source.target=await resolve(source,controller.signal);source.playFailed=false;}
-        catch(error){if(controller.signal.aborted||token!==generation)throw aborted();if(source){source.target=null;source.playFailed=true;}notify();candidate=preview();continue;}
+        catch(error){if(controller.signal.aborted||token!==generation)throw aborted();if(source){source.target=null;source.playFailed=true;}notify();candidate=preview(automatic);continue;}
         break;
       }
-      if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority())return null;
+      if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority(before,automatic))return null;
       let track=payload(candidate);
-      if(track&&candidate.source!=='explicit') {
+      if(track&&candidate.source==='album-top') {
+        if(!topTrack)topTrack=await TopPlaybackRuntime.prepareContext(candidate,{automatic,signal:controller.signal,isCurrent:topCurrent});
+        track=topTrack;
+        if(track) {
+          const fresh=TopPlaybackRuntime.contextForTrack(track);
+          if(before.source==='explicit') {
+            const value=planner.getSnapshot();
+            if(!sameContext(value.returnContext,candidate)||!planner.restore(value,{...value,returnContext:fresh}))return null;
+          }
+          candidate=fresh;
+        }
+      } else if(track&&candidate.source!=='explicit') {
         try {track=await refreshExplicitQueueReturnTrack(candidate,track,{signal:controller.signal});}
         catch(error) {if(controller.signal.aborted||token!==generation)throw aborted();prepared=null;planner.halt();notify();return null;}
       }
-      if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority())return null;
+      if(controller.signal.aborted||token!==generation||!sameContext(before,describe())||stopPriority(before,automatic))return null;
       if(!track){prepared=null;return null;}
       prepared={before,next:candidate,track,generation:token};
       await scheduleStreamingContinuity(track);
@@ -420,10 +453,11 @@ const ExplicitQueueRuntime = (() => {
           ||options.isCurrent&&options.isCurrent()!==true||planner.getSnapshot()!==value)throw aborted();
         const context=planner.start(id,current),track=payload(context);if(!context||!track)throw aborted();
         install(context);installed=planner.getSnapshot();const authorityEpoch=source.authorityEpoch;notify();
-        const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,isCurrent:()=>
+        selectedToken=playerTrackSelectionToken;
+        const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,onSelectionAdmitted:token=>{selectedToken=token;},isCurrent:()=>
           actor===TrackActionsRuntime.scope().token&&pendingStart===controller&&sourceCurrent(source)&&source.readable!==false&&source.authorityEpoch===authorityEpoch
           &&planner.getSnapshot()===installed&&(!options.isCurrent||options.isCurrent()===true)});
-        selectedToken=playerTrackSelectionToken;started=await starting;
+        started=await starting;
         if(started!==true)throw new Error('Queue playback did not start.');return true;
       } finally {
         if(!started&&installed&&planner.getSnapshot().currentId===id&&playerTrackSelectionToken===selectedToken
@@ -439,25 +473,30 @@ const ExplicitQueueRuntime = (() => {
   PrivateUITransport.subscribe?.(()=>{sync();notify();});
   window.AlbumHavenExplicitQueue=Object.freeze(api);
   return Object.freeze({
+    referencesOrdinaryQueue(queue){return planner?.getSnapshot().returnContext?.nativeQueue===queue;},
     currentChanged(){notify();},
     selectionStarted(){const old=refreshController;refreshController=null;ownershipEpoch++;generation++;prepared=null;successorCache=null;old?.abort();},
-    hasNext(){sync();if(!planner.getSnapshot().entries.length&&!planner.getSnapshot().currentId)return false;return Boolean(payload(preview()));},
+    hasNext(){sync();if(!planner.getSnapshot().entries.length&&!planner.getSnapshot().currentId)return false;return Boolean(payload(preview(false)));},
     async skip(offset) {
       sync();const before=describe();if(offset<0)return before.source==='explicit'?false:undefined;
       if(offset!==1||stopPriority()||pendingStart)return false;
-      await refresh();const context=preview(),track=prepared&&sameContext(prepared.before,before)&&sameContext(prepared.next,context)?prepared.track:null;
+      if((before.source==='album-top'||planner.getSnapshot().returnContext?.source==='album-top')&&streamingEngineState().pendingPromotion)return false;
+      if(before.source==='album-top'&&planner.getSnapshot().halted) {
+        const value=planner.getSnapshot();planner.restore(value,{...value,halted:false});
+      }
+      await refresh({automatic:false});const context=preview(false),track=prepared&&sameContext(prepared.before,before)&&sameContext(prepared.next,context)?prepared.track:null;
       if(!track||pendingStart||!sameContext(before,describe()))return false;
       const previous=planner.getSnapshot(),previousQueue=state.player.playbackQueue,actor=scopeToken;
       const controller=new AbortController();pendingStart=controller;
-      const next=planner.advance(before,successor(before)),selected=planner.getSnapshot();install(next);
+      const next=planner.advance(before,successor(before,false)),selected=planner.getSnapshot();install(next);
       const selectedQueue=state.player.playbackQueue,previousIndex=before.index;
       const selectedEntry=selected.entries.find(entry=>entry.id===selected.currentId),selectedSource=sources.get(selectedEntry?.trackId),authorityEpoch=selectedSource?.authorityEpoch;
       notify();let started=false,selectedToken=null;
-      try {const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,isCurrent:()=>
+      try {selectedToken=playerTrackSelectionToken;const starting=playTrackFromPayload(track,{explicitQueueTransition:true,signal:controller.signal,onSelectionAdmitted:token=>{selectedToken=token;},isCurrent:()=>
         pendingStart===controller&&!controller.signal.aborted&&actor===TrackActionsRuntime.scope().token
         &&(!selectedSource||sourceCurrent(selectedSource)&&selectedSource.readable!==false&&selectedSource.authorityEpoch===authorityEpoch)
         &&planner.getSnapshot()===selected&&state.player.playbackQueue===selectedQueue});
-        selectedToken=playerTrackSelectionToken;started=await starting;if(started)prune();return started===true;}
+        started=await starting;if(started)prune();return started===true;}
       finally {if(!started&&pendingStart===controller&&actor===TrackActionsRuntime.scope().token
         &&planner.getSnapshot().currentId===selected.currentId&&state.player.playbackQueue===selectedQueue&&playerTrackSelectionToken===selectedToken) {
         planner.restore(planner.getSnapshot(),{...previous,halted:planner.getSnapshot().halted||previous.halted});state.player.playbackQueue=previousQueue;if(previousQueue)previousQueue.currentIndex=previousIndex;notify();}
@@ -467,20 +506,34 @@ const ExplicitQueueRuntime = (() => {
     peek(){sync();const next=preview();return prepared&&sameContext(prepared.before,describe())&&sameContext(prepared.next,next)?prepared.track:null;},
     consume(){sync();const before=describe(),next=preview();
       if(!prepared||!sameContext(prepared.before,before)||!sameContext(prepared.next,next))return null;
-      const context=planner.advance(before,successor(before),{stopPriority:stopPriority()}),track=payload(context);
+      const after=successor(before),stopping=stopPriority(before);
+      if(prepared.next.source==='album-top'&&(!TopPlaybackRuntime.receiptCurrent(prepared.track)
+        ||streamingEngineState().roles?.current?.track!==prepared.track||!TopPlaybackRuntime.commit(prepared.track)))return null;
+      const context=planner.advance(before,after,{stopPriority:stopping}),track=payload(context);
       const promoted=prepared&&sameContext(prepared.next,context)?prepared.track:track;
       install(context);prepared=null;prune();snapshot=null;return promoted;},
     prepareNext:refresh,
     replaced(){sync();refreshController?.abort();generation++;prepared=null;successorCache=null;session++;
       if(state.player.playbackQueue)queues.set(state.player.playbackQueue,session);planner.replaceContext();notify();},
     modeChanged(previous,next){sync();successorCache=null;
+      if(typeof TopPlaybackRuntime!=='undefined'&&TopPlaybackRuntime.hasQueue(next)&&previous===next) {
+        const value=planner.getSnapshot();
+        if(value.returnContext?.nativeQueue===previous) {
+          const context=TopPlaybackRuntime.describe(next);
+          planner.restore(value,{...value,returnContext:TopPlaybackRuntime.successor(context,false)});
+        }
+        planner.reconcile(describe());prepared=null;notify();reschedule();return;
+      }
       const sameSource=previous?.playlistId===next?.playlistId&&previous?.playlistRevision===next?.playlistRevision
         &&(previous?.regularTracks||previous?.tracks)===(next?.regularTracks||next?.tracks);
       if(sameSource&&queues.has(previous))queues.set(next,queues.get(previous));
       else {queues.set(next,++session);planner.replaceContext();}
       planner.reconcile(describe(next));prepared=null;notify();reschedule();},
     ended(){sync();refreshController?.abort();generation++;const before=describe();
-      planner.advance(before,{...before,ended:true},{stopPriority:true});prepared=null;prune();notify();},
+      const retained=planner.getSnapshot().returnContext;
+      planner.advance(before,{...before,ended:true},{stopPriority:true});
+      if(before.source==='explicit'&&retained?.source==='album-top')state.player.playbackQueue=retained.nativeQueue;
+      prepared=null;prune();notify();},
     captureStop,isStopCurrent,commitStop,
     stopped(){const captured=captureStop(),dispatch=commitStop(captured);if(dispatch)dispatch();},
   });

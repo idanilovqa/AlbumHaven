@@ -12,10 +12,8 @@
 .playlists__header .gallery-bar__actions { flex-wrap: wrap; justify-content: flex-end; }
 .playlists__scroll { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; }
 .playlists__metadata, .playlists__form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.playlists__metadata label, .playlists__filters label, .playlists__form label { display: flex; flex-direction: column; gap: 5px; }
-.playlists__metadata :is(input, textarea), .playlists__filters :is(input, select), .playlists__form :is(input, textarea, select) { max-width: 100%; min-width: 0; box-sizing: border-box; }
-.playlists__filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding-block: 10px; }
-.playlists__filters > .playlists__note { flex-basis: 100%; }
+.playlists__metadata label, .playlists__form label { display: flex; flex-direction: column; gap: 5px; }
+.playlists__metadata :is(input, textarea), .playlists__form :is(input, textarea, select) { max-width: 100%; min-width: 0; box-sizing: border-box; }
 .playlists__summary, .playlists__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-block: 10px; }
 .playlists__summary > span:first-child { margin-inline-end: auto; }
 .playlists__note { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
@@ -50,16 +48,3 @@
   .playlists__header .gallery-bar__actions { width: 100%; }
 }
 
-/* Compact desktop fields share their native controls with the phone form. */
-.playlists__filter-surface { flex: none; min-width: 0; }
-.playlists__filter-surface--inline { padding-inline: 12px; }
-.playlists__filter-surface--inline .ui-choice__label { display: none; }
-.playlists__filter-surface--inline .playlists__filters { align-items: center; }
-.playlists__filter-surface .playlists-filter__search { flex: 1 1 200px; min-width: 0; max-width: 320px; }
-.playlists__filter-surface--inline .playlists-filter__search { --search-field-height: 28px; }
-.playlists__filter-surface .playlists__filters > .playlists__note { margin: 0; }
-.playlists__filter-surface--form .playlists__filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-.playlists__filter-surface--form .playlists-filter__search,
-.playlists__filter-surface--form .playlists__note { grid-column: 1 / -1; width: 100%; max-width: none; }
-.playlists__filter-surface--form .ui-choice__control,
-.playlists__filter-surface--form .ui-choice__trigger { width: 100%; }

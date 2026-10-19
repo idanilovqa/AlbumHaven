@@ -72,7 +72,11 @@ const AlbumTopsRuntime = (() => {
     const inLibrary = (new URL(window.location.href).pathname === '/' || retainedDeparture) && shell?.hidden !== true;
     const active = inLibrary && String(state.view?.surface?.active || state.view?.surface_request || '') === 'album_tops';
     if (lastView !== state.view) {lastView = state.view; viewVersion++;}
+    const galleryPreferences = getSavedGalleryDisplayPreferences();
     const next = {scopeKey, authenticated, inLibrary, active, visible: Boolean(host && active && !state.ui?.pendingViewTransition),
+      galleryDisplayMode: galleryPreferences.defaultGalleryDisplayMode,
+      galleryScalePercent: galleryPreferences.defaultGalleryScalePercent,
+      mobileGalleryColumns: window.AlbumHavenDevicePreferences?.read('mobileGridColumns', 3) ?? 3,
       topRef: active && typeof state.view.top_ref === 'string' && state.view.top_ref ? state.view.top_ref : null,
       sidebarMode: getLibrarySidebarMode(), viewVersion, viewRequestId: state.ui?.activeViewRequestId || 0};
     if (confirmation && (!authenticated || confirmation.scopeKey !== scopeKey || confirmation.viewVersion !== viewVersion)) {
@@ -168,10 +172,32 @@ const AlbumTopsRuntime = (() => {
   PrivateUITransport.subscribe(sync);
   window.addEventListener('popstate', sync);
   window.addEventListener('albumhaven:library-sidebar-change', sync);
+  document.addEventListener('album-haven:preferences-sync', sync);
   const shell = document.getElementById('app-shell');
   if (shell && typeof MutationObserver === 'function') new MutationObserver(sync).observe(shell,
     {attributes: true, attributeFilter: ['hidden', 'data-native-account-id', 'data-native-library-id', 'data-private-ui-context']});
   return Object.freeze({
+    playbackControlHtml: options => renderPlaybackControlCluster(options),
+    playbackControlElements: host => getPlaybackControlClusterElements(host),
+    mountPlaybackOptions: options => mountLoopEditActionControl(options),
+    playback: Object.freeze({
+      transport: PrivateUITransport,
+      captureScope(scopeKey) {
+        if (!acceptsPrivateScope(scopeKey)) return null;
+        const scope = capturePlaybackOwnershipScope();
+        if (!scope || JSON.stringify([scope.actor, scope.library, scope.context, scope.generation]) !== scopeKey) return null;
+        let retired = false;
+        return Object.freeze({isCurrent() {
+          if (!retired && !isPlaybackOwnershipScopeCurrent(scope)) retired = true;
+          return !retired;
+        }});
+      },
+      create: options => TopPlaybackRuntime.create(options),
+      start: (queue, options) => TopPlaybackRuntime.start(queue, options),
+      configure: (queue, options) => TopPlaybackRuntime.configure(queue, options),
+      describe: queue => TopPlaybackRuntime.describe(queue),
+      dispose: queue => TopPlaybackRuntime.dispose(queue),
+    }),
     snapshot, sync, subscribe(listener) {
       listeners.add(listener);
       return () => {listeners.delete(listener); pendingListeners.delete(listener);};
@@ -183,7 +209,7 @@ const AlbumTopsRuntime = (() => {
       return window.AlbumHavenSettingsNavigation?.instance?.deferCollectionDraftNavigation(callback) || false;
     },
     buttonHtml: components.buttonHtml, actionHtml: components.actionHtml, alertHtml: components.alertHtml,
-    searchHtml: components.searchHtml,
+    searchHtml: config => buildSearchInputHtml(config),
     tabsHtml: components.tabsHtml, mountTabs: components.mountTabs,
     notificationRegistry: () => window.AlbumHavenNotifications,
     subscribeNotificationRegistry(listener) {
@@ -191,6 +217,20 @@ const AlbumTopsRuntime = (() => {
       return () => window.removeEventListener('albumhaven:notifications-ready', listener);
     },
     galleryCardHtml: components.galleryCardHtml, artboxHtml: components.artboxHtml,
+    escapeHtml: components.escapeHtml,
+    viewChooserHtml: components.viewChooserHtml, mountViewChooser: components.mountViewChooser, viewIconHtml: components.viewIconHtml,
+    createGalleryHost: options => new ResourceGalleryHost(options),
+    createGalleryMetadataOwner: options => createGalleryCardMetadataMotion(options),
+    createGalleryFocusOwner: options => createGalleryFocusGlowOwner(options),
+    createResourceSelection: options => window.AlbumHavenResourceSelection.create(options),
+    projectResourceTarget: value => window.AlbumHavenResourceSelection.projectTarget(value),
+    projectResourceOrigin: value => window.AlbumHavenResourceSelection.projectOrigin(value),
+    setGalleryDisplayMode(mode) {
+      if (!['list', 'cards', 'covers'].includes(mode) || !sync().visible || !sync().authenticated) return false;
+      const preferences = getSavedGalleryDisplayPreferences();
+      persistCurrentGalleryDisplayPreferences({gallery_display_mode: mode, gallery_scale_percent: preferences.defaultGalleryScalePercent});
+      sync(); return true;
+    },
     navigationItemHtml: components.navigationItemHtml, openChoice: components.openChoice,
     openForm(options) {
       const start = sync(), sourceView = state.view, sourceUrl = window.location.href;

@@ -1,7 +1,7 @@
 (function (scope) {
   'use strict';
 
-  const PLAYBACK_CONTROL_VARIANTS = new Set(['expanded-player', 'compact-player', 'saved-loop']);
+  const PLAYBACK_CONTROL_VARIANTS = new Set(['expanded-player', 'compact-player', 'saved-loop', 'collection-play']);
 
   function escapePlaybackControlAttribute(value) {
     return String(value ?? '')
@@ -19,11 +19,33 @@
     return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l6 6-6 6"></path><path d="M13 6l6 6-6 6"></path></svg>';
   }
 
-  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = scope.AlbumHavenAppearance?.instance?.getSavedLoopControlStyle?.() || 'capsule' } = {}) {
+  function renderPlaybackControlCluster({
+    variant, ownerId = '', loopId = '',
+    loopControlStyle = scope.AlbumHavenAppearance?.instance?.getSavedLoopControlStyle?.() || 'capsule',
+    resourceKind = '', disabled = false, showOptions = true, modeBadge = '', modeLabel = '',
+  } = {}) {
     if (!PLAYBACK_CONTROL_VARIANTS.has(variant)) {
       throw new TypeError('Unknown PlaybackControlCluster variant.');
     }
     const style = loopControlStyle === 'companion' ? 'companion' : 'capsule';
+    if (variant === 'collection-play') {
+      if (resourceKind !== 'album_top') return '';
+      const renderLoopActions = typeof buildLoopEditActionControl === 'function'
+        ? buildLoopEditActionControl
+        : scope?.buildLoopEditActionControl;
+      if (typeof renderLoopActions !== 'function' || typeof scope.ButtonComponent?.renderIconSvg !== 'function') {
+        throw new TypeError('PlaybackControlCluster requires the native action and icon renderers.');
+      }
+      const label = escapePlaybackControlAttribute(modeLabel ? `Play Top from the beginning: ${modeLabel}` : 'Play Top from the beginning');
+      return `
+        <span class="playback-control-cluster playback-control-cluster--collection loop-play-control-cluster collection-play-cluster" data-playback-control-cluster data-playback-control-variant="collection-play" data-collection-resource-kind="album_top" data-loop-control-style="capsule">
+          <button class="loop-play-control-button collection-play" type="button" data-playback-control-action="play" aria-label="${label}"${disabled ? ' disabled aria-disabled="true"' : ''}>${scope.ButtonComponent.renderIconSvg('play', { className: 'player-transport-icon' })}${modeBadge ? `<span class="collection-play-mode-badge" data-playback-mode-badge aria-hidden="true">${escapePlaybackControlAttribute(modeBadge)}</span>` : ''}</button>
+          <span class="loop-play-control-actions collection-play-actions" data-playback-control-loop-actions>
+            ${showOptions ? renderLoopActions({ ownerId, enterLabel: 'Top playback options', presentation: 'options' }) : ''}
+          </span>
+        </span>
+      `;
+    }
     if (variant === 'compact-player') {
       return `
         <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
@@ -64,8 +86,12 @@
     return {
       previous: root?.querySelector?.('[data-playback-control-action="previous"]') || null,
       playPause: root?.querySelector?.('[data-playback-control-action="play-pause"]') || null,
+      play: root?.querySelector?.('[data-playback-control-action="play"]') || null,
       next: root?.querySelector?.('[data-playback-control-action="next"]') || null,
       loopActions: root?.querySelector?.('[data-playback-control-loop-actions]') || null,
+      actionRoot: root?.querySelector?.('.loop-edit-actions[data-loop-action-owner]') || null,
+      optionsTrigger: root?.querySelector?.('[data-playback-control-action="options"]') || null,
+      modeBadge: root?.querySelector?.('[data-playback-mode-badge]') || null,
     };
   }
 

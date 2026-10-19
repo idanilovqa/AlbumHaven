@@ -510,7 +510,10 @@ function getGalleryFocusGlowMetrics(card, viewport) {
 }
 
 function positionGalleryFocusGlow(card, glowMetrics = null) {
-  const { glow, viewport, scroll } = getGalleryFocusGlowElements();
+  applyGalleryFocusGlow(card, getGalleryFocusGlowElements(), state.gallery, glowMetrics);
+}
+
+function applyGalleryFocusGlow(card, {glow, viewport, scroll}, owner, glowMetrics = null) {
   if (!(glow instanceof HTMLElement) || !(viewport instanceof HTMLElement) || !(scroll instanceof HTMLElement) || !(card instanceof HTMLElement)) {
     return;
   }
@@ -521,17 +524,99 @@ function positionGalleryFocusGlow(card, glowMetrics = null) {
   if (!nextGlowKey) return;
   const nextLeft = `${metrics.left}px`;
   const nextTop = `${metrics.top}px`;
-  if (state.gallery.focusGlowKey !== nextGlowKey || glow.style.left !== nextLeft) {
+  if (owner.focusGlowKey !== nextGlowKey || glow.style.left !== nextLeft) {
     glow.style.left = nextLeft;
   }
-  if (state.gallery.focusGlowKey !== nextGlowKey || glow.style.top !== nextTop) {
+  if (owner.focusGlowKey !== nextGlowKey || glow.style.top !== nextTop) {
     glow.style.top = nextTop;
   }
   glow.hidden = false;
   glow.classList.add('is-visible');
-  state.gallery.focusedAlbumGlowCard = card;
-  state.gallery.focusGlowKey = nextGlowKey;
-  state.gallery.focusGlowVisible = true;
+  owner.focusedAlbumGlowCard = card;
+  owner.focusGlowKey = nextGlowKey;
+  owner.focusGlowVisible = true;
+}
+
+const resourceGalleryGlowOwners = new WeakMap();
+const resourceGalleryGlowNodeOwners = new WeakMap();
+function createGalleryFocusGlowOwner({viewport, scroll, glow, isCurrent}) {
+  if (!(viewport instanceof HTMLElement) || !(scroll instanceof HTMLElement)
+    || !(glow instanceof HTMLElement) || !viewport.contains(glow) || !scroll.contains(viewport)
+    || typeof isCurrent !== 'function') throw new TypeError('A scoped native Gallery glow host is required.');
+  const local = {focusedAlbumGlowCard: null, focusGlowKey: '', focusGlowVisible: false};
+  let disposed = false, frame = 0, timer = 0, pending = null;
+  const current = () => !disposed && resourceGalleryGlowOwners.get(viewport) === owner
+    && resourceGalleryGlowNodeOwners.get(glow) === owner && viewport.contains(glow)
+    && isCurrent() === true && !disposed && resourceGalleryGlowOwners.get(viewport) === owner
+    && resourceGalleryGlowNodeOwners.get(glow) === owner && viewport.contains(glow);
+  const cancel = () => {
+    if (frame) cancelBrowserAnimationFrame(frame);
+    if (timer) clearBrowserTimeout(timer);
+    frame = 0; timer = 0; pending = null;
+  };
+  const hide = () => {
+    if (!current()) {owner.dispose(); return;}
+    cancel(); glow.classList.remove('is-visible');
+    local.focusedAlbumGlowCard = null; local.focusGlowKey = ''; local.focusGlowVisible = false;
+    timer = scheduleBrowserTimeout(() => {
+      timer = 0;
+      if (!current()) {owner.dispose(); return;}
+      if (!glow.classList.contains('is-visible')) glow.hidden = true;
+    }, 260);
+  };
+  const schedule = (card, force = false) => {
+    if (!current()) {owner.dispose(); return;}
+    if (!(card instanceof HTMLElement) || !viewport.contains(card)) {hide(); return;}
+    if (!force && local.focusedAlbumGlowCard === card && !frame && local.focusGlowVisible) return;
+    pending = card;
+    if (timer) {clearBrowserTimeout(timer); timer = 0;}
+    if (frame) return;
+    frame = scheduleBrowserAnimationFrame(() => {
+      frame = 0;
+      if (!current()) {owner.dispose(); return;}
+      const next = pending; pending = null;
+      if (!next || !viewport.contains(next)) {hide(); return;}
+      const metrics = getGalleryFocusGlowMetrics(next, viewport);
+      if (!current()) {owner.dispose(); return;}
+      applyGalleryFocusGlow(next, {glow, viewport, scroll}, local, metrics);
+    });
+  };
+  const enter = event => schedule(event.target.closest?.('.album-card'));
+  const leave = event => {
+    const next = event.relatedTarget?.closest?.('.album-card');
+    if (next && viewport.contains(next)) schedule(next); else hide();
+  };
+  const refresh = () => {
+    if (!current()) {owner.dispose(); return;}
+    if (local.focusedAlbumGlowCard) schedule(local.focusedAlbumGlowCard, true);
+  };
+  const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(refresh) : null;
+  const owner = {refresh, dispose() {
+    if (disposed) return;
+    disposed = true; cancel(); observer?.disconnect();
+    for (const name of ['pointerover', 'focusin']) viewport.removeEventListener(name, enter);
+    for (const name of ['pointerout', 'focusout']) viewport.removeEventListener(name, leave);
+    scroll.removeEventListener('scroll', refresh); window.removeEventListener('resize', refresh);
+    if (resourceGalleryGlowOwners.get(viewport) === owner) {
+      resourceGalleryGlowOwners.delete(viewport);
+    }
+    if (resourceGalleryGlowNodeOwners.get(glow) === owner) {
+      resourceGalleryGlowNodeOwners.delete(glow); glow.classList.remove('is-visible'); glow.hidden = true;
+    }
+  }};
+  const previous = resourceGalleryGlowOwners.get(viewport);
+  const previousGlow = resourceGalleryGlowNodeOwners.get(glow);
+  resourceGalleryGlowOwners.set(viewport, owner);
+  resourceGalleryGlowNodeOwners.set(glow, owner);
+  previous?.dispose();
+  if (previousGlow !== previous) previousGlow?.dispose();
+  if (!current()) {owner.dispose(); return owner;}
+  glow.classList.remove('is-visible'); glow.hidden = true;
+  for (const name of ['pointerover', 'focusin']) viewport.addEventListener(name, enter);
+  for (const name of ['pointerout', 'focusout']) viewport.addEventListener(name, leave);
+  scroll.addEventListener('scroll', refresh, {passive: true}); window.addEventListener('resize', refresh);
+  observer?.observe(viewport);
+  return owner;
 }
 
 function scheduleGalleryFocusGlow(card, options = {}) {

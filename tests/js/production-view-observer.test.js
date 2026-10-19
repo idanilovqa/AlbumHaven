@@ -1887,6 +1887,49 @@ test('same-query Partner-to-Lead reparenting retains the complete authoritative 
   assert.equal(snapshot.authoritativeMountedFamily, true);
 });
 
+test('queried album projection transfers only the matching target', async () => {
+  const { GalleryPage } = await import(pathToFileURL(path.join(
+    __dirname,
+    '..',
+    'e2e',
+    'poms',
+    'galleryPage.js',
+  )).href);
+  const vm = require('node:vm');
+  const applied = {
+    query: 'ДДТ',
+    gallery_scope: 'all',
+    artist_groups: [
+      { artist: 'ДДТ', albums: [{ name: 'Other' }, { name: 'Target' }] },
+      { artist: 'Unrelated', albums: [{ name: 'Target' }] },
+    ],
+    primary_artist_groups: [{ artist: 'ДДТ', albums: [{ name: 'Target' }] }],
+    family_artist_groups: [{ artist: 'Family', albums: [{ name: 'Family album' }] }],
+  };
+  const snapshot = await GalleryPage.prototype.readAppliedAlbumTargetProjection.call({
+    page: {
+      evaluate: (fn, argument) => vm.runInNewContext(
+        `(${fn.toString()})(${JSON.stringify(argument)})`,
+        {
+          state: { view: applied, ui: {} },
+          URL,
+          window: { location: { href: 'http://127.0.0.1/?q=%D0%94%D0%94%D0%A2' } },
+        },
+      ),
+    },
+  }, { artist: 'ДДТ', album: 'Target' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.artist_groups)), [
+    { artist: 'ДДТ', albums: [{ name: 'Target' }] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.primary_artist_groups)), [
+    { artist: 'ДДТ', albums: [{ name: 'Target' }] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.family_artist_groups)), []);
+  assert.equal(snapshot.query, 'ДДТ');
+  assert.equal(snapshot.locationQuery, 'ДДТ');
+});
+
 test('bounded gallery pages expose browse telemetry without claiming a complete inventory', async () => {
   const { ProductionViewObserver, hasCompleteCanonicalAlbumInventory } = await import(observerUrl);
   const page = new FakePage();

@@ -603,6 +603,10 @@ def _finalize_save_task(
         if (
             changed_field_names & relation_projection_edit_fields
             and not scoped_postgres_exception_only
+            and (
+                not isinstance(committed_relation_state, dict)
+                or committed_relation_state.get("projection_mode") != "stale"
+            )
         ):
             try:
                 if isinstance(committed_relation_state, dict) and isinstance(
@@ -876,12 +880,15 @@ def finalize_structural_tag_edit_save_task(
                 else relation_projection_edit_fields
             )
             if changed_field_names & required_relation_fields:
-                if not isinstance(committed_relation_views, dict):
+                if (
+                    not isinstance(committed_relation_views, dict)
+                    and persistence_result.get("projection_mode") != "stale"
+                ):
                     warnings.append(
                         "Relation state refresh failed after persistence committed: "
                         "Postgres persistence returned no canonical relation projection state."
                     )
-                else:
+                elif isinstance(committed_relation_views, dict):
                     st["relation_views"] = dict(committed_relation_views)
                     st["relations_last_built"] = committed_relations_last_built
             try:

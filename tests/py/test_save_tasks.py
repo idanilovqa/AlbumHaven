@@ -123,6 +123,29 @@ def test_queue_finalize_save_task_can_complete_inline_before_return(tmp_path):
     assert save_task_result(task_id)["status"] == "completed"
 
 
+def test_finalize_save_task_accepts_stale_relation_projection_after_commit(tmp_path):
+    task_id = create_save_task("edit-tags")
+    persistence = Future()
+    persistence.set_result(
+        {
+            "projection_mode": "stale",
+            "rebuild_reason": "structural_tag_edit_requires_full_projection",
+        }
+    )
+
+    finalize_save_task(
+        task_id,
+        **_durable_save_finalize_kwargs(
+            tmp_path,
+            schedule_cache_updates_save=lambda *_args, **_kwargs: persistence,
+        ),
+    )
+
+    terminal_task = save_task_result(task_id)
+    assert terminal_task["status"] == "completed"
+    assert "warnings" not in terminal_task
+
+
 def test_queue_finalize_save_task_inline_exposes_commit_failure_before_return(tmp_path):
     task_id = create_save_task("edit-tags")
     persistence = Future()
@@ -1406,7 +1429,9 @@ def test_structural_tag_edit_schedules_stale_projection_rebuild_after_commit(tmp
     )
 
     assert scheduled == ["structural_tag_edit_requires_full_projection"]
-    assert save_task_result(task_id)["status"] == "completed"
+    terminal_task = save_task_result(task_id)
+    assert terminal_task["status"] == "completed"
+    assert "warnings" not in terminal_task
 
 
 def test_structural_year_edit_publishes_committed_separate_release_key_before_rebuild(

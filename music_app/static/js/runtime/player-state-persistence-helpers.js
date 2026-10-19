@@ -176,6 +176,7 @@ let playerUnloadStatePersisted = false;
 function resetPlayerUnloadPersistence() {
   playerUnloadWasPlaying = null;
   playerUnloadStatePersisted = false;
+  if (!getPlaybackOwnershipState().initialized) initPlaybackOwnershipCoordinator();
 }
 
 function persistPlayerState(force = false, options = {}) {
@@ -204,9 +205,11 @@ function persistPlayerStateForUnload(reason) {
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  if (typeof releasePlaybackOwnership === 'function') {
-    releasePlaybackOwnership('paused', state.player.current);
-  }
+  const unloadingHandle = getActivePlaybackOwnershipHandle();
+  retirePlayerRestoreAttempt('unload');
+  retirePlayerSelectionOwnership('unload');
+  releasePlaybackOwnership('stopped', unloadingHandle);
+  disposePlaybackOwnershipCoordinator();
   flushListenSessionOnUnload(reason);
   persistPlayerState(true, {
     preservePlayingState: true,
@@ -217,28 +220,55 @@ function persistPlayerStateForUnload(reason) {
   return true;
 }
 
+let playerRestoreEpoch = 0;
+let playerRestoreAttempt = null;
+function retirePlayerRestoreAttempt(reason = 'superseded') {
+  const attempt = playerRestoreAttempt;
+  if (!attempt) return;
+  ++playerRestoreEpoch; playerRestoreAttempt = null;
+  if (attempt.pageshow) window.removeEventListener('pageshow', attempt.pageshow);
+  attempt.pageshow = null;
+  const settle = attempt.settle; attempt.settle = null; settle?.(null);
+  if (!attempt.handle || !releasePlaybackOwnership('stopped', attempt.handle)) cancelPlaybackAttempt(attempt.engineAttempt, reason);
+}
+function currentPlayerRestoreAttempt(attempt) {
+  return Boolean(attempt && playerRestoreAttempt === attempt && attempt.epoch === playerRestoreEpoch
+    && !playerUnloadStatePersisted && isPlaybackOwnershipScopeCurrent(attempt.scope)
+    && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read') === true)
+    && playerRestoreAttempt === attempt && attempt.epoch === playerRestoreEpoch
+    && (!attempt.handle || isPlaybackOwnershipHandleCurrent(attempt.handle)));
+}
+function reconcileRestoredPlaybackOwnership(role) {
+  const attempt = playerRestoreAttempt;
+  if (!currentPlayerRestoreAttempt(attempt) || !attempt.handle || !attempt.engineAttempt
+    || !isStreamingPlaybackAttemptCurrent(attempt.engineAttempt) || streamingEngineState().roles.current !== role
+    || state.player.current?.path !== attempt.track.path || role?.track?.path !== attempt.track.path) return false;
+  return commitPlaybackOwnership(attempt.handle, role, attempt.track);
+}
 function restorePlayerState() {
-  if (typeof window !== 'undefined' && window.AlbumHavenCapabilities
-    && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
-  if (state.player.restoredFromStorage) return;
+  const entrySelection = playerTrackSelectionToken;
+  const entryRestoreEpoch = playerRestoreEpoch;
+  if (window.AlbumHavenCapabilities && !window.AlbumHavenCapabilities.allows('library.media.read')) return;
+  if (entrySelection !== playerTrackSelectionToken || entryRestoreEpoch !== playerRestoreEpoch
+    || state.player.restoredFromStorage) return;
   state.player.restoredFromStorage = true;
-  const raw = getLocalStorageItem(PLAYER_STATE_STORAGE_KEY);
-  if (!raw) return;
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (_error) {
-    return;
-  }
+  let parsed;
+  try { parsed = JSON.parse(getLocalStorageItem(PLAYER_STATE_STORAGE_KEY)); } catch { return; }
   const track = parsed?.track;
-  if (!track || !track.src) return;
-  const savedPaused = typeof parsed.paused === 'boolean'
-    ? parsed.paused
-    : !Boolean(parsed.wasPlaying);
-  const canResumePlayback = !savedPaused
-    && (typeof canRestoreActivePlayback !== 'function'
-      || Boolean(canRestoreActivePlayback(parsed)));
+  const scope = capturePlaybackOwnershipScope();
+  if (!track || Array.isArray(track) || typeof track.src !== 'string' || !track.src.trim()
+    || typeof track.path !== 'string' || !track.path.trim() || !scope || !isPlaybackOwnershipScopeCurrent(scope) || entrySelection !== playerTrackSelectionToken || entryRestoreEpoch !== playerRestoreEpoch) return;
+  const expectedRetirementEpoch = entryRestoreEpoch + (playerRestoreAttempt ? 1 : 0);
+  retirePlayerRestoreAttempt();
+  if (entrySelection !== playerTrackSelectionToken || playerRestoreEpoch !== expectedRetirementEpoch
+    || playerRestoreAttempt || !isPlaybackOwnershipScopeCurrent(scope)
+    || entrySelection !== playerTrackSelectionToken || playerRestoreEpoch !== expectedRetirementEpoch) return;
+  const attempt = { epoch: ++playerRestoreEpoch, scope, track, handle: null, engineAttempt: null,
+    pageshow: null, settle: null, role: null, autoplayHandled: false };
+  playerRestoreAttempt = attempt;
+  const savedPaused = typeof parsed.paused === 'boolean' ? parsed.paused : !Boolean(parsed.wasPlaying);
   const restore = async () => {
+    if (!currentPlayerRestoreAttempt(attempt)) return;
     state.player.playbackQueue = null;
     const restoredQueue = restorePersistedPlaybackQueue(parsed, track.path);
     const restoredQueueHasAlbumSnapshot = restoredQueue
@@ -247,11 +277,13 @@ function restorePlayerState() {
       && !restoredQueueHasAlbumSnapshot
       && typeof resolveAlbumForPlayerTrack === 'function') {
       const album = resolveAlbumForPlayerTrack(track);
+      if (!currentPlayerRestoreAttempt(attempt)) return;
       if (album) attachAlbumSnapshotToRestoredPlaybackQueue(album, track);
     } else if (!restoredQueue
       && typeof resolveAlbumForPlayerTrack === 'function'
       && typeof setAlbumPlaybackQueue === 'function') {
       const album = resolveAlbumForPlayerTrack(track);
+      if (!currentPlayerRestoreAttempt(attempt)) return;
       if (album) setAlbumPlaybackQueue(album, track.path);
     }
 
@@ -273,68 +305,77 @@ function restorePlayerState() {
     const restoredLoopEnd = Math.max(loopStart, loopEnd);
     const restoredLoopActive = false;
 
-    const savedTime = Math.max(0, Number(parsed.currentTime) || 0);
+    const savedTime = Number.isFinite(Number(parsed.currentTime)) ? Math.max(0, Number(parsed.currentTime)) : 0;
     const boundedTime = duration > 0
       ? Math.min(savedTime, Math.max(0, duration - 0.05))
       : savedTime;
-    let autoplayCompletionHandled = false;
-    const completeRestoredAutoplay = () => {
-      if (!canResumePlayback || autoplayCompletionHandled) return;
-      autoplayCompletionHandled = true;
-      if (typeof beginStreamingPlayerListenSession === 'function') {
-        beginStreamingPlayerListenSession(track, boundedTime);
-      }
-      updatePlayerUi();
-      persistPlayerState(true);
-    };
-    const startRestoredRole = () => startStreamingTrack(track, {
-      startSeconds: boundedTime,
-      autoplay: canResumePlayback,
-      ...(canResumePlayback ? {
-        allowSuspendedAutoplayFallback: true,
-        onAutoplayStarted: completeRestoredAutoplay,
-      } : {}),
-    });
-    const restoredRolePromise = canResumePlayback
-      && typeof window !== 'undefined'
-      && typeof window.addEventListener === 'function'
-      ? new Promise((resolve, reject) => {
-        window.addEventListener('pageshow', () => {
-          Promise.resolve().then(startRestoredRole).then(resolve, reject);
-        }, { once: true });
-      })
-      : startRestoredRole();
-    setCurrentPlayerTrack(track, { persist: false });
-    state.player.loopStart = loopStart;
-    state.player.loopEnd = restoredLoopEnd;
-    state.player.loopActive = restoredLoopActive;
-    updatePlayerUi();
-    const restoredRole = await restoredRolePromise;
-    if (!restoredRole) return;
-    if (typeof handleStreamingPlaybackWaveformReady === 'function') {
-      try {
-        const waveformReady = handleStreamingPlaybackWaveformReady({
-          generation: Number(restoredRole.generation) || 0,
-          currentPath: String(track.path || ''),
-          continuityPath: '',
-        });
-        if (waveformReady && typeof waveformReady.catch === 'function') {
-          void waveformReady.catch((error) => {
-            console.warn('[AlbumHaven][Waveform] Restored-track peak load failed.', error);
-          });
-        }
-      } catch (error) {
-        console.warn('[AlbumHaven][Waveform] Restored-track peak load failed.', error);
-      }
-    }
-    if (!autoplayCompletionHandled) persistPlayerState(true);
-  };
 
-  void restore().catch((error) => {
-    state.player.lastRestoreError = {
-      name: error?.name || 'Error',
-      message: error?.message || String(error),
+    if (!currentPlayerRestoreAttempt(attempt)) return;
+    const completeRestoredAutoplay = () => {
+      if (!currentPlayerRestoreAttempt(attempt) || !attempt.role || state.player.current?.path !== track.path
+        || !isStreamingPlaybackAttemptCurrent(attempt.engineAttempt)
+        || streamingEngineState().roles.current !== attempt.role || attempt.autoplayHandled) return;
+      const playback = getPlayerPlaybackSnapshot();
+      if (playback.paused || playback.ended) return;
+      attempt.autoplayHandled = true;
+      reconcileRestoredPlaybackOwnership(attempt.role);
+      if (!currentPlayerRestoreAttempt(attempt)) return;
+      beginStreamingPlayerListenSession(track, boundedTime);
+      if (!currentPlayerRestoreAttempt(attempt)) return;
+      updatePlayerUi();
+      if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(true);
     };
+    const startRestoredRole = () => {
+      if (!currentPlayerRestoreAttempt(attempt)) return null;
+      if (!savedPaused) {
+        attempt.handle = canRestoreActivePlayback(parsed, { isCurrent: () => currentPlayerRestoreAttempt(attempt) });
+        if (!attempt.handle || !currentPlayerRestoreAttempt(attempt)) return null;
+      }
+      return startStreamingTrack(track, {
+        startSeconds: boundedTime, autoplay: !savedPaused,
+        onStartAttempt(engineAttempt) {
+          attempt.engineAttempt = engineAttempt;
+          if (!currentPlayerRestoreAttempt(attempt)) { cancelPlaybackAttempt(engineAttempt, 'stale-restore'); return; }
+          if (attempt.handle) bindPlaybackOwnershipAttempt(attempt.handle, engineAttempt);
+        },
+        ...(!savedPaused ? { allowSuspendedAutoplayFallback: true, onAutoplayStarted: completeRestoredAutoplay } : {}),
+      });
+    };
+    const rolePromise = !savedPaused ? new Promise((resolve, reject) => {
+      attempt.settle = resolve;
+      attempt.pageshow = () => {
+        window.removeEventListener('pageshow', attempt.pageshow); attempt.pageshow = null;
+        Promise.resolve().then(() => currentPlayerRestoreAttempt(attempt) ? startRestoredRole() : null).then(resolve, reject);
+      };
+      window.addEventListener('pageshow', attempt.pageshow, { once: true });
+    }) : startRestoredRole();
+    const role = await rolePromise;
+    attempt.settle = null;
+    if (!currentPlayerRestoreAttempt(attempt)) return;
+    if (!role || !isStreamingPlaybackAttemptCurrent(attempt.engineAttempt)
+      || streamingEngineState().roles.current !== role || role.track?.path !== track.path) {
+      retirePlayerRestoreAttempt('restore-failed'); return;
+    }
+    attempt.role = role;
+    setCurrentPlayerTrack(track, { persist: false, isCurrent: () => currentPlayerRestoreAttempt(attempt) && isStreamingPlaybackAttemptCurrent(attempt.engineAttempt) });
+    if (!currentPlayerRestoreAttempt(attempt) || state.player.current?.path !== track.path) return;
+    state.player.loopStart = loopStart; state.player.loopEnd = restoredLoopEnd; state.player.loopActive = restoredLoopActive;
+    reconcileRestoredPlaybackOwnership(role);
+    if (!currentPlayerRestoreAttempt(attempt)) return;
+    completeRestoredAutoplay();
+    if (!currentPlayerRestoreAttempt(attempt)) return;
+    updatePlayerUi();
+    if (!currentPlayerRestoreAttempt(attempt)) return;
+    if (typeof handleStreamingPlaybackWaveformReady === 'function') {
+      try { void Promise.resolve(handleStreamingPlaybackWaveformReady({ generation: role.generation,
+        currentPath: track.path, continuityPath: '' })).catch(() => {}); } catch {}
+    }
+    if (currentPlayerRestoreAttempt(attempt)) persistPlayerState(true);
+  };
+  void restore().catch(error => {
+    if (!currentPlayerRestoreAttempt(attempt)) return;
+    retirePlayerRestoreAttempt('restore-failed');
+    state.player.lastRestoreError = { name: error?.name || 'Error', message: error?.message || String(error) };
     console.error('[AlbumHaven][Player] State restore failed.', error);
   });
 }

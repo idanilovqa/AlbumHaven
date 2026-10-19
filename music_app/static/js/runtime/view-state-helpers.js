@@ -5,6 +5,38 @@ function isPrivateSearchExpression(query) {
     word.includes(':') || word.replace(/^-+/u, '').startsWith('@'));
 }
 
+// Transport classification only; the server validates the unchanged expression.
+function isListenerSearchExpression(query) {
+  return typeof query === 'string' && query.split(/\s+/u).some(word => word.startsWith('@'));
+}
+
+// Match the backend admission classifier, including malformed/mixed intent.
+// This is deliberately not a query parser or a client acceptance decision.
+function isPopularitySearchExpression(query) {
+  // Python re Unicode whitespace: JS \s omits U+001C–1F/U+0085 and adds FEFF.
+  // Python IGNORECASE additionally matches dotted/dotless i and long s in
+  // these selector names. Preserve the original query, including malformed intent.
+  return typeof query === 'string'
+    && /(?:^|[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000])-*(?::popular|[sſ]ort:|per_art[iİı][sſ]t:)/iu.test(query);
+}
+
+function buildPopularitySearchParams(query, visibility = {}, {limit = 100, cursor = null,
+  presentation = visibility.search_presentation === 'albums' ? 'albums' : 'tracks'} = {}) {
+  const params = new URLSearchParams({surface: 'albums', q: query, search_presentation: presentation});
+  // App-generated requests carry only explicit visibility and Search paging.
+  // Raw navigation never passes through this allowlist.
+  if (visibility.gallery_scope) params.set('gallery_scope', visibility.gallery_scope);
+  (Array.isArray(visibility.visible_library_categories) ? visibility.visible_library_categories : [])
+    .forEach(category => params.append('category', category));
+  if (limit !== 100 || cursor !== null) params.set('search_page_size', String(limit));
+  if (cursor !== null) params.set('search_cursor', cursor);
+  return params;
+}
+
+function buildListenerSearchParams(query) {
+  return new URLSearchParams({surface: 'albums', q: query, search_presentation: 'tracks'});
+}
+
 function isPrivateSearchRequestUrl(value) {
   const url = new URL(value, 'http://localhost');
   const surface = String(url.searchParams.get('surface') || '');
@@ -151,6 +183,12 @@ function appendPlaylistStateParams(params, view, resolvedSurface) {
 function buildUrl(view) {
   const params = new URLSearchParams();
   const resolvedSurface = resolveViewSurface(view);
+  if (resolvedSurface === 'albums' && isPopularitySearchExpression(view.query)) {
+    return `/?${buildPopularitySearchParams(view.query, view)}`;
+  }
+  if (resolvedSurface === 'albums' && isListenerSearchExpression(view.query)) {
+    return `/?${buildListenerSearchParams(view.query)}`;
+  }
   if (resolvedSurface === 'album_tops') {
     params.set('surface', resolvedSurface);
     if (view.top_ref) params.set('top_ref', String(view.top_ref));
@@ -191,6 +229,12 @@ function buildUrl(view) {
 
 function buildApiUrl(view, options = {}) {
   const resolvedSurface = resolveViewSurface(view);
+  if (resolvedSurface === 'albums' && isPopularitySearchExpression(view.query)) {
+    return `/view-data?${buildPopularitySearchParams(view.query, view)}`;
+  }
+  if (resolvedSurface === 'albums' && isListenerSearchExpression(view.query)) {
+    return `/view-data?${buildListenerSearchParams(view.query)}`;
+  }
   if (resolvedSurface === 'home') {
     return options.omitSidebar ? '/home-data?omit_sidebar=1' : '/home-data';
   }

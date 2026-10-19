@@ -59,10 +59,10 @@ export function mountSearchResults({host, runtime} = {}) {
     candidate.root.hidden = true; candidate.root.setAttribute('inert', '');
     // Detach every owner before disposal callbacks can publish a successor.
     const owners = [candidate.selection, candidate.playtableSource, candidate.presentation, candidate.tabs, candidate.columnsButton,
-      candidate.continueButton, candidate.retryButton, candidate.sidebarButton];
+      candidate.continueButton, candidate.retryButton, candidate.sidebarButton, candidate.bindingsButton];
     candidate.selection = candidate.playtableSource = null;
     candidate.presentation = candidate.tabs = candidate.columnsButton = null;
-    candidate.continueButton = candidate.retryButton = candidate.sidebarButton = null;
+    candidate.continueButton = candidate.retryButton = candidate.sidebarButton = candidate.bindingsButton = null;
     candidate.root.removeEventListener('click', candidate.click);
     const stopPlayback = candidate.stopPlayback; candidate.stopPlayback = null;
     try {stopPlayback?.();} catch { /* Remaining exact owners must still retire. */ }
@@ -116,9 +116,15 @@ export function mountSearchResults({host, runtime} = {}) {
     parent?.append(node);
     return node;
   }
+  function isPopularity(snapshot) {
+    return snapshot.kind === 'popularity' || snapshot.result?.kind === 'popularity';
+  }
+  function tracksOnly(snapshot) {
+    return snapshot.kind === 'listener';
+  }
   function tabsOptions(candidate) {
     return {id: 'search-results-tabs', label: 'Search presentation', value: candidate.snapshot.presentation,
-      items: presentations.map(key => [key, key === 'albums' ? 'Albums' : 'Tracks',
+      items: (tracksOnly(candidate.snapshot) ? ['tracks'] : presentations).map(key => [key, key === 'albums' ? 'Albums' : 'Tracks',
         {disabled: !candidate.ready, panelId: `search-results-${key}-panel`}]),
       onChange: value => command(candidate, true, snapshot => runtime.selectPresentation(snapshot, value))};
   }
@@ -129,22 +135,26 @@ export function mountSearchResults({host, runtime} = {}) {
       source: snapshot.sourceIdentity, result: snapshot.result, mode: snapshot.presentation,
       galleryMode: null, choices: {}, tabs: null, presentation: null, columnsButton: null,
       continueButton: null, retryButton: null, sidebarButton: null, selection: null, playtableSource: null,
+      bindingsButton: null,
       stopPlayback: null, actionSequence: 0};
     session = next; next.native = nativeControls(next);
     next.tabsHost = element('div', 'search-results__tabs', root);
-    for (const key of presentations) {
+    for (const key of tracksOnly(snapshot) ? ['tracks'] : presentations) {
       const panel = element('div', 'search-results__panel', root);
       panel.id = `search-results-${key}-panel`; panel.setAttribute('role', 'tabpanel');
       panel.setAttribute('aria-labelledby', `search-results-tabs-${key}`);
       panel.hidden = key !== snapshot.presentation;
       if (!panel.hidden) next.panel = panel;
     }
+    next.summary = element('div', 'search-results__status', next.panel);
     next.status = element('div', 'search-results__status', next.panel);
     next.actionStatus = element('div', 'search-results__status', next.panel); next.actionStatus.hidden = true;
     next.body = element('div', 'search-results__body', next.panel);
     next.actions = element('div', 'search-results__actions', next.panel);
     next.continueHost = element('span', '', next.actions);
     next.retryHost = element('span', '', next.actions);
+    next.bindingsStatus = element('div', 'search-results__status', next.panel);
+    next.bindingsHost = element('span', '', next.panel);
     next.sidebar = element('div', 'search-results__sidebar-progress', root);
     next.sidebarStatus = element('div', 'search-results__status', next.sidebar);
     next.sidebarAction = element('span', '', next.sidebar);
@@ -171,14 +181,16 @@ export function mountSearchResults({host, runtime} = {}) {
   function paintAlbums(candidate) {
     const snapshot = candidate.snapshot;
     const grants = snapshot.result.albums.map(album => checked(candidate, () => runtime.canOpenAlbum(snapshot, album), true));
-    const signature = JSON.stringify([snapshot.galleryDisplayMode, grants]);
+    const matchCurrent = !isPopularity(snapshot)
+      || checked(candidate, () => runtime.galleryMatchCurrent?.(snapshot) === true, true);
+    const signature = JSON.stringify([snapshot.galleryDisplayMode, grants, matchCurrent]);
     if (candidate.galleryMode === signature) return;
     const html = snapshot.result.albums.map((album, index) => {
       const artboxHtml = checked(candidate, () => runtime.artboxHtml({state: 'empty', label: `${album.name} artwork`}), true);
       return checked(candidate, () => runtime.galleryCardHtml({interaction: 'controlled', identity: album.albumRef,
         actionRef: album.albumRef, actions: {select: grants[index], open: grants[index]},
         displayMode: snapshot.galleryDisplayMode, title: album.name, artist: album.artist, year: album.year,
-        isSearchMatch: album.isSearchMatch === true, artboxHtml, listeningSummaryHtml: ''}), true);
+        isSearchMatch: matchCurrent && album.isSearchMatch === true, artboxHtml, listeningSummaryHtml: ''}), true);
     }).join('');
     if (!contentCurrent(candidate, true)) throw stalePublication;
     candidate.body.className = 'search-results__body search-results__albums';
@@ -186,17 +198,24 @@ export function mountSearchResults({host, runtime} = {}) {
     candidate.body.innerHTML = html; candidate.galleryMode = signature;
   }
   function buildTracks(candidate) {
+    const listener = candidate.snapshot.result.kind === 'listener' ? candidate.snapshot.result.listener : null;
+    const popularity = candidate.snapshot.result.kind === 'popularity';
     const columns = checked(candidate, () => runtime.trackColumns(), true).flatMap(column => column.key === 'title'
       ? [column, {key: 'artist', label: 'Artist', width: 112, autoMinWidth: 641},
-        {key: 'album', label: 'Album', width: 112, autoMinWidth: 641}] : [column]);
+        {key: 'album', label: 'Album', width: 112, autoMinWidth: 641},
+        ...(listener ? [{key: 'listener', label: 'Listener', width: 150, required: true}] : []),
+        ...(popularity ? [{key: 'popularity', label: 'Last.fm global scrobbles', width: 220, required: true}] : [])] : [column]);
     const rows = candidate.snapshot.result.tracks.map((track, index) => {
       const seconds = track.durationSeconds;
       const duration = seconds === null ? '' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
       const native = checked(candidate, () => runtime.albumTrackRow({rowKey: track.rowKey, title: track.title,
         trackNumber: track.trackNumber, duration, readable: true, selectable: track.selectable, isSearchMatch: false}, index), true);
-      const artbox = checked(candidate, () => runtime.artboxHtml({state: 'empty', label: `${track.title} artwork`}), true);
+      const artbox = popularity ? '' : checked(candidate, () => runtime.artboxHtml({state: 'empty', label: `${track.title} artwork`}), true);
       const artist = checked(candidate, () => runtime.escapeHtml(track.artist), true);
       const album = checked(candidate, () => runtime.escapeHtml(track.album), true);
+      const listenerLabel = listener ? checked(candidate, () => runtime.escapeHtml(
+        listener.displayName ? `${listener.displayName} (@${listener.username})` : `@${listener.username}`), true) : '';
+      const unavailable = listener && track.availability === 'unresolved' ? '<span>Local audio unavailable</span>' : '';
       const canOpen = checked(candidate, () => runtime.canOpenAlbum(candidate.snapshot, track), true);
       const play = checked(candidate, () => runtime.actionHtml({icon: 'play', ariaLabel: `Play ${track.title}`,
         presentation: 'bare', className: 'album-track-table__play', disabled: !runtime.canPlayTrack(candidate.snapshot, track),
@@ -207,8 +226,11 @@ export function mountSearchResults({host, runtime} = {}) {
       // media attributes never enter these rows. Each activation resolves anew.
       return {...native, cells: {
         number: {content: native.cells.number.content.replace('</span>', '</span>' + play)}, duration: native.cells.duration,
-        title: {content: `<div class="home-detail__release">${artbox}${native.cells.title.content}</div>`},
+        title: {content: `<div class="home-detail__release">${artbox}${native.cells.title.content}${unavailable}</div>`},
         artist: {content: artist}, album: {content: `${album}${details}`},
+        ...(listener ? {listener: {content: listenerLabel}} : {}),
+        ...(popularity ? {popularity: {content: checked(candidate, () => runtime.escapeHtml(
+          `${track.popularityCount} · Observed at ${track.observedAt}`), true)}} : {}),
       }};
     });
     const html = checked(candidate, () => runtime.tableHtml({id: 'search-tracks', ariaLabel: 'Search tracks',
@@ -333,13 +355,51 @@ export function mountSearchResults({host, runtime} = {}) {
     else candidate[key] = checkedOwner(candidate, () => mountButton(target, candidate.native, options));
     target.hidden = !options;
   }
+  function popularitySummary(popularity) {
+    const diagnostics = [
+      ['missing_recording_identity', 'missing recording identity'],
+      ['missing_provider_mapping', 'missing provider mapping'],
+      ['provider_unavailable', 'provider unavailable'],
+      ['mapping_mismatch', 'mapping mismatch'],
+      ['missing_global_metric', 'missing global metric'],
+      ['ambiguous_attribution', 'ambiguous attribution'],
+      ['missing_canonical_artist', 'missing canonical artist'],
+    ].map(([key, label]) => `${label}: ${popularity.excludedLocalRows[key]}`).join('; ');
+    const refresh = ['idle', 'queued', 'running', 'complete', 'blocked', 'cancelled'].includes(popularity.refreshStatus)
+      ? popularity.refreshStatus : 'unknown';
+    const observed = popularity.oldestObservedAt && popularity.newestObservedAt
+      ? `Cached observations: oldest ${popularity.oldestObservedAt}; newest ${popularity.newestObservedAt}.`
+      : 'Cached observations: none available.';
+    return `Last.fm global scrobbles. ${popularity.selectedRecordings} selected recordings from ${popularity.matchedLocalRows} matched local rows. `
+      + (popularity.genreFiltered ? 'Genre: stored local file tags. ' : '')
+      + (popularity.perArtist === null ? '' : `Per-artist limit: ${popularity.perArtist}, applied by the server across the results. `)
+      + `${observed} Cache refresh status: ${refresh}. `
+      + `Local rows missing genre: ${popularity.missingGenreLocalRows}. Excluded local-row diagnostics: ${diagnostics}. `
+      + 'Diagnostic counts may overlap; they cannot be subtracted from recording totals.';
+  }
+  function errorLocationText(snapshot) {
+    const location = snapshot.errorLocation;
+    return location && Number.isSafeInteger(location.start) && Number.isSafeInteger(location.end)
+      && location.start >= 0 && location.end >= location.start
+      ? ` Query location: UTF-16 offsets ${location.start}–${location.end}.` : '';
+  }
   function updateSession(candidate) {
     const snapshot = candidate.snapshot, pending = snapshot.status === 'pending', error = snapshot.status === 'error';
     checked(candidate, () => candidate.tabs.update(tabsOptions(candidate)));
     candidate.panel.setAttribute('aria-busy', String(snapshot.status === 'loading' || pending));
     const rows = candidate.ready ? snapshot.result[snapshot.presentation] : [];
-    const message = pending ? 'Still checking…' : error ? snapshot.error || 'Search could not be loaded. Try again.'
-      : !candidate.ready ? 'Loading search results…' : rows.length ? '' : `No matching ${snapshot.presentation}.`;
+    const listener = candidate.ready && snapshot.result.kind === 'listener' ? snapshot.result.listener : null;
+    const listenerLabel = listener && (listener.displayName ? `${listener.displayName} (@${listener.username})` : `@${listener.username}`);
+    const totalMatches = snapshot.result?.page.totalMatches;
+    const popularity = candidate.ready && snapshot.result.kind === 'popularity' ? snapshot.result.popularity : null;
+    const summary = popularity ? (snapshot.presentation === 'albums' ? `${totalMatches} matching albums. ` : '') + popularitySummary(popularity) : listener ? `Listener: ${listenerLabel}. ${snapshot.result.history.periodLabel}. `
+      + (totalMatches === null ? '' : `${totalMatches} matching tracks. `) + snapshot.result.history.coverageLabel : '';
+    candidate.summary.textContent = summary; candidate.summary.hidden = !summary;
+    const message = pending ? 'Still checking…' : error ? (snapshot.error || 'Search could not be loaded. Try again.') + errorLocationText(snapshot)
+      : !candidate.ready ? 'Loading search results…' : rows.length ? ''
+        : snapshot.result?.kind === 'listener' && snapshot.result.page.hasMore ? 'No matches in this page. Continue searching.'
+          : snapshot.result?.kind === 'listener' && snapshot.result.page.totalMatches !== 0 ? 'No matches in this page.'
+            : `No matching ${snapshot.presentation}.`;
     paintAlert(candidate, candidate.status, message, error);
     if (candidate.ready && snapshot.presentation === 'albums' && rows.length) paintAlbums(candidate);
     if (candidate.ready && snapshot.presentation === 'tracks' && rows.length) paintTrackActions(candidate);
@@ -347,11 +407,16 @@ export function mountSearchResults({host, runtime} = {}) {
     button(candidate, 'continueButton', candidate.continueHost, canContinue
       ? {label: 'Continue', onClick: () => command(candidate, false, value => runtime.continueResults(value))} : null);
     button(candidate, 'retryButton', candidate.retryHost, error
-      ? {label: 'Retry', onClick: () => command(candidate, false, value => runtime.restart(value))} : null);
+      ? {label: snapshot.restartRequired === true ? 'Restart search' : 'Retry',
+        onClick: () => command(candidate, false, value => runtime.restart(value))} : null);
     candidate.actions.hidden = !canContinue && !error;
+    const bindingError = candidate.ready && snapshot.bindings?.status === 'error';
+    paintAlert(candidate, candidate.bindingsStatus, bindingError ? snapshot.bindings.error : '', bindingError);
+    button(candidate, 'bindingsButton', candidate.bindingsHost, bindingError
+      ? {label: 'Retry track actions', onClick: () => command(candidate, true, value => runtime.retryBindings(value))} : null);
 
     // Sidebar progress owns a child request, never the foreground result slot.
-    const sidebar = snapshot.sidebar, showSidebar = Boolean(candidate.ready && sidebar
+    const sidebar = snapshot.sidebar, showSidebar = Boolean(candidate.ready && !isPopularity(snapshot) && sidebar
       && (sidebar.hasMore || ['loading', 'pending', 'error'].includes(sidebar.status)));
     candidate.sidebar.hidden = !showSidebar;
     candidate.sidebar.setAttribute('aria-busy', String(showSidebar && sidebar.status === 'loading'));

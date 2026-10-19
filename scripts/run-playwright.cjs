@@ -261,6 +261,7 @@ function finalizeMainResult(result, options = {}) {
       'managed-isolated-app-cleanup-error',
       'owned-process-cleanup-error',
       'fake-database-cleanup-error',
+      'owned-temp-cleanup-error',
     ].includes(lifecycle.exitReason);
   const exitCode = processCleanupUnproven
     || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
@@ -709,9 +710,15 @@ function isDefaultIsolatedLibraryConfig(passthroughArgv = []) {
   return path.resolve(repoRoot, explicitConfig) === path.join(repoRoot, 'playwright.config.js');
 }
 
+function homeFeedbackScenario(passthroughArgv = []) {
+  const config = path.resolve(repoRoot, resolveExplicitPlaywrightConfig(passthroughArgv));
+  if (config === path.join(repoRoot, 'playwright.home-feedback.config.js')) return 'home-feedback';
+  if (config === path.join(repoRoot, 'playwright.native-acceptance.config.js')) return 'native-acceptance';
+  return '';
+}
+
 function isHomeFeedbackConfig(passthroughArgv = []) {
-  return path.resolve(repoRoot, resolveExplicitPlaywrightConfig(passthroughArgv))
-    === path.join(repoRoot, 'playwright.home-feedback.config.js');
+  return Boolean(homeFeedbackScenario(passthroughArgv));
 }
 
 function isManagedIsolatedLibraryConfig(passthroughArgv = []) {
@@ -1321,9 +1328,14 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
     ALBUM_HAVEN_FAKE_E2E_PROVIDER_BASE_URL: `http://127.0.0.1:${providerPort}`,
   }));
   const homeFeedback = options.homeFeedback === true;
+  const scenario = options.scenario || 'home-feedback';
+  if (!['home-feedback', 'native-acceptance'].includes(scenario) || (!homeFeedback && scenario !== 'home-feedback')) {
+    throw new Error('Unsupported managed Home scenario.');
+  }
   const launcherArguments = homeFeedback
     ? [HOME_FEEDBACK_APP_PATH, '--port', String(port), '--manifest',
-      path.join(String(managedEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || ''), 'home-feedback-manifest.json')]
+      path.join(String(managedEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || ''), 'home-feedback-manifest.json'),
+      ...(scenario === 'native-acceptance' ? ['--scenario', scenario] : [])]
     : [ISOLATED_LIBRARY_APP_PATH, '--port', String(port), '--provider-port', String(providerPort),
       ...(options.seedAllFunctionalCoverMisses ? ['--seed-all-functional-cover-misses'] : [])];
   if (homeFeedback && (!path.isAbsolute(String(managedEnv.ALBUM_HAVEN_E2E_TEMP_ROOT || ''))
@@ -3149,7 +3161,8 @@ async function runManagedPlaywrightAttempt(options = {}) {
         port: resolvedIsolatedAppPort,
         providerPort: resolvedIsolatedProviderPort,
         seedAllFunctionalCoverMisses,
-        ...(homeFeedback ? { homeFeedback: true } : {}),
+        ...(homeFeedback ? { homeFeedback: true,
+          ...(homeFeedbackScenario(passthroughArgv) === 'native-acceptance' ? { scenario: 'native-acceptance' } : {}) } : {}),
         onSpawnFn(child) {
           managedIsolatedChild = child;
           managedIsolatedAppStarted = true;
@@ -3574,6 +3587,7 @@ module.exports = {
     isDefaultIsolatedLibraryConfig,
     isManagedIsolatedLibraryConfig,
     isHomeFeedbackConfig,
+    homeFeedbackScenario,
     HOME_FEEDBACK_APP_PATH,
     shouldSeedAllFunctionalCoverMisses,
     isScanPerformanceConfig,

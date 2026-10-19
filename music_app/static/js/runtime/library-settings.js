@@ -631,6 +631,7 @@ async function openUtilityFoobarGuide() {
 
 let utilityFoobarFormatCleanup = null;
 let utilityChoiceTrigger = null;
+let utilityChoiceGeneration = 0;
 function openUtilityFoobarFormats(trigger) {
   return openUtilityChoiceDropdown(trigger, {
     formats: ['Playback Statistics XML', 'Text Tools — standard', 'Text Tools — enhanced'],
@@ -650,14 +651,17 @@ function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, 
 }
 
 function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false,
-  density, menuWidth, actionMenu = false, initialFocus = 'selected', updateTriggerLabel = true }) {
+  density, menuWidth, actionMenu = false, initialFocus = 'selected', updateTriggerLabel = true, onClose, onOwnedEvent }) {
+  const generation = ++utilityChoiceGeneration;
   if (utilityFoobarFormatCleanup) {
     const sameTrigger = utilityChoiceTrigger === trigger;
     utilityFoobarFormatCleanup();
-    if (sameTrigger) return null;
+    if (sameTrigger || generation !== utilityChoiceGeneration) return null;
   }
-  const available = () => trigger?.isConnected && !trigger.disabled && trigger.getAttribute?.('aria-disabled') !== 'true'
+  let anchorBound = false;
+  const triggerAvailable = () => trigger?.isConnected && !trigger.disabled && trigger.getAttribute?.('aria-disabled') !== 'true'
     && !trigger.closest?.('[hidden], [inert], [aria-hidden="true"]');
+  const available = () => triggerAvailable() && (!anchorBound || isTriggerSurfaceAnchorCurrent(menu, trigger));
   if (!available()) return null;
   const choices = (Array.isArray(formats) ? formats : []).map(format => typeof format === 'string'
     ? {value: format, label: format} : {...format, value: String(format.value)});
@@ -673,17 +677,40 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
       ...(actionMenu ? {} : {'aria-checked': String(choice.value === String(selected))}), 'data-foobar-format': choice.value}})).join('');
   document.body.append(menu);
   let closed = false, escapeHeld = false;
-  const close = ({restoreFocus = false} = {}) => {
-    if (closed) return; closed = true;
+  const ownedEvents = new WeakSet();
+  let owner;
+  const contains = target => menu.contains(target) || trigger.contains(target);
+  const admit = event => {
+    if (closed || utilityFoobarFormatCleanup !== close) return;
+    const path = event.composedPath?.();
+    const crossesChoice = path ? path.includes(menu) || path.includes(trigger) : contains(event.target);
+    if (!available()) {
+      close({reason:'stale-anchor'});
+      // Reject this stale child's gesture without turning it into an outside
+      // activation on the parent. Unrelated events retain normal propagation.
+      if (crossesChoice) {event.preventDefault(); event.stopImmediatePropagation();}
+      return;
+    }
+    if (crossesChoice) {
+      ownedEvents.add(event); onOwnedEvent?.(event, owner);
+    }
+  };
+  const close = ({restoreFocus = false, reason = 'closed'} = {}) => {
+    if (closed) return;
+    const restoreTrigger = restoreFocus && available();
+    closed = true;
     clearTriggerAnchor(menu); menu.remove(); trigger.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', outside, true);
+    window.removeEventListener('pointerdown', admit, true); window.removeEventListener('click', admit, true);
     window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true);
     if (!escapeHeld) window.removeEventListener('keydown', escape, true);
     window.visualViewport?.removeEventListener('resize', position); window.visualViewport?.removeEventListener('scroll', position);
     observer?.disconnect(); resizeObserver?.disconnect();
     // A React cleanup for an old owner must never clear a replacement menu.
     if (utilityFoobarFormatCleanup === close) {utilityFoobarFormatCleanup = null; utilityChoiceTrigger = null;}
-    if (restoreFocus && available()) trigger.focus({preventScroll: true});
+    const closingGeneration = utilityChoiceGeneration;
+    onClose?.({owner, reason});
+    if (restoreTrigger && closingGeneration === utilityChoiceGeneration && !utilityFoobarFormatCleanup && triggerAvailable()) trigger.focus({preventScroll: true});
   };
   const position = () => {
     if (!available() || menu.hidden || !menu.isConnected) {close(); return;}
@@ -708,9 +735,10 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
     const height = menu.scrollHeight || menu.getBoundingClientRect?.().height || 0;
     const vertical = resolveUtilityChoiceDropdownVerticalPlacement(rect, height, bottom, top);
     menu.style.top = `${vertical.top}px`; menu.style.maxHeight = `${vertical.maxHeight}px`;
-    syncTriggerAnchor(menu, trigger);
+    if (syncTriggerAnchor(menu, trigger) === false) {close({reason:'stale-anchor'}); return;}
+    anchorBound = true;
   };
-  const outside = event => {if (!menu.contains(event.target) && !trigger.contains(event.target)) close();};
+  const outside = event => {if (!contains(event.target)) close({reason:'outside-pointer'});};
   // Window capture precedes native modal Escape capture, so dismissing this
   // child menu cannot dismiss its parent dialog in the same keypress.
   const releaseEscape = () => {
@@ -736,7 +764,9 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
   observer?.observe(document.body, {childList: true, subtree: true, attributes: true,
     attributeFilter: ['hidden', 'inert', 'aria-hidden', 'disabled', 'aria-disabled']});
   resizeObserver?.observe(trigger); if (trigger.parentElement) resizeObserver?.observe(trigger.parentElement);
+  owner = {close, contains, ownsEvent:event=>ownedEvents.has(event), get isOpen() {return !closed;}};
   utilityFoobarFormatCleanup = close; utilityChoiceTrigger = trigger; trigger.setAttribute('aria-expanded', 'true');
+  window.addEventListener('pointerdown', admit, true); window.addEventListener('click', admit, true);
   document.addEventListener('pointerdown', outside, true);
   window.addEventListener('resize', position); window.addEventListener('scroll', position, true); window.addEventListener('keydown', escape, true);
   window.visualViewport?.addEventListener('resize', position); window.visualViewport?.addEventListener('scroll', position);
@@ -747,7 +777,7 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
     const option = choices.find(item => item.value === value); if (!option || option.disabled === true) return;
     try {
       const accepted = onSelect(value);
-      if (!closed && accepted !== false && updateTriggerLabel) {
+      if (!closed && utilityFoobarFormatCleanup === close && accepted !== false && updateTriggerLabel) {
         const content = trigger.querySelector('.ui-button__content'); if (content) content.textContent = option.label;
       }
     } finally {close({restoreFocus: true});}
@@ -768,9 +798,9 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
     const buttons = enabledButtons(), chosen = initialFocus === 'last' ? buttons.at(-1)
       : initialFocus === 'first' ? buttons[0] : buttons.find(button => button.getAttribute('aria-checked') === 'true') || buttons[0];
     chosen?.focus({preventScroll: true});
-    chosen?.scrollIntoView?.({block: 'nearest'});
+    if (!closed && utilityFoobarFormatCleanup === close) chosen?.scrollIntoView?.({block: 'nearest'});
   }
-  return {close, get isOpen() {return !closed;}};
+  return !closed && utilityFoobarFormatCleanup === close && generation === utilityChoiceGeneration ? owner : null;
 }
 
 

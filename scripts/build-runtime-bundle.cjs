@@ -37,6 +37,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/search-shorthand-model.js',
   'js/runtime/gallery-main-interactions.js',
   'js/runtime/compact-player-helpers.js',
+  'js/runtime/player-capture-telemetry.js',
   'js/runtime/player-streaming-engine.js',
   'js/runtime/shell-navigation-drawer.js',
   'js/runtime/account-menu.js',

@@ -2524,6 +2524,82 @@ test('reconcileCommittedTagEditDestination selects the committed artist and remo
   assert.equal(historyCalls[0].url, '/albums?artist=Overhead');
 });
 
+test('reconcileCommittedTagEditDestination accepts the destination album after its key is canonicalized', async () => {
+  const context = loadHelpers();
+  const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';
+  const destinationAlbum = {
+    album_id: 14712,
+    key: 'overhead::telepathic minds',
+    identity_key: 'overhead::telepathic minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    year: 1999,
+    tracks: [{ path: trackPath }],
+  };
+  context.state.view.selected_artist = 'Ovderhead';
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.buildUrl = (view) => `/albums?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  const historyCalls = [];
+  context.window.history = {
+    state: {},
+    replaceState(_snapshot, _unused, url) {
+      historyCalls.push(url);
+    },
+  };
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_id: 14712,
+    destination_album_key: 'overhead::telepathic minds::year::1999',
+    updated_albums: [destinationAlbum],
+  }), true);
+  assert.deepEqual(historyCalls, ['/albums?artist=Overhead']);
+});
+
+test('reconcileCommittedTagEditDestination rejects an unrelated album by the destination artist', async () => {
+  const context = loadHelpers();
+  const unrelatedAlbum = {
+    album_id: 14713,
+    key: 'overhead::unrelated',
+    identity_key: 'overhead::unrelated',
+    name: 'Unrelated',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'D:\\Synthetic Music\\Overhead\\Unrelated\\01.flac' }],
+  };
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [unrelatedAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_id: 14712,
+    destination_album_key: 'overhead::telepathic minds::year::1999',
+    updated_albums: [unrelatedAlbum],
+  }), false);
+});
+
 test('reconcileCommittedTagEditDestination keeps a retained source artist', async () => {
   const context = loadHelpers();
   const destinationAlbum = {

@@ -1905,6 +1905,7 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
   const destinationAlbumKey = String(
     terminalPayload?.destination_album_key || '',
   ).trim();
+  const destinationAlbumId = Number(terminalPayload?.destination_album_id || 0);
   const shouldApplyResponse = typeof context.shouldApplyResponse === 'function'
     ? context.shouldApplyResponse
     : () => true;
@@ -1941,8 +1942,21 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
   ) return false;
 
   if (destinationAlbumKey) {
+    const updatedDestinationAlbums = (
+      Array.isArray(terminalPayload?.updated_albums) ? terminalPayload.updated_albums : []
+    ).filter((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || (
+        destinationAlbumId > 0
+        && Number(album?.album_id || 0) === destinationAlbumId
+      )
+    ));
     const destinationVisible = collectVisibleAlbumsUnique().some((album) => (
       getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+      || updatedDestinationAlbums.some((updatedAlbum) => (
+        albumsShareTrackPath(album, getAlbumTrackPaths(updatedAlbum))
+        || albumsShareLogicalReleaseIdentity(album, updatedAlbum)
+      ))
     ));
     if (!destinationVisible) return false;
   }

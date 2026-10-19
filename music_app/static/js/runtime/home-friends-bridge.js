@@ -565,12 +565,19 @@ const HomeFriendsRuntime = (() => {
     // caches and the signed-in listener's preferences must remain untouched.
     const personal = new Set(['taste_state', 'love_tier', 'track_rating', 'play_count', 'last_listened_at_ms', 'added_at', 'added_at_ms', 'album_rating', 'rating', 'favorite', 'is_favorite', 'listen_count', 'last_listened_at',
       'track_scrobble_count', 'scrobble_count', 'track_stats', 'listening_progress', 'listen_progress',
-      'album_preference', 'album_preference_overlay', 'track_preference', 'track_preference_overlay', 'track_preference_state', 'canonical_track_ref', 'tag_album_rating', 'tag_album_rating_source']);
+      'album_preference', 'album_preference_overlay', 'favorite_override', 'favorite_source', 'preference_revision',
+      'context_ref', 'can_edit', 'can_manage_album_preferences', 'to_listen', 'is_relisten', 'can_toggle_to_listen', 'track_preference', 'track_preference_overlay', 'track_preference_state', 'canonical_track_ref', 'tag_album_rating', 'tag_album_rating_source']);
     const copy = value => {
       if (Array.isArray(value)) return value.map(copy);
       if (!value || typeof value !== 'object') return value;
       const result = {};
-      for (const [key, child] of Object.entries(value)) result[key] = personal.has(key) ? null : copy(child);
+      for (const [key, child] of Object.entries(value)) {
+        if (!personal.has(key)) result[key] = copy(child);
+      }
+      if (result.allowed_actions) {
+        delete result.allowed_actions.can_manage_album_preferences;
+        delete result.allowed_actions.can_toggle_to_listen;
+      }
       result.can_edit_preferences = false; result.read_only_subject = subject;
       if (own(value, 'inventory_track_ref') && typeof value.inventory_track_ref === 'string') {
         const row = byRef.get(value.inventory_track_ref);
@@ -586,8 +593,8 @@ const HomeFriendsRuntime = (() => {
     const result = copy(album);
     result.read_only_subject = subject;
     result.taste_state = ratingTasteState(taste, 10);
-    result.album_rating = own(taste, 'rating') && Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
-    result.favorite = typeof taste.favorite === 'boolean' ? taste.favorite : null;
+    result.album_rating = result.taste_state === 'available' && own(taste, 'rating') && Number.isInteger(taste.rating) && taste.rating >= 1 && taste.rating <= 10 ? taste.rating : null;
+    result.favorite = result.taste_state === 'available' && typeof taste.favorite === 'boolean' ? taste.favorite : null;
     return result;
   }
   function retainResource(selection, context = {}) {

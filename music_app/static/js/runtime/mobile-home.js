@@ -15,5 +15,6 @@ function syncMobileHome() {
   if (typeof syncHomeFriendsRuntime === 'function') syncHomeFriendsRuntime();
   if (typeof syncPlaylistRuntime === 'function') syncPlaylistRuntime();
   if (typeof syncAlbumTopsRuntime === 'function') syncAlbumTopsRuntime();
+  window.AlbumHavenArtistPageRuntime?.syncPresentation();
   if (!show && typeof showMobileGalleryPinchHint === 'function') showMobileGalleryPinchHint();
 }

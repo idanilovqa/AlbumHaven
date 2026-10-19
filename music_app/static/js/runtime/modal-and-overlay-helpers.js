@@ -155,6 +155,7 @@ function renderVersionPickerModal() {
   saveButton.textContent = state.versionPicker.saving ? 'Saving...' : 'Save';
 }
 
+let versionPickerSheetLayer = null;
 function openVersionPickerModal(album) {
   const sourceAlbum = album || null;
   if (!sourceAlbum) return;
@@ -163,6 +164,9 @@ function openVersionPickerModal(album) {
   state.versionPicker.selectedTargetKey = '';
   const modal = ensureVersionPickerModal();
   renderVersionPickerModal();
+  versionPickerSheetLayer?.();
+  const parent = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  versionPickerSheetLayer = window.AlbumHavenBottomSheet?.acquireChildLayer(modal, parent) || null;
   modal.hidden = false;
   document.body.classList.add('modal-open');
 }
@@ -171,6 +175,7 @@ function closeVersionPickerModal() {
   const modal = document.getElementById('version-picker-modal');
   if (!modal) return;
   modal.hidden = true;
+  const layer = versionPickerSheetLayer; versionPickerSheetLayer = null; layer?.();
   state.versionPicker.album = null;
   state.versionPicker.selectedTargetKey = '';
   state.versionPicker.saving = false;

@@ -6,6 +6,12 @@
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const reference = value => typeof value === 'string' && value.trim().length > 0
   && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value);
+// Only native Album hydration references use the backend's larger scalar bound.
+// Reject edge whitespace before fetchTrackModalAlbumDetails can trim it; public
+// identities, Artist refs, origins, scope keys and grants keep their old rules.
+const nativeAlbumReference = value => typeof value === 'string' && value.length > 0
+  && value === value.trim() && !/^\u0085|\u0085$/u.test(value) && [...value].length <= 16384
+  && !/[\u0000-\u001f\u007f\uD800-\uDFFF]/u.test(value);
 const freeze = Object.freeze;
 const grant = (value, name) => object(value) && Object.hasOwn(value, name) && value[name] === true;
 
@@ -45,7 +51,7 @@ function nativeActions(value, kind = 'album') {
   if (!object(value)) return null;
   if (kind === 'artist') return reference(value.artist_ref) ? freeze({artist_ref: value.artist_ref,
     allowed_actions: freeze({can_open_artist_gallery: grant(value.allowed_actions, 'can_open_artist_gallery')})}) : null;
-  if (!reference(value.album_ref)) return null;
+  if (!nativeAlbumReference(value.album_ref)) return null;
   const canOpen = grant(value.allowed_actions, 'can_open_album');
   return freeze({album_ref: value.album_ref, allowed_actions: freeze({
     can_open_album: canOpen, can_play_album: canOpen && grant(value.allowed_actions, 'can_play_album'),
@@ -57,7 +63,7 @@ function nativeActions(value, kind = 'album') {
 }
 const error = (message, status = 403) => Object.assign(new Error(message), {status});
 const stale = () => Object.assign(new Error('Resource selection was superseded.'), {name: 'AbortError'});
-function createResourceSelection({sourceResource, retainResource, revalidateResource, authorizeResource, projectAlbum} = {}) {
+function createResourceSelection({sourceResource, retainResource, revalidateResource, authorizeResource, projectAlbum, beginAlbumPresentation} = {}) {
   let sequence = 0, artistReadSequence = 0;
   const artistAlbums = new Set(), mounted = new Set();
   const readSource = (target, context) => {
@@ -166,7 +172,16 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
     }
     return receipts.length ? () => receipts.every(isCurrent => isCurrent()) : null;
   }
+  // Explicit post-render commitment is recorded by the private immutable
+  // handle, never inferred from an open helper's undefined return.
+  function presentation(selection, context, intent, signal, current) {
+    if (intent === 'artwork' || typeof beginAlbumPresentation !== 'function') return null;
+    return beginAlbumPresentation(selection, context, {intent, signal, isCurrent: current}) || null;
+  }
   async function hydrate(selection, context, intent, signal, current) {
+    const presentationAttempt = presentation(selection, context, intent, signal, current);
+    let transferred = false;
+    try {
     const admitted = source(selection, context, intent), key = fingerprint(admitted);
     if (!admitted) throw error('This resource action is no longer available.');
     const token = Number(state.ui?.pendingTrackModalLoadToken || 0);
@@ -179,14 +194,31 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       readOnlySubject: (context.origin || selection.origin)?.account_ref != null,
       isCurrent: () => current() && token === Number(state.ui?.pendingTrackModalLoadToken || 0)
         && fingerprint(source(selection, context, intent)) === key});
+    if (typeof beginAlbumPresentation === 'function' && typeof SearchAlbumPresentationProvenance !== 'undefined') {
+      SearchAlbumPresentationProvenance.mark(album);
+    }
     if (signal?.aborted || !current() || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)) throw stale();
     if (fingerprint(source(selection, context, intent)) !== key) throw error('This resource action is no longer available.');
     if (!album || String(album.key || album.album_ref || '') !== admitted.actions.album_ref
       || typeof albumRequiresHydration === 'function' && albumRequiresHydration(album)) throw error('Album details did not match this selection.', 409);
-    return typeof projectAlbum === 'function' ? projectAlbum(album, selection, context) : album;
+    if (presentationAttempt) {
+      await presentationAttempt.prepare(album);
+      if (signal?.aborted || !current() || !presentationAttempt.isCurrent()
+        || token !== Number(state.ui?.pendingTrackModalLoadToken || 0)
+        || fingerprint(source(selection, context, intent)) !== key) throw stale();
+    }
+    const projected = typeof projectAlbum === 'function' ? projectAlbum(album, selection, context) : album;
+    if (!projected || !current() || signal?.aborted) throw stale();
+    if (projected !== album && typeof SearchAlbumPresentationProvenance !== 'undefined') SearchAlbumPresentationProvenance.bridge(album, projected);
+    transferred = true;
+    return {album: projected, presentationAttempt};
+    } finally {if (!transferred) presentationAttempt?.dispose('hydrate-failed');}
   }
   function replaySource(selection, context, original) {
     return async ({signal, albumKey}) => {
+      const presentationAttempt = presentation(selection, context, 'replay', signal, () => !signal?.aborted);
+      let transferred = false;
+      try {
       if (typeof revalidateResource !== 'function') throw error('This source cannot restore Album pages.', 503);
       const fresh = await revalidateResource(selection, {...context, signal: undefined}, {signal});
       if (fresh == null) throw error('This source cannot restore this Album page.', 503);
@@ -200,22 +232,34 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       }
       const album = await fetchTrackModalAlbumDetails(actions.album_ref, {signal,
         readOnlySubject: origin?.account_ref != null, isCurrent: fresh.isCurrent});
+      if (typeof beginAlbumPresentation === 'function' && typeof SearchAlbumPresentationProvenance !== 'undefined') {
+        SearchAlbumPresentationProvenance.mark(album);
+      }
       if (signal?.aborted) throw stale();
       if (!fresh.isCurrent()) throw error('This album page is no longer authorized by its source.');
       if (!album || String(album.key || album.album_ref || '') !== actions.album_ref
         || typeof albumRequiresHydration === 'function' && albumRequiresHydration(album)) throw error('Album details did not match the restored source.', 409);
+      if (presentationAttempt) {
+        await presentationAttempt.prepare(album);
+        if (signal?.aborted || !fresh.isCurrent() || !presentationAttempt.isCurrent()) throw stale();
+      }
       const admitted = actions.allowed_actions, prior = original.allowed_actions;
-      return {album: typeof projectAlbum === 'function' ? projectAlbum(album, selection, {...context, subjectTaste: fresh.subjectTaste}) : album, isCurrent: fresh.isCurrent, presentationRestrictions: {
+      const projected = typeof projectAlbum === 'function' ? projectAlbum(album, selection, {...context, subjectTaste: fresh.subjectTaste}) : album;
+      if (!projected || signal?.aborted || !fresh.isCurrent()) throw stale();
+      if (projected !== album && typeof SearchAlbumPresentationProvenance !== 'undefined') SearchAlbumPresentationProvenance.bridge(album, projected);
+      transferred = true;
+      return {album: projected, presentationAttempt, isCurrent: fresh.isCurrent, presentationRestrictions: {
         can_play_album: prior.can_play_album === true && admitted.can_play_album === true,
         can_view_artwork: prior.can_view_artwork !== false && admitted.can_view_artwork !== false,
         can_open_album_page: prior.can_open_album_page !== false && admitted.can_open_album_page !== false,
       }};
+      } finally {if (!transferred) presentationAttempt?.dispose('replay-hydrate-failed');}
     };
   }
   async function resourceIntent(intent, selection, context) {
     const admitted = source(selection, context, intent);
     if (!admitted || intent === 'embed') throw error('This resource action is unavailable.');
-    const active = ++sequence;
+    const active = intent === 'artwork' ? sequence : ++sequence;
     const current = () => sequence === active && !context.signal?.aborted;
     if (!current()) throw stale();
     if (typeof deferAppFormPageReplacement === 'function') {
@@ -238,7 +282,9 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       handleSidebarArtistSelectionClick({target: item, preventDefault() {}});
       return;
     }
-    const album = await hydrate(selection, context, intent, context.signal, current);
+    const {album, presentationAttempt} = await hydrate(selection, context, intent, context.signal, current);
+    let completed = false;
+    try {
     if (intent !== 'artwork') releaseTrackModalSelection(intent);
     if (!current() || fingerprint(source(selection, context, intent)) !== fingerprint(admitted)) throw stale();
     if (intent === 'artwork') {
@@ -251,27 +297,38 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
       const sourceCurrent = retainNativeSource(selection, context, admitted, intent, current);
       if (!sourceCurrent || !sourceCurrent() || !current()) throw stale();
       const opened = openTrackModal(album, {coverLightboxGallery: false, foreground: true,
+        searchPresentationAttempt: presentationAttempt,
+        deferResourceSelection: () => resourceIntent(intent, selection, context),
         presentationRestrictions: admitted.actions.allowed_actions,
         sourcePageOwner: {isCurrent: sourceCurrent,
           revalidate: replaySource(selection, context, admitted.actions)}});
       if (opened === false) throw error('This Album presentation is unavailable.');
     }
+    completed = true;
+    } finally {if (!completed || !presentationAttempt?.isCommitted()) presentationAttempt?.dispose('open-uncommitted');}
   }
   function mountResourceSelection(host, {selection, scopeKey, origin, onState, onError} = {}) {
     const controller = new AbortController();
     const context = {scopeKey, ...(origin ? {origin} : {}), signal: controller.signal};
-    let disposed = false, lease = null, album = null, pending = false, returnFocus = null;
+    let disposed = false, lease = null, album = null, preparation = null, pending = false, returnFocus = null;
     const admitted = fingerprint(source(selection, context, 'embed'));
     const current = () => !disposed && !controller.signal.aborted && host?.isConnected
       && !!admitted && fingerprint(source(selection, context, 'embed')) === admitted;
-    const release = () => {lease?.release('dispose'); lease = null;};
+    const release = () => {
+      const ownedLease = lease, ownedPreparation = preparation;
+      lease = null; preparation = null; album = null;
+      ownedPreparation?.dispose('embed-release'); ownedLease?.release('dispose');
+    };
     const attempt = async () => {
       if (pending || lease || !current() || !document.getElementById('track-modal')?.hidden) return;
       pending = true;
+      let owned = null, acquired = null, complete = false;
       try {
-        if (!album) album = await hydrate(selection, context, 'embed', controller.signal, current);
+        const hydrated = await hydrate(selection, context, 'embed', controller.signal, current);
+        owned = hydrated.presentationAttempt; album = hydrated.album; preparation = owned;
         if (!current()) return;
-        lease = acquireTrackModalSelection(host, album, {isCurrent: current,
+        let released = false;
+        acquired = acquireTrackModalSelection(host, album, {isCurrent: current, searchPresentationAttempt: owned,
           retainNavigation() {
             const value = source(selection, context, 'embed');
             return current() && value ? retainNativeSource(selection, context, value, 'embed', current) : null;
@@ -280,21 +337,40 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
           canArtwork: () => source(selection, context, 'artwork') !== null,
           canOpen: () => source(selection, context, 'open') !== null,
           canPage: () => source(selection, context, 'page') !== null,
-          onRelease() {lease = null; if (!disposed) onState?.('unavailable');},
+          onRelease() {
+            released = true;
+            if (preparation === owned) {preparation = null; album = null;}
+            if (lease === acquired) lease = null;
+            owned?.dispose('embed-released');
+            if (!disposed) onState?.('unavailable');
+          },
           onOpen() {if (current()) {returnFocus = host.contains(document.activeElement) ? 'open' : null;
             void resourceIntent('open', selection, context).catch(failure => onError?.(failure));}},
           onPage() {if (current()) {returnFocus = host.contains(document.activeElement) ? 'page' : null;
             void resourceIntent('page', selection, context).catch(failure => onError?.(failure));}}});
-        if (lease) {
+        if (acquired && !released && current() && getTrackModalSelectionLease() === acquired
+          && acquired.album === album && acquired.dialog?.isConnected && host.contains(acquired.dialog)) {
+          lease = acquired;
+          if (owned && (!owned.isCurrent() || !owned.commit())) throw stale();
           onState?.('ready');
+          if (!current() || lease !== acquired || released || owned && !owned.isCurrent()) throw stale();
           const active = document.activeElement;
           if (returnFocus && (!active || active === document.body || !active.isConnected)) {
             (host.querySelector(`[data-resource-selection-${returnFocus}]`) || host.querySelector('[data-resource-selection-open]'))?.focus({preventScroll: true});
           }
           returnFocus = null;
+          complete = true;
         }
       } catch (failure) {if (current()) {onState?.('unavailable'); if (failure.name !== 'AbortError') onError?.(failure);}}
-      finally {pending = false;}
+      finally {
+        try {
+        if (!complete) {
+          if (preparation === owned) {preparation = null; album = null;}
+          if (lease === acquired) lease = null;
+          owned?.dispose('embed-uncommitted'); acquired?.release('failed');
+        }
+        } finally {pending = false;}
+      }
     };
     const guard = event => {
       const valid = current();
@@ -312,7 +388,7 @@ function createResourceSelection({sourceResource, retainResource, revalidateReso
     if (admitted) {onState?.('loading'); void attempt();}
     return {dispose() {
       if (disposed) return;
-      disposed = true; controller.abort(); release(); album = null; mounted.delete(invalidate);
+      disposed = true; release(); controller.abort(); album = null; mounted.delete(invalidate);
       for (const event of ['click', 'dblclick', 'keydown']) host.removeEventListener(event, guard, true);
       window.removeEventListener('albumhaven:resource-selection-available', attempt);
     }};

@@ -209,6 +209,9 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
     /delete from library\.separate_releases[\s\S]*release_key like[\s\S]*lower\(/,
   );
   assert.match(sql, /deleted_orphan_albums as/);
+  assert.match(sql, /library\.local_albums\.title = 'Telepathic Minds'/);
+  assert.match(sql, /library\.local_artists\.name in \('Ovderhead', 'Overhead'\)/);
+  assert.match(sql, /deleted_orphan_artists as/);
   assert.match(
     sql,
     /not exists \(\s*select 1\s*from library\.local_tracks\s*join library\.local_track_files/,

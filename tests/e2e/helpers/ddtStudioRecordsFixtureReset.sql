@@ -144,9 +144,20 @@ deleted_orphan_albums as (
   using target_album
   where library.local_albums.library_id = target_album.library_id
     and library.local_albums.id <> target_album.id
-    and library.local_albums.title in (
-      'Студийные записи',
-      'Студийные записи merge candidate'
+    and (
+      library.local_albums.title in (
+        'Студийные записи',
+        'Студийные записи merge candidate'
+      )
+      or (
+        library.local_albums.title = 'Telepathic Minds'
+        and exists (
+          select 1
+          from library.local_artists
+          where library.local_artists.id = library.local_albums.artist_id
+            and library.local_artists.name in ('Ovderhead', 'Overhead')
+        )
+      )
     )
     and not exists (
       select 1
@@ -155,7 +166,22 @@ deleted_orphan_albums as (
         on library.local_track_files.track_id = library.local_tracks.id
       where library.local_tracks.album_id = library.local_albums.id
     )
-  returning library.local_albums.id
+  returning library.local_albums.id, library.local_albums.artist_id
+),
+deleted_orphan_artists as (
+  delete from library.local_artists
+  using target_album
+  where library.local_artists.library_id = target_album.library_id
+    and library.local_artists.name in ('Ovderhead', 'Overhead')
+    and not exists (
+      select 1
+      from library.local_albums
+      where library.local_albums.artist_id = library.local_artists.id
+        and library.local_albums.id not in (
+          select deleted_orphan_albums.id from deleted_orphan_albums
+        )
+    )
+  returning library.local_artists.id
 ),
 updated_library as (
   update library.libraries
@@ -206,5 +232,6 @@ select json_build_object(
     ) is not null
   ),
   'separate_release_rows', (select count(*) from deleted_separate_releases),
-  'orphan_album_rows', (select count(*) from deleted_orphan_albums)
+  'orphan_album_rows', (select count(*) from deleted_orphan_albums),
+  'orphan_artist_rows', (select count(*) from deleted_orphan_artists)
 )::text;

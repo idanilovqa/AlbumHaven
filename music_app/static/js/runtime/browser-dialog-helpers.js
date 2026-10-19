@@ -35,6 +35,7 @@ function showAppFormDialog(options = {}) {
   const parent = parentSurface && !parentSurface.hidden ? parentSurface : null;
   const parentInert = parent?.inert;
   const previousLayer = modal.style.zIndex;
+  let sheetLayer = null;
   const containParentClick = event => event.stopPropagation();
   const anchor = options.anchor;
   const contentOwnsFooter = options.contentOwnsFooter === true;
@@ -54,6 +55,7 @@ function showAppFormDialog(options = {}) {
   const contentInert = content.inert;
   let submitEnabled = options.submitEnabled !== false, submitting = false, finishing = false, dismissal = null;
   let dismissDisabled = options.dismissDisabled === true;
+  let dismissalRecord = null;
   const syncSubmit = () => {
     if (activeAppFormDialog !== owner) return;
     submit.disabled = submitting || Boolean(dismissal) || !submitEnabled;
@@ -67,8 +69,11 @@ function showAppFormDialog(options = {}) {
   }, close: (value, closeOptions = {}) => guarded && closeOptions.force !== true
     ? requestDismiss(closeOptions.reason || 'cancel', closeOptions, value)
     : finish(value ?? null, closeOptions), dismiss: (reason, closeOptions) => requestDismiss(reason, closeOptions) };
-  const finish = (value, {restoreFocus = true, updateHistory = true, returnToParent = true} = {}) => {
-    if (activeAppFormDialog !== owner || finishing) return false;
+  const finish = (value, {restoreFocus = true, updateHistory = true, returnToParent = true, isCurrent = null, searchReplacement = null} = {}) => {
+    const externalCurrent = () => !isCurrent || canRetainMobileFormParent(isCurrent);
+    if (activeAppFormDialog !== owner || finishing || !externalCurrent()) return false;
+    if (searchReplacement && typeof canDismissAdvancedMobileForm === 'function'
+      && !canDismissAdvancedMobileForm(owner.token, searchReplacement)) return false;
     finishing = true;
     modal.hidden = true;
     listeners.forEach(([node, name, handler]) => node.removeEventListener(name, handler));
@@ -76,17 +81,20 @@ function showAppFormDialog(options = {}) {
     focusObserver?.disconnect();
     let navigation = null, completion;
     const settled = (returned = true) => {
-      const current = returned !== false && owner.isCurrentContext();
-      try { options.onAfterClose?.(content, {restoreFocus, returnToParent, current}); }
+      let current = returned !== false && owner.isCurrentContext() && externalCurrent();
+      try {
+        if (!searchReplacement || (current && !activeAppFormDialog)) options.onAfterClose?.(content, {restoreFocus, returnToParent, current});
+      }
       finally {
+        current = current && owner.isCurrentContext() && externalCurrent();
         resolve(current ? value : null);
-        if (restoreFocus && current && owner.isCurrentContext() && !activeAppFormDialog) {
+        if (restoreFocus && current && owner.isCurrentContext() && externalCurrent() && !activeAppFormDialog) {
           const available = node => Boolean(node) && node.isConnected !== false && !node.disabled
             && node.getAttribute?.('aria-disabled') !== 'true' && !node.closest?.('[hidden], [inert]');
           const fallback = options.returnFocus?.() || (parent?.id === 'cover-lookup-drawer' ? document.querySelector?.('#cover-lookup-drawer [data-close-cover-lookup-drawer]') : null);
           const target = available(previousFocus) ? previousFocus : available(fallback) ? fallback
             : parent?.id === 'cover-lookup-drawer' ? document.getElementById('cover-lookup-drawer-button') : null;
-          if (available(target)) target?.focus?.({preventScroll: true});
+          if (externalCurrent() && owner.isCurrentContext() && !activeAppFormDialog && available(target)) target?.focus?.({preventScroll: true});
         }
       }
       return current;
@@ -94,12 +102,15 @@ function showAppFormDialog(options = {}) {
     try {
       if (activeAppConfirmDialog?.formOwner === owner) activeAppConfirmDialog.cancel({restoreFocus: false});
       if (pageId && typeof retireMobileAppFormPage === 'function') {
-        navigation = retireMobileAppFormPage(owner.token, {restoreFocus, updateHistory, returnToParent, isCurrent: owner.isCurrentContext,
-          retainParentView: options.retainParentView});
+        navigation = retireMobileAppFormPage(owner.token, {restoreFocus, updateHistory, returnToParent, isCurrent: () => owner.isCurrentContext() && externalCurrent(),
+          retainParentView: options.retainParentView, searchReplacement});
       }
       options.onClose?.(content, {restoreFocus});
     }
     finally {
+      // An opted-in dismissal may clean only the captured native owner.
+      // Legacy callbacks retain their existing invocation and cleanup behavior.
+      if (!searchReplacement || activeAppFormDialog === owner) {
       if (contentOwnsFooter) {
         if (footer) footer.hidden = footerHidden;
         if (contentTabIndex === null) content.removeAttribute('tabindex');
@@ -111,6 +122,7 @@ function showAppFormDialog(options = {}) {
       if (headerClose) {headerClose.hidden = true; headerClose.disabled = false;}
       content.inert = contentInert; cancel.disabled = false;
       content.innerHTML = ''; activeAppFormDialog = null;
+      if (!searchReplacement) {sheetLayer?.(); sheetLayer = null;}
       modal.style.zIndex = previousLayer;
       if (parent) {
         parent.inert = parentInert;
@@ -118,13 +130,70 @@ function showAppFormDialog(options = {}) {
         // containment through that event so the drawer does not close as an
         // unrelated outside click, then release only this form's listener.
         window.setTimeout(() => modal.removeEventListener('click', containParentClick), 0);
-        if (parent.id === 'cover-lookup-drawer' && !returnToParent && owner.isCurrentContext() && typeof closeNotificationDrawer === 'function') closeNotificationDrawer();
+        if (parent.id === 'cover-lookup-drawer' && !returnToParent && externalCurrent() && owner.isCurrentContext() && typeof closeNotificationDrawer === 'function') closeNotificationDrawer();
       }
-      completion = navigation ? Promise.resolve(navigation).then(settled) : settled();
+      }
+      // Release our lease after shared DOM work, so a release callback may
+      // acquire a successor without old cleanup writing over it.
+      const releaseLayer = sheetLayer; sheetLayer = null; releaseLayer?.();
+      completion = navigation && typeof navigation.then === 'function' ? Promise.resolve(navigation).then(settled) : settled(navigation !== false);
     }
     return completion;
   };
   const requestDismiss = (reason = 'cancel', closeOptions = {}, value = null) => {
+    closeOptions = {...closeOptions};
+    const operation = closeOptions.dismissalOperation ? {...closeOptions.dismissalOperation} : null;
+    if (operation) {
+      const record = {operation, observer: closeOptions.onDismissOutcome, settled: false, promise: null};
+      const current = () => canRetainMobileFormParent(closeOptions.isCurrent)
+        && operation.identity?.nonce === operation.nonce && operation.identity?.sessionId === operation.sessionId
+        && canRetainMobileFormParent(() => operation.identity.isCurrent());
+      const terminal = (status, why) => {
+        if (record.settled) return status === 'accepted';
+        record.settled = true;
+        if (dismissalRecord === record) {
+          dismissalRecord = null;
+          if (dismissal === record.promise) dismissal = null;
+        }
+        syncSubmit();
+        try {record.observer?.({operation: operation.identity, nonce: operation.nonce,
+          formToken: owner.token, status, reason: why});} catch { /* Outcome observers never own native settlement. */ }
+        return status === 'accepted';
+      };
+      if (!current()) return Promise.resolve(terminal('superseded', 'stale-intent'));
+      if (activeAppFormDialog !== owner || !owner.isCurrentContext()) return Promise.resolve(terminal('superseded', 'form-owner'));
+      if (finishing || submitting || dismissal || dismissalRecord) return Promise.resolve(terminal('cancelled', 'busy'));
+      if (dismissDisabled && closeOptions.force !== true) return Promise.resolve(terminal('cancelled', 'disabled'));
+      if (!closeOptions.searchReplacement || closeOptions.searchReplacement.operation !== operation.identity
+        || (typeof canDismissAdvancedMobileForm === 'function' && !canDismissAdvancedMobileForm(owner.token, closeOptions.searchReplacement))) {
+        return Promise.resolve(terminal('cancelled', 'blocked-return'));
+      }
+      dismissalRecord = record;
+      record.promise = Promise.resolve().then(async () => {
+        if (!current()) return terminal('superseded', 'stale-intent');
+        if (!owner.isActive() || !owner.isCurrentContext()) return terminal('superseded', 'form-owner');
+        let accepted = true;
+        if (guarded) {
+          try {accepted = await options.beforeDismiss(reason);}
+          catch {return terminal(current() ? 'failed' : 'superseded', 'before-dismiss-error');}
+        }
+        if (!current()) return terminal('superseded', 'stale-intent');
+        if (!owner.isCurrentContext()) {
+          if (owner.isActive()) finish(null, {restoreFocus: false, returnToParent: false});
+          return terminal('superseded', 'form-owner');
+        }
+        if (!owner.isActive()) return terminal('superseded', 'form-owner');
+        if (accepted !== true) return terminal('cancelled', 'blocked');
+        if (!current()) return terminal('superseded', 'stale-intent');
+        try {
+          const returned = await finish(value ?? null, {...closeOptions, isCurrent: current});
+          if (!current() || !owner.isCurrentContext()) return terminal('superseded', 'return-stale');
+          return returned === true ? terminal('accepted', 'completed') : terminal('cancelled', 'return-blocked');
+        } catch {return terminal(current() && owner.isCurrentContext() ? 'failed' : 'superseded', 'finish-error');}
+      }).catch(() => terminal(current() ? 'failed' : 'superseded', 'finish-error'));
+      dismissal = record.promise; syncSubmit();
+      return record.promise;
+    }
     if (activeAppFormDialog !== owner || finishing || (guarded && submitting)) return Promise.resolve(false);
     if (dismissal) return dismissal;
     if (dismissDisabled && closeOptions?.force !== true) return Promise.resolve(false);
@@ -132,7 +201,7 @@ function showAppFormDialog(options = {}) {
     const dismissFocus = document.activeElement;
     // Defer the callback until the shared pending token is installed. Reentrant
     // clicks, Back and Escape all await this exact decision.
-    dismissal = Promise.resolve().then(() => owner.isActive() && owner.isCurrentContext() ? options.beforeDismiss(reason) : false)
+    const legacyDismissal = Promise.resolve().then(() => owner.isActive() && owner.isCurrentContext() ? options.beforeDismiss(reason) : false)
       .catch(() => false).then(accepted => {
       if (owner.isActive() && !owner.isCurrentContext()) {
         finish(null, {restoreFocus: false, returnToParent: false}); return false;
@@ -140,11 +209,11 @@ function showAppFormDialog(options = {}) {
       if (activeAppFormDialog !== owner || finishing || accepted !== true) return false;
       return finish(value ?? null, closeOptions);
     }).finally(() => {
-      dismissal = null; syncSubmit();
+      if (dismissal === legacyDismissal) dismissal = null; syncSubmit();
       if (activeAppFormDialog === owner && !activeAppConfirmDialog && dismissFocus?.isConnected !== false
         && !dismissFocus?.closest?.('[hidden], [inert]')) dismissFocus?.focus?.({preventScroll: true});
     });
-    syncSubmit();
+    dismissal = legacyDismissal; syncSubmit();
     return dismissal;
   };
   controls.updatePresentation = presentation => {
@@ -175,6 +244,7 @@ function showAppFormDialog(options = {}) {
   if (footer) footer.hidden = true;
   if (contentOwnsFooter) content.setAttribute('tabindex', '-1');
   if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
+  sheetLayer = window.AlbumHavenBottomSheet?.acquireChildLayer(modal, parent) || null;
   modal.hidden = false; modal.style.zIndex = '125';
   if (parent) {
     const layer = typeof getComputedStyle === 'function' ? Number(getComputedStyle(parent).zIndex) : 135;
@@ -249,7 +319,7 @@ function showAppFormDialog(options = {}) {
   try {
     if (pageId && typeof presentMobileAppFormPage === 'function') presentMobileAppFormPage(owner);
     options.onMount?.(content, controls);
-  } catch (error) { finish(null, {returnToParent: Boolean(parent)}); throw error; }
+  } catch (error) { finish(null, {restoreFocus: false, returnToParent: Boolean(parent)}); throw error; }
   if (activeAppFormDialog !== owner) return promise;
   if (contentOwnsFooter) {
     const focusContent = () => (contentControls()[0] || content).focus();
@@ -310,6 +380,9 @@ function showAppConfirmDialog(options = {}) {
   if (!modal || !title || !text || !cancelButton || !acceptButton) return Promise.resolve(false);
 
   const previousFocus = document.activeElement;
+  const sheetParent = activeAppFormDialog ? document.getElementById('app-form-modal')
+    : typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  let sheetLayer = null;
   const listeners = [];
   const listen = (element, name, handler) => {
     element?.addEventListener?.(name, handler);
@@ -323,6 +396,7 @@ function showAppConfirmDialog(options = {}) {
     if (activeAppConfirmDialog?.promise !== promise) return;
     listeners.forEach(([element, name, handler]) => element?.removeEventListener?.(name, handler));
     modal.hidden = true;
+    sheetLayer?.(); sheetLayer = null;
     activeAppConfirmDialog = null;
     resolveDialog(Boolean(accepted));
     if (restoreFocus && (!formOwner || activeAppFormDialog === formOwner)
@@ -356,6 +430,7 @@ function showAppConfirmDialog(options = {}) {
   acceptButton.textContent = String(options.acceptLabel || 'Continue');
   acceptButton.classList?.toggle?.('confirm-modal-danger', Boolean(options.danger));
   modal.style.zIndex = '140';
+  sheetLayer = window.AlbumHavenBottomSheet?.acquireChildLayer(modal, sheetParent) || null;
   modal.hidden = false;
   document.body?.classList?.add?.('modal-open');
   cancelButton.focus?.();
@@ -381,6 +456,8 @@ function showLoopNameDialog(options = {}) {
   }
 
   const previousFocus = document.activeElement;
+  const sheetParent = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  let sheetLayer = null;
   const listeners = [];
   const listen = (element, name, handler) => {
     element?.addEventListener?.(name, handler);
@@ -405,6 +482,7 @@ function showLoopNameDialog(options = {}) {
       element?.removeEventListener?.(name, handler);
     });
     modal.hidden = true;
+    sheetLayer?.(); sheetLayer = null;
     activeLoopNameDialog = null;
     resolveDialog(value);
     previousFocus?.focus?.();
@@ -454,6 +532,7 @@ function showLoopNameDialog(options = {}) {
   input.value = String(options.defaultValue || '');
   input.setAttribute?.('placeholder', String(options.placeholder || ''));
   setError('');
+  sheetLayer = window.AlbumHavenBottomSheet?.acquireChildLayer(modal, sheetParent) || null;
   modal.hidden = false;
   input.focus?.();
   input.select?.();
@@ -474,6 +553,8 @@ function showLoopDeleteConfirmDialog(loopName = '') {
   if (!modal || !text || !cancelButton || !acceptButton) return Promise.resolve(false);
 
   const previousFocus = document.activeElement;
+  const sheetParent = typeof getTopmostOpenModal === 'function' ? getTopmostOpenModal() : null;
+  let sheetLayer = null;
   const listeners = [];
   const listen = (element, name, handler) => {
     element?.addEventListener?.(name, handler);
@@ -491,6 +572,7 @@ function showLoopDeleteConfirmDialog(loopName = '') {
       element?.removeEventListener?.(name, handler);
     });
     modal.hidden = true;
+    sheetLayer?.(); sheetLayer = null;
     activeLoopDeleteConfirmDialog = null;
     resolveDialog(Boolean(accepted));
     previousFocus?.focus?.();
@@ -524,6 +606,7 @@ function showLoopDeleteConfirmDialog(loopName = '') {
   const name = String(loopName || 'this loop');
   text.textContent = `Remove "${name}"? This will delete the saved loop file.`;
   modal.style.zIndex = '125';
+  sheetLayer = window.AlbumHavenBottomSheet?.acquireChildLayer(modal, sheetParent) || null;
   modal.hidden = false;
   document.body?.classList?.add?.('modal-open');
   cancelButton.focus?.();

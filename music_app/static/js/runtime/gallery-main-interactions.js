@@ -1,30 +1,33 @@
 function createAnchoredSurfaceController() {
-  let active = null;
-  const close = (returnFocus = true) => {
+  let active = null, generation = 0;
+  const close = (returnFocus = true, {reason = 'closed', searchOperation} = {}) => {
     if (!active) return false;
     const previous = active;
-    active = null;
-    if (returnFocus) previous.anchor?.focus?.();
+    active = null; const closedGeneration = ++generation;
+    previous.onDismiss?.({owner:previous,reason,searchOperation});
+    if (returnFocus && generation === closedGeneration && !active && previous.anchor?.isConnected !== false) previous.anchor?.focus?.();
     return true;
   };
   return {
     activate(next) {
-      if (active?.key === next.key) { close(true); return 'closed'; }
-      close(false);
-      active = next;
+      if (active?.key === next.key) { close(true,{reason:'repeat-anchor'}); return 'closed'; }
+      const expected = generation + (active ? 1 : 0);
+      close(false,{reason:'surface-replaced'});
+      if (active || generation !== expected) return 'superseded';
+      active = next; generation++;
       return 'opened';
     },
     close,
     current: () => active,
     isOpen: (key) => active?.key === key,
     handlePointerDown(event = {}) {
-      if (!active || active.surface?.contains?.(event.target)) return false;
-      return close(true);
+      if (!active || active.surface?.contains?.(event.target) || active.key === 'search-filters' && typeof admitsAdvancedEvent === 'function' && admitsAdvancedEvent(event)) return false;
+      return close(active.key !== 'search-filters',{reason:'outside-pointer'});
     },
     handleKeyDown(event = {}) {
-      if (!active || event.key !== 'Escape') return false;
+      if (!active || event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.repeat || event.defaultPrevented || active.key === 'search-filters' && advancedSearchState.session?.composing) return false;
       event.preventDefault?.();
-      return close(true);
+      return close(true,{reason:'escape'});
     },
   };
 }
@@ -82,6 +85,7 @@ function positionGalleryAnchoredSurface(surface, anchor, align = 'right') {
     return;
   }
   const rect = anchor.getBoundingClientRect();
+  if(surface.id==='search-advanced-panel'){const viewport=window.visualViewport;surface.style.maxHeight=`${Math.max(0,(viewport?.offsetTop||0)+(viewport?.height||window.innerHeight)-Math.max(rect.bottom,(viewport?.offsetTop||0))-12)}px`;}
   surface.dataset.anchorEnvelope = align;
   surface.style.setProperty?.('--gallery-anchor-width', `${Math.round(rect.width)}px`);
   surface.style.setProperty?.('--gallery-anchor-height', `${Math.round(rect.height)}px`);
@@ -233,6 +237,7 @@ function getGalleryMainContextSections() {
     });
   }
   return sections.filter((section) => section?.kind === 'artist' || section?.group).map((section) => ({
+    group: section.group,
     artist: galleryMainGroupArtist(section.group),
     albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
     top: Number(section.top || 0),
@@ -341,7 +346,7 @@ function getGalleryFamilyPanelModel() {
 
 const galleryMainSurfaceCloseCallbacks = new WeakMap();
 
-function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {}) {
+function closeGalleryMainSurface(returnFocus = true, { immediate = false, reason = 'closed', searchOperation } = {}) {
   const active = galleryMainSurfaceController?.current?.();
   if (!active) return false;
   const slidingPanel = active.surface.matches?.('.artist-family-panel, .mobile-settings-drawer') === true;
@@ -355,7 +360,8 @@ function closeGalleryMainSurface(returnFocus = true, { immediate = false } = {})
   active.surface.setAttribute?.('aria-hidden', 'true');
   active.anchor?.setAttribute?.('aria-expanded', 'false');
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(active.surface);
-  const closed = galleryMainSurfaceController.close(active.key === 'search-suggestions' ? false : returnFocus);
+  const closed = galleryMainSurfaceController.close(active.key === 'search-suggestions' ? false : returnFocus,{reason,searchOperation});
+  if (galleryMainSurfaceController.current()?.surface === active.surface) return closed;
   if (immediate || !slidingPanel || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
     active.surface.hidden = true;
   } else {
@@ -386,7 +392,7 @@ function getGalleryFamilyContextKey(view = state.view) {
   ]);
 }
 
-function openGalleryMainSurface(key, anchor, surface, align = 'right') {
+function openGalleryMainSurface(key, anchor, surface, align = 'right', {onDismiss} = {}) {
   if (!anchor || !surface) return false;
   if (surface.matches?.('.gallery-anchored-menu') && surface.parentElement !== document.body) {
     document.body.appendChild(surface);
@@ -394,18 +400,20 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (!galleryMainSurfaceController) galleryMainSurfaceController = createAnchoredSurfaceController();
   const previous = galleryMainSurfaceController.current();
   if (previous?.key === key) {
-    closeGalleryMainSurface(true);
+    closeGalleryMainSurface(true,{reason:'repeat-anchor'});
     return false;
   }
-  if (previous) closeGalleryMainSurface(false, { immediate: true });
+  if (previous) closeGalleryMainSurface(false, { immediate: true, reason:'surface-replaced' });
+  if (galleryMainSurfaceController.current()) return false;
   galleryMainSurfaceCloseCallbacks.get(surface)?.();
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
-    if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
+    if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false,{reason:'surface-replaced'});
   }, { anchor });
   const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
-  galleryMainSurfaceController.activate({ key, anchor, surface,
+  const activation = galleryMainSurfaceController.activate({ key, anchor, surface, onDismiss,
     familyContextKey: key === 'artist-family' ? getGalleryFamilyContextKey() : null,
     openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
+  if (activation !== 'opened') return false;
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
   if (surface.matches?.('.artist-family-panel, .mobile-settings-drawer')) {
@@ -421,6 +429,89 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (surface.matches?.('.artist-info-overlay') && typeof syncMobileArtistInfoDialog === 'function') syncMobileArtistInfoDialog(surface, true);
   if (shouldFocusGalleryMainSurface(key)) focusGalleryMainSurface(surface);
   return true;
+}
+
+let galleryArtistLovedInput = null;
+function galleryArtistLovedHeaderContext() {
+  const scroll = document.getElementById('albums-scroll'), artistPage = window.AlbumHavenArtistPageRuntime?.snapshot();
+  if (!scroll || state.view.private_search || state.ui?.pendingViewTransition
+    || typeof shouldShowMobileHome === 'function' && shouldShowMobileHome()) return null;
+  if (artistPage?.mounted && artistPage.retained) return {kind: 'artist-page', artist: artistPage.artistRef, artistPage};
+  const model = getFilteredGalleryMainModel();
+  const totals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  return resolveGalleryBarContext({scrollTop: scroll.scrollTop, primaryArtist: String(state.view.selected_artist || '').trim(),
+    artistCount: totals.artistCount, albumCount: totals.albumCount, groups: getGalleryMainContextSections(), hasFamily: hasGalleryArtistFamily()});
+}
+function captureGalleryArtistLovedInput(context = galleryArtistLovedHeaderContext()) {
+  if (!context) return null;
+  const view = state.view, page = view.artist_page, stamp = view.artist_loved_context_ref;
+  const api = window.AlbumHavenPlaylistUI, runtime = window.AlbumHavenPlaylistRuntime;
+  let launch = null, group = null, host = null;
+  if (context.kind === 'artist-page') {
+    host = context.artistPage || window.AlbumHavenArtistPageRuntime?.snapshot();
+    if (!host?.actionable || host.artistRef !== page?.artist_ref) return null;
+    launch = page?.artist_loved_launches?.artist;
+  } else if (context.kind === 'family' || context.kind === 'single-artist') {
+    if (page?.artist_ref !== view.selected_artist) return null;
+    launch = page?.artist_loved_launches?.[context.kind === 'family' ? 'family' : 'artist'];
+  } else if (context.kind === 'artist') {
+    group = context.sourceSection?.group;
+    if (!group || group.artist !== group.artist_loved_launch?.artist_ref
+      || group.display_artist_key && group.display_artist_key !== group.artist) return null;
+    launch = group.artist_loved_launch;
+  }
+  if (!launch || launch.context_ref !== stamp || !artistLovedLaunchIsCurrent(launch) || !runtime) return null;
+  const descriptor = launch.descriptor, transportGeneration = artistLovedTransportGeneration();
+  const providerGeneration = api?.artistLovedProviderGeneration?.();
+  const viewRevision = Number(state.ui?.viewStateRevision || 0), requestId = state.ui?.activeViewRequestId;
+  const entryKey = window.history.state?.albumHavenNavigationPosition, entryUrl = window.location.href;
+  let retired = false;
+  const lease = {descriptor, responseStamp: stamp, readScope: artistLovedReadScope(view), runtime,
+    transportGeneration, providerGeneration, viewRevision, entryKey, entryUrl,
+    sessionId: host?.sessionId ?? null, sourceGroup: group,
+    isCurrent() {
+      if (retired) return false;
+      const now = galleryArtistLovedHeaderContext();
+      const valid = state.view === view && state.view.artist_loved_context_ref === stamp && artistLovedLaunchIsCurrent(launch)
+        && runtime === window.AlbumHavenPlaylistRuntime && providerGeneration === api?.artistLovedProviderGeneration?.()
+        && transportGeneration === artistLovedTransportGeneration() && Number(state.ui?.viewStateRevision || 0) === viewRevision
+        && state.ui?.activeViewRequestId === requestId && window.history.state?.albumHavenNavigationPosition === entryKey
+        && window.location.href === entryUrl && now?.kind === context.kind
+        && (group ? now.sourceSection?.group === group && group.artist === launch.artist_ref
+          && (!group.display_artist_key || group.display_artist_key === group.artist)
+          : host ? now.artistPage?.actionable === true && now.artistPage.sessionId === host.sessionId
+            && now.artistPage.viewRevision === host.viewRevision && now.artistPage.entryKey === host.entryKey
+            && now.artistPage.entryUrl === host.entryUrl && now.artistPage.artistRef === launch.artist_ref
+            : page === state.view.artist_page && page.artist_ref === launch.artist_ref);
+      if (!valid) retired = true;
+      return valid;
+    }};
+  return {descriptor, launchContext: Object.freeze(lease)};
+}
+function updateGalleryArtistLovedControl(context) {
+  const slot = document.querySelector('[data-artist-page-action-slot="loved"]');
+  if (!slot) {galleryArtistLovedInput = null; return;}
+  const input = captureGalleryArtistLovedInput(context);
+  galleryArtistLovedInput = input;
+  const available = input && window.AlbumHavenPlaylistUI?.canOpenArtistLoved?.(input) === true;
+  if (galleryArtistLovedInput !== input) return;
+  if (!available) {
+    slot.replaceChildren();
+    slot.hidden = true;
+    return;
+  }
+  let button = slot.querySelector('[data-gallery-bar-action="loved-tracks"]');
+  if (!button) {
+    slot.innerHTML = ButtonComponent.renderActionButton({icon: 'love-play', ariaLabel: 'Play loved and obsessed tracks',
+      presentation: 'bare', className: 'gallery-action-button', attributes: {'data-gallery-bar-action': 'loved-tracks', disabled: ''}});
+    button = slot.querySelector('[data-gallery-bar-action="loved-tracks"]');
+  }
+  if (!button) return;
+  slot.hidden = false;
+  button.disabled = false;
+  button.title = input.descriptor.scope_mode === 'family'
+    ? `Play loved and obsessed tracks from ${input.launchContext.sourceGroup?.artist || state.view.selected_artist} family`
+    : 'Play loved and obsessed tracks';
 }
 
 function galleryArtistPopularInput(model = getFilteredGalleryMainModel()) {
@@ -576,6 +667,7 @@ function syncGalleryBarSearchVisibility() {
 }
 
 function updateGalleryMainChrome() {
+  const renderedView = state.view, renderedRequestId = state.ui?.activeViewRequestId;
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
   if (!bar || !scroll) return;
@@ -586,7 +678,11 @@ function updateGalleryMainChrome() {
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
   const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
-  const context = resolveGalleryBarContext({
+  const artistPage = window.AlbumHavenArtistPageRuntime?.snapshot();
+  if (state.view !== renderedView || state.ui?.activeViewRequestId !== renderedRequestId) return;
+  const context = artistPage?.mounted && artistPage.retained
+    ? {kind: 'artist-page', artist: artistPage.artistRef, albumCount: model.totals.albumCount}
+    : resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
     primaryArtist,
     artistCount: summaryTotals.artistCount,
@@ -594,6 +690,8 @@ function updateGalleryMainChrome() {
     groups: sections,
     hasFamily,
   });
+  updateGalleryArtistLovedControl(context);
+  if (state.view !== renderedView || state.ui?.activeViewRequestId !== renderedRequestId) return;
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
@@ -610,6 +708,10 @@ function updateGalleryMainChrome() {
   if (mobileHome) {
     name.textContent = document.getElementById('mobile-home')?.dataset.accountName || 'My music';
     summary.textContent = '';
+    oldInfo?.remove();
+  } else if (context.kind === 'artist-page') {
+    name.textContent = context.artist;
+    summary.textContent = galleryMainPlural(context.albumCount, 'album');
     oldInfo?.remove();
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
@@ -702,6 +804,15 @@ function openGalleryArtistInfo(anchor) {
 }
 
 function handleGalleryMainClick(event) {
+  const loved = event.target.closest?.('[data-gallery-bar-action="loved-tracks"]');
+  if (loved) {
+    event.preventDefault();
+    const input = galleryArtistLovedInput;
+    if (loved.isConnected && !loved.disabled && !loved.closest('[data-artist-page-action-slot="loved"]')?.hidden
+      && input && input.launchContext.isCurrent() && window.AlbumHavenPlaylistUI?.canOpenArtistLoved?.(input) === true
+      && input.launchContext.isCurrent()) window.AlbumHavenPlaylistUI?.openArtistLoved?.(input);
+    return true;
+  }
   const popular = event.target.closest?.('[data-gallery-bar-action="popular-tracks"]');
   if (popular) {
     event.preventDefault();
@@ -754,7 +865,7 @@ function handleGalleryMainClick(event) {
   }
   if (event.target.closest?.('[data-gallery-customize-preview]')) { event.preventDefault(); return true; }
   const active = galleryMainSurfaceController?.current?.();
-  if (active && !active.surface.contains(event.target) && !active.anchor.contains(event.target)) closeGalleryMainSurface(true);
+  if (active && !active.surface.contains(event.target) && !active.anchor.contains(event.target) && !(active.key === 'search-filters' && typeof admitsAdvancedEvent === 'function' && admitsAdvancedEvent(event))) closeGalleryMainSurface(active.key !== 'search-filters',{reason:'outside-pointer'});
   return false;
 }
 
@@ -845,9 +956,9 @@ function initGalleryMain() {
     }, true);
   }
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && galleryMainSurfaceController?.current?.()) {
+    if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229 && !event.repeat && !event.defaultPrevented && !advancedSearchState.session?.composing && galleryMainSurfaceController?.current?.()) {
       event.preventDefault();
-      closeGalleryMainSurface(true);
+      closeGalleryMainSurface(true,{reason:'escape'});
     }
   });
   const recentSearch = document.getElementById('recent-search-popover');

@@ -153,15 +153,15 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   /* The page bar owns the identity; artwork and table share one content width. */
   .is-mobile-page .track-modal-header { display: none; }
   .is-mobile-page .track-modal-body { display: flex !important; flex-direction: column; overflow: visible; gap: 16px; padding: 0 0 20px; }
-  .is-mobile-page .track-modal-cover { width: 100%; max-width: none; margin: 0; flex: none; }
-  .is-mobile-page .track-modal-tabs { margin-bottom: 16px; padding: 0; }
-  .is-mobile-page .track-modal-tabs .in-page-tabs > [role="tab"] { min-height: 44px; }
-  .is-mobile-page .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; object-fit: contain; }
-  .is-mobile-page .track-modal-main { min-width: 0; width: 100%; overflow: visible; }
-  .is-mobile-page :is(.track-modal-list, .track-list, .track-table-wrap, .album-track-table-wrap) { max-height: none; overflow: visible; }
-  .is-mobile-page .track-modal-list { padding: 0; scrollbar-gutter: auto; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) .track-modal-cover { width: 100%; max-width: none; margin: 0; flex: none; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) .track-modal-tabs { margin-bottom: 16px; padding: 0; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) .track-modal-tabs .in-page-tabs > [role="tab"] { min-height: 44px; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) .track-modal-cover :is(img, .album-artbox) { width: 100%; max-height: none; aspect-ratio: 1; object-fit: contain; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) .track-modal-main { min-width: 0; width: 100%; overflow: visible; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) :is(.track-modal-list, .track-list, .track-table-wrap, .album-track-table-wrap) { max-height: none; overflow: visible; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) .track-modal-list { padding: 0; scrollbar-gutter: auto; }
   /* The shared mobile shell owns the inline gutter for native track tables. */
-  .is-mobile-page :is(.track-modal-table-wrap, .non-album-modal-table-wrap) { width: 100%; padding-inline: 0; overflow-x: auto; }
+  :is(.is-mobile-page, .is-artist-discography-sheet) :is(.track-modal-table-wrap, .non-album-modal-table-wrap) { width: 100%; padding-inline: 0; overflow-x: auto; }
   .is-mobile-page :is(table, .album-track-table) { width: 100%; min-width: 0 !important; font-size: 12px; }
   .is-mobile-page :is(th, td) { padding: 10px 5px; }
   .is-mobile-page .album-details-editorial-copy { display: none; }
@@ -289,21 +289,21 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-album-overview { flex: 0 0 auto; display: grid; align-items: start; gap: 12px; min-width: 0; width: 100%; }
   .mobile-album-overview > #mobile-back-button { grid-column: 1; grid-row: 1; align-self: start; width: 32px; height: 32px; min-width: 32px; min-height: 32px; }
   .mobile-album-overview > #mobile-back-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-  #track-modal.is-mobile-page .mobile-album-overview .track-modal-cover { grid-column: 2; grid-row: 1; align-self: start; width: 100%; margin: 0; aspect-ratio: 1; container-type: normal; contain-intrinsic-size: none; }
-  #track-modal.is-mobile-page .mobile-album-overview .track-modal-cover :is(.track-modal-cover-shell, .album-artbox, .track-modal-cover-button) { aspect-ratio: 1; width: 100%; height: auto; box-sizing: border-box; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet) .mobile-album-overview .track-modal-cover { grid-column: 2; grid-row: 1; align-self: start; width: 100%; margin: 0; aspect-ratio: 1; container-type: normal; contain-intrinsic-size: none; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet) .mobile-album-overview .track-modal-cover :is(.track-modal-cover-shell, .album-artbox, .track-modal-cover-button) { aspect-ratio: 1; width: 100%; height: auto; box-sizing: border-box; }
   .mobile-album-overview .mobile-album-actions { position: static; inset: auto; display: flex; gap: 8px; opacity: 1; visibility: visible; transform: none; pointer-events: auto; z-index: auto; }
   .mobile-album-actions .action-button { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; }
   .mobile-album-actions .action-button svg { width: 20px; height: 20px; }
   .mobile-album-identity [hidden] { display: none !important; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-overview { grid-template-columns: 32px clamp(96px, 28.7vw, 112px) minmax(0, 1fr); }
-  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity { grid-column: 3; grid-row: 1; align-self: center; margin-bottom: 40px; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__primary { font-size: 16px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__eyebrow { margin: 0 0 4px; line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__secondary { margin-top: 4px; font-size: 11px; line-height: 14px; white-space: nowrap; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="stacked_bar"] .mobile-album-actions { grid-column: 3; grid-row: 1; align-self: end; justify-self: end; flex-direction: row; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-overview { grid-template-columns: 32px minmax(0, 1fr) 32px; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-actions { grid-column: 3; grid-row: 1; align-self: start; justify-self: end; flex-direction: column; }
-  #track-modal.is-mobile-page[data-mobile-album-layout="editorial_canvas"] .mobile-album-identity { grid-column: 1 / -1; grid-row: 2; text-align: center; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="stacked_bar"] .mobile-album-overview { grid-template-columns: 32px clamp(96px, 28.7vw, 112px) minmax(0, 1fr); }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="stacked_bar"] .mobile-album-identity { grid-column: 3; grid-row: 1; align-self: center; margin-bottom: 40px; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__primary { font-size: 16px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__eyebrow { margin: 0 0 4px; line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="stacked_bar"] .mobile-album-identity .album-details-header__secondary { margin-top: 4px; font-size: 11px; line-height: 14px; white-space: nowrap; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="stacked_bar"] .mobile-album-actions { grid-column: 3; grid-row: 1; align-self: end; justify-self: end; flex-direction: row; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="editorial_canvas"] .mobile-album-overview { grid-template-columns: 32px minmax(0, 1fr) 32px; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="editorial_canvas"] .mobile-album-actions { grid-column: 3; grid-row: 1; align-self: start; justify-self: end; flex-direction: column; }
+  #track-modal:is(.is-mobile-page, .is-artist-discography-sheet)[data-mobile-album-layout="editorial_canvas"] .mobile-album-identity { grid-column: 1 / -1; grid-row: 2; text-align: center; }
   .is-mobile-page .appearance-album-layout-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
   .is-mobile-page .appearance-album-page__controls > .appearance-subsection-heading { display: block; }
   /* Same range and audio clock. Three-pixel visual track, 24px touch/keyboard target. */

@@ -1,0 +1,14 @@
+/* The existing albums-scroll remains the only vertical scrolling surface. */
+#artist-page-root[hidden] { display: none; }
+#artist-page-root.is-artist-page-active,
+#artist-page-root .artist-page__sections,
+#artist-page-root .intrinsic-disclosure__panel { min-width: 0; }
+#artist-page-root .artist-page__sections { display: grid; gap: 20px; }
+#artist-page-root #albums-viewport { width: 100%; min-width: 0; overflow-anchor: none; }
+#artist-page-root .artist-section.intrinsic-disclosure { margin-bottom: 28px; }
+#artist-page-root .intrinsic-disclosure__panel[hidden] { display: none; }
+[data-artist-page-action-slot="loved"][hidden] { display: none; }
+
+/* Release geometry measures the complete header box, including this gap. */
+#artist-page-root .artist-page-release > .intrinsic-disclosure__header { margin: 0; padding-block-end: 12px; }
+#artist-page-root .artist-page-release > .intrinsic-disclosure__panel { margin: 0; padding: 0; border: 0; }

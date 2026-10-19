@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import ExitStack
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 import re
 from time import perf_counter
@@ -61,6 +62,7 @@ except ImportError:  # pragma: no cover - keeps migration and diagnostic imports
 
 
 ScanCacheSnapshot = tuple[dict[str, dict[str, object]], float, dict[str, object], float, str | None]
+_LOGGER = logging.getLogger(__name__)
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_scan_cache"
 _PIPELINE_BATCH_SIZE = 1_000
@@ -1318,6 +1320,7 @@ class PostgresScanCacheAdapter:
             inventory_mutation_revision = int(
                 result.get("inventory_mutation_revision") or 0
             )
+            source_album_id = int(result.get("source_album_id") or 0)
             destination_album_id = int(result.get("destination_album_id") or 0)
             persisted_separate_release_key = str(
                 result.get("separate_release_key") or ""
@@ -1388,10 +1391,37 @@ class PostgresScanCacheAdapter:
         }
         if committed_relation_state is not None:
             persistence_result.update(committed_relation_state)
+        if source_album_id:
+            persistence_result["source_album_id"] = source_album_id
         if persisted_separate_release_key:
             persistence_result["separate_release_key"] = (
                 persisted_separate_release_key
             )
+        if source_album_id and destination_album_id:
+            from music_app.services import gallery_projection_postgres as gallery
+
+            try:
+                patch_result = gallery.patch_gallery_projections_after_structural_edit(
+                    self._config,
+                    source_album_id=source_album_id,
+                    destination_album_id=destination_album_id,
+                    connect=self._connect,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Committed structural tag edit could not patch gallery projection."
+                )
+                patch_result = {"patched": 0}
+            if not int(patch_result.get("patched") or 0):
+                try:
+                    gallery.schedule_gallery_projection_refresh(
+                        self._config,
+                        connect=self._connect,
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "Committed structural tag edit could not schedule gallery refresh."
+                    )
         return persistence_result
 
     def validate_structural_tag_edit(
@@ -4965,6 +4995,7 @@ def _persist_structural_album_tag_edit_sql(
           (select count(*) from source_album_track_files) as source_album_track_file_count,
           0 as destination_conflict_count,
           (select count(*) from destination_album) as destination_album_count,
+          (select id from validated_source_album) as source_album_id,
           (select id from destination_album) as destination_album_id,
           exists (select 1 from inserted_destination_album) as inserted_destination_album,
           (select count(*) from destination_album) as album_rows_updated,

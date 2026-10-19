@@ -2166,6 +2166,83 @@ def test_postgres_album_rename_returns_only_after_commit_and_propagates_commit_f
     assert failed_connection.exit_exc_type is RuntimeError
 
 
+def test_structural_album_edit_patches_gallery_after_domain_transaction_exit(monkeypatch):
+    from music_app.services import gallery_projection_postgres as gallery
+
+    _paths, previous, updated = _entries()
+    events = []
+
+    class RecordingConnection(StructuralTagEditConnection):
+        def __exit__(self, exc_type, exc, traceback):
+            events.append("transaction_exit")
+            return super().__exit__(exc_type, exc, traceback)
+
+    connection = RecordingConnection({
+        **_successful_result(),
+        "source_album_id": 17,
+    })
+    adapter = _adapter(monkeypatch, connection)
+    patch_calls = []
+
+    def patch(config, **kwargs):
+        events.append("gallery_patch")
+        patch_calls.append((config, kwargs))
+        return {"patched": 1, "generation": 9}
+
+    monkeypatch.setattr(gallery, "patch_gallery_projections_after_structural_edit", patch)
+
+    result = _persist_album_rename(adapter, previous, updated)
+
+    assert events == ["transaction_exit", "gallery_patch"]
+    assert result["source_album_id"] == 17
+    assert patch_calls == [(
+        adapter._config,
+        {
+            "source_album_id": 17,
+            "destination_album_id": 41,
+            "connect": adapter._connect,
+        },
+    )]
+    persistence_sql = next(
+        sql for sql, _params in connection.executed
+        if "source_album_track_file_count" in _normalized_sql(sql)
+    )
+    assert "(select id from validated_source_album) as source_album_id" in _normalized_sql(
+        persistence_sql
+    )
+
+
+def test_structural_album_edit_falls_back_after_gallery_patch_failure(monkeypatch):
+    from music_app.services import gallery_projection_postgres as gallery
+
+    _paths, previous, updated = _entries()
+    connection = StructuralTagEditConnection({
+        **_successful_result(),
+        "source_album_id": 17,
+    })
+    adapter = _adapter(monkeypatch, connection)
+    scheduled = []
+
+    def fail_patch(*_args, **_kwargs):
+        raise RuntimeError("projection patch failed")
+
+    monkeypatch.setattr(
+        gallery,
+        "patch_gallery_projections_after_structural_edit",
+        fail_patch,
+    )
+    monkeypatch.setattr(
+        gallery,
+        "schedule_gallery_projection_refresh",
+        lambda config, **kwargs: scheduled.append((config, kwargs)),
+    )
+
+    result = _persist_album_rename(adapter, previous, updated)
+
+    assert result["destination_album_id"] == 41
+    assert scheduled == [(adapter._config, {"connect": adapter._connect})]
+
+
 def test_structural_tag_edit_runs_intent_completion_on_domain_transaction_before_commit(monkeypatch):
     _paths, previous, updated = _entries()
     connection = StructuralTagEditConnection(_successful_result())

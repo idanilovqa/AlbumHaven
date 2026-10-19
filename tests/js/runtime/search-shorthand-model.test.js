@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
-const ROOT=path.resolve(process.env.ALBUM_TOP_TEST_ROOT||path.join(__dirname,'../../..','..'));
+const ROOT=path.resolve(process.env.ALBUM_TOP_TEST_ROOT||path.join(__dirname,'../../..'));
 function model(){const c=vm.createContext({});vm.runInContext(fs.readFileSync(path.join(ROOT,'music_app/static/js/runtime/search-shorthand-model.js'),'utf8'),c);return vm.runInContext('SearchShorthandModel',c);}
 const plain=x=>JSON.parse(JSON.stringify(x));
 const witnesses=[['loved',':loved'],['obsessed',':obsessed'],['not-loved','-:loved'],['love-alias','love:loved'],['obsessed-alias','love:obsessed'],['not-love-alias','-love:loved'],['not-obsessed-alias','-love:obsessed'],['not-obsessed','-:obsessed'],['love-only',':loved -:obsessed'],['listener','@'],['listener-love','@ :loved'],['popular',':popular'],['sort-popular','sort:popular'],['artist',':popular artist:""'],['not-artist',':popular -artist:""'],['genre',':popular genre:"progressive rock"'],['not-genre',':popular -genre:rock'],['cap',':popular per_artist:3']];

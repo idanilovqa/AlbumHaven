@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
-const ROOT=path.resolve(process.env.ALBUM_TOP_TEST_ROOT||path.join(__dirname,'../../../..'));
+const ROOT=path.resolve(process.env.ALBUM_TOP_TEST_ROOT||path.join(__dirname,'../../..'));
 const plain=x=>JSON.parse(JSON.stringify(x));
 function model(){const c=vm.createContext({});vm.runInContext(fs.readFileSync(path.join(ROOT,'music_app/static/js/runtime/search-shorthand-model.js'),'utf8'),c);return vm.runInContext('SearchShorthandModel',c);}
 function edit(m,d,command){const r=m.editAdvanced(d,command);assert.equal(r.ok,true,JSON.stringify(r.diagnostics));return r.draft;}

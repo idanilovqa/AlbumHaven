@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
-const ROOT=process.env.ALBUM_TOP_TEST_ROOT||path.resolve(__dirname,'../../../..');
+const ROOT=process.env.ALBUM_TOP_TEST_ROOT||path.resolve(__dirname,'../../..');
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 const drain=async()=>{for(let i=0;i<24;i++)await Promise.resolve();};
 // Actual ResourceSelection owner, synthetic boundary callbacks only. This suite

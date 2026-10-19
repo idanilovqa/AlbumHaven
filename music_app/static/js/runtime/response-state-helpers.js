@@ -521,16 +521,125 @@ function compactRuntimeMoveAvailability(availability) {
   };
 }
 
+// Taste is a server-owned, actor/context-bound DTO. Optional progress has a
+// separate receipt: bootstrap dictionaries and arbitrary copies never admit it.
+const runtimeAlbumProgressReceipts = new WeakMap();
+const runtimeAlbumPreferenceReceipts = new WeakMap();
+const runtimeAlbumProgressKeys = Object.freeze(['to_listen', 'is_relisten', 'can_toggle_to_listen']);
+function captureRuntimeAlbumPreferenceScope() {
+  if (typeof captureGalleryReadScope !== 'function') return null;
+  const scope = captureGalleryReadScope();
+  return scope.transport && /^[1-9]\d*$/.test(scope.actor) && /^[1-9]\d*$/.test(scope.library)
+    && /^[a-f0-9]{64}$/.test(scope.context || '') && scope.context === scope.stamp
+    && galleryReadScopeIsCurrent(scope) ? Object.freeze(scope) : null;
+}
+function runtimeAlbumPreferenceScopeIsCurrent(scope) {
+  return !!scope && galleryReadScopeIsCurrent(scope) && scope.context === scope.stamp;
+}
+function normalizeRuntimeAlbumPreference(value, scope) {
+  if (!runtimeAlbumPreferenceScopeIsCurrent(scope) || !isRuntimePlainObject(value)
+    || value.context_ref !== scope.context || !isRuntimePlainObject(value.allowed_actions)
+    || Object.keys(value.allowed_actions).length !== 1
+    || typeof value.allowed_actions.can_manage_album_preferences !== 'boolean'
+    || value.can_edit !== value.allowed_actions.can_manage_album_preferences) return null;
+  const core = ['album_ref', 'context_ref', 'rating', 'is_favorite', 'favorite_override',
+    'favorite_source', 'taste_state', 'preference_revision', 'can_edit', 'allowed_actions'];
+  if (!core.every(key => Object.hasOwn(value, key))
+    || Object.keys(value).some(key => !core.includes(key) && !runtimeAlbumProgressKeys.includes(key))) return null;
+  if (value.taste_state === 'available') {
+    const match = typeof value.album_ref === 'string' && /^inventory-album:([1-9]\d*):([1-9]\d*)$/.exec(value.album_ref);
+    if (!match || match[1] !== scope.library
+      || !(value.rating === null || Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 10)
+      || typeof value.is_favorite !== 'boolean'
+      || !(value.favorite_override === null || typeof value.favorite_override === 'boolean')
+      || value.is_favorite !== (value.favorite_override === true)
+      || value.favorite_source !== (value.favorite_override === null ? null : 'personal')
+      || !Number.isSafeInteger(value.preference_revision) || value.preference_revision < 0) return null;
+  } else if (value.taste_state !== 'unavailable' || value.can_edit !== false
+    || ['album_ref', 'rating', 'is_favorite', 'favorite_override', 'favorite_source', 'preference_revision'].some(key => value[key] !== null)) return null;
+  return Object.fromEntries(core.map(key => [key, key === 'allowed_actions'
+    ? {can_manage_album_preferences: value.can_edit} : value[key]]));
+}
+function runtimeAlbumPreferenceGeneration(album, scope) {
+  return Number.isSafeInteger(album?.album_id) && album.album_id > 0
+    && (album.library_id === undefined || String(album.library_id) === scope?.library)
+    ? `inventory-album:${scope.library}:${album.album_id}` : null;
+}
+function runtimeAlbumPreferenceForAlbum(album, scope = captureRuntimeAlbumPreferenceScope(), requireReceipt = true) {
+  if (!album || album.read_only_subject || !scope) return null;
+  const value = normalizeRuntimeAlbumPreference(album.album_preference, scope);
+  if (!value || value.taste_state === 'available'
+    && runtimeAlbumPreferenceGeneration(album, scope) !== value.album_ref) return null;
+  if (requireReceipt) {
+    const receipt = runtimeAlbumPreferenceReceipts.get(album.album_preference);
+    if (!receipt || !runtimeAlbumPreferenceScopeIsCurrent(receipt.scope)
+      || receipt.scope.actor !== scope.actor || receipt.scope.library !== scope.library
+      || receipt.scope.context !== scope.context || receipt.albumRef !== runtimeAlbumPreferenceGeneration(album, scope)
+      || receipt.signature !== JSON.stringify(value)) return null;
+  }
+  return value;
+}
+function retainRuntimeAlbumPreferenceReceipt(target, album, scope) {
+  const core = normalizeRuntimeAlbumPreference(target, scope);
+  const albumRef = runtimeAlbumPreferenceGeneration(album, scope);
+  if (core && albumRef) runtimeAlbumPreferenceReceipts.set(target, {scope, albumRef, signature: JSON.stringify(core)});
+  return target;
+}
+function copyRuntimeAlbumProgress(source, target, album, scope) {
+  const receipt = source && runtimeAlbumProgressReceipts.get(source);
+  if (!receipt || !runtimeAlbumPreferenceScopeIsCurrent(receipt.scope)
+    || !runtimeAlbumPreferenceScopeIsCurrent(scope) || receipt.scope.context !== scope.context
+    || receipt.scope.actor !== scope.actor || receipt.scope.library !== scope.library
+    || receipt.albumRef !== runtimeAlbumPreferenceGeneration(album, scope)) return target;
+  for (const key of runtimeAlbumProgressKeys) if (Object.hasOwn(receipt.values, key)) target[key] = receipt.values[key];
+  runtimeAlbumProgressReceipts.set(target, receipt);
+  return target;
+}
+function compactRuntimeAlbumPreference(album) {
+  const scope = captureRuntimeAlbumPreferenceScope();
+  const core = runtimeAlbumPreferenceForAlbum(album, scope, false);
+  if (!core) return null;
+  const verified = runtimeAlbumPreferenceForAlbum(album, scope) !== null;
+  if (runtimeAlbumPreferenceReceipts.has(album.album_preference) && !verified) return null;
+  const result = copyRuntimeAlbumProgress(album.album_preference, core, album, scope);
+  // A current embedded DTO can display taste; it cannot mint a live read or
+  // progress receipt. Opening its controls first performs an authorized read.
+  return verified ? retainRuntimeAlbumPreferenceReceipt(result, album, scope) : result;
+}
+// Called only by successful current native HTTP read owners, never bootstrap,
+// mutation responses, tag edits, subject copies, or metadata/path lookups.
+function admitRuntimeAlbumPreferenceRead(payload, scope) {
+  if (!runtimeAlbumPreferenceScopeIsCurrent(scope)) return;
+  const seen = new Set(), queue = [payload];
+  const containers = ['album', 'albums', 'artist_groups', 'primary_artist_groups', 'family_artist_groups',
+    'chronological_artist_groups', 'selected_artist_groups', 'sections', 'subsections', 'duplicate_sources'];
+  while (queue.length) {
+    const value = queue.shift();
+    if (!value || typeof value !== 'object' || seen.has(value) || value.read_only_subject) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {queue.push(...value); continue;}
+    for (const key of containers) if (value[key]) queue.push(value[key]);
+    const core = runtimeAlbumPreferenceForAlbum(value, scope, false);
+    const albumRef = runtimeAlbumPreferenceGeneration(value, scope);
+    if (!core || !albumRef) continue;
+    retainRuntimeAlbumPreferenceReceipt(value.album_preference, value, scope);
+    const values = {};
+    for (const key of runtimeAlbumProgressKeys) {
+      if (typeof value.album_preference[key] === 'boolean') values[key] = value.album_preference[key];
+    }
+    if (Object.keys(values).length) runtimeAlbumProgressReceipts.set(value.album_preference,
+      {scope, albumRef, values: Object.freeze(values)});
+  }
+}
+
 function compactRuntimeAlbumPayload(album) {
   if (!isRuntimePlainObject(album)) {
     return album;
   }
-  const sourceAlbumPreference = isRuntimePlainObject(album.album_preference)
-    ? album.album_preference
-    : null;
+  const sourceAlbumPreference = compactRuntimeAlbumPreference(album);
   const compactedRatingContract = {
-    ...(sourceAlbumPreference && Object.prototype.hasOwnProperty.call(sourceAlbumPreference, 'rating')
-      ? { album_preference: { rating: sourceAlbumPreference.rating } }
+    ...(sourceAlbumPreference
+      ? { album_preference: sourceAlbumPreference, album_rating: sourceAlbumPreference.rating }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(album, 'tag_album_rating')
       ? { tag_album_rating: album.tag_album_rating }
@@ -549,11 +658,27 @@ function compactRuntimeAlbumPayload(album) {
     move_availability: _moveAvailability,
     ...baseAlbum
   } = album;
+  // Public/unbound compaction cannot carry own personal aliases or actions.
+  for (const key of ['album_rating', 'rating', 'favorite', 'is_favorite', 'favorite_override', 'favorite_source',
+    'preference_revision', 'can_edit', 'context_ref', 'taste_state', 'to_listen', 'is_relisten', 'can_toggle_to_listen',
+    'album_preference_overlay', 'can_manage_album_preferences']) delete baseAlbum[key];
+  if (baseAlbum.allowed_actions) {
+    baseAlbum.allowed_actions = {...baseAlbum.allowed_actions};
+    delete baseAlbum.allowed_actions.can_manage_album_preferences;
+    delete baseAlbum.allowed_actions.can_toggle_to_listen;
+  }
+  if (album.read_only_subject) {
+    baseAlbum.taste_state = album.taste_state === 'available' ? 'available' : 'unavailable';
+    baseAlbum.album_rating = baseAlbum.taste_state === 'available' && Number.isInteger(album.album_rating)
+      && album.album_rating >= 1 && album.album_rating <= 10 ? album.album_rating : null;
+    baseAlbum.favorite = baseAlbum.taste_state === 'available' && typeof album.favorite === 'boolean' ? album.favorite : null;
+  }
   const compactedMoveAvailability = compactRuntimeMoveAvailability(album.move_availability);
   if (album.preview_only) {
     return {
       ...baseAlbum,
       ...compactedRatingContract,
+      duplicate_sources: [], tracks: [], track_rows: [],
       ...(compactedMoveAvailability ? { move_availability: compactedMoveAvailability } : {}),
       track_count_preview: normalizeRuntimeNumber(
         album.track_count_preview,
@@ -572,6 +697,7 @@ function compactRuntimeAlbumPayload(album) {
     has_duplicate_files: normalizeRuntimeBoolean(album.has_duplicate_files, duplicateSources.length > 0),
     duplicate_sources: [],
     tracks: [],
+    track_rows: [],
     open_directory_paths: compactRuntimeAlbumDirectoryPaths(album),
     preview_only: true,
   };
@@ -885,7 +1011,11 @@ function resolveMainGalleryCategorySelection(fallbackCategories = null) {
 function normalizePrivateSearchNavigation(payload, fallbackView = null) {
   const base = isRuntimePlainObject(fallbackView) ? fallbackView : {};
   const wire = payload.contract_version === 'own-love-v1';
-  const rows = wire ? payload.sidebar?.artists : payload.artists_sidebar;
+  const listener = payload.contract_version === 'listener-search-v1';
+  const popularity = ['popularity-search-v1', 'popularity-search-albums-v1'].includes(payload.contract_version);
+  const tracksOnly = listener || payload.contract_version === 'popularity-search-v1';
+  const noSidebar = listener || popularity;
+  const rows = noSidebar ? [] : wire ? payload.sidebar?.artists : payload.artists_sidebar;
   const artists = (Array.isArray(rows) ? rows : []).filter(row =>
     typeof row?.artist === 'string' && row.artist.trim()).map(row => ({
     artist: row.artist,
@@ -895,11 +1025,11 @@ function normalizePrivateSearchNavigation(payload, fallbackView = null) {
   return {
     ok: true,
     surface: {active: 'albums'}, surface_request: 'albums',
-    private_search: true,
+    private_search: true, artist_loved_context_ref: null,
     query: typeof payload.query === 'string' ? payload.query : '',
-    selected_artist: typeof payload.selected_artist === 'string' ? payload.selected_artist : '',
-    all_artists_active: wire ? payload.selection_state === 'all_artists' : payload.all_artists_active === true,
-    search_presentation: (wire ? payload.presentation : payload.search_presentation) === 'tracks' ? 'tracks' : 'albums',
+    selected_artist: !noSidebar && typeof payload.selected_artist === 'string' ? payload.selected_artist : '',
+    all_artists_active: !noSidebar && (wire ? payload.selection_state === 'all_artists' : payload.all_artists_active === true),
+    search_presentation: tracksOnly || (wire || popularity ? payload.presentation : payload.search_presentation) === 'tracks' ? 'tracks' : 'albums',
     artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
     artists_sidebar: artists, related_artists: [], related_filter_artists: [],
     search_filters: normalizeRuntimeSearchFilters(null),
@@ -916,12 +1046,70 @@ function normalizePrivateSearchNavigation(payload, fallbackView = null) {
     music_dir: normalizeRuntimeString(base.music_dir),
     app_name: normalizeRuntimeString(base.app_name), app_version: normalizeRuntimeString(base.app_version),
     album_count: 0, artist_count: artists.length,
-    show_all_artists_sidebar_link: wire || payload.show_all_artists_sidebar_link !== false, primary_filter_active: false,
+    show_all_artists_sidebar_link: !noSidebar && (wire || payload.show_all_artists_sidebar_link !== false), primary_filter_active: false,
     initial_view_partial: false, payload_tier: 'full',
   };
 }
 
-function normalizeViewPayload(payload, fallbackView = null) {
+// A launch is response-local authority. Cached objects keep their original
+// transport/read lifetime and can never acquire a fresh one merely by matching a name.
+const artistLovedLaunchReceipts = new WeakMap();
+let artistLovedReadEpoch = 0;
+function artistLovedTransportGeneration() {
+  return typeof PrivateUITransport !== 'undefined' ? PrivateUITransport.generation() : null;
+}
+function artistLovedReadScope(view) {
+  return JSON.stringify([view?.surface?.active || view?.surface_request || 'albums',
+    view?.selected_artist || '', view?.query || '', view?.gallery_scope || '', view?.private_search === true]);
+}
+function normalizeRuntimeArtistLovedLaunch(value, stamp, anchor, mode, epoch = artistLovedReadEpoch) {
+  // Ordinary Artist responses need not carry Loved authority or a browser integration.
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || typeof stamp !== 'string' || !/^[0-9a-f]{64}$/.test(stamp)
+    || typeof anchor !== 'string' || !anchor.trim() || !['artist', 'family'].includes(mode)
+    || typeof window === 'undefined'
+    || typeof window?.AlbumHavenPlaylistUI?.normalizeArtistLovedLaunch !== 'function') return null;
+  const parsed = window.AlbumHavenPlaylistUI.normalizeArtistLovedLaunch(value);
+  if (!parsed || parsed.context_ref !== stamp || parsed.artist_ref !== anchor || parsed.descriptor.scope_mode !== mode) return null;
+  const generation = artistLovedTransportGeneration();
+  if (generation === null) return null;
+  const prior = artistLovedLaunchReceipts.get(value);
+  if (prior && (prior.generation !== generation || prior.epoch !== epoch)) return null;
+  const receipt = prior || {generation, epoch,
+    readScope: typeof captureGalleryReadScope === 'function' ? captureGalleryReadScope() : null};
+  if (receipt.readScope && !galleryReadScopeIsCurrent(receipt.readScope)) return null;
+  artistLovedLaunchReceipts.set(value, receipt);
+  artistLovedLaunchReceipts.set(parsed, receipt);
+  return parsed;
+}
+function artistLovedLaunchIsCurrent(launch) {
+  const receipt = launch && artistLovedLaunchReceipts.get(launch);
+  return Boolean(receipt && receipt.generation === artistLovedTransportGeneration() && receipt.epoch === artistLovedReadEpoch
+    && (!receipt.readScope || galleryReadScopeIsCurrent(receipt.readScope)));
+}
+function replaceArtistLovedViewLaunches(view, source, {local = false, epoch = artistLovedReadEpoch} = {}) {
+  const stamp = typeof source?.artist_loved_context_ref === 'string' && /^[0-9a-f]{64}$/.test(source.artist_loved_context_ref)
+    && !view.private_search && !['playlists', 'album_tops', 'home'].includes(view.surface?.active || view.surface_request)
+    ? source.artist_loved_context_ref : null;
+  view.artist_loved_context_ref = stamp;
+  for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups', 'related_filter_base_primary_groups', 'related_filter_base_family_groups']) {
+    if (!Array.isArray(view[key])) continue;
+    // Missing group arrays on a partial response cannot borrow fallback authority.
+    const admitted = local || Array.isArray(source?.[key]);
+    view[key] = view[key].map(group => ({...group, artist_loved_launch: admitted
+      ? normalizeRuntimeArtistLovedLaunch(group?.artist_loved_launch, stamp, group?.artist, 'artist', epoch) : null}));
+  }
+  if (view.artist_page) {
+    const launches = local ? view.artist_page.artist_loved_launches : source?.artist_page?.artist_loved_launches;
+    view.artist_page = {...view.artist_page, artist_loved_launches: {
+      artist: normalizeRuntimeArtistLovedLaunch(launches?.artist, stamp, view.artist_page.artist_ref, 'artist', epoch),
+      family: normalizeRuntimeArtistLovedLaunch(launches?.family, stamp, view.artist_page.artist_ref, 'family', epoch),
+    }};
+  }
+  return view;
+}
+
+function normalizeViewPayload(payload, fallbackView = null, {artistLovedEpoch = artistLovedReadEpoch} = {}) {
   const defaults = typeof appBootstrap?.getInitialView === 'function'
     ? appBootstrap.getInitialView()
     : {};
@@ -1096,7 +1284,8 @@ function normalizeViewPayload(payload, fallbackView = null) {
     delete normalizedView.playlist_actions;
     delete normalizedView.search_context;
   }
-  return normalizedView;
+  const localLovedPatch = Object.keys(source).every(key => ['gallery_display_mode', 'gallery_scale_percent'].includes(key));
+  return replaceArtistLovedViewLaunches(normalizedView, localLovedPatch ? base : source, {local: localLovedPatch, epoch: artistLovedEpoch});
 }
 
 function buildSelectedArtistChronologicalArtistGroups(primaryGroups = [], familyGroups = []) {
@@ -1380,6 +1569,11 @@ function syncRelatedFilterBaseCache(view) {
 }
 
 function compactCurrentViewForIdle() {
+  // An admitted Artist owns this exact view and its mounted release records.
+  // Idle modal cleanup is not another admission and must not replace it.
+  const ownedView = state.view;
+  const artist = typeof window !== 'undefined' ? window.AlbumHavenArtistPageRuntime?.snapshot() : null;
+  if (state.view !== ownedView || artist?.retained) return state.view;
   const currentView = normalizeViewPayload(state.view);
   const compactedView = viewShouldRetainFullRuntimeAlbums(currentView)
     ? currentView
@@ -1406,6 +1600,7 @@ function applyViewPayload(payload, options = {}) {
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }
+  const applySourceView = state.view;
   const mountedPreviousView = isRuntimePlainObject(state.view) ? state.view : {};
   const previousView = normalizeViewPayload(state.view);
   const sidebarReconciledPayload = options.preserveSidebarState
@@ -1426,7 +1621,9 @@ function applyViewPayload(payload, options = {}) {
       surface_request: previousView.surface_request,
     }
     : sidebarReconciledPayload;
-  const normalizedNextView = normalizeViewPayload(nextPayload, previousView);
+  const nextLovedEpoch = artistLovedReadEpoch + ((!options.rootGalleryContinuation && !options.localArtistLovedTransition
+    || artistLovedReadScope({...mountedPreviousView, ...nextPayload}) !== artistLovedReadScope(mountedPreviousView)) ? 1 : 0);
+  const normalizedNextView = normalizeViewPayload(nextPayload, previousView, {artistLovedEpoch: nextLovedEpoch});
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
@@ -1477,9 +1674,14 @@ function applyViewPayload(payload, options = {}) {
   );
   if (preserveMountedSelectedView) {
     nextView.loaded_library_categories = [...(mountedPreviousView.loaded_library_categories || previousView.visible_library_categories)];
-    nextView.artist_groups = mountedPreviousView.artist_groups;
-    nextView.primary_artist_groups = mountedPreviousView.primary_artist_groups;
-    nextView.family_artist_groups = mountedPreviousView.family_artist_groups;
+    // Retained mounted content keeps its identity unless launch authority must
+    // be retired. Never mutate a group still referenced by the previous view.
+    for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
+      const groups = mountedPreviousView[key];
+      nextView[key] = Array.isArray(groups) && groups.some(group => group?.artist_loved_launch != null)
+        ? groups.map(group => group?.artist_loved_launch != null ? {...group, artist_loved_launch: null} : group)
+        : groups;
+    }
     nextView.related_artists = mountedPreviousView.related_artists;
     nextView.related_filter_artists = mountedPreviousView.related_filter_artists;
     nextView.primary_filter_active = Boolean(mountedPreviousView.primary_filter_active);
@@ -1515,8 +1717,12 @@ function applyViewPayload(payload, options = {}) {
       ? String(nextView.selected_artist || '')
       : '';
   }
+  if (!ownsResponseApply() || state.view !== applySourceView) return null;
+  artistLovedReadEpoch = nextLovedEpoch;
   state.view = nextView;
+  if(typeof syncAdvancedSearchAppliedView==='function')syncAdvancedSearchAppliedView({changed:String(previousView.query || '') !== String(nextView.query || '') || previousView.selected_artist !== nextView.selected_artist || previousView.surface?.active !== nextView.surface?.active});
   const ownsAppliedView = () => ownsResponseApply() && state.view === nextView;
+  if (!ownsAppliedView()) return nextView;
   if (typeof window !== 'undefined') window.AlbumHavenSearchRuntime?.syncNativeView({isCurrentResponse: options.isCurrentResponse});
   if (!ownsAppliedView()) return nextView;
   if (typeof selectLibrarySidebarMode === 'function' && previousView.surface?.active !== nextView.surface?.active
@@ -1561,7 +1767,8 @@ function applyViewPayload(payload, options = {}) {
     state.relatedExpanded = false;
   }
   if (syncSearchDraftQuery && state.ui && typeof state.ui === 'object') {
-    state.ui.searchDraftQuery = String(nextView.query || '');
+    if(typeof updateGallerySearchDraftQuery==='function')updateGallerySearchDraftQuery(String(nextView.query || ''));
+    else state.ui.searchDraftQuery = String(nextView.query || '');
   }
   rememberMainGalleryCategorySelection(nextView);
   syncRelatedFilterBaseCache(nextView);
@@ -1583,7 +1790,10 @@ function applyViewPayload(payload, options = {}) {
 function mergeViewPayload(patch, options = {}) {
   const baseView = normalizeViewPayload(state.view);
   const nextPatch = isRuntimePlainObject(patch) ? patch : {};
-  return applyViewPayload({ ...baseView, ...nextPatch }, options);
+  const local = Object.keys(nextPatch).every(key => ['gallery_display_mode', 'gallery_scale_percent'].includes(key));
+  return applyViewPayload({ ...baseView, ...nextPatch,
+    artist_loved_context_ref: local ? baseView.artist_loved_context_ref : nextPatch.artist_loved_context_ref ?? null,
+  }, {...options, localArtistLovedTransition: local || options.localArtistLovedTransition === true});
 }
 
 function applyStatusPayload(payload, fallbackStatus = null) {
@@ -1647,6 +1857,7 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
   state.ui.pendingViewTransitionRequestId = 0;
 
   return mergeViewPayload({
+    artist_loved_context_ref: currentView.artist_loved_context_ref,
     related_filter_artists: [...activeArtists],
     primary_filter_active: nextPrimaryFilterActive,
     primary_artist_groups: nextPrimaryGroups,
@@ -1654,5 +1865,5 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
     artist_groups: nextArtistGroups,
     artist_count: nextPrimaryGroups.length + nextFamilyGroups.length,
     album_count: nextArtistGroups.reduce((sum, group) => sum + ((group?.albums || []).length), 0),
-  }, { trackSidebarReveal: false });
+  }, { trackSidebarReveal: false, localArtistLovedTransition: true });
 }

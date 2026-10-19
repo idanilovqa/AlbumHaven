@@ -5,6 +5,8 @@ The deterministic worker runs outside database locks. A crashed attempt is
 recoverable through process(); reads never start work or renew its claim.
 """
 import json
+from contextlib import contextmanager
+from copy import copy
 from datetime import timedelta
 from uuid import uuid4
 
@@ -15,8 +17,10 @@ _CLAIM_TIME = timedelta(minutes=1)
 
 
 class TopSourceImports:
-    def __init__(self, tops):
+    def __init__(self, tops, *, source_origins=(), fetch=None):
         self.tops = tops
+        self.source_origins = tuple(source_origins)
+        self._fetch = fetch
 
     @staticmethod
     def _row(connection, live, ref, *, write=False):
@@ -43,7 +47,28 @@ class TopSourceImports:
                   'top_ref': str(row['saved_top_ref']) if row.get('saved_top_ref') is not None else None}
         if evidence:
             result.update(source=row['source'], review=row['review_result'])
+            if row['source']['kind'] == 'url':
+                result['acquisition'] = row.get('url_acquisition')
         return result
+
+    def _observe_url(self, context, ref, attempt, constraints):
+        from music_app.services.postgres_connections import pooled_connection
+        @contextmanager
+        def bounded_connect(url):
+            with pooled_connection(url, timeout=.250) as connection:
+                connection.execute("set local statement_timeout='250ms'")
+                connection.execute("set local lock_timeout='100ms'")
+                yield connection
+        # Only this independent observer uses the bounded pool admission.
+        observer = copy(self.tops)
+        observer._connect = bounded_connect
+        with observer._authorized(context, constraints) as (connection, live, _):
+            observer._require(live, (BROWSE, CREATE), constraints)
+            row = connection.execute('''select status,attempt_ref,lease_until from app.album_top_source_jobs
+                where ref=%s and actor_account_id=%s and library_id=%s''',
+                (ref, live.actor.account_id, live.library_id)).fetchone()
+            return (row is not None and row['status'] == 'running'
+                    and str(row['attempt_ref']) == attempt and row['lease_until'] > observer._clock())
 
     def submit(self, context, payload, *, constraints=None):
         command, digest = source_command(payload)
@@ -132,8 +157,26 @@ class TopSourceImports:
         # Failures are explicit and retryable, never successful review evidence.
         # Process termination still leaves a lease recoverable by a later request.
         failure = None
+        acquisition = None
+        acquisition_json = None
         try:
-            review = parse_source(command)
+            parsed_command = command
+            if command['kind'] == 'url':
+                from music_app.services.public_document_acquisition import fetch_document
+                if not self.source_origins:
+                    raise AlbumTopError('source_origin_unavailable', 409)
+                acquisition = (self._fetch or fetch_document)(command['content'],
+                    excluded_hosts=self.source_origins,
+                    observe=lambda: self._observe_url(context, ref, attempt, constraints))
+                acquisition_json = json.dumps(acquisition, ensure_ascii=False)
+                # JSON escaping of control characters can multiply a bounded
+                # wire body. Leave room below the SQL jsonb representation cap;
+                # reject here as a recoverable processing error, never in SQL.
+                if len(acquisition_json.encode('utf-8')) > 2 * 1024 * 1024:
+                    raise AlbumTopError('source_evidence_too_large', 413)
+                parsed_command = {**command, 'kind': 'text' if acquisition['mime'] == 'text/plain' else 'pasted_html',
+                                  'content': acquisition['content']}
+            review = parse_source(parsed_command)
         except Exception:
             review = None
             failure = 'source_processing_failed'
@@ -146,8 +189,9 @@ class TopSourceImports:
                 return self._project(row)
             row = connection.execute('''update app.album_top_source_jobs set
                 status=%s,revision=revision+1,review_result=%s::jsonb,error_code=%s,
-                attempt_ref=null,lease_until=null,updated_at=%s where ref=%s returning *''',
+                attempt_ref=null,lease_until=null,updated_at=%s,url_acquisition=%s::jsonb where ref=%s returning *''',
                 ('failed' if failure else 'completed',
                  json.dumps(review, ensure_ascii=False) if review is not None else None,
-                 failure, now, ref)).fetchone()
+                 failure, now, acquisition_json if not failure else None,
+                 ref)).fetchone()
             return self._project(row)

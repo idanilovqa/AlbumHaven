@@ -167,7 +167,7 @@ def read_source(owner, context, top_ref, revision, *, constraints=None):
         if (str(top['revision']) != revision or not top['source_derived']
                 or not (top['owner_account_id'] == live.actor.account_id or top['editor_grant'])):
             raise AlbumTopError('source_evidence_unavailable', 403)
-        row = connection.execute('''select j.source,f.review_report from app.album_top_source_finalizations f
+        row = connection.execute('''select j.source,j.url_acquisition,f.review_report from app.album_top_source_finalizations f
             join app.album_top_source_jobs j on j.ref=f.job_ref
             where f.top_ref=%s and j.library_id=%s and j.actor_account_id=%s''',
             (ref, live.library_id, top['owner_account_id'])).fetchone()
@@ -175,4 +175,5 @@ def read_source(owner, context, top_ref, revision, *, constraints=None):
         return {'top_ref': ref, 'revision': revision, 'source_locked': top['source_locked'],
                 'evidence_available': row is not None,
                 'source': {key: value for key, value in row['source'].items() if key != 'request_key'} if row else None,
-                'review_report': row['review_report'] if row else None}
+                'review_report': row['review_report'] if row else None,
+                **({'acquisition': row['url_acquisition']} if row and row['source']['kind'] == 'url' else {})}

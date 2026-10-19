@@ -19,11 +19,17 @@ def source_command(payload):
     result['request_key'] = top_uuid(payload['request_key'])
     result['title'] = _text(payload['title'], 100, title=True)
     result['description'] = _text(payload['description'], 1000)
-    if payload['kind'] not in ('text', 'pasted_html', 'uploaded_html'):
+    if payload['kind'] not in ('text', 'pasted_html', 'uploaded_html', 'url'):
         raise AlbumTopError('invalid_command')
     result['content'] = _text(payload['content'], MAX_TOP_COMMAND_BYTES)
     if not result['content'].strip():
         raise AlbumTopError('invalid_command')
+    if payload['kind'] == 'url':
+        from music_app.services.public_document_worker import normalize_url, DocumentError
+        try:
+            normalize_url(result['content'])
+        except DocumentError:
+            raise AlbumTopError('invalid_source_url') from None
     filename = payload['filename']
     if payload['kind'] == 'uploaded_html':
         filename = _text(filename, 255)

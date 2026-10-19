@@ -250,7 +250,15 @@ def read_album_top_access_candidates(request: Request, top_ref: str):
 def _source_import_service(request):
     from music_app.services.album_top_source_imports import TopSourceImports
     service = getattr(request.app.state, 'album_top_source_import_service', None)
-    return service if service is not None else TopSourceImports(_service(request))
+    if service is not None:
+        return service
+    from music_app.services.public_document_acquisition import trusted_hosts
+    from music_app.services.public_document_worker import DocumentError
+    try:
+        origins = trusted_hosts(getattr(request.app.state, 'auth_policy_config', None))
+    except DocumentError:
+        origins = ()  # Existing offline imports remain independent of URL transport.
+    return TopSourceImports(_service(request), source_origins=origins)
 
 
 async def _source_import_request(request, operation, job_ref=None):

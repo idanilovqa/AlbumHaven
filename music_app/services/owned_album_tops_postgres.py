@@ -474,6 +474,10 @@ class PostgresOwnedAlbumTopsService:
                 remote_membership.lock_pending_budget(connection, live.actor.account_id)
             if command.action == "create":
                 self._require(live, command_actions(command), constraints)
+                conversion_albums = None
+                if 'playlist_preview_ref' in command.data:
+                    from music_app.services.playlist_album_top_previews import save_albums
+                    conversion_albums = save_albums(self, connection, live, command, context_ref, constraints)
                 ref = str(uuid4())
                 connection.execute("""insert into app.album_lists(ref,owner_account_id,library_id,title,description)
                     values(%s,%s,%s,%s,%s)""", (ref, live.actor.account_id, live.library_id,
@@ -523,9 +527,23 @@ class PostgresOwnedAlbumTopsService:
                 receipt = viewers.copy_top(connection, live, command, top, service=self,
                     constraints=constraints, context_ref=context_ref, remote_sources=remote)
             else:
-                receipt = self._mutate(connection, live, command, top, now, constraints,
+                mutation = command
+                if command.action == 'create' and 'playlist_preview_ref' in command.data:
+                    mutation = replace(command, data={
+                        'title': command.data['title'], 'description': command.data['description'],
+                        'album_refs': conversion_albums})
+                receipt = self._mutate(connection, live, mutation, top, now, constraints,
                                        locked_target=lock_target)
             self._insert_operation(connection, live, command, receipt, required_actions)
+            if command.action == 'create' and 'playlist_preview_ref' in command.data:
+                # Preserve the exact source/report with the saved Top. Expired
+                # abandoned previews are bounded cleanup; saved provenance is not.
+                connection.execute('update app.playlist_album_top_previews set saved_top_ref=%s where ref=%s',
+                    (receipt['top_ref'], command.data['playlist_preview_ref']))
+                # Receipt/provenance writes can wait too. An expired or revoked
+                # first Save rolls back all writes; landed operation replay above
+                # remains independent of expired source evidence.
+                save_albums(self, connection, live, command, context_ref, constraints)
             remote_membership.consume(connection, live, command, top, receipt, context_ref, consumption)
             if typed or remote:
                 # The operation receipt INSERT can itself wait. Re-evaluate

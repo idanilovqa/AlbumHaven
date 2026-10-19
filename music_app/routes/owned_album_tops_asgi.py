@@ -280,6 +280,39 @@ async def create_album_top(request: Request):
     return await _mutate(request, "create")
 
 
+@router.post('/album-tops/playlist-previews/{playlist_ref}')
+async def capture_playlist_album_top(request: Request, playlist_ref: str):
+    from music_app.services.playlist_album_top_previews import PlaylistAlbumTopPreviews
+    try:
+        if request.query_params:
+            raise AlbumTopError('invalid_command')
+        context, constraints = _context(request, CREATE)
+        context_ref = _require_context(request)
+        payload = await read_bounded_json_object(request, max_bytes=4096)
+        value = await run_in_threadpool(PlaylistAlbumTopPreviews(_service(request)).capture,
+            context, playlist_ref=playlist_ref, payload=payload, context_ref=context_ref, constraints=constraints)
+        return _response(request, value)
+    except JSONBodyTooLarge:
+        return _error(AlbumTopError('command_too_large', 413))
+    except AlbumTopError as error:
+        return _error(error)
+
+
+@router.delete('/album-tops/playlist-previews/{preview_ref}')
+async def discard_playlist_album_top(request: Request, preview_ref: str):
+    from music_app.services.playlist_album_top_previews import PlaylistAlbumTopPreviews
+    try:
+        if request.query_params:
+            raise AlbumTopError('invalid_command')
+        context, constraints = _context(request, BROWSE)
+        context_ref = _require_context(request)
+        value = await run_in_threadpool(PlaylistAlbumTopPreviews(_service(request)).discard,
+            context, preview_ref=preview_ref, context_ref=context_ref, constraints=constraints)
+        return _response(request, value)
+    except AlbumTopError as error:
+        return _error(error)
+
+
 @router.post('/album-tops/{top_ref}/publication-preview')
 async def preview_album_top_publication(request: Request, top_ref: str):
     try:

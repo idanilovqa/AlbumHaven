@@ -232,6 +232,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/album-tops/{top_ref}/access-candidates"): "library.album_tops.access.manage",
     ("GET", "/album-tops"): "library.browse.read",
     ("POST", "/album-tops"): "library.album_tops.create",
+    ("POST", "/album-tops/playlist-previews/{playlist_ref}"): "library.album_tops.create",
+    ("DELETE", "/album-tops/playlist-previews/{preview_ref}"): "library.browse.read",
     ("POST", "/album-tops/{top_ref}/{action}"): "library.browse.read",
     ("POST", "/album-top-catalog/inventory"): "library.album_tops.create",
     ("GET", "/album-top-catalog/search"): "library.browse.read",

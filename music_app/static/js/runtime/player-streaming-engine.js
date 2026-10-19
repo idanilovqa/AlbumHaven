@@ -17,6 +17,124 @@ const STREAMING_WAVEFORM_READY_FRAMES = 48_000;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
 const STREAMING_REPLACEMENT_CUSHION_WAIT_MS = 1000;
 
+// Capture ownership is separate from playback attempt/lease ownership. The
+// staged gate cannot start a context request, timer or producer while false.
+const streamingCaptureOwners = new WeakMap();
+function streamingCaptureSafely(callback) {
+  try { return callback(); } catch (_) { return null; }
+}
+function streamingCaptureBridge(node = streamingEngineState().node) {
+  return node ? streamingCaptureOwners.get(node) || null : null;
+}
+function beginStreamingCaptureContext() {
+  if (typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || !PLAYBACK_CAPTURE_ENABLED) return null;
+  const scope = typeof capturePlaybackOwnershipScope === 'function' ? capturePlaybackOwnershipScope() : null;
+  if (!scope) return null;
+  const controller = new AbortController();
+  const current = () => typeof isPlaybackOwnershipScopeCurrent === 'function' && isPlaybackOwnershipScopeCurrent(scope);
+  // Start alongside worklet loading. This request never gates audio preparation.
+  const promise = Promise.resolve().then(async () => {
+    if (!current()) return null;
+    const response = await fetch('/playback/capture/context', {
+      credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: controller.signal,
+    });
+    if (!response.ok || !current()) return null;
+    const value = await response.json();
+    return current() ? value : null;
+  }).catch(() => null);
+  return { scope, promise, discard: () => controller.abort() };
+}
+function prepareStreamingCapture(engine, context, node, preparedContext = null) {
+  if (typeof PLAYBACK_CAPTURE_ENABLED === 'undefined' || !PLAYBACK_CAPTURE_ENABLED
+      || typeof PlaybackCaptureTelemetry === 'undefined' || context.sampleRate !== 48000) {
+    preparedContext?.discard();
+    return;
+  }
+  const prepared = preparedContext || beginStreamingCaptureContext();
+  const scope = prepared?.scope;
+  if (!scope) return;
+  const bridge = { owner: null, generation: engine.generation, retired: false };
+  const currentScope = () => typeof isPlaybackOwnershipScopeCurrent === 'function'
+    && isPlaybackOwnershipScopeCurrent(scope);
+  const guard = () => {
+    if (currentScope()) return true;
+    bridge.owner?.onScopeLost();
+    return false;
+  };
+  const owner = PlaybackCaptureTelemetry.createOwner({
+    getContext: async () => {
+      if (!guard()) throw new Error('Capture scope retired');
+      const value = await prepared.promise;
+      if (!guard()) throw new Error('Capture context unavailable');
+      return value;
+    },
+    postCheckpoint: async (body, scopeHeader, { signal, keepalive }) => {
+      if (!guard()) throw new Error('Capture scope retired');
+      const response = await fetch('/playback/capture/checkpoint', {
+        method: 'POST', credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Playback-Capture-Scope': scopeHeader },
+        body, signal, keepalive,
+      });
+      if (response.status === 401 || response.status === 403) return { status: response.status, data: null };
+      return { status: response.status, data: await response.json().catch(() => null) };
+    },
+    clock: { now: () => performance.now(), utc: () => Date.now(),
+      setTimeout: (fn, ms) => window.setTimeout(() => { if (guard()) fn(); }, ms),
+      clearTimeout: id => window.clearTimeout(id) },
+    crypto: window.crypto,
+    generation: () => engine.node === node ? engine.generation : bridge.generation,
+    sendCommand: (message, transfer) => {
+      if (message.type === 'capture-disable' || guard()) node.port.postMessage(message, transfer);
+    },
+    diagnostic: reason => { bridge.diagnostic = reason; },
+  });
+  bridge.owner = owner; bridge.guard = guard;
+  streamingCaptureOwners.set(node, bridge);
+  const stateChanged = () => { if (guard()) owner.onContextState(context.state); };
+  context.addEventListener('statechange', stateChanged);
+  const pagehide = () => { if (guard()) owner.pagehide(); };
+  window.addEventListener('pagehide', pagehide);
+  bridge.detach = () => {
+    prepared.discard();
+    context.removeEventListener('statechange', stateChanged);
+    window.removeEventListener('pagehide', pagehide);
+  };
+  void owner.enable().then(accepted => { if (accepted) stateChanged(); }).catch(() => owner.onScopeLost());
+}
+function bindStreamingCapture(role, metadata) {
+  const engine = streamingEngineState(), bridge = streamingCaptureBridge();
+  if (!bridge || !bridge.guard() || role.captureBinding || role.captureSkipped) return;
+  bridge.generation = engine.generation;
+  if (metadata.sampleRate !== 48000 || engine.context?.sampleRate !== 48000) {
+    role.captureSkipped = true; bridge.diagnostic = 'unsupported_capture_rate'; return;
+  }
+  const continuation = ['seek', 'short-loop', 'long-loop', 'whole-track-repeat'].includes(role.continuityOptions?.kind)
+    && !(engine.pendingSeek?.kind === 'replacement' && engine.pendingSeek.streamId === role.streamId)
+    && role.track?.path === engine.roles.current?.track?.path;
+  const parent = continuation ? engine.roles.current?.captureParent : bridge.owner.bindTrack({
+    trackPath: role.track?.path,
+    deviceId: typeof getMeasuredPlaybackDeviceId === 'function' ? getMeasuredPlaybackDeviceId().toLowerCase() : '',
+    v1SessionId: null,
+  });
+  if (!parent) { role.captureSkipped = true; bridge.diagnostic = 'capture_binding_unavailable_before_pcm'; return; }
+  role.captureParent = parent;
+  role.captureBinding = bridge.owner.linkStream(parent, {
+    generation: role.generation, streamId: role.streamId, sourceBase48: metadata.timelineStartFrame,
+    sourceRate: metadata.sampleRate, outputRate: engine.context.sampleRate,
+  });
+  if (!role.captureBinding) {
+    role.captureSkipped = true;
+    if (!continuation) bridge.owner.requestClose(parent, 'capture_limit');
+  }
+}
+function retireStreamingCapture(role, successor = null, reason = 'track_change', node = streamingEngineState().node) {
+  const bridge = streamingCaptureBridge(node);
+  if (!bridge || !bridge.guard() || !role) return;
+  if (role.captureBinding) bridge.owner.unlinkStream(role.captureBinding);
+  if (role.captureParent && role.captureParent !== successor?.captureParent) bridge.owner.requestClose(role.captureParent, reason);
+}
+
+
 function streamingEngineState() {
   return state.player.streaming;
 }
@@ -450,6 +568,7 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
     }
   }
   if (!current()) return false;
+  streamingCaptureSafely(() => retireStreamingCapture(continuity, engine.roles.current));
   engine.roles.continuity = null;
   engine.pcmEvidenceByStream?.delete(continuity.streamId);
   engine.renderedPcmEvidenceByStream?.delete(continuity.streamId);
@@ -683,6 +802,7 @@ function handleStreamingControl(message) {
       );
       return;
     }
+    streamingCaptureSafely(() => bindStreamingCapture(roleState, message));
     roleState.metadataAccepted = true;
     roleState.provisionalTotalFrames = message.provisionalTotalFrames;
     roleState.timelineStartFrame = message.timelineStartFrame;
@@ -949,6 +1069,7 @@ function handleStreamingWorkletMessage(message) {
     continuity.targetBufferFrames = streamingRoleCapacityFrames(continuity);
     continuity.seekTarget = true;
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
+    streamingCaptureSafely(() => retireStreamingCapture(current, continuity));
     promoteStreamingAttempt(current, continuity, engine.pendingSeek);
     engine.roles.current = continuity;
     engine.roles.continuity = null;
@@ -1059,6 +1180,7 @@ function handleStreamingWorkletMessage(message) {
     };
     engine.diagnostics.boundaryCapture = message.capture || null;
     swapStreamingBackingCapacities(current, continuity);
+    streamingCaptureSafely(() => retireStreamingCapture(current, continuity));
     promoteStreamingAttempt(current, continuity, engine.pendingSeek);
     engine.roles.current = continuity;
     engine.roles.current.role = 'current';
@@ -1188,6 +1310,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     current.endedNotified = true;
+    streamingCaptureSafely(() => retireStreamingCapture(current, null, 'ended'));
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const currentTime = timelineFrame / STREAMING_SAMPLE_RATE;
     Object.assign(engine.snapshot, {
@@ -1331,6 +1454,7 @@ async function prepareStreamingPlaybackEngine() {
     let context = null;
     let node = null;
     let socket = null;
+    const captureContext = streamingCaptureSafely(() => beginStreamingCaptureContext());
     try {
       const AudioContextType = window.AudioContext || window.webkitAudioContext;
       context = new AudioContextType({ sampleRate: STREAMING_SAMPLE_RATE });
@@ -1341,7 +1465,14 @@ async function prepareStreamingPlaybackEngine() {
         outputChannelCount: [2],
       });
       node.connect(context.destination);
-      node.port.onmessage = ({ data }) => { if (engine.node === node) handleStreamingWorkletMessage(data); };
+      node.port.onmessage = ({ data }) => {
+        if (data?.type === 'capture-packet') {
+          const bridge = streamingCaptureBridge(node);
+          streamingCaptureSafely(() => { if (bridge?.guard()) bridge.owner.acceptPacket(data.buffer); });
+          return;
+        }
+        if (engine.node === node) handleStreamingWorkletMessage(data);
+      };
       node.onprocessorerror = (event) => {
         if (engine.node !== node) return;
         failStreamingEngine('processor', event, 'processor-error');
@@ -1386,12 +1517,14 @@ async function prepareStreamingPlaybackEngine() {
         throw new Error('Preparation retired');
       }
       engine.context = context; engine.node = node; engine.socket = socket;
+      streamingCaptureSafely(() => prepareStreamingCapture(engine, context, node, captureContext));
       engine.backingCapacityFrames = initialStreamingBackingCapacities();
       engine.pendingControls = [];
       engine.nextStreamId ??= 1;
       engine.mode = 'prepared';
       Object.assign(preparationOutcome, {settled: true, published: true, context, node, socket});
     } catch (error) {
+      streamingCaptureSafely(() => captureContext?.discard());
       if (engine.socket === socket) engine.socket = null;
       if (engine.node === node) engine.node = null;
       if (engine.context === context) engine.context = null;
@@ -1622,6 +1755,7 @@ async function startStreamingTrack(track, {
       || engine.lifecycleEpoch !== lifecycleEpoch) return null;
   const oldRoles = [engine.roles.current, engine.roles.continuity].filter(Boolean);
   for (const roleState of oldRoles) {
+    streamingCaptureSafely(() => retireStreamingCapture(roleState));
     const accepted = sendStreamingControl({
       type: 'close',
       generation: roleState.generation,
@@ -1882,6 +2016,7 @@ async function seekStreamingPlayback(seconds) {
       streamId: staleContinuity.streamId,
     });
     if (!owns() || engine.roles.continuity!==staleContinuity) return null;
+    streamingCaptureSafely(() => retireStreamingCapture(staleContinuity, engine.roles.current));
     engine.roles.continuity = null;
     engine.diagnostics.bufferedFrames.continuity = 0;
     engine.diagnostics.inFlightFrames.continuity = 0;
@@ -2025,6 +2160,14 @@ function setStreamingLoop(active, startSeconds = 0, endSeconds = 0) {
 // Cleanup owns a detached snapshot. No callback below may target current slots.
 async function cleanupStreamingResources(record) {
   const {reason, roles, node, socket, context, generation, preparation, options} = record;
+  const capture = streamingCaptureBridge(node);
+  if (capture) {
+    capture.generation = generation;
+    streamingCaptureSafely(() => {
+      if (capture.guard()) capture.owner.close('owner_closed');
+      capture.detach();
+    });
+  }
   const errors = [];
   let physicalFailure = false;
   const invoke = (callback, physical = false) => { try { callback(); } catch (error) {
@@ -2052,7 +2195,10 @@ async function cleanupStreamingResources(record) {
     if (reject) invoke(() => reject(new Error(`Prepared track replacement stopped: ${reason}`)));
   }
   if (record.queueDispatch) invoke(record.queueDispatch);
-  if (context) { try { await context.close(); } catch (error) { errors.push(error); physicalFailure = true; } }
+  if (context) { try {
+    await context.close();
+    streamingCaptureSafely(() => capture?.owner.onContextState('closed'));
+  } catch (error) { errors.push(error); physicalFailure = true; } }
   if (preparation) {
     let rejected = false, preparationError;
     try { await preparation; } catch (error) { rejected = true; preparationError = error; }

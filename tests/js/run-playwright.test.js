@@ -5799,6 +5799,9 @@ test('owned temp cleanup failure rejects authoritative pass while passive diagno
 
   assert.equal(result.exitCode, 1);
   assert.equal(result.lifecycle.exitReason, 'owned-temp-cleanup-error');
+  assert.equal(_private.finalizeMainResult(result, {
+    processObject: { exitCode: 0 }, stderr: { write() {} },
+  }), 2, 'failed owned temp cleanup must stop all later managed invocations');
   assert.equal(_private.hasCompletedAuthoritativePassLifecycle(result), false);
   assert.equal(result.lifecycle.managedAttempt.tempCleanup.status, 'failed');
   assert.deepEqual(result.lifecycle.managedAttempt.tempCleanup.error, { name: 'Error' });
@@ -6782,4 +6785,134 @@ test('scan startup hands child ownership to the attempt before readiness fails',
     assert.equal(_private.finalizeMainResult({ exitCode: 1, lifecycle: error.lifecycle }, { processObject: {}, stderr: { write() {} } }), 2);
     return true;
   });
+});
+
+for (const outcome of ['pass', 'test-failure', 'interrupted', 'readiness-failure', 'unproven-exit']) {
+  test(`Native managed ${outcome} proves process exit before database and owned-temp cleanup`, async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'home-runner-lifecycle-'));
+    const ownedRoot = _private.createOwnedIsolatedE2ETempRoot({
+      tempRoot, readProcessCreationIdentityFn: () => TEST_PROCESS_CREATION_IDENTITY,
+    });
+    const manifest = path.join(ownedRoot, 'home-feedback-manifest.json');
+    const child = createFakeChildProcess(5461), events = [];
+    let releaseExit, enteredExit;
+    const exitGate = new Promise(resolve => { releaseExit = resolve; });
+    const atExitGate = new Promise(resolve => { enteredExit = resolve; });
+    const argv = ['test', '--config=playwright.native-acceptance.config.js'];
+    try {
+      const pending = _private.runManagedPlaywrightAttempt({
+        passthroughArgv: argv,
+        childEnv: {
+          ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot,
+          ALBUM_HAVEN_HOME_FEEDBACK_MANIFEST: manifest,
+          ALBUM_HAVEN_FIXTURE_PROFILE: 'functional-core',
+          PLAYWRIGHT_PORT: '4173', PLAYWRIGHT_REAL_APP_PORT: '6270',
+        },
+        runTimeoutMs: 1000, managesScanApp: false, managesIsolatedApp: true,
+        servesRealApp: false, supportAppPort: 4173, realAppPort: 6270,
+        isolatedAppPort: 6270, isolatedProviderPort: 6272, managedPorts: [6270, 6272],
+        ownedIsolatedTempRoot: ownedRoot, isHeadless: true, browserName: 'chromium',
+        startManagedIsolatedAppFn(env, options) {
+          assert.equal(options.homeFeedback, true);
+          assert.equal(options.scenario, 'native-acceptance');
+          return _private.startManagedIsolatedApp(env, {
+            ...options,
+            spawnFn(_command, args) {
+              assert.deepEqual(args, [_private.HOME_FEEDBACK_APP_PATH, '--port', '6270', '--manifest', manifest, '--scenario', 'native-acceptance']);
+              events.push('home-spawn'); return child;
+            },
+            readProcessCreationIdentityFn: () => 'home-lifecycle-identity',
+            probeHttpStatusReadyFn: async () => {
+              if (outcome === 'readiness-failure') throw new Error('home readiness failed');
+              return true;
+            },
+            authenticateFunctionalFixtureFn: async () => assert.fail('no shared-profile Home warmup'),
+            stdout: { write() {} }, stderr: { write() {} },
+          });
+        },
+        createManagedIsolatedAppRestartControllerFn() { assert.fail('Home must not create a runtime restart controller'); },
+        async runPlaywrightProcessFn(_argv, activeEnv) {
+          events.push('playwright-settled');
+          assert.notEqual(outcome, 'readiness-failure');
+          assert.equal(activeEnv.PLAYWRIGHT_PORT, '6270');
+          const configFile = path.resolve(__dirname, '..', '..', 'playwright.home-feedback.config.js');
+          const module = { exports: {} };
+          vm.runInNewContext(fs.readFileSync(configFile, 'utf8'), {
+            module, require: createRequire(configFile), __dirname: path.dirname(configFile),
+            process: { pid: process.pid, argv: [process.execPath, 'playwright-cli'], env: { ...activeEnv } },
+          }, { filename: configFile });
+          assert.equal(module.exports.use.baseURL, 'http://127.0.0.1:6270');
+          return { exitCode: outcome === 'pass' ? 0 : 1,
+            signal: outcome === 'interrupted' ? 'SIGTERM' : null, lifecycle: {} };
+        },
+        stopManagedIsolatedAppFn(current, ports) {
+          assert.equal(current, child);
+          return _private.stopManagedIsolatedApp(current, ports, {
+            readProcessCreationIdentityFn: () => 'home-lifecycle-identity',
+            stopProcessTreeFn(pid, options) {
+              assert.equal(pid, child.pid);
+              assert.equal(options.expectedCreationIdentity, 'home-lifecycle-identity');
+              events.push('stop-tree');
+            },
+            async waitForReclaimedProcessesExitedFn(identities) {
+              assert.deepEqual(identities, [{ pid: child.pid, creationIdentity: 'home-lifecycle-identity' }]);
+              events.push('exit-proof-pending'); enteredExit(); await exitGate;
+              if (outcome === 'unproven-exit') throw new Error('home exit unproven');
+              events.push('exit-proven');
+            },
+            waitForPortReleasedFn: async port => { events.push(`port-proven:${port}`); return true; },
+          });
+        },
+        cleanupIsolatedLibraryDatabaseFn(_env, options) {
+          assert.equal(options, undefined, 'Home resets its own fixture rather than preserving the shared baseline');
+          assert.ok(events.includes('exit-proven'));
+          events.push('database-cleanup');
+        },
+        cleanupIsolatedE2ETempRootsFn(_root, ownedRoots) {
+          assert.deepEqual(ownedRoots, [ownedRoot]);
+          assert.equal(events.at(-1), 'database-cleanup');
+          events.push('temp-cleanup');
+          return _private.cleanupIsolatedE2ETempRoots(tempRoot, ownedRoots);
+        },
+        reportManagedPortOwnersFn() { return []; },
+      }).then(value => ({ value }), error => ({ error }));
+      await Promise.race([atExitGate, pending.then(settled => {
+        throw settled.error || new Error('Home attempt settled before reaching process-exit proof');
+      })]);
+      assert.equal(events.includes('database-cleanup'), false);
+      assert.equal(events.includes('temp-cleanup'), false);
+      assert.equal(fs.existsSync(ownedRoot), true);
+      releaseExit();
+      const settled = await pending;
+      if (outcome === 'unproven-exit') {
+        assert.match(settled.error.message, /home exit unproven/);
+        assert.equal(events.includes('database-cleanup'), false);
+        assert.equal(events.includes('temp-cleanup'), false);
+        assert.equal(fs.existsSync(ownedRoot), true);
+      } else {
+        if (outcome === 'readiness-failure') assert.match(settled.error.message, /home readiness failed/);
+        else { assert.equal(settled.error, undefined); assert.equal(settled.value.exitCode, outcome === 'pass' ? 0 : 1); }
+        assert.deepEqual(events.slice(-5), ['exit-proven', 'port-proven:6270', 'port-proven:6272', 'database-cleanup', 'temp-cleanup']);
+        assert.equal(fs.existsSync(ownedRoot), false);
+      }
+    } finally {
+      releaseExit();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+
+test('native config admission is exact and invalid scenarios fail before spawn', async () => {
+  assert.equal(_private.homeFeedbackScenario(['--config=playwright.native-acceptance.config.js']), 'native-acceptance');
+  assert.equal(_private.homeFeedbackScenario(['--config=playwright.home-feedback.config.js']), 'home-feedback');
+  for (const config of ['subdir/playwright.native-acceptance.config.js', 'playwright.native-acceptance.config.js.extra']) {
+    assert.equal(_private.homeFeedbackScenario([`--config=${config}`]), '');
+  }
+  for (const scenario of ['../nativeAcceptanceData', 'unknown']) {
+    await assert.rejects(_private.startManagedIsolatedApp({}, { homeFeedback: true, scenario,
+      spawnFn() { assert.fail('unknown scenario must not spawn'); } }), /Unsupported managed Home scenario/);
+  }
+  assert.equal(_private.finalizeMainResult({ exitCode: 0, lifecycle: { exitReason: 'owned-temp-cleanup-error' } },
+    { processObject: { exitCode: 0 }, stderr: { write() {} } }), 2);
 });

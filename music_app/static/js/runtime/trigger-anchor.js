@@ -12,17 +12,34 @@ function getTriggerAnchorGeometry(anchor, surface) {
 }
 
 let activeTriggerSurface = null;
+function containsTriggerSurface(owner, surface, anchor) {
+  return owner.surface.contains?.(surface) || Boolean(anchor?.isConnected && surface?.isConnected
+    && owner.surface.isConnected && !owner.surface.hidden && owner.surface.contains?.(anchor));
+}
+function isTriggerSurfaceAnchorCurrent(surface, anchor) {
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
+    if (owner.surface === surface) return owner.anchor === anchor
+      && (!owner.parent || containsTriggerSurface(owner.parent, surface, anchor));
+  }
+  return false;
+}
 function activateTriggerSurface(surface, close, options = {}) {
   for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
-    if (owner.surface === surface) return;
+    if (owner.surface !== surface) continue;
+    if (owner.parent && !containsTriggerSurface(owner.parent, surface, options.anchor || owner.anchor)) {
+      owner.close();
+      return false;
+    }
+    return true;
   }
-  while (activeTriggerSurface && !activeTriggerSurface.surface.contains?.(surface)) {
+  while (activeTriggerSurface && !containsTriggerSurface(activeTriggerSurface, surface, options.anchor)) {
     const previous = activeTriggerSurface;
     activeTriggerSurface = previous.parent || null;
     previous.close();
   }
   activeTriggerSurface = { surface, close, anchor: options.anchor, parent: activeTriggerSurface };
   if (typeof CustomEvent === 'function') surface.ownerDocument?.dispatchEvent?.(new CustomEvent('album-haven:surface-opening', { detail: { surface } }));
+  return true;
 }
 
 const triggerAnchorBindings = new WeakMap();
@@ -64,11 +81,11 @@ function syncTriggerAnchor(surface, anchor) {
   const contextChanged = surface.dataset.triggerAnchorContext !== anchorContext;
   if (contextChanged) surface.dataset.triggerAnchorContext = anchorContext;
   if (anchor.dataset.triggerAnchorContext !== anchorContext) anchor.dataset.triggerAnchorContext = anchorContext;
-  activateTriggerSurface(surface, () => {
+  if (!activateTriggerSurface(surface, () => {
     surface.hidden = true;
     anchor.setAttribute?.('aria-expanded', 'false');
     clearTriggerAnchor(surface);
-  });
+  }, { anchor })) return false;
   // Establish the owning surface before sampling its paint for the joined trigger.
   if (!surface.classList.contains('trigger-anchor-surface')) surface.classList.add('trigger-anchor-surface');
   if (!previous || previous.anchor !== anchor || contextChanged) {

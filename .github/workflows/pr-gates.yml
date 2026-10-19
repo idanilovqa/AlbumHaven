@@ -2372,6 +2372,18 @@ jobs:
             timeout_minutes: 20
           - batch: capture_backend
             timeout_minutes: 20
+          - batch: new_top_targets
+            timeout_minutes: 30
+          - batch: new_playlist_preview
+            timeout_minutes: 30
+          - batch: new_top_queue
+            timeout_minutes: 30
+          - batch: new_playlist_preferences
+            timeout_minutes: 30
+          - batch: new_source_import
+            timeout_minutes: 30
+          - batch: new_url_html
+            timeout_minutes: 30
           # Each exact-node diagnostic has a fresh runner/service and the same
           # owned initializer. Never reuse a quarantined full-batch database.
           - batch: popularity_bootstrap
@@ -2560,6 +2572,59 @@ jobs:
                 'tests/py/test_phase7_auth_app.py' \
                 'tests/py/test_initialize_loved_browse_postgres.py' > "$evidence/tests.txt"
               ;;
+            new_top_targets)
+              printf '%s\n' \
+                'tests/py/test_album_top_browse.py' \
+                'tests/py/test_album_top_browse_postgres.py' \
+                'tests/py/test_album_top_native_remote_targets_postgres.py' \
+                'tests/py/test_album_top_native_target_routes.py' \
+                'tests/py/test_album_top_native_targets.py' \
+                'tests/py/test_album_top_native_targets_postgres.py' \
+                'tests/py/test_owned_album_tops_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_playlist_preview)
+              printf '%s\n' \
+                'tests/py/test_playlist_album_top_preview_editions.py' \
+                'tests/py/test_playlist_album_top_preview_routes.py' \
+                'tests/py/test_playlist_album_top_preview_target_routes.py' \
+                'tests/py/test_playlist_album_top_preview_targets.py' \
+                'tests/py/test_playlist_album_top_previews.py' \
+                'tests/py/test_playlist_album_top_previews_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_top_queue)
+              printf '%s\n' \
+                'tests/py/test_album_top_native_queue.py' \
+                'tests/py/test_album_top_native_queue_postgres.py' \
+                'tests/py/test_album_top_native_queue_routes.py' \
+                'tests/py/test_album_top_native_remote_queue_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_playlist_preferences)
+              printf '%s\n' \
+                'tests/py/test_playlist_filter_preferences.py' \
+                'tests/py/test_playlist_filter_preferences_postgres.py' \
+                'tests/py/test_playlist_filter_preferences_routes.py' > "$evidence/tests.txt"
+              ;;
+            new_source_import)
+              printf '%s\n' \
+                'tests/py/test_album_top_source_import_routes.py' \
+                'tests/py/test_album_top_source_imports_postgres.py' \
+                'tests/py/test_album_top_source_parse.py' \
+                'tests/py/test_album_top_source_finalization.py' \
+                'tests/py/test_album_top_source_finalization_postgres.py' \
+                'tests/py/test_album_top_source_finalization_remote_postgres.py' \
+                'tests/py/test_album_top_source_finalization_routes.py' \
+                'tests/py/test_album_top_source_lock_publication_postgres.py' > "$evidence/tests.txt"
+              ;;
+            new_url_html)
+              printf '%s\n' \
+                'tests/py/test_album_top_url_import_routes.py' \
+                'tests/py/test_album_top_url_imports_postgres.py' \
+                'tests/py/test_postgres_pool_call_timeout.py' \
+                'tests/py/test_public_document_acquisition.py' \
+                'tests/py/test_public_document_worker.py' \
+                'tests/py/test_album_top_source_html.py' \
+                'tests/py/test_album_top_source_html_structure_parents.py' > "$evidence/tests.txt"
+              ;;
             *) echo "Unknown feature batch" >&2; exit 1 ;;
           esac
           # Closed diagnostic allowlist, paired with its original admission lane.
@@ -2644,6 +2709,29 @@ jobs:
           evidence.joinpath("capture-zero-skip.txt").write_text(
               f"Verified {len(cases)} cases across {len(expected)} selected modules; zero skips.\n")
           PY_CAPTURE_EVIDENCE
+
+      - name: Require complete new-feature execution evidence
+        if: ${{ !cancelled() && contains(fromJSON('["new_top_targets","new_playlist_preview","new_top_queue","new_playlist_preferences","new_source_import","new_url_html"]'), matrix.batch) && steps.feature_runtime.outcome != 'skipped' }}
+        run: |
+          python - <<'PY_NEW_FEATURE_EVIDENCE'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          evidence = Path(os.environ["RUNNER_TEMP"]) / "feature-batch-evidence"
+          selected = evidence.joinpath("tests.txt").read_text().splitlines()
+          expected = {path.split("::", 1)[0][:-3].replace("/", ".") for path in selected}
+          cases = ET.parse(evidence / "results.xml").getroot().findall(".//testcase")
+          observed = {case.get("classname", "") for case in cases}
+          missing = sorted(module for module in expected
+                           if not any(name == module or name.startswith(module + ".") for name in observed))
+          skipped = [case for case in cases if case.find("skipped") is not None]
+          failed = [case for case in cases if case.find("failure") is not None or case.find("error") is not None]
+          if not cases or missing or skipped or failed:
+              raise SystemExit(f"New-feature evidence incomplete: cases={len(cases)}, missing={missing}, "
+                               f"skipped={len(skipped)}, failed={len(failed)}")
+          evidence.joinpath("new-feature-zero-skip.txt").write_text(
+              f"Verified {len(cases)} cases across {len(expected)} selected modules; zero skips.\n")
+          PY_NEW_FEATURE_EVIDENCE
 
       - name: Diagnose one exact feature node on its fresh owned baseline
         if: ${{ matrix.diagnostic != '' }}

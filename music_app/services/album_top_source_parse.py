@@ -82,12 +82,20 @@ class _VisibleEvidence(HTMLParser):
 def parse_source(command):
     """No network, catalog reads, metadata guessing or creation side effects.
 
-    All original bytes remain in the job. Extracted HTML is always reviewed since
-    heading/list selection is not yet an approved automatic extraction contract.
+    All original bytes remain in the job. Only complete unambiguous structural
+    ranks are normalized; matching and ambiguous page selection remain explicit.
     """
     content = command['content']
     html = command['kind'] != 'text'
     if html:
+        from music_app.services.album_top_source_html import structural_rows
+        structural = structural_rows(content, MAX_TOP_ITEMS)
+        if structural is not None:
+            rows = [dict(row, row_ref=str(index), catalog_ref=None, match_state='unresolved')
+                    for index, row in enumerate(structural, 1)]
+            return {'parser_version': 2, 'state': 'review_required', 'rows': rows,
+                    'issues': [], 'ordered_row_refs': [row['row_ref'] for row in
+                        sorted(rows, key=lambda row: row['explicit_rank'])]}
         parser = _VisibleEvidence()
         parser.feed(content)
         parser.close()

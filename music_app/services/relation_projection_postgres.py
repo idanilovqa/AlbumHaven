@@ -109,6 +109,254 @@ def relation_projection_structure_complete(relation_views: object) -> bool:
     )
 
 
+class TargetedRelationPatchUnsupported(RuntimeError):
+    pass
+
+
+def _relation_value_contains_artist(value: object, artist_keys: set[str]) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in artist_keys
+    if isinstance(value, Mapping):
+        return any(
+            _relation_value_contains_artist(item, artist_keys)
+            for pair in value.items()
+            for item in pair
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(
+            _relation_value_contains_artist(item, artist_keys) for item in value
+        )
+    return False
+
+
+def _affected_alias_groups_are_trivial(
+    alias_to_canonical: object,
+    canonical_to_aliases: object,
+    artist_keys: set[str],
+) -> bool:
+    if not isinstance(alias_to_canonical, Mapping) or not isinstance(
+        canonical_to_aliases,
+        Mapping,
+    ):
+        return False
+    for alias, canonical in alias_to_canonical.items():
+        alias_key = str(alias or "").strip().casefold()
+        canonical_key = str(canonical or "").strip().casefold()
+        if (alias_key in artist_keys or canonical_key in artist_keys) and (
+            alias_key != canonical_key
+        ):
+            return False
+    for canonical, aliases in canonical_to_aliases.items():
+        canonical_key = str(canonical or "").strip().casefold()
+        alias_keys = {
+            str(alias or "").strip().casefold()
+            for alias in (aliases if isinstance(aliases, (list, tuple, set)) else [])
+            if str(alias or "").strip()
+        }
+        if canonical_key in artist_keys or alias_keys & artist_keys:
+            if canonical_key not in artist_keys or any(
+                alias_key != canonical_key for alias_key in alias_keys
+            ):
+                return False
+    return True
+
+
+def _mapping_values_contain_artist(value: object, artist_keys: set[str]) -> bool:
+    return isinstance(value, Mapping) and any(
+        _relation_value_contains_artist(item, artist_keys) for item in value.values()
+    )
+
+
+def _affected_folder_relations_are_empty(
+    folder_related: object,
+    artist_keys: set[str],
+) -> bool:
+    if not isinstance(folder_related, Mapping):
+        return False
+    for artist, related in folder_related.items():
+        artist_key = str(artist or "").strip().casefold()
+        related_values = related if isinstance(related, (list, tuple, set, frozenset)) else []
+        if artist_key in artist_keys and any(related_values):
+            return False
+        if artist_key not in artist_keys and _relation_value_contains_artist(
+            related_values,
+            artist_keys,
+        ):
+            return False
+    return True
+
+
+def patch_structural_relation_views(
+    relation_views: Mapping[str, object],
+    *,
+    affected_rows: list[object],
+    source_artist_names: set[str],
+    destination_artist_names: set[str],
+    source_album_vacated: bool = False,
+) -> dict[str, object]:
+    if not relation_projection_structure_complete(relation_views):
+        raise TargetedRelationPatchUnsupported("Relation projection is incomplete.")
+
+    affected_names = {
+        str(name or "").strip().casefold()
+        for name in source_artist_names | destination_artist_names
+        if str(name or "").strip()
+    }
+    if not _affected_alias_groups_are_trivial(
+        relation_views.get("alias_to_canonical"),
+        relation_views.get("canonical_to_aliases"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in a nontrivial alias group."
+        )
+    if _mapping_values_contain_artist(
+        relation_views.get("family_to_artists"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in family_to_artists."
+        )
+    if not _affected_folder_relations_are_empty(
+        relation_views.get("folder_related"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in folder_related."
+        )
+    if _relation_value_contains_artist(
+        relation_views.get("sidebar_families"),
+        affected_names,
+    ):
+        raise TargetedRelationPatchUnsupported(
+            "Affected artist participates in sidebar_families."
+        )
+
+    referenced_names = {
+        str(row.get(field) or "").strip()
+        for row in affected_rows
+        if isinstance(row, Mapping)
+        for field in (
+            "owner_artist_name",
+            "album_artist",
+            "member_artist_name",
+            "artist_name",
+        )
+        if str(row.get(field) or "").strip()
+    }
+    referenced_keys = {name.casefold() for name in referenced_names}
+    source_names_by_key = {
+        str(name or "").strip().casefold(): str(name or "").strip()
+        for name in source_artist_names
+        if str(name or "").strip()
+    }
+    destination_names_by_key = {
+        str(name or "").strip().casefold(): str(name or "").strip()
+        for name in destination_artist_names
+        if str(name or "").strip()
+    }
+    if not set(destination_names_by_key).issubset(referenced_keys):
+        raise TargetedRelationPatchUnsupported(
+            "Destination artist facts are incomplete."
+        )
+
+    sidebar_entries = relation_views.get("artists_sidebar", [])
+    if any(not isinstance(entry, Mapping) for entry in sidebar_entries):
+        raise TargetedRelationPatchUnsupported("Artist sidebar entries are incomplete.")
+    current_counts = {
+        str(entry.get("artist") or "").strip().casefold(): int(
+            entry.get("count") or 0
+        )
+        for entry in sidebar_entries
+        if str(entry.get("artist") or "").strip()
+    }
+    updated_counts = {
+        key: current_counts.get(key, 0)
+        - int(
+            source_album_vacated
+            and key in source_names_by_key
+            and key not in destination_names_by_key
+        )
+        + int(key in destination_names_by_key and key not in source_names_by_key)
+        for key in affected_names
+    }
+    patched = dict(relation_views)
+    artists = {
+        str(name or "").strip()
+        for name in relation_views.get("artists", [])
+        if str(name or "").strip()
+        and str(name or "").strip().casefold() not in affected_names
+    }
+    artists.update(
+        destination_names_by_key.get(
+            normalized_name,
+            source_names_by_key.get(normalized_name, normalized_name),
+        )
+        for normalized_name, count in updated_counts.items()
+        if count > 0
+    )
+    patched["artists"] = sorted(artists, key=str.casefold)
+
+    patched_sidebar = [
+        {"artist": str(entry.get("artist") or "").strip(), "count": int(entry.get("count") or 0)}
+        for entry in sidebar_entries
+        if str(entry.get("artist") or "").strip()
+        and str(entry.get("artist") or "").strip().casefold() not in affected_names
+    ]
+    patched_sidebar.extend(
+        {
+            "artist": destination_names_by_key.get(
+                normalized_name,
+                source_names_by_key.get(normalized_name, normalized_name),
+            ),
+            "count": count,
+        }
+        for normalized_name, count in updated_counts.items()
+        if count > 0
+    )
+    patched["artists_sidebar"] = sorted(
+        patched_sidebar,
+        key=lambda entry: str(entry["artist"]).casefold(),
+    )
+    patched_folder_related = {
+        str(artist): set(related)
+        for artist, related in relation_views.get("folder_related", {}).items()
+        if str(artist or "").strip().casefold() not in affected_names
+    }
+    patched_alias_to_canonical = {
+        str(alias): str(canonical)
+        for alias, canonical in relation_views.get("alias_to_canonical", {}).items()
+        if str(alias or "").strip().casefold() not in affected_names
+        and str(canonical or "").strip().casefold() not in affected_names
+    }
+    patched_canonical_to_aliases = {
+        str(canonical): list(aliases)
+        for canonical, aliases in relation_views.get(
+            "canonical_to_aliases", {}
+        ).items()
+        if str(canonical or "").strip().casefold() not in affected_names
+        and not {
+            str(alias or "").strip().casefold()
+            for alias in aliases
+            if str(alias or "").strip()
+        } & affected_names
+    }
+    for normalized_name, count in updated_counts.items():
+        if count <= 0:
+            continue
+        display_name = destination_names_by_key.get(
+            normalized_name,
+            source_names_by_key.get(normalized_name, normalized_name),
+        )
+        patched_alias_to_canonical[display_name] = display_name
+        patched_canonical_to_aliases[display_name] = [display_name]
+        patched_folder_related[display_name] = set()
+    patched["alias_to_canonical"] = patched_alias_to_canonical
+    patched["canonical_to_aliases"] = patched_canonical_to_aliases
+    patched["folder_related"] = patched_folder_related
+    return patched
+
+
 def relation_projection_stale_reason(scan_cache: object) -> str:
     if not isinstance(scan_cache, Mapping):
         return "missing_projection"
@@ -564,6 +812,48 @@ def replace_artist_search_projection_in_transaction(
     return replacement_count
 
 
+def patch_artist_search_projection_in_transaction(
+    connection: Any,
+    relation_views: Mapping[str, object],
+    *,
+    affected_artist_names: set[str],
+    metadata: Mapping[str, object],
+    relations_last_built: float,
+) -> int:
+    affected_normalized_keys = sorted({
+        normalized_key
+        for artist_name in affected_artist_names
+        if (normalized_key := local_inventory_identity_key(artist_name))
+    })
+    if not affected_normalized_keys:
+        raise ValueError("Artist-search projection patch requires at least one affected identity.")
+    if len(affected_normalized_keys) > 256:
+        raise ValueError("Artist-search projection patch accepts at most 256 affected identities.")
+    affected_key_set = set(affected_normalized_keys)
+    rows = [
+        row
+        for row in _artist_search_projection_rows(relation_views)
+        if row["normalized_artist_key"] in affected_key_set
+    ]
+    builder_version = str(metadata.get("builder_version") or "").strip()
+    source_fingerprint = str(metadata.get("source_fingerprint") or "").strip()
+    if not builder_version or not source_fingerprint:
+        raise RuntimeError("Ready projection metadata is required for search publication.")
+    result = _first_row(
+        connection.execute(
+            _patch_artist_search_projection_sql(),
+            {
+                "affected_normalized_keys": affected_normalized_keys,
+                "rows": _jsonb(rows),
+                "builder_version": builder_version,
+                "source_fingerprint": source_fingerprint,
+                "relations_last_built": relations_last_built,
+            },
+        )
+    )
+    return int(_row_mapping(result).get("patch_row_count") or 0)
+
+
 def _artist_search_projection_rows(
     relation_views: Mapping[str, object],
 ) -> list[dict[str, str]]:
@@ -841,6 +1131,18 @@ def _replace_artist_search_projection_sql() -> str:
           %(source_fingerprint)s::text,
           %(relations_last_built)s::double precision
         ) as replacement_row_count;
+    """
+
+
+def _patch_artist_search_projection_sql() -> str:
+    return """
+        select library.patch_local_artist_search_projection(
+          %(affected_normalized_keys)s::text[],
+          %(rows)s::jsonb,
+          %(builder_version)s::text,
+          %(source_fingerprint)s::text,
+          %(relations_last_built)s::double precision
+        ) as patch_row_count;
     """
 
 

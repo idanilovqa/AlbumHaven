@@ -251,6 +251,8 @@ def test_postgres_album_rename_is_targeted_and_never_round_trips_a_snapshot(monk
         "track_file_rows_updated": 2,
         "inventory_mutation_revision": 8,
         "destination_album_id": 41,
+        "destination_album_key": "artist::new album",
+        "destination_artist_name": "Artist",
     }
     mutation_calls = [
         (sql, params)
@@ -1616,7 +1618,6 @@ def test_postgres_year_split_prevalidation_uses_year_destination_identity(
     "changed_field_names",
     [
         {"album", "year"},
-        {"album_artist"},
         {"edition"},
     ],
 )
@@ -1630,7 +1631,7 @@ def test_postgres_targeted_structural_edit_rejects_broader_field_sets(
 
     with pytest.raises(
         ValueError,
-        match="album-only, year-only, or exception-only",
+        match="supported album/artist identity",
     ):
         adapter.persist_structural_tag_edit(
             changed_paths=set(updated),
@@ -2223,6 +2224,165 @@ def test_selected_postgres_album_rename_does_not_use_legacy_snapshot_finalizer(m
     )
 
     assert selected is targeted_finalizer
+
+
+def test_selected_postgres_artist_rename_uses_targeted_structural_finalizer(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    targeted_finalizer = object()
+    monkeypatch.setattr(routes, "_is_selected_postgres_library_browse_request", lambda _request: True)
+    monkeypatch.setattr(routes, "_has_edit_tags_media_write_fields", lambda _payload: True)
+    monkeypatch.setattr(
+        routes,
+        "_asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder",
+        lambda _request: targeted_finalizer,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        routes,
+        "_asgi_selected_postgres_media_write_queue_finalize_save_task_builder",
+        lambda _request: pytest.fail("artist rename selected legacy snapshot finalizer"),
+    )
+
+    selected = routes._edit_tags_queue_finalize_save_task_builder(
+        object(),
+        {
+            "updates": {
+                "C:/Music/Ovderhead/Telepathic Minds/01 First.flac": {
+                    "artist": "Overhead",
+                    "album_artist": "Overhead",
+                },
+                "C:/Music/Ovderhead/Telepathic Minds/02 Second.flac": {
+                    "artist": "Overhead",
+                    "album_artist": "Overhead",
+                },
+            }
+        },
+    )
+
+    assert selected is targeted_finalizer
+
+
+@pytest.mark.parametrize(
+    "changed_fields",
+    [
+        {"album", "artist"},
+        {"album", "album_artist"},
+        {"album", "artist", "album_artist"},
+    ],
+)
+def test_selected_postgres_combined_identity_edit_uses_targeted_structural_finalizer(
+    monkeypatch,
+    changed_fields,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    targeted_finalizer = object()
+    monkeypatch.setattr(routes, "_is_selected_postgres_library_browse_request", lambda _request: True)
+    monkeypatch.setattr(
+        routes,
+        "_asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder",
+        lambda _request: targeted_finalizer,
+    )
+    monkeypatch.setattr(
+        routes,
+        "_asgi_selected_postgres_media_write_queue_finalize_save_task_builder",
+        lambda _request: pytest.fail("combined identity edit selected legacy snapshot finalizer"),
+    )
+
+    selected = routes._edit_tags_queue_finalize_save_task_builder(
+        object(),
+        {
+            "updates": {
+                "C:/Music/Ovderhead/Old Album/01 First.flac": {
+                    field: {
+                        "album": "New Album",
+                        "artist": "Overhead",
+                        "album_artist": "Overhead",
+                    }[field]
+                    for field in changed_fields
+                }
+            }
+        },
+    )
+
+    assert selected is targeted_finalizer
+
+
+def test_postgres_combined_album_artist_identity_edit_is_targeted(monkeypatch):
+    paths, previous, _updated = _entries("Old Album")
+    updated = {
+        path: {
+            **previous[path],
+            "album": "New Album",
+            "artist": "Overhead",
+            "album_artist": "Overhead",
+        }
+        for path in paths
+    }
+    connection = StructuralTagEditConnection(_successful_result())
+    adapter = _adapter(monkeypatch, connection)
+
+    result = adapter.persist_structural_tag_edit(
+        changed_paths=set(paths),
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"album", "artist", "album_artist"},
+        rebuild_relation_projection=True,
+    )
+
+    assert result["destination_album_key"]
+    assert result["destination_artist_name"] == "Overhead"
+
+
+@pytest.mark.parametrize(
+    ("selected_count", "expected_source_album_vacated"),
+    [(2, True), (1, False)],
+)
+def test_postgres_artist_rename_reports_complete_source_transfer(
+    monkeypatch,
+    selected_count,
+    expected_source_album_vacated,
+):
+    from music_app.services import scan_cache_persistence
+
+    paths, previous, _updated = _entries("Telepathic Minds")
+    changed_paths = set(paths[:selected_count])
+    updated = {
+        path: {
+            **previous[path],
+            "artist": "Overhead",
+            "album_artist": "Overhead",
+        }
+        for path in changed_paths
+    }
+    result_row = {
+        **_successful_result(path_count=selected_count),
+        "source_album_track_file_count": 2,
+    }
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+    source_transfer_flags: list[bool] = []
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "_patch_structural_relation_projection",
+        lambda _connection, *, source_album_vacated, **_kwargs: (
+            source_transfer_flags.append(source_album_vacated)
+            or {"projection_mode": "targeted"}
+        ),
+    )
+
+    result = adapter.persist_structural_tag_edit(
+        changed_paths=changed_paths,
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"artist", "album_artist"},
+        rebuild_relation_projection=True,
+    )
+
+    assert source_transfer_flags == [expected_source_album_vacated]
+    assert result["destination_album_key"]
+    assert result["destination_artist_name"] == "Overhead"
 
 
 def test_selected_postgres_year_only_edit_uses_targeted_structural_finalizer(

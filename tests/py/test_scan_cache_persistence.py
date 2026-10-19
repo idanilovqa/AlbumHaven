@@ -2154,6 +2154,166 @@ def test_structural_relation_publication_replaces_search_projection_before_ready
     assert published_search_metadata == [metadata]
 
 
+def test_targeted_structural_relation_patch_avoids_full_source_load(monkeypatch):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.cache import serialize_relation_views
+
+    monkeypatch.setattr(persistence, "Jsonb", None)
+    relation_views = {
+        "artists": ["Ovderhead", "Overhead", "Unrelated Artist"],
+        "artists_sidebar": [
+            {"artist": "Ovderhead", "count": 1},
+            {"artist": "Overhead", "count": 3},
+            {"artist": "Unrelated Artist", "count": 7},
+        ],
+        "family_to_artists": {},
+        "folder_related": {},
+        "sidebar_families": [],
+        "alias_to_canonical": {},
+        "canonical_to_aliases": {},
+    }
+    snapshot = {
+        "relation_views": serialize_relation_views(relation_views),
+        "relations_last_built": 100.0,
+        persistence.RELATION_PROJECTION_METADATA_KEY: (
+            persistence.build_ready_relation_projection_metadata(
+                "a" * 64,
+                reason="scan",
+                duration_ms=1.0,
+            )
+        ),
+    }
+    saved_snapshots: list[dict[str, object]] = []
+
+    class Cursor:
+        def __init__(self, rows=None):
+            self.rows = list(rows or [])
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if sql == persistence._load_scan_snapshot_sql():
+                return Cursor([{"scan_cache": snapshot}])
+            if sql == persistence._save_scan_snapshot_sql():
+                saved_snapshots.append(params["scan_cache"])
+                return Cursor()
+            raise AssertionError(f"Unexpected SQL in targeted patch: {sql}")
+
+    search_patches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        persistence,
+        "patch_artist_search_projection_in_transaction",
+        lambda _connection, _views, **kwargs: search_patches.append(kwargs) or 1,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        persistence,
+        "load_relation_source_rows_sql",
+        lambda: (_ for _ in ()).throw(AssertionError("full relation source load is forbidden")),
+    )
+
+    result = persistence._patch_structural_relation_projection(
+        Connection(),
+        previous_entries={
+            "track.flac": {
+                "artist": "Ovderhead",
+                "album_artist": "Ovderhead",
+            },
+        },
+        updated_entries={
+            "track.flac": {
+                "artist": "Overhead",
+                "album_artist": "Overhead",
+            },
+        },
+        source_album_vacated=True,
+    )
+
+    assert result["projection_mode"] == "targeted"
+    assert result["orphaned_source_artists"] == ["Ovderhead"]
+    assert result["relation_views"]["artists"] == ["Overhead", "Unrelated Artist"]
+    assert len(saved_snapshots) == 1
+    assert len(search_patches) == 1
+    assert search_patches[0]["affected_artist_names"] == {"Ovderhead", "Overhead"}
+    assert search_patches[0]["relations_last_built"] == 100.0
+    metadata = saved_snapshots[0][persistence.RELATION_PROJECTION_METADATA_KEY]
+    assert metadata["source_fingerprint"] == "a" * 64
+    assert metadata["built_from_fingerprint"] == "a" * 64
+    assert metadata["targeted_patch_reason"] == "structural_tag_edit"
+    assert "targeted_patch_timestamp" in metadata
+
+
+def test_targeted_structural_relation_patch_marks_unsafe_shape_stale(monkeypatch):
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.cache import serialize_relation_views
+
+    monkeypatch.setattr(persistence, "Jsonb", None)
+    relation_views = {
+        "artists": ["Ovderhead", "Overhead"],
+        "artists_sidebar": [
+            {"artist": "Ovderhead", "count": 1},
+            {"artist": "Overhead", "count": 1},
+        ],
+        "family_to_artists": {"Overhead Family": ["Ovderhead"]},
+        "folder_related": {},
+        "sidebar_families": [],
+        "alias_to_canonical": {},
+        "canonical_to_aliases": {},
+    }
+    snapshot = {
+        "relation_views": serialize_relation_views(relation_views),
+        "relations_last_built": 100.0,
+        persistence.RELATION_PROJECTION_METADATA_KEY: (
+            persistence.build_ready_relation_projection_metadata(
+                "b" * 64,
+                reason="scan",
+                duration_ms=1.0,
+            )
+        ),
+    }
+    saved_snapshots: list[dict[str, object]] = []
+
+    class Cursor:
+        def __init__(self, rows=None):
+            self.rows = list(rows or [])
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if sql == persistence._load_scan_snapshot_sql():
+                return Cursor([{"scan_cache": snapshot}])
+            if sql == persistence._save_scan_snapshot_sql():
+                saved_snapshots.append(params["scan_cache"])
+                return Cursor()
+            raise AssertionError(f"Unexpected SQL in stale fallback: {sql}")
+
+    monkeypatch.setattr(
+        persistence,
+        "patch_artist_search_projection_in_transaction",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsafe relation shape must not patch search rows")
+        ),
+        raising=False,
+    )
+
+    result = persistence._patch_structural_relation_projection(
+        Connection(),
+        previous_entries={"track.flac": {"artist": "Ovderhead"}},
+        updated_entries={"track.flac": {"artist": "Overhead"}},
+        source_album_vacated=True,
+    )
+
+    assert result == {
+        "projection_mode": "stale",
+        "rebuild_reason": "structural_tag_edit_requires_full_projection",
+    }
+    assert saved_snapshots[0][persistence.RELATION_PROJECTION_METADATA_KEY]["status"] == "stale"
+
+
 def test_unrebuilt_projection_with_changed_fingerprint_stays_stale_and_preserves_provenance(
     monkeypatch,
 ):

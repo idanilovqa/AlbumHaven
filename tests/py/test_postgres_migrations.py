@@ -33,6 +33,9 @@ MISSING_ALBUM_RELATION_PRESERVATION_MIGRATION = (
 ARTIST_SEARCH_PROJECTION_MIGRATION = (
     MIGRATIONS_DIR / "0084_create_local_artist_search_projection.sql"
 )
+TARGETED_ARTIST_SEARCH_PATCH_MIGRATION = (
+    MIGRATIONS_DIR / "0090_patch_local_artist_search_projection.sql"
+)
 GALLERY_PROJECTION_FEATURED_ROLE_MIGRATION = (
     MIGRATIONS_DIR / "0089_allow_gallery_projection_featured_kind.sql"
 )
@@ -442,7 +445,6 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
     assert migration_names[-50:] == [
-        "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -492,6 +494,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0087_library_source_indicators.sql",
         "0088_add_active_physical_parent_index.sql",
         "0089_allow_gallery_projection_featured_kind.sql",
+        "0090_patch_local_artist_search_projection.sql",
     ]
 
 
@@ -589,6 +592,28 @@ def test_artist_search_projection_migration_is_keyed_and_runtime_read_only():
     assert "projection_source_fingerprint !~ '^[0-9a-f]{64}$'" in sql
     assert "'nan'::double precision" in sql
     assert "'infinity'::double precision" in sql
+
+
+def test_targeted_artist_search_patch_migration_is_bounded_and_runtime_safe():
+    sql = _normalized_sql(
+        TARGETED_ARTIST_SEARCH_PATCH_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create or replace function library.patch_local_artist_search_projection" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "cardinality(affected_normalized_keys) > 256" in sql
+    assert "jsonb_array_length(projection_rows) > 256" in sql
+    assert "pg_column_size(projection_rows) > 1048576" in sql
+    assert "normalized_artist_key = any(affected_normalized_keys)" in sql
+    assert "on conflict (library_id, normalized_artist_key) do update" in sql
+    assert "revoke all on function library.patch_local_artist_search_projection" in sql
+    assert "grant execute on function library.patch_local_artist_search_projection" in sql
+    assert "grant insert" not in sql
+    assert "grant update" not in sql
+    assert "grant delete" not in sql
+    assert "drop table" not in sql
+    assert "drop function library.replace_local_artist_search_projection" not in sql
 
 
 def test_docked_compact_player_regular_style_migration_is_additive_and_default_off():

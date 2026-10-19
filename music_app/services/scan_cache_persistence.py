@@ -33,6 +33,7 @@ from music_app.services.persistence_selection import select_runtime_persistence_
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
     RELATION_PROJECTION_METADATA_KEY,
+    TargetedRelationPatchUnsupported,
     _load_relation_projection_sql,
     _relation_projection_scan_cache_from_row,
     artist_search_projection_stale_reason,
@@ -40,6 +41,8 @@ from music_app.services.relation_projection_postgres import (
     build_relation_views_from_postgres_rows,
     inventory_publication_advisory_lock_sql as _inventory_publication_advisory_lock_sql,
     load_relation_source_rows_sql,
+    patch_artist_search_projection_in_transaction,
+    patch_structural_relation_views,
     relation_projection_advisory_lock_sql,
     relation_projection_structure_complete,
     relation_projection_stale_reason,
@@ -73,6 +76,12 @@ _ALBUM_COVER_METADATA_FIELDS = (
 )
 _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
     frozenset({"album"}),
+    frozenset({"artist"}),
+    frozenset({"album_artist"}),
+    frozenset({"artist", "album_artist"}),
+    frozenset({"album", "artist"}),
+    frozenset({"album", "album_artist"}),
+    frozenset({"album", "artist", "album_artist"}),
     frozenset({"exception_type"}),
     frozenset({"custom_collection_name"}),
     frozenset({"exception_type", "custom_collection_name"}),
@@ -868,7 +877,18 @@ class PostgresScanCacheAdapter:
             ):
                 raise RuntimeError("Targeted blank Album persistence did not update the selected inventory.")
             committed_relation_state = (
-                _commit_structural_relation_projection(connection, self._config)
+                _patch_structural_relation_projection(
+                    connection,
+                    previous_entries=previous_entries,
+                    updated_entries={
+                        path: updated_file_entries[path]
+                        for path in normalized_paths
+                    },
+                    source_album_vacated=(
+                        source_album_count == 1
+                        and source_album_track_file_count == input_path_count
+                    ),
+                )
                 if rebuild_relation_projection
                 else None
             )
@@ -987,7 +1007,15 @@ class PostgresScanCacheAdapter:
                 target_album_ids=(destination_album_id,),
             )
             committed_relation_state = (
-                _commit_structural_relation_projection(connection, self._config)
+                _patch_structural_relation_projection(
+                    connection,
+                    previous_entries=previous_entries,
+                    updated_entries=updated_entries,
+                    source_album_vacated=(
+                        source_album_count == 1
+                        and source_album_track_file_count == input_path_count
+                    ),
+                )
                 if rebuild_relation_projection
                 else None
             )
@@ -1033,8 +1061,8 @@ class PostgresScanCacheAdapter:
             and not targeted_inventory_edit
         ):
             raise ValueError(
-                "Targeted tag persistence requires an album-only, year-only, "
-                "or exception-only edit, or a non-identity inventory edit."
+                "Targeted tag persistence requires a supported album/artist identity "
+                "edit or a non-identity inventory edit."
             )
 
         previous_entries = {
@@ -1333,7 +1361,14 @@ class PostgresScanCacheAdapter:
                 ),
             )
             committed_relation_state = (
-                _commit_structural_relation_projection(connection, self._config)
+                _patch_structural_relation_projection(
+                    connection,
+                    previous_entries=previous_entries,
+                    updated_entries=updated_entries,
+                    source_album_vacated=(
+                        source_album_track_file_count == input_path_count
+                    ),
+                )
                 if rebuild_relation_projection
                 else None
             )
@@ -1345,6 +1380,8 @@ class PostgresScanCacheAdapter:
         persistence_result: dict[str, object] = {
             "album_rows_updated": album_rows_updated,
             "destination_album_id": destination_album_id,
+            "destination_album_key": destination_album_key,
+            "destination_artist_name": destination_album.album_artist,
             "track_rows_updated": track_rows_updated,
             "track_file_rows_updated": track_file_rows_updated,
             "inventory_mutation_revision": inventory_mutation_revision,
@@ -1380,8 +1417,8 @@ class PostgresScanCacheAdapter:
             )
         ):
             raise ValueError(
-                "Targeted tag prevalidation requires an album-only, year-only, "
-                "or exception-only edit, or a non-identity inventory edit."
+                "Targeted tag prevalidation requires a supported album/artist identity "
+                "edit or a non-identity inventory edit."
             )
         previous_entries = {
             path: dict(previous_file_entries[path])
@@ -2275,6 +2312,120 @@ def _structural_destination_album_projection(
             )
         destination_album = destination_albums[0]
     return destination_album
+
+
+def _structural_entry_artist_names(
+    entries: dict[str, dict[str, object]],
+) -> set[str]:
+    return {
+        artist_name
+        for entry in entries.values()
+        for artist_name in (
+            str(entry.get("album_artist") or "").strip(),
+            str(entry.get("artist") or "").strip(),
+        )
+        if artist_name
+    }
+
+
+def _patch_structural_relation_projection(
+    connection: Any,
+    *,
+    previous_entries: dict[str, dict[str, object]],
+    updated_entries: dict[str, dict[str, object]],
+    source_album_vacated: bool,
+    reason: str = "structural_tag_edit",
+) -> dict[str, object]:
+    snapshot_row = _first_row(connection.execute(_load_scan_snapshot_sql()))
+    loaded_snapshot = (
+        _row_mapping(snapshot_row).get("scan_cache")
+        if snapshot_row is not None
+        else None
+    )
+    next_scan_cache = dict(loaded_snapshot) if isinstance(loaded_snapshot, dict) else {}
+    relation_views_payload = next_scan_cache.get("relation_views")
+    projection_metadata = next_scan_cache.get(RELATION_PROJECTION_METADATA_KEY)
+    relations_last_built = next_scan_cache.get("relations_last_built")
+    if (
+        not isinstance(relation_views_payload, dict)
+        or not isinstance(projection_metadata, dict)
+        or not isinstance(relations_last_built, (int, float))
+    ):
+        return {
+            "projection_mode": "stale",
+            "rebuild_reason": "structural_tag_edit_requires_full_projection",
+        }
+
+    source_artist_names = _structural_entry_artist_names(previous_entries)
+    destination_artist_names = _structural_entry_artist_names(updated_entries)
+    affected_rows = [
+        {
+            "owner_artist_name": str(
+                entry.get("album_artist") or entry.get("artist") or ""
+            ).strip(),
+            "album_artist": str(entry.get("album_artist") or "").strip(),
+            "member_artist_name": str(entry.get("artist") or "").strip(),
+        }
+        for entry in updated_entries.values()
+    ]
+    try:
+        patched_views = patch_structural_relation_views(
+            deserialize_relation_views(relation_views_payload),
+            affected_rows=affected_rows,
+            source_artist_names=source_artist_names,
+            destination_artist_names=destination_artist_names,
+            source_album_vacated=source_album_vacated,
+        )
+    except TargetedRelationPatchUnsupported:
+        next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = {
+            **projection_metadata,
+            "status": "stale",
+            "reason": "structural_tag_edit_requires_full_projection",
+        }
+        connection.execute(
+            _save_scan_snapshot_sql(),
+            {"scan_cache": _jsonb(next_scan_cache)},
+        )
+        return {
+            "projection_mode": "stale",
+            "rebuild_reason": "structural_tag_edit_requires_full_projection",
+        }
+
+    next_scan_cache["relation_views"] = serialize_relation_views(patched_views)
+    next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = {
+        **projection_metadata,
+        "status": "ready",
+        "targeted_patch_reason": reason,
+        "targeted_patch_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    connection.execute(
+        _save_scan_snapshot_sql(),
+        {"scan_cache": _jsonb(next_scan_cache)},
+    )
+    patch_artist_search_projection_in_transaction(
+        connection,
+        patched_views,
+        affected_artist_names=source_artist_names | destination_artist_names,
+        metadata=next_scan_cache[RELATION_PROJECTION_METADATA_KEY],
+        relations_last_built=relations_last_built,
+    )
+    remaining_artist_keys = {
+        local_inventory_identity_key(
+            artist.get("artist") if isinstance(artist, dict) else artist
+        )
+        for artist in patched_views.get("artists", [])
+    }
+    orphaned_source_artists = sorted(
+        artist_name
+        for artist_name in source_artist_names
+        if local_inventory_identity_key(artist_name) not in remaining_artist_keys
+    )
+    return {
+        "relation_views": patched_views,
+        "relations_last_built": relations_last_built,
+        "projection_mode": "targeted",
+        "orphaned_source_artists": orphaned_source_artists,
+    }
 
 
 def _commit_structural_relation_projection(

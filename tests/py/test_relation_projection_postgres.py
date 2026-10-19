@@ -323,6 +323,209 @@ def _complete_relation_views(folder_related=None):
     }
 
 
+def test_patch_structural_relation_views_replaces_orphaned_typo_artist():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["Morse Portnoy George", "Ovderhead"],
+        "artists_sidebar": [
+            {"artist": "Morse Portnoy George", "count": 4},
+            {"artist": "Ovderhead", "count": 1},
+        ],
+        "alias_to_canonical": {
+            "Morse Portnoy George": "Morse Portnoy George",
+            "Ovderhead": "Ovderhead",
+        },
+        "canonical_to_aliases": {
+            "Morse Portnoy George": ["Morse Portnoy George"],
+            "Ovderhead": ["Ovderhead"],
+        },
+        "folder_related": {
+            "Morse Portnoy George": set(),
+            "Ovderhead": set(),
+        },
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[
+            {
+                "owner_artist_name": "Overhead",
+                "album_artist": "Overhead",
+                "member_artist_name": "Overhead",
+            }
+        ],
+        source_artist_names={"Ovderhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=True,
+    )
+
+    assert patched["artists"] == ["Morse Portnoy George", "Overhead"]
+    assert patched["artists_sidebar"] == [
+        {"artist": "Morse Portnoy George", "count": 4},
+        {"artist": "Overhead", "count": 1},
+    ]
+    assert patched["alias_to_canonical"] == {
+        "Morse Portnoy George": "Morse Portnoy George",
+        "Overhead": "Overhead",
+    }
+    assert patched["canonical_to_aliases"] == {
+        "Morse Portnoy George": ["Morse Portnoy George"],
+        "Overhead": ["Overhead"],
+    }
+    assert patched["folder_related"] == {
+        "Morse Portnoy George": set(),
+        "Overhead": set(),
+    }
+    assert relation_views["artists_sidebar"][-1] == {
+        "artist": "Ovderhead",
+        "count": 1,
+    }
+
+
+def test_patch_structural_relation_views_keeps_referenced_source_artist():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["Ovderhead"],
+        "artists_sidebar": [{"artist": "Ovderhead", "count": 2}],
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[
+            {"owner_artist_name": "Overhead", "album_artist": "Overhead"},
+        ],
+        source_artist_names={"Ovderhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=True,
+    )
+
+    assert patched["artists_sidebar"] == [
+        {"artist": "Ovderhead", "count": 1},
+        {"artist": "Overhead", "count": 1},
+    ]
+
+
+def test_patch_structural_relation_views_canonicalizes_case_only_artist_rename():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["overhead"],
+        "artists_sidebar": [{"artist": "overhead", "count": 1}],
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[
+            {"owner_artist_name": "Overhead", "album_artist": "Overhead"},
+        ],
+        source_artist_names={"overhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=True,
+    )
+
+    assert patched["artists"] == ["Overhead"]
+    assert patched["artists_sidebar"] == [{"artist": "Overhead", "count": 1}]
+
+
+def test_patch_structural_relation_views_keeps_source_on_partial_artist_transfer():
+    relation_views = {
+        **_complete_relation_views(),
+        "artists": ["Ovderhead"],
+        "artists_sidebar": [{"artist": "Ovderhead", "count": 1}],
+    }
+
+    patched = projection.patch_structural_relation_views(
+        relation_views,
+        affected_rows=[{"owner_artist_name": "Overhead"}],
+        source_artist_names={"Ovderhead"},
+        destination_artist_names={"Overhead"},
+        source_album_vacated=False,
+    )
+
+    assert patched["artists"] == ["Ovderhead", "Overhead"]
+    assert patched["artists_sidebar"] == [
+        {"artist": "Ovderhead", "count": 1},
+        {"artist": "Overhead", "count": 1},
+    ]
+
+
+@pytest.mark.parametrize(
+    "relation_overrides",
+    [
+        {"alias_to_canonical": {"Ovderhead": "Overhead"}},
+        {"family_to_artists": {"Progressive Metal": ["Ovderhead"]}},
+        {"folder_related": {"Ovderhead": {"Overhead"}}},
+    ],
+)
+def test_patch_structural_relation_views_refuses_unsafe_relation_shapes(
+    relation_overrides,
+):
+    relation_views = {**_complete_relation_views(), **relation_overrides}
+
+    with pytest.raises(projection.TargetedRelationPatchUnsupported):
+        projection.patch_structural_relation_views(
+            relation_views,
+            affected_rows=[{"owner_artist_name": "Overhead"}],
+            source_artist_names={"Ovderhead"},
+            destination_artist_names={"Overhead"},
+        )
+
+
+def test_patch_artist_search_projection_in_transaction_deletes_source_and_upserts_destination(
+    monkeypatch,
+):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    relation_views = _complete_relation_views()
+    relation_views["artists"] = ["Overhead", "Unrelated Artist"]
+    relation_views["artists_sidebar"] = ["Overhead", "Unrelated Artist"]
+    relation_views["canonical_to_aliases"] = {"Overhead": []}
+    executed: list[tuple[str, dict[str, object]]] = []
+
+    class RecordingConnection:
+        def execute(self, sql, params):
+            executed.append((sql, params))
+            return _Cursor([{"patch_row_count": 2}])
+
+    patch_count = projection.patch_artist_search_projection_in_transaction(
+        RecordingConnection(),
+        relation_views,
+        affected_artist_names={"Ovderhead", "Overhead"},
+        metadata={
+            "builder_version": projection.RELATION_PROJECTION_BUILDER_VERSION,
+            "source_fingerprint": "a" * 64,
+        },
+        relations_last_built=123.5,
+    )
+
+    assert patch_count == 2
+    assert len(executed) == 1
+    sql, params = executed[0]
+    assert "patch_local_artist_search_projection" in sql
+    assert params["affected_normalized_keys"] == ["ovderhead", "overhead"]
+    assert params["rows"] == [{
+        "normalized_artist_key": "overhead",
+        "canonical_artist_name": "Overhead",
+    }]
+    assert "Unrelated Artist" not in repr(params)
+
+
+def test_patch_artist_search_projection_in_transaction_rejects_unbounded_identity_set():
+    class UnexpectedConnection:
+        def execute(self, _sql, _params):
+            raise AssertionError("Unbounded patch must fail before SQL execution")
+
+    with pytest.raises(ValueError, match="at most 256"):
+        projection.patch_artist_search_projection_in_transaction(
+            UnexpectedConnection(),
+            _complete_relation_views(),
+            affected_artist_names={f"Artist {index}" for index in range(257)},
+            metadata={
+                "builder_version": projection.RELATION_PROJECTION_BUILDER_VERSION,
+                "source_fingerprint": "b" * 64,
+            },
+            relations_last_built=123.5,
+        )
+
+
 def test_relation_source_fingerprint_is_order_independent_and_source_sensitive():
     rows = _morse_rows()
 

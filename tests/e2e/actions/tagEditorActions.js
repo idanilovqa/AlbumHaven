@@ -358,6 +358,11 @@ export class TagEditorActions {
     await expect(this.tagEditor.artistInput).toHaveValue(String(artist));
   }
 
+  async setAlbumArtist(albumArtist) {
+    await this.tagEditor.albumArtistInput.fill(String(albumArtist));
+    await expect(this.tagEditor.albumArtistInput).toHaveValue(String(albumArtist));
+  }
+
   async expectAlbumName(albumName) {
     await expect(this.tagEditor.albumNameInput).toHaveValue(String(albumName || ''));
   }

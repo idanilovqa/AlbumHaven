@@ -192,15 +192,11 @@ test('restores the exact mixed-year Studio Records fixture through guarded helpe
   assert.match(sql, /album_id = target_album\.id/);
   assert.match(
     sql,
-    /library\.local_tracks\.album_id\s*=\s*target_album\.id/,
+    /library\.local_track_files\.private_path\s*=\s*fixture_rows\.private_path/,
   );
   assert.match(
     sql,
-    /library\.local_tracks\.title\s*=\s*'Студийная запись '\s*\|\|\s*fixture_rows\.track_number::text/,
-  );
-  assert.doesNotMatch(
-    sql,
-    /library\.local_track_files\.private_path\s*=\s*fixture_rows\.private_path/,
+    /library\.local_tracks\.library_id\s*=\s*target_album\.library_id/,
   );
   assert.match(sql, /private_path = selected_rows\.private_path/);
   assert.match(sql, /- array\['year', 'release_date'\]::text\[\]/);
@@ -289,4 +285,35 @@ test('restarts the performance app around Studio Records setup and cleanup', () 
     assert.ok(stopPositions[index] < restorePositions[index]);
     assert.ok(restorePositions[index] < restartPositions[index]);
   }
+});
+
+test('owns the exact five-track typo-artist rename inside the isolated Edit Tags target', () => {
+  const spec = fs.readFileSync(
+    path.resolve('tests/e2e/syntheticLargeLibrary/editTagsPostEditPerformance.spec.js'),
+    'utf8',
+  );
+
+  assert.match(spec, /const TYPO_ARTIST = 'Ovderhead';/);
+  assert.match(spec, /const CORRECTED_ARTIST = 'Overhead';/);
+  assert.match(spec, /const TYPO_ALBUM = 'Telepathic Minds';/);
+  assert.match(spec, /const TYPO_TRACK_FILENAMES = Object\.freeze\(\[[\s\S]*?\]\);/);
+  assert.match(spec, /selectTracksByFilenames\(TYPO_TRACK_FILENAMES\)/);
+  assert.match(spec, /setAlbumArtist\(TYPO_ARTIST\)/);
+  assert.match(spec, /setAlbumArtist\(CORRECTED_ARTIST\)/);
+  assert.match(spec, /waitForSelectedArtistGallery\(CORRECTED_ARTIST/);
+  assert.match(spec, /readRuntimeSidebarArtistNames\(\)[\s\S]*?TYPO_ARTIST/);
+  assert.match(spec, /whilePostInFlight/);
+  assert.match(spec, /const visibleSuccessMessages = result\.notificationSamples/);
+  assert.match(spec, /expect\(visibleSuccessMessages\)\.toHaveLength\(1\)/);
+  for (const endpoint of [
+    '/status',
+    '/view-data?surface=albums',
+    '/album-details?album_key=',
+    '/utilities/cover-lookup/tasks/counts',
+    '/utilities/cover-lookup/start',
+  ]) {
+    assert.ok(spec.includes(endpoint), `Missing in-flight capacity probe for ${endpoint}`);
+  }
+  assert.match(spec, /method: 'post'[\s\S]*?authenticatedPagePost\(page, url/);
+  assert.match(spec, /authenticatedPageGet\(page, url/);
 });

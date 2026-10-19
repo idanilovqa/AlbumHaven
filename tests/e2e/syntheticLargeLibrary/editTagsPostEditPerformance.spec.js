@@ -3,10 +3,17 @@ import { performance } from 'node:perf_hooks';
 import { expect, test } from '../support/performanceFixtures.js';
 import { restoreDdtStudioRecordsFixture } from '../helpers/ddtStudioRecordsFixture.js';
 import {
+  authenticatedPageGet,
+  authenticatedPagePost,
+} from '../helpers/authenticatedPageRequest.js';
+import {
   expectTimingBudget,
   performanceTimingBudget,
 } from '../helpers/index.js';
-import { readGeneratedMp3AlbumTags } from '../helpers/physicalTagHelpers.js';
+import {
+  readGeneratedMp3AlbumTags,
+  readGeneratedMp3TagSnapshots,
+} from '../helpers/physicalTagHelpers.js';
 import {
   flattenAlbums,
   readRuntimeView,
@@ -22,6 +29,16 @@ const TEMPORARY_ALBUM_B = 'Студийные записи — performance B';
 const TRACK_FILENAME = '01. Студийная запись 1.mp3';
 const TRACK_TITLE = 'Студийная запись 1';
 const FIXTURE_YEAR = '1999';
+const TYPO_ARTIST = 'Ovderhead';
+const CORRECTED_ARTIST = 'Overhead';
+const TYPO_ALBUM = 'Telepathic Minds';
+const TYPO_TRACK_FILENAMES = Object.freeze([
+  '05. Студийная запись 5.mp3',
+  '06. Студийная запись 6.mp3',
+  '07. Студийная запись 7.mp3',
+  '08. Студийная запись 8.mp3',
+  '12. Студийная запись 12.mp3',
+]);
 const TREE_FILTER_QUERY = 'Ар';
 const TREE_ARTIST = 'Ария';
 const ARTIST_VIEW_URL = `/?surface=albums&artist=${encodeURIComponent(ARTIST)}`;
@@ -46,6 +63,60 @@ async function expectPhysicalAlbum(expectedAlbum) {
   expect(editedTrack.albumValues).toEqual([expectedAlbum]);
 }
 
+async function expectPhysicalStructuralRename() {
+  const snapshots = await readGeneratedMp3TagSnapshots({
+    artist: ARTIST,
+    album: ORIGINAL_ALBUM,
+  });
+  for (const filename of TYPO_TRACK_FILENAMES) {
+    const track = snapshots.find((candidate) => candidate.filename === filename);
+    expect(track, `Expected physical fixture track ${filename}.`).toBeTruthy();
+    expect(track.frames.TALB).toEqual([TYPO_ALBUM]);
+    expect(track.frames.TPE1).toEqual([CORRECTED_ARTIST]);
+    expect(track.frames.TPE2).toEqual([CORRECTED_ARTIST]);
+  }
+}
+
+async function probeEditTagsRequestCapacity(page, album) {
+  const albumKey = String(
+    album?.request_key || album?.identity_key || album?.key || '',
+  ).trim();
+  const requests = [
+    { name: 'status', url: '/status' },
+    { name: 'search', url: `/view-data?surface=albums&q=${encodeURIComponent(TYPO_ARTIST)}` },
+    { name: 'home', url: '/view-data?surface=albums' },
+    { name: 'artist-tree', url: `/view-data?surface=albums&artist=${encodeURIComponent(TREE_ARTIST)}` },
+    { name: 'album-details', url: `/album-details?album_key=${encodeURIComponent(albumKey)}` },
+    { name: 'notifications', url: '/utilities/cover-lookup/tasks/counts' },
+    {
+      name: 'cover-lookup',
+      url: '/utilities/cover-lookup/start',
+      method: 'post',
+      data: { album, manual_urls: [] },
+    },
+  ];
+  const results = await Promise.all(requests.map(async ({ name, url, method = 'get', data }) => {
+    const startedAt = performance.now();
+    const response = method === 'post'
+      ? await authenticatedPagePost(page, url, { data, timeout: 30000 })
+      : await authenticatedPageGet(page, url, { timeout: 30000 });
+    return {
+      durationMs: performance.now() - startedAt,
+      name,
+      ok: response.ok(),
+      status: response.status(),
+    };
+  }));
+  for (const result of results) {
+    expect(result.ok, `${result.name} returned HTTP ${result.status} during Edit Tags.`).toBe(true);
+    expect(
+      result.durationMs,
+      `${result.name} took ${result.durationMs.toFixed(1)} ms during Edit Tags.`,
+    ).toBeLessThanOrEqual(1200);
+  }
+  return results;
+}
+
 test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
   test('repeated saves leave navigation responsive', async ({
     appBarActions,
@@ -59,13 +130,13 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
     tagEditorActions,
     trackModalActions,
   }) => {
-    test.setTimeout(480000);
     requirePostgresRuntimeEnv('the repeated Edit Tags post-edit benchmark');
 
     const saveTimingsMs = [];
     const metrics = {};
     let treeArtist = '';
     let treeAlbum = '';
+    let typoAlbumRequest = null;
 
     try {
       await stepLogger.step('Restore the private DDT media copy and open the source album', async () => {
@@ -77,6 +148,97 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         }
         await galleryActions.goto('/');
         await waitForPostgresBrowseWarmRoot(page, galleryActions, navigationPanelActions);
+        await galleryActions.goto(ARTIST_VIEW_URL);
+        await galleryActions.waitForSelectedArtistGallery(ARTIST, { timeout: 60000 });
+        await galleryActions.selectAlbumDetailsByIdentity({
+          artist: ARTIST,
+          album: ORIGINAL_ALBUM,
+          year: FIXTURE_YEAR,
+        });
+        await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
+      });
+
+      await stepLogger.step('Create the isolated five-track typo-artist fixture', async () => {
+        await trackModalActions.openTagEditor();
+        await tagEditorActions.waitForOpen({ expectedTrackCount: 16 });
+        await tagEditorActions.selectTracksByFilenames(TYPO_TRACK_FILENAMES);
+        await tagEditorActions.setArtist(TYPO_ARTIST);
+        await tagEditorActions.setAlbumArtist(TYPO_ARTIST);
+        await tagEditorActions.setAlbumName(TYPO_ALBUM);
+        await tagEditorActions.applyAndWaitForTerminalSavedResponse({ timeout: 60000 });
+        await trackModalActions.close();
+        await galleryActions.waitForSelectedArtistGallery(TYPO_ARTIST, { timeout: 60000 });
+        await galleryActions.waitForAlbumVisibleUnderHeading(TYPO_ARTIST, TYPO_ALBUM, {
+          timeout: 60000,
+        });
+        const typoView = await readRuntimeView(page);
+        const typoAlbum = flattenAlbums(typoView.artist_groups)
+          .find((album) => String(album?.name || '').trim() === TYPO_ALBUM);
+        typoAlbumRequest = typoAlbum;
+        const typoAlbumRequestKey = String(
+          typoAlbum?.request_key || typoAlbum?.identity_key || typoAlbum?.key || '',
+        ).trim();
+        expect(typoAlbumRequestKey).not.toBe('');
+      });
+
+      await stepLogger.step('Correct the final typo artist and reconcile to its destination', async () => {
+        await galleryActions.clickAlbumDetailsByAlbumName(TYPO_ALBUM);
+        const typoSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
+        expect(typoSummary.trackRows).toBe(TYPO_TRACK_FILENAMES.length);
+        await trackModalActions.openTagEditor();
+        await tagEditorActions.waitForOpen({ expectedTrackCount: TYPO_TRACK_FILENAMES.length });
+        await tagEditorActions.selectTracksByFilenames(TYPO_TRACK_FILENAMES);
+        await tagEditorActions.setArtist(CORRECTED_ARTIST);
+        await tagEditorActions.setAlbumArtist(CORRECTED_ARTIST);
+        const startedAt = performance.now();
+        const result = await tagEditorActions.applyAndWaitForTerminalSavedResponse({
+          timeout: 60000,
+          async whilePostInFlight() {
+            const probes = await probeEditTagsRequestCapacity(page, typoAlbumRequest);
+            metrics.exactIncidentProbeMaxMs = Math.max(
+              ...probes.map((probe) => probe.durationMs),
+            );
+            metrics.exactIncidentProbes = probes;
+          },
+        });
+        const saveTimingMs = performance.now() - startedAt;
+        saveTimingsMs.push(saveTimingMs);
+        const visibleSuccessMessages = result.notificationSamples
+          .filter((sample) => sample.visible && SAVED_MESSAGE.test(sample.text));
+        expect(visibleSuccessMessages).toHaveLength(1);
+        expect(result.notificationSamples.some((sample) => (
+          sample.error || /Failed (?:to )?edit tags\./u.test(sample.text)
+        ))).toBe(false);
+        await expect(tagEditorActions.tagEditor.overlay).toBeHidden();
+        await expect(tagEditorActions.tagEditor.confirmOverlay).toBeHidden();
+        await expect(tagEditorActions.tagEditor.repairAlert).toBeHidden({ timeout: 60000 });
+        await trackModalActions.close();
+
+        await galleryActions.waitForSelectedArtistGallery(CORRECTED_ARTIST, { timeout: 60000 });
+        await galleryActions.waitForAlbumVisibleUnderHeading(CORRECTED_ARTIST, TYPO_ALBUM, {
+          timeout: 60000,
+        });
+        const destinationView = await readRuntimeView(page);
+        expect(destinationView.selected_artist).toBe(CORRECTED_ARTIST);
+        const sidebarArtists = await navigationPanelActions.readRuntimeSidebarArtistNames();
+        expect(sidebarArtists).toContain(CORRECTED_ARTIST);
+        expect(sidebarArtists).not.toContain(TYPO_ARTIST);
+        await expectPhysicalStructuralRename();
+        await editTagsPostEditLocalReport.recordTimingCheckpoint({
+          key: 'edit-tags-typo-artist-save',
+          label: 'Edit Tags typo-artist terminal save',
+          timingMs: saveTimingMs,
+          details: { destinationArtist: CORRECTED_ARTIST, saveTaskId: result.saveTaskId },
+        });
+        await editTagsPostEditLocalReport.recordTimingCheckpoint({
+          key: 'edit-tags-typo-artist-concurrent-probe-max',
+          label: 'Edit Tags typo-artist concurrent request maximum',
+          timingMs: metrics.exactIncidentProbeMaxMs,
+          details: { probes: metrics.exactIncidentProbes },
+        });
+      });
+
+      await stepLogger.step('Return to the DDT source album for repeated-save coverage', async () => {
         await galleryActions.goto(ARTIST_VIEW_URL);
         await galleryActions.waitForSelectedArtistGallery(ARTIST, { timeout: 60000 });
         await galleryActions.selectAlbumDetailsByIdentity({

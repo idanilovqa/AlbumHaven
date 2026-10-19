@@ -2449,6 +2449,222 @@ test('updateOpenTrackModalAfterTagEdit keeps source aliases on the remaining alb
   assert.deepEqual(destinationCache.aliases, []);
 });
 
+test('reconcileCommittedTagEditDestination selects the committed artist and removes only confirmed orphans', async () => {
+  const context = loadHelpers();
+  const destinationAlbum = {
+    key: 'album:telepathic-minds',
+    identity_key: 'album:telepathic-minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac' }],
+  };
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Ovderhead',
+    artists_sidebar: [
+      { artist: 'Ovderhead', count: 1 },
+      { artist: 'Overhead', count: 1 },
+      { artist: 'Retained Artist', count: 1 },
+    ],
+    artist_groups: [{ artist: 'Ovderhead', albums: [] }],
+    primary_artist_groups: [{ artist: 'Ovderhead', albums: [] }],
+    family_artist_groups: [],
+  };
+  const requests = [];
+  const historyCalls = [];
+  context.buildApiUrl = (view) => {
+    requests.push(JSON.parse(JSON.stringify(view)));
+    return `/api/library?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  };
+  context.fetchAndRender = async (_url, _push, options) => {
+    assert.equal(options.restartIfSameUrl, true);
+    assert.equal(options.shouldApplyResponse(), true);
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artists_sidebar: [
+        { artist: 'Overhead', count: 1 },
+        { artist: 'Retained Artist', count: 1 },
+      ],
+      artist_groups: [{ artist: 'Overhead', albums: [destinationAlbum] }],
+      primary_artist_groups: [{ artist: 'Overhead', albums: [destinationAlbum] }],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+  context.buildUrl = (view) => `/albums?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.window.history = {
+    state: { retained: true },
+    replaceState(snapshot, _unused, url) {
+      historyCalls.push({ snapshot, url });
+    },
+  };
+
+  const reconciled = await context.reconcileCommittedTagEditDestination({
+    ok: true,
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_key: destinationAlbum.identity_key,
+    orphaned_source_artists: ['Ovderhead'],
+    updated_albums: [destinationAlbum],
+  }, {
+    shouldApplyResponse: () => true,
+  });
+
+  assert.equal(reconciled, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].selected_artist, 'Overhead');
+  assert.equal(context.state.view.selected_artist, 'Overhead');
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Overhead', 'Retained Artist'],
+  );
+  assert.equal(context.collectVisibleAlbumsUnique()[0].identity_key, destinationAlbum.identity_key);
+  assert.equal(historyCalls.length, 1);
+  assert.equal(historyCalls[0].url, '/albums?artist=Overhead');
+});
+
+test('reconcileCommittedTagEditDestination keeps a retained source artist', async () => {
+  const context = loadHelpers();
+  const destinationAlbum = {
+    identity_key: 'album:telepathic-minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'track.flac' }],
+  };
+  context.state.view.artists_sidebar = [
+    { artist: 'Ovderhead', count: 1 },
+    { artist: 'Overhead', count: 1 },
+  ];
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.buildUrl = () => '/albums?artist=Overhead';
+  context.window.history = { state: {}, replaceState() {} };
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artists_sidebar: [
+        { artist: 'Ovderhead', count: 1 },
+        { artist: 'Overhead', count: 1 },
+      ],
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_key: destinationAlbum.identity_key,
+    orphaned_source_artists: [],
+  }), true);
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Ovderhead', 'Overhead'],
+  );
+});
+
+test('reconcileCommittedTagEditDestination cannot overwrite superseding navigation', async () => {
+  const context = loadHelpers();
+  context.state.view.selected_artist = 'Newer Navigation';
+  let refreshCount = 0;
+  context.fetchAndRender = async () => {
+    refreshCount += 1;
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_key: 'album:telepathic-minds',
+    orphaned_source_artists: ['Ovderhead'],
+  }, {
+    shouldApplyResponse: () => false,
+  }), false);
+  assert.equal(refreshCount, 0);
+  assert.equal(context.state.view.selected_artist, 'Newer Navigation');
+});
+
+test('watchSaveTask routes a committed typo rename through destination reconciliation', async () => {
+  const context = loadHelpers();
+  const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';
+  const originalAlbum = {
+    key: 'album:telepathic-minds-old',
+    name: 'Telepathic Minds',
+    album_artist: 'Ovderhead',
+    tracks: [{ path: trackPath }],
+  };
+  const destinationAlbum = {
+    key: 'album:telepathic-minds',
+    identity_key: 'album:telepathic-minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: trackPath }],
+  };
+  const sourceGroup = { artist: 'Ovderhead', albums: [originalAlbum] };
+  Object.assign(context.state, {
+    ui: { viewStateRevision: 7 },
+    view: {
+      ...context.state.view,
+      selected_artist: 'Ovderhead',
+      artists_sidebar: [
+        { artist: 'Ovderhead', count: 1 },
+        { artist: 'Overhead', count: 1 },
+      ],
+      artist_groups: [sourceGroup],
+      primary_artist_groups: [sourceGroup],
+      family_artist_groups: [],
+    },
+  });
+  const destinationRequests = [];
+  context.buildApiUrl = (view) => {
+    destinationRequests.push(JSON.parse(JSON.stringify(view)));
+    return `/api/library?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  };
+  context.buildUrl = (view) => `/albums?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.window.history = { state: {}, replaceState() {} };
+  context.fetchAndRender = async (_url, _push, options) => {
+    if (!options.shouldApplyResponse()) return false;
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artists_sidebar: [{ artist: 'Overhead', count: 1 }],
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('typo-rename-task', {
+    originalAlbum,
+    originatingViewStateRevision: 7,
+    tagEdits: { [trackPath]: { artist: 'Overhead', album_artist: 'Overhead' } },
+    terminalPayload: {
+      ok: true,
+      save_task_id: 'typo-rename-task',
+      save_task_status: 'completed',
+      requires_view_refresh: true,
+      destination_artist: 'Overhead',
+      destination_album_key: destinationAlbum.identity_key,
+      orphaned_source_artists: ['Ovderhead'],
+      updated_albums: [destinationAlbum],
+    },
+  });
+
+  assert.equal(destinationRequests.length, 1);
+  assert.equal(destinationRequests[0].selected_artist, 'Overhead');
+  assert.equal(context.state.view.selected_artist, 'Overhead');
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Overhead'],
+  );
+});
+
 test('watchSaveTask reconciles an open destination modal locally after a structural merge', async () => {
   const context = loadHelpers();
   const destinationTrackPath = 'D:\\Synthetic Music\\Merge Artist\\Destination\\01 Existing.mp3';
@@ -3824,6 +4040,10 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
         ok: true,
         status: 'completed',
         requires_view_refresh: true,
+          reconciliation_pending: true,
+          warnings: [
+            'Canonical album reconciliation unavailable after persistence committed.',
+          ],
         updated_albums: [canonicalAlbum],
       };
     },
@@ -3872,15 +4092,15 @@ test('watchSaveTask adopts one canonical terminal payload without a second view 
   assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [
     ['Tag changes queued. Finalizing library view...', 'info', null],
     [
-      'Saved changes to 1 track in “New Album”.',
-      'success',
-      2000,
-      { title: 'Tags updated', dismissible: false },
+        'Saved changes to 1 track in “New Album”. Canonical album reconciliation unavailable after persistence committed.',
+        'warning',
+        8000,
+        { title: 'Tags saved with warning', dismissible: true },
     ],
   ]);
 });
 
-test('watchSaveTask reconciles a provided terminal payload without polling or emitting async success', async () => {
+test('watchSaveTask reconciles a provided terminal payload without polling and emits one final success', async () => {
   const context = loadHelpers();
   const trackPath = 'D:\\Synthetic Music\\Terminal Artist\\Old Album\\01 Track.mp3';
   const originalAlbum = {
@@ -3930,6 +4150,7 @@ test('watchSaveTask reconciles a provided terminal payload without polling or em
     originatingViewStateRevision: 7,
     tagEditMutationClaim: mutationClaim,
     tagEdits: { [trackPath]: { album: 'New Album', year: '2026' } },
+    tagEditAlert: { completionMessage: 'Saved changes to 1 track in “Old Album”.' },
     problematicMutationOriginKey: '',
     terminalPayload: {
       ok: true,
@@ -3945,7 +4166,12 @@ test('watchSaveTask reconciles a provided terminal payload without polling or em
   assert.equal(context.state.view.artist_groups[0].albums[0].key, canonicalAlbum.key);
   assert.equal(invalidatedAlbums.includes(originalAlbum), true);
   assert.equal(invalidatedAlbums.includes(canonicalAlbum), true);
-  assert.deepEqual(alerts, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [[
+    'Saved changes to 1 track in “Old Album”.',
+    'success',
+    2000,
+    { title: 'Tags updated', dismissible: false },
+  ]]);
   assert.deepEqual(settledClaims, [mutationClaim]);
 });
 

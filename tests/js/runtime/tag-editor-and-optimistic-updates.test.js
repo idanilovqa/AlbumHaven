@@ -1962,7 +1962,7 @@ test('completed refresh-required response gives its terminal payload to canonica
   await context.confirmManualTagEdit();
 
   assert.deepEqual(
-    events.slice(-2).map((event) => JSON.parse(JSON.stringify(event))),
+    events.slice(-1).map((event) => JSON.parse(JSON.stringify(event))),
     [
       [
         'watch',
@@ -1970,10 +1970,83 @@ test('completed refresh-required response gives its terminal payload to canonica
         { [trackPath]: { title: 'Committed' } },
         terminalPayload,
       ],
-      ['alert', 'Saved changes to 1 track in “Album”.'],
     ],
   );
   assert.deepEqual(settledClaims, [mutationClaim]);
+});
+
+test('completed tag edit with reconciliation warning confirms save without a frozen or failure alert', async () => {
+  const trackPath = 'C:\\Music\\Ovderhead\\Telepathic Minds\\01.flac';
+  const album = {
+    key: 'album:telepathic-minds-old',
+    name: 'Telepathic Minds',
+    album_artist: 'Ovderhead',
+    tracks: [{ path: trackPath, artist: 'Ovderhead', album_artist: 'Ovderhead' }],
+  };
+  const tagEditorOverlay = { hidden: false };
+  const confirmOverlay = { hidden: false };
+  const alerts = [];
+  const terminalPayload = {
+    ok: true,
+    save_task_id: 'completed-warning-task',
+    save_task_status: 'completed',
+    requires_view_refresh: true,
+    reconciliation_pending: true,
+    warnings: ['Canonical album reconciliation unavailable after persistence committed.'],
+    destination_artist: 'Overhead',
+    destination_album_key: 'album:telepathic-minds',
+    orphaned_source_artists: ['Ovderhead'],
+    updated_albums: [],
+  };
+  const context = loadHelper([album], {
+    document: {
+      body: { classList: { add() {}, remove() {} } },
+      getElementById() { return null; },
+    },
+    getTagEditConfirmElements() { return { overlay: confirmOverlay }; },
+    getTagEditorElements() { return { overlay: tagEditorOverlay }; },
+    buildChangedTagEditorUpdates() {
+      return { [trackPath]: { artist: 'Overhead', album_artist: 'Overhead' } };
+    },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return [album]; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    claimTagEditViewMutation() { return {}; },
+    tagEditViewMutationStillOwnsResources() { return true; },
+    settleTagEditViewMutation() {},
+    releaseFailedTagEditViewMutation() {},
+    async watchSaveTask() {
+      alerts.push([
+        'Saved changes to 1 track in “Telepathic Minds”. Canonical album reconciliation unavailable after persistence committed.',
+        'warning',
+        8000,
+        { title: 'Tags saved with warning', dismissible: true },
+      ]);
+    },
+    async fetch() {
+      return {
+        ok: true,
+        async json() { return terminalPayload; },
+      };
+    },
+  });
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(tagEditorOverlay.hidden, true);
+  assert.equal(confirmOverlay.hidden, true);
+  assert.equal(alerts.some((alert) => alert[1] === 'error'), false);
+  assert.equal(alerts.filter((alert) => alert[1] === 'warning').length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts.at(-1))), [
+    'Saved changes to 1 track in “Telepathic Minds”. Canonical album reconciliation unavailable after persistence committed.',
+    'warning',
+    8000,
+    { title: 'Tags saved with warning', dismissible: true },
+  ]);
 });
 
 test('completed loose-track membership edit refreshes canonically even when finalized albums are returned', async () => {
@@ -2051,8 +2124,8 @@ test('completed loose-track membership edit refreshes canonically even when fina
     'Album Details edits must omit the Problematic Files origin flag entirely.',
   );
   assert.deepEqual(events.slice(-2), [
+    ['alert', 'Updating 1 track in “Non-album tracks”.'],
     ['watch', 'completed-loose-membership-task'],
-    ['alert', 'Saved changes to 1 track in “Non-album tracks”.'],
   ]);
 
   closedModal.hidden = false;

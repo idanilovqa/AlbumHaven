@@ -952,12 +952,19 @@ async function confirmManualTagEdit() {
     ) {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
-    if (responseIsTerminal) {
+    if (responseIsTerminal && !completedResponseNeedsCanonicalRefresh) {
+      const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+        .map((warning) => String(warning || '').trim())
+        .filter(Boolean);
+      const hasCompletionWarning = completionWarnings.length > 0;
       showRepairAlert(
-        tagEditAlert.completionMessage,
-        'success',
-        2000,
-        { title: 'Tags updated', dismissible: false },
+        [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
+        hasCompletionWarning ? 'warning' : 'success',
+        hasCompletionWarning ? 8000 : 2000,
+        {
+          title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+          dismissible: hasCompletionWarning,
+        },
       );
     }
     if (responseIsTerminal) {

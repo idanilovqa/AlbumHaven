@@ -1897,6 +1897,85 @@ async function refreshLoadedProblematicFilesAfterSaveCompletion() {
   return true;
 }
 
+async function reconcileCommittedTagEditDestination(terminalPayload, context = {}) {
+  const status = String(
+    terminalPayload?.status || terminalPayload?.save_task_status || '',
+  ).trim().toLowerCase();
+  const destinationArtist = String(terminalPayload?.destination_artist || '').trim();
+  const destinationAlbumKey = String(
+    terminalPayload?.destination_album_key || '',
+  ).trim();
+  const shouldApplyResponse = typeof context.shouldApplyResponse === 'function'
+    ? context.shouldApplyResponse
+    : () => true;
+  if (status !== 'completed' || !destinationArtist || !shouldApplyResponse()) return false;
+
+  const activeQuery = String(state.view?.query || '').trim();
+  const destinationView = {
+    ...state.view,
+    selected_artist: destinationArtist,
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    ...(activeQuery ? {
+      search_context: {
+        ...(state.view?.search_context || {}),
+        selected_artist: destinationArtist,
+        selected_artist_source: 'requested_artist',
+      },
+    } : {}),
+  };
+  const refreshed = await fetchAndRender(
+    buildApiUrl(destinationView, { rootFullPayload: true }),
+    false,
+    {
+      ...(context.renderOptions || {}),
+      restartIfSameUrl: true,
+      shouldApplyResponse,
+    },
+  );
+  if (
+    !refreshed
+    || !shouldApplyResponse()
+    || String(state.view?.selected_artist || '').trim() !== destinationArtist
+  ) return false;
+
+  if (destinationAlbumKey) {
+    const destinationVisible = collectVisibleAlbumsUnique().some((album) => (
+      getAlbumRuntimeIdentityAliases(album).has(destinationAlbumKey)
+    ));
+    if (!destinationVisible) return false;
+  }
+
+  const orphanedArtists = new Set(
+    (Array.isArray(terminalPayload?.orphaned_source_artists)
+      ? terminalPayload.orphaned_source_artists
+      : [])
+      .map((artist) => String(artist || '').trim().toLocaleLowerCase())
+      .filter(Boolean),
+  );
+  if (orphanedArtists.size) {
+    state.view.artists_sidebar = (state.view.artists_sidebar || []).filter((item) => (
+      !orphanedArtists.has(String(item?.artist || '').trim().toLocaleLowerCase())
+    ));
+    for (const key of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
+      state.view[key] = (state.view[key] || []).filter((group) => (
+        !orphanedArtists.has(
+          String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase(),
+        )
+      ));
+    }
+  }
+  if (typeof buildUrl === 'function' && window?.history?.replaceState) {
+    window.history.replaceState(
+      { ...window.history.state, ...state.view },
+      '',
+      buildUrl(state.view),
+    );
+  }
+  return true;
+}
+
 async function watchSaveTask(taskId, context = {}) {
   const normalizedId = String(taskId || '').trim();
   if (!normalizedId) return;
@@ -2023,6 +2102,23 @@ async function watchSaveTask(taskId, context = {}) {
       if (data.status === 'completed') {
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
+        let destinationViewReconciled = false;
+        if (data.destination_artist && canReconcileOriginView()) {
+          try {
+            destinationViewReconciled = await reconcileCommittedTagEditDestination(
+              data,
+              {
+                renderOptions: currentViewRenderOptions(),
+                shouldApplyResponse: () => !mutationWasSuperseded(),
+              },
+            );
+          } catch (destinationError) {
+            console.warn(
+              '[AlbumHaven][SaveTask] Saved tags, but failed to open the committed destination artist.',
+              destinationError,
+            );
+          }
+        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -2060,7 +2156,7 @@ async function watchSaveTask(taskId, context = {}) {
           && !finalizedAlbumsCoverOriginalMembership
         );
         let modalUpdatedAlbums = finalizedAlbums;
-        let viewRefreshed = false;
+        let viewRefreshed = destinationViewReconciled;
         let viewReconciledLocally = false;
         const currentViewContainsAffectedAlbum = () => {
           const affectedAlbums = [originalAlbum, ...finalizedAlbums].filter(Boolean);
@@ -2079,6 +2175,8 @@ async function watchSaveTask(taskId, context = {}) {
         };
         if (data.requires_view_refresh) {
           if (
+            !viewRefreshed
+            &&
             canReconcileOriginView()
             && finalizedAlbums.length
             && (
@@ -2110,6 +2208,8 @@ async function watchSaveTask(taskId, context = {}) {
             }
           }
           if (
+            !viewRefreshed
+            &&
             (
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
@@ -2288,20 +2388,25 @@ async function watchSaveTask(taskId, context = {}) {
           await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
         }
         restoreOwnedAbsoluteScroll();
-        if (!consumesProvidedTerminalPayload) {
-          const completionMessage = String(
-            context.tagEditAlert?.completionMessage || '',
-          ).trim();
-          if (completionMessage) {
-            showRepairAlert(
-              completionMessage,
-              'success',
-              2000,
-              { title: 'Tags updated', dismissible: false },
-            );
-          } else {
-            showRepairAlert('Library view updated from saved files.', 'success', 1000);
-          }
+        const completionMessage = String(
+          context.tagEditAlert?.completionMessage || '',
+        ).trim();
+        if (completionMessage) {
+          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+            .map((warning) => String(warning || '').trim())
+            .filter(Boolean);
+          const hasCompletionWarning = completionWarnings.length > 0;
+          showRepairAlert(
+            [completionMessage, ...completionWarnings].join(' '),
+            hasCompletionWarning ? 'warning' : 'success',
+            hasCompletionWarning ? 8000 : 2000,
+            {
+              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+              dismissible: hasCompletionWarning,
+            },
+          );
+        } else if (!consumesProvidedTerminalPayload) {
+          showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
         settleTagEditViewMutation(tagEditMutationClaim);
         return;

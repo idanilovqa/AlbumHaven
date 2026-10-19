@@ -66,6 +66,8 @@
   <script src="{{ url_for('static', filename='js/client-layout-bootstrap.js') }}?v={{ runtime_asset_version }}"></script>
   <script>AlbumHavenClientLayoutBootstrap.capture({ defaultCollapsed: {{ (shell_rail.default_collapsed | default(false)) | tojson }} });</script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-layout.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/bottom-sheet.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/artist-page.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="/static/css/startup-progress.css?v={{ runtime_asset_version | default(app_version | default('')) }}">
 </head>
 <body>
@@ -81,14 +83,17 @@
   {% set shell_bottom_player = shell_slots.bottom_player if shell_slots and shell_slots.bottom_player else {} %}
   {% set discovery_center_page = bootstrap_payload.initial_view.discovery_center if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.discovery_center else {} %}
   {% from "partials/app-bar.html" import app_bar with context %}
-  {% from "partials/search-input.html" import search_input %}
+  {% from "partials/search-input.html" import search_input, search_filter_icon %}
   <template id="native-search-field-template">{{ search_input("native-search-template-input", name="", placeholder="", label="Search", button_type="button") }}</template>
   {% from "partials/button.html" import ui_button, action_button %}
   {% from "partials/playback-control-cluster.html" import playback_control_cluster %}
   <div class="layout shell-layout" id="app-shell" data-private-ui-context="{{ private_ui_context or '' }}" data-native-account-id="{{ home_actor.account_id if home_actor and home_actor.is_authenticated else '' }}" data-native-library-id="{{ home_actor.current_library_id if home_actor and home_actor.is_authenticated and home_actor.current_library_id is not none else '' }}" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
     {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/" data-shell-horizontal-align="gallery-body">
-          {{ search_input("search-input", value=query, suggestions_id="recent-search-popover") }}
+          {% call(action_class) search_input("search-input", value=query, suggestions_id="recent-search-popover", suggestions_label="Search suggestions") %}
+            <button class="{{ action_class }}" type="button" id="search-advanced-toggle" aria-label="Advanced filters" title="Advanced filters" aria-haspopup="dialog" aria-controls="search-advanced-panel" aria-expanded="false">{{ search_filter_icon() }}</button>
+          {% endcall %}
+          <div id="search-advanced-panel" class="gallery-anchored-menu search-advanced-panel" role="dialog" aria-labelledby="search-advanced-title" data-anchored-surface="search-filters" hidden></div>
           {{ action_button('Create a Library Mix', icon='add', title='Library Mix', disabled=not (home_actor and home_actor.is_authenticated), attributes={'data-library-mix-open': '1'}) }}
           {% if effective_selected_artist %}<input type="hidden" name="artist" value="{{ effective_selected_artist }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_scope %}<input type="hidden" name="gallery_scope" value="{{ bootstrap_payload.initial_view.gallery_scope }}">{% endif %}
@@ -176,6 +181,7 @@
         </section>
       </section>
       <div class="albums-scroll" id="albums-scroll" hidden aria-hidden="true">
+        <section id="artist-page-root" hidden inert aria-label="Artist"></section>
         <div class="albums-viewport" id="albums-viewport">
           <div class="gallery-focus-glow" id="gallery-focus-glow" hidden aria-hidden="true"></div>
           <div id="albums-spacer-top"></div>
@@ -201,6 +207,7 @@
       <section class="gallery-bar" data-gallery-bar data-gallery-bar-instance="gallery" aria-label="Gallery controls"{% if query and not effective_selected_artist %} hidden{% endif %}>
           <div class="gallery-bar__context"><div class="gallery-bar__title">{% call action_button('Open library navigation', id='mobile-library-button', class_name='mobile-bar-action', attributes={'data-toggle-artists-drawer': '1', 'aria-controls': 'shell-navigation-rail', 'aria-expanded': 'false'}) %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>{% endcall %}<span data-gallery-context-name>Gallery</span><span class="gallery-bar__artist-divider gallery-divider__line" data-gallery-context-artist-divider hidden></span><span class="gallery-bar__artist-total" data-gallery-context-inline-total hidden></span></div><span class="gallery-bar__summary" data-gallery-context-summary>{{ bootstrap_payload.initial_view.artist_count | default(0) }} artists · {{ bootstrap_payload.initial_view.album_count | default(0) }} albums</span></div>
         <div class="gallery-bar__actions">
+          <span data-artist-page-action-slot="loved" hidden></span>
           <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family"{% if not effective_selected_artist %} hidden{% endif %} aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
 
           <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster>
@@ -256,6 +263,7 @@
 
 
       <div class="albums-scroll" id="albums-scroll" {% if show_initial_library_loader %}hidden{% endif %}>
+        <section id="artist-page-root" hidden inert aria-label="Artist"></section>
         <div class="albums-viewport" id="albums-viewport" data-shell-horizontal-align="gallery-body">
           <div class="gallery-focus-glow" id="gallery-focus-glow" hidden aria-hidden="true"></div>
           <div id="albums-spacer-top"></div>

@@ -12,7 +12,7 @@
 </svg>
 {%- endmacro %}
 
-{% macro search_input(input_id, name='q', value='', placeholder='Search artist, album, or track', label='Search music', button_label='Search', button_type='submit', suggestions_id=none) -%}
+{% macro search_input(input_id, name='q', value='', placeholder='Search artist, album, or track', label='Search music', button_label='Search', button_type='submit', suggestions_id=none, suggestions_label='Recent searches') -%}
 <div class="search-input-wrap search-field">
   <div class="search-field-control ui-input-action">
     <input type="search" name="{{ name }}" id="{{ input_id }}" value="{{ value }}" placeholder="{{ placeholder }}" aria-label="{{ label }}" autocomplete="off"{% if suggestions_id %} role="combobox" aria-autocomplete="list" aria-controls="{{ suggestions_id }}" aria-expanded="false"{% endif %}>
@@ -33,6 +33,6 @@
       {% endif %}
     </span>
   </div>
-  {% if suggestions_id %}<div class="recent-search-popover" id="{{ suggestions_id }}" role="listbox" aria-label="Recent searches" hidden></div>{% endif %}
+  {% if suggestions_id %}<div class="recent-search-popover" id="{{ suggestions_id }}" role="listbox" aria-label="{{ suggestions_label }}" hidden></div>{% endif %}
 </div>
 {%- endmacro %}

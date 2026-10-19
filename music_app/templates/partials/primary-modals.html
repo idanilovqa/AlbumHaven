@@ -90,6 +90,8 @@
 
   <div class="track-modal" id="track-modal" hidden>
     <div class="track-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="track-modal-title">
+      <div class="album-sheet-handle" id="track-modal-sheet-handle" hidden aria-hidden="true"><span></span></div>
+      {% call action_button('Expand album sheet', class_name='album-sheet-toggle', id='track-modal-sheet-toggle', attributes={'hidden': 'hidden', 'aria-expanded': 'false', 'aria-controls': 'track-modal-list'}) %}<span aria-hidden="true">↕</span>{% endcall %}
       <div class="track-modal-header">
         <div class="track-modal-title-wrap">
           <h3 id="track-modal-title">Album</h3>

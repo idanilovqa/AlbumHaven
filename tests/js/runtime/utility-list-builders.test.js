@@ -2524,6 +2524,52 @@ test('reconcileCommittedTagEditDestination selects the committed artist and remo
   assert.equal(historyCalls[0].url, '/albums?artist=Overhead');
 });
 
+test('reconcileCommittedTagEditDestination inserts a newly committed artist into a stale sidebar', async () => {
+  const context = loadHelpers();
+  const destinationAlbum = {
+    album_id: 14712,
+    identity_key: 'overhead::telepathic minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Overhead',
+    tracks: [{ path: 'D:\\Synthetic Music\\Overhead\\Telepathic Minds\\01.flac' }],
+  };
+  context.state.view = {
+    ...context.state.view,
+    selected_artist: 'Ovderhead',
+    artists_sidebar: [
+      { artist: 'Ovderhead', count: 1 },
+      { artist: 'Retained Artist', count: 1 },
+    ],
+  };
+  context.buildApiUrl = () => '/api/library?artist=Overhead';
+  context.buildUrl = () => '/albums?artist=Overhead';
+  context.window.history = { state: {}, replaceState() {} };
+  context.fetchAndRender = async () => {
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    return true;
+  };
+
+  assert.equal(await context.reconcileCommittedTagEditDestination({
+    status: 'completed',
+    destination_artist: 'Overhead',
+    destination_album_id: 14712,
+    destination_album_key: destinationAlbum.identity_key,
+    orphaned_source_artists: ['Ovderhead'],
+  }), true);
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Overhead', 'Retained Artist'],
+  );
+  assert.equal(context.state.view.artists_sidebar[0].count, 1);
+});
+
 test('reconcileCommittedTagEditDestination accepts the destination album after its key is canonicalized', async () => {
   const context = loadHelpers();
   const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';

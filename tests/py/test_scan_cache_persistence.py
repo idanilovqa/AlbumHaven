@@ -1562,6 +1562,46 @@ def test_structural_album_edit_scopes_selection_and_completeness_to_active_track
     assert sql.count("::boolean, false ) is false") >= 2
 
 
+def test_structural_album_artist_rename_updates_retained_album_owner():
+    from music_app.services import scan_cache_persistence
+
+    sql = _normalized_sql(
+        scan_cache_persistence._persist_structural_album_tag_edit_sql()
+    )
+    destination_artist_position = sql.index("inserted_destination_artist as (")
+    renamed_source_position = sql.index("renamed_source_album as (")
+    inserted_destination_position = sql.index("inserted_destination_album as (")
+    destination_artist_sql = sql[destination_artist_position:renamed_source_position]
+    renamed_source_sql = sql[renamed_source_position:inserted_destination_position]
+
+    assert destination_artist_position < renamed_source_position
+    assert "input_path_count" not in destination_artist_sql
+    assert "source_album_track_files" not in destination_artist_sql
+    assert "artist_id = (select id from inserted_destination_artist)" in renamed_source_sql
+    assert "%(destination_artist_metadata)s::jsonb" in renamed_source_sql
+    assert "updated_renamed_album_owner as (" in renamed_source_sql
+    assert "featured_kind = 'owner'" in renamed_source_sql
+
+
+def test_structural_album_artist_rename_resolves_each_track_artist():
+    from music_app.services import scan_cache_persistence
+
+    sql = _normalized_sql(
+        scan_cache_persistence._persist_structural_album_tag_edit_sql()
+    )
+
+    assert "track_artist_key text" in sql
+    assert "track_artist_name text" in sql
+    assert "inserted_track_artists as (" in sql
+    assert "returning library.local_artists.id, library.local_artists.artist_key" in sql
+    assert "resolved_track_artists as materialized (" in sql
+    assert (
+        "artist_id = ( select resolved_track_artists.id "
+        "from resolved_track_artists where resolved_track_artists.artist_key = "
+        "selected_track_files.track_artist_key )"
+    ) in sql
+
+
 @pytest.mark.parametrize("canonical_origin,canonical_provenance", [
     ("automatic", None), ("user", "explicit"),
 ])

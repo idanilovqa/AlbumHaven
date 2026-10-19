@@ -1961,6 +1961,32 @@ async function reconcileCommittedTagEditDestination(terminalPayload, context = {
     if (!destinationVisible) return false;
   }
 
+  const destinationSidebarKey = destinationArtist.toLocaleLowerCase();
+  const sidebarArtists = Array.isArray(state.view?.artists_sidebar)
+    ? state.view.artists_sidebar
+    : [];
+  if (!sidebarArtists.some((item) => (
+    String(item?.artist || '').trim().toLocaleLowerCase() === destinationSidebarKey
+  ))) {
+    const destinationGroup = [
+      ...(state.view?.primary_artist_groups || []),
+      ...(state.view?.artist_groups || []),
+    ].find((group) => (
+      String(group?.artist || group?.artist_display || '').trim().toLocaleLowerCase()
+        === destinationSidebarKey
+    ));
+    const albumCount = Number(destinationGroup?.album_count || destinationGroup?.count || 0)
+      || Math.max(1, Array.isArray(destinationGroup?.albums) ? destinationGroup.albums.length : 0);
+    state.view.artists_sidebar = [
+      ...sidebarArtists,
+      { artist: destinationArtist, count: albumCount },
+    ].sort((left, right) => String(left?.artist || '').localeCompare(
+      String(right?.artist || ''),
+      undefined,
+      { sensitivity: 'base' },
+    ));
+  }
+
   const orphanedArtists = new Set(
     (Array.isArray(terminalPayload?.orphaned_source_artists)
       ? terminalPayload.orphaned_source_artists

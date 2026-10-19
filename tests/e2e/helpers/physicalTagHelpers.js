@@ -83,10 +83,11 @@ export async function readGeneratedMp3AlbumTags({ artist, album, allowedProfiles
   });
 }
 
-export async function readGeneratedMp3TagSnapshots({ artist, album }) {
+export async function readGeneratedMp3TagSnapshots({ artist, album, allowedProfiles }) {
   return runGeneratedMp3TagScript({
     artist,
     album,
+    allowedProfiles,
     script: READ_COMPLETE_TAG_SNAPSHOTS_SCRIPT,
   });
 }

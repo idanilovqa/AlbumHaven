@@ -1210,6 +1210,16 @@ class PostgresScanCacheAdapter:
         input_rows = [
             {
                 "private_path": path,
+                "track_artist_key": _key(
+                    updated_entries[path].get("artist")
+                    or updated_entries[path].get("album_artist")
+                    or "Unknown Artist"
+                ),
+                "track_artist_name": str(
+                    updated_entries[path].get("artist")
+                    or updated_entries[path].get("album_artist")
+                    or "Unknown Artist"
+                ).strip(),
                 "file_entry": _structural_file_entry_delta(
                     previous_entries[path],
                     updated_entries[path],
@@ -4385,7 +4395,7 @@ def _persist_structural_album_tag_edit_sql(
                          true
                        )
                   else library.local_albums.metadata
-                end
+                end || %(destination_artist_metadata)s::jsonb
     """
     inserted_album_metadata_sql = """
             case
@@ -4405,6 +4415,7 @@ def _persist_structural_album_tag_edit_sql(
     if updates_release_year:
         renamed_album_metadata_sql = """
               , metadata = coalesce(library.local_albums.metadata, '{}'::jsonb)
+                  || %(destination_artist_metadata)s::jsonb
                 || jsonb_build_object(
                      'release_date',
                      %(destination_release_date)s::text
@@ -4434,15 +4445,24 @@ def _persist_structural_album_tag_edit_sql(
           from unnest(%(changed_paths)s::text[]) as input_path
         ),
         input_rows as materialized (
-          select incoming.private_path, incoming.file_entry
+          select incoming.private_path,
+                 incoming.track_artist_key,
+                 incoming.track_artist_name,
+                 incoming.file_entry
           from jsonb_to_recordset(%(input_rows)s::jsonb)
-            as incoming(private_path text, file_entry jsonb)
+            as incoming(
+              private_path text,
+              track_artist_key text,
+              track_artist_name text,
+              file_entry jsonb
+            )
         ),
         selected_track_files as materialized (
           select
             library.local_track_files.id as track_file_id,
             library.local_tracks.id as track_id,
             library.local_tracks.album_id as source_album_id,
+            input_rows.track_artist_key,
             input_rows.file_entry
           from bootstrap_context
           join library.local_track_files on true
@@ -4706,9 +4726,45 @@ def _persist_structural_album_tag_edit_sql(
             and not exists (select 1 from existing_destination_album)
           returning app.album_ratings.id
         ),
+        inserted_destination_artist as (
+          insert into library.local_artists (
+            library_id, artist_key, name, sort_name, metadata
+          )
+          select validated_source_album.library_id,
+                 %(destination_artist_key)s, %(destination_artist_name)s,
+                 lower(%(destination_artist_name)s),
+                 jsonb_build_object('source', %(source)s::text)
+          from validated_source_album
+          on conflict (library_id, artist_key) do update
+            set last_seen_at = now()
+          returning library.local_artists.id, library.local_artists.artist_key
+        ),
+        inserted_track_artists as (
+          insert into library.local_artists (
+            library_id, artist_key, name, sort_name, metadata
+          )
+          select distinct
+                 validated_source_album.library_id,
+                 input_rows.track_artist_key,
+                 input_rows.track_artist_name,
+                 lower(input_rows.track_artist_name),
+                 jsonb_build_object('source', %(source)s::text)
+          from validated_source_album
+          cross join input_rows
+          where input_rows.track_artist_key <> %(destination_artist_key)s
+          on conflict (library_id, artist_key) do update
+            set last_seen_at = now()
+          returning library.local_artists.id, library.local_artists.artist_key
+        ),
+        resolved_track_artists as materialized (
+          select id, artist_key from inserted_destination_artist
+          union all
+          select id, artist_key from inserted_track_artists
+        ),
         renamed_source_album as (
           update library.local_albums
-          set album_key = case
+          set artist_id = (select id from inserted_destination_artist),
+              album_key = case
                 when %(destination_is_explicit_separate)s::boolean
                 then validated_source_album.album_key
                 else %(destination_album_key)s
@@ -4731,23 +4787,16 @@ def _persist_structural_album_tag_edit_sql(
             and not exists (select 1 from existing_destination_album)
           returning library.local_albums.id, library.local_albums.album_key
         ),
-        inserted_destination_artist as (
-          insert into library.local_artists (
-            library_id, artist_key, name, sort_name, metadata
-          )
-          select validated_source_album.library_id,
-                 %(destination_artist_key)s, %(destination_artist_name)s,
-                 lower(%(destination_artist_name)s),
-                 jsonb_build_object('source', %(source)s::text)
-          from validated_source_album
-          where (select input_path_count from selection_scope) < (
-                  select count(*) from source_album_track_files
-                )
-            and not exists (select 1 from existing_destination_album)
-            and not exists (select 1 from retained_source_album)
-          on conflict (library_id, artist_key) do update
-            set last_seen_at = now()
-          returning library.local_artists.id
+        updated_renamed_album_owner as (
+          update library.local_album_featured_artists
+          set artist_id = (select id from inserted_destination_artist),
+              last_seen_at = now()
+          from renamed_source_album
+          where library.local_album_featured_artists.album_id =
+                renamed_source_album.id
+            and library.local_album_featured_artists.featured_kind = 'owner'
+            and exists (select 1 from inserted_destination_artist)
+          returning library.local_album_featured_artists.id
         ),
         inserted_destination_album as (
           insert into library.local_albums (
@@ -4888,6 +4937,12 @@ def _persist_structural_album_tag_edit_sql(
         updated_tracks as (
           update library.local_tracks
           set album_id = (select destination_album.id from destination_album),
+              artist_id = (
+                select resolved_track_artists.id
+                from resolved_track_artists
+                where resolved_track_artists.artist_key =
+                      selected_track_files.track_artist_key
+              ),
               metadata = coalesce(library.local_tracks.metadata, '{}'::jsonb)
                 || case
                      when selected_track_files.file_entry ? 'album'

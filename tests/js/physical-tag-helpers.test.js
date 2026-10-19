@@ -149,8 +149,14 @@ test('reads prepared synthetic tags from the nested writable media tree', async 
     album: 'Fixture Album',
     allowedProfiles: ['synthetic-large-library'],
   });
+  const snapshots = await readGeneratedMp3TagSnapshots({
+    artist: 'Fixture Artist',
+    album: 'Fixture Album',
+    allowedProfiles: ['synthetic-large-library'],
+  });
 
   assert.equal(records.length, 2);
+  assert.equal(snapshots.length, 2);
 });
 
 test('normalizes complete ID3 snapshots and reports only frames whose values changed', async () => {

@@ -109,7 +109,27 @@
       collectionDraft = registered;
       return () => {if (collectionDraft === registered) {collectionDraft = null; draftDeparture = null;}};
     };
-    const deferCollectionDraftNavigation = callback => {
+    const deferCollectionDraftNavigation = (callback, leaveContext = null) => {
+      if (leaveContext) {
+        let done=false;
+        const outcome=(status,reason)=>{if(done)return false;done=true;leaveContext.onOutcome?.({status,reason});return false;};
+        if(!leaveContext.isCurrent())return Promise.resolve(outcome('superseded','stale-intent'));
+        const owner=collectionDraft;
+        if(!owner||retainedDraft===owner)return false;
+        if(draftDeparture)return Promise.resolve(outcome('cancelled','busy'));
+        const position=historyPosition(window.history.state),url=window.location.href,departure={owner};draftDeparture=departure;
+        const current=()=>leaveContext.isCurrent()&&collectionDraft===owner&&owner.isCurrent()&&position===historyPosition(window.history.state)&&url===window.location.href;
+        return Promise.resolve().then(()=>current()?owner.confirmLeave():false).then(accepted=>{
+          if(draftDeparture!==departure||!current())return outcome('superseded','settings-owner');
+          draftDeparture=null;
+          if(accepted!==true)return outcome('cancelled','blocked');
+          if(!current())return outcome('superseded','stale-intent');
+          collectionDraft=null;owner.discard();
+          if(!leaveContext.isCurrent()||collectionDraft!==null||position!==historyPosition(window.history.state)||url!==window.location.href)return outcome('superseded','stale-intent');
+          const result=callback?.();done=true;return result;
+        }).catch(()=>outcome(leaveContext.isCurrent()?'failed':'superseded','settings-leave-error'))
+          .finally(()=>{if(draftDeparture===departure)draftDeparture=null;});
+      }
       const owner = liveDraft();
       if (!owner || retainedDraft === owner) return false;
       if (draftDeparture) return Promise.resolve(false);
@@ -209,6 +229,7 @@
     };
 
     async function navigate(value, { historyMode = 'push', method = 'GET', body, leaveConfirmed = false, hierarchy = false } = {}) {
+      if(typeof invalidateAdvancedSearchIntent==='function')invalidateAdvancedSearchIntent('settings-navigation');
       const url = urlFor(value);
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');

@@ -18,6 +18,7 @@ from music_app.services.owned_album_tops import (
     require_top_authority, top_uuid, normalize_top_publication_preview,
 )
 from music_app.services.owned_album_tops_postgres import PostgresOwnedAlbumTopsService
+from music_app.services.album_top_native_targets import AlbumTopNativeTargets
 from music_app.services.album_top_remote_acquisition import TopRemoteAcquisitionService
 from music_app.services.album_top_artwork_owner import TopArtworkOwnerService
 from music_app.services.album_top_artwork_preparation import TopArtworkPreparationService
@@ -254,6 +255,22 @@ def read_album_top(request: Request, top_ref: str):
         context_ref = _context_ref(request)
         return _response(request, _service(request).read(context, top_ref=top_ref,
             constraints=constraints, context_ref=context_ref))
+    except AlbumTopError as error:
+        return _error(error)
+
+
+@router.get("/album-tops/{top_ref}/items/{item_ref}/native-target")
+def read_album_top_native_target(request: Request, top_ref: str, item_ref: str):
+    try:
+        params = request.query_params
+        if set(params) != {'revision', 'inventory_album_ref'} or len(params.multi_items()) != len(params):
+            raise AlbumTopError('invalid_query', 422)
+        context, constraints = _context(request, BROWSE)
+        context_ref = _require_context(request)
+        value = AlbumTopNativeTargets(_service(request)).resolve(context, top_ref=top_ref,
+            item_ref=item_ref, revision=params['revision'], inventory_album_ref=params['inventory_album_ref'],
+            context_ref=context_ref, constraints=constraints)
+        return _response(request, value)
     except AlbumTopError as error:
         return _error(error)
 

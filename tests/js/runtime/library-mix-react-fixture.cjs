@@ -76,8 +76,24 @@ async function nativeMixFixture(t) {
   c.Element.prototype.getClientRects = function () {return this.isConnected && !this.closest('[hidden]') ? [this.getBoundingClientRect()] : [];};
   c.requestAnimationFrame = callback => {const id = ++frameId; frames.set(id, callback); return id;};
   c.cancelAnimationFrame = id => frames.delete(id);
+  // Only browser clocks are synthetic; scheduling and toast owners stay real.
+  const timers = new Map(); let timerId = 0, now = 0;
+  c.setTimeout = (callback, delay = 0) => {const id = ++timerId; timers.set(id, {callback, at: now + Math.max(0, Number(delay) || 0)}); return id;};
+  c.clearTimeout = id => timers.delete(id);
+  function advanceTimers(milliseconds) {
+    const target = now + milliseconds; let turns = 0;
+    while (true) {
+      const next = [...timers].filter(([, task]) => task.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      assert.ok(turns++ < 100, 'SETUP_FAILURE: browser timer queue failed to quiesce');
+      timers.delete(next[0]); now = next[1].at; next[1].callback();
+    }
+    now = target;
+  }
+  const toastLayer = h.add('toast-layer');
   const observers = installAttributeObservers(h);
-  for (const file of ['compact-data-table.js', 'trigger-anchor.js', 'library-settings.js', 'browser-dialog-helpers.js']) h.load(`runtime/${file}`);
+  for (const file of ['compact-data-table.js', 'trigger-anchor.js', 'library-settings.js', 'browser-dialog-helpers.js',
+    'browser-scheduling-helpers.js', 'notification-ui-helpers.js']) h.load(`runtime/${file}`);
   const template = h.add('navigation-tree-item-template', 'script');
   template.textContent = fs.readFileSync(path.join(root, 'music_app/templates/components/navigation-tree-item.html'), 'utf8'); h.load('navigation-tree.js');
   const form = h.add('app-form-modal'); form.hidden = true; form.className = 'confirm-modal';
@@ -122,9 +138,13 @@ async function nativeMixFixture(t) {
       for (const controller of controllers.reverse()) controller.dispose();
       await settle();
     } finally {
-      try {observers.dispose();} finally {
-        for (const [name, descriptor] of savedGlobals) {
-          if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+      // Cleanup also runs when native teardown or settle reports an error.
+      try {toastLayer.remove(); advanceTimers(10000);} finally {
+        frames.clear(); timers.clear();
+        try {observers.dispose();} finally {
+          for (const [name, descriptor] of savedGlobals) {
+            if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+          }
         }
       }
     }
@@ -182,7 +202,7 @@ async function nativeMixFixture(t) {
     h.load('runtime/mobile-home.js'); h.load('settings-navigation.js');
     return {entries};
   }
-  return {...h, c, runtime, api, form, errors, flush, settle, mount, click, choose,
+  return {...h, c, runtime, api, form, errors, flush, settle, mount, click, choose, toastLayer, advanceTimers,
     installNavigation,
     async boot(providers) {
       assert.equal(booted, false, 'one entry owner per fixture');

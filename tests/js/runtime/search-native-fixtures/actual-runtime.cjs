@@ -70,7 +70,7 @@ function withSearchAttributePrefixPlatform(env) {
   };
   return env;
 }
-function fixture(t, {url='https://albumhaven.test/?surface=albums',initial=ordinary(),bootstrap={},holdRuntime=false}={}) {
+function fixture(t, {url='https://albumhaven.test/?surface=albums',initial=ordinary(),bootstrap={},holdRuntime=false,beforeRuntimePlatform=null}={}) {
   const env=withPlaylistDomPlatform(withSearchAttributePrefixPlatform(createNativeHomeRuntime())), c=env.context, doc=env.document;
   const requests=[],invocations=[],applications=[],historyCalls=[],storageCalls=[],redirects=[],loaded=[],listeners=[],observers=[],resizers=[],timers=new Map(),frames=new Map();
   let timer=0,frame=0,historyIndex=0;
@@ -86,7 +86,7 @@ function fixture(t, {url='https://albumhaven.test/?surface=albums',initial=ordin
     go(delta){if(historyIndex+delta<0||historyIndex+delta>=entries.length)return;historyIndex+=delta;location.href=entries[historyIndex].url;
       const event=new c.Event('popstate');event.state=history.state;emit(event);},back(){this.go(-1);},forward(){this.go(1);}};
   const storage=()=>{const values=new Map();return {getItem:key=>values.get(String(key))??null,setItem(key,value){values.set(String(key),String(value));storageCalls.push({key:String(key),value:String(value)});},removeItem:key=>values.delete(String(key)),clear:()=>values.clear()};};
-  Object.assign(c,{URL,URLSearchParams,AbortController,structuredClone,location,history,crypto:require('node:crypto').webcrypto,
+  Object.assign(c,{URL,URLSearchParams,TextEncoder:require('node:util').TextEncoder,AbortController,structuredClone,location,history,crypto:require('node:crypto').webcrypto,
     __ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__:{initial_view:structuredClone(initial),bootstrap:structuredClone(bootstrap)},
     __ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__:{},innerWidth:1200,innerHeight:800,devicePixelRatio:1,
     navigator:{userAgent:'Native Search acceptance fixture',platform:'Linux',onLine:true},performance:{now:()=>0},
@@ -231,6 +231,9 @@ function fixture(t, {url='https://albumhaven.test/?surface=albums',initial=ordin
   proto.insertBefore=function(node,before){const result=insert.call(this,node,before);mutation({type:'childList',target:this,addedNodes:[node],removedNodes:[]});return result;};
   proto.removeChild=function(node){const result=removeChild.call(this,node);mutation({type:'childList',target:this,addedNodes:[],removedNodes:[node]});return result;};
   const add=(tag,id,parent=doc.body)=>{const node=doc.createElement(tag);if(id)node.id=id;parent.append(node);return node;};
+  const toastMarkup=read('music_app/templates/index.html').match(/<div class="toast-layer" id="toast-layer"><\/div>/)?.[0];
+  assert.ok(toastMarkup,'actual page supplies the shared notification mount');
+  doc.body.insertAdjacentHTML('beforeend',toastMarkup);
   const shell=add('div','app-shell');Object.assign(shell.dataset,{nativeAccountId:'7',nativeLibraryId:'9',privateUiContext:A});
   const settings=add('section');settings.setAttribute('data-settings-host','');settings.hidden=true;
   add('div',null,settings).setAttribute('data-settings-outlet','');add('nav',null,settings).setAttribute('data-settings-nav','');
@@ -265,6 +268,9 @@ function fixture(t, {url='https://albumhaven.test/?surface=albums',initial=ordin
   assert.doesNotMatch(modalHtml,/{%|{{/);doc.body.insertAdjacentHTML('beforeend',modalHtml);
   const preloaded=new Set(['js/runtime/markup-format-helpers.js','js/runtime/loader-status-helpers.js','js/runtime/alert-components.js','js/runtime/album-artbox.js',
     'js/runtime/gallery-main-components.js','js/runtime/gallery-card-component.js','js/runtime/album-details-components.js']);
+  // Optional bounded browser primitives only, before any runtime owner loads.
+  // The default path is unchanged; this hook must never replace product owners.
+  if(beforeRuntimePlatform!==null){assert.equal(typeof beforeRuntimePlatform,'function');beforeRuntimePlatform({c,document:doc,storageCalls,listeners,observers,timers});}
   const loadFile=relative=>{assert.ok(!relative.endsWith('config.py'));vm.runInContext(read(relative),c,{filename:relative});loaded.push(relative);};
   for(const name of ['navigation-tree.js','surface-dismissal.js','settings-navigation.js'])loadFile('music_app/static/js/'+name);
   const build=read('scripts/build-runtime-bundle.cjs'),list=build.match(/const RUNTIME_SCRIPT_PATHS\s*=\s*\[([\s\S]*?)\];/);

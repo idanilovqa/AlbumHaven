@@ -242,10 +242,12 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
+    invalidateAdvancedSearchIntent('sidebar-navigation');
     if (typeof deferAppFormPageReplacement === 'function'
       && deferAppFormPageReplacement(() => handleGalleryBootstrapClick(event))) return;
     const activeSearchQuery = String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
+    invalidateAdvancedSearchIntent('sidebar-query');
     updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
     const searchInput = document.getElementById('search-input');
@@ -423,6 +425,7 @@ function handlePrivateSearchSidebarNavigation(event, node) {
   event.preventDefault();
   const runtime = window.AlbumHavenSearchRuntime;
   if (runtime?.sidebarNodeIsCurrent(node) !== true) return true;
+  invalidateAdvancedSearchIntent('sidebar-navigation');
   if (typeof deferAppFormPageReplacement === 'function'
     && deferAppFormPageReplacement(() => handlePrivateSearchSidebarNavigation(event, node))) return true;
   if (runtime.sidebarNodeIsCurrent(node) !== true) return true;
@@ -447,6 +450,7 @@ function handleSidebarArtistSelectionClick(event) {
   }
 
   event.preventDefault();
+  invalidateAdvancedSearchIntent('sidebar-navigation');
   if (typeof deferAppFormPageReplacement === 'function'
     && deferAppFormPageReplacement(() => handleSidebarArtistSelectionClick(event))) return true;
   if (
@@ -731,6 +735,10 @@ function syncRecentSearchScope(records = []) {
     const previous = ui.recentSearchScope;
     ui.recentSearchScope = scope;
     ui.recentSearchQueries = [];
+    ui.searchSuggestionItems = [];
+    ui.searchSuggestionSnapshot = null;
+    ui.searchComposing = false;
+    invalidateAdvancedSearchIntent('scope-loss');
     ui.recentSearchesLoaded = false;
     ui.recentSearchPopoverOpen = false;
     ui.recentSearchActiveIndex = -1;
@@ -807,34 +815,248 @@ function getRecentSearchElements() {
   };
 }
 
+// A rendered row is bound to the exact draft, caret and privacy scope.
+function getSearchSuggestionSnapshot() {
+  const {input} = getRecentSearchElements();
+  const scope = syncRecentSearchScope();
+  if (!input || !scope || state.ui.searchComposing) return null;
+  return {value: input.value, start: input.selectionStart, end: input.selectionEnd, scope};
+}
+function getSearchSuggestionItems() {
+  const snapshot = getSearchSuggestionSnapshot();
+  if (!snapshot) return [];
+  const shorthand = SearchShorthandModel.suggestions(snapshot.value, snapshot.start, snapshot.end)
+    .map(entry => ({kind: 'shorthand', id: entry.id, label: entry.example, description: entry.description}));
+  const recent = readRecentSearchQueries().map(query => ({kind: 'recent', query, label: query, description: 'Recent search'}));
+  return [...shorthand, ...recent].slice(0, RECENT_SEARCH_LIMIT + 8);
+}
 function renderRecentSearchPopover() {
   const ui = ensureRecentSearchState();
-  const { input, popover } = getRecentSearchElements();
+  const {input, popover} = getRecentSearchElements();
   if (!ui || !input || !popover) return;
-  const queries = readRecentSearchQueries();
+  const items = getSearchSuggestionItems();
   const mobileReady = typeof mobilePageState === 'undefined' || typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()
-    || (mobilePageState.searchOpen && mobilePageState.searchSuggestionsReady && String(getRecentSearchElements().input?.value || '').trim());
-  const open = Boolean(ui.recentSearchPopoverOpen && queries.length && mobileReady);
-  if (ui.recentSearchActiveIndex >= queries.length) ui.recentSearchActiveIndex = -1;
-  popover.innerHTML = queries.map((query, index) => {
+    || (mobilePageState.searchOpen && mobilePageState.searchSuggestionsReady && String(input.value || '').trim());
+  const open = Boolean(ui.recentSearchPopoverOpen && items.length && mobileReady && !ui.searchComposing);
+  if (ui.recentSearchActiveIndex >= items.length) ui.recentSearchActiveIndex = -1;
+  ui.searchSuggestionSnapshot = getSearchSuggestionSnapshot();
+  ui.searchSuggestionItems = items;
+  popover.innerHTML = items.map((item, index) => {
     const selected = open && index === ui.recentSearchActiveIndex;
-    return `<button class="recent-search-option" id="recent-search-option-${index}" type="button" role="option" tabindex="-1" data-recent-search-index="${index}" aria-selected="${selected ? 'true' : 'false'}">${escapeHtml(query)}</button>`;
+    return `<button class="recent-search-option search-discovery-option" id="recent-search-option-${index}" type="button" role="option" tabindex="-1" data-search-suggestion-index="${index}" aria-selected="${selected ? 'true' : 'false'}"><span>${escapeHtml(item.label)}</span></button>`;
   }).join('');
   popover.hidden = !open;
   input.setAttribute('aria-expanded', open ? 'true' : 'false');
   if (open && ui.recentSearchActiveIndex >= 0) {
     input.setAttribute('aria-activedescendant', `recent-search-option-${ui.recentSearchActiveIndex}`);
-    popover.querySelector?.(`#recent-search-option-${ui.recentSearchActiveIndex}`)?.scrollIntoView?.({
-      block: 'nearest',
-    });
-  } else {
-    input.removeAttribute('aria-activedescendant');
-  }
+    popover.querySelector?.(`#recent-search-option-${ui.recentSearchActiveIndex}`)?.scrollIntoView?.({block: 'nearest'});
+  } else input.removeAttribute('aria-activedescendant');
 }
+function selectSearchSuggestion(index) {
+  const ui = ensureRecentSearchState(), prior = ui?.searchSuggestionSnapshot;
+  const item = ui?.searchSuggestionItems?.[index], current = getSearchSuggestionSnapshot();
+  if (!prior || !current || !item || prior.scope !== current.scope || prior.value !== current.value
+      || prior.start !== current.start || prior.end !== current.end) {closeRecentSearchPopover(); return false;}
+  if (item.kind === 'recent') return selectRecentSearchQuery(item.query);
+  const planned = SearchShorthandModel.plan(current.value, current.start, current.end, item.id);
+  if (planned.error) return false;
+  applySearchShorthandDraft(planned);
+  return true;
+}
+function applySearchShorthandDraft(planned) {
+  const {input} = getRecentSearchElements();
+  if (!input || planned.error || state.ui.searchComposing) return false;
+  invalidateAdvancedSearchIntent('shorthand-edit');
+  input.value = planned.value;
+  // Use the existing input owner, including clear action/mobile badge and
+  // cancellation of pending submissions. This does not submit a Search.
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+  input.focus();
+  input.setSelectionRange(planned.start, planned.end);
+  closeRecentSearchPopover();
+  return true;
+}
+function handleSearchShorthandCaret() {
+  const ui = ensureRecentSearchState();
+  if (!ui || ui.searchComposing) return;
+  ui.recentSearchActiveIndex = -1;
+  if (ui.recentSearchPopoverOpen) renderRecentSearchPopover();
+}
+function handleSearchCompositionStart() {
+  state.ui.searchComposing = true;
+  clearPendingGallerySearchCommit();
+  closeRecentSearchPopover();
+}
+function handleSearchCompositionEnd() {
+  state.ui.searchComposing = false;
+  handleGalleryBootstrapSearchInput(getRecentSearchElements().input?.value || '');
+}
+const advancedSearchState = {session:null,pending:null,textRevision:0,intentRevision:0,viewRevision:0,sequence:0,visibility:0};
+const advancedSearchSubmissions = new WeakMap();
+const advancedSearchEventProofs = new WeakMap();
+function advancedSearchBaseCurrent(session) {
+  return Boolean(session && session.scope === syncRecentSearchScope()
+    && session.shell === document.getElementById('app-shell') && session.transport === recentSearchTransport && session.input === getRecentSearchElements().input && session.form === session.input?.form
+    && session.textRevision === advancedSearchState.textRevision && session.intentRevision === advancedSearchState.intentRevision
+    && session.viewRevision === advancedSearchState.viewRevision
+    && session.baseInput === getRecentSearchElements().input?.value && session.baseDraft === state.ui.searchDraftQuery);
+}
+function invalidateAdvancedSearchIntent(reason = 'navigation', {searchOperation, preserveRetained = false} = {}) {
+  if (preserveRetained && !advancedSearchState.pending) return;
+  if (searchOperation && searchOperation === advancedSearchState.pending && searchOperation.isCurrent()) return;
+  advancedSearchState.intentRevision++;
+  const pending = advancedSearchState.pending;
+  pending?.settle({status:'superseded',reason});
+  const session = advancedSearchState.session;
+  advancedSearchState.session = null;
+  if(session) closeSearchAdvancedFilters({reason});
+}
+function syncAdvancedSearchAppliedView({changed = false} = {}) {
+  if(changed) {advancedSearchState.viewRevision++;invalidateAdvancedSearchIntent('applied-view');}
+  else if(advancedSearchState.session && !advancedSearchState.pending && !advancedSearchBaseCurrent(advancedSearchState.session))invalidateAdvancedSearchIntent('base-changed');
+  const anchor=document.getElementById('search-advanced-toggle');
+  const summary=SearchShorthandModel.advancedSummary(SearchShorthandModel.parseAdvanced(String(state.view?.query??'')));
+  if(anchor){anchor.setAttribute('data-filters-active',String(Boolean(summary)));anchor.setAttribute('aria-label',summary?`Advanced filters: ${summary}`:'Advanced filters');}
+}
+function admitsAdvancedEvent(event) {
+  const session=advancedSearchState.session;
+  if(!session?.visible || session.scope!==syncRecentSearchScope())return false;
+  if(document.getElementById('search-advanced-panel')?.contains(event.target))return true;
+  const proof=advancedSearchEventProofs.get(event);
+  return Boolean(proof&&proof.session===session&&proof.visibility===session.visibility&&proof.scope===session.scope);
+}
+function dismissAdvancedSearchSession(session,{reason='closed',searchOperation}={}) {
+  const retires=['navigation','mobile-teardown','scope-loss','shell-replaced','applied-view'].includes(reason)
+    && !(searchOperation&&searchOperation===advancedSearchState.pending&&searchOperation.isCurrent());
+  if(session&&retires&&advancedSearchState.session===session){advancedSearchState.intentRevision++;advancedSearchState.session=null;advancedSearchState.pending?.settle({status:'superseded',reason});}
+  if(!session?.visible)return;
+  session.visible=false; const visibility=session.visibility;
+  session.viewportCleanup?.();session.viewportCleanup=null;
+  const child=session.child;session.child=null;child?.close({restoreFocus:false,reason});
+  if(advancedSearchState.session&&advancedSearchState.session!==session||session.visible||session.visibility!==visibility)return;
+  const panel=document.getElementById('search-advanced-panel');if(panel){panel.hidden=true;panel.replaceChildren();}
+  document.getElementById('search-advanced-toggle')?.setAttribute('aria-expanded','false');
+}
+function closeSearchAdvancedFilters({reason='closed',searchOperation}={}) {
+  const session=advancedSearchState.session;
+  const descriptor=typeof galleryMainSurfaceController!=='undefined' ? galleryMainSurfaceController?.current?.() : null;
+  // Capture ownership before callbacks. A dismissal may reopen this same retained
+  // session with a new visibility epoch, so it must never receive a second hook.
+  if(descriptor?.key==='search-filters' && (!session || descriptor.onDismiss===session.dismissHook)) {
+    closeGalleryMainSurface(false,{reason,searchOperation});
+    return;
+  }
+  // Only an opening never acquired by the controller needs local cleanup.
+  dismissAdvancedSearchSession(session,{reason,searchOperation});
+}
+function advancedSearchFeedback(message) {
+  const node=document.getElementById('search-advanced-feedback');if(node)node.textContent=message||'';
+}
+function editAdvancedSearchControls(edit) {
+  const session=advancedSearchState.session;
+  if(!session?.visible||advancedSearchState.pending||!advancedSearchBaseCurrent(session))return false;
+  const result=SearchShorthandModel.editAdvanced(session.draft,edit);
+  if(!result.ok){advancedSearchFeedback(result.diagnostics[0]?.message);return false;}
+  if(result.draft===session.draft)return true;
+  session.draft=result.draft;session.dirty=true;renderAdvancedSearchControls(session);return true;
+}
+function renderAdvancedSearchControls(session) {
+  if(advancedSearchState.session!==session||!session.visible)return;
+  const panel=document.getElementById('search-advanced-panel');if(!panel)return;
+  const focused=document.activeElement,field=focused?.getAttribute?.('data-advanced-field');
+  const selection=typeof focused?.selectionStart==='number'?[focused.selectionStart,focused.selectionEnd]:null;
+  const f=session.draft.fields,serialized=SearchShorthandModel.serializeAdvanced(session.draft),locked=Boolean(advancedSearchState.pending);
+  const button=(label,attributes={},disabled=false)=>window.ButtonComponent.renderButton({label,disabled,className:'gallery-menu-action',attributes:{type:'button',...attributes}});
+  const choice=(label,field,value)=>`<div class="search-advanced-field"><span id="advanced-label-${field}">${label}</span>${button(value||'None',{'data-advanced-choice':field,'aria-labelledby':`advanced-label-${field}`},locked||session.draft.status!=='editable')}</div>`;
+  const input=(label,field,value,extra='')=>`<label class="search-advanced-field">${label}<span class="ui-input-action"><input data-advanced-field="${field}" value="${escapeHtml(value)}" ${locked||session.draft.status!=='editable'?'disabled':''} ${extra}></span></label>`;
+  panel.innerHTML='<h2 id="search-advanced-title">Advanced filters</h2>'+choice('Family','family',({ordinary:'Ordinary',love:'Your Love',listener:'Listener',popularity:'Popularity'})[f.family])
+    +(session.draft.status!=='editable'?'<p>This query needs ordinary Search. Edit or clear it in the search box.</p>':'')
+    +(f.family==='ordinary'?'<p>Plain text remains ordinary Search. Clear nonempty text in the search box before choosing a filter family.</p>':'')
+    +(['love','listener'].includes(f.family)?choice('Include Love','include',f.include.join(' + ')||'None')+choice('Exclude Love','exclude',f.exclude.join(' + ')||'None')+'<p>Loved includes Obsessed. Include and Exclude are independent.</p>':'')
+    +(f.family==='listener'?input('Listener username','username',f.username,'autocomplete="off" spellcheck="false"')+'<p>All-time listening history and this listener’s Love, where you have access. Tracks only.</p>':'')
+    +(f.family==='popularity'?'<p>Last.fm global scrobbles, highest first. Tracks only.</p>'+f.facets.map(r=>`<div data-advanced-row="${r.rowId}">${choice('Field',r.rowId+':kind',r.kind)}${choice('Match',r.rowId+':polarity',r.polarity)}${input('Value',r.rowId+':text',r.text)}${button('Remove',{'data-advanced-remove':r.rowId},locked)}</div>`).join('')+button('Add artist or genre',{'data-advanced-add':'true'},locked)+`<label><input type="checkbox" data-advanced-cap ${f.cap.present?'checked':''} ${locked||session.draft.status!=='editable'?'disabled':''}>Limit songs per artist</label>`+(f.cap.present?input('Songs per artist (1–5000)','cap',f.cap.text,'inputmode="numeric"'):''):'')
+    +'<p data-advanced-dirty></p><pre class="search-advanced-preview" aria-label="Query preview"></pre><p id="search-advanced-feedback" role="status" aria-live="polite"></p>'
+    +button('Apply',{'data-advanced-apply':'true'},locked||session.composing||!serialized.ok)+button('Reset filters',{'data-advanced-reset':'true'},locked||session.draft.status!=='editable'||f.family==='ordinary'&&f.ordinary!=='')+button('Cancel',{'data-search-help-close':'true'})
+    +'<details><summary>Supported examples</summary><p>:loved · -:obsessed · @listener :tracks listened:all · :popular artist:"Artist Name" -genre:rock per_artist:3</p><p>Filters from different families cannot be combined. Reset removes supported filters from this draft only.</p></details>';
+  panel.querySelector('.search-advanced-preview').textContent=serialized.ok?serialized.value:session.draft.rawBase;
+  panel.querySelector('[data-advanced-dirty]').textContent=session.dirty?'Unapplied changes':'';
+  advancedSearchFeedback(serialized.ok?'':serialized.diagnostics[0]?.message);
+  panel.oninput=event=>{const target=event.target,key=target.getAttribute('data-advanced-field');if(!key||session.composing)return;editAdvancedSearchControls(key==='username'?{type:'setUsername',text:target.value}:key==='cap'?{type:'setCap',present:true,text:target.value}:{type:'updateFacet',rowId:key.split(':')[0],patch:{text:target.value}});};
+  panel.onchange=event=>{if(event.target.hasAttribute('data-advanced-cap'))editAdvancedSearchControls({type:'setCap',present:event.target.checked,text:f.cap.text});};
+  panel.oncompositionstart=()=>{session.composing=true;};
+  panel.oncompositionend=event=>{session.composing=false;panel.oninput(event);};
+  panel.onkeydown=event=>{if(event.key!=='Enter'||event.isComposing||event.keyCode===229||session.composing||event.repeat||event.defaultPrevented||session.child?.ownsEvent(event))return;if(event.target.matches('input:not([type="checkbox"])')){event.preventDefault();applyAdvancedSearchControls();}};
+  if(field){const replacement=Array.from(panel.querySelectorAll('[data-advanced-field]')).find(n=>n.getAttribute('data-advanced-field')===field);replacement?.focus({preventScroll:true});if(selection&&replacement&&session===advancedSearchState.session&&session.visible)replacement.setSelectionRange(...selection);}
+}
+function openAdvancedSearchChoice(trigger,key) {
+  const session=advancedSearchState.session;if(!session?.visible||advancedSearchState.pending||!advancedSearchBaseCurrent(session)||!document.getElementById('search-advanced-panel')?.contains(trigger))return false;
+  const f=session.draft.fields,facet=key.includes(':')?f.facets.find(r=>r.rowId===key.split(':')[0]):null;
+  const options=key==='family'?[['ordinary','Ordinary'],['love','Your Love'],['listener','Listener'],['popularity','Popularity']]:['include','exclude'].includes(key)?[['','None'],['loved','Loved'],['obsessed','Obsessed'],['loved,obsessed','Both']]:key.endsWith(':kind')?[['artist','Artist'],['genre','Genre']]:[['include','Include'],['exclude','Exclude']];
+  const selected=key==='family'?f.family:['include','exclude'].includes(key)?f[key].join(','):facet?.[key.split(':')[1]];
+  const visibility=session.visibility;
+  const owner=openUtilityChoiceDropdown(trigger,{formats:options.map(([value,label])=>({value,label})),selected,label:trigger.getAttribute('aria-labelledby')||'Filter',density:'compact',updateTriggerLabel:false,
+    onOwnedEvent(event,child){if(session===advancedSearchState.session&&session.visible&&session.visibility===visibility&&session.child===child)advancedSearchEventProofs.set(event,{session,visibility,scope:session.scope});},
+    onClose({owner}){if(session.child===owner)session.child=null;},
+    onSelect(value){const child=session.child;session.child=null;child?.close({restoreFocus:false,reason:'selected'});if(session!==advancedSearchState.session||!session.visible||session.visibility!==visibility)return false;
+      editAdvancedSearchControls(key==='family'?{type:'setFamily',family:value}:['include','exclude'].includes(key)?{type:'setLove',side:key,orderedSet:value?value.split(','):[]}:{type:'updateFacet',rowId:facet.rowId,patch:{[key.split(':')[1]]:value}});
+      if(session===advancedSearchState.session&&session.visible&&session.visibility===visibility)Array.from(document.querySelectorAll('[data-advanced-choice]')).find(n=>n.getAttribute('data-advanced-choice')===key)?.focus({preventScroll:true});return true;}});
+  if(owner?.isOpen&&session===advancedSearchState.session&&session.visible&&session.visibility===visibility)session.child=owner;
+  else owner?.close({restoreFocus:false,reason:'stale-parent'});return true;
+}
+function toggleSearchAdvancedFilters() {
+  const panel=document.getElementById('search-advanced-panel'),anchor=document.getElementById('search-advanced-toggle'),scope=syncRecentSearchScope(),input=getRecentSearchElements().input;
+  if(!panel||!anchor||!scope||!input)return false;
+  if(advancedSearchState.session?.visible){const captured=advancedSearchState.session,visibility=captured.visibility;closeSearchAdvancedFilters({reason:'repeat-anchor'});if(captured===advancedSearchState.session&&!captured.visible&&captured.visibility===visibility)anchor.focus();return true;}
+  closeRecentSearchPopover();let session=advancedSearchState.session;
+  if(!session||!advancedSearchBaseCurrent(session)){
+    if(advancedSearchState.pending)return false;
+    session={id:++advancedSearchState.sequence,scope,input,form:input.form,shell:document.getElementById('app-shell'),transport:recentSearchTransport,baseInput:input.value,baseDraft:state.ui.searchDraftQuery,textRevision:advancedSearchState.textRevision,intentRevision:advancedSearchState.intentRevision,viewRevision:advancedSearchState.viewRevision,draft:SearchShorthandModel.parseAdvanced(input.value),dirty:false,child:null};advancedSearchState.session=session;
+  }
+  session.visible=true;session.visibility=++advancedSearchState.visibility;renderAdvancedSearchControls(session);
+  session.dismissHook=options=>dismissAdvancedSearchSession(session,options);
+  const opened=openGalleryMainSurface('search-filters',anchor,panel,'right',{onDismiss:session.dismissHook});
+  if(!opened||session!==advancedSearchState.session||!session.visible){dismissAdvancedSearchSession(session,{reason:'surface-replaced'});return false;}
+  const position=()=>{if(session===advancedSearchState.session&&session.visible)positionGalleryAnchoredSurface(panel,anchor,'right');};
+  window.visualViewport?.addEventListener('resize',position);window.visualViewport?.addEventListener('scroll',position);
+  session.viewportCleanup=()=>{window.visualViewport?.removeEventListener('resize',position);window.visualViewport?.removeEventListener('scroll',position);};return true;
+}
+function applyAdvancedSearchControls() {
+  const session=advancedSearchState.session,input=getRecentSearchElements().input,form=input?.form;
+  if(!session?.visible||advancedSearchState.pending||session.composing||state.ui.searchComposing||!advancedSearchBaseCurrent(session))return false;
+  const serialized=SearchShorthandModel.serializeAdvanced(session.draft);if(!serialized.ok){advancedSearchFeedback(serialized.diagnostics[0]?.message);return false;}
+  if(!form||!input||typeof form.requestSubmit!=='function'){advancedSearchFeedback('Search is unavailable.');return false;}
+  const op={id:++advancedSearchState.sequence,sessionId:session.id,nonce:{},scope:session.scope,submittedText:serialized.value,baseInput:input.value,baseDraft:state.ui.searchDraftQuery,baseViewRevision:advancedSearchState.viewRevision,settled:false};
+  advancedSearchState.textRevision++;advancedSearchState.intentRevision++;
+  op.textRevision=advancedSearchState.textRevision;op.intentRevision=advancedSearchState.intentRevision;
+  op.isCurrent=()=>!op.settled&&advancedSearchState.pending===op&&op.scope===syncRecentSearchScope()&&session.shell===document.getElementById('app-shell')&&session.transport===recentSearchTransport&&getRecentSearchElements().input===input&&input.form===form&&op.textRevision===advancedSearchState.textRevision&&op.intentRevision===advancedSearchState.intentRevision&&input.value===op.submittedText&&state.ui.searchDraftQuery===op.submittedText;
+  op.settle=result=>{
+    if(op.settled)return;const owns=advancedSearchState.pending===op,current=owns&&op.isCurrent();
+    let outcome=result;
+    if(!current)outcome={status:'superseded',reason:result.reason||'stale-intent'};
+    const applied=outcome.status==='accepted'||outcome.status==='unchanged'&&outcome.reason==='actual-committed';
+    if(current&&!applied&&outcome.status!=='superseded'){
+      input.value=op.baseInput;state.ui.searchDraftQuery=op.baseDraft;advancedSearchState.textRevision++;
+      Object.assign(session,{baseInput:op.baseInput,baseDraft:op.baseDraft,textRevision:advancedSearchState.textRevision,intentRevision:advancedSearchState.intentRevision,viewRevision:advancedSearchState.viewRevision});
+    }
+    op.settled=true;op.result=outcome;if(owns)advancedSearchState.pending=null;
+    if(current&&applied){session.dirty=false;closeSearchAdvancedFilters({reason:'submit-hide'});if(advancedSearchState.session===session)advancedSearchState.session=null;}
+    else if(current){if(session.visible)renderAdvancedSearchControls(session);advancedSearchFeedback(outcome.reason);}
+    if(current){if(typeof updateSearchClearAction==='function')updateSearchClearAction(input);if(typeof syncGalleryBarSearchVisibility==='function')syncGalleryBarSearchVisibility();if(typeof syncMobileSearchQueryIndicator==='function')syncMobileSearchQueryIndicator();}
+  };
+  advancedSearchState.pending=op;
+  try {
+    input.value=op.submittedText;updateGallerySearchDraftQuery(op.submittedText,{searchOperation:op});
+    if(typeof updateSearchClearAction==='function')updateSearchClearAction(input);if(typeof syncGalleryBarSearchVisibility==='function')syncGalleryBarSearchVisibility();if(typeof syncMobileSearchQueryIndicator==='function')syncMobileSearchQueryIndicator();
+    if(!op.isCurrent()){op.settle({status:'superseded',reason:'stale-dispatch'});return false;}
+    advancedSearchSubmissions.set(form,op);form.requestSubmit();if(advancedSearchSubmissions.get(form)===op)op.settle({status:'failed',reason:'submit-not-consumed'});}
+  catch(_error){op.settle({status:'failed',reason:'submit-error'});}
+  finally{if(advancedSearchSubmissions.get(form)===op)advancedSearchSubmissions.delete(form);}return true;
+}
+function applySearchHelpExample() { return false; }
 
 function openRecentSearchPopover() {
   const ui = ensureRecentSearchState();
-  if (!ui || !readRecentSearchQueries().length) return false;
+  if (!ui || !getSearchSuggestionItems().length || ui.searchComposing) return false;
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
       && (!mobilePageState.searchOpen || !mobilePageState.searchSuggestionsReady || !String(getRecentSearchElements().input?.value || '').trim())) return false;
   ui.recentSearchPopoverOpen = true;
@@ -865,6 +1087,7 @@ function selectRecentSearchQuery(query) {
   const { input } = getRecentSearchElements();
   const value = String(query || '').trim();
   if (!input || !value || !readRecentSearchQueries().includes(value)) return false;
+  invalidateAdvancedSearchIntent('recent-selection');
   input.value = value;
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
@@ -884,31 +1107,49 @@ function handleGalleryBootstrapSearchFocus() {
 }
 
 function handleGalleryBootstrapSearchClick(event) {
-  const option = event.target.closest('[data-recent-search-index]');
+  const insideAdvanced=document.getElementById('search-advanced-panel')?.contains(event.target);
+  const advancedChoice=insideAdvanced&&event.target.closest('[data-advanced-choice]');
+  if(advancedChoice){event.preventDefault();return openAdvancedSearchChoice(advancedChoice,advancedChoice.getAttribute('data-advanced-choice'));}
+  if(insideAdvanced&&event.target.closest('[data-advanced-apply]')){event.preventDefault();return applyAdvancedSearchControls();}
+  if(insideAdvanced&&event.target.closest('[data-advanced-reset]')){event.preventDefault();return editAdvancedSearchControls({type:'reset'});}
+  if(insideAdvanced&&event.target.closest('[data-advanced-add]')){event.preventDefault();return editAdvancedSearchControls({type:'addFacet',kind:'artist',polarity:'include',text:''});}
+  const remove=insideAdvanced&&event.target.closest('[data-advanced-remove]');
+  if(remove){event.preventDefault();const rowId=remove.getAttribute('data-advanced-remove'),rows=advancedSearchState.session?.draft.fields.facets||[],index=rows.findIndex(r=>r.rowId===rowId),next=rows[index+1]||rows[index-1];const result=editAdvancedSearchControls({type:'removeFacet',rowId});const panel=document.getElementById('search-advanced-panel');(next?panel?.querySelector(`[data-advanced-row="${next.rowId}"] input`):panel?.querySelector('[data-advanced-add]'))?.focus();return result;}
+  if(admitsAdvancedEvent(event)&&!document.getElementById('search-advanced-panel')?.contains(event.target))return false;
+  if (event.target.closest('#search-advanced-toggle')) {event.preventDefault(); return toggleSearchAdvancedFilters();}
+  const example = event.target.closest('[data-search-example]');
+  if (example && document.getElementById('search-advanced-panel')?.contains(example)) {
+    event.preventDefault(); return applySearchHelpExample(example.getAttribute('data-search-example'));
+  }
+  if (event.target.closest('[data-search-help-close]')) {
+    event.preventDefault(); const session=advancedSearchState.session,visibility=session?.visibility;closeSearchAdvancedFilters({reason:'cancel'});if(event.detail===0&&session===advancedSearchState.session&&!session?.visible&&session?.visibility===visibility)document.getElementById('search-advanced-toggle')?.focus();return true;
+  }
+  if (document.getElementById('search-advanced-panel')?.contains(event.target)) return false;
+  const option = event.target.closest('[data-search-suggestion-index]');
   if (option) {
     event.preventDefault();
-    const queries = readRecentSearchQueries();
     if (!getRecentSearchElements().popover?.contains(option)) return false;
-    return selectRecentSearchQuery(queries[Number(option.getAttribute('data-recent-search-index'))]);
+    return selectSearchSuggestion(Number(option.getAttribute('data-search-suggestion-index')));
   }
   if (event.target.closest('#search-input')) {
-    openRecentSearchPopover();
-    return false;
+    handleSearchShorthandCaret(); openRecentSearchPopover(); return false;
   }
   closeRecentSearchPopover();
+  closeSearchAdvancedFilters({reason:'outside-pointer'});
   return false;
 }
 
 function handleGalleryBootstrapSearchMouseDown(event) {
-  if (!event.target.closest('[data-recent-search-index]')) return false;
+  if (!event.target.closest('[data-search-suggestion-index]')) return false;
   event.preventDefault();
   return true;
 }
 
 function handleGalleryBootstrapSearchKeyDown(event) {
+  if (event.isComposing || event.keyCode === 229 || state.ui?.searchComposing) return false;
   const ui = ensureRecentSearchState();
   if (!ui) return false;
-  const queries = readRecentSearchQueries();
+  const queries = getSearchSuggestionItems();
   const mobileReady = typeof mobilePageState === 'undefined' || typeof usesMobilePageLayout !== 'function' || !usesMobilePageLayout()
     || (mobilePageState.searchOpen && mobilePageState.searchSuggestionsReady && String(getRecentSearchElements().input?.value || '').trim());
   const open = Boolean(ui.recentSearchPopoverOpen && queries.length && mobileReady);
@@ -933,9 +1174,10 @@ function handleGalleryBootstrapSearchKeyDown(event) {
       return true;
     }
     event.preventDefault();
-    return selectRecentSearchQuery(queries[ui.recentSearchActiveIndex]);
+    return selectSearchSuggestion(ui.recentSearchActiveIndex);
   }
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return false;
+  if (['Home', 'End'].includes(event.key) && (!open || ui.recentSearchActiveIndex < 0)) return false;
   if (!queries.length) return false;
   event.preventDefault();
   if (!open) openRecentSearchPopover();
@@ -960,9 +1202,12 @@ function clearPendingSelectedArtistReconcile() {
   state.ui.pendingSelectedArtistReconcileTimer = 0;
 }
 
-function updateGallerySearchDraftQuery(nextQuery) {
+function updateGallerySearchDraftQuery(nextQuery, {searchOperation} = {}) {
   const normalizedQuery = String(nextQuery || '');
   if (state.ui && typeof state.ui === 'object') {
+    if (state.ui.searchDraftQuery !== normalizedQuery && searchOperation !== advancedSearchState.pending) {
+      advancedSearchState.textRevision++; invalidateAdvancedSearchIntent('draft-change');
+    }
     state.ui.searchDraftQuery = normalizedQuery;
   }
   if (typeof syncGalleryBarSearchVisibility === 'function') {
@@ -1068,7 +1313,9 @@ function releasePendingGallerySearchSuspensions() {
 function scheduleGallerySearchCommit(nextQuery, options = {}) {
   const recentSearchScope = options.recordRecentSearch === true
     ? syncRecentSearchScope() : undefined;
-  const normalizedQuery = updateGallerySearchDraftQuery(nextQuery);
+  const normalizedQuery = updateGallerySearchDraftQuery(nextQuery, options);
+  const searchOperation = options.searchOperation;
+  if (searchOperation && !searchOperation.isCurrent()) {searchOperation.settle({status:'superseded',reason:'stale-schedule'});return false;}
   let committedQuery = String(state.view?.query || '');
   const pendingQuery = state.busy
     && String(state.ui.activeViewRequestUrl || '').startsWith('/view-data?')
@@ -1080,6 +1327,13 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
       // Invalid request encoding cannot supersede the applied query.
     }
   }
+  const privateSearchSnapshot = options.immediate && state.view?.private_search === true
+    ? window.AlbumHavenSearchRuntime?.snapshot?.() : null;
+  // A retired response has no result authority even if its last applied query
+  // remains in the view. Only an explicit submit may request fresh authority.
+  const retriesRetiredPrivateSearch = Boolean(options.immediate && !state.busy
+    && privateSearchSnapshot?.status === 'idle' && privateSearchSnapshot.visible === false
+    && privateSearchSnapshot.result === null);
   const retriesFailedSearch = Boolean(
     options.immediate
     && state.ui?.failedGallerySearch?.query === normalizedQuery
@@ -1096,24 +1350,26 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
     state.ui.pendingSearchClearOnBlur = false;
   }
   if (normalizedQuery === committedQuery && !shouldReselectCommittedQuery
-    && !retriesFailedSearch
+    && !retriesFailedSearch && !retriesRetiredPrivateSearch
     && !(typeof hasActiveMobilePage === 'function' && hasActiveMobilePage())) {
     clearPendingGallerySearchCommit();
-    if (options.recordRecentSearch === true) recordRecentSearchQuery(normalizedQuery);
+    if (searchOperation) searchOperation.settle({status:'unchanged',reason:normalizedQuery === String(state.view?.query || '') ? 'actual-committed' : 'already-pending'});
+    else if (options.recordRecentSearch === true) recordRecentSearchQuery(normalizedQuery);
     releasePendingGallerySearchSuspensions();
     return false;
   }
   clearPendingGallerySearchCommit();
   const commitSearch = () => {
     if (options.recordRecentSearch === true
-        && recentSearchScope !== (syncRecentSearchScope())) return;
+        && recentSearchScope !== (syncRecentSearchScope())) {searchOperation?.settle({status:'superseded',reason:'scope-loss'});return;}
     state.ui.pendingSearchCommitTimer = 0;
     state.ui.pendingRecentSearchCommitScope = null;
-    commitGallerySearchQuery(normalizedQuery, {
+    try {commitGallerySearchQuery(normalizedQuery, {
       recentSearchScope,
       recordRecentSearch: options.recordRecentSearch === true,
       scanPageAbandonHandled: options.scanPageAbandonHandled === true,
-    });
+      searchOperation,
+    });} catch(error){if(searchOperation)searchOperation.settle({status:'failed',reason:'commit-error'});else throw error;}
   };
   if (options.immediate) {
     commitSearch();
@@ -1141,8 +1397,16 @@ function revealArtistTreeForSearch() {
 }
 
 function handleGalleryBootstrapSearchSubmit(event) {
+  const form = event?.currentTarget?.matches?.('form') ? event.currentTarget : event?.target;
+  const searchOperation = form && advancedSearchSubmissions.get(form);
+  if (searchOperation) advancedSearchSubmissions.delete(form);
+  try {
+  if (!searchOperation) invalidateAdvancedSearchIntent('submit');
+  if (state.ui?.searchComposing || event?.isComposing) {event?.preventDefault();searchOperation?.settle({status:'cancelled',reason:'composition'});return;}
+  if (searchOperation && !searchOperation.isCurrent()) {event?.preventDefault();searchOperation.settle({status:'superseded',reason:'stale-submit'});return;}
+  closeSearchAdvancedFilters({reason:'submit-hide'});
   event.preventDefault();
-  if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
+  if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit(searchOperation)) {searchOperation?.settle({status:'unchanged',reason:'opened-search'});return;}
   if (state.ui.artistsDrawerOpen
     && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
     && typeof closeArtistsDrawer === 'function') {
@@ -1165,22 +1429,26 @@ function handleGalleryBootstrapSearchSubmit(event) {
     || state.ui.forceScanPageVisible
   );
   const queryChanged = nextQuery !== String(state.view?.query || '');
-  const scanPageWasAbandoned = scanPageIsVisible
+  const scanPageWasAbandoned = scanPageIsVisible && !searchOperation
     ? abandonScanPageForNavigation(queryChanged ? { clearSelection: true } : {})
     : false;
   const searchWasScheduled = scheduleGallerySearchCommit(nextQuery, {
     immediate: true,
     recordRecentSearch: true,
-    scanPageAbandonHandled: true,
+    scanPageAbandonHandled: !searchOperation,
+    searchOperation,
   });
   if (scanPageWasAbandoned && !searchWasScheduled) {
     renderView();
     resumeScanPageGalleryCoverLoads();
   }
   input?.blur?.();
+  } catch (error) {if(searchOperation)searchOperation.settle({status:'failed',reason:'submit-error'});else throw error;}
 }
 
 function handleGalleryBootstrapSearchInput(nextQuery) {
+  invalidateAdvancedSearchIntent('input');
+  closeSearchAdvancedFilters();
   if (typeof mobilePageState !== 'undefined') mobilePageState.searchSuggestionsReady = Boolean(String(nextQuery || '').trim());
   clearPendingSelectedArtistReconcile();
   clearPendingGallerySearchCommit();
@@ -1204,7 +1472,7 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
   } else if (ui && !ui.recentSearchPopoverOpen) {
     openRecentSearchPopover();
   }
-  if (ui && ui.recentSearchActiveIndex >= 0) {
+  if (ui) {
     ui.recentSearchActiveIndex = -1;
     renderRecentSearchPopover();
   }
@@ -1215,11 +1483,14 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
+  const searchOperation = options.searchOperation;
+  if (searchOperation && !searchOperation.isCurrent()) {searchOperation.settle({status:'superseded',reason:'stale-commit'});return;}
+  const leaveContext = searchOperation ? {operation:searchOperation,isCurrent:searchOperation.isCurrent,onOutcome:result=>searchOperation.settle(result)} : null;
   const currentRecentSearchScope = options.recordRecentSearch === true
     ? syncRecentSearchScope() : undefined;
   const recentSearchScope = Object.prototype.hasOwnProperty.call(options, 'recentSearchScope')
     ? options.recentSearchScope : currentRecentSearchScope;
-  if (options.recordRecentSearch === true && recentSearchScope !== currentRecentSearchScope) return;
+  if (options.recordRecentSearch === true && recentSearchScope !== currentRecentSearchScope) {searchOperation?.settle({status:'superseded',reason:'scope-loss'});return;}
   const mobileLeaveConfirmed = options.mobileLeaveConfirmed === true;
   if (mobileLeaveConfirmed) {
     beginAlbumDetailPrewarmSearchSuspension();
@@ -1227,9 +1498,13 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     beginSearchWaveformPeakLoadSuspension();
   }
   if (typeof prepareMobileGallerySearch === 'function'
-    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, recentSearchScope, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
+    && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, recentSearchScope, mobileLeaveConfirmed: true }), mobileLeaveConfirmed, leaveContext)) {
     releasePendingGallerySearchSuspensions();
     return;
+  }
+  if (searchOperation) {
+    if (!searchOperation.isCurrent()) {searchOperation.settle({status:'superseded',reason:'stale-admission'});return;}
+    searchOperation.settle({status:'accepted',reason:'commit-admitted'});
   }
   clearPendingSelectedArtistReconcile();
   clearPendingGallerySearchCommit();
@@ -1246,7 +1521,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   const searchGeneration = Number(state.ui.gallerySearchGeneration || 0) + 1;
   state.ui.gallerySearchGeneration = searchGeneration;
   state.ui.failedGallerySearch = null;
-  updateGallerySearchDraftQuery(normalizedQuery);
+  updateGallerySearchDraftQuery(normalizedQuery, {searchOperation});
   if (options.recordRecentSearch === true) {
     recordRecentSearchQuery(normalizedQuery);
   }
@@ -1366,6 +1641,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   const previousView = state.view;
   const next = {
     ...withActiveGallerySources(state.view, state.gallery.mainState),
+    // Popularity Search captures explicit Gallery scope independently of the
+    // client-side source-toggle projection used by ordinary Gallery Search.
+    ...(isPopularitySearchExpression(normalizedQuery) ? {gallery_scope: state.view.gallery_scope} : {}),
     query: normalizedQuery,
     selected_artist: '',
     all_artists_active: false,
@@ -1394,6 +1672,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   const hydrationUrl = buildApiUrl(next);
   const handleSearchFailure = (error) => {
     if (state.ui.gallerySearchGeneration !== searchGeneration) return;
+    syncAdvancedSearchAppliedView();
     const activeSearchStage = 'hydration';
     state.ui.failedGallerySearch = {
       query: normalizedQuery,
@@ -2170,6 +2449,7 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState(options = {}) {
+  invalidateAdvancedSearchIntent('history');
   if (window.AlbumHavenPlaylistRuntime?.restoreDraftFromHistory?.()) return;
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   return fetchAndRender(options.parentViewUrl || getBrowserLocationHref(), false, options);

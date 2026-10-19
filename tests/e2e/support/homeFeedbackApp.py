@@ -14,14 +14,22 @@ from isolatedPostgres import (
     provision_performance_auth_owner,
     resolve_isolated_database_urls,
 )
-from homeFeedbackData import prepare_home_media, persist_home_inventory, seed_home_feedback
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--scenario", choices=("home-feedback", "native-acceptance"), default="home-feedback")
     args = parser.parse_args()
+    if args.scenario == "native-acceptance":
+        from nativeAcceptanceData import (prepare_native_media as prepare_media,
+                                          persist_native_inventory as persist_inventory,
+                                          seed_native_acceptance as seed_data)
+    else:
+        from homeFeedbackData import (prepare_home_media as prepare_media,
+                                      persist_home_inventory as persist_inventory,
+                                      seed_home_feedback as seed_data)
     if not 1 <= args.port <= 65534:
         parser.error("--port must be between 1 and 65534")
     configured_root = os.environ.get("ALBUM_HAVEN_E2E_TEMP_ROOT", "").strip()
@@ -53,9 +61,9 @@ def main() -> None:
                            "ALBUM_HAVEN_DEPLOYMENT_MODE": "self_hosted"})
         prepare_isolated_database(setup_url, runtime_url)
         provision_performance_auth_owner(runtime_url)
-        inventory = prepare_home_media(library_root)
-        persist_home_inventory(setup_url, library_root, inventory)
-        fixture = seed_home_feedback(setup_url)
+        inventory = prepare_media(library_root)
+        persist_inventory(setup_url, library_root, inventory)
+        fixture = seed_data(setup_url)
         manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")
         # The manifest is exclusively a browser-harness oracle. No production

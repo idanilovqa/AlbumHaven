@@ -18,6 +18,7 @@ from music_app.services.album_top_browse import project_native_albums
 from music_app.services import album_top_publication as publication
 from music_app.services import album_top_publication_evidence as publication_evidence
 from music_app.services import album_top_remote_membership as remote_membership
+from music_app.services import album_top_source_finalization as source_import
 from music_app.services.postgres_connections import pooled_connection
 from music_app.services.social_cursors import encode_social_cursor
 from music_app.services.private_library_authority import (
@@ -52,6 +53,8 @@ class PostgresOwnedAlbumTopsService:
             raise
         except Exception as error:
             code = getattr(error, "sqlstate", None)
+            if getattr(getattr(error, 'diag', None), 'constraint_name', None) == 'album_top_source_locked':
+                raise AlbumTopError('source_locked', 409) from None
             if code in {"23505", "23503", "40001", "40P01"}:
                 raise AlbumTopError("concurrent_change", 409) from None
             raise
@@ -109,8 +112,13 @@ class PostgresOwnedAlbumTopsService:
             return {**actions, "can_create": actions.get(CREATE, False)}
         read, manage, items = (actions.get(action, False) for action in (BROWSE, MANAGE, ITEMS))
         own_progress = self._allows(context, (BROWSE, PROGRESS), constraints, top)
+        unlocked = not top.get('source_locked', False)
         return {**actions, "can_read": read, "can_edit": manage, "can_rename": manage,
-                "can_add": items, "can_remove": items, "can_reorder": items,
+                "can_add": items and unlocked, "can_remove": items and unlocked, "can_reorder": items and unlocked,
+                **({'can_unlock_source': not unlocked and self._allows(context, (BROWSE, MANAGE), constraints, top, owner_only=True),
+                    'can_view_source': read and (top['owner_account_id'] == context.actor.account_id
+                                                or top.get('editor_grant', False))}
+                   if top.get('source_derived', False) else {}),
                 "can_delete": self._allows(context, (BROWSE, MANAGE), constraints, top, owner_only=True),
                 "can_share": self._allows(context, (BROWSE, ACCESS), constraints, top, owner_only=True),
                 "can_view_sharing": read,
@@ -149,6 +157,8 @@ class PostgresOwnedAlbumTopsService:
                     tops.append({"top_ref": str(top["ref"]), "title": top["title"],
                         "description": top["description"], "revision": str(top["revision"]),
                         "visibility": top["visibility"], "allowed_actions": actions,
+                        **({'source_locked': top['source_locked'], 'source_derived': True}
+                           if top.get('source_derived', False) else {}),
                         "top_viewer_overlay": {"activity": state}})
             return {"tops": tops, "allowed_actions": self._actions(live, constraints),
                 "next_cursor": encode_social_cursor(rows[limit - 1]["id"] if len(rows) > limit else None,
@@ -292,6 +302,8 @@ class PostgresOwnedAlbumTopsService:
             self._require(live, (BROWSE,), constraints, top)
             return {"top_ref": ref, "title": top["title"], "description": top["description"],
                 "revision": str(top["revision"]), "visibility": top["visibility"],
+                **({'source_locked': top['source_locked'], 'source_derived': True}
+                   if top.get('source_derived', False) else {}),
                 "allowed_actions": actions, **edit,
                 "top_viewer_overlay": overlay, "items": items}
 
@@ -351,7 +363,7 @@ class PostgresOwnedAlbumTopsService:
             self._require(live, (BROWSE,), constraints, retained)
             self._require(live, command_actions(command), constraints,
                 retained if command.action not in {"create", "copy"} else None,
-                owner_only=command.action == "delete")
+                owner_only=command.action in {'delete', 'unlock_source'})
             # Copy receipts bind the destination. Source edits or revocation
             # cannot duplicate a landed copy, including from a new session.
             if command.action in {"create", "copy"} and retained["owner_account_id"] != live.actor.account_id:
@@ -475,6 +487,8 @@ class PostgresOwnedAlbumTopsService:
             if command.action == "create":
                 self._require(live, command_actions(command), constraints)
                 conversion_albums = None
+                source = source_import.lock_review(self, connection, live, command, constraints, context_ref
+                    ) if 'source_review' in command.data else None
                 if 'playlist_preview_ref' in command.data:
                     from music_app.services.playlist_album_top_previews import save_albums
                     conversion_albums = save_albums(self, connection, live, command, context_ref, constraints)
@@ -496,9 +510,12 @@ class PostgresOwnedAlbumTopsService:
                         actor_session_id=live.actor.session_id, clock=self._clock)
                 self._require(live, (BROWSE,), constraints, top)
                 self._require(live, command_actions(command), constraints,
-                              None if command.action == "copy" else top, owner_only=command.action == "delete")
+                              None if command.action == "copy" else top,
+                              owner_only=command.action in {'delete', 'unlock_source'})
                 if not private_state and str(top["revision"]) != command.data["revision"]:
                     raise AlbumTopError("revision_conflict", 409)
+                if top.get('source_locked', False) and command.action in {'add', 'remove', 'reorder'}:
+                    raise AlbumTopError('source_locked', 409)
             required_actions = command_actions(command)
             consumption = []
             remote = remote_membership.bindings(connection, top) if command.action in {
@@ -511,7 +528,22 @@ class PostgresOwnedAlbumTopsService:
                 # A source changed during discovery. Never acquire a newly
                 # discovered account lock after the source Top lock.
                 raise AlbumTopError('concurrent_change', 409)
-            if command.action in {'create', 'add'} and typed:
+            report = None
+            if command.action == 'create' and 'source_review' in command.data:
+                mutation, report = source_import.resolve_review(self, connection, live, command, top,
+                    source, constraints, context_ref, discovered_sources)
+                if 'selections' in mutation.data:
+                    pending_refs = {row['acquisition_ref'] for row in mutation.data['selections']
+                                    if row['kind'] == 'remote_acquisition'}
+                    receipt, consumption = remote_membership.add(self, connection, live, mutation, top, now,
+                        constraints, context_ref, [row for row in discovered_sources
+                                                  if row['acquisition_ref'] in pending_refs])
+                else:
+                    receipt = self._mutate(connection, live, mutation, top, now, constraints)
+                source_import.finish(connection, command, top, report)
+                receipt.update(source_job_ref=command.data['source_review']['job_ref'],
+                               source_locked=True, source_derived=True, source_report=report)
+            elif command.action in {'create', 'add'} and typed:
                 receipt, consumption = remote_membership.add(self, connection, live, command, top, now,
                     constraints, context_ref, discovered_sources)
             elif command.action in {'save', 'enable_external'} and (typed or remote):
@@ -526,6 +558,7 @@ class PostgresOwnedAlbumTopsService:
             elif command.action == "copy":
                 receipt = viewers.copy_top(connection, live, command, top, service=self,
                     constraints=constraints, context_ref=context_ref, remote_sources=remote)
+                source_import.copy_flags(connection, top, receipt['top_ref'])
             else:
                 mutation = command
                 if command.action == 'create' and 'playlist_preview_ref' in command.data:
@@ -545,6 +578,8 @@ class PostgresOwnedAlbumTopsService:
                 # remains independent of expired source evidence.
                 save_albums(self, connection, live, command, context_ref, constraints)
             remote_membership.consume(connection, live, command, top, receipt, context_ref, consumption)
+            if command.action == 'create' and 'source_review' in command.data:
+                source_import.final_fence(self, connection, live, command, top, constraints)
             if typed or remote:
                 # The operation receipt INSERT can itself wait. Re-evaluate
                 # resolver policy after all writes; _authorized then rechecks
@@ -604,6 +639,10 @@ class PostgresOwnedAlbumTopsService:
             if link is not None:
                 publication.revoke(connection, top, link, now)
             connection.execute("update app.album_lists set deleted_at=%s where ref=%s", (now, ref))
+        elif command.action == 'unlock_source':
+            if not top.get('source_locked', False):
+                raise AlbumTopError('source_not_locked', 409)
+            connection.execute('update app.album_lists set source_locked=false where ref=%s', (ref,))
         revision = top["revision"]
         if changed and command.action != "create":
             if revision == 9223372036854775807:

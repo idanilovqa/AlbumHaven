@@ -233,7 +233,8 @@ def normalize_top_publication_preview(payload):
 
 def normalize_top_command(action: str, payload: object, *, top_ref: object = None) -> AlbumTopCommand:
     fields = {
-        "create": {"request_key", "title", "description", "album_refs", "draft_ref", "selections", "playlist_preview_ref"},
+        "create": {"request_key", "title", "description", "album_refs", "draft_ref", "selections", "playlist_preview_ref", "source_review"},
+        "unlock_source": {"request_key", "revision"},
         "save": {"request_key", "revision", "title", "description", "items", "item_selections", "evidence_revision", "artwork_publication"},
         "enable_external": {"request_key", "revision", "title", "description", "items", "evidence_revision", "artwork_publication"},
         "revoke_external": {"request_key", "revision"},
@@ -259,6 +260,17 @@ def normalize_top_command(action: str, payload: object, *, top_ref: object = Non
     if action == "create":
         if top_ref is not None:
             raise AlbumTopError("invalid_command")
+        if 'source_review' in payload:
+            if set(payload) - {'request_key', 'title', 'description', 'source_review'}:
+                raise AlbumTopError('invalid_command')
+            from music_app.services.album_top_source_finalization import normalize_review
+            review = normalize_review(payload['source_review'])
+            if key != review['job_ref']:
+                raise AlbumTopError('invalid_command')
+            return AlbumTopCommand(action, None, key, {
+                'title': _text(payload.get('title'), 100, title=True),
+                'description': _text(payload.get('description', ''), 1000),
+                'source_review': review})
         if "playlist_preview_ref" in payload:
             if set(payload) - {'request_key', 'title', 'description', 'playlist_preview_ref'}:
                 raise AlbumTopError('invalid_command')
@@ -371,7 +383,7 @@ def command_actions(command: AlbumTopCommand) -> tuple[str, ...]:
         return BROWSE, ACCESS
     if command.action == "request_edit":
         return (BROWSE,)
-    action = {"create": CREATE, "copy": CREATE, "save": MANAGE, "delete": MANAGE,
+    action = {"create": CREATE, "copy": CREATE, "save": MANAGE, "delete": MANAGE, "unlock_source": MANAGE,
               "add": ITEMS, "remove": ITEMS, "reorder": ITEMS, "visibility": ACCESS,
               "grant_editor": ACCESS, "grant_viewer": ACCESS, "revoke_editor": ACCESS,
               "decide_edit_request": ACCESS, "set_manual_completion": PROGRESS,

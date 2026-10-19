@@ -20,7 +20,8 @@ class TopSourceImports:
 
     @staticmethod
     def _row(connection, live, ref, *, write=False):
-        row = connection.execute('''select * from app.album_top_source_jobs
+        row = connection.execute('''select j.*,(select top_ref from app.album_top_source_finalizations
+            where job_ref=j.ref) as saved_top_ref from app.album_top_source_jobs j
             where ref=%s and actor_account_id=%s and library_id=%s for ''' +
             ('update' if write else 'share'),
             (ref, live.actor.account_id, live.library_id)).fetchone()
@@ -36,8 +37,10 @@ class TopSourceImports:
                   'kind': row['source']['kind'] if evidence else row['kind'],
                   'created_at': row['created_at'].isoformat(),
                   'updated_at': row['updated_at'].isoformat(),
-                  'phase': 'review_evidence' if row['status'] == 'completed' else 'source_processing',
-                  'error': row['error_code'], 'top_ref': None}
+                  'phase': 'top_created' if row.get('saved_top_ref') is not None else
+                      'review_evidence' if row['status'] == 'completed' else 'source_processing',
+                  'error': row['error_code'],
+                  'top_ref': str(row['saved_top_ref']) if row.get('saved_top_ref') is not None else None}
         if evidence:
             result.update(source=row['source'], review=row['review_result'])
         return result
@@ -87,7 +90,8 @@ class TopSourceImports:
                 params.extend((previous['created_at'], previous['ref']))
             rows = connection.execute('''select ref,request_key,status,revision,
                 source->>'title' as title,source->>'kind' as kind,
-                created_at,updated_at,error_code from app.album_top_source_jobs
+                created_at,updated_at,error_code,(select top_ref from app.album_top_source_finalizations
+                    where job_ref=app.album_top_source_jobs.ref) as saved_top_ref from app.album_top_source_jobs
                 where actor_account_id=%s and library_id=%s''' + clause +
                 ' order by created_at desc,ref desc limit 51', params).fetchall()
             return {'jobs': [self._project(row, evidence=False) for row in rows[:50]],
@@ -98,6 +102,8 @@ class TopSourceImports:
         with self.tops._authorized(context, constraints) as (connection, live, _):
             self.tops._require(live, (BROWSE, CREATE), constraints)
             row = self._row(connection, live, ref, write=True)
+            if row.get('saved_top_ref') is not None:
+                raise AlbumTopError('source_already_finalized', 409)
             # Cancellation is monotonic and retains original evidence, including
             # an already produced review. No worker can resurrect this job.
             if row['status'] != 'canceled':

@@ -27,11 +27,14 @@ def require_context(context_ref):
 
 
 def typed_command(command):
-    return 'selections' in command.data or 'item_selections' in command.data
+    return 'selections' in command.data or 'item_selections' in command.data or 'source_review' in command.data
 
 
 def pending_selectors(command):
     selections = command.data.get('selections', ())
+    if 'source_review' in command.data:
+        from music_app.services.album_top_source_finalization import selections as source_selections
+        selections = source_selections(command.data['source_review'])
     if 'item_selections' in command.data:
         selections = [item['source'] for item in command.data['item_selections']]
     return [item for item in selections if item['kind'] == 'remote_acquisition']
@@ -63,7 +66,8 @@ def lock_pending_budget(connection, actor_account_id):
 
 
 def _destination(command, top):
-    return RemoteTopDestination('create', command.data['draft_ref'], None) if command.action == 'create' else (
+    return RemoteTopDestination('create', command.data['source_review']['job_ref']
+        if 'source_review' in command.data else command.data['draft_ref'], None) if command.action == 'create' else (
         RemoteTopDestination('top', str(top['ref']), command.data['revision']))
 
 
@@ -148,7 +152,7 @@ def _sql(connection, statement, params):
         raise
 
 
-def resolve_sources(connection, live, top, selectors, destination, context_ref, discovered):
+def resolve_sources(connection, live, top, selectors, destination, context_ref, discovered, *, identity_only=False):
     """Batch prelocks and canonical work order, separate from curator order."""
     from psycopg.types.json import Jsonb
     remote = [item for item in selectors if item['kind'] in {'remote_acquisition', 'remote_retained'}]
@@ -208,6 +212,10 @@ def resolve_sources(connection, live, top, selectors, destination, context_ref, 
             evidence_from_row(row)
             catalog_ref = str(row['catalog_ref'])
         candidates.append((catalog_ref, selector.get('admission_ref', ''), selector))
+    if identity_only:
+        # Import review resolves all identities before first-occurrence dedupe.
+        # It retains no admission; ordinary add/save/copy behavior is unchanged.
+        return {_source_key(selector): (catalog_ref, None) for catalog_ref, _, selector in candidates}
     if len({row[0] for row in candidates}) != len(candidates):
         raise AlbumTopError('duplicate_album', 409)
     resolved = {}

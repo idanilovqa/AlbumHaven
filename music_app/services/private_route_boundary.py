@@ -231,6 +231,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/album-tops/{top_ref}/artwork-publication/enable"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/items/{item_ref}/publication-sources"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/items/{item_ref}/native-target"): "library.browse.read",
+    ("GET", "/album-tops/{top_ref}/import-source"): "library.browse.read",
     ("POST", "/album-tops/{top_ref}/native-queue"): "library.browse.read",
     ("POST", "/album-tops/{top_ref}/native-playback-target"): "library.browse.read",
     ("GET", "/album-tops/{top_ref}/access-grants"): "library.album_tops.access.manage",

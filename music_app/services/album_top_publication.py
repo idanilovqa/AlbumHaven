@@ -167,6 +167,8 @@ def pending_items(connection, link, items):
 
 
 def apply_draft(connection, top, items, current):
+    from music_app.services.album_top_source_finalization import require_same_structure
+    require_same_structure(top, items, current)
     ref = str(top["ref"])
     old = {str(row["ref"]): row for row in current}
     retained = [item["item_ref"] for item in items if item["item_ref"] is not None]

@@ -315,6 +315,23 @@ async def cancel_album_top_source_import(request: Request, job_ref: str):
     return await _source_import_request(request, 'cancel', job_ref)
 
 
+@router.get('/album-tops/{top_ref}/import-source')
+async def read_album_top_import_source(request: Request, top_ref: str):
+    from music_app.services.album_top_source_finalization import read_source
+    try:
+        admitted = _require_context(request)
+        if set(request.query_params) != {'revision'} or len(request.query_params.multi_items()) != 1:
+            raise AlbumTopError('invalid_query')
+        context, constraints = _context(request, BROWSE)
+        value = await run_in_threadpool(read_source, _service(request), context, top_ref,
+            request.query_params['revision'], constraints=constraints)
+        if _context_ref(request) != admitted:
+            raise AlbumTopError('stale_context', 409)
+        return _response(request, value)
+    except AlbumTopError as error:
+        return _error(error)
+
+
 @router.get("/album-tops/{top_ref}")
 def read_album_top(request: Request, top_ref: str):
     try:
@@ -383,8 +400,13 @@ async def _mutate(request, action, top_ref=None):
         context_ref = _require_context(request)
         payload = await read_bounded_json_object(request, max_bytes=MAX_TOP_COMMAND_BYTES)
         command = normalize_top_command(action, payload, top_ref=top_ref)
+        source_command = action == 'unlock_source' or 'source_review' in command.data
+        if source_command and _require_context(request) != context_ref:
+            raise AlbumTopError('stale_context', 409)
         value = await run_in_threadpool(_service(request).execute, context, command,
             constraints=constraints, context_ref=context_ref)
+        if source_command and _require_context(request) != context_ref:
+            raise AlbumTopError('stale_context', 409)
         return _response(request, value)
     except JSONBodyTooLarge:
         return _error(AlbumTopError("command_too_large", 413))
@@ -672,7 +694,7 @@ async def acquire_album_top_remote(request: Request):
 
 @router.post("/album-tops/{top_ref}/{action}")
 async def mutate_album_top(request: Request, top_ref: str, action: str):
-    if action not in {"save", "enable_external", "revoke_external", "add", "remove", "reorder", "delete", "visibility", "grant_editor", "grant_viewer",
+    if action not in {"unlock_source", "save", "enable_external", "revoke_external", "add", "remove", "reorder", "delete", "visibility", "grant_editor", "grant_viewer",
                       "revoke_editor", "request_edit", "decide_edit_request", "copy", "set_manual_completion", "set_activity"}:
         return _error(AlbumTopError("invalid_command"))
     return await _mutate(request, action, top_ref)

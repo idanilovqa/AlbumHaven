@@ -17,6 +17,7 @@ import {
 import {
   queryPersistedAlbumIdentity,
 } from '../helpers/postgresAlbumIdentityHelpers.js';
+import { effectiveArtistGroups } from '../helpers/rendererReconciliationHelpers.js';
 import {
   flattenAlbums,
   readRuntimeView,
@@ -447,7 +448,9 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           await navigationPanelActions.waitForSidebarSelection(TREE_ARTIST, { timeout: 60000 });
           await galleryActions.waitForSelectedArtistGallery(TREE_ARTIST, { timeout: 60000 });
           const navigationView = await readRuntimeView(page);
-          const navigationAlbum = String(flattenAlbums(navigationView.artist_groups)[0]?.name || '').trim();
+          const navigationAlbum = String(
+            flattenAlbums(effectiveArtistGroups(navigationView))[0]?.name || '',
+          ).trim();
           expect(navigationAlbum, 'Artist Tree navigation must expose an album.').not.toBe('');
           await galleryActions.clickAlbumDetailsByAlbumName(navigationAlbum);
           const navigationSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
@@ -540,7 +543,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       metrics.treeCoverReadyMs = performance.now() - treeSelectedAt;
 
       const treeView = await readRuntimeView(page);
-      const treeAlbums = flattenAlbums(treeView?.artist_groups || []);
+      const treeAlbums = flattenAlbums(effectiveArtistGroups(treeView));
       treeAlbum = String(treeAlbums[0]?.name || '').trim();
       expect(treeAlbum, 'Expected the selected Artist Tree gallery to expose an album.').not.toBe('');
       const albumDetailsStartedAt = performance.now();

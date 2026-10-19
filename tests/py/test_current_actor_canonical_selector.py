@@ -2,8 +2,8 @@
 
 Run only in a separately approved isolated Python lane. No product package imports,
 configuration file reads, database connections, or SQL evaluation are performed.
-The real domain source and the exact session dataclass are loaded from pinned text;
-only the resolver's three product imports are replaced by explicit injected values.
+The real domain, pure selector, and exact session dataclass use pinned source;
+only the resolver's four reviewed product imports are replaced by injected values.
 Fake rows exercise result interpretation, not PostgreSQL selector execution.
 """
 from __future__ import annotations
@@ -50,6 +50,10 @@ def _load_isolated_owner():
         "music_app/services/auth_sessions_postgres.py",
         "7a8c94b37446e1494a7536389e8bd4c566de4444",
     )
+    selector = _pinned_source(
+        "music_app/services/current_library_selector.py",
+        "8642887bf2e29171c501ff6e02c5124f2350ee7f",
+    )
     session_tree = ast.parse(session)
     session_class = [node for node in session_tree.body
                      if isinstance(node, ast.ClassDef) and node.name == "ResolvedBrowserSession"]
@@ -57,6 +61,8 @@ def _load_isolated_owner():
         raise AssertionError("Expected exactly one guarded session dataclass")
     owner = ast.parse(OWNER.read_text(encoding="utf-8"))
     product_imports = {
+        "music_app.services.current_library_selector": [
+            ("canonical_library_selector_sql", None)],
         "music_app.services.postgres_connections": [("pooled_connection", "_connect")],
         "music_app.services.auth_sessions_postgres": [
             ("PostgresAuthSessionService", None), ("ResolvedBrowserSession", None)],
@@ -85,6 +91,8 @@ def _load_isolated_owner():
         exec(compile(domain, "<guarded-current-actor>", "exec"), module.__dict__)
         exec(compile(ast.Module(body=session_class, type_ignores=[]),
                      "<guarded-session-dataclass>", "exec"), module.__dict__)
+        exec(compile(selector, "<guarded-current-library-selector>", "exec"),
+             module.__dict__)
         exec(compile(owner, str(OWNER), "exec"), module.__dict__)
     return module
 

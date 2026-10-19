@@ -10,7 +10,7 @@ import pytest
 from music_app.routes import playback_capture_asgi as routes
 from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 from music_app.services.playback_capture import CaptureError, capture_scope
-from music_app.services.policy import PolicyContext
+from music_app.services.policy import PolicyContext, RequestOrigin
 from tests.py.test_playback_capture import envelope
 
 
@@ -29,7 +29,8 @@ def request(monkeypatch, chunks, *, header=True, actor=None):
         return dependency
     monkeypatch.setattr(routes,'require_action',require)
     context=PolicyContext.build(actor=actor,action='library.media.read',library_id=3,
-        deployment_mode='self_hosted',client_surface_class='private_web')
+        deployment_mode='self_hosted',request_origin=RequestOrigin('network','synthetic-capture-route'),
+        client_surface_class='private_web')
     guard=capture_scope(context,app.state.auth_policy_config)
     messages=iter(chunks)
     async def receive():
